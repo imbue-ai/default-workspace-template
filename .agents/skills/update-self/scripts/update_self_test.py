@@ -497,9 +497,9 @@ def test_a_branch_override_the_workspace_only_has_upstream_resolves_and_hands_of
 ) -> None:
     """The branch the user picked resolves everywhere the pass uses ``$REF``.
 
-    A bare name with no local branch behind it used to come back verbatim, which
-    resolves nowhere: the hand-off then quietly kept the workspace's own copy of
-    the flow instead of the branch's.
+    A bare name with no local branch behind it resolves nowhere, so handing it
+    back verbatim would make the hand-off quietly keep the workspace's own copy
+    of the flow instead of the branch's.
     """
     upstream, workspace = _clone_workspace_with_upstream_branch(
         tmp_path, "electric-husky"
