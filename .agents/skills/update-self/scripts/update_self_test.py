@@ -549,8 +549,8 @@ def test_a_branch_override_the_workspace_only_has_upstream_resolves_and_hands_of
 def test_a_bare_branch_override_takes_the_remote_over_a_stale_local_branch(
     tmp_path, capsys
 ) -> None:
-    # A local branch of the same name is a copy the fetch never advances -- one
-    # a previous pass may have made by hand -- so the remote is what was picked.
+    # A local branch of the same name is a copy the fetch never advances, so
+    # the remote is what was picked.
     upstream, workspace = _clone_workspace_with_upstream_branch(
         tmp_path, "electric-husky"
     )

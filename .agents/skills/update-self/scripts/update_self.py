@@ -447,9 +447,8 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     dest_root = (dest if dest.is_absolute() else repo_root / dest).resolve()
     staged_skill = dest_root / SKILL_DIR_REL
 
-    # Checked before the skill-dir probe below, which cannot tell a ref that
-    # names nothing from one that predates the skill: staging the local copy for
-    # the former would hand the lead its own flow for a target it never read.
+    # Checked first: the skill-dir probe below cannot tell a ref that names
+    # nothing from one that predates the skill.
     if not _names_commit(args.ref, repo_root):
         print(
             f"error: {args.ref} does not name a commit in this workspace, so there "
