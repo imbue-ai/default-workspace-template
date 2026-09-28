@@ -10,6 +10,8 @@ import re
 import pytest
 
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.lanes import AppServerMethod
+from imbue.chat.harnesses.lanes import CodexLogin
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.lanes import LANE_ANTHROPIC
@@ -20,7 +22,6 @@ from imbue.chat.harnesses.lanes import LaneNotFoundError
 from imbue.chat.harnesses.lanes import PasteMethod
 from imbue.chat.harnesses.lanes import PasteSink
 from imbue.chat.harnesses.lanes import PtyMethod
-from imbue.chat.harnesses.lanes import Submit
 from imbue.chat.harnesses.lanes import account_label
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import get_method
@@ -69,7 +70,6 @@ def test_a_scrape_trigger_matches_what_its_strict_pattern_matches() -> None:
     samples = {
         "anthropic": "https://claude.ai/oauth/authorize?code=1",
         "google": "https://accounts.google.com/o/oauth2/auth?client_id=x",
-        "openai": "ED1D-9U4FY",
     }
     for lane_id, sample in samples.items():
         method = get_lane(lane_id).methods[0]
@@ -78,24 +78,16 @@ def test_a_scrape_trigger_matches_what_its_strict_pattern_matches() -> None:
         assert re.search(method.scrape.strict, sample), lane_id
 
 
-def test_codex_scrapes_a_code_against_a_fixed_url_and_submits_nothing() -> None:
-    """codex inverts the usual shape, and the rest of the flow branches on exactly this."""
-    method = get_method("openai", "device")
-    assert isinstance(method, PtyMethod)
-    assert method.static_url == "https://auth.openai.com/codex/device"
-    assert method.submit is Submit.NONE
-    # Its success signal is the process exiting, not a line on screen.
-    assert method.success is None
-
-
-def test_the_openai_lane_can_also_be_signed_in_by_pasting_a_key() -> None:
-    """The device flow needs a person at a browser, so it is the only method on this lane
-    that cannot be driven programmatically. The key paste is a plain file write."""
-    method = get_method("openai", "api_key")
-    assert isinstance(method, PasteMethod)
-    assert method.sink is PasteSink.CODEX_AUTH_JSON
-    # The device flow stays primary: it is the subscription most people already have.
-    assert LANE_OPENAI.methods[0].id == "device"
+def test_chatgpt_signs_in_through_codexs_app_server_in_a_browser_first() -> None:
+    """The browser login needs the desktop app's relay; the device login is the fallback without one."""
+    browser, device, api_key = LANE_OPENAI.methods
+    assert isinstance(browser, AppServerMethod)
+    assert (browser.id, browser.login) == ("chatgpt", CodexLogin.BROWSER)
+    assert browser.label == "Use your ChatGPT plan (runs on Codex)"
+    assert isinstance(device, AppServerMethod)
+    assert (device.id, device.login) == ("device", CodexLogin.DEVICE)
+    assert isinstance(api_key, PasteMethod)
+    assert api_key.sink is PasteSink.CODEX_AUTH_JSON
 
 
 def test_agy_methods_assert_the_menu_before_typing() -> None:

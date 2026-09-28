@@ -52,11 +52,18 @@ from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.claude.auth import SUBSCRIPTION_TOKEN_REFUSAL
 from imbue.chat.harnesses.claude.auth import parse_credential_lines
 from imbue.chat.harnesses.claude.auth import record_api_key_approval
+from imbue.chat.harnesses.codex.sign_in import APP_SERVER_SOCKET_FILENAME
+from imbue.chat.harnesses.codex.sign_in import CodexLoginClient
+from imbue.chat.harnesses.codex.sign_in import SIGN_IN_FLOW_ENV_VAR
+from imbue.chat.harnesses.codex.sign_in import app_server_argv
+from imbue.chat.harnesses.codex.sign_in import connect_login_client
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.key_check import CheckedProvider
 from imbue.chat.harnesses.key_check import KeyCheck
 from imbue.chat.harnesses.key_check import PROVIDER_DISPLAY
 from imbue.chat.harnesses.key_check import check_key
+from imbue.chat.harnesses.lanes import AppServerMethod
+from imbue.chat.harnesses.lanes import CodexLogin
 from imbue.chat.harnesses.lanes import EofPolicy
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.lanes import Lane
@@ -64,6 +71,7 @@ from imbue.chat.harnesses.lanes import PasteMethod
 from imbue.chat.harnesses.lanes import PasteSink
 from imbue.chat.harnesses.lanes import PtyMethod
 from imbue.chat.harnesses.lanes import Scrape
+from imbue.chat.harnesses.lanes import SignInMethod
 from imbue.chat.harnesses.lanes import Submit
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import get_method
@@ -93,6 +101,8 @@ from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.harnesses.signed_in import is_signed_in
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr_codex.app_server_client import CodexAppServerError
+from imbue.mngr_codex.app_server_client import LoginCompleted
 
 logger = _loguru_logger
 
@@ -101,6 +111,8 @@ logger = _loguru_logger
 _CODE_ECHO_QUIET_SECONDS: Final = 0.3
 _CODE_ECHO_DEADLINE_SECONDS: Final = 3.0
 _READY_WAIT_SECONDS: Final = 20.0
+# How long a sign-in's `codex app-server` may take to start listening.
+_APP_SERVER_START_SECONDS: Final = 20.0
 # Shown beside a saved key the provider could not be asked about.
 KEY_UNCHECKED_DETAIL: Final = "Couldn't check this key"
 # How long to keep asking whether a submitted code worked. The browser round trip is already
@@ -131,6 +143,9 @@ class FlowShape(StrEnum):
     CODE_THEN_WAIT = "code_then_wait"
     # Paste a key.
     PASTE = "paste"
+    # Here is a page to finish in a browser; the sign-in completes by itself. Only a relay from
+    # the user's own machine can reach its callback, so without one the chooser offers another way.
+    BROWSER = "browser"
 
 
 class FlowStart(FrozenModel):
@@ -149,9 +164,11 @@ class FlowStatus(FrozenModel):
     account_id: str | None = None
 
 
-def flow_shape(method: PtyMethod | PasteMethod) -> FlowShape:
+def flow_shape(method: SignInMethod) -> FlowShape:
     if isinstance(method, PasteMethod):
         return FlowShape.PASTE
+    if isinstance(method, AppServerMethod):
+        return FlowShape.BROWSER if method.login is CodexLogin.BROWSER else FlowShape.CODE_THEN_WAIT
     return FlowShape.CODE_THEN_WAIT if method.submit is Submit.NONE else FlowShape.URL_THEN_CODE
 
 
@@ -173,7 +190,7 @@ class _Session:
 
     flow_id: str
     lane: Lane
-    method: PtyMethod | PasteMethod
+    method: SignInMethod
     account_id: str
     # Whether THIS flow created the folder. Only a folder we minted is ours to throw away: a
     # re-auth adopts a committed account, so discarding on failure would delete a live
@@ -202,6 +219,10 @@ class _Session:
     # A relayed request is out to the CLI. A poll must not settle the flow meanwhile: that
     # tears the CLI down, which could cut off the answer the browser is waiting on.
     is_relay_in_flight: bool
+    # An app-server sign-in's connection, and how its login ended once codex says so: the
+    # notification, or why waiting for it failed.
+    login_client: CodexLoginClient | None
+    login_outcome: LoginCompleted | str | None
 
     def is_value_ready(self, buffer: str) -> bool:
         """Whether the scraped value can be read yet -- the drain loop's stop condition.
@@ -210,12 +231,12 @@ class _Session:
         predicate, and this is the one piece of per-flow state it has to see.
         """
         method = self.method
-        if isinstance(method, PasteMethod):
+        if not isinstance(method, PtyMethod):
             return True
         return _extract(buffer, method.scrape, method.frame_marker) is not None
 
 
-def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str, minted: bool) -> _Session:
+def _new_session(lane: Lane, method: SignInMethod, account_id: str, minted: bool) -> _Session:
     session = _Session()
     session.flow_id = uuid.uuid4().hex
     session.lane = lane
@@ -234,6 +255,8 @@ def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str, m
     session.relay_target = None
     session.relay_answered_at = None
     session.is_relay_in_flight = False
+    session.login_client = None
+    session.login_outcome = None
     return session
 
 
@@ -254,6 +277,7 @@ class AuthFlowService:
     _fetch_callback: CallbackFetcher
     _clock: Callable[[], float]
     _check_key: Callable[[CheckedProvider, str, str | None], KeyCheck]
+    _connect_login_client: Callable[[Path], CodexLoginClient]
 
     @classmethod
     def create(
@@ -266,6 +290,7 @@ class AuthFlowService:
         fetch_callback: CallbackFetcher | None = None,
         clock: Callable[[], float] | None = None,
         key_checker: Callable[[CheckedProvider, str, str | None], KeyCheck] | None = None,
+        login_client_connector: Callable[[Path], CodexLoginClient] | None = None,
     ) -> "AuthFlowService":
         """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`.
 
@@ -285,6 +310,7 @@ class AuthFlowService:
         service._fetch_callback = fetch_callback or fetch_loopback_callback
         service._clock = clock or time.monotonic
         service._check_key = key_checker or check_key
+        service._connect_login_client = login_client_connector or connect_login_client
         return service
 
     # lifecycle
@@ -339,7 +365,10 @@ class AuthFlowService:
             # FlowError is the CLI having said no, and anything else is a bug.
             is_torn_down = False
             try:
-                url, code = self._drive_locked(session, method, account_path)
+                if isinstance(method, AppServerMethod):
+                    url, code = self._drive_app_server_locked(session, method, account_path)
+                else:
+                    url, code = self._drive_locked(session, method, account_path)
                 is_torn_down = True
             except FlowError:
                 # `_drive_locked`'s own failure paths already tore the session down.
@@ -353,10 +382,72 @@ class AuthFlowService:
             return FlowStart(
                 flow_id=session.flow_id,
                 shape=flow_shape(method),
-                url=method.static_url or url,
+                url=(method.static_url if isinstance(method, PtyMethod) else None) or url,
                 code=code,
                 relay_url=session.relay_url,
             )
+
+    def _drive_app_server_locked(
+        self, session: _Session, method: AppServerMethod, account_path: Path
+    ) -> tuple[str | None, str | None]:
+        """Start an app-server on the account's codex home and begin its login."""
+        session.scratch_dir = Path(tempfile.mkdtemp(prefix="minds-sign-in-"))
+        socket_path = session.scratch_dir / APP_SERVER_SOCKET_FILENAME
+        env = {
+            **os.environ,
+            **build_account_binding(session.lane.harness).account_env(account_path),
+            BROWSER_ENV_VAR: str(self._work_dir / BROWSER_SHIM_RELATIVE_PATH),
+            SIGN_IN_URL_FILE_ENV_VAR: str(session.scratch_dir / SIGN_IN_URL_FILENAME),
+            SIGN_IN_FLOW_ENV_VAR: "1",
+        }
+        session.process = self._spawner(
+            _binary_for(session.lane), app_server_argv(socket_path), _APP_SERVER_START_SECONDS, env=env
+        )
+        # Reading its output while it starts keeps the PTY from filling, and paces the wait.
+        session.output = drain_pty_stream(
+            session.process,
+            session.output,
+            lambda _: socket_path.exists(),
+            deadline_seconds=_APP_SERVER_START_SECONDS,
+        )
+        if not socket_path.exists():
+            self._fail_locked(session, "Codex did not start its sign-in.")
+            raise FlowError(session.detail or "no app-server")
+        try:
+            client = self._connect_login_client(socket_path)
+            session.login_client = client
+            if method.login is CodexLogin.BROWSER:
+                browser_login = client.start_chatgpt_login()
+                login_id, url, code = browser_login.login_id, browser_login.auth_url, None
+                relay_target = parse_relay_target(url)
+                if relay_target is not None:
+                    session.relay_url = url
+                    session.relay_target = relay_target
+            else:
+                device_login = client.start_device_login()
+                login_id, url, code = device_login.login_id, device_login.verification_url, device_login.user_code
+        except (CodexAppServerError, OSError) as e:
+            logger.warning("Codex sign-in could not begin: {}", e)
+            self._fail_locked(session, "Codex could not begin the sign-in.")
+            raise FlowError(session.detail or "no login") from e
+        threading.Thread(
+            target=self._await_login,
+            args=(session, client, login_id, method.flow_deadline_s),
+            name=f"codex-sign-in-{session.flow_id}",
+            daemon=True,
+        ).start()
+        return url, code
+
+    def _await_login(self, session: _Session, client: CodexLoginClient, login_id: str, timeout: float) -> None:
+        """Wait for codex to say how the login ended; the next poll settles the flow on it."""
+        outcome: LoginCompleted | str
+        try:
+            outcome = client.wait_login_completed(login_id, timeout)
+        except CodexAppServerError as e:
+            outcome = str(e)
+        with self._lock:
+            if session.login_outcome is None:
+                session.login_outcome = outcome
 
     def _drive_locked(self, session: _Session, method: PtyMethod, account_path: Path) -> tuple[str | None, str | None]:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
@@ -460,9 +551,7 @@ class AuthFlowService:
         with self._lock:
             session = self._require_locked(flow_id, must_be_pending=True)
             method = session.method
-            if isinstance(method, PasteMethod):
-                raise FlowError("this sign-in does not take a code")
-            if method.submit is Submit.NONE:
+            if not isinstance(method, PtyMethod) or method.submit is Submit.NONE:
                 raise FlowError("this sign-in does not take a code")
             # Two writes: the code, then Enter separately, or the paste heuristic swallows it.
             session.process.send(code)
@@ -555,6 +644,8 @@ class AuthFlowService:
             method = session.method
             if isinstance(method, PasteMethod) or session.is_relay_in_flight:
                 return FlowStatus(state=FlowState.PENDING)
+            if isinstance(method, AppServerMethod):
+                return self._settle_app_server_locked(session)
             return self._settle_locked(session, method)
 
     def abort(self, flow_id: str) -> None:
@@ -598,6 +689,23 @@ class AuthFlowService:
         return answer
 
     # internals
+
+    def _settle_app_server_locked(self, session: _Session) -> FlowStatus:
+        """Decide on what codex said about its login, without waiting for it."""
+        session.output = _bounded(
+            drain_pty_stream(session.process, session.output, lambda _: False, deadline_seconds=0.2)
+        )
+        outcome = session.login_outcome
+        if outcome is None:
+            if session.process is not None and session.process.isalive():
+                return FlowStatus(state=FlowState.PENDING)
+            self._fail_locked(session, "Codex stopped before the sign-in finished.")
+            return FlowStatus(state=FlowState.FAILED, detail=session.detail)
+        if isinstance(outcome, LoginCompleted) and outcome.success:
+            return self._commit_locked(session, session.lane.provider_name)
+        logger.info("Codex sign-in {} did not complete: {}", session.flow_id, outcome)
+        self._fail_locked(session, "The sign-in did not complete.")
+        return FlowStatus(state=FlowState.FAILED, detail=session.detail)
 
     def _settle_locked(self, session: _Session, method: PtyMethod) -> FlowStatus:
         """Read what the CLI has said so far and decide, without blocking on it."""
@@ -699,6 +807,9 @@ class AuthFlowService:
         if session.timer is not None:
             session.timer.cancel()
             session.timer = None
+        if session.login_client is not None:
+            session.login_client.close()
+            session.login_client = None
         if session.scratch_dir is not None:
             shutil.rmtree(session.scratch_dir, ignore_errors=True)
             session.scratch_dir = None
@@ -774,6 +885,10 @@ def _auth_command_signatures() -> set[tuple[str, ...]]:
     return signatures
 
 
+_APP_SERVER_SIGNATURE: Final = ("codex", "app-server")
+_SIGN_IN_FLOW_MARKER: Final = f"{SIGN_IN_FLOW_ENV_VAR}=1".encode()
+
+
 def reap_orphaned_auth_processes(home: Path | None = None) -> int:
     """Kill sign-in CLIs left running by a previous process. Returns how many.
 
@@ -806,9 +921,15 @@ def reap_orphaned_auth_processes(home: Path | None = None) -> int:
                 continue
             # argv[0] can be an absolute path; compare on the basename.
             signature = (Path(cmdline[0]).name, *cmdline[1:])
-            if signature not in signatures:
+            is_app_server = signature[:2] == _APP_SERVER_SIGNATURE
+            if signature not in signatures and not is_app_server:
                 continue
-            if scoping_value not in entry.joinpath("environ").read_bytes():
+            environ = entry.joinpath("environ").read_bytes()
+            if scoping_value not in environ:
+                continue
+            # The account's own chats run app-servers on the same codex home; only one this
+            # service started for a sign-in carries the marker.
+            if is_app_server and _SIGN_IN_FLOW_MARKER not in environ.split(b"\0"):
                 continue
             os.kill(int(entry.name), signal.SIGKILL)
             reaped += 1
