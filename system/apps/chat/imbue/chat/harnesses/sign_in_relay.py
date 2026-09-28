@@ -32,7 +32,8 @@ BROWSER_ENV_VAR: Final = "BROWSER"
 SIGN_IN_URL_FILE_ENV_VAR: Final = "MINDS_SIGNIN_URL_FILE"
 SIGN_IN_URL_FILENAME: Final = "relay_url"
 
-# How long the CLI may take to answer the relayed callback: it answers once its token exchange ends.
+# How long the CLI may take to answer the relayed callback and the redirect back to its own listener
+# that codex follows it with; the flow, not this answer, says whether the sign-in worked.
 CALLBACK_TIMEOUT_SECONDS: Final = 30.0
 MAX_PATH_AND_QUERY_LENGTH: Final = 8192
 
