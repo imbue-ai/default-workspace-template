@@ -84,16 +84,22 @@ export function launchPathOf(app: AppRecord, launchId: string): LaunchPath | nul
   return app.launch_paths.find((candidate) => candidate.id === launchId) ?? null;
 }
 
-/** The path the chat app serves a chat at: one page per chat, at ``/<chat-id>``. */
+/** The chat app's root query key naming the chat it shows. */
+const CHAT_ROOT_QUERY_KEY = "chat";
+
+/** The path that shows the chat ``chatId``: the chat app's root (the chat list its pinned window holds)
+ *  with that chat selected, ``/?chat=<chat-id>``. The root reads its selection only from this query, so
+ *  a bare ``/<chat-id>`` sent to it selects nothing. */
 export function chatPath(chatId: string): string {
-  return `/${chatId}`;
+  return `/?${new URLSearchParams({ [CHAT_ROOT_QUERY_KEY]: chatId }).toString()}`;
 }
 
-/** Whether ``path`` is showing the chat ``chatId``: the chat's own page, or one of its subagent
- *  views (``/<chat-id>.<agent-id>.<session-id>``). Any query string is ignored. */
+/** Whether ``path`` is showing the chat ``chatId``: the root with it selected, the chat's own page
+ *  (``/<chat-id>``), or one of its subagent views (``/<chat-id>.<agent-id>.<session-id>``). */
 export function isPathShowingChat(path: string, chatId: string): boolean {
-  const withoutQuery = path.split("?")[0];
-  return withoutQuery === chatPath(chatId) || withoutQuery.startsWith(`${chatPath(chatId)}.`);
+  const { pathname, searchParams } = new URL(path, "http://app.invalid");
+  if (pathname === "/") return searchParams.get(CHAT_ROOT_QUERY_KEY) === chatId;
+  return pathname === `/${chatId}` || pathname.startsWith(`/${chatId}.`);
 }
 
 /** The params a free-text row launches with: the text as its fill param; none for empty text. */
