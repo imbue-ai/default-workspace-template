@@ -40,7 +40,7 @@ IF YOU FAIL TO FOLLOW ONE, SAY SO EXPLICITLY IN YOUR REPORT.
 `data/` is gitignored, so your worktree carries almost none of it. The workspace's
 own data is at `/home/user/workspace/data/`.
 
-Read data from there if you need to, and write any data changes there too.
+Read data from there if you need to. Write your report where your task file says.
 
 # Progress tracking is not yours
 
