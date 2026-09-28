@@ -530,12 +530,14 @@ resumes), and how to honor a rollback request are in
 
 Before composing the results message, collect every finding the worker labelled
 a `submit-upstream-changes` candidate, plus any other defect in built-in code
-you hit this pass (a failing built-in test, a step of this flow that broke and
-had to be worked around). Escalate them together as AGENTS.md's "Updates"
+you hit this pass (a failing built-in test, a built-in test the worker's
+Validation names as flaky, a step of this flow that broke and had to be worked
+around). Escalate them together as AGENTS.md's "Updates"
 section describes -- one report via
 `.agents/shared/references/report-built-in-issues.md`, or
 `submit-upstream-changes` for a template fix -- or name each in the results
-message with the submission offered.
+message with the submission offered. A flaky test of a creation the workspace
+built is not built-in: file a regular ticket for it (`tk create`).
 
 Then compose the results message per `references/results-message.md`.
 
