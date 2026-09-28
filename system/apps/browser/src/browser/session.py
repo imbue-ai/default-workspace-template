@@ -232,12 +232,15 @@ def _ensure_pulse_daemon() -> bool:
         # above; only a stop that overruns stopwaitsecs reaps it with the group.
         # --daemonize=yes double-forks and trips over a stale PID file in this container; a
         # plain Popen does not.
-        subprocess.Popen(
+        daemon = subprocess.Popen(
             ["pulseaudio", "--system", "--daemonize=no", "--disallow-exit",
              "--exit-idle-time=-1", "--log-target=stderr", "-n",
              "-L", "module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        # Reap it the moment it exits (shed under memory pressure, or crashed). Left
+        # unwaited it stays a zombie of this process, which earlyoom cannot free.
+        threading.Thread(target=daemon.wait, name="pulseaudio-reaper", daemon=True).start()
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
