@@ -305,9 +305,10 @@ in your report.
 - **Suites, lint, ratchets** for what the merged set, the update's changes to
   your creations, 4a's impacted consumers, and your own edits can reach, and
   for nothing else (with none of them, no suite runs at all). The test
-  selector names them from those paths -- each changed package's, skill's, or
-  script's own tests, the suites of whatever consumes it, the frontend checks,
-  and the repo guards; a set made only of documentation selects nothing.
+  selector names them from those paths -- each changed package's or skill's
+  own tests, the suites of whatever declares a dependency on it, the frontend
+  checks, the repo guards, and the full root suite for a path in no package or
+  skill; a set made only of documentation selects nothing.
   The update's changes inside a creation that carries local content (every
   creation whose Step 4 `.local.json` and `.update.json` both list files
   inside its footprint) go in by rule, so the user's own tests of it run
@@ -342,7 +343,7 @@ in your report.
   `--diff-base` here only names what a merged `uv.lock` is compared against,
   so a lock that upgraded a package selects the suites that depend on it. Run
   every printed line, in order, plus `uv run ruff check` when a Python file is
-  in the list, and handle a shed command or an `# unclassified` path the way
+  in the list, and handle a shed command the way
   `.agents/shared/worker/references/harden-creation.md` ("The test gate")
   says. mngr's own suite runs in its repo, not here.
 - **Isolated-service boots** for each service with a file in the merged set,

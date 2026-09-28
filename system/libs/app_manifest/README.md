@@ -199,43 +199,45 @@ against. A `--diff-base` selection that runs to the checked-out commit refuses
 to run while the working tree holds uncommitted or untracked changes, and names
 them, since the tests would run against changes the diff leaves out.
 
-A path selects:
+Selection reads only what the workspace declares. A path selects:
 
 - its own tests: the package (`system/{libs,services,apps}/<name>`) or skill
-  (`.agents/skills/<name>`) it sits in, or, in the flat script directories
-  (`system/scripts`, `.agents/shared/scripts`), the tests paired with it by
-  filename (`<stem>.py`, `<stem>.sh` and `<stem>/` pair with `<stem>_test.py`
-  and `test_<stem>*.py`; a deleted script needs no pair), plus those of every
-  script beside it that imports it, directly or through another (the whole
-  directory when its `conftest.py` does);
+  (`.agents/skills/<name>`) it sits in, or, for a collected test file outside
+  both, that file alone;
 - its consumers: every workspace member that depends on its package, directly
-  or transitively (`pyproject.toml` dependencies and dependency groups), with
-  the suites the override file records for any of that member's files, and
-  the unpackaged scripts that import one of its modules, through the tests
-  paired with each and the suites the override file records for it (not for a
-  test file, which nothing that depends on the package runs, and not for a
-  path in an app's frontend, which is built into the app's own bundle);
-- for a `uv.lock` change, every member that depends on a package the lock
-  upgraded, with what the override file records for its files (a package only
-  added selects nothing beyond the member whose `pyproject.toml` added it);
-- for an npm package, its and its consumers' `npm test`, `npm run lint` and
-  `npm run format:check` (and `npm run typecheck` for a package with no build),
-  after `npm ci && npm run build`, plus the browser tests of every app whose
-  frontend is among them;
-- the app whose manifest references it, or whose supervisord block it holds;
+  or transitively (`pyproject.toml` dependencies and dependency groups) -- not
+  for a test file, which nothing that depends on the package runs, and not for
+  a path in an app's frontend, which is built into the app's own bundle;
 - for a path in an app other than a test file, the tests beneath each
   directory the app's manifest references (a referenced skill drives the
   app's surface);
-- every test file whose code names it: in a string, or in a path joined from
-  literal parts (`root / "system" / "scripts" / "layout.py"`), but not in a
-  comment or docstring;
-- what the override file says.
+- the app whose manifest references it (`[[references]]`), or whose program a
+  supervisord block holds;
+- for a `uv.lock` change, every member that depends on a package the lock
+  upgraded (a package only added selects nothing beyond the member whose
+  `pyproject.toml` added it);
+- for an npm package, its and its consumers' `npm test`, `npm run lint` and
+  `npm run format:check` (and `npm run typecheck` for a package with no build),
+  after `npm ci && npm run build`, plus the browser tests of every app whose
+  frontend is among them; the npm root's configuration and its prebuild script
+  (`system/scripts/fetch_mngr_assets.sh`, with the `_mngr_git_auth.sh` it
+  sources) select every npm package.
+
+A path in no package, skill or npm package, that is not npm root
+configuration, a supervisord block, `uv.lock`, a guard, a collected test file, or markdown under
+`.agents/` (agent prose, which only the always-run prose checks and the apps
+referencing it read), runs the full root suite (`uv run pytest` from the repo
+root), which replaces the other root-collected commands; so does a change to
+the root `pyproject.toml` or `conftest.py`, and a `uv.lock` change that cannot
+be compared or that the root project depends on directly.
 
 Every change that is not entirely documentation (README and changelog files
 anywhere, and other markdown outside `.agents/` and `system/{scripts,libs,services,apps}/`,
-where markdown is prose an agent runs) also runs the
-always-run set: `system/*.py` and the cross-cutting guards the override file
-lists. A change made only of documentation selects nothing.
+where markdown is prose an agent runs) also runs the always-run set:
+`system/*.py`, the cross-cutting `system/scripts` guards, and the checks that
+read every skill's prose. A listed guard git does not track fails the selection
+rather than dropping out of it. A change made only of documentation selects
+nothing.
 
 `system/apps/chat` and `system/apps/system_interface` run as their own pytest
 roots: workspace members with their own pytest configuration, which the root
@@ -244,28 +246,14 @@ as `system/vendor/tk`) is no suite, and its tests are never selected. The two
 apps' suites deselect their browser tests (the `release` marker) by default.
 Such an app runs with them (`-m ''`) when the app itself changed, and without
 them when it was reached as a consumer. A run of only some of such a suite's
-files (its browser tests, or a test file that names a changed path) passes
+files (its browser tests, or a changed test file) passes
 `--no-cov` when the suite measures coverage, since only a whole run can reach
 its coverage floor. The chat suite's `test_no_type_errors`
 is deselected and its `ty check` printed as a command of its own, so the two
 memory peaks do not stack.
 
-A path none of this classifies brings in the full root suite, and is named in
-an `# unclassified` block at the end. That is the signal to decide which suites
-can observe the path and record it in the override file.
-
-### The override file
-
-`system/config/test_selection_overrides.toml` holds what the declarations
-cannot show: `always_run` (the cross-cutting guards), `[[consumer]]` entries
-(`paths` globs, the `suites` they select, and a `note`; an empty `suites` says
-no suite beyond the always-run set can observe the paths), and `[[integration]]`
-entries for tests that drive a real installed tool (`test`, the `paths` that
-select it, and a `note`). Paths are gitignore-style globs over repo-root-relative
-paths; a suite is a test file or a suite directory. A suite that does not exist
-fails the selection rather than selecting nothing. `test_repo_test_selection.py`
-holds the real tree to the mapping: every tracked path that is not documentation
-must classify, and every suite the file names must exist. CI runs it on every
-change, and a workspace runs it whenever the selector or the override file
-changes.
+A coupling nothing declares (a script run as a subprocess, a service called
+over HTTP, a file one component writes and another reads) is invisible to the
+selection. When the consumer is an app, declaring the path in its manifest's
+`[[references]]` is what makes a change to the path select it.
 

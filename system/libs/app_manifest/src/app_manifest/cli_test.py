@@ -363,7 +363,7 @@ def test_select_tests_over_explicit_paths_matches_the_same_set_read_from_a_diff(
     commit_everything(tmp_path, "lock")
     changes = {
         "system/libs/midlib/src/midlib/core.py": "VALUE = 2\n",
-        "system/scripts/forward_port.py": "PORT = 2\n",
+        ".agents/skills/refresh/scripts/refresh.py": "VALUE = 2\n",
         "uv.lock": selection_lock("2.1"),
         "README.md": "# changed\n",
     }
@@ -399,14 +399,17 @@ def test_select_tests_over_a_diff_runs_what_depended_on_a_moved_files_old_place(
     lines = result.output.splitlines()
     # corelib lost the module its consumers import, so it and they run, not only midlib's side.
     assert "uv run pytest system/libs/corelib" in lines
-    assert "uv run pytest .agents/skills/refresh" in lines
+    assert (
+        "(cd system/apps/chat && uv run pytest --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
+        in lines
+    )
 
 
 def test_select_tests_over_a_diff_refuses_a_working_tree_with_uncommitted_changes(
     tmp_path: Path,
 ) -> None:
     build_selection_workspace(tmp_path)
-    _branch_with_changes(tmp_path, {"system/scripts/forward_port.py": "PORT = 2\n"})
+    _branch_with_changes(tmp_path, {".agents/skills/refresh/scripts/refresh.py": "VALUE = 2\n"})
     write_repo_file(tmp_path, ".git/info/exclude", "*.log\n")
     write_repo_file(tmp_path, "system/libs/midlib/run.log", "ignored\n")
     write_repo_file(tmp_path, "system/libs/midlib/src/midlib/core.py", "VALUE = 3\n")
@@ -448,7 +451,7 @@ def test_select_tests_over_a_diff_to_an_earlier_commit_ignores_the_working_tree(
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
-    assert "uv run pytest system/scripts/forward_port_test.py" in lines
+    assert lines[-1] == "uv run pytest"
     assert "uv run pytest system/libs/midlib" not in lines
 
 
@@ -471,12 +474,11 @@ def test_select_tests_prints_json_with_every_path_classified(tmp_path: Path) -> 
 
     assert result.exit_code == 0, result.output
     selection = json.loads(result.output)
-    assert selection["unclassified"] == ["unknown.bin"]
     assert selection["is_full_root"] is True
     assert [command["argv"] for command in selection["commands"]] == [["uv", "run", "pytest"]]
     assert {entry["path"]: entry["classes"] for entry in selection["paths"]} == {
-        "system/scripts/forward_port.py": ["paired_script"],
-        "unknown.bin": ["unclassified"],
+        "system/scripts/forward_port.py": ["unowned"],
+        "unknown.bin": ["unowned"],
     }
 
 

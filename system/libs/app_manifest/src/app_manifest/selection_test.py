@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app_manifest.errors import SuiteSelectionError
+from app_manifest.selection import ALWAYS_RUN_GUARDS
 from app_manifest.selection import ChangedPathClass
 from app_manifest.selection import SuiteSelection
 from app_manifest.selection import load_repo_layout
@@ -16,7 +17,10 @@ from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_dropin
 
-_ALWAYS_RUN = "uv run pytest system/scripts/hook_wiring_test.py system/test_layout.py"
+_ALWAYS_RUN = " ".join(
+    ("uv", "run", "pytest", *sorted({*ALWAYS_RUN_GUARDS, "system/test_layout.py"}))
+)
+_FULL_ROOT = "uv run pytest"
 _CHAT_WHOLE_WITHOUT_BROWSER = (
     "(cd system/apps/chat && uv run pytest --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
 )
@@ -50,8 +54,6 @@ def test_a_shared_library_change_runs_its_suite_and_every_transitive_consumer(
 
     assert _command_lines(selection) == [
         _ALWAYS_RUN,
-        # The skill's script imports corelib without a pyproject.toml to say so.
-        "uv run pytest .agents/skills/refresh",
         # notes reaches corelib only through midlib.
         "uv run pytest system/apps/notes",
         "uv run pytest system/libs/corelib",
@@ -61,42 +63,6 @@ def test_a_shared_library_change_runs_its_suite_and_every_transitive_consumer(
         _CHAT_TYPE_CHECK,
     ]
     assert not selection.is_full_root
-
-
-def test_a_shared_library_change_runs_the_tests_of_scripts_importing_a_consumer(
-    workspace: Path,
-) -> None:
-    write_repo_file(workspace, "system/scripts/mid_report.py", "from midlib.core import VALUE\n")
-    write_repo_file(
-        workspace, "system/scripts/mid_report_test.py", "def test_report() -> None:\n    pass\n"
-    )
-    commit_everything(workspace, "a script that imports midlib")
-
-    selection = _select(workspace, ["system/libs/corelib/src/corelib/core.py"])
-
-    assert "uv run pytest system/scripts/mid_report_test.py" in _command_lines(selection)
-
-
-def test_a_shared_library_change_runs_the_suites_the_override_file_records_for_an_importer(
-    workspace: Path,
-) -> None:
-    write_repo_file(workspace, "system/scripts/guard_check.py", "from midlib.core import VALUE\n")
-    write_repo_file(
-        workspace, "system/scripts/guard_hook_test.py", "def test_hook() -> None:\n    pass\n"
-    )
-    overrides = workspace / "system/config/test_selection_overrides.toml"
-    write_repo_file(
-        workspace,
-        "system/config/test_selection_overrides.toml",
-        overrides.read_text()
-        + '\n[[consumer]]\npaths = ["system/scripts/guard_check.py"]\n'
-        + 'suites = ["system/scripts/guard_hook_test.py"]\nnote = "run by the hook\'s test"\n',
-    )
-    commit_everything(workspace, "a script whose tests the override file records")
-
-    selection = _select(workspace, ["system/libs/corelib/src/corelib/core.py"])
-
-    assert "uv run pytest system/scripts/guard_hook_test.py" in _command_lines(selection)
 
 
 def test_a_shared_library_test_change_runs_only_the_librarys_own_suite(workspace: Path) -> None:
@@ -111,153 +77,56 @@ def test_a_consumer_change_does_not_run_what_it_consumes(workspace: Path) -> Non
     assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
 
 
-def test_a_script_runs_the_test_paired_with_it_by_filename_and_no_other(workspace: Path) -> None:
+def test_a_skill_change_runs_only_that_skills_suite(workspace: Path) -> None:
+    selection = _select(workspace, [".agents/skills/refresh/scripts/refresh.py"])
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest .agents/skills/refresh"]
+    assert selection.paths[0].classes == (ChangedPathClass.SKILL,)
+
+
+def test_a_path_outside_every_package_and_skill_runs_the_full_root_suite(
+    workspace: Path,
+) -> None:
     selection = _select(workspace, ["system/scripts/forward_port.py"])
 
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/scripts/forward_port_test.py"]
-
-
-def test_a_script_under_its_own_directory_pairs_with_the_test_there(workspace: Path) -> None:
-    selection = _select(workspace, ["system/scripts/agy_shim/agy_shim.sh"])
-
-    assert _command_lines(selection) == [
-        _ALWAYS_RUN,
-        "uv run pytest system/scripts/agy_shim/agy_shim_test.py",
-    ]
-
-
-def test_a_test_prefixed_file_pairs_with_the_script_it_names(workspace: Path) -> None:
-    selection = _select(workspace, ["system/scripts/create_gate.py"])
-
-    assert "uv run pytest system/scripts/test_create_gate.py" in _command_lines(selection)
-
-
-def test_a_new_script_with_no_pair_is_unclassified_and_brings_in_the_full_root_suite(
-    workspace: Path,
-) -> None:
-    write_repo_file(workspace, "system/scripts/brand_new.py", "X = 1\n")
-    commit_everything(workspace, "add a script")
-
-    selection = _select(workspace, ["system/scripts/brand_new.py"])
-
-    assert _command_lines(selection) == ["uv run pytest"]
-    assert selection.unclassified == ("system/scripts/brand_new.py",)
+    assert _command_lines(selection) == [_FULL_ROOT]
     assert selection.is_full_root
-    rendered = render_selection(selection)
-    assert "#   system/scripts/brand_new.py" in rendered
-    assert "test_selection_overrides.toml" in rendered
+    assert selection.paths[0].classes == (ChangedPathClass.UNOWNED,)
+    assert "system/scripts/forward_port.py (full root suite)" in render_selection(selection)
 
 
-def test_a_deleted_script_and_its_test_are_classified_without_the_full_root_suite(
-    workspace: Path,
-) -> None:
-    write_repo_file(
-        workspace,
-        "system/scripts/gate_callers_test.py",
-        'GATE = "system/scripts/create_gate.py"\n\n\ndef test_callers() -> None:\n    pass\n',
-    )
-    commit_everything(workspace, "a test that names the gate")
-    (workspace / "system/scripts/create_gate.py").unlink()
-    (workspace / "system/scripts/test_create_gate.py").unlink()
-    commit_everything(workspace, "retire the gate")
+def test_a_changed_test_file_outside_every_package_runs_only_itself(workspace: Path) -> None:
+    selection = _select(workspace, ["system/scripts/forward_port_test.py"])
 
-    selection = _select(
-        workspace, ["system/scripts/create_gate.py", "system/scripts/test_create_gate.py"]
-    )
-
-    assert not selection.is_full_root
-    assert selection.unclassified == ()
     assert _command_lines(selection) == [
         _ALWAYS_RUN,
-        "uv run pytest system/scripts/gate_callers_test.py",
+        "uv run pytest system/scripts/forward_port_test.py",
     ]
 
 
 def test_the_full_root_suite_replaces_the_root_collected_runs_but_not_the_own_root_suites(
     workspace: Path,
 ) -> None:
-    selection = _select(workspace, ["unknown.bin", "system/apps/chat/imbue/chat/server.py"])
+    selection = _select(
+        workspace,
+        ["unknown.bin", "system/libs/midlib/src/midlib/core.py", "system/apps/chat/imbue/chat/server.py"],
+    )
 
     lines = _command_lines(selection)
-    assert "uv run pytest" in lines
+    assert _FULL_ROOT in lines
     assert _ALWAYS_RUN not in lines
+    assert "uv run pytest system/libs/midlib" not in lines
     assert _CHAT_WHOLE_WITH_BROWSER in lines
 
 
-def test_a_file_a_test_names_runs_that_test(workspace: Path) -> None:
-    selection = _select(workspace, ["system/scripts/banner.txt"])
+def test_a_supervisord_block_runs_the_app_it_starts(workspace: Path) -> None:
+    write_supervisord_dropin(workspace, "notes", ("program:notes",))
+    commit_everything(workspace, "wire notes")
 
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/scripts/banner_test.py"]
-    assert selection.paths[0].classes == (ChangedPathClass.NAMED_BY_TEST,)
+    selection = _select(workspace, ["system/supervisord.conf.d/notes.conf"])
 
-
-def test_a_helper_module_a_test_imports_runs_that_test(workspace: Path) -> None:
-    selection = _select(workspace, ["system/scripts/shape_testing.py"])
-
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/scripts/shape_test.py"]
-
-
-def test_a_path_named_only_in_a_comment_or_docstring_runs_no_test(workspace: Path) -> None:
-    write_repo_file(workspace, "system/scripts/motd.txt", "hi\n")
-    write_repo_file(
-        workspace,
-        "system/scripts/greeting_test.py",
-        '"""Reads the greeting the way system/scripts/motd.txt does."""\n\n\n'
-        "def test_greeting() -> None:\n"
-        "    # system/scripts/motd.txt is not what this test reads.\n"
-        "    pass\n",
-    )
-    commit_everything(workspace, "a test that only mentions a file")
-
-    selection = _select(workspace, ["system/scripts/motd.txt"])
-
-    assert selection.unclassified == ("system/scripts/motd.txt",)
-
-
-def test_a_file_a_test_reaches_through_path_parts_runs_that_test(workspace: Path) -> None:
-    write_repo_file(workspace, ".claude/settings.json", "{}\n")
-    write_repo_file(workspace, ".codex/settings.json", "{}\n")
-    write_repo_file(
-        workspace,
-        "system/scripts/plugins_test.py",
-        "from pathlib import Path\n\n"
-        '_SETTINGS = Path(__file__).resolve().parents[2] / ".claude" / "settings.json"\n\n\n'
-        "def test_plugins() -> None:\n    assert _SETTINGS\n",
-    )
-    commit_everything(workspace, "a test that reads a settings file through path parts")
-
-    selection = _select(workspace, [".claude/settings.json"])
-
-    assert "uv run pytest system/scripts/plugins_test.py" in _command_lines(selection)
-
-
-def test_a_script_change_runs_the_tests_of_the_sibling_scripts_that_import_it(
-    workspace: Path,
-) -> None:
-    write_repo_file(workspace, "system/scripts/greeter.py", "from forward_port import PORT\n")
-    write_repo_file(workspace, "system/scripts/welcome.py", "import greeter\n")
-    write_repo_file(
-        workspace, "system/scripts/welcome_test.py", "def test_welcome() -> None:\n    pass\n"
-    )
-    commit_everything(workspace, "a script importing a script importing forward_port")
-
-    selection = _select(workspace, ["system/scripts/forward_port.py"])
-
-    assert (
-        "uv run pytest system/scripts/forward_port_test.py system/scripts/welcome_test.py"
-        in _command_lines(selection)
-    )
-
-
-def test_a_script_the_directorys_conftest_imports_runs_the_whole_directory(
-    workspace: Path,
-) -> None:
-    write_repo_file(workspace, "system/scripts/conftest.py", "from shape_testing import SHAPE\n")
-    commit_everything(workspace, "a conftest that imports a helper")
-
-    selection = _select(workspace, ["system/scripts/shape_testing.py"])
-
-    assert "uv run pytest system/scripts" in _command_lines(selection)
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
+    assert selection.paths[0].classes == (ChangedPathClass.WIRING,)
 
 
 def test_documentation_alone_selects_nothing(workspace: Path) -> None:
@@ -268,8 +137,8 @@ def test_documentation_alone_selects_nothing(workspace: Path) -> None:
 
 
 def test_documentation_beside_code_adds_nothing_to_what_the_code_selects(workspace: Path) -> None:
-    with_docs = _select(workspace, ["README.md", "system/scripts/forward_port.py"])
-    without_docs = _select(workspace, ["system/scripts/forward_port.py"])
+    with_docs = _select(workspace, ["README.md", "system/libs/midlib/src/midlib/core.py"])
+    without_docs = _select(workspace, ["system/libs/midlib/src/midlib/core.py"])
 
     assert _command_lines(with_docs) == _command_lines(without_docs)
 
@@ -279,6 +148,46 @@ def test_every_non_documentation_change_runs_the_always_run_set(workspace: Path)
 
     assert _command_lines(selection) == [_ALWAYS_RUN]
     assert selection.paths[0].classes == (ChangedPathClass.GUARD,)
+
+
+def test_an_always_run_guard_git_does_not_track_fails_the_selection(workspace: Path) -> None:
+    (workspace / "system/scripts/provision_guard_test.py").unlink()
+    commit_everything(workspace, "drop a guard")
+
+    with pytest.raises(SuiteSelectionError, match="system/scripts/provision_guard_test.py"):
+        _select(workspace, ["system/test_layout.py"])
+
+
+def test_agent_prose_outside_every_skill_runs_only_the_always_run_set(workspace: Path) -> None:
+    write_repo_file(workspace, ".agents/shared/references/dispatch.md", "# dispatch\n")
+    write_repo_file(workspace, ".agents/shared/scripts/dispatch.py", "X = 1\n")
+    commit_everything(workspace, "shared agent prose and a shared script")
+
+    prose = _select(workspace, [".agents/shared/references/dispatch.md"])
+    script = _select(workspace, [".agents/shared/scripts/dispatch.py"])
+
+    assert _command_lines(prose) == [_ALWAYS_RUN]
+    assert _command_lines(script) == [_FULL_ROOT]
+
+
+def test_agent_prose_an_app_manifest_references_runs_that_app(workspace: Path) -> None:
+    write_repo_file(workspace, ".agents/shared/references/notes-guide.md", "# guide\n")
+    write_app_manifest(
+        workspace,
+        "notes",
+        'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n\n'
+        '[[references]]\npath = ".agents/shared/references/notes-guide.md"\n',
+        is_icon_written=True,
+    )
+    commit_everything(workspace, "notes references a shared guide")
+
+    selection = _select(workspace, [".agents/shared/references/notes-guide.md"])
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
+    assert selection.paths[0].classes == (
+        ChangedPathClass.GUARD,
+        ChangedPathClass.MANIFEST_REFERENCE,
+    )
 
 
 def test_a_shared_frontend_library_change_builds_then_runs_consumer_checks_and_browser_tests(
@@ -295,6 +204,22 @@ def test_a_shared_frontend_library_change_builds_then_runs_consumer_checks_and_b
         "(cd system && npm run typecheck --workspace=libs/ui)",
         _ALWAYS_RUN,
         # Only the chat app's browser tests can observe the library; the rest of its suite cannot.
+        "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_e2e.py)",
+    ]
+
+
+def test_the_npm_roots_prebuild_script_runs_every_frontends_checks_instead_of_the_full_root_suite(
+    workspace: Path,
+) -> None:
+    selection = _select(workspace, ["system/scripts/fetch_mngr_assets.sh"])
+
+    assert _command_lines(selection) == [
+        *_FRONTEND_BUILD,
+        "(cd system && npm test --workspace=apps/chat/frontend --workspace=libs/ui)",
+        "(cd system && npm run lint --workspace=apps/chat/frontend --workspace=libs/ui)",
+        "(cd system && npm run format:check --workspace=apps/chat/frontend --workspace=libs/ui)",
+        "(cd system && npm run typecheck --workspace=libs/ui)",
+        _ALWAYS_RUN,
         "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_e2e.py)",
     ]
 
@@ -332,17 +257,6 @@ def test_a_frontend_change_to_the_app_runs_its_npm_checks_and_its_whole_suite(
 def test_a_frontend_change_does_not_reach_the_python_consumers_of_the_apps_package(
     workspace: Path,
 ) -> None:
-    _write_chat_consumer(workspace)
-
-    frontend = _select(workspace, ["system/apps/chat/frontend/src/main.ts"])
-    backend = _select(workspace, ["system/apps/chat/imbue/chat/server.py"])
-
-    assert "uv run pytest system/apps/shelf" not in _command_lines(frontend)
-    assert _CHAT_WHOLE_WITH_BROWSER in _command_lines(frontend)
-    assert "uv run pytest system/apps/shelf" in _command_lines(backend)
-
-
-def _write_chat_consumer(workspace: Path) -> None:
     write_repo_file(
         workspace,
         "system/apps/shelf/pyproject.toml",
@@ -355,15 +269,15 @@ def _write_chat_consumer(workspace: Path) -> None:
     )
     commit_everything(workspace, "an app that depends on the chat app")
 
+    frontend = _select(workspace, ["system/apps/chat/frontend/src/main.ts"])
+    backend = _select(workspace, ["system/apps/chat/imbue/chat/server.py"])
 
-def test_a_path_an_app_manifest_references_runs_that_app(workspace: Path) -> None:
-    selection = _select(workspace, ["system/scripts/run_notes.sh"])
-
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
-    assert selection.paths[0].classes == (ChangedPathClass.MANIFEST_REFERENCE,)
+    assert "uv run pytest system/apps/shelf" not in _command_lines(frontend)
+    assert _CHAT_WHOLE_WITH_BROWSER in _command_lines(frontend)
+    assert "uv run pytest system/apps/shelf" in _command_lines(backend)
 
 
-def test_an_app_change_runs_the_tests_of_the_directories_its_manifest_references(
+def test_a_path_an_app_manifest_references_runs_that_app_and_the_references_tests(
     workspace: Path,
 ) -> None:
     write_app_manifest(
@@ -375,80 +289,33 @@ def test_an_app_change_runs_the_tests_of_the_directories_its_manifest_references
     )
     commit_everything(workspace, "notes references the refresh skill")
 
-    selection = _select(workspace, ["system/apps/notes/src/notes/core.py"])
+    from_reference = _select(workspace, [".agents/skills/refresh/scripts/refresh.py"])
+    from_app = _select(workspace, ["system/apps/notes/src/notes/core.py"])
 
-    assert _command_lines(selection) == [
+    expected = [
         _ALWAYS_RUN,
         "uv run pytest .agents/skills/refresh",
         "uv run pytest system/apps/notes",
     ]
-
-
-def test_a_supervisord_block_runs_the_app_it_starts(workspace: Path) -> None:
-    write_supervisord_dropin(workspace, "notes", ("program:notes",))
-    commit_everything(workspace, "wire notes")
-
-    selection = _select(workspace, ["system/supervisord.conf.d/notes.conf"])
-
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
-
-
-def test_the_override_file_selects_consumers_and_integration_tests(workspace: Path) -> None:
-    selection = _select(workspace, ["catalog/templates.json", ".mngr/settings.toml"])
-
-    assert _command_lines(selection) == [
-        _ALWAYS_RUN,
-        "uv run pytest system/apps/notes",
-        "uv run pytest system/scripts/test_create_gate.py",
-    ]
-
-
-def test_an_override_naming_a_suite_that_does_not_exist_fails_loudly(workspace: Path) -> None:
-    write_repo_file(
-        workspace,
-        "system/config/test_selection_overrides.toml",
-        'always_run = []\n\n[[consumer]]\npaths = ["catalog/**"]\nsuites = ["system/apps/gone"]\nnote = "stale"\n\n',
+    assert _command_lines(from_reference) == expected
+    assert from_reference.paths[0].classes == (
+        ChangedPathClass.SKILL,
+        ChangedPathClass.MANIFEST_REFERENCE,
     )
-    commit_everything(workspace, "a stale override")
-
-    with pytest.raises(SuiteSelectionError, match="system/apps/gone"):
-        _select(workspace, ["catalog/templates.json"])
+    assert _command_lines(from_app) == expected
 
 
 def test_an_upgraded_lock_entry_runs_the_members_that_depend_on_it(workspace: Path) -> None:
-    base_lock = selection_lock("2.0")
-    head_lock = selection_lock("2.1")
-
-    selection = _select(workspace, ["uv.lock"], (base_lock, head_lock))
+    selection = _select(workspace, ["uv.lock"], (selection_lock("2.0"), selection_lock("2.1")))
 
     assert _command_lines(selection) == [
         _ALWAYS_RUN,
-        # The skill's script imports corelib, which depends on the upgrade.
-        "uv run pytest .agents/skills/refresh",
         "uv run pytest system/apps/notes",
         "uv run pytest system/libs/corelib",
         "uv run pytest system/libs/midlib",
         _CHAT_WHOLE_WITHOUT_BROWSER,
         _CHAT_TYPE_CHECK,
     ]
-
-
-def test_an_upgrade_runs_the_suites_the_override_file_records_for_a_dependent_members_files(
-    workspace: Path,
-) -> None:
-    overrides = workspace / "system/config/test_selection_overrides.toml"
-    write_repo_file(
-        workspace,
-        "system/config/test_selection_overrides.toml",
-        overrides.read_text()
-        + '\n[[consumer]]\npaths = ["system/libs/midlib/src/midlib/*.py"]\n'
-        + 'suites = ["system/scripts/agy_shim"]\nnote = "runs midlib as a subprocess"\n',
-    )
-    commit_everything(workspace, "a subprocess consumer of midlib")
-
-    selection = _select(workspace, ["uv.lock"], (selection_lock("2.0"), selection_lock("2.1")))
-
-    assert "uv run pytest system/scripts/agy_shim" in _command_lines(selection)
 
 
 def test_a_lock_that_only_adds_packages_runs_nothing_beyond_the_adder(workspace: Path) -> None:
@@ -467,14 +334,14 @@ def test_a_lock_that_only_adds_packages_runs_nothing_beyond_the_adder(workspace:
 def test_a_lock_that_does_not_parse_brings_in_the_full_root_suite(workspace: Path) -> None:
     selection = _select(workspace, ["uv.lock"], ("not [ toml", selection_lock("2.0")))
 
-    assert _command_lines(selection) == ["uv run pytest"]
+    assert _command_lines(selection) == [_FULL_ROOT]
     assert any("cannot parse the base uv.lock" in note for note in selection.notes)
 
 
 def test_a_lock_with_no_base_to_compare_brings_in_the_full_root_suite(workspace: Path) -> None:
     selection = _select(workspace, ["uv.lock"], None)
 
-    assert _command_lines(selection) == ["uv run pytest"]
+    assert _command_lines(selection) == [_FULL_ROOT]
     assert selection.paths[0].classes == (ChangedPathClass.LOCKFILE,)
 
 
@@ -489,16 +356,9 @@ def test_an_ignored_vendored_subtree_selects_none_of_its_tests(workspace: Path) 
     write_repo_file(
         workspace, "system/vendor/tool/pyproject.toml", '[tool.pytest.ini_options]\naddopts = ["-q"]\n'
     )
-    write_repo_file(
-        workspace,
-        "system/vendor/tool/tool_test.py",
-        "# Exercises system/scripts/forward_port.py.\nimport corelib\n",
-    )
+    write_repo_file(workspace, "system/vendor/tool/tool_test.py", "import corelib\n")
     commit_everything(workspace, "vendor a tool")
 
-    selection = _select(
-        workspace, ["system/scripts/forward_port.py", "system/libs/corelib/src/corelib/core.py"]
-    )
+    selection = _select(workspace, ["system/vendor/tool/tool_test.py"])
 
     assert not any("system/vendor/tool" in line for line in _command_lines(selection))
-    assert "uv run pytest system/scripts/forward_port_test.py" in _command_lines(selection)
