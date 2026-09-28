@@ -4,7 +4,7 @@
 
 - New `POST /api/accounts/flow/<flow_id>/callback` delivers a relayed browser callback to the sign-in CLI: only the callback with the flow's `state`, once, while the flow is waiting. It answers with the flow's status once it settles (or `pending` after 20 seconds) and the provider's name, which the desktop app shows the browser. When a flow ends, the chooser sends `minds:provider-sign-in-end` so the desktop app frees the callback port.
 
-- Only the workspace's owner can connect, change or remove an AI account: those routes answer 403 "Only the owner of this workspace can connect an AI account." to a visitor. Reading the accounts stays open, since a visitor's chats render from them; `GET /api/accounts` carries `can_manage`, and the chooser shows a visitor the accounts with that sentence instead of ways to sign in.
+- Only the workspace's owner can connect, change or remove an AI account: those routes answer 403 "Only the owner of this workspace can connect an AI account." to a visitor. Reading the accounts stays open, since a visitor's chats render from them; `GET /api/accounts` carries `can_manage`, the chooser shows a visitor the accounts with that sentence instead of ways to sign in, and the model menu's account rows show a visitor no default star, rename or remove.
 
 - A pasted Anthropic or OpenAI key is checked with its provider before it is saved: a rejected key says "That key was rejected by <provider>." and saves nothing, and a provider that cannot be reached saves the key and says "Couldn't check this key".
 

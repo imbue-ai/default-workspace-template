@@ -87,10 +87,11 @@ vi.mock("./fast-mode-limit", () => ({
 }));
 vi.mock("../models/Response", () => ({ getEventsForChat: () => [] }));
 
-const providerState: { accounts: unknown[]; defaultId: string | null; isLoaded: boolean } = {
+const providerState: { accounts: unknown[]; defaultId: string | null; isLoaded: boolean; canManage: boolean } = {
   accounts: [],
   defaultId: null,
   isLoaded: true,
+  canManage: true,
 };
 // Every time something opened the provider chooser, with whether it asked to hear of the sign-in.
 const chooserOpens: { hasOnSignedIn: boolean }[] = [];
@@ -107,6 +108,7 @@ vi.mock("../models/Providers", () => ({
   accountForFirstSend: (id: string) =>
     providerState.accounts.find((a) => (a as { id: string }).id === id) ?? providerState.accounts[0] ?? null,
   areAccountsLoaded: () => providerState.isLoaded,
+  canManageAccounts: () => providerState.canManage,
   openProviderChooser: (intent: { onSignedIn?: unknown } = {}) =>
     chooserOpens.push({ hasOnSignedIn: intent.onSignedIn !== undefined }),
   deleteAccount: () => Promise.resolve(),
@@ -224,6 +226,7 @@ beforeEach(() => {
   chatSettingsState.loads = 0;
   providerState.defaultId = null;
   providerState.isLoaded = true;
+  providerState.canManage = true;
   chooserOpens.length = 0;
   agentState.provisional = undefined;
   agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
@@ -739,6 +742,19 @@ describe("the combo card", () => {
     render();
     expect(screenText()).not.toContain("Launch a new chat?");
     expect(started).toEqual([]);
+  });
+
+  it("gives a visitor's account rows none of the controls that would change the account", () => {
+    // Changing accounts is the owner's alone, and the server refuses a visitor's star, rename
+    // and removal; the row itself still lists the account.
+    providerState.canManage = false;
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="providers"]');
+    expect(screenText()).toContain("Anthropic");
+    expect(document.querySelector('[aria-label="Open new chats on Anthropic by default"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Sign out of Anthropic"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Rename Anthropic"]')).toBeNull();
   });
 
   it("confirms a sign-out in a dialog, and closing the card takes the dialog with it", () => {

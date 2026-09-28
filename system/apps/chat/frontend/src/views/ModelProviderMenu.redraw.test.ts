@@ -44,6 +44,7 @@ const renamed: [string, string][] = [];
 vi.mock("../models/Providers", () => ({
   getAccounts: () => providerState.accounts,
   getDefaultAccountId: () => null,
+  canManageAccounts: () => true,
   setDefaultAccount: () => Promise.resolve(),
   loadAccounts: () => Promise.resolve(),
   accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
