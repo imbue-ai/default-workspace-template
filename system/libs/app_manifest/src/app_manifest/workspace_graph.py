@@ -10,7 +10,6 @@ from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
-from pathlib import PurePosixPath
 from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -31,8 +30,6 @@ NPM_ROOT_MANIFEST: Final[str] = "system/package.json"
 
 _REQUIREMENT_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _NAME_SEPARATOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"[-_.]+")
-_NAMESPACE_PACKAGE: Final[str] = "imbue"
-_SOURCE_DIRECTORY: Final[str] = "src"
 
 
 class PythonMember(FrozenModel):
@@ -43,7 +40,6 @@ class PythonMember(FrozenModel):
     dependencies: tuple[str, ...] = Field(
         description="Normalized names of everything it depends on"
     )
-    module_names: tuple[str, ...] = Field(description="The top-level modules it installs")
 
 
 class NpmPackage(FrozenModel):
@@ -123,42 +119,6 @@ def _string_list(value: object) -> list[str]:
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
-def _member_module_names(
-    member_directory: Path, pyproject: Mapping[str, object]
-) -> tuple[str, ...]:
-    """The top-level modules a member installs: its wheel's packages, with ``src/`` dropped and
-    the ``imbue`` namespace expanded to the subpackages the member puts in it."""
-    wheel = _table(
-        _table(_table(_table(pyproject.get("tool")).get("hatch")).get("build")).get("targets")
-    )
-    packages = _string_list(_table(wheel.get("wheel")).get("packages"))
-    if not packages:
-        source = member_directory / _SOURCE_DIRECTORY
-        packages = (
-            [
-                f"{_SOURCE_DIRECTORY}/{child.name}"
-                for child in sorted(source.iterdir())
-                if child.is_dir()
-            ]
-            if source.is_dir()
-            else []
-        )
-    names: list[str] = []
-    for package in packages:
-        package_path = PurePosixPath(package)
-        if package_path.name == _NAMESPACE_PACKAGE:
-            namespace_directory = member_directory / package
-            if namespace_directory.is_dir():
-                names.extend(
-                    f"{_NAMESPACE_PACKAGE}.{child.name}"
-                    for child in sorted(namespace_directory.iterdir())
-                    if child.is_dir() and not child.name.startswith(("_", "."))
-                )
-        else:
-            names.append(package_path.name)
-    return tuple(names)
-
-
 def read_python_members(repo_root: Path) -> tuple[PythonMember, ...]:
     """The uv workspace members the root ``pyproject.toml`` declares, with what each depends on."""
     root_pyproject = _read_toml(repo_root / "pyproject.toml")
@@ -185,7 +145,6 @@ def read_python_members(repo_root: Path) -> tuple[PythonMember, ...]:
                     directory=RepoRelativePath(member_directory.relative_to(repo_root).as_posix()),
                     name=NonEmptyStr(normalize_distribution_name(name)),
                     dependencies=_requirement_names(requirements),
-                    module_names=_member_module_names(member_directory, pyproject),
                 )
             )
     return tuple(members)
