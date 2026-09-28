@@ -38,6 +38,8 @@ export const MODEL_SUBMENU_MAX_HEIGHT =
 export const TRIGGER =
   "flex h-[30px] items-center gap-1 rounded-lg px-2 type-helper whitespace-nowrap " +
   "text-faint transition-colors hover:bg-fill-hover hover:text-secondary cursor-pointer";
+/** The trigger's shape with nothing to open: a chat with no agent yet names its account. */
+export const PROVISIONAL_CHIP = "flex h-[30px] items-center rounded-lg px-2 type-helper whitespace-nowrap text-faint";
 /** The separators between the chip's parts, a step quieter than the values. */
 export const TRIGGER_DOT = "text-faint/60";
 

@@ -793,9 +793,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
               "div",
               {
                 // Same max-width as the composer card above it; relative as
-                // the containing block for centered overlays.
+                // the containing block for centered overlays. As tall as the model chip
+                // whether or not anything in it has rendered yet, so the composer never moves.
                 class:
-                  "composer-under-bar relative mx-auto mt-2 flex w-full " +
+                  "composer-under-bar relative mx-auto mt-2 flex min-h-[30px] w-full " +
                   "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2",
               },
               [
