@@ -1,0 +1,7 @@
+#!/bin/sh
+# The `$BROWSER` a provider sign-in CLI runs in this workspace. There is no browser here to open:
+# the chat app reads the sign-in URL from `$MINDS_SIGNIN_URL_FILE` and hands it to the minds
+# desktop app, which opens it on the user's own machine and relays the provider's callback back
+# into the CLI's loopback listener. Exiting 0 tells the CLI the page was opened.
+printf '%s\n' "$1" > "$MINDS_SIGNIN_URL_FILE"
+exit 0

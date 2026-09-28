@@ -151,6 +151,9 @@ class PtyMethod(FrozenModel):
     # A wall clock for the whole flow. Nothing else bounds it: the machinery only advances
     # when a client polls, so a closed tab would otherwise leave a CLI waiting forever.
     flow_deadline_s: float = 900.0
+    # The CLI opens its sign-in page through `$BROWSER` and listens for the provider's loopback
+    # callback itself, so the minds desktop app can open the page and relay the callback here.
+    relays_browser_sign_in: bool = False
 
 
 class PasteMethod(FrozenModel):
@@ -246,6 +249,7 @@ LANE_ANTHROPIC = Lane(
             success=r"Login successful",
             failures=_CLAUDE_FAILURES,
             eof_policy=EofPolicy.FAILURE,
+            relays_browser_sign_in=True,
         ),
         PasteMethod(
             id="api_key",
@@ -273,6 +277,7 @@ LANE_ANTHROPIC = Lane(
             success=r"Login successful",
             failures=_CLAUDE_FAILURES,
             eof_policy=EofPolicy.FAILURE,
+            relays_browser_sign_in=True,
         ),
     ),
 )

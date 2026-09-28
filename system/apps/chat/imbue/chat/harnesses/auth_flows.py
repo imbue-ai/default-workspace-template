@@ -25,8 +25,11 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import signal
+import tempfile
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from collections.abc import Iterator
@@ -68,6 +71,19 @@ from imbue.chat.harnesses.pty_auth import safe_close
 from imbue.chat.harnesses.pty_auth import safe_terminate
 from imbue.chat.harnesses.pty_auth import spawn_pty
 from imbue.chat.harnesses.registry import build_account_binding
+from imbue.chat.harnesses.sign_in_relay import BROWSER_ENV_VAR
+from imbue.chat.harnesses.sign_in_relay import BROWSER_SHIM_RELATIVE_PATH
+from imbue.chat.harnesses.sign_in_relay import CallbackFetcher
+from imbue.chat.harnesses.sign_in_relay import FOLLOW_UP_WINDOW_SECONDS
+from imbue.chat.harnesses.sign_in_relay import RelayTarget
+from imbue.chat.harnesses.sign_in_relay import RelayedResponse
+from imbue.chat.harnesses.sign_in_relay import SIGN_IN_URL_FILENAME
+from imbue.chat.harnesses.sign_in_relay import SIGN_IN_URL_FILE_ENV_VAR
+from imbue.chat.harnesses.sign_in_relay import fetch_loopback_callback
+from imbue.chat.harnesses.sign_in_relay import is_relayable_path
+from imbue.chat.harnesses.sign_in_relay import parse_relay_target
+from imbue.chat.harnesses.sign_in_relay import query_state
+from imbue.chat.harnesses.sign_in_relay import read_sign_in_url
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.harnesses.signed_in import is_signed_in
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -114,6 +130,9 @@ class FlowStart(FrozenModel):
     shape: FlowShape
     url: str | None = None
     code: str | None = None
+    # The sign-in page the minds desktop app can open for this flow and relay the callback of.
+    # None when the CLI named none, or one whose callback this workspace cannot serve.
+    relay_url: str | None = None
 
 
 class FlowStatus(FrozenModel):
@@ -174,6 +193,16 @@ class _Session:
     # promote probe answers about the NEW sign-in rather than the old file. These are the
     # bytes it took, restored on every path that does not end in a fresh credential.
     cleared_credentials: Mapping[Path, bytes | None]
+    # Where the browser shim records the sign-in URL; removed with the session.
+    scratch_dir: Path | None
+    relay_url: str | None
+    relay_target: RelayTarget | None
+    # When the CLI first answered a relayed callback. Other requests on its port go through
+    # for a short while after, and no longer need the flow's `state`.
+    relay_answered_at: float | None
+    # A relayed request is out to the CLI. A poll must not settle the flow meanwhile: that
+    # tears the CLI down, which could cut off the answer the browser is waiting on.
+    is_relay_in_flight: bool
 
     def is_value_ready(self, buffer: str) -> bool:
         """Whether the scraped value can be read yet -- the drain loop's stop condition.
@@ -202,6 +231,11 @@ def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str, m
     session.code_submitted = False
     session.last_verdict = None
     session.cleared_credentials = {}
+    session.scratch_dir = None
+    session.relay_url = None
+    session.relay_target = None
+    session.relay_answered_at = None
+    session.is_relay_in_flight = False
     return session
 
 
@@ -219,6 +253,8 @@ class AuthFlowService:
     _session: _Session | None
     _spawner: Callable[..., Any]
     _probe: Callable[[HarnessType, Path], SignedIn]
+    _fetch_callback: CallbackFetcher
+    _clock: Callable[[], float]
 
     @classmethod
     def create(
@@ -228,6 +264,8 @@ class AuthFlowService:
         spawner: Callable[..., Any] | None = None,
         probe: Callable[[HarnessType, Path], SignedIn] | None = None,
         restart_bound_agents: Callable[[str], None] | None = None,
+        fetch_callback: CallbackFetcher | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> "AuthFlowService":
         """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`.
 
@@ -244,6 +282,8 @@ class AuthFlowService:
         service._spawner = spawner or spawn_pty
         service._probe = probe or is_signed_in
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
+        service._fetch_callback = fetch_callback or fetch_loopback_callback
+        service._clock = clock or time.monotonic
         return service
 
     # lifecycle
@@ -345,11 +385,19 @@ class AuthFlowService:
                 shape=flow_shape(method),
                 url=method.static_url or url,
                 code=code,
+                relay_url=session.relay_url,
             )
 
     def _drive_locked(self, session: _Session, method: PtyMethod, account_path: Path) -> tuple[str | None, str | None]:
         """Spawn the CLI, get it to the point of showing something, and scrape it."""
         env = {**os.environ, **build_account_binding(session.lane.harness).account_env(account_path)}
+        url_file: Path | None = None
+        if method.relays_browser_sign_in:
+            session.scratch_dir = Path(tempfile.mkdtemp(prefix="minds-sign-in-"))
+            url_file = session.scratch_dir / SIGN_IN_URL_FILENAME
+            env[BROWSER_ENV_VAR] = str(self._work_dir / BROWSER_SHIM_RELATIVE_PATH)
+            env[SIGN_IN_URL_FILE_ENV_VAR] = str(url_file)
+        drive_started_at = time.monotonic()
         binary = _binary_for(session.lane)
         session.process = self._spawner(
             binary, list(method.argv), method.scrape_timeout_s, env=env, columns=method.pty_columns
@@ -423,6 +471,21 @@ class AuthFlowService:
         if value is None:
             self._fail_locked(session, "Could not read the sign-in details from the terminal.")
             raise FlowError(session.detail or "extraction failed")
+        if url_file is not None:
+            # The CLI may print its manual URL before it runs `$BROWSER`, so the shim's file can
+            # land a moment after the scrape. Reading the PTY meanwhile keeps its output whole.
+            remaining = max(0.0, method.scrape_timeout_s - (time.monotonic() - drive_started_at))
+            session.output = drain_pty_stream(
+                session.process,
+                session.output,
+                lambda _: read_sign_in_url(url_file) is not None,
+                deadline_seconds=remaining,
+            )
+            relay_url = read_sign_in_url(url_file)
+            relay_target = None if relay_url is None else parse_relay_target(relay_url)
+            if relay_target is not None:
+                session.relay_url = relay_url
+                session.relay_target = relay_target
         return (None, value) if method.static_url else (value, None)
 
     # advancing
@@ -522,7 +585,7 @@ class AuthFlowService:
             if session.state is not FlowState.PENDING:
                 return FlowStatus(state=session.state, detail=session.detail, account_id=session.account_id)
             method = session.method
-            if isinstance(method, PasteMethod):
+            if isinstance(method, PasteMethod) or session.is_relay_in_flight:
                 return FlowStatus(state=FlowState.PENDING)
             return self._settle_locked(session, method)
 
@@ -530,6 +593,41 @@ class AuthFlowService:
         with self._lock:
             if self._session is not None and self._session.flow_id == flow_id:
                 self._drop_locked()
+
+    def relay_callback(self, flow_id: str, path_and_query: str) -> RelayedResponse:
+        """Replay one request the desktop app received on this flow's loopback callback port.
+
+        The first request must be the provider's callback: the path the sign-in URL names and the
+        `state` it carries, while the flow is still waiting on it. Once the CLI has answered that,
+        other requests on the same port go through for a short while, since a CLI can redirect
+        the browser to a page of its own. The request itself runs outside the lock: the CLI takes
+        its time finishing the sign-in, and the polls that report it need the lock meanwhile.
+        """
+        if not is_relayable_path(path_and_query):
+            raise FlowError("that is not a callback this sign-in can take")
+        with self._lock:
+            session = self._require_locked(flow_id)
+            target = session.relay_target
+            if target is None:
+                raise FlowError("this sign-in has no browser callback")
+            answered_at = session.relay_answered_at
+            if answered_at is None:
+                if session.state is not FlowState.PENDING:
+                    raise FlowError(session.detail or "that sign-in has already finished")
+                if path_and_query.split("?", 1)[0] != target.path or query_state(path_and_query) != target.state:
+                    raise FlowError("that callback does not belong to this sign-in")
+            elif self._clock() - answered_at > FOLLOW_UP_WINDOW_SECONDS:
+                raise FlowError("that sign-in's callback has already been handled")
+            session.is_relay_in_flight = True
+        try:
+            answer = self._fetch_callback(target.port, path_and_query)
+        finally:
+            with self._lock:
+                session.is_relay_in_flight = False
+        with self._lock:
+            if session.relay_answered_at is None:
+                session.relay_answered_at = self._clock()
+        return answer
 
     # internals
 
@@ -669,6 +767,9 @@ class AuthFlowService:
         if session.timer is not None:
             session.timer.cancel()
             session.timer = None
+        if session.scratch_dir is not None:
+            shutil.rmtree(session.scratch_dir, ignore_errors=True)
+            session.scratch_dir = None
         if session.process is not None:
             safe_terminate(session.process)
             safe_close(session.process)

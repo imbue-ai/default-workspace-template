@@ -29,6 +29,8 @@ from imbue.chat.harnesses.lanes import numbered_provider
 from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.registry import get_catalog
 from imbue.chat.harnesses.registry import list_account_options
+from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
+from imbue.chat.identity import forbid_unless_owner
 from imbue.chat.models import ErrorResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.request_helpers import parse_json_object_body
@@ -205,6 +207,30 @@ def submit_flow(flow_id: str) -> Response:
     return _json_response(status.model_dump())
 
 
+def relay_flow_callback(flow_id: str) -> Response:
+    """Replay a request the minds desktop app received on this flow's loopback callback port.
+
+    The desktop app listens where the user's browser runs and posts each request here as
+    `{path_and_query}`; the answer is the CLI's own, which the desktop app hands the browser.
+    """
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
+    payload = parse_json_object_body()
+    if isinstance(payload, Response):
+        return payload
+    path_and_query = payload.get("path_and_query")
+    if not isinstance(path_and_query, str):
+        return _error_response("path_and_query must be a string")
+    try:
+        answer = get_state().auth_flows.relay_callback(flow_id, path_and_query)
+    except FlowError as e:
+        return _error_response(str(e), status_code=409)
+    except RelayCallbackError as e:
+        return _error_response(str(e), status_code=502)
+    return _json_response(answer.model_dump())
+
+
 def abort_flow(flow_id: str) -> Response:
     # Abort is what a closed modal calls on its way out, so it has to succeed even when the
     # flow it is abandoning is in a bad state -- a folder deleted underneath it, an unreadable
@@ -268,6 +294,7 @@ def register_routes(application: Flask) -> None:
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=poll_flow, methods=["GET"])
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=submit_flow, methods=["POST"])
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=abort_flow, methods=["DELETE"])
+    application.add_url_rule("/api/accounts/flow/<flow_id>/callback", view_func=relay_flow_callback, methods=["POST"])
     application.add_url_rule("/api/accounts/<account_id>", view_func=delete_account, methods=["DELETE"])
     application.add_url_rule("/api/accounts/<account_id>", view_func=update_account, methods=["PATCH"])
     application.add_url_rule(
