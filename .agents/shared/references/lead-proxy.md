@@ -237,10 +237,10 @@ or supersede the pass per `.agents/shared/references/harden-contention.md`.
 
 On `type: status`:
 
-- `name: done` -- read the lines below from its body, or, when that body is
-  only "Committed on branch", from the worker's last `final-creation` gate
-  (under `<REPORTS_DIR>/consumed/`), which carries them instead.
-  If it lists `Undeclared couplings:`, they are built-in
+- `name: done` -- read its `Undeclared couplings:` and `Flaky tests:` lines
+  from its body, or, when that body is only "Committed on branch", from the
+  worker's last `final-creation` gate (under `<REPORTS_DIR>/consumed/`), which
+  carries them instead. If it lists `Undeclared couplings:`, they are built-in
   defects (a built-in suite observes a path nothing declares, so the test
   selector missed it): add them to the pass's single report per
   `.agents/shared/references/report-built-in-issues.md`. If it lists
