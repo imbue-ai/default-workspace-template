@@ -73,6 +73,10 @@ draft_param = "message"
 path = ".mngr/settings.toml"
 note = "Holds the chat create template every chat launch stacks on"
 
+[[references]]
+path = ".agents/skills/connect-external-service"
+note = "request_secret.py files secret requests through /api/secret-requests"
+
 # A chat preview is a secondary chat: it follows the live observer and reads the
 # live accounts, but writes nothing the live chat owns. It opens on the chat list
 # with the conversation the user is in selected ({key} is a chat id).

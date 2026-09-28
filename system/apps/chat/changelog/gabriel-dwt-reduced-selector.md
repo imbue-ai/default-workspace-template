@@ -1,1 +1,1 @@
-The chat manifest references `.mngr/settings.toml`, which holds the create template every chat launch stacks on, so a change to it runs the chat suite in a harden gate.
+The chat manifest references `.mngr/settings.toml`, which holds the create template every chat launch stacks on, and the `connect-external-service` skill, whose `request_secret.py` files secret requests through the chat's `/api/secret-requests`, so a change to either runs the chat suite in a harden gate.
