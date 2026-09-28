@@ -77,22 +77,6 @@ note = "Holds the chat create template every chat launch stacks on"
 path = ".agents/skills/connect-external-service"
 note = "request_secret.py files secret requests through /api/secret-requests"
 
-[[references]]
-path = ".agents/shared/references/continue-chat.md"
-note = "The handoff prompt template chat_handoffs.py fills in for a successor agent"
-
-[[references]]
-path = "system/scripts/message_chat.py"
-note = "Posts to /api/chats/create and sends the system tag the transcript renders; the chat suite pins both"
-
-[[references]]
-path = "system/scripts/claude_status_line.sh"
-note = "Writes the model_state.json the claude harness reads; statusline_conformance_test runs it"
-
-[[references]]
-path = "system/scripts/with_secrets.py"
-note = "Reads back the env file a fulfilled secret request writes"
-
 # A chat preview is a secondary chat: it follows the live observer and reads the
 # live accounts, but writes nothing the live chat owns. It opens on the chat list
 # with the conversation the user is in selected ({key} is a chat id).
