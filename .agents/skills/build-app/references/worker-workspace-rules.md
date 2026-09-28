@@ -37,12 +37,10 @@ IF YOU FAIL TO FOLLOW ONE, SAY SO EXPLICITLY IN YOUR REPORT.
 
 # Where the data is
 
-`data/` is gitignored, so your worktree carries almost none of it. Two paths are
-the exception: `data/uploads` and `data/.tasks/fetch-process-show` are symlinks
-to the workspace's own copies. Everything else under `data/` is in the workspace,
-at `/home/user/workspace/data/`.
+`data/` is gitignored, so your worktree carries almost none of it. The workspace's
+own data is at `/home/user/workspace/data/`.
 
-Read data from here if you need to.
+Read data from there if you need to, and write any data changes there too.
 
 # Progress tracking is not yours
 
