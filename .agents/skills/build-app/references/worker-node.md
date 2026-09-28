@@ -8,12 +8,11 @@ being committed to your branch. Your task file names your subtask and gives you
 the reports of the nodes you depend on, and its frontmatter names its own path
 and where your report goes. This document is the rest of your task.
 
-Read `.agents/skills/build-app/references/worker-workspace-rules.md`
-too. It is the subset of the workspace's `AGENTS.md` that applies to a worker --
-`AGENTS.md` itself is loaded into your context automatically and is written for
-the agent holding the chat with the user, so where the two differ, that file is
-the one that applies to you. This document says how to work as a node; that one
-says how the workspace works.
+`.agents/skills/build-app/references/worker-workspace-rules.md` is already in
+your context: your worktree's `CLAUDE.md` imports it. It says how the workspace
+works, for you; this document says how to work as a node. The repo's `AGENTS.md`
+is written for the agent holding the chat with the user and is not loaded for
+you, so nothing in it is yours to follow.
 
 ## Do only your subtask
 

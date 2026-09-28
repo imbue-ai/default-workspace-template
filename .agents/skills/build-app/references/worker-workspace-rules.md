@@ -1,11 +1,12 @@
 # Workspace rules for a worker
 
-**This file is the subset of the top-level `AGENTS.md` that applies to you.
-Read it and ignore that one.** `AGENTS.md` is loaded into your context
-automatically and is written for an agent that holds a chat with the user and
-owns a whole task; you are a node of a build, with one subtask, one report and
-no chat. Everything here is copied from it, with the parts meant for the other
-kind of agent taken out.
+**This file is how the workspace works, for you.** Your worktree's `CLAUDE.md`
+imports it, so it is loaded automatically and it is the whole of what you are
+told about this workspace. The repo's own `AGENTS.md` is not loaded for you: it
+is written for an agent that holds a chat with the user and owns a whole task,
+and you are a node of a build, with one subtask, one report and no chat. What
+follows is taken from it, with the parts meant for the other kind of agent left
+out. If you open `AGENTS.md` yourself, prefer this file wherever they differ.
 
 Your brief is your task file and the handoffs quoted inside it. Read those and
 `.agents/skills/build-app/references/worker-node.md`, then read only as much of
@@ -36,10 +37,10 @@ IF YOU FAIL TO FOLLOW ONE, SAY SO EXPLICITLY IN YOUR REPORT.
 
 # You keep no progress records
 
-You record nothing and track nothing. The workspace's `AGENTS.md`, which is loaded into your
-context automatically, devotes a long section to the `tk` tracker and calls it mandatory --
-that section is written for the agent talking to the user, and **none of it applies to you**.
-Do not run `tk` at all: not `create`, not `start`, not `close`, and not for a regular ticket.
+You record nothing and track nothing. **Do not run `tk` at all**: not `create`, not `start`,
+not `close`, and not for a regular ticket. The workspace's `AGENTS.md` gives the tracker a long
+section and calls it mandatory; that section is written for the agent talking to the user, it is
+not loaded for you, and none of it is yours to follow.
 
 The orchestrator holds the one progress timeline the user sees, and it shows them stages of the
 build, never nodes. A record you filed would reach nobody. Your report file is how your work is
