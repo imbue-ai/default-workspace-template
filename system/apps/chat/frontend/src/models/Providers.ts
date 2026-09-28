@@ -5,7 +5,7 @@
  * provider. Several lanes can share a harness (Opencode Go and a raw API key both run on
  * Pi), so the chooser lists lanes, not harnesses.
  *
- * A sign-in has four possible shapes and the server tells us which, per method, so nothing
+ * A sign-in takes one of these shapes and the server tells us which, per method, so nothing
  * here has to know what a harness is:
  *
  *   url_then_code   here is a link; approve in the browser and paste the code back
