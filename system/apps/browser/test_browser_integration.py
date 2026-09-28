@@ -317,8 +317,8 @@ def test_startup_opens_gate_even_if_restore_fails(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(bsession.BrowserSessionManager, "restore", boom)
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
     # The real starters would leave the shared manager's checkpoint and window-sweep loops
-    # running on the session-wide bridge loop for every later test, writing the manifest
-    # at its real path once this test's redirect is undone.
+    # running on the session-wide bridge loop through every later test, sweeping against
+    # the live shell's windows.
     started: list[str] = []
     monkeypatch.setattr(
         bsession.BrowserSessionManager, "start_checkpointing", lambda _self: started.append("checkpointing")
