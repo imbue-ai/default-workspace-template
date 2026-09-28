@@ -40,7 +40,7 @@ afterEach(() => {
 });
 
 describe("a preview shell", () => {
-  it("offers no Stop or Start for an app the live shell would, since they reach the live supervisord", () => {
+  it("offers no Quit for an app the live shell would, since it reaches the live supervisord", () => {
     const docs = store.getState().apps[0];
     expect(store.canStopApp(docs)).toBe(true);
 
