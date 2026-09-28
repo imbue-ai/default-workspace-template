@@ -29,17 +29,17 @@ def _registered(name: str, url: str, label: str = "") -> str:
     return registry_row_toml(name, url, label=label)
 
 
-def test_the_first_announcement_registers_every_app(tmp_path: Path) -> None:
+def test_the_first_announcement_registers_every_app(
+    announcement_writer: AppAnnouncementWriter, tmp_path: Path
+) -> None:
     """A consumer reading from the start of the stream needs the whole set, so the first read (nothing
     remembered) announces every app."""
-    events_path = tmp_path / "events.jsonl"
-    writer = AppAnnouncementWriter(events_path=events_path)
 
-    writer.announce(
+    announcement_writer.announce(
         _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:8300"))
     )
 
-    events = _events(events_path)
+    events = _events(announcement_writer.events_path)
     assert [(event["type"], event["service"]) for event in events] == [
         ("service_registered", "chat"),
         ("service_registered", "files"),
@@ -48,63 +48,59 @@ def test_the_first_announcement_registers_every_app(tmp_path: Path) -> None:
     assert events[0]["url"] == "http://localhost:8010"
 
 
-def test_an_unchanged_registry_announces_nothing(tmp_path: Path) -> None:
+def test_an_unchanged_registry_announces_nothing(announcement_writer: AppAnnouncementWriter, tmp_path: Path) -> None:
     """The guard against the event flood: ``forward_port.py`` rewrites the whole registry whenever any app
     registers, so a restarting app must not re-announce every app in the file."""
-    events_path = tmp_path / "events.jsonl"
-    writer = AppAnnouncementWriter(events_path=events_path)
     rows = _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:8300"))
-    writer.announce(rows)
+    announcement_writer.announce(rows)
 
     for _ in range(5):
-        writer.announce(rows)
+        announcement_writer.announce(rows)
 
-    assert len(_events(events_path)) == 2
+    assert len(_events(announcement_writer.events_path)) == 2
 
 
-def test_only_the_app_whose_row_changed_is_re_announced(tmp_path: Path) -> None:
-    events_path = tmp_path / "events.jsonl"
-    writer = AppAnnouncementWriter(events_path=events_path)
-    writer.announce(
+def test_only_the_app_whose_row_changed_is_re_announced(
+    announcement_writer: AppAnnouncementWriter, tmp_path: Path
+) -> None:
+    announcement_writer.announce(
         _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:8300"))
     )
 
-    writer.announce(
+    announcement_writer.announce(
         _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:9999"))
     )
 
-    events = _events(events_path)
+    events = _events(announcement_writer.events_path)
     assert [(event["type"], event["service"]) for event in events[2:]] == [("service_registered", "files")]
     assert events[2]["url"] == "http://localhost:9999"
 
 
-def test_a_new_app_registers_and_a_removed_one_deregisters(tmp_path: Path) -> None:
-    events_path = tmp_path / "events.jsonl"
-    writer = AppAnnouncementWriter(events_path=events_path)
-    writer.announce(
+def test_a_new_app_registers_and_a_removed_one_deregisters(
+    announcement_writer: AppAnnouncementWriter, tmp_path: Path
+) -> None:
+    announcement_writer.announce(
         _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("old", "http://localhost:8200"))
     )
 
-    writer.announce(
+    announcement_writer.announce(
         _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("new", "http://localhost:8400"))
     )
 
-    assert [(event["type"], event["service"]) for event in _events(events_path)[2:]] == [
+    assert [(event["type"], event["service"]) for event in _events(announcement_writer.events_path)[2:]] == [
         ("service_registered", "new"),
         ("service_deregistered", "old"),
     ]
 
 
-def test_a_relabelled_app_is_re_announced(tmp_path: Path) -> None:
+def test_a_relabelled_app_is_re_announced(announcement_writer: AppAnnouncementWriter, tmp_path: Path) -> None:
     """The label is the origin consumers route on, so a change to it must reach them even though the app's
     name and URL are untouched."""
-    events_path = tmp_path / "events.jsonl"
-    writer = AppAnnouncementWriter(events_path=events_path)
-    writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010", label="chat-aaaa1111")))
+    announcement_writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010", label="chat-aaaa1111")))
 
-    writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010", label="chat-bbbb2222")))
+    announcement_writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010", label="chat-bbbb2222")))
 
-    events = _events(events_path)
+    events = _events(announcement_writer.events_path)
     assert [(event["type"], event["service"]) for event in events[1:]] == [("service_registered", "chat")]
     assert events[1]["label"] == "chat-bbbb2222"
 
