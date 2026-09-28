@@ -149,7 +149,7 @@ def client_activity_route() -> ResponseReturnValue:
     return "", HTTP_NO_CONTENT
 
 
-# Section 5: stop and start of an app
+# Section 5: stop, start, and quit of an app
 
 
 def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
