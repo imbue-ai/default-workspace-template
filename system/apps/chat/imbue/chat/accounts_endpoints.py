@@ -169,9 +169,13 @@ def _reauth_method_id(account: accounts.Account, harness: HarnessType) -> str:
 
 
 def _codex_auth_mode(account_folder: Path) -> str | None:
+    path = account_folder / "auth.json"
     try:
-        auth = json.loads((account_folder / "auth.json").read_text())
-    except (OSError, json.JSONDecodeError):
+        auth = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Could not read codex's {}: {}", path, e)
         return None
     mode = auth.get("auth_mode") if isinstance(auth, dict) else None
     return mode if isinstance(mode, str) else None

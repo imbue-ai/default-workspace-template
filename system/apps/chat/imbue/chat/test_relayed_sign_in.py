@@ -22,40 +22,7 @@ from imbue.chat.testing import build_test_state
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 
-_FAKE_CLAUDE = """
-import http.server, os, socket, subprocess, sys, urllib.parse
-
-server = http.server.HTTPServer(("127.0.0.1", 0), http.server.BaseHTTPRequestHandler)
-port = server.server_address[1]
-state = "fake-state"
-redirect = urllib.parse.quote(f"http://localhost:{port}/callback", safe="")
-url = f"https://claude.ai/oauth/authorize?code=true&client_id=c&redirect_uri={redirect}&state={state}"
-
-class Callback(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-        ok = query.get("state") == [state] and query.get("code") == ["the-code"]
-        self.send_response(302 if ok else 400)
-        self.send_header("Location", "https://platform.claude.com/oauth/code/success")
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-        server.succeeded = ok
-
-    def log_message(self, *args):
-        pass
-
-server.RequestHandlerClass = Callback
-server.succeeded = False
-subprocess.run([os.environ["BROWSER"], url], check=True)
-print("Browser didn't open? Use the url below to sign in:", flush=True)
-print(url.replace("http%3A%2F%2Flocalhost", "https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode"), flush=True)
-server.handle_request()
-if server.succeeded:
-    print("Login successful.", flush=True)
-    sys.exit(0)
-print("Login failed: the callback did not match", flush=True)
-sys.exit(1)
-"""
+_FAKE_CLAUDE_SCRIPT = Path(__file__).with_name("_fake_claude_login_script.py")
 
 
 def _fake_claude_spawner(script: Path) -> Any:
@@ -65,13 +32,11 @@ def _fake_claude_spawner(script: Path) -> Any:
     return spawner
 
 
-def test_a_relayed_callback_signs_claude_in(tmp_path: Path) -> None:
-    script = tmp_path / "fake_claude.py"
-    script.write_text(_FAKE_CLAUDE)
+def test_a_relayed_callback_signs_claude_in() -> None:
     service = AuthFlowService.create(
         home=None,
         work_dir=_REPO_ROOT,
-        spawner=_fake_claude_spawner(script),
+        spawner=_fake_claude_spawner(_FAKE_CLAUDE_SCRIPT),
         probe=lambda *_a: SignedIn.NO,
     )
     client = create_application(build_test_state(auth_flows=service)).test_client()
@@ -94,13 +59,11 @@ def test_a_relayed_callback_signs_claude_in(tmp_path: Path) -> None:
     assert account.lane == "anthropic"
 
 
-def test_a_callback_with_another_flows_state_never_reaches_the_cli(tmp_path: Path) -> None:
-    script = tmp_path / "fake_claude.py"
-    script.write_text(_FAKE_CLAUDE)
+def test_a_callback_with_another_flows_state_never_reaches_the_cli() -> None:
     service = AuthFlowService.create(
         home=None,
         work_dir=_REPO_ROOT,
-        spawner=_fake_claude_spawner(script),
+        spawner=_fake_claude_spawner(_FAKE_CLAUDE_SCRIPT),
         probe=lambda *_a: SignedIn.NO,
     )
     client = create_application(build_test_state(auth_flows=service)).test_client()

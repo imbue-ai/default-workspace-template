@@ -45,7 +45,8 @@ def test_prevent_global_keyword() -> None:
 
 
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(0))
+    # A stand-in sign-in CLI run as a subprocess: its terminal output is how the flow reads it.
+    rc.check_bare_print(_DIR, snapshot(0), excluded_patterns=("_fake_claude_login_script.py",))
 
 
 # --- Exception handling ---
@@ -262,8 +263,8 @@ def test_prevent_os_fork() -> None:
 
 
 def test_prevent_direct_subprocess() -> None:
-    # conftest.py is test infrastructure (fixtures), same category as *_test.py
-    excluded = TEST_FILE_PATTERNS + ("testing.py", "conftest.py")
+    # conftest.py and the stand-in sign-in CLI are test infrastructure, same category as *_test.py
+    excluded = TEST_FILE_PATTERNS + ("testing.py", "conftest.py", "_fake_claude_login_script.py")
     rc.check_direct_subprocess(_DIR, snapshot(0), excluded_patterns=excluded)
 
 
