@@ -237,8 +237,10 @@ class AppLifecycleManager(MutableModel):
                 logger.info("Woke app {} (program {})", app, program)
             except SupervisorProgramActionError as e:
                 logger.warning("Could not start {} for a wake: {}", app, e)
+                # Nothing is in flight for the sweep to read the outcome of; the wake still counts against the budget.
                 with self._lock:
                     self._failed_apps.add(app)
+                    self._apps_awaiting_wake_outcome.discard(app)
                 kind = ParkedPageKind.FAILED
         self.inventory.refresh_liveness()
         self.wake_soon()

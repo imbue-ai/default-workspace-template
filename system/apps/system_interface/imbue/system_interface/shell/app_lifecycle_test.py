@@ -19,6 +19,7 @@ from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_WINDOW_SECOND
 from imbue.system_interface.shell.app_lifecycle import WindowCountsReader
 from imbue.system_interface.shell.app_lifecycle import recent_wake_times
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
+from imbue.system_interface.shell.errors import SupervisorProgramActionError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.liveness import probe_tcp_url
 from imbue.system_interface.shell.port_parking import ParkedPageKind
@@ -337,6 +338,30 @@ def test_a_wake_after_which_the_app_runs_spends_none_of_the_budget(
         supervisor.statename_by_program["docs"] = "STOPPED"
         manager.sweep_once()
     assert manager.wake("docs") is ParkedPageKind.FAILED
+
+
+def test_a_wake_supervisord_refuses_is_answered_as_failed_and_awaits_no_outcome(
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
+) -> None:
+    """A start supervisord refuses (an unknown program, a spawn error) leaves no wake in flight: the sweep keeps
+    its idle pace rather than waiting on an outcome that never comes, and the next pass parks the port with the
+    failure page."""
+
+    def refuse(program: str) -> None:
+        raise SupervisorProgramActionError(f"supervisord refused to start {program!r}")
+
+    refusing = _manager_over(manager.inventory, supervisor, start_program=refuse)
+    try:
+        assert refusing.wake("docs") is ParkedPageKind.FAILED
+        assert supervisor.started == []
+        assert refusing.sweep_interval_seconds() == IDLE_SWEEP_INTERVAL_SECONDS
+
+        refusing.sweep_once()
+
+        assert refusing.is_app_parked("docs")
+        assert b"Docs could not start" in send_raw_get_over_socket(closed_port)
+    finally:
+        refusing.stop()
 
 
 def test_a_wake_that_ends_in_fatal_re_parks_with_the_failure_page(
