@@ -224,7 +224,8 @@ Selection reads only what the workspace declares. A path selects:
   after `npm ci && npm run build`, plus the tests marked `browser` or
   `frontend` of every app whose frontend is among them (and nothing else of
   that app, since no Python code loads its frontend; an app the root suite
-  runs gets `uv run pytest -m 'browser or frontend' <app>`); the npm root's
+  runs runs whole instead, since a marker run over an app none of whose tests
+  carry the markers collects nothing, which pytest fails); the npm root's
   configuration and its prebuild script
   (`system/scripts/fetch_mngr_assets.sh`, with the `_mngr_git_auth.sh` it
   sources) select every npm package.

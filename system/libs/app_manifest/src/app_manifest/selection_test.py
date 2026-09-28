@@ -369,7 +369,7 @@ def test_an_app_reached_through_a_library_and_its_frontend_adds_only_its_browser
     assert lines[-1] == _CHAT_TYPE_CHECK
 
 
-def test_a_frontend_change_to_an_app_the_root_suite_runs_runs_its_browser_and_frontend_tests(
+def test_a_frontend_change_to_an_app_the_root_suite_runs_runs_its_whole_suite(
     workspace: Path,
 ) -> None:
     write_repo_file(
@@ -385,20 +385,16 @@ def test_a_frontend_change_to_an_app_the_root_suite_runs_runs_its_browser_and_fr
     write_repo_file(workspace, "system/apps/notes/frontend/src/main.ts", "export {};\n")
     commit_everything(workspace, "notes gets a frontend")
 
-    frontend = _select(workspace, ["system/apps/notes/frontend/src/main.ts"])
-    both = _select(
-        workspace, ["system/apps/notes/frontend/src/main.ts", "system/apps/notes/src/notes/core.py"]
-    )
+    selection = _select(workspace, ["system/apps/notes/frontend/src/main.ts"])
 
-    assert _command_lines(frontend) == [
+    # The selection cannot tell whether any of the app's tests carry the browser or frontend
+    # marker, and a marker run that collects nothing fails, so the app runs whole.
+    assert _command_lines(selection) == [
         *_FRONTEND_BUILD,
         "(cd system && npm test --workspace=apps/notes/frontend)",
         _ALWAYS_RUN,
-        "uv run pytest -m 'browser or frontend' system/apps/notes",
+        "uv run pytest system/apps/notes",
     ]
-    # A Python change to the same app runs its whole suite, which already holds those tests.
-    assert "uv run pytest system/apps/notes" in _command_lines(both)
-    assert "uv run pytest -m 'browser or frontend' system/apps/notes" not in _command_lines(both)
 
 
 def test_a_frontend_change_does_not_reach_the_python_consumers_of_the_apps_package(
