@@ -340,3 +340,12 @@ body {
     transform: scale(1.15);
   }
 }
+
+/* While a keystroke edits text, the pointer is hidden until it moves, so it never sits over what
+ * is being typed (hideCursorWhileTyping.ts toggles the class). ``*`` with ``!important`` because
+ * fields, links, buttons, and the window drag handle set their own cursors, which would otherwise
+ * win over the hidden one. */
+html.typing-hides-cursor,
+html.typing-hides-cursor * {
+  cursor: none !important;
+}

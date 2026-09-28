@@ -20,6 +20,7 @@ import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
+import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
@@ -420,6 +421,9 @@ function bootstrap(): void {
     isDraftAvailable: isReferenceDraftAvailable,
     open: createContextMenuOpener().open,
   });
+  // The pointer hides while text is typed into the root's own fields (the send picker); the inner
+  // chat frame does the same for itself.
+  installCursorHidingWhileTyping(document);
   reportLocation();
   const token = pendingToken;
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));

@@ -15,6 +15,7 @@ import {
   setEmbedderMessageHandler,
 } from "@imbue/workspace-ui/src/embed";
 import "./style.css";
+import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
@@ -104,6 +105,9 @@ function bootstrap(): void {
   const gestures = new PointerGestureSource();
   // Say this window is here (and learn who it is) for as long as it stays visible.
   startPresenceHeartbeat();
+  // The pointer hides while text is typed into the shell's own fields (the launcher, the settings);
+  // each framed page does the same for itself.
+  installCursorHidingWhileTyping(document);
   // The child-frame boundary: the minds relay for the framed pages' `minds:` messages, and the
   // shell side of the app contract.
   initEmbedderRelay();
