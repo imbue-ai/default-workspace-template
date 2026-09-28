@@ -408,15 +408,17 @@ class AppLifecycleManager(MutableModel):
             on_first_connection=lambda: self._wake_from_parked_port(app),
             page_for=lambda kind: parked_page_html(kind, display_name, program),
         )
-        try:
-            parked.start()
-        except PortInUseError:
-            logger.debug("Left {} unparked: something listens on {}:{}", app, target.host, target.port)
-            return
-        except PortParkingError as e:
-            logger.warning("Could not park {}: {}", app, e)
-            return
+        # The parker is recorded under the lock its first connection's wake pops it with, so a connection that
+        # arrives the moment the port binds cannot find no parker and leave a woken one on the books.
         with self._lock:
+            try:
+                parked.start()
+            except PortInUseError:
+                logger.debug("Left {} unparked: something listens on {}:{}", app, target.host, target.port)
+                return
+            except PortParkingError as e:
+                logger.warning("Could not park {}: {}", app, e)
+                return
             self._parked_by_app[app] = parked
         logger.info("Parked {} on {}:{} (program {} is down)", app, target.host, target.port, program)
 
