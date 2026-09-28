@@ -93,6 +93,28 @@ def test_a_wake_that_raises_still_answers_the_request(closed_port: int) -> None:
     assert b"could not start" in send_raw_get_over_socket(parked_port.target.port)
 
 
+class _UnexpectedWakeError(Exception):
+    """An error outside the kinds the parker answers a request for."""
+
+
+def test_a_wake_that_raises_unexpectedly_still_closes_the_connection(closed_port: int) -> None:
+    """The exception is the accept thread's to report; the requester sees its connection end (closed, or reset
+    since its request was never read) rather than waiting on an answer that never comes."""
+
+    def explode() -> ParkedPageKind:
+        raise _UnexpectedWakeError("the inventory refresh raised")
+
+    parked_port = _parked_port(closed_port, explode)
+    parked_port.start()
+
+    try:
+        answer = send_raw_get_over_socket(parked_port.target.port)
+    except ConnectionResetError:
+        answer = b""
+
+    assert answer == b""
+
+
 def test_a_port_something_listens_on_is_not_parked(listening_port: int) -> None:
     port = ParkedPort(
         app="docs",

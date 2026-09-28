@@ -204,21 +204,25 @@ class ParkedPort(MutableModel):
         # The listener goes first, so the app can bind the moment it starts; connections still queued behind it are
         # reset, and whoever sent them retries through the proxy's own loading page.
         listener.close()
-        try:
-            kind = self.on_first_connection()
-        except (ShellError, OSError) as e:
-            logger.opt(exception=e).error("The wake of {} raised; answering its request as a failed start", self.app)
-            kind = ParkedPageKind.FAILED
-        self._answer(connection, kind)
+        # The connection closes on every path, so a wake that raises something unexpected resets the requester
+        # rather than leaving it waiting for an answer.
+        with connection:
+            try:
+                kind = self.on_first_connection()
+            except (ShellError, OSError) as e:
+                logger.opt(exception=e).error(
+                    "The wake of {} raised; answering its request as a failed start", self.app
+                )
+                kind = ParkedPageKind.FAILED
+            self._answer(connection, kind)
 
     def _answer(self, connection: socket.socket, kind: ParkedPageKind) -> None:
         try:
-            with connection:
-                connection.settimeout(_REQUEST_READ_TIMEOUT_SECONDS)
-                try:
-                    connection.recv(_REQUEST_READ_LIMIT_BYTES)
-                except OSError as e:
-                    logger.debug("Answering the request that woke {} without reading it: {}", self.app, e)
-                connection.sendall(parked_response_bytes(kind, self.page_for(kind)))
+            connection.settimeout(_REQUEST_READ_TIMEOUT_SECONDS)
+            try:
+                connection.recv(_REQUEST_READ_LIMIT_BYTES)
+            except OSError as e:
+                logger.debug("Answering the request that woke {} without reading it: {}", self.app, e)
+            connection.sendall(parked_response_bytes(kind, self.page_for(kind)))
         except OSError as e:
             logger.debug("Could not answer the request that woke {}: {}", self.app, e)
