@@ -853,13 +853,7 @@ def _own_root_commands(
         commands.append(_command(SuiteKind.PYTEST, root, argv, reasons))
     if relative_files:
         # A file named on its own runs in full, whatever its markers; a whole run may skip it.
-        argv = (
-            *partial_run,
-            "-m",
-            _ALL_MARKERS_EXPRESSION,
-            *(() if is_whole_run else deselect),
-            *relative_files,
-        )
+        argv = (*partial_run, "-m", _ALL_MARKERS_EXPRESSION, *deselect, *relative_files)
         commands.append(_command(SuiteKind.PYTEST, root, argv, reasons))
     return [*commands, *_split_type_check_commands(root, deselect, reasons)]
 
