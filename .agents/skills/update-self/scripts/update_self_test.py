@@ -443,12 +443,6 @@ def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
     assert "Traceback" not in captured.err
 
 
-def _git_out(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
 def _clone_workspace_with_upstream_branch(
     tmp_path: Path, branch: str
 ) -> tuple[Path, Path]:
@@ -460,21 +454,21 @@ def _clone_workspace_with_upstream_branch(
     """
     upstream = tmp_path / "upstream"
     _init_repo_with_skill(upstream, skill_body="MAIN FLOW\n")
-    _git_out(upstream, "branch", "-M", "main")
-    _git_out(upstream, "checkout", "-q", "-b", branch)
+    _git_in(upstream, "branch", "-M", "main")
+    _git_in(upstream, "checkout", "-q", "-b", branch)
     (upstream / update_self.SKILL_DIR_REL / "SKILL.md").write_text(
         "BRANCH FLOW\n", encoding="utf-8"
     )
-    _git_out(upstream, "commit", "-q", "-am", "fix the flow on the branch")
-    _git_out(upstream, "checkout", "-q", "main")
+    _git_in(upstream, "commit", "-q", "-am", "fix the flow on the branch")
+    _git_in(upstream, "checkout", "-q", "main")
     workspace = tmp_path / "workspace"
     subprocess.run(
         ["git", "clone", "-q", "-o", "upstream", str(upstream), str(workspace)],
         check=True,
         capture_output=True,
     )
-    _git_out(workspace, "config", "user.email", "test@example.com")
-    _git_out(workspace, "config", "user.name", "test")
+    _git_in(workspace, "config", "user.email", "test@example.com")
+    _git_in(workspace, "config", "user.name", "test")
     return upstream, workspace
 
 
@@ -516,7 +510,7 @@ def test_a_branch_override_the_workspace_only_has_upstream_resolves_and_hands_of
     ref = target["ref"]
     assert ref == "upstream/electric-husky"
     assert target["exceeds_ceiling"] is True
-    assert _git_out(workspace, "rev-parse", f"{ref}^{{commit}}") == _git_out(
+    assert _git_in(workspace, "rev-parse", f"{ref}^{{commit}}") == _git_in(
         upstream, "rev-parse", "electric-husky"
     )
 
@@ -545,8 +539,8 @@ def test_a_branch_override_the_workspace_only_has_upstream_resolves_and_hands_of
 
     # The worker merges it from its own worktree of the same repo.
     worker = tmp_path / "worker"
-    _git_out(workspace, "worktree", "add", "-q", "-b", "mngr/update-self", str(worker))
-    _git_out(worker, "merge", "-q", "--no-edit", ref)
+    _git_in(workspace, "worktree", "add", "-q", "-b", "mngr/update-self", str(worker))
+    _git_in(worker, "merge", "-q", "--no-edit", ref)
     assert (worker / update_self.SKILL_DIR_REL / "SKILL.md").read_text() == (
         "BRANCH FLOW\n"
     )
@@ -560,14 +554,14 @@ def test_a_bare_branch_override_takes_the_remote_over_a_stale_local_branch(
     upstream, workspace = _clone_workspace_with_upstream_branch(
         tmp_path, "electric-husky"
     )
-    _git_out(workspace, "branch", "electric-husky", "upstream/electric-husky")
-    _git_out(upstream, "checkout", "-q", "electric-husky")
-    _git_out(upstream, "commit", "-q", "--allow-empty", "-m", "a later fix")
-    _git_out(workspace, "fetch", "-q", "upstream")
+    _git_in(workspace, "branch", "electric-husky", "upstream/electric-husky")
+    _git_in(upstream, "checkout", "-q", "electric-husky")
+    _git_in(upstream, "commit", "-q", "--allow-empty", "-m", "a later fix")
+    _git_in(workspace, "fetch", "-q", "upstream")
 
     ref = _resolve_override(workspace, "electric-husky", capsys)["ref"]
 
-    assert _git_out(workspace, "rev-parse", ref) == _git_out(
+    assert _git_in(workspace, "rev-parse", ref) == _git_in(
         upstream, "rev-parse", "electric-husky"
     )
 
@@ -576,8 +570,8 @@ def test_an_override_the_remote_has_no_branch_for_is_kept_as_given(
     tmp_path, capsys
 ) -> None:
     _, workspace = _clone_workspace_with_upstream_branch(tmp_path, "electric-husky")
-    _git_out(workspace, "branch", "my-local-work")
-    sha = _git_out(workspace, "rev-parse", "HEAD")
+    _git_in(workspace, "branch", "my-local-work")
+    sha = _git_in(workspace, "rev-parse", "HEAD")
 
     # The clone's ``upstream/HEAD`` is a symref, not a branch to qualify onto.
     for override in (
