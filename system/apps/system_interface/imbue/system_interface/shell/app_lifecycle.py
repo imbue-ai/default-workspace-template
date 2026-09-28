@@ -354,15 +354,22 @@ class AppLifecycleManager(MutableModel):
             is_any_between_states = is_any_between_states or not is_settled
         with self._lock:
             self._is_any_app_between_states = is_any_between_states
-        self._release_parked_except(reconciled_apps)
+        self._forget_apps_except(reconciled_apps)
 
-    def _release_parked_except(self, apps: AbstractSet[str]) -> None:
-        """Let go of every parked port whose app the pass did not reconcile: the shell can no longer start the app,
-        so holding its port would only strand whatever binds it next."""
+    def _forget_apps_except(self, apps: AbstractSet[str]) -> None:
+        """Let go of every parked port, and drop the bookkeeping, of an app the pass did not reconcile: the shell can
+        no longer start the app, so holding its port would only strand whatever binds it next, and a wake of it
+        still awaiting an outcome would keep the sweep at its transition pace for good."""
         with self._lock:
             unreachable = [(app, parked) for app, parked in self._parked_by_app.items() if app not in apps]
             for app, _parked in unreachable:
                 del self._parked_by_app[app]
+            self._apps_awaiting_wake_outcome.intersection_update(apps)
+            self._failed_apps.intersection_update(apps)
+            for app in [app for app in self._wake_times_by_app if app not in apps]:
+                del self._wake_times_by_app[app]
+            for app in [app for app in self._idle_since_by_app if app not in apps]:
+                del self._idle_since_by_app[app]
         for app, parked in unreachable:
             parked.release()
             logger.info("Released the parked port of {}: the app is no longer one the shell can start", app)

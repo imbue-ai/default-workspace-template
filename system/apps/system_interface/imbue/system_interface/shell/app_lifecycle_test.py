@@ -240,6 +240,44 @@ def test_a_parked_port_follows_its_row_and_is_released_once_the_row_is_gone(
     assert supervisor.started == []
 
 
+def test_a_pass_forgets_the_bookkeeping_of_an_app_it_no_longer_reaches(
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
+) -> None:
+    """An app's wake in flight, failed mark, and wake times go with its parker when its row leaves the registry:
+    kept, the wake awaiting its outcome would hold the sweep at its transition pace for the rest of the shell's
+    life, and the failed mark would answer the app's first request as a failed start if it registered again."""
+    registry_path = manager.inventory.registry_path
+    docs_row = registry_row_toml("docs", f"http://127.0.0.1:{closed_port}", program="docs", stop_when_no_windows=True)
+
+    def register(*rows: str) -> None:
+        write_registry(registry_path, *rows)
+        manager.inventory.reload_registry()
+
+    # A wake awaiting its outcome when the row leaves: the sweep idles once the pass no longer reaches the app.
+    assert manager.wake("docs") is ParkedPageKind.STARTING
+    assert manager.sweep_interval_seconds() == TRANSITION_SWEEP_INTERVAL_SECONDS
+    register(registry_row_toml("plain", "http://127.0.0.1:1"))
+    manager.sweep_once()
+    assert manager.parked_app_names() == []
+    assert manager.sweep_interval_seconds() == IDLE_SWEEP_INTERVAL_SECONDS
+
+    # A wake that ended in FATAL when the row leaves: the app registered again is parked as any stopped app is,
+    # and its first request is answered as starting.
+    register(docs_row)
+    assert manager.wake("docs") is ParkedPageKind.STARTING
+    supervisor.statename_by_program["docs"] = "FATAL"
+    manager.sweep_once()
+    assert manager.is_app_parked("docs")
+    register(registry_row_toml("plain", "http://127.0.0.1:1"))
+    manager.sweep_once()
+    assert manager.parked_app_names() == []
+    register(docs_row)
+    manager.sweep_once()
+    assert manager.is_app_parked("docs")
+    assert b"Starting Docs" in send_raw_get_over_socket(closed_port)
+    assert supervisor.started == ["docs", "docs", "docs"]
+
+
 def test_a_pass_does_not_park_an_app_woken_after_its_state_was_read(
     manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
 ) -> None:
