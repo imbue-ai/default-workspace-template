@@ -50,8 +50,8 @@ from imbue.system_interface.shell.port_parking import ParkingTarget
 from imbue.system_interface.shell.port_parking import parked_page_html
 from imbue.system_interface.shell.port_parking import parking_target_of
 
-# The sweep runs often while any stoppable app is not running (a parked port, a stop or start in flight), and at
-# the inventory's own pace otherwise.
+# The sweep runs often while any stoppable app is between states (a parked port, a wake awaiting its outcome, a
+# program starting, retrying, or stopping), and at the inventory's own pace otherwise.
 TRANSITION_SWEEP_INTERVAL_SECONDS: Final[float] = 2.0
 IDLE_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 # How many wakes an app gets in a window before its page stops asking for more (spec section 5.5).
@@ -131,6 +131,8 @@ class AppLifecycleManager(MutableModel):
     _apps_awaiting_wake_outcome: set[str] = PrivateAttr(default_factory=set)
     _failed_apps: set[str] = PrivateAttr(default_factory=set)
     _idle_since_by_app: dict[str, float] = PrivateAttr(default_factory=dict)
+    # Whether the last pass found a stoppable app between states (see ``_reconcile_app``).
+    _is_any_app_between_states: bool = PrivateAttr(default=False)
     _is_visited: bool = PrivateAttr(default=False)
     _sweep_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _sweep_wake: threading.Event = PrivateAttr(default_factory=threading.Event)
@@ -273,7 +275,7 @@ class AppLifecycleManager(MutableModel):
 
     def _run_sweep(self) -> None:
         while not self._sweep_stop.is_set():
-            self._sweep_wake.wait(timeout=self._sweep_interval_seconds())
+            self._sweep_wake.wait(timeout=self.sweep_interval_seconds())
             self._sweep_wake.clear()
             if self._sweep_stop.is_set():
                 return
@@ -282,9 +284,13 @@ class AppLifecycleManager(MutableModel):
             except (OSError, ValueError) as e:
                 logger.opt(exception=e).error("The app lifecycle sweep failed; the next pass will retry")
 
-    def _sweep_interval_seconds(self) -> float:
+    def sweep_interval_seconds(self) -> float:
+        """How long the sweep waits before its next pass: the transition pace while any port is parked, a wake is
+        awaiting its outcome, or the last pass found a program between states; the idle pace otherwise."""
         with self._lock:
-            is_transitioning = bool(self._parked_by_app) or bool(self._apps_awaiting_wake_outcome)
+            is_transitioning = (
+                bool(self._parked_by_app) or bool(self._apps_awaiting_wake_outcome) or self._is_any_app_between_states
+            )
         return (
             min(TRANSITION_SWEEP_INTERVAL_SECONDS, self.idle_sweep_interval_seconds)
             if is_transitioning
@@ -304,6 +310,7 @@ class AppLifecycleManager(MutableModel):
             return
         entries = self.inventory.entries()
         reconciled_apps: set[str] = set()
+        is_any_between_states = False
         for entry in entries:
             program = stoppable_program_of(entry, entries)
             if program is None:
@@ -312,7 +319,10 @@ class AppLifecycleManager(MutableModel):
             if statename is None:
                 continue
             reconciled_apps.add(str(entry.row.name))
-            self._reconcile_app(entry, program, statename, states_read_at)
+            is_settled = self._reconcile_app(entry, program, statename, states_read_at)
+            is_any_between_states = is_any_between_states or not is_settled
+        with self._lock:
+            self._is_any_app_between_states = is_any_between_states
         self._release_parked_except(reconciled_apps)
 
     def _release_parked_except(self, apps: AbstractSet[str]) -> None:
@@ -326,7 +336,12 @@ class AppLifecycleManager(MutableModel):
             parked.release()
             logger.info("Released the parked port of {}: the app is no longer one the shell can start", app)
 
-    def _reconcile_app(self, entry: AppInventoryEntry, program: str, statename: str, states_read_at: float) -> None:
+    def _reconcile_app(self, entry: AppInventoryEntry, program: str, statename: str, states_read_at: float) -> bool:
+        """Bring one app's parker in line with its program's state, and answer whether the app is settled: running
+        and left running, or down with its port parked (or unparkable). A program starting, retrying, or stopping,
+        one the no-window rule just stopped, and one woken after the pass read its state are between states, and
+        the sweep keeps its transition pace until they settle, so the pass that parks a stopped port comes soon
+        after the program exits."""
         app = str(entry.row.name)
         if statename in (SUPERVISOR_RUNNING_STATENAME, SUPERVISOR_STARTING_STATENAME, SUPERVISOR_BACKOFF_STATENAME):
             # Up, or about to bind again on its own: the port must be free.
@@ -337,17 +352,18 @@ class AppLifecycleManager(MutableModel):
                     self._failed_apps.discard(app)
             if parked is not None:
                 parked.release()
-            if statename != SUPERVISOR_BACKOFF_STATENAME:
-                self._apply_no_window_rule(entry, program)
-            return
+            if statename == SUPERVISOR_BACKOFF_STATENAME:
+                return False
+            is_stopped_now = self._apply_no_window_rule(entry, program)
+            return statename == SUPERVISOR_RUNNING_STATENAME and not is_stopped_now
         with self._lock:
             self._idle_since_by_app.pop(app, None)
         if statename not in SUPERVISOR_DOWN_STATENAMES:
             # STOPPING: the port is still the app's until it exits.
-            return
+            return False
         if self._is_woken_since(app, states_read_at):
             logger.debug("Left {} unparked this pass: it was woken after its state was read", app)
-            return
+            return False
         target = parking_target_of(str(entry.row.url))
         with self._lock:
             if statename == SUPERVISOR_FATAL_STATENAME and app in self._apps_awaiting_wake_outcome:
@@ -355,7 +371,7 @@ class AppLifecycleManager(MutableModel):
                 self._apps_awaiting_wake_outcome.discard(app)
             parked = self._parked_by_app.get(app)
             if parked is not None and parked.target == target:
-                return
+                return True
             # A parker on a port the row no longer names (the app re-registered elsewhere) is let go first.
             stale = self._parked_by_app.pop(app, None)
         if stale is not None:
@@ -365,6 +381,7 @@ class AppLifecycleManager(MutableModel):
             )
         if target is not None:
             self._park(entry, program, target)
+        return True
 
     def _is_woken_since(self, app: str, moment: float) -> bool:
         """Whether a wake started the app's program after ``moment``: a state read before it is stale for the app,
@@ -373,31 +390,33 @@ class AppLifecycleManager(MutableModel):
             wake_times = self._wake_times_by_app.get(app)
             return bool(wake_times) and wake_times[-1] > moment
 
-    def _apply_no_window_rule(self, entry: AppInventoryEntry, program: str) -> None:
+    def _apply_no_window_rule(self, entry: AppInventoryEntry, program: str) -> bool:
         """Stop a running app that declares ``stop_when_no_windows`` once no window has shown it for the grace
-        period, and only once the workspace has been visited (spec section 6.1)."""
+        period, and only once the workspace has been visited (spec section 6.1); True when the program was told to
+        stop."""
         app = str(entry.row.name)
         if not entry.row.stop_when_no_windows or self.count_windows_of_app(app) > 0:
             with self._lock:
                 self._idle_since_by_app.pop(app, None)
-            return
+            return False
         now = self.clock()
         with self._lock:
             if not self._is_visited:
-                return
+                return False
             idle_since = self._idle_since_by_app.setdefault(app, now)
             if now - idle_since < self.no_windows_grace_seconds:
-                return
+                return False
             self._idle_since_by_app.pop(app, None)
         try:
             self.stop_program(program)
         except SupervisorProgramActionError as e:
             logger.warning("Could not stop {} after {}s without a window: {}", app, self.no_windows_grace_seconds, e)
-            return
+            return False
         logger.info(
             "Stopped app {} (program {}): no window showed it for {}s", app, program, self.no_windows_grace_seconds
         )
         self.inventory.refresh_liveness()
+        return True
 
     def _park(self, entry: AppInventoryEntry, program: str, target: ParkingTarget) -> None:
         app = str(entry.row.name)

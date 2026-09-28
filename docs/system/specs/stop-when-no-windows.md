@@ -144,7 +144,7 @@ A wake that lands while a stop is in flight is a start of a `STOPPING` program, 
 It is built by `build_shell_state`, started and stopped with the shell, and disabled outright in a preview shell (which refuses the stop and start verbs already) and in tests unless a test enables it, so no test binds a port by accident.
 Its supervisord access is injectable: a states reader (`getAllProcessInfo`, answering each program's `statename`), a start, and a stop, defaulting to the RPC functions of `shell/liveness.py`.
 
-Its sweep runs every 2 seconds while any app is parked or a wake is awaiting its outcome and every 10 seconds otherwise, and is woken at once by a window open, a window close, a desktop deletion, a stop or wake through the manager, and the first client's arrival; a registry change is picked up on the next pass.
+Its sweep runs every 2 seconds while any app is parked, a wake is awaiting its outcome, or a stoppable app's program is between states (starting, retrying, stopping, or stopped and not yet parked) and every 10 seconds otherwise, and is woken at once by a window open, a window close, a desktop deletion, a stop or wake through the manager, and the first client's arrival; a registry change is picked up on the next pass.
 Each pass:
 
 1. reads every supervised program's state in one RPC (none when supervisord cannot be reached: the pass does nothing, logged at debug);

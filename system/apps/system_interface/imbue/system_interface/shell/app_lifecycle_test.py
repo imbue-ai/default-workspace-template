@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
+from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
+from imbue.system_interface.shell.app_lifecycle import TRANSITION_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_WINDOW_SECONDS
 from imbue.system_interface.shell.app_lifecycle import recent_wake_times
@@ -449,3 +451,37 @@ def test_stop_releases_every_parked_port(manager: AppLifecycleManager, closed_po
 
     assert manager.parked_app_names() == []
     assert _is_refused(closed_port)
+
+
+def test_the_sweep_runs_at_its_transition_pace_while_a_program_is_between_states(
+    manager: AppLifecycleManager, supervisor: FakeSupervisor
+) -> None:
+    """A stopped program's port is parked on the pass after it exits, so a sweep at its idle pace would leave the
+    port refused for up to that interval after a Quit; a program starting, retrying, stopping, or just told to
+    stop keeps the sweep quick until it settles."""
+    supervisor.statename_by_program["docs"] = "RUNNING"
+    manager.sweep_once()
+    assert manager.sweep_interval_seconds() == IDLE_SWEEP_INTERVAL_SECONDS
+
+    for statename in ("STARTING", "BACKOFF", "STOPPING"):
+        supervisor.statename_by_program["docs"] = statename
+        manager.sweep_once()
+        assert manager.sweep_interval_seconds() == TRANSITION_SWEEP_INTERVAL_SECONDS, statename
+
+    # Parked, the app is in transition until a request wakes it; running again, the sweep idles.
+    supervisor.statename_by_program["docs"] = "STOPPED"
+    manager.sweep_once()
+    assert manager.is_app_parked("docs")
+    assert manager.sweep_interval_seconds() == TRANSITION_SWEEP_INTERVAL_SECONDS
+    supervisor.statename_by_program["docs"] = "RUNNING"
+    manager.sweep_once()
+    assert manager.sweep_interval_seconds() == IDLE_SWEEP_INTERVAL_SECONDS
+
+    # The pass that stops an app for having no window reports it between states at once.
+    clock = _clock_of(manager)
+    manager.mark_visited()
+    manager.sweep_once()
+    clock.now += NO_WINDOWS_GRACE_SECONDS + 1
+    manager.sweep_once()
+    assert supervisor.stopped == ["docs"]
+    assert manager.sweep_interval_seconds() == TRANSITION_SWEEP_INTERVAL_SECONDS
