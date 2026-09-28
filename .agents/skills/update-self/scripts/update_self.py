@@ -10,7 +10,7 @@ analysis). This script owns the parts that are *deterministic* and therefore
 belong in tested code rather than agent prose:
 
 ``resolve-target``
-    Resolve the ref to update to. Default is the release the minds app driving
+    Resolve the ref to update to. Default is the release the Imbue Studio app driving
     this workspace was built against -- the ``minds-v*`` tag it names, and only
     that one; an explicit override may name a specific tag, ``main``, or any
     other ref, and is reported back as exceeding the ceiling when it cannot be
@@ -63,7 +63,7 @@ belong in tested code rather than agent prose:
 
 ``surface-chat-tab``
     Open this run's own chat window in the workspace UI, so a user sent into the
-    workspace by the minds app lands on the conversation performing the update.
+    workspace by the Imbue Studio app lands on the conversation performing the update.
     The interface can only place a window in front of a client that is connected,
     and the user may still be on their way in, so the command detaches a helper
     that retries ``layout.py open`` until one takes it (or a deadline passes)
@@ -120,7 +120,7 @@ The logic lives in the sibling modules, imported by name from this directory
 (the whole ``scripts/`` directory is staged and run as one unit):
 ``update_target`` (which ref to update to), ``update_classification`` (change
 classes and the apply plan), ``update_apply_contract`` (every path, phase,
-verdict and record the Mind app, bootstrap and the system interface read),
+verdict and record the Imbue Studio app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
 ``update_environment``, ``update_probes``, ``update_ledger``, and
 ``update_apply`` (the apply and recover orchestration). All of it is covered
@@ -718,7 +718,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--ceiling",
         dest="app_version",
         default=None,
-        help="The release to update to, standing in for the running minds app's "
+        help="The release to update to, standing in for the running Imbue Studio app's "
         "own (default: ask the app). A ref that is not a release tag is a fault: "
         "pass --override to say what to take instead.",
     )
@@ -897,7 +897,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     run_status_parser = sub.add_parser(
         "run-status",
-        help="Record this run for the Mind app (data/.state/update-apply/run.json).",
+        help="Record this run for the Imbue Studio app (data/.state/update-apply/run.json).",
         parents=[common],
     )
     run_status_sub = run_status_parser.add_subparsers(
@@ -932,7 +932,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     verdict_parser.add_argument(
         "--detail",
         default="",
-        help="One plain-language line for the Mind app's modal.",
+        help="One plain-language line for the Imbue Studio app's modal.",
     )
     verdict_parser.add_argument(
         "--resulting-ref",

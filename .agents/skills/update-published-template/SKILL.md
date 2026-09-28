@@ -11,7 +11,7 @@ Version: v2 (templates flow). This is the PUBLISHER's re-publish path -- the
 companion to `publish-template` (a template's first publish),
 `use-template` (adopt someone else's), and `update-installed-template`
 (pull a newer version of one you adopted). It produces the NEXT version of a
-template THIS mind already published: it re-cuts the source workspace's
+template THIS agent already published: it re-cuts the source workspace's
 changes since the last version onto the published snapshot and fast-forwards
 `main` by exactly one commit, leaving every hand-crafted thing in the published
 repo (manifest prose, thumbnail, adopters' "Adaptation history")
@@ -42,7 +42,7 @@ format) and a template's own publish count. See
 > untouched and only the app/feature changes advance. If you cannot get the
 > published tip, STOP -- do not fall back to a from-`BASE_REF` rebuild.
 
-> **CWD INVARIANT -- where each step runs.** The source mind's live checkout at
+> **CWD INVARIANT -- where each step runs.** The source agent's live checkout at
 > `/home/user/workspace` is touched in exactly two read-only ways and one write:
 > - §2 does a **read-only object fetch** of the published repo into `/home/user/workspace`'s
 >   object store and reads the delta with `git diff`/`git show`. A fetch adds
@@ -53,7 +53,7 @@ format) and a template's own publish count. See
 >   built by the worker on top of the fetched published tip, IS what gets pushed,
 >   as-is, from `$WT`. IGNORE `lead-proxy.md`'s default `done -> merge the
 >   worker's branch` handling -- as in `publish-template`, merging the assembly
->   branch into `/home/user/workspace` is forbidden (it once reset a live mind's tree to an old
+>   branch into `/home/user/workspace` is forbidden (it once reset a live agent's tree to an old
 >   base). Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/home/user/workspace`, or
 >   any step that mutates `/home/user/workspace`'s tree after assembly.
 > - **The ONE sanctioned write to `/home/user/workspace`: §8, the version-history entry.** After
@@ -133,7 +133,7 @@ latchkey gateway exactly as `use-template` §1 does for a private fetch (the
 `github-git` / `github-git-read` permission; initiate it yourself via a latchkey
 permission request per `.agents/skills/connect-external-service/references/latchkey.md`
 if the `permissions/self` probe shows it missing, and tell the user an approval is
-waiting in minds). A public repo may
+waiting in Imbue Studio). A public repo may
 fetch anonymously.
 
 ```bash
@@ -144,7 +144,7 @@ PUBLISHED_TIP="$(git rev-parse FETCH_HEAD)"
 ```
 
 **2b. Verify the published repo is where we last left it (out-of-band-divergence
-check).** The published tree should still be the clean v(n) snapshot this mind
+check).** The published tree should still be the clean v(n) snapshot this agent
 pushed. Read the manifest at the tip and confirm its front-matter `version:`
 equals `v<n>` (the ledger's current version), and that the tip is a single
 template snapshot on a template base (`git rev-list --count "$PUBLISHED_TIP"`
@@ -163,14 +163,14 @@ actual published version) before any update. (The shipped ledger records the
 source sha, not the published snapshot sha, so this version-and-shape check is
 the integrity gate in place of a recorded-snapshot-sha comparison.)
 
-Then confirm the published repo does not carry this mind's own history. A
+Then confirm the published repo does not carry this agent's own history. A
 template published on the wrong base -- an `update-self:` merge commit instead of
-its upstream parent -- shipped everything the mind had built before that update,
+its upstream parent -- shipped everything the agent had built before that update,
 in its tree and in its history. The published base is the newest commit under
 the `template:` snapshots, and it must not descend from this workspace's own
 `Initial workspace commit` (being that commit is fine). `--origin` resolves that
-marker, and takes the NEWEST for the reason the script documents: a mind created
-from a published template also carries the source mind's marker further down,
+marker, and takes the NEWEST for the reason the script documents: an agent created
+from a published template also carries the source agent's marker further down,
 and a correct base descends from that one:
 
 ```bash
@@ -445,7 +445,7 @@ Reuse `publish-template` §7's mechanics for the WRITE side. You already have
 `github-git-read` from §2a; the push needs `github-git-write`. Probe it and, if
 missing, initiate the permission request yourself (`payload.scope: github-git`,
 `permissions: ["github-git-write"]`), tell the user an approval is waiting in
-minds, and background-poll (bounded) until granted. No `github-rest-api` /
+Imbue Studio, and background-poll (bounded) until granted. No `github-rest-api` /
 repo-creation grant is needed -- the repo already exists and this flow does not
 create one or change its settings. Never fall back to a token-in-URL push.
 
@@ -473,7 +473,7 @@ create one or change its settings. Never fall back to a token-in-URL push.
   A NON-fast-forward rejection means the published `main` moved since §2b's check
   (a genuine out-of-band push) -- STOP and surface it; do NOT `--force`. Handle
   the other push-failure causes (permission, HTTP 413, `workflow` scope, GitHub
-  push-protection on the baked-in Mind Google OAuth client) exactly as
+  push-protection on the baked-in Imbue Studio Google OAuth client) exactly as
   `publish-template` §8's "Failure handling" list does.
 
 - **Move / create the version tag** (the design's `template/<slug>/v<n>` tag

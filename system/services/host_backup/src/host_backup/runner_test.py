@@ -116,7 +116,7 @@ def test_should_tick_now_fires_when_backup_toml_first_appears() -> None:
 def test_should_tick_now_fires_when_restic_env_first_appears() -> None:
     """restic.env appearing (mtime None -> value) counts as a config change.
 
-    minds injects restic.env into a running workspace to enable backups (no
+    Imbue Studio injects restic.env into a running workspace to enable backups (no
     template is seeded anymore), so the first backup must fire promptly rather
     than waiting out backup_interval_seconds.
     """

@@ -7,7 +7,7 @@ a bug" modal, and the user reviews and submits it, so the human gates the send.
 
 **Send exactly one report, once, covering every built-in issue you found.** Each POST pops a modal over the user's workspace, so a report per issue means a queue of modals to read and submit one at a time, for a single session's work. Collect the issues as you go and send them together at the end of the pass, numbered, each with its own root cause and classification -- they can be split apart upstream, but they cannot be un-popped here. If you have already sent a report this session and then find something else, say so in chat and ask before sending a second one.
 
-POST your diagnosis to the minds report route through the latchkey gateway:
+POST your diagnosis to the Imbue Studio report route through the latchkey gateway:
 
 ```bash
 DESCRIPTION="$(cat <<'EOF'

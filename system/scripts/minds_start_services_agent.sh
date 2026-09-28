@@ -1,11 +1,11 @@
 #!/bin/sh
-# Start the minds "system-services" agent, sourcing the same env mngr itself
+# Start the Imbue Studio "system-services" agent, sourcing the same env mngr itself
 # applies to agent operations: the host env first, then the agent's own env
 # (agent overrides host) -- mirroring mngr's build_source_env_prefix
 # (host_dir/env + host_dir/agents/<id>/env). Sourcing only the host env would
 # violate that contract.
 #
-# Invoked by the minds boot units (the lima in-VM unit and the outer-VM unit's
+# Invoked by the Imbue Studio boot units (the lima in-VM unit and the outer-VM unit's
 # `docker exec`) so a workspace recovers after a VM/container restart without the
 # desktop app. Run it through a login shell (`bash -lc`) so uv/mngr are on PATH.
 #
