@@ -3,8 +3,8 @@
 Selection reads only what the workspace declares: a changed path inside a package or skill
 runs that unit's suite, plus the suites of the workspace members that depend on the package
 (``pyproject.toml``), the npm packages that depend on it (``package.json``), and the apps whose
-manifests reference it (``[[references]]``). ``uv.lock`` selects the members that depend on
-what it upgraded. A small always-run set guards the repo-wide invariants any edit can break.
+manifests reference it (``[[references]]``). A supervisord block runs the app whose program
+it holds. ``uv.lock`` selects the members that depend on what it upgraded. A small always-run set guards the repo-wide invariants any edit can break.
 Any other path belongs to no declared unit, so it runs the full root suite.
 """
 
@@ -24,13 +24,16 @@ from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
+from loguru import logger
 from pydantic import Field
 
+from app_manifest.errors import ScopeComputationError
 from app_manifest.errors import SuiteSelectionError
 from app_manifest.manifest import app_package_directory
 from app_manifest.primitives import RepoRelativePath
 from app_manifest.primitives import is_path_covered_by
 from app_manifest.scope import LoadedManifest
+from app_manifest.scope import find_wiring_sections
 from app_manifest.scope import list_changed_files
 from app_manifest.scope import list_tracked_files
 from app_manifest.scope import list_uncommitted_paths
@@ -65,6 +68,8 @@ _ROOT_CONFIG_FILES: Final[frozenset[str]] = frozenset({"pyproject.toml", "confte
 _LOCKFILE: Final[RepoRelativePath] = RepoRelativePath("uv.lock")
 # ``system/*.py``: the repo-wide invariants, part of the always-run set.
 _GUARD_DIRECTORY: Final[str] = "system"
+_SUPERVISORD_CONF: Final[str] = "system/supervisord.conf"
+_SUPERVISORD_DROPIN_DIRECTORY: Final[str] = "system/supervisord.conf.d"
 # The cross-cutting system/scripts guards, run beside system/*.py for every change.
 _ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
     "system/scripts/agent_hook_wiring_test.py",
@@ -125,6 +130,7 @@ class ChangedPathClass(LowerCaseStrEnum):
     LOCKFILE = auto()
     FRONTEND_PACKAGE = auto()
     MANIFEST_REFERENCE = auto()
+    WIRING = auto()
     ROOT_CONFIG = auto()
     DOCS = auto()
     UNOWNED = auto()
@@ -201,6 +207,9 @@ class RepoLayout(FrozenModel):
     python_members: tuple[PythonMember, ...] = Field(description="The uv workspace members")
     npm_packages: tuple[NpmPackage, ...] = Field(description="The npm workspace packages")
     manifests: tuple[LoadedManifest, ...] = Field(description="The app manifests that load")
+    wiring_owners: Mapping[str, tuple[str, ...]] = Field(
+        description="Each supervisord config file and the app directories with blocks in it"
+    )
 
 
 class _PytestRequest(FrozenModel):
@@ -286,6 +295,24 @@ def _read_text(path: Path) -> str:
         raise SuiteSelectionError(f"cannot read {path}: {e}") from e
 
 
+def _wiring_owners(
+    repo_root: Path, manifests: Sequence[LoadedManifest]
+) -> dict[str, tuple[str, ...]]:
+    owners: dict[str, set[str]] = defaultdict(set)
+    for loaded in manifests:
+        package_directory = app_package_directory(repo_root, loaded.manifest_path)
+        if package_directory is None:
+            continue
+        try:
+            sections = find_wiring_sections(repo_root, loaded.manifest)
+        except ScopeComputationError as e:
+            logger.warning("Skipping the wiring of {}: {}", loaded.manifest_path, e)
+            continue
+        for section in sections:
+            owners[section.path].add(package_directory.rstrip("/"))
+    return {path: tuple(sorted(directories)) for path, directories in owners.items()}
+
+
 def load_repo_layout(repo_root: Path) -> RepoLayout:
     """Read everything the selection needs off the tree at ``repo_root``."""
     repo_root = repo_root.resolve()
@@ -307,6 +334,7 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
             and not any(is_path_covered_by(directory, path) for directory in uncollected_directories)
         )
     )
+    manifests = load_app_manifests(repo_root)
     return RepoLayout(
         repo_root=repo_root,
         tracked_files=tracked_files,
@@ -322,7 +350,8 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
         coverage_measured_units=read_coverage_measured_units(repo_root, own_root_units),
         python_members=python_members,
         npm_packages=read_npm_packages(repo_root),
-        manifests=load_app_manifests(repo_root),
+        manifests=manifests,
+        wiring_owners=_wiring_owners(repo_root, manifests),
     )
 
 
@@ -480,6 +509,22 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
     pytest_requests: list[_PytestRequest] = []
     frontend_requests: list[_FrontendRequest] = []
     is_owned = False
+
+    if path == _SUPERVISORD_CONF or PurePosixPath(path).parent.as_posix() == _SUPERVISORD_DROPIN_DIRECTORY:
+        # The always-run set checks the layout; the apps whose blocks the file holds run too.
+        classes.append(ChangedPathClass.WIRING)
+        pytest_requests.extend(
+            _present(
+                _whole_request(
+                    layout,
+                    owner,
+                    is_browser_included=False,
+                    reason=_reason(path, ChangedPathClass.WIRING, f"runs {owner}"),
+                )
+                for owner in layout.wiring_owners.get(path, ())
+            )
+        )
+        is_owned = True
 
     npm_package = _owning_npm_package(layout, path)
     if path in _NPM_ROOT_CONFIG_FILES or npm_package is not None:

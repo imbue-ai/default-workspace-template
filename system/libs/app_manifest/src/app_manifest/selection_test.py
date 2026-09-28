@@ -115,13 +115,14 @@ def test_the_full_root_suite_replaces_the_root_collected_runs_but_not_the_own_ro
     assert _CHAT_WHOLE_WITH_BROWSER in lines
 
 
-def test_a_supervisord_block_runs_the_full_root_suite(workspace: Path) -> None:
+def test_a_supervisord_block_runs_the_app_it_starts(workspace: Path) -> None:
     write_supervisord_dropin(workspace, "notes", ("program:notes",))
     commit_everything(workspace, "wire notes")
 
     selection = _select(workspace, ["system/supervisord.conf.d/notes.conf"])
 
-    assert _command_lines(selection) == [_FULL_ROOT]
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
+    assert selection.paths[0].classes == (ChangedPathClass.WIRING,)
 
 
 def test_documentation_alone_selects_nothing(workspace: Path) -> None:
