@@ -806,10 +806,10 @@ def _own_root_commands(
     is_coverage_measured: bool,
     reasons: tuple[SelectionReason, ...],
 ) -> list[SuiteCommand]:
-    """The runs of an own-root suite: every test when the app itself changed, its default run
-    when something it depends on did, only its browser and frontend tests when just a frontend
-    it builds changed, and any files named on their own, all markers included; then its
-    split-out type check when a run includes the test it replaces."""
+    """The runs of an own-root suite: every test when a file of the app outside its frontend
+    changed, its default run when something it depends on did, only its browser and frontend
+    tests when just a frontend it builds changed, and any files named on their own, all markers
+    included; then its split-out type check when a run includes the test it replaces."""
     commands: list[SuiteCommand] = []
     partial_run = ("uv", "run", "pytest", *((_NO_COVERAGE_FLAG,) if is_coverage_measured else ()))
     scopes = {request.marker_scope for request in whole}
