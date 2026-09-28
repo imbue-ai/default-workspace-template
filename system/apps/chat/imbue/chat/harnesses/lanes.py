@@ -13,10 +13,7 @@ already does -- one recommended path with the alternates behind a disclosure -- 
 so every lane can have its own alternates.
 
 Every value in the table below was measured against the real CLIs, not read off
-documentation, which was wrong about several of them. Notably: codex's `--device-auth` is
-absent from `codex login --help` but is what bare `codex login` tells you to use on a
-headless box, and it inverts the usual shape -- the code comes OUT and nothing is pasted
-back.
+documentation, which was wrong about several of them.
 """
 
 from __future__ import annotations
