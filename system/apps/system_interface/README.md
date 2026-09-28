@@ -165,8 +165,10 @@ takes the app, a path, the other paths that count as already showing it, and
 the pages whose windows it may point at the path, and picks the window itself:
 one already showing it (switching desktops if it must), else the frontmost
 window on screen at one of those pages (pointed at the path), else the app's
-pinned window, else a new one. The shell reads no meaning into a path's query
-string.
+pinned window, else a new one. A pulled-out window it settles on stays out, and
+the client stays on its desktop: the shell asks that client's page to have the
+Mind app raise the window's own desktop window. The shell reads no meaning into
+a path's query string.
 
 ### How the shell learns about apps
 
