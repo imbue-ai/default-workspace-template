@@ -11,6 +11,7 @@ from typing import Any
 from typing import Final
 from typing import assert_never
 
+from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import LocationScope
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
@@ -30,6 +31,8 @@ from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
+from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
+from imbue.system_interface.shell.app_lifecycle import build_app_lifecycle_manager
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
@@ -60,6 +63,7 @@ from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_wire_json
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.data_types import effective_window
+from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.data_types import window_wire_json
 from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import find_window
@@ -81,6 +85,7 @@ from imbue.system_interface.shell.desktops import slugify_desktop_name
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import InvalidShellValueError
+from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.identity import visiting_user_id
@@ -123,6 +128,9 @@ class ShellState(MutableModel):
         frozen=True, description="Where the state files live (desktop contracts.md section 4)"
     )
     inventory: AppInventory = Field(frozen=True, description="The registry and each app's liveness")
+    lifecycle: AppLifecycleManager = Field(
+        frozen=True, description="Parks, wakes, starts, and stops the stoppable apps (the stop-when-no-windows spec)"
+    )
     desktops: DesktopStore = Field(frozen=True, description="desktops.json")
     placements: PlacementStore = Field(frozen=True, description="The per-client layouts of each desktop")
     window_paths: WindowPathStore = Field(
@@ -181,6 +189,7 @@ class ShellState(MutableModel):
         self._prune_thread = thread
         thread.start()
         self.inventory.start()
+        self.lifecycle.start()
         self.update_notice.start()
         self.avatar_status.start()
 
@@ -190,6 +199,7 @@ class ShellState(MutableModel):
         if self._prune_thread is not None:
             self._prune_thread.join(timeout=5)
             self._prune_thread = None
+        self.lifecycle.stop()
         self.inventory.stop()
         self.avatar_status.stop()
 
@@ -273,7 +283,13 @@ class ShellState(MutableModel):
     ) -> WindowPath:
         """The page a launch of the path opens (post-launch-paths plan section 3.2): built for a GET launch path,
         asked of the app for a POST one, with the requesting client, its desktop, and the aimed-at window's path as
-        the envelope. Raises LaunchRefusedError (a 400) and LaunchUnavailableError (a 502)."""
+        the envelope. A POST to a stoppable app that is stopped wakes it first and waits for it to answer (the
+        stop-when-no-windows spec, section 5.6). Raises LaunchRefusedError (a 400) and LaunchUnavailableError (a
+        502)."""
+        if launch_path.method is LaunchPathMethod.POST and not entry.is_running:
+            is_stoppable = stoppable_program_of(entry, self.inventory.entries()) is not None
+            if is_stoppable and not self.lifecycle.wake_and_wait(entry):
+                raise LaunchUnavailableError(f"{str(entry.row.name)} did not come up in time for the launch")
         return resolve_launch_destination(
             entry, launch_path, params, client_id, desktop_id, window_path, self.launch_poster
         )
@@ -702,6 +718,7 @@ def build_shell_state(
     profiles: ProfileResolver | None = None,
     launch_poster: LaunchPoster | None = None,
     on_registry_read: Callable[[Sequence[RegistryRow]], None] | None = None,
+    is_lifecycle_enabled: bool = False,
 ) -> ShellState:
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests (and
     ``on_registry_read``, what the built inventory tells every registry read, is the production shell's services
@@ -710,12 +727,18 @@ def build_shell_state(
     environment names; ``repo_root`` (the workspace the update notice's record and script live under) is the
     served tree by default; ``profiles`` (the resolver the composition root shares with presence) defaults to one
     that can reach no connector, so a shell built without one names visitors by email; ``launch_poster`` (how a
-    POST launch path is asked for its page) defaults to the loopback POST."""
+    POST launch path is asked for its page) defaults to the loopback POST; ``is_lifecycle_enabled`` is whether the
+    lifecycle manager's sweep runs (the production shell's yes; a preview's and a test's no, so no test parks a
+    port by accident)."""
+    resolved_inventory = (
+        inventory
+        if inventory is not None
+        else AppInventory(registry_path=registry_path, broadcaster=broadcaster, on_registry_read=on_registry_read)
+    )
     return ShellState(
         state_directory=state_directory,
-        inventory=inventory
-        if inventory is not None
-        else AppInventory(registry_path=registry_path, broadcaster=broadcaster, on_registry_read=on_registry_read),
+        inventory=resolved_inventory,
+        lifecycle=build_app_lifecycle_manager(resolved_inventory, is_lifecycle_enabled),
         desktops=DesktopStore(state_directory=state_directory),
         placements=PlacementStore(state_directory=state_directory),
         window_paths=WindowPathStore(state_directory=state_directory),

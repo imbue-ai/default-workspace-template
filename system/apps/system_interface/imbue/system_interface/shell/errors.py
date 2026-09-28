@@ -102,3 +102,15 @@ class UpdateNoticeRefusedError(ShellError, ValueError):
 
 class UpdateNoticeCommandError(ShellError, RuntimeError):
     """The update-self script behind a notice verb could not be run, or failed."""
+
+
+class PortParkingError(ShellError, OSError):
+    """A stopped app's port could not be parked."""
+
+
+class PortInUseError(PortParkingError):
+    """Something already listens on the port the shell meant to park (the app itself, most likely)."""
+
+
+class AppWakeRefusedError(ShellError, RuntimeError):
+    """The app was not woken: its wake budget is spent, or it cannot be started through the workspace."""

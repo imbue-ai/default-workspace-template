@@ -33,6 +33,12 @@ _PROBE_TIMEOUT_SECONDS: Final[float] = 2.0
 # The supervisord process states that mean "the program is up (or coming up)".
 # STOPPED / STOPPING / EXITED / BACKOFF / FATAL / UNKNOWN all render as stopped.
 _RUNNING_STATE_NAMES: Final[frozenset[str]] = frozenset({"RUNNING", "STARTING"})
+SUPERVISOR_RUNNING_STATENAME: Final[str] = "RUNNING"
+SUPERVISOR_STARTING_STATENAME: Final[str] = "STARTING"
+SUPERVISOR_BACKOFF_STATENAME: Final[str] = "BACKOFF"
+SUPERVISOR_FATAL_STATENAME: Final[str] = "FATAL"
+# The states in which a program is neither up nor about to bind its port again on its own: what the shell parks.
+SUPERVISOR_DOWN_STATENAMES: Final[frozenset[str]] = frozenset({"STOPPED", "EXITED", "FATAL", "UNKNOWN"})
 
 
 def supervisor_socket_path() -> Path:
@@ -111,11 +117,19 @@ def stop_supervisor_program(program: str, socket_path: Path) -> None:
 
 
 def fetch_supervisor_program_states(socket_path: Path) -> dict[str, bool] | None:
-    """Every supervised program's up/down state in one getAllProcessInfo RPC.
+    """Every supervised program's up/down state in one getAllProcessInfo RPC; None when supervisord cannot be
+    reached, so the caller falls back to per-row TCP probes rather than presenting a guess as its answer."""
+    statename_by_program = fetch_supervisor_program_statenames(socket_path)
+    if statename_by_program is None:
+        return None
+    return {program: statename in _RUNNING_STATE_NAMES for program, statename in statename_by_program.items()}
+
+
+def fetch_supervisor_program_statenames(socket_path: Path) -> dict[str, str] | None:
+    """Every supervised program's ``statename`` in one getAllProcessInfo RPC.
 
     Returns None when supervisord cannot be reached (or answers with something
-    unmarshallable), so the caller falls back to per-row TCP probes rather than
-    presenting a guess as supervisord's answer. Keys are bare program names --
+    unmarshallable). Keys are bare program names --
     the same names ``forward_port.py --program`` registers and the per-program
     RPCs use (this config defines no supervisord groups).
     """
@@ -131,7 +145,7 @@ def fetch_supervisor_program_states(socket_path: Path) -> dict[str, bool] | None
         return None
     if not isinstance(process_infos, list):
         return None
-    is_running_by_program: dict[str, bool] = {}
+    statename_by_program: dict[str, str] = {}
     for process_info in process_infos:
         if not isinstance(process_info, dict):
             continue
@@ -148,8 +162,8 @@ def fetch_supervisor_program_states(socket_path: Path) -> dict[str, bool] | None
             else:
                 pass
         if program_name:
-            is_running_by_program[program_name] = statename in _RUNNING_STATE_NAMES
-    return is_running_by_program
+            statename_by_program[program_name] = statename
+    return statename_by_program
 
 
 def probe_all_app_liveness(probe_targets: Sequence[tuple[str, str, str]]) -> dict[str, bool]:

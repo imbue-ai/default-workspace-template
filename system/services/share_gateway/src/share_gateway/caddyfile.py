@@ -6,7 +6,10 @@ about every request (forward_auth), and routes by Host: each registered
 service's unguessable ``<label>.<domain>`` origin to that service's local
 backend, the dedicated ``auth-<rand>.<domain>`` label to the gateway's public
 ``/_auth/*`` surface (the login callback), and unknown-but-plausible service
-origins to the gateway's auto-retrying loading page. The bare workspace domain
+origins to the gateway's auto-retrying loading page, which a registered service
+caddy cannot reach gets too (the moment between an app stopping and the shell
+parking its port, or between the shell releasing the port and the app binding
+it; the stop-when-no-windows spec, section 5.7). The bare workspace domain
 is intentionally unrouted (no frpc claim), so scanners that learn it from
 Certificate Transparency reach nothing.
 
@@ -160,6 +163,17 @@ https://*.{workspace_domain}:{https_port} {{
     # label) and never auth-gated, so the chrome can probe a workspace it has
     # any origin for. The gateway applies CORS for the chrome origin itself.
     handle /_health {{
+        reverse_proxy {gateway_backend}
+    }}
+
+    # A registered service whose backend refuses the connection (a stopped app
+    # whose port the shell has not parked yet, or one it just released for the
+    # app to bind) gets the auto-retrying loading page rather than a bare 502;
+    # the visitor's next request reaches the app, or the shell's parker, which
+    # starts it. The parker's own 503 is a backend answer, not a caddy error,
+    # and passes through as it does locally.
+    handle_errors 502 {{
+        rewrite * /_auth/loading
         reverse_proxy {gateway_backend}
     }}
 

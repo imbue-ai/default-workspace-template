@@ -87,6 +87,7 @@ def build_production_state(
             broadcaster=broadcaster,
             profiles=profiles,
             on_registry_read=service_event_writer.announce if service_event_writer is not None else None,
+            is_lifecycle_enabled=not is_preview,
         ),
         presence=presence,
         presence_sweep=build_presence_sweep(presence, profiles, broadcaster),

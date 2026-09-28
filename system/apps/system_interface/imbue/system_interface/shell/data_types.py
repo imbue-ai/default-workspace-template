@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Any
 from typing import Final
 
@@ -87,6 +88,19 @@ class AppInventoryEntry(FrozenModel):
 
     row: RegistryRow = Field(description="The registry row, validated on read")
     is_running: bool = Field(description="Derived from supervisord or a TCP probe, never stored")
+
+
+@pure
+def stoppable_program_of(entry: AppInventoryEntry, entries: Sequence[AppInventoryEntry]) -> str | None:
+    """The supervised program the workspace may stop, start, park, and wake for this app, or None: an app with no
+    program, a critical app, and any row inside a critical app's program are never acted on (desktop contracts.md
+    section 5.1)."""
+    program = entry.row.program or ""
+    if not program or entry.row.critical:
+        return None
+    if any(other.row.critical and other.row.program == program for other in entries):
+        return None
+    return program
 
 
 @pure
