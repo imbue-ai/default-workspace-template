@@ -370,11 +370,11 @@ def pending_update_rollbacks(
     # that undid its revert is classified.
     update_rollbacks: set[str] = set()
     for sha, subject, rolled_back_update, _body in reversed(newest_first):
-        rollback = _ROLLBACK_SUBJECT.match(subject)
-        if rollback is not None and (
+        restore_to = rolled_back_to(subject)
+        if restore_to is not None and (
             rolled_back_update.strip()
             or _undid_update_content(
-                sha, rollback.group("restore_to"), update_rollbacks, repo_root, runner
+                sha, restore_to, update_rollbacks, repo_root, runner
             )
         ):
             update_rollbacks.add(sha)
