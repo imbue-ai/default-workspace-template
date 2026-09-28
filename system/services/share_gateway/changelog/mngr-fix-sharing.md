@@ -1,0 +1,3 @@
+The share gateway no longer retries a failed bring-up every 10 seconds. When the connector cannot issue the certificate or hand out the relay assignment, attempts are spaced 15s, 30s, 1m, 2m, 8m, then 15m apart (a longer connector `Retry-After` wins), and a refusal the connector marks as permanent (any 4xx other than 408/429) halts retries until `share.env` changes. This keeps one stuck workspace from hammering the connector, its Cloudflare DNS token, and the certificate authorities behind it.
+
+Each outcome is reported in `data/.state/share_gateway/status.json` (`up` / `retrying` / `halted`, the last error, the next retry time), which the minds desktop client reads to explain a share that is not live yet. The file is removed at unshare.

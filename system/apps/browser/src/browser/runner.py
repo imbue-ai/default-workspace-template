@@ -447,6 +447,22 @@ def stop_browser(browser_id: str) -> Response:
     return jsonify({"stopped": True})
 
 
+def close_active_tab(browser_id: str) -> Response:
+    """Close the tab the pane is showing (the viewer's close chord); the browser itself stays up."""
+    if (gate := _require_ready()) is not None:
+        return gate
+    if not is_valid_browser_name(browser_id):
+        return jsonify({"error": "invalid browser name"}), 404
+    browser = _resolve_sync(browser_id)
+    if isinstance(browser, Response):
+        return browser
+    try:
+        bridge.run(browser.close_active_tab(), timeout=_ROUTE_TIMEOUT)
+    except BrowserNotDrivableError as e:
+        return _error({"error": str(e)}, 409)
+    return jsonify({"closed": True})
+
+
 def start_browser(browser_id: str) -> Response:
     """Relaunch a stopped browser on its saved tabs from its profile."""
     if (gate := _require_ready()) is not None:
@@ -571,7 +587,9 @@ def cmd_clipboard_paste(browser_id: str) -> Response:
         return resolved
     data = request.get_data()
     mime = (request.content_type or "text/plain").split(";")[0].strip() or "text/plain"
-    return mediastream.clipboard_paste(browser_id, resolved, data, mime)
+    return mediastream.clipboard_paste(
+        browser_id, resolved, data, mime, lambda coro: bridge.run(coro, timeout=_ROUTE_TIMEOUT)
+    )
 
 
 def cmd_clipboard_out(browser_id: str) -> Response:
@@ -873,6 +891,9 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>", view_func=close_browser, methods=["DELETE"])
     application.add_url_rule("/browsers/<string:browser_id>/stop", view_func=stop_browser, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/start", view_func=start_browser, methods=["POST"])
+    application.add_url_rule(
+        "/browsers/<string:browser_id>/close-tab", view_func=close_active_tab, methods=["POST"]
+    )
     application.add_url_rule("/browsers/<string:browser_id>/release", view_func=release_browser, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/attach", view_func=cmd_attach, methods=["GET"])
     application.add_url_rule("/browsers/<string:browser_id>/acquire", view_func=cmd_acquire, methods=["POST"])

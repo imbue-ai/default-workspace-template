@@ -5,20 +5,23 @@ supervised as the `files` program declared in
 `system/supervisord.conf.d/files.conf`. There is no Python package here: the
 program line registers `app.toml` and the dufs port 8300 through
 `system/scripts/forward_port.py`, then runs
-`dufs --allow-all --bind 127.0.0.1 --port 8300 --assets system/apps/files/assets data`.
+`dufs --allow-all --bind 127.0.0.1 --port 8300 --assets system/apps/files/assets /`.
 
 The server is [dufs](https://github.com/sigoden/dufs), a single static binary
 installed at image build by `system/scripts/install_dufs.sh` (version and
-per-arch sha256 pinned there). It serves `data/` -- the workspace's user-facing
-file tree -- bound to loopback with all operations enabled (browse, preview,
+per-arch sha256 pinned there). It serves the container's filesystem root, so a
+viewer opened at the workspace can walk up to anything the workspace user can
+read; it is bound to loopback with all operations enabled (browse, preview,
 upload, rename, delete): the workspace origin is what gates access, exactly as
 for every other registered app.
 
 ## Opening a folder
 
-The manifest's one launch path is `/` with an optional `path` param, so the shell
-opens a file viewer window at `/?path=<folder>` (`layout.py open files --path
-/notes/` is the same thing). dufs ignores the query; the vendored frontend
+The manifest's one launch path is `/home/user/workspace/` with an optional `path`
+param (an absolute path, since dufs serves the filesystem root), so a plain launch
+opens the workspace folder and the shell opens a file viewer window at
+`/home/user/workspace/?path=<folder>` when asked for one (`layout.py open files
+--path /home/user/workspace/data/notes/` is the same thing). dufs ignores the query; the vendored frontend
 takes the frame to the folder itself (see below) and then reports that folder as
 its location, so the window's stored path follows and a reload reopens the
 folder.

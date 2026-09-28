@@ -1,0 +1,1 @@
+The template-env-manifest blueprint names the Studio trampoline page (`https://studio.imbue.com/open?git_url=<repo url>`) and the `imbue-studio://` deep link scheme where it described the published README's call-to-action.

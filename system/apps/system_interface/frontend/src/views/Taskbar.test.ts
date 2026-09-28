@@ -23,6 +23,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         app: docs,
         title: "Plan",
         isMinimized: false,
+        isDetached: false,
         isFocused: true,
         isPinned: false,
         look: null,
@@ -32,6 +33,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         app: docs,
         title: "Docs",
         isMinimized: true,
+        isDetached: false,
         isFocused: false,
         isPinned: false,
         look: null,
@@ -41,6 +43,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         app: docs,
         title: "Docs",
         isMinimized: true,
+        isDetached: false,
         isFocused: false,
         isPinned: true,
         look: { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null },
@@ -93,6 +96,42 @@ describe("Taskbar", () => {
     expect(onEntryClick).toHaveBeenCalledWith("win-2");
   });
 
+  it("marks an entry whose window is shown in its own desktop window, dimmed like a minimized one", () => {
+    const docs = appRecord("docs");
+    const taskbar = render({
+      entries: [
+        {
+          window: windowRecord("win-1", "docs", "/a", { title: "Plan" }),
+          app: docs,
+          title: "Plan",
+          isMinimized: false,
+          isDetached: true,
+          isFocused: false,
+          isPinned: false,
+          look: null,
+        },
+        {
+          window: windowRecord("win-2", "docs", "/new"),
+          app: docs,
+          title: "Docs",
+          isMinimized: false,
+          isDetached: false,
+          isFocused: true,
+          isPinned: false,
+          look: null,
+        },
+      ],
+    });
+    const entries = [...taskbar.querySelectorAll("[data-taskbar-entry]")];
+    expect(entries.map((entry) => entry.getAttribute("data-detached"))).toEqual(["true", "false"]);
+    expect(entries.map((entry) => entry.getAttribute("data-minimized"))).toEqual(["false", "false"]);
+    expect(entries.map((entry) => entry.querySelector('[aria-label="In its own window"]') !== null)).toEqual([
+      true,
+      false,
+    ]);
+    expect(entries.map((entry) => entry.querySelector(".opacity-60") !== null)).toEqual([true, false]);
+  });
+
   it("shows icons only in compact mode, the title as each entry's accessible name", () => {
     const taskbar = render({ isCompact: true });
     expect(taskbar.querySelectorAll(".taskbar-entry-title")).toHaveLength(0);
@@ -128,7 +167,7 @@ describe("Taskbar", () => {
     (taskbar.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement).dispatchEvent(
       new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 40 }),
     );
-    expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40);
+    expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40, expect.any(Element));
   });
 
   it("carries the launcher field and the Desktops widget with a glyph per desktop, and nothing else in the tray while nobody is recorded", () => {

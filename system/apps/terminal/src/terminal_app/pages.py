@@ -122,6 +122,27 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     empty.hidden = false;
   }
 
+  // ttyd fits its grid once at mount, with the DOM renderer's whole-pixel cell width, then
+  // switches to its WebGL renderer, whose narrower cell leaves that column count short of the
+  // pane; it only refits on a resize, and only listens for one once its socket is open. A
+  // one-pixel nudge of the frame after it loads is such a resize; the second covers a slow
+  // socket.
+  const NUDGE_DELAYS_MS = [500, 2000];
+  let nudgeTimers = [];
+  function nudgeFrameSize() {
+    frame.style.height = "calc(100% - 1px)";
+    requestAnimationFrame(() => { frame.style.height = ""; });
+  }
+  function scheduleRefitNudges() {
+    nudgeTimers.forEach(clearTimeout);
+    nudgeTimers = NUDGE_DELAYS_MS.map((delay) => setTimeout(nudgeFrameSize, delay));
+  }
+  frame.addEventListener("load", scheduleRefitNudges);
+
+  function pointFrameAt(src) {
+    if (frame.src !== src) frame.src = src;
+  }
+
   function show(page) {
     current = page.name;
     document.title = page.title;
@@ -133,8 +154,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       frame.hidden = false;
       // A navigate to the session already framed re-points at the same target: assigning the
       // same src again would reload the frame and drop the live ttyd connection.
-      const src = originFor(page.pty_label) + page.pty_path;
-      if (frame.src !== src) frame.src = src;
+      pointFrameAt(originFor(page.pty_label) + page.pty_path);
     }
     connection?.location(pathFor(page.name), page.title);
   }
@@ -200,7 +220,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     import("__CONTRACT_PATH__")
       .then(({ connectToShell }) => {
         connection = connectToShell({
-          capabilities: { navigation: true },
+          capabilities: { navigation: true, closeChord: false },
           onNavigate: navigate,
           onShown: focusPty,
         });

@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Deterministic helpers for pulling an old Mind workspace into this one.
+"""Deterministic helpers for pulling an old Imbue Studio workspace into this one.
 
 The migration is mostly agent judgement -- deciding what a user-authored file
 *means* in the new tree, whether a migrated app actually shows the user's own
@@ -160,7 +160,7 @@ def detect_layout(existing_paths: Sequence[str]) -> SourceRoots:
         )
     return _CURRENT_ROOTS._replace(
         layout=LAYOUT_UNKNOWN,
-        reason="neither layout's markers are present; this may not be a minds workspace checkout",
+        reason="neither layout's markers are present; this may not be an Imbue Studio workspace checkout",
     )
 
 
@@ -884,6 +884,11 @@ AUDIT_PATTERNS: Mapping[str, tuple[re.Pattern[str], ...]] = {
         re.compile(r"update-service\b"),
         re.compile(r"(?:crystallize|update|heal|harden)-artifact"),
         re.compile(r"artifact-(?:skill|service|system-interface)"),
+        # The latchkey skill is now `connect-external-service`. Matched as a path
+        # into the old directory or as prose naming it, never as bare `latchkey`,
+        # which every legitimate CLI call carries (those are the `latchkey` kind).
+        re.compile(r"skills/latchkey\b"),
+        re.compile(r"latchkey`? skill"),
     ),
 }
 

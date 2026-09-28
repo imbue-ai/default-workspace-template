@@ -7,7 +7,7 @@ agent through that registry, so the panel's first ``/events`` fetch 404s and
 latches into the "No conversation data" view.
 
 The ``provisional_chat_created`` broadcast normally covers that window with the
-"Starting the chat" page, but it is a transient edge event: the frontend holds
+page of a chat being created, but it is a transient edge event: the frontend holds
 the provisional chat only between ``provisional_chat_created`` and
 ``provisional_chat_completed``, so any delivery lag longer than the creation itself
 leaves no render in which the cover is up. These tests pin the two ways that
@@ -90,7 +90,7 @@ _ROOT_SELECT_SECONDS = 1.0
 
 
 class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
-    """Withholds ``provisional_chat_created`` so the "Starting the chat" cover never engages.
+    """Withholds ``provisional_chat_created`` so the page of a chat being created never engages.
 
     ``release_on_completion`` chooses which delivery pathology is modelled: when
     False the event is dropped outright (the socket was down for the whole
@@ -371,8 +371,8 @@ def _is_chat_listed(base_url: str, chat_id: str) -> bool:
 def test_a_chat_the_root_created_stays_shown_when_its_replay_lands_after_the_create(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: Page
 ) -> None:
-    """The root keeps the chat it created selected and shown through a replayed chat list that predates the
-    create, and the chat's composer is there once the agent registers."""
+    """The root keeps the chat its New chat button created selected and shown through a replayed chat list
+    that predates the create, and the chat's composer is there once the agent registers."""
     with _serving_workspace(
         tmp_path,
         monkeypatch,
@@ -380,7 +380,8 @@ def test_a_chat_the_root_created_stays_shown_when_its_replay_lands_after_the_cre
         broadcaster=WebSocketBroadcaster(),
         manager_class=_LateReplayListAgentManager,
     ) as base_url:
-        page.goto(f"{base_url}/new")
+        page.goto(f"{base_url}/")
+        page.get_by_role("button", name="New chat").click()
         expect(page).to_have_url(re.compile(r"\?chat=agent-"), timeout=_RECOVERY_TIMEOUT_MS)
         chat_id = urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)["chat"][0]
         wait_for(

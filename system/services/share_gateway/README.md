@@ -8,7 +8,7 @@ carries the encrypted bytes to the region's relay.
 ## How it works
 
 The supervisord program `share-gateway` runs `share_gateway.runner`, which
-watches `data/.secrets/share.env` (written by the minds desktop app at
+watches `data/.secrets/share.env` (written by the Imbue Studio desktop app at
 share-enable, removed at unshare). While the materials are present it keeps
 three things running:
 
@@ -91,6 +91,25 @@ refusal, and logs every denial (never the token) to the service's stderr:
   is never grant-checked, so they still get in.
 - A verified account with no grant is **"Not shared with you"** (403).
 
+## When the stack cannot come up
+
+Bringing the stack up needs the connector twice (the certificate, then the
+relay assignment). A failed attempt is not retried on the next 10-second tick:
+the runner waits 15s, 30s, 1m, 2m, 8m, then 15m between attempts (a longer
+connector `Retry-After` wins), and a refusal the connector marks as permanent
+(any 4xx other than 408/429, e.g. an invalid CSR) halts retries until
+`share.env` changes -- a re-share from the desktop starts over. Each outcome is
+written to `data/.state/share_gateway/status.json`:
+
+```json
+{"state": "retrying", "workspace_domain": "...", "failed_attempt_count": 2,
+ "last_error": "certificate provisioning failed: ...",
+ "next_retry_at": "2026-09-13T12:01:00+00:00", "updated_at": "..."}
+```
+
+`state` is `up`, `retrying`, or `halted`. The Imbue Studio desktop client reads this
+file to explain a share that is not live yet; it is removed at unshare.
+
 ## Grants
 
 `data/.secrets/share_grants.toml`:
@@ -124,7 +143,7 @@ entry is an invitation: once a visitor with that verified email is admitted
 (at the login callback or on any later request), the gateway rewrites the
 document to hold their user id instead -- the email leaves every scope's
 `emails` and the user id joins that scope's `users` -- so a later email change
-on their account never revokes what the owner granted. The minds desktop's
+on their account never revokes what the owner granted. The Imbue Studio desktop's
 grants editor writes `users` entries directly when it can resolve an address
 to an account.
 

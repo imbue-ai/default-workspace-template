@@ -10,7 +10,7 @@ analysis). This script owns the parts that are *deterministic* and therefore
 belong in tested code rather than agent prose:
 
 ``resolve-target``
-    Resolve the ref to update to. Default is the release the minds app driving
+    Resolve the ref to update to. Default is the release the Imbue Studio app driving
     this workspace was built against -- the ``minds-v*`` tag it names, and only
     that one; an explicit override may name a specific tag, ``main``, or any
     other ref, and is reported back as exceeding the ceiling when it cannot be
@@ -55,9 +55,15 @@ belong in tested code rather than agent prose:
     List ``changelog/`` entries newly added between two refs -- the raw input for
     the worker's "what's new" report.
 
+``pending-rollbacks``
+    List the rollbacks of earlier updates that nothing has undone yet, newest
+    first -- the commits the worker reverts before it merges, since until then git
+    counts the content they removed as merged. ``apply`` refuses a merge ref that
+    still carries one, by the same rule.
+
 ``surface-chat-tab``
     Open this run's own chat window in the workspace UI, so a user sent into the
-    workspace by the minds app lands on the conversation performing the update.
+    workspace by the Imbue Studio app lands on the conversation performing the update.
     The interface can only place a window in front of a client that is connected,
     and the user may still be on their way in, so the command detaches a helper
     that retries ``layout.py open`` until one takes it (or a deadline passes)
@@ -122,7 +128,7 @@ The logic lives in the sibling modules, imported by name from this directory
 (the whole ``scripts/`` directory is staged and run as one unit):
 ``update_target`` (which ref to update to), ``update_classification`` (change
 classes and the apply plan), ``update_apply_contract`` (every path, phase,
-verdict and record the Mind app, bootstrap and the system interface read),
+verdict and record the Imbue Studio app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
 ``update_environment``, ``update_probes``, ``update_ledger``,
 ``update_history_bridge``, and ``update_apply`` (the apply and recover
@@ -144,7 +150,13 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
-from update_apply import apply_update, confirm_last, recover, rollback_last
+from update_apply import (
+    apply_update,
+    confirm_last,
+    pending_update_rollbacks,
+    recover,
+    rollback_last,
+)
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
     ENV_DRI_AGENT,
@@ -388,6 +400,14 @@ def _try_open_chat_tab(repo_root: Path, chat_id: str, runner: Runner) -> bool:
         capture_output=True,
     )
     return result.returncode == 0
+
+
+def _cmd_pending_rollbacks(args: argparse.Namespace) -> int:
+    for rollback in pending_update_rollbacks(
+        args.target, "HEAD", _repo_root(args), Runner()
+    ):
+        print(rollback)
+    return 0
 
 
 def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
@@ -728,7 +748,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--ceiling",
         dest="app_version",
         default=None,
-        help="The release to update to, standing in for the running minds app's "
+        help="The release to update to, standing in for the running Imbue Studio app's "
         "own (default: ask the app). A ref that is not a release tag is a fault: "
         "pass --override to say what to take instead.",
     )
@@ -763,6 +783,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     changelog_parser.add_argument("--base", required=True, help="Base ref.")
     changelog_parser.add_argument("--target", required=True, help="Target ref.")
     changelog_parser.set_defaults(func=_cmd_changelog_entries)
+
+    pending_parser = sub.add_parser(
+        "pending-rollbacks",
+        help="List the rollbacks of earlier updates that nothing has undone yet, "
+        "newest first: the commits to revert before merging the target.",
+        parents=[common],
+    )
+    pending_parser.add_argument(
+        "--target", required=True, help="The ref this pass merges."
+    )
+    pending_parser.set_defaults(func=_cmd_pending_rollbacks)
 
     surface_parser = sub.add_parser(
         "surface-chat-tab",
@@ -855,8 +886,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="The release this update lands (update-self mode, which requires "
         "--ff-only): enables the VERSION_HISTORY.md ledger entry and the post-success "
-        "`env-converge upgrade`, and refuses a merge ref that re-merges this "
-        "target after a rollback of it without reverting the rollback first.",
+        "`env-converge upgrade`, and refuses a merge ref that still carries a "
+        "rollback of an earlier update it has not reverted.",
     )
     apply_parser.add_argument(
         "--keep-rollback-point",
@@ -916,7 +947,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     run_status_parser = sub.add_parser(
         "run-status",
-        help="Record this run for the Mind app (data/.state/update-apply/run.json).",
+        help="Record this run for the Imbue Studio app (data/.state/update-apply/run.json).",
         parents=[common],
     )
     run_status_sub = run_status_parser.add_subparsers(
@@ -951,7 +982,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     verdict_parser.add_argument(
         "--detail",
         default="",
-        help="One plain-language line for the Mind app's modal.",
+        help="One plain-language line for the Imbue Studio app's modal.",
     )
     verdict_parser.add_argument(
         "--resulting-ref",

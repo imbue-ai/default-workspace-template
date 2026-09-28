@@ -1,6 +1,6 @@
 ---
 name: agentic-browser-fleet
-description: Drive a fleet of shared Chromium browsers yourself, one command at a time, from your shell. Use when the user wants you to do something on the web (log in somewhere, fill a form, click through a flow, read a page that needs interaction) rather than just fetch a URL. YOU own the browser and YOU drive it -- in this same chat, with your own reasoning.
+description: Drive a fleet of shared Chromium browsers yourself, one command at a time, from your shell. Reached from the connect-external-service skill, which decides when a browser is the way to do something on the web for the user (log in somewhere, fill a form, click through a flow, read a page that needs interaction); load that skill first rather than this one. YOU own the browser and YOU drive it -- in this same chat, with your own reasoning.
 metadata:
   author: imbue
 ---
@@ -38,11 +38,13 @@ browser, starting it again if it was stopped. Browsers are addressed by name eve
 
 - `new` returns as soon as the browser is registered; **Chromium is still launching**. If the
   attach line says it is still starting, wait a few seconds and run `ls`.
-- `new` also opens the browser's window on the user's desktop, minimized, so they can see what
-  you are doing and take over. **The browser lives as long as some window shows it**: when the
-  user closes its last window, the browser is stopped (its logins and tabs are kept) and your
-  next command fails -- that is the user telling you to stop, so do not `new` it straight back
-  without asking. Never close the user's window yourself.
+- `new` also opens the browser's window on the user's desktop, **minimized**: it waits in their
+  taskbar, and they do not see it until they click it or you show it (see "Live view" below).
+  That is right while you browse on your own; show it once they should watch. `handoff` shows
+  it for you. **The browser lives as long as some window shows it**: when the user closes its
+  last window, the browser is stopped (its logins and tabs are kept) and your next command
+  fails -- that is the user telling you to stop, so do not `new` it straight back without
+  asking. Never close the user's window yourself.
 - `new my-browser` asks for a second, named browser; the fleet is capped and answers
   `1/1 browsers open -- close one first`. Do not do this.
 - **Browsers cannot be renamed.**
@@ -188,17 +190,27 @@ uv run agentic-browser-fleet handoff browser-1 "solve the CAPTCHA on the sign-in
 ```
 
 `handoff` puts you at the **front** of the resume queue, hands control to the human (pinned, so
-it will not pass to another agent), and opens the browser's window. In the **same turn**: tell the user
-exactly what to do and on which page, then **end your turn**. You are woken first when they hand
-it back -- re-`snapshot` to confirm the challenge cleared, then carry on.
+it will not pass to another agent), and brings the browser's window up in front of them. In the
+**same turn**: tell the user exactly what to do and on which page, then **end your turn**. You
+are woken first when they hand it back -- re-`snapshot` to confirm the challenge cleared, then
+carry on.
 
 ## Live view vs. your output
 
 The browser streams to a window on the desktop of whoever is watching your chat, and it follows
-whatever tab you are acting on. `new` and your first command open that window automatically --
-but only when the shell can tell which screen asked (the client that last messaged your chat,
-else the one connected client). Do not arrange windows yourself; if the user asks for a browser
-that is not showing, tell them to open it from the desktop's launcher (Browser).
+whatever tab you are acting on. `new` and your first command open that window automatically, but
+minimized, and only when the shell can tell which screen asked (the client that last messaged your
+chat, else the one connected client); `handoff` opens it in front. To put it in front of the user
+at any other time -- they asked to see the browser, or should watch what you do -- show it
+yourself:
+
+```bash
+python3 system/scripts/layout.py open browser --path "/?session=browser-1"
+```
+
+That restores and raises the window, or opens one if there is none. It changes what the user is
+looking at the moment it returns, so run it when you want them to look, and never tell them to
+open a browser you can show them (the `manage-desktop` skill has the rest of `layout.py`).
 
 The window is **viewer only** -- your real output is here in the CLI. Read and relay it; never tell
 the user to "check the window" for results.
@@ -209,8 +221,9 @@ the user to "check the window" for results.
   other. Drive several at once just by varying the name.
 - **Tabs:** `playwright-cli tab-list` / `tab-new` / `tab-select` / `tab-close`, within one
   browser. The fleet's `ls --include-tabs` shows the same tabs in the same order.
-- **Drive the browser yourself, in this chat.** A `launch-task` sub-agent runs in a separate,
-  isolated container with no access to this workspace's fleet. If a sub-agent needs something
+- **Drive the browser yourself, in this chat.** A `launch-task` sub-agent runs in a separate
+  worktree of this same workspace, so it could reach the fleet, but the browser and its pane
+  belong to this chat: the user watches and takes over here. If a sub-agent needs something
   from the web, have it tell you what it needs and you do the browsing.
 
 ## Exit codes -- branch on these

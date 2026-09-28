@@ -20,7 +20,7 @@ export interface ChatSettings {
 /** The backend's defaults, so a page that has not loaded yet behaves as a fresh workspace would. */
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   fast_mode_default: "auto",
-  fast_mode_turn_limit: 5,
+  fast_mode_turn_limit: 2,
   is_fast_mode_notice_shown: false,
 };
 

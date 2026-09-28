@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
+  SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
@@ -25,6 +26,7 @@ const HANDSHAKE = {
   clientId: "client-1",
   windowId: "win-1",
   desktopId: "home",
+  app: "chat",
   path: "/?chat=agent-1",
 };
 
@@ -75,6 +77,7 @@ describe("connectToShell", () => {
       clientId: "client-1",
       windowId: "win-1",
       desktopId: "home",
+      app: "chat",
       path: "/?chat=agent-1",
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
@@ -96,30 +99,63 @@ describe("connectToShell", () => {
     const onHandshake = vi.fn();
     connection = connectToShell({ onHandshake });
     deliver({ type: SHELL_HANDSHAKE, clientId: "client-1", desktopId: "home", viewId: "home" }, parent);
-    expect(onHandshake).toHaveBeenCalledWith({ clientId: "client-1", windowId: "", desktopId: "home", path: "" });
+    expect(onHandshake).toHaveBeenCalledWith({
+      clientId: "client-1",
+      windowId: "",
+      desktopId: "home",
+      app: "",
+      path: "",
+    });
   });
 
   it("announces its capabilities to the parent once, before anything else", () => {
     const parent = framed();
     connection = connectToShell({});
-    expect(parent.postMessage.mock.calls).toEqual([[{ type: SHELL_CAPABILITIES, navigation: false }, "*"]]);
+    expect(parent.postMessage.mock.calls).toEqual([
+      [{ type: SHELL_CAPABILITIES, navigation: false, closeChord: false }, "*"],
+    ]);
 
     connection.disconnect();
-    const navigating = connectToShell({ onNavigate: vi.fn(), capabilities: { navigation: true } });
-    expect(parent.postMessage.mock.calls[1]).toEqual([{ type: SHELL_CAPABILITIES, navigation: true }, "*"]);
+    const navigating = connectToShell({
+      onNavigate: vi.fn(),
+      capabilities: { navigation: true, closeChord: false },
+    });
+    expect(parent.postMessage.mock.calls[1]).toEqual([
+      { type: SHELL_CAPABILITIES, navigation: true, closeChord: false },
+      "*",
+    ]);
     navigating.disconnect();
+
+    const closing = connectToShell({
+      onCloseRequest: vi.fn(),
+      capabilities: { navigation: false, closeChord: true },
+    });
+    expect(parent.postMessage.mock.calls[2]).toEqual([
+      { type: SHELL_CAPABILITIES, navigation: false, closeChord: true },
+      "*",
+    ]);
+    closing.disconnect();
   });
 
   it("refuses a navigate handler without the capability, and the capability without a handler", () => {
     framed();
     expect(() => connectToShell({ onNavigate: vi.fn() })).toThrow(ShellContractError);
-    expect(() => connectToShell({ capabilities: { navigation: true } })).toThrow(ShellContractError);
+    expect(() => connectToShell({ capabilities: { navigation: true, closeChord: false } })).toThrow(
+      ShellContractError,
+    );
+  });
+
+  it("refuses the close-chord capability without a close handler", () => {
+    framed();
+    expect(() => connectToShell({ capabilities: { navigation: false, closeChord: true } })).toThrow(
+      ShellContractError,
+    );
   });
 
   it("delivers a navigate with a string path from the parent only", () => {
     const parent = framed();
     const onNavigate = vi.fn();
-    connection = connectToShell({ onNavigate, capabilities: { navigation: true } });
+    connection = connectToShell({ onNavigate, capabilities: { navigation: true, closeChord: false } });
 
     deliver({ type: SHELL_NAVIGATE, path: "/?chat=agent-2" }, parent);
     deliver({ type: SHELL_NAVIGATE, path: 7 }, parent);
@@ -128,7 +164,7 @@ describe("connectToShell", () => {
     expect(onNavigate.mock.calls).toEqual([["/?chat=agent-2"]]);
   });
 
-  it("posts focused, location, and openPath to the parent with the contract shapes", () => {
+  it("posts focused, location, openPath, and draftText to the parent with the contract shapes", () => {
     const parent = framed();
     connection = connectToShell({});
 
@@ -136,12 +172,14 @@ describe("connectToShell", () => {
     connection.location("/docs", "Docs");
     connection.openPath("/?chat=agent-3", "focus");
     connection.openPath("/new", "new");
+    connection.draftText("Explain this element:");
 
     expect(sentAfterConnect(parent)).toEqual([
       [{ type: SHELL_FOCUSED }, "*"],
       [{ type: SHELL_LOCATION, path: "/docs", title: "Docs" }, "*"],
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
+      [{ type: SHELL_DRAFT_TEXT, text: "Explain this element:" }, "*"],
     ]);
   });
 

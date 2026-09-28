@@ -1,0 +1,1 @@
+A terminal now opens at the right size for its window instead of needing a nudge. The terminal used to size its grid once, before switching to its faster renderer whose characters are slightly narrower, so the grid came up short of the pane until you resized the window. The terminal page now gives the terminal that resize itself shortly after it loads.

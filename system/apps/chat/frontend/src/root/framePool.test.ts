@@ -14,6 +14,7 @@ const HANDSHAKE: ShellHandshake = {
   clientId: "client-1",
   windowId: "win-1",
   desktopId: "home",
+  app: "chat",
   path: "/",
 };
 

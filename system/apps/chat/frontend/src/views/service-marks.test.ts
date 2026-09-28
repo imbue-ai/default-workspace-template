@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { BUNDLED_MARK_COUNT, serviceMarkUrl } from "./service-marks";
 
 describe("serviceMarkUrl", () => {
-  it("bundles the minds service marks", () => {
+  it("bundles the Imbue Studio service marks", () => {
     // A glob that stops matching (a moved vendor tree) yields an empty map, and
     // every card would quietly show the cube instead of anything failing here.
     expect(BUNDLED_MARK_COUNT).toBeGreaterThan(20);

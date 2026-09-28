@@ -41,7 +41,7 @@ it will be skipped when the machine is off.
 ## Timezone: confirm it before scheduling anything
 
 The container's clock is set to the **user's local timezone at each boot** (the
-bootstrap fetches it from the minds app on the user's machine, and re-applies the
+bootstrap fetches it from the Imbue Studio app on the user's machine, and re-applies the
 last zone it set, from `data/.state/user_timezone`, when that fetch fails). But the user may
 have moved since boot, so **when the user asks to schedule something, re-check
 their current timezone first**:
@@ -81,6 +81,12 @@ the repo root:
 
 Also redirect output to a log file (cron would otherwise try to mail it):
 `>> /var/log/supervisor/<job-name>.log 2>&1`.
+
+A job that needs a credential the user supplied through the
+`connect-external-service` skill's secret card runs its command under
+`python3 /home/user/workspace/system/scripts/with_secrets.py /home/user/workspace/data/.secrets/<name>.env -- <command...>`
+(after the env wrapper), which puts the file's variables in that process's
+environment; never source or read the file in the cron line itself.
 
 The one exception is the built-in `update-apply-recover` guard, which carries
 its own `PATH` line and `cd` (see the map below). Every job you write goes

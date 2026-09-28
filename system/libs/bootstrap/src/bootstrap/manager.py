@@ -67,6 +67,10 @@ UPDATE_APPLY_SCRIPT = Path(".agents/skills/update-self/scripts/update_self.py")
 # than this process's.
 WORKSPACE_ROOT_DIR = Path("/home/user/workspace")
 UPDATE_RECOVER_CRON_NAME = "update-apply-recover"
+# Directly under /run rather than in /var/lock: the image's /var/lock is a
+# symlink to /run/lock, and a container whose /run is a fresh tmpfs has no
+# /run/lock, so `flock` there fails and the guard never runs.
+_UPDATE_RECOVER_LOCK_PATH = Path("/run") / f"{UPDATE_RECOVER_CRON_NAME}.lock"
 # `recover`'s exit code for "the tree is rolled back, but the pre-apply state
 # could not be put back" (the script's own emergency code; it has recorded an
 # emergency.json beside the marker). Distinct from the exit 1 of a rollback
@@ -194,7 +198,7 @@ def _initialize_workspace_main_branch() -> None:
     with the desktop client's `_rsync_worktree_over_clone` content sitting
     as uncommitted changes on top of the shallow clone's tip.
 
-    We want every new minds workspace to start out on a single clean
+    We want every new Imbue Studio workspace to start out on a single clean
     `main` branch the user can git-log / push from without having to
     reason about the per-host mngr/* branch. So before the chat agent
     is created, we:
@@ -334,7 +338,7 @@ def _request_timezone(request: urllib.request.Request) -> str:
 
 
 def _fetch_user_timezone() -> str:
-    """Fetch the user's IANA timezone name from the minds desktop client.
+    """Fetch the user's IANA timezone name from the Imbue Studio desktop client.
 
     GETs /api/v1/timezone through the latchkey gateway's minds-api-proxy using
     the gateway env vars mngr injects into the agent environment. Timezone-at-
@@ -381,7 +385,7 @@ def _apply_container_timezone(
     """Point /etc/localtime and /etc/timezone at the named IANA zone.
 
     The name is validated by loading it with ``ZoneInfo`` -- the same check the
-    minds desktop client applies before serving the value -- which by spec
+    Imbue Studio desktop client applies before serving the value -- which by spec
     rejects absolute paths and ``..`` components (so a malicious response
     cannot traverse out of the zoneinfo dir) and proves the zone is real. The
     ``is_file`` check below still matters: ZoneInfo may resolve a zone from
@@ -502,7 +506,7 @@ def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) ->
     )
     entry = (
         "PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
-        f"*/5 * * * * root flock -n /var/lock/{UPDATE_RECOVER_CRON_NAME}.lock "
+        f"*/5 * * * * root flock -n {_UPDATE_RECOVER_LOCK_PATH} "
         f"-c '{command}' "
         f">> {SUPERVISOR_LOG_DIR}/{UPDATE_RECOVER_CRON_NAME}.log 2>&1\n"
     )

@@ -45,7 +45,11 @@ host_env__extend = [
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
     "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1",
     # Disable claude.ai account MCP connector sync -- it's an OAuth side
-    # channel to third-party services that bypasses the latchkey gateway.
+    # channel to third-party services that bypasses the latchkey gateway for
+    # the services latchkey DOES support. MCP itself is not disallowed: for a
+    # service latchkey has no builtin for, the connect-external-service skill
+    # connects that service's MCP server through mcpc, the workspace's shared
+    # MCP client, rather than through any one harness.
     "ENABLE_CLAUDEAI_MCP_SERVERS=false",
     # Tickets live inside runtime/ so they are covered by the opt-in GitHub
     # sync (github-sync skill) when the user enables it.
@@ -175,16 +179,14 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # scroll out of view, so what mngr captures at send time is what is actually holding the
 # input. tmux here runs with `alternate-screen off` (see the tmux.conf written below), so
 # the workspace terminal panel keeps its scrollback either way.
-# model = "opus[1m]" is the ONE model pin left in this file, and it is claude-only on
-# purpose. Two things make it safe here and unsafe everywhere else: every Anthropic account
-# that can reach Claude Code has Opus, so the slug cannot be rejected the way a codex slug
-# can (see agent_types.codex); and the `first` create template turns fast mode on for the
-# introductory agent, which needs a model that actually supports it -- so the model and the
-# fast-mode default have to be chosen together rather than left to whatever the account
-# happens to default to.
+# model = "opus[1m]" pins claude's model. Two things make it safe: every Anthropic account
+# that can reach Claude Code has Opus, so the slug cannot be rejected by the account; and the
+# `first` create template turns fast mode on for the introductory agent, which needs a model
+# that actually supports it -- so the model and the fast-mode default have to be chosen
+# together rather than left to whatever the account happens to default to.
 #
-# Do NOT copy this to another harness. codex, pi, opencode and antigravity all pin nothing:
-# their model sets are per-account (codex: by ChatGPT tier) or per-provider (pi, opencode),
+# codex is the only other harness with a pin (see agent_types.codex for how its slug is chosen).
+# pi, opencode and antigravity pin nothing: their model sets are per-provider (pi, opencode),
 # so a pin there is a slug that some accounts cannot use, which fails as a hard 400 AND as
 # an empty model bar.
 settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, feedbackSurveyRate = 0, feedbackDrafts = "off", tui = "fullscreen"}
@@ -250,17 +252,19 @@ command = "sleep infinity"
 # (system/scripts/setup_system.sh, CODEX_VERSION), so check_installation is off -- do not
 # reinstall/verify at provision.
 #
-# NO model or effort is pinned, deliberately -- and claude is now the only agent type that
-# pins one. A codex slug is not a property of the workspace, it is a property of the ACCOUNT:
-# which models a ChatGPT plan may use varies by tier, so a slug that is one account's default
-# is another account's hard 400 ("The 'gpt-5.6-sol' model is not supported when using Codex
-# with a ChatGPT account"). That failure is doubly bad because it is not just a refused turn:
-# the model bar matches the live model against the account's own list, so an unusable pin
-# also shows as a shrug and hides every model the account CAN use.
+# model = "gpt-6-sol" makes GPT-6 Sol the model every new codex agent starts on; left unset,
+# codex takes the first model of its account's server catalog, which is GPT-6 Astra. A chat
+# can still switch to any model its account offers from the model bar.
 #
-# Leaving it unset lets codex pick its account's default, which the model bar then reads back
-# from model_state.json like every other harness. Claude keeps its pin because its auth is
-# single-account and its slugs do not vary by plan in the same way.
+# A codex slug is a property of the ACCOUNT, not the workspace: which models a ChatGPT plan
+# may use varies by tier, and a slug the account cannot use is a hard 400 on every turn ("The
+# 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account") that also
+# leaves the model bar showing a shrug. gpt-6-sol needs codex >= 0.155.0 (CODEX_VERSION) and
+# is listed for every plan GPT-6 Astra is except `promax`. fall_back_to_account_default_model
+# covers that: before mngr starts a new thread it reads the account's model list, and if the
+# pin is not offered it starts the thread on the account's default model instead. A thread
+# that already exists keeps its model. No effort is pinned, so the model's own default
+# (medium) applies.
 #
 # sandbox_mode = danger-full-access disables codex's own OS sandbox. On Linux codex
 # sandboxes exec via bubblewrap, but the bundled bwrap cannot set up its network
@@ -276,7 +280,8 @@ command = "sleep infinity"
 extra_provision_command__extend = ["bash system/scripts/codex_update_plugin.sh"]
 # Launch through the OOM band wrapper, exactly as claude does above -- without it an
 # agent runs unbanded and earlyoom sheds it by kernel score instead of by our tiering.
-# The wrapper execs `codex` in place, so process detection still matches `codex`.
+# The wrapper execs codex's native binary in place (not the npm entry point, which runs
+# it as a child), so process detection still matches `codex`.
 # Note codex uses this base for BOTH its visible `--remote` TUI and its `app-server`
 # daemon, so both are banded (the daemon is where turns run, so it is the one that
 # matters for memory).
@@ -285,31 +290,32 @@ auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
 sandbox_mode = "danger-full-access"
 check_installation = false
+model = "gpt-6-sol"
+fall_back_to_account_default_model = true
 # config_overrides is dumped verbatim into codex's own config.toml, so these are codex's
-# [features] keys, not mngr fields -- kept here on the agent-type block for one place to read.
+# own keys, not mngr fields -- kept here on the agent-type block for one place to read.
 # - memories = false: disable codex's built-in memory system so it never writes to
 #   $CODEX_HOME/memories/ -- a per-agent, non-runtime-backed silo that would compete with the
 #   shared runtime/memory/. features.memories is the master switch; false wins regardless of
 #   any [memories] settings.
-# - code_mode_only / code_mode_host / suppress_unstable_features_warning: pin the tool surface
+# - code_mode_only / code_mode_host (plus the top-level flag below): pin the tool surface
 #   to code mode (`tools.<fn>({...})`, the schema our tool labels parse). The surface normally
 #   comes from the model's `tool_mode` in the remote /models catalog (300s TTL); a server-side
 #   change or an unrecognized value deserializes to None and silently drops us to direct tool
 #   calls. `effective_tool_mode` falls back to these flags exactly when `tool_mode` is None, so
 #   they close that hole (`code_mode_only` implies `code_mode`; it is Stage::UnderDevelopment,
-#   which only warns -- the suppress flag silences that). `code_mode_host` picks where the JS
-#   runs (standalone host vs embedded V8), unrelated to whether code mode is on.
-# - unified_exec = false: closes a TOTAL bypass of the PreToolUse guards. The unified-exec
-#   surface adds `write_stdin` (and a tty option to the shell tool); `write_stdin` fires NO
-#   PreToolUse event at all, so an agent can start a shell with one guarded call and then type
-#   anything into it -- `git rebase`, a piped `head`, a batched `tk start` -- with every guard
-#   skipped. Measured on codex-cli 0.147.0: the typed command ran and the hook log held a single
-#   `Bash`/`bash` entry. It is NOT closable via the tools table below: `ToolsToml` accepts only
-#   web_search / experimental_request_user_input / update_plan, and `write_stdin` there is
-#   silently ignored (verified -- the bypass still worked). With this flag the model reports
-#   "`write_stdin` does not exist in the available exec tools", ordinary shell calls still run
-#   AND still fire their hook. Cost: the interactive-tty affordance, which Mind does not use.
-#   (The older spelling `experimental_use_unified_exec_tool` is deprecated in 0.147.0.)
+#   which only warns -- the top-level `suppress_unstable_features_warning` silences that; codex
+#   ignores it under [features]). `code_mode_host` picks where the JS runs (standalone host vs
+#   embedded V8), unrelated to whether code mode is on.
+# - unified_exec_tty = false: closes a TOTAL bypass of the PreToolUse guards. `write_stdin`
+#   fires NO PreToolUse event at all, so an agent could start a shell with one guarded call and
+#   then type anything into it -- `git rebase`, a piped `head`, a batched `tk start` -- with
+#   every guard skipped. With tty off, exec_command rejects `tty: true` and runs every process
+#   with its stdin closed, so `write_stdin` can only poll a running command or send it an
+#   interrupt. Long-running commands still yield and can be polled. Do not reach for
+#   `unified_exec = false` instead: codex >= 0.154 forces unified exec back on unless a managed
+#   requirements file pins it, so that flag is silently ignored. Nor the tools table below:
+#   `ToolsToml` accepts only web_search / experimental_request_user_input / update_plan.
 # - features.goals = false, and tools.{update_plan, experimental_request_user_input,
 #   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
 #   goals/plan UI (we drive tk), its interactive request-user-input tool, and web search --
@@ -317,34 +323,36 @@ check_installation = false
 # - apps = false: disable ChatGPT account app/connector sync -- it's an OAuth side channel
 #   to third-party services that bypasses the latchkey gateway (codex's counterpart of
 #   ENABLE_CLAUDEAI_MCP_SERVERS=false above). Plugin skills and hooks are unaffected.
-config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false, apps = false }
+config_overrides.suppress_unstable_features_warning = true
+# gpt-6-sol's catalog entry defaults to the `priority` (fast) tier, and codex's TUI applies a
+# model's default tier to every turn typed in the agent terminal when no tier is configured. So
+# pin standard speed; the `fast` create template's config_overrides__extend replaces it.
+config_overrides.service_tier = "default"
+config_overrides.features = { memories = false, code_mode_only = true, code_mode_host = true, goals = false, unified_exec_tty = false, apps = false }
 config_overrides.tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } }
 # Keep source and enablement through mngr's config rewrite. Codex refuses to
 # re-add a cached Git marketplace if its source declaration has disappeared.
 config_overrides.marketplaces.imbue-code-guardian = { source_type = "git", source = "https://github.com/imbue-ai/code-guardian.git", ref = "main" }
 config_overrides.plugins."imbue-code-guardian@imbue-code-guardian" = { enabled = true }
 # Codex-only instructions, appended to every codex agent's system prompt.
-# The `/welcome` entry is what claude gets from its slash-command expansion: codex does not
-# expand `/welcome` into the skill, so it is told to follow it.
 append_system_prompt__extend = ["""# Codex-specific instructions
 
 Do NOT use your built-in `update_plan` tool, your `create_goal`/`get_goal`/`update_goal` tools, or your `request_user_input` tool. Their output and effects never reach the user's workspace chat -- a plan or goal recorded there is invisible to the user, and a `request_user_input` prompt blocks on a terminal nobody is watching (and submits empty answers when it times out). Track every plan and step with `tk` step records, and when you need something from the user, write it as an ordinary chat message and stop -- their reply comes back as your next turn.
 
-Run every shell command as its own `exec_command`. Do NOT start a long-lived interactive shell and feed commands into its stdin: commands delivered that way bypass this workspace's command guards, so a mistake they would have caught reaches the repo instead.""", """# The /welcome command
-
-If the user's message is exactly `/welcome`, follow `.agents/skills/welcome/SKILL.md` exactly: run the one command it names, `python3 system/scripts/welcome_count.py`, read the number it prints, and make the greeting the skill gives for that number, copied verbatim, your entire response. Do NOT call any other tool, do NOT look at the codebase, and do NOT add anything before or after the greeting -- not a preamble, not a summary, not a note about the command, the number, or what you are doing.
-
-Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
+Run every shell command as its own `exec_command`. Do NOT start a long-lived interactive shell and feed commands into its stdin: commands delivered that way bypass this workspace's command guards, so a mistake they would have caught reaches the repo instead."""]
 
 # the "pi-coding" agent type -- Pi coding CLI as a peer harness (short alias `pi`).
 # Registered by the imbue-mngr-pi-coding plugin; the pi binary is baked
 # into the image (system/scripts/setup_system.sh, PI_VERSION), so check_installation
 # is off.
 #
-# No model is pinned: pi is many-provider,
+# No model is pinned here: pi is many-provider,
 # many-auth. Its model (`provider/model`) and effort (thinking level: off..max)
 # come from the user's pi settings / launch args, not an mngr-forced slug; the chat
-# model bar reads the live values via the pi lifecycle extension.
+# model bar reads the live values via the pi lifecycle extension. The one default the
+# workspace supplies is pi's own `defaultProvider` / `defaultModel` pair, seeded into
+# ~/.pi/agent/settings.json by system/scripts/seed_home_skeleton.sh (OpenRouter's
+# GLM 5.3), which pi only honors when that provider has a key.
 #
 # auto_allow_permissions MUST be true -- pi has no approval gate and its config
 # validator rejects false. auto_dismiss_dialogs_at_startup adds pi's `--approve` (trust
@@ -367,13 +375,7 @@ share_home_npm_dir = true
 auto_dismiss_dialogs_at_startup = true
 check_installation = false
 # Harness-only instructions, appended to every pi agent's system prompt.
-# The `/welcome` entry is what claude gets from its slash-command expansion: pi does not
-# expand `/welcome` into the skill, so it is told to follow it.
-append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words.""", """# The /welcome command
-
-If the user's message is exactly `/welcome`, follow `.agents/skills/welcome/SKILL.md` exactly: run the one command it names, `python3 system/scripts/welcome_count.py`, read the number it prints, and make the greeting the skill gives for that number, copied verbatim, your entire response. Do NOT call any other tool, do NOT look at the codebase, and do NOT add anything before or after the greeting -- not a preamble, not a summary, not a note about the command, the number, or what you are doing.
-
-Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
+append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
 
 # the "opencode" agent type -- OpenCode CLI as a peer harness to claude/codex. It
 # is its own base type (registered by the imbue-mngr-opencode plugin, installed
@@ -382,7 +384,7 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 # OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
 # provision.
 #
-# No model is pinned -- as with every agent type but claude now. OpenCode is a
+# No model is pinned -- as with pi and antigravity. OpenCode is a
 # many-provider, many-auth harness: its model is a `provider/model` slug that comes
 # from the user's own opencode.json (synced from ~/.config/opencode by the plugin)
 # or the authenticated provider's default -- forcing a slug here could name a
@@ -470,17 +472,14 @@ isolate_host_volumes = true
 host_dir = "/home/user/.mngr"
 volume_mount_path = "/home/user"
 host_log_dir = "/var/log/mngr"
-# Publish each workspace container's sshd on loopback only. The minds desktop
-# client always talks to a local daemon and connects to 127.0.0.1, so nothing
-# needs the container reachable from the machine's LAN. This is also mngr's
-# default for a local daemon; it is pinned here so the workspace's exposure does
-# not depend on that default. (Requires an mngr pin that knows the field: an
-# older one rejects it as an unknown provider setting.)
-ssh_bind_address = "127.0.0.1"
+# No `ssh_bind_address` is set here: mngr's default already publishes each
+# container's sshd on loopback for a local daemon, and on the daemon host's
+# interfaces for a remote one (`host = "ssh://..."` in the user's config), where
+# a loopback bind would be unreachable.
 # No `docker_runtime` is set here, so containers use Docker's default runtime
 # (runc), which is available everywhere -- notably macOS, where gVisor's `runsc`
 # is not. The gVisor-hardened runtime is selected per-create by stacking the
-# `docker_runsc` template overlay below (the minds desktop app does this by
+# `docker_runsc` template overlay below (the Imbue Studio desktop app does this by
 # default on Linux, where `runsc` is installed). A direct CLI user can opt in
 # with `--template docker --template docker_runsc`, or override either way with
 # MNGR__PROVIDERS__DOCKER__DOCKER_RUNTIME=<runc|runsc>.
@@ -510,7 +509,7 @@ default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec"]
 # the plugin) still parses it. The lima create still works because `@<name>.lima`
 # resolves the provider by name regardless of is_enabled (same as @<name>.docker).
 is_enabled = false
-# Run the minds workspace directly in the Lima VM as root (uid 0) -- no nested
+# Run the Imbue Studio workspace directly in the Lima VM as root (uid 0) -- no nested
 # Docker container. is_run_as_root gives the agent the same "no sudo, install
 # anything" posture it has inside a docker/vps_docker container (the VM is the
 # isolation boundary). Root cannot traverse the 9p bind mount, so is_run_as_root
@@ -596,11 +595,6 @@ host_log_dir = "/var/log/mngr"
 # the template that is shared across all agent types
 [create_templates.main]
 type = "main"
-# `/welcome` is NOT set here: the services agent's window 0 sleeps forever
-# (see `[agent_types.main] command`) and never reaches claude. Chats are
-# separate agents the chat app creates on demand; the ones that start with
-# nothing to say get `/welcome` through `[create_templates.welcome]` below.
-#
 # bootstrap is the only extra_window now. It runs first-boot setup (git config)
 # and then launches
 # supervisord, which runs every background service (system_interface, web,
@@ -610,7 +604,7 @@ type = "main"
 # it performed now runs inside bootstrap), and terminal is a supervisord
 # service rather than its own window.
 extra_window = ["bootstrap='uv run bootstrap'"]
-# Write a sane default tmux config on every minds host. tuple-typed
+# Write a sane default tmux config on every Imbue Studio host. tuple-typed
 # `extra_provision_command` stacks across templates (see
 # `apply_create_template` in mngr's cli/common_opts.py), so the
 # mode-specific templates (docker/lima/...) keep their own commands.
@@ -641,6 +635,11 @@ extra_provision_command__extend = [
 provider = "docker"
 target_path = "/home/user/workspace/"
 setting__extend = ["providers.docker.is_enabled=true"]
+# While pyproject.toml pins mngr from the private mngr-internal repo, every docker
+# build_arg here carries a `--secret=id=mngr_internal_git_token,...` element that
+# hands the build its credential; system/scripts/set_mngr_pin.py adds it with
+# such a pin and removes it with a public one, because the flag needs BuildKit
+# (docker buildx), which a public pin must not require. Never edit it by hand.
 build_arg__extend = ["--file=system/Dockerfile", "."]
 # Security hardening for `docker run`: block privilege escalation via setuid
 # binaries. `--cap-add=SYS_PTRACE` was removed deliberately -- gVisor is the
@@ -658,7 +657,7 @@ build_arg__extend = ["--file=system/Dockerfile", "."]
 # `--restart=unless-stopped` brings the container back after a docker daemon
 # restart or host reboot; the container entrypoint then self-heals sshd, so the
 # host is reachable again without a manual `mngr start`. The agent itself is
-# relaunched by the minds desktop client in this (debugging-oriented) mode.
+# relaunched by the Imbue Studio desktop client in this (debugging-oriented) mode.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
@@ -721,11 +720,15 @@ extra_provision_command__extend = [
     "bash /home/user/workspace/system/scripts/setup_system.sh",
     "bash /home/user/workspace/system/scripts/install_dependencies.sh",
     "bash /home/user/workspace/system/scripts/build_workspace.sh",
+    # The creator uploads a credential for a private mngr pin to this path before
+    # the commands above run; build_workspace.sh is its last reader, so it goes
+    # here, before anything else runs. A no-op for a public pin.
+    "rm -f /run/secrets/mngr_internal_git_token",
     # Same home-skeleton seeding the docker first-boot seed performs
     # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
     # Install a systemd unit that relaunches the system-services agent on VM
-    # boot, so the workspace recovers from a VM reboot even when the minds
+    # boot, so the workspace recovers from a VM reboot even when the Imbue Studio
     # desktop app is not running. The agent runs directly in the VM here, so
     # this runs `mngr start system-services` in the VM (mngr is installed by
     # build_workspace.sh above).
@@ -736,7 +739,7 @@ extra_provision_command__extend = [
 # Like Lima, Modal has no Dockerfile build -- the toolchain is provisioned over SSH
 # after the sandbox boots, reusing the exact scripts the Dockerfile RUNs. There is
 # no autostart unit: Modal sandboxes are ephemeral (~1 day) and do not survive a
-# reboot, so the minds desktop app re-creates them rather than relying on systemd
+# reboot, so the Imbue Studio desktop app re-creates them rather than relying on systemd
 # (the lima-autostart step is intentionally absent). Sizing + timeouts are set in
 # this template's setting__extend (below), not in the mngr_modal provider defaults.
 [create_templates.modal]
@@ -747,7 +750,7 @@ target_path = "/home/user/workspace/"
 # (matching how the vultr/aws/imbue_cloud templates disable idle).
 idle_mode = "disabled"
 # Enable the (default-disabled) modal provider for this create, and set the
-# minds-facing sizing + timeouts HERE rather than in the mngr_modal provider
+# sizing + timeouts Imbue Studio needs HERE rather than in the mngr_modal provider
 # defaults: 2 CPU / 4 GB (matching the lima/docker convention) and a ~24h sandbox
 # timeout. The sandbox timeout (86310) plus the provider's 90s shutdown buffer
 # lands at 86400s (24h), Modal's hard cap. The workspaces an eval run creates
@@ -773,6 +776,8 @@ extra_provision_command__extend = [
     "bash /home/user/workspace/system/scripts/setup_system.sh",
     "bash /home/user/workspace/system/scripts/install_dependencies.sh",
     "bash /home/user/workspace/system/scripts/build_workspace.sh",
+    # Same credential cleanup as the lima template, at the same point.
+    "rm -f /run/secrets/mngr_internal_git_token",
     # Same home-skeleton seeding the docker first-boot seed performs
     # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
@@ -798,7 +803,7 @@ target_path = "/home/user/workspace/"
 # machines, and the New Jersey region routinely produced ~1s SSH RTTs
 # and ~1.6 MB/s effective rsync throughput, which combined with the
 # ~1500-file build context made the cold upload time out at 10 minutes.
-# Keeping the default change at the template level so every minds /
+# Keeping the default change at the template level so every Imbue Studio /
 # imbue_cloud-pool create lands in the same place; CLI users who want
 # a different region can still override per-invocation with
 # ``-b --vps-region=<other>``.
@@ -884,7 +889,7 @@ BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
 cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 [Unit]
-Description=Start the minds system-services agent once the data volume is up
+Description=Start the Imbue Studio system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
 # Never rate-limit starts: while the trigger condition holds, a failing
@@ -901,7 +906,7 @@ ExecStart=/usr/local/sbin/minds-outer-autostart.sh
 UNIT
 cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 [Unit]
-Description=Watch for the mngr data volume and start the minds workspace
+Description=Watch for the mngr data volume and start the Imbue Studio workspace
 
 [Path]
 # The marker file is created exclusively by this installer, behind a hard
@@ -977,7 +982,7 @@ start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--resta
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
 # Install systemd units on the OUTER pool/slice VM that, on every VM boot,
 # start the agent container and relaunch the system-services agent inside it
-# -- so the workspace recovers from a VM reboot even when the minds desktop app
+# -- so the workspace recovers from a VM reboot even when the Imbue Studio desktop app
 # is not running. A path unit watches for the /mngr-btrfs data volume and only
 # then triggers the start service: on slices, lima mounts the data disk (and
 # recreates the /mngr-btrfs symlink) at a highly variable point late in boot,
@@ -1055,7 +1060,7 @@ BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
 cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 [Unit]
-Description=Start the minds system-services agent once the data volume is up
+Description=Start the Imbue Studio system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
 # Never rate-limit starts: while the trigger condition holds, a failing
@@ -1072,7 +1077,7 @@ ExecStart=/usr/local/sbin/minds-outer-autostart.sh
 UNIT
 cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 [Unit]
-Description=Watch for the mngr data volume and start the minds workspace
+Description=Watch for the mngr data volume and start the Imbue Studio workspace
 
 [Path]
 # The marker file is created exclusively by this installer, behind a hard
@@ -1123,23 +1128,23 @@ systemctl restart --no-block minds-autostart.service
 # template for AWS EC2 VPS provider (aws mode)
 [create_templates.aws]
 target_path = "/home/user/workspace/"
-# No `provider` declared: minds addresses the create as
+# No `provider` declared: Imbue Studio addresses the create as
 # `system-services@<host>.aws-<region>`, which selects the region-specific
-# `[providers.aws-<region>]` block minds writes into its mngr profile settings
+# `[providers.aws-<region>]` block Imbue Studio writes into its mngr profile settings
 # at startup (mirroring how the imbue_cloud template omits `provider` and lets
 # the `imbue_cloud_<slug>` address pick the instance). No region or instance
 # type is baked in: the region comes from the provider block's `default_region`
-# (and the matching `-b --aws-region=` minds passes), the instance type from
+# (and the matching `-b --aws-region=` Imbue Studio passes), the instance type from
 # `AwsProviderConfig.default_instance_type`.
 build_arg__extend = ["--file=system/Dockerfile", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown. The
 # AWS provider's `auto_shutdown_seconds` max-lifetime cap is also left unset
-# (the minds-written provider blocks don't set it), so the EC2 instance stays
+# (the provider blocks Imbue Studio writes don't set it), so the EC2 instance stays
 # up for the whole user session rather than self-terminating after a timeout.
 idle_mode = "disabled"
 # gVisor runsc hardening for the agent container, matching the vultr/ovh
 # templates. runsc is installed+selected via `install_gvisor_runtime` /
-# `docker_runtime` on the minds-written `[providers.aws-<region>]` blocks; these
+# `docker_runtime` on the `[providers.aws-<region>]` blocks Imbue Studio writes; these
 # `docker run` args go via start_arg (vps_docker forwards start_arg to the inner
 # `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /home/user/workspace,
 # inside the mounted /home/user volume, already exists as the process cwd) and
@@ -1216,7 +1221,7 @@ BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
 cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 [Unit]
-Description=Start the minds system-services agent once the data volume is up
+Description=Start the Imbue Studio system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
 # Never rate-limit starts: while the trigger condition holds, a failing
@@ -1233,7 +1238,7 @@ ExecStart=/usr/local/sbin/minds-outer-autostart.sh
 UNIT
 cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 [Unit]
-Description=Watch for the mngr data volume and start the minds workspace
+Description=Watch for the mngr data volume and start the Imbue Studio workspace
 
 [Path]
 # The marker file is created exclusively by this installer, behind a hard
@@ -1282,11 +1287,11 @@ systemctl restart --no-block minds-autostart.service
 ]
 
 # template for GCP Compute Engine VPS provider (gcp mode). Mirrors the aws
-# template above: minds addresses the create as
-# `system-services@<host>.byo-gcp-<slug>` (a bring-your-own account block minds
+# template above: Imbue Studio addresses the create as
+# `system-services@<host>.byo-gcp-<slug>` (a bring-your-own account block Imbue Studio
 # writes on account setup), so no `provider` is declared here. Zone / machine
 # type come from that provider block (`default_zone` / `default_machine_type`)
-# plus the matching `-b --gcp-zone=` / `-b --gcp-machine-type=` minds passes.
+# plus the matching `-b --gcp-zone=` / `-b --gcp-machine-type=` Imbue Studio passes.
 [create_templates.gcp]
 target_path = "/home/user/workspace/"
 build_arg__extend = ["--file=system/Dockerfile", "."]
@@ -1369,7 +1374,7 @@ BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
 cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 [Unit]
-Description=Start the minds system-services agent once the data volume is up
+Description=Start the Imbue Studio system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
 # Never rate-limit starts: while the trigger condition holds, a failing
@@ -1386,7 +1391,7 @@ ExecStart=/usr/local/sbin/minds-outer-autostart.sh
 UNIT
 cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 [Unit]
-Description=Watch for the mngr data volume and start the minds workspace
+Description=Watch for the mngr data volume and start the Imbue Studio workspace
 
 [Path]
 # The marker file is created exclusively by this installer, behind a hard
@@ -1435,11 +1440,11 @@ systemctl restart --no-block minds-autostart.service
 ]
 
 # template for Azure Virtual Machines VPS provider (azure mode). Mirrors the
-# aws template above: minds addresses the create as
+# aws template above: Imbue Studio addresses the create as
 # `system-services@<host>.byo-azure-<slug>` (a bring-your-own account block
-# minds writes on account setup), so no `provider` is declared here. Region /
+# Imbue Studio writes on account setup), so no `provider` is declared here. Region /
 # VM size come from that provider block (`default_region` / `default_vm_size`)
-# plus the matching `-b --azure-region=` / `-b --azure-vm-size=` minds passes.
+# plus the matching `-b --azure-region=` / `-b --azure-vm-size=` Imbue Studio passes.
 [create_templates.azure]
 target_path = "/home/user/workspace/"
 build_arg__extend = ["--file=system/Dockerfile", "."]
@@ -1522,7 +1527,7 @@ BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
 cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 [Unit]
-Description=Start the minds system-services agent once the data volume is up
+Description=Start the Imbue Studio system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
 # Never rate-limit starts: while the trigger condition holds, a failing
@@ -1539,7 +1544,7 @@ ExecStart=/usr/local/sbin/minds-outer-autostart.sh
 UNIT
 cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 [Unit]
-Description=Watch for the mngr data volume and start the minds workspace
+Description=Watch for the mngr data volume and start the Imbue Studio workspace
 
 [Path]
 # The marker file is created exclusively by this installer, behind a hard
@@ -1587,7 +1592,7 @@ systemctl restart --no-block minds-autostart.service
 """,
 ]
 
-# Template for imbue_cloud-leased pool hosts. minds invokes this as
+# Template for imbue_cloud-leased pool hosts. Imbue Studio invokes this as
 # `--template main --template imbue_cloud` (mirroring how the other modes
 # use `--template main --template <provider>`), so the imbue_cloud-specific
 # knobs that used to be inlined in `_build_mngr_create_command` live here
@@ -1615,7 +1620,7 @@ build_arg__extend = ["--file=system/Dockerfile", "."]
 # baked container from the pool_host template. The fast (adopt) path reuses the
 # pre-baked container, which already carries this policy.
 start_arg__extend = ["--restart=unless-stopped"]
-# Forward the minds-side MNGR_PREFIX from minds' subprocess env onto the
+# Forward MNGR_PREFIX from Imbue Studio's subprocess env onto the
 # host's ``/home/user/.mngr/env``, so the in-container mngr sees the same prefix the
 # desktop client used. Anthropic credentials are deliberately NOT forwarded
 # anywhere: workspace Claude auth lives in the env block of the shared
@@ -1664,16 +1669,6 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 transfer = "none"
 output_style = "Engineering Subordinate"
 env__extend = ["MNGR_AGENT_ROLE=chat"]
-
-# Welcome: the greeting a chat that starts with nothing to say gets. The chat app
-# stacks it (`-t chat -t welcome --type <harness>`) on every chat launched without
-# a first message -- the New Tab page's plain "New Chat", a rail shortcut -- so
-# `/welcome` runs each time, and the skill (.agents/skills/welcome) varies what it
-# says by how many times it has run in this workspace. A chat that starts with a
-# message (a seeded prompt, the onboarding chat's first send) gets its message
-# instead.
-[create_templates.welcome]
-message = "/welcome"
 
 # Fast: launches the fast-capable harnesses in fast mode so a new conversation
 # feels responsive. The chat app stacks it on a chat whose fast mode is on, or

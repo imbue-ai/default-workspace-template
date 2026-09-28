@@ -70,9 +70,9 @@ from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
 from imbue.chat.harnesses.tool_output import error_snippet
-from imbue.chat.harnesses.tool_output import find_permission_request
 from imbue.chat.harnesses.tool_output import is_pure_tk_lifecycle_command
 from imbue.chat.harnesses.tool_output import is_tk_lifecycle_anywhere
+from imbue.chat.harnesses.tool_output import stamp_echoed_requests
 from imbue.chat.harnesses.tool_output import tk_stamp
 
 logger = _loguru_logger
@@ -87,6 +87,9 @@ SOURCE = "codex/common_transcript"
 # placeholder ``claude_session_parser`` uses when the model is absent, keeping the
 # frontend's non-optional ``model`` field populated.
 _UNKNOWN_MODEL = "unknown"
+
+# ``turn_state`` key, present only while a ``thread_settings_applied`` is newer than the latest ``turn_context``.
+SETTINGS_CHANGED_SINCE_TURN_KEY: Final[str] = "settings_changed_since_turn"
 
 # codex's own `codex_error_info.type` tags, mapped to the shared kind vocabulary. Preferred over
 # reading the prose: the tag is the part that survives codex rewording its messages. Quota
@@ -143,14 +146,14 @@ def _tool_call_raw_input(payload: dict[str, Any]) -> str:
     return "" if raw is None else str(raw)
 
 
-def _tk_output_text(output: str) -> str:
-    """Unwrap code-mode command results for decoration, keeping raw detail unchanged.
+def _unwrap_command_result_envelopes(output: str) -> str:
+    """Unwrap code-mode command results for the structured facts, keeping raw detail unchanged.
 
     ``text(result)`` prints a JSON envelope; ``text(result.output)`` prints plain stdout.
     Adjacent calls can concatenate envelopes on one line. Decode only complete command
     result envelopes, never arbitrary JSON embedded in prose or a command's stdout.
     """
-    if "-step-" not in output:
+    if '"chunk_id"' not in output:
         return output
     decoder = json.JSONDecoder()
     lines: list[str] = []
@@ -161,7 +164,7 @@ def _tk_output_text(output: str) -> str:
             try:
                 value, end = decoder.raw_decode(remaining)
             except (json.JSONDecodeError, RecursionError) as exc:
-                logger.warning("Could not decode code-mode task output: {}", exc)
+                logger.warning("Could not decode a code-mode command result envelope: {}", exc)
                 break
             if not isinstance(value, dict) or not isinstance(value.get("chunk_id"), str):
                 break
@@ -427,7 +430,7 @@ def _user_message_events(timestamp: str, text: str | None, client_id: str | None
     return [build_user_turn_event(timestamp, text, event_id)]
 
 
-# --- Queue ledger (the codex analogue of Claude's queue-operation records) ---
+# Queue ledger (the codex analogue of Claude's queue-operation records)
 #
 # A message the user submits while a turn is running is held in codex's TUI queue and
 # does not reach the rollout until the turn ends. The patched codex binary writes a full
@@ -447,8 +450,10 @@ def parse_lines(
     ``turn_state`` is a mutable cross-line dict carrying the EFFECTIVE per-turn model/effort read
     from each ``turn_context`` line (§4b): a ``turn_context`` updates it and every following
     assistant message is stamped with it, so the bar can reflect the model the turn actually ran on
-    (a framework fallback, not just the selected setting). ``None`` disables the tracking (the model
-    stays ``_UNKNOWN_MODEL``) -- used by callers that only want the transcript events.
+    (a framework fallback, not just the selected setting). It also records, under
+    ``SETTINGS_CHANGED_SINCE_TURN_KEY``, whether a ``thread_settings_applied`` line came after that
+    ``turn_context``. ``None`` disables the tracking (the model stays ``_UNKNOWN_MODEL``) -- used by
+    callers that only want the transcript events.
     """
     outer = record.get("type")
     payload = record.get("payload")
@@ -457,7 +462,7 @@ def parse_lines(
         return []
     payload_type = payload.get("type")
 
-    # --- turn_context: the per-turn effective model/effort (§4b) ---
+    # turn_context: the per-turn effective model/effort (§4b)
     # Not a transcript event (returns []), but its ``model`` / ``effort`` are the truth of what the
     # turn ran on. Record them in ``turn_state`` so the following assistant messages are stamped and
     # the watcher can reflect a fallback in the model bar.
@@ -468,10 +473,17 @@ def parse_lines(
                 turn_state["model"] = context_model
                 context_effort = payload.get("effort")
                 turn_state["effort"] = context_effort if isinstance(context_effort, str) and context_effort else None
+            turn_state.pop(SETTINGS_CHANGED_SINCE_TURN_KEY, None)
         return []
 
-    # --- event_msg: the clean human prompt + the turn-abort marker ---
+    # event_msg: the clean human prompt + the turn-abort marker
     if outer == "event_msg":
+        # Codex logs the thread's settings whenever it applies them (a user's change, each turn
+        # start). Until the next turn_context, the latest one may predate what the agent is set to.
+        if payload_type == "thread_settings_applied":
+            if turn_state is not None:
+                turn_state[SETTINGS_CHANGED_SINCE_TURN_KEY] = True
+            return []
         # The clean human prompt. Older codex emitted it as ``user_message``; newer
         # codex folds every display echo into ``item_completed`` carrying a typed
         # ``item``, so the human turn is now ``item_completed`` with
@@ -586,7 +598,7 @@ def parse_lines(
         # session_meta / other non-content records -> drop (turn_context handled above).
         return []
 
-    # --- reasoning: codex's readable thinking summaries ---
+    # reasoning: codex's readable thinking summaries
     # A reasoning item precedes the assistant output it belongs to. It is not itself a
     # transcript event; the watcher consumes this internal marker to remember the line as
     # the NEXT assistant event's thinking source (has_thinking + the detail endpoint).
@@ -599,7 +611,7 @@ def parse_lines(
     effective_model = turn_state.get("model") if turn_state is not None else None
     effective_model = effective_model if isinstance(effective_model, str) and effective_model else _UNKNOWN_MODEL
 
-    # --- response_item: assistant messages + tool calls/results ---
+    # response_item: assistant messages + tool calls/results
     if payload_type == "message":
         if payload.get("role") == "assistant":
             # codex re-serialises history; each copy shares the message ``id``, so
@@ -644,9 +656,9 @@ def parse_lines(
         event_id = f"codex-result-{call_id}" if call_id else _synthetic_event_id("tool_result", timestamp, payload)
         raw_output = _output_text(payload.get("output"))
         # The structured facts lifted from the full output, which itself stays off the
-        # event (the payload-free wire contract): the permission-request object the card
-        # renders from, the tk stamp the step view reads, and the error snippet.
-        permission_request = find_permission_request(raw_output)
+        # event (the payload-free wire contract): the request objects the permission and
+        # secret cards render from, the tk stamp the step view reads, and the error snippet.
+        unwrapped_output = _unwrap_command_result_envelopes(raw_output)
         # A failed code-mode script writes output starting with "Script failed".
         is_error = raw_output.startswith("Script failed")
         event: dict[str, Any] = {
@@ -660,12 +672,11 @@ def parse_lines(
             "is_error": is_error,
             "message_uuid": event_id,
         }
-        if permission_request is not None:
-            event["permission_request"] = permission_request.details
+        stamp_echoed_requests(event, unwrapped_output)
         snippet = error_snippet(raw_output) if is_error else ""
         if snippet:
             event["error_snippet"] = snippet
-        stamped_tk = tk_stamp(_tk_output_text(raw_output))
+        stamped_tk = tk_stamp(unwrapped_output)
         if stamped_tk:
             event["tk_stamp"] = stamped_tk
         return [event]

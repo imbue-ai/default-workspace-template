@@ -1,0 +1,1 @@
+The `welcome` skill is removed: new chats no longer open with a greeting or hints. `publish-template` no longer writes a template-specific welcome into the snapshot it publishes, so a mind created from a template starts on an empty chat like any other.

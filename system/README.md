@@ -1,10 +1,10 @@
 # system/
 
 The machinery that runs this workspace. Users don't need anything in here
-day-to-day, but every part is inspectable and the mind maintains it.
+day-to-day, but every part is inspectable and the agent maintains it.
 
 - `apps/` - Everything you can open as a tab: the built-in apps and the apps
-  your mind builds for you.
+  your agent builds for you.
 - `services/` - Standalone background services (supervised or cron-driven).
 - `libs/` - Support libraries, including the first-boot bootstrap and the
   automations machinery.

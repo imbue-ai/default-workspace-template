@@ -168,8 +168,6 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
         # a few map lookups, and the set is bounded by the transcript's Agent calls.
         self._pending_enrichment_ids = set()
 
-    # -- base hooks -----------------------------------------------------------------------
-
     def _refresh_locked(self) -> None:
         self._discover_sessions_locked()
         for cursor in list(self._cursor_by_session.values()):
@@ -184,7 +182,7 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
         # in time, so this order matches the merged timestamp order.
         return [sid for sid in self._main_session_ids if self._store.has_lane(sid)]
 
-    # -- the queue feed's hooks (the watcher's; a loader mirrors no live queue) ------------
+    # The queue feed's hooks belong to the watcher: a loader mirrors no live queue.
 
     def _on_new_latest_main_session_locked(self) -> None:
         """A new latest main session was registered: the claude process restarted into a fresh session."""
@@ -194,8 +192,6 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
 
     def _feed_queue_locked(self, decoded_line: str, process_epoch_started_at: float | None) -> None:
         """One line of the LATEST main session's ledger, for the live queue's populator."""
-
-    # -- discovery ------------------------------------------------------------------------
 
     def _discover_sessions_locked(self) -> None:
         """Discover this agent's main sessions and any subagent sessions under them."""
@@ -325,8 +321,6 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
         logger.debug("Session file not found for {}; scanning for it again in {:.0f}s", session_id, delay)
         return None
 
-    # -- consumption ----------------------------------------------------------------------
-
     def _is_latest_main_session_locked(self, session_id: str) -> bool:
         """The queue-feed gate: the live claude process's in-memory queue can only live in
         the LATEST main session's ledger, so only that session feeds the queue populator --
@@ -411,8 +405,6 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
         cursor.byte_offset_consumed += len(complete)
         cursor.last_mtime = current_mtime
 
-    # -- subagent enrichment --------------------------------------------------------------
-
     def _note_linkage_and_enrich_locked(self, event: dict[str, Any]) -> None:
         """Record any linkage a just-ingested event carries and enrich it if applicable."""
         if event.get("type") == "tool_result" and "subagent_id" in event:
@@ -469,15 +461,11 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
             if _is_fully_enriched(event):
                 self._pending_enrichment_ids.discard(event_id)
 
-    # -- subagents ------------------------------------------------------------------------
-
     def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
         """Get metadata for a subagent by its session ID."""
         with self._lock:
             self._discover_sessions_locked()
             return self._subagent_metadata.get(subagent_session_id)
-
-    # -- on-demand payload detail ---------------------------------------------------------
 
     def _parse_detail(
         self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
@@ -537,10 +525,8 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         # snapshot pushed to the agent manager, compared so an unchanged queue pushes
         # nothing. The callback is set once before ``start`` and read without the lock.
         self._queue_tracker = ClaudeQueueTracker.build()
-        self._last_broadcast_queue_snapshot: list[dict[str, str]] = []
+        self._last_broadcast_queue_snapshot: list[dict[str, Any]] = []
         self._queue_snapshot_callback: Callable[[list[dict[str, Any]]], None] | None = None
-
-    # -- base hooks -----------------------------------------------------------------------
 
     def _watch_paths(self) -> tuple[Path, ...]:
         # The projects tree (recursive: every session file and subagent dir under it wakes
@@ -552,9 +538,11 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         # committed transcript turn in the SAME cycle (its LEAVE record and its ``user``
         # record ride the same file). Push the queue snapshot (the chip REMOVAL) before the
         # transcript turn is broadcast, so the message is never a chip and a turn at once.
+        # The emit cycle runs at least once per poll interval, which is also what drops a
+        # message left queued past the idle grace when nothing else wakes the watcher.
+        with self._lock:
+            self._queue_tracker.expire(time.monotonic())
         self._broadcast_queue_snapshot_if_changed()
-
-    # -- the queue feed -------------------------------------------------------------------
 
     def _on_new_latest_main_session_locked(self) -> None:
         self._queue_tracker.reset()
@@ -566,8 +554,6 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         queue_signal = parse_queue_signals(decoded_line)
         if queue_signal is not None and not _is_dead_epoch_enqueue(queue_signal, process_epoch_started_at):
             self._queue_tracker.consume(queue_signal)
-
-    # -- main/subagent routing ------------------------------------------------------------
 
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         """True if an event belongs to a main session rather than a subagent session.
@@ -599,8 +585,6 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
             return cursor.file_path
         return None
 
-    # -- queued messages ------------------------------------------------------------------
-
     def set_queue_snapshot_callback(self, callback: Callable[[list[dict[str, Any]]], None]) -> None:
         """Register the sink the watcher pushes each new queued-message snapshot to."""
         self._queue_snapshot_callback = callback
@@ -620,15 +604,25 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         self._broadcast_queue_snapshot_if_changed()
 
     def notify_idle(self) -> list[dict[str, Any]]:
-        """Apply the working->IDLE backstop and return the resulting (empty) snapshot.
+        """Apply the idle backstop and return the resulting snapshot.
 
-        The caller (the agent manager, on a working->IDLE transition) folds the returned
-        snapshot into the same broadcast that carries the IDLE activity state, so this does
-        not push a broadcast of its own -- it only records the cleared snapshot as
-        broadcast so the poll loop does not re-push it.
+        The caller (the agent manager, whenever it reads the agent as IDLE with something
+        queued, not only on the working->IDLE transition) folds the returned snapshot into
+        the same broadcast that carries the IDLE activity state, so this does not push a
+        broadcast of its own -- it only records the snapshot as broadcast so the poll loop
+        does not re-push it.
         """
         with self._lock:
-            self._queue_tracker.on_idle()
+            self._queue_tracker.on_idle(time.monotonic())
+            snapshot = self._queue_tracker.snapshot()
+            self._last_broadcast_queue_snapshot = snapshot
+        return snapshot
+
+    def notify_busy(self) -> list[dict[str, Any]] | None:
+        """Forget the idle backstop's marks (the agent reads as working again) and return the
+        resulting snapshot, recorded as broadcast the same way :meth:`notify_idle`'s is."""
+        with self._lock:
+            self._queue_tracker.on_busy()
             snapshot = self._queue_tracker.snapshot()
             self._last_broadcast_queue_snapshot = snapshot
         return snapshot

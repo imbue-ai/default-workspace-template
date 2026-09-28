@@ -8,7 +8,9 @@ from typing import Any
 from typing import Final
 
 from app_manifest.registry import APP_CONTRACT_ROUTE
+from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
+from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
 from flask import Flask
 from flask import Response
 from flask import request
@@ -466,19 +468,28 @@ def _presence_heartbeat_endpoint() -> Response:
     return json_response({"identity": identity.model_dump(exclude_none=True)})
 
 
-def _serve_app_contract() -> Response:
-    """Serve the browser-side contract module (desktop contracts.md section 7) from the shell's own origin.
+def _serve_shell_module(basename: str) -> Response:
+    """Serve one of the browser-side modules every app serves (the contract, desktop contracts.md section 7, and
+    the element context menu) from the shell's own origin.
 
-    An app page imports it from its own origin (each app serves the same build output), since a
+    An app page imports them from its own origin (each app serves the same build output), since a
     cross-origin module import carries no cookie and the forwarder refuses it; this copy is what
     the e2e stub pages import.
     """
-    contract_path = get_state().static_directory / "_static" / SHELL_APP_CONTRACT_PATH.name
-    if not contract_path.is_file():
+    module_path = get_state().static_directory / "_static" / basename
+    if not module_path.is_file():
         return Response(status=404)
-    response = send_file(contract_path, mimetype="text/javascript")
+    response = send_file(module_path, mimetype="text/javascript")
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
+
+
+def _serve_app_contract() -> Response:
+    return _serve_shell_module(SHELL_APP_CONTRACT_PATH.name)
+
+
+def _serve_context_menu() -> Response:
+    return _serve_shell_module(SHELL_CONTEXT_MENU_PATH.name)
 
 
 def _favicon() -> Response:
@@ -667,6 +678,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
     application.add_url_rule(APP_CONTRACT_ROUTE, view_func=_serve_app_contract, methods=["GET"])
+    application.add_url_rule(CONTEXT_MENU_ROUTE, view_func=_serve_context_menu, methods=["GET"])
     application.add_url_rule(PRESENCE_PATH, view_func=_presence_endpoint, methods=["GET"])
     application.add_url_rule(PRESENCE_HEARTBEAT_PATH, view_func=_presence_heartbeat_endpoint, methods=["POST"])
     register_shell_routes(application)

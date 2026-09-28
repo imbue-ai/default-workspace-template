@@ -38,8 +38,12 @@ interpreted the way a shell would.
   each segment's words to find the ones that POST to the permission-requests
   host, and its `terminator` to allow a trailing `;` while still blocking a
   trailing `&`.
+- `system/scripts/agent_block_pipe_tail_head_check.py` -- the PreToolUse gate that
+  blocks a pipe into `head`/`tail` whose input would have to be regenerated. It
+  groups the segments into pipelines by their `terminator` and inspects the
+  words of each stage that feeds the pipe.
 
-Both gates import this package under a bare `python3` (no virtualenv) via an
+All three gates import this package under a bare `python3` (no virtualenv) via an
 explicit `sys.path` entry, which is why this package is **stdlib-only** and must
 stay that way.
 

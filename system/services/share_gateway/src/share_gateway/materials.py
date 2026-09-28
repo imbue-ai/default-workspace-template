@@ -1,8 +1,8 @@
-"""Share materials: the per-share files the minds app injects and the gateway's own state.
+"""Share materials: the per-share files Imbue Studio injects and the gateway's own state.
 
 ``data/.secrets/share.env`` is the gating material -- the gateway (and its
 caddy + frpc children) run only while it is present and parseable. It is
-written by the minds desktop app at share-enable and removed at unshare.
+written by the Imbue Studio desktop app at share-enable and removed at unshare.
 ``data/.secrets/share_grants.toml`` (who may visit) lives next to it, and the
 TLS key/cert persist under ``data/.secrets/`` so a re-share skips
 reprovisioning. The session-cookie signing secret does not: unsharing deletes
@@ -39,6 +39,10 @@ CADDYFILE_PATH = STATE_DIR / "Caddyfile"
 # its region. The last-fetched relay assignment is cached so a container
 # restart brings the tunnels up without the connector.
 ASSIGNMENT_CACHE_PATH = STATE_DIR / "assignment.json"
+# Where the runner reports the stack's provisioning state (up / retrying /
+# halted, the last error, the next retry time) for the Imbue Studio desktop client;
+# removed at unshare along with the rest of the stack.
+GATEWAY_STATUS_FILE = STATE_DIR / "status.json"
 
 # Local port layout: caddy terminates the share's TLS on HTTPS_PORT (each
 # relay's frpc splices its relay bytes into it); the gateway's Flask app
@@ -82,7 +86,7 @@ class ShareMaterials:
         self.relay_token = relay_token
         self.connector_url = connector_url
         self.broker_url = broker_url
-        # The hosted minds chrome origin (e.g. https://minds.imbue.com) allowed
+        # The hosted Imbue Studio chrome origin (e.g. https://minds.imbue.com) allowed
         # to embed this workspace in an iframe and probe /_health cross-origin.
         # Empty when the share was created by an older client that did not set
         # SHARE_CHROME_ORIGIN -- embedding + CORS then stay disabled.

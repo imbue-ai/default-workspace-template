@@ -13,8 +13,8 @@ an encrypted restic repo on cheaper object storage.
 - Single long-running tick loop run as the `host-backup` supervisord program
   (defined in `system/supervisord.conf.d/host-backup.conf`, started by supervisord after `bootstrap`).
   Restart policy: `autorestart=true`.
-- The repository is created (and keyed) by the minds app, not by
-  host_backup: minds runs `restic init` from outside the workspace -- the
+- The repository is created (and keyed) by Imbue Studio, not by
+  host_backup: Imbue Studio runs `restic init` from outside the workspace -- the
   workspace's own random password is the repository's single key -- and
   injects the resulting `restic.env`. host_backup just backs up to the
   existing repository -- it does not probe-then-init.
@@ -29,8 +29,8 @@ an encrypted restic repo on cheaper object storage.
     `RESTIC_REPOSITORY` (the only source of the repo URL), `RESTIC_PASSWORD`
     (this workspace's repository password), and any backend credentials
     restic reads from the environment (e.g. `AWS_ACCESS_KEY_ID` /
-    `AWS_SECRET_ACCESS_KEY` for an S3/R2 backend). Written only by the minds
-    app (injected whole); a missing file means backups are not configured.
+    `AWS_SECRET_ACCESS_KEY` for an S3/R2 backend). Written only by the Imbue
+    Studio app (injected whole); a missing file means backups are not configured.
     `restic.env` is gitignored (rides nothing). `backup.toml` is *not*
     gitignored (everything under data/ is), so it survives via these restic
     backups themselves when
@@ -80,8 +80,25 @@ an encrypted restic repo on cheaper object storage.
   `~/.rustup/toolchains`, `~/.rustup/downloads`) are excluded by default while
   the user-data parts of those trees (`~/.cargo/bin` binaries, config,
   credentials, rustup's `settings.toml`) ride the backup.
-- After every successful backup, `restic forget --group-by '' --keep-hourly N
-  --keep-daily M --keep-weekly W --keep-monthly O` runs (cheap, index-only).
+- Restic runs from inside the directory it reads and backs up `.`, so each
+  snapshot stores that tree at its root. restic only skips re-reading an
+  unchanged file when the previous snapshot holds it at the same path inside
+  the snapshot, and `outer_trigger` reads every tick from a new timestamped
+  path, so an absolute source would never match and every tick would re-read
+  the whole home tree. `--group-by ''` makes the newest snapshot the parent
+  (the recorded path still changes every tick), and `--ignore-inode` compares
+  files by size and mtime only. A restore reads the tree from `<snapshot>:/`;
+  older snapshots hold it under their recorded absolute path instead.
+- Every restic command runs with `GOMAXPROCS=1` and
+  `RESTIC_READ_CONCURRENCY=1`, so a backup or prune uses one core and reads
+  one file at a time. This is the only lever that works everywhere: gVisor
+  (remote workspaces) ignores `nice`, and rejects `ionice` outright.
+- After every successful backup, `restic forget --group-by '' --keep-within 1h
+  --keep-hourly N --keep-daily M --keep-weekly W --keep-monthly O` runs
+  (cheap, index-only). `--keep-within 1h` keeps every snapshot taken within an
+  hour of the newest, so an extra tick in the same hour (a service restart, a
+  changed `restic.env`, a manual backup) cannot thin away a snapshot that a
+  user may be restoring at that moment.
   Grouping is disabled because restic applies the keep-* policy per group and
   its default grouping (`host,paths`) would put every snapshot in a group of
   its own -- `outer_trigger` reads each tick from a uniquely-named snapshot
@@ -97,11 +114,14 @@ an encrypted restic repo on cheaper object storage.
 - A hard `minimum_backup_gap_seconds` (default 60) gap is enforced between
   successive backup attempts, so a config that's being mutated constantly
   cannot spam restic / the error log.
-- Stale-lock recovery: a `restic backup` blocked by an existing repository
-  lock (e.g. an exclusive lock left by a dead PID from a prior container
-  incarnation) triggers `restic unlock` -- which removes only *stale* locks,
-  never one a live process holds -- and one retry. Without this, a single
-  stale lock would fail every tick indefinitely.
+- Stale-lock recovery: a `restic backup`, `forget` (retention or restore-marker
+  age-out) or `prune` blocked by an existing repository lock triggers
+  `restic unlock` -- which removes only *stale* locks, never one a live process
+  holds -- and one retry. `forget` and `prune` need an exclusive lock, which
+  restic refuses while any other lock exists, so the non-exclusive lock a
+  backup killed with its container leaves behind blocks them while new backups
+  still succeed. Without this, a single stale lock would fail the blocked step
+  on every tick indefinitely.
 - Repeated-failure escalation: consecutive failed ticks are counted (reset on
   any success). Once the count reaches a threshold (3), each failing tick also
   emits a `backup_repeatedly_failing` event and logs at error level, so a
@@ -173,8 +193,8 @@ log stays bounded. Rotating only there keeps each tick's events in one file.
 
 ## First-run setup
 
-In the minds app the whole `data/.secrets/restic.env` is written for you
-when you pick a backup provider on the create form -- minds initializes the
+In the Imbue Studio app the whole `data/.secrets/restic.env` is written for you
+when you pick a backup provider on the create form -- Imbue Studio initializes the
 repository (`restic init`, keyed solely by the workspace's own random
 password) from outside the workspace and injects the file. To configure
 backups by hand instead, populate
@@ -184,19 +204,19 @@ credentials (e.g. R2 access keys), and a `RESTIC_PASSWORD`, and initialize
 the repository yourself (`restic init`) before the first tick -- host_backup
 does not create the repository.
 
-## Stable contract (minds backup-service updates)
+## Stable contract (Imbue Studio backup-service updates)
 
-The minds desktop app can inject a newer version of this service into a
+The Imbue Studio desktop app can inject a newer version of this service into a
 running workspace by checking out `system/services/host_backup/**` at the `minds-v<X>`
 tag matching the app version, committing it with the subject
 `backup-update: minds-v<X>` (a convention like `update-self:` -- tools that
 classify built-in vs. user code match on it), running `uv sync`, and
-restarting the `host-backup` supervisord program. Tags are fetched from a
-minds-owned `official` git remote that always points at the canonical
+restarting the `host-backup` supervisord program. Tags are fetched from an
+`official` git remote owned by Imbue Studio that always points at the canonical
 template repository (`https://github.com/imbue-ai/default-workspace-template.git`);
-minds creates or repoints that remote idempotently, and the `upstream` remote
+Imbue Studio creates or repoints that remote idempotently, and the `upstream` remote
 name stays reserved for the update-self machinery. Drift *detection* compares
-against a fixed minimum required tag (bumped by minds only when a newer
+against a fixed minimum required tag (bumped by Imbue Studio only when a newer
 service is actually required), so a workspace at or above the minimum is
 never flagged even when the app is newer. For that mechanism to stay sound,
 the following are stable contracts that must NOT be changed by edits to this

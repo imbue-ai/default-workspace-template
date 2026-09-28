@@ -28,10 +28,10 @@ files.
 | Word | Meaning |
 |---|---|
 | **desktop** | A named, shared collection of windows and shortcuts over a wallpaper. Everyone sees the same desktops and the same windows on them. |
-| **window** | One page of one app on one desktop: the app, the path under the app's origin the page is at (`chat` at `/?chat=<id>`, `terminal` at `/?session=<name>`, `files` at `/notes/`), and the title the page last reported. Named by an id, `win-<hex>`. |
+| **window** | One page of one app on one desktop: the app, the path under the app's origin the page is at (`chat` at `/?chat=<id>`, `terminal` at `/?session=<name>`, `files` at `/home/user/workspace/data/notes/`), and the title the page last reported. Named by an id, `win-<hex>`. |
 | **placement** | Where one *client* keeps one window on its screen: its frame, whether it is snapped or maximized, whether it is minimized. Per client, never shared. |
 | **client** | One browser (its windows share it). Each client has one active desktop and its own placements of every desktop. |
-| **launch path** | A way an app declares for opening a new page of itself, with optional parameters. A GET launch path is the page itself with the parameters as its query (`files` declares `new` at `/` with a `path` parameter); a POST launch path is posted the parameters by the shell and answers the page to open (`terminal` and `browser` declare `new` at `/new`; `chat` declares `new`, `send`, and `draft` at `/api/chats/intake`). An app that declares none offers `open` at `/`. |
+| **launch path** | A way an app declares for opening a new page of itself, with optional parameters. A GET launch path is the page itself with the parameters as its query (`files` declares `new` at `/home/user/workspace/` with a `path` parameter); a POST launch path is posted the parameters by the shell and answers the page to open (`terminal` and `browser` declare `new` at `/new`; `chat` declares `new`, `send`, and `draft` at `/api/chats/intake`). An app that declares none offers `open` at `/`. |
 | **shortcut** | An icon on a desktop's backdrop that runs one app's launch path, in `focus` mode (raise the app's most recent window, opening one only when it has none) or `new` mode (always open one). |
 
 **Shared vs per client.** Desktops, their windows, their shortcuts, and their
@@ -62,6 +62,15 @@ never applied to every client at once.
   `--minimized` to any `open` you make for your own use (a terminal or browser you
   are driving): the window then lands out of the way of what the user is doing, and a
   window already there is left as they placed it.
+- **`open --beside` puts what you opened next to what the user is reading** --
+  the opposite of `--minimized`, and passing both is refused. Bare it pairs with
+  your own chat; name a window to pair with something else. The new window takes
+  half the backdrop's width beside it, at its height and its place down the
+  screen. The window it pairs with is disturbed as little as the room allows: it
+  is left exactly where it is when either side of it has the space, nudged across
+  by the least that opens the space when neither does, and resized only when it
+  is over half the backdrop wide.
+  Reach for it whenever you have made something for the user to look at.
 
 ## Naming a window
 
@@ -86,7 +95,7 @@ A window argument is one of:
 | List every app with its launch paths and windows | `python3 system/scripts/layout.py list` |
 | Switch a client onto a desktop | `python3 system/scripts/layout.py load <desktop> [--client <id>]` |
 | Open an app (at its default launch path) | `python3 system/scripts/layout.py open terminal` |
-| Open a specific page of an app | `python3 system/scripts/layout.py open files --path /notes/` |
+| Open a specific page of an app | `python3 system/scripts/layout.py open files --path /home/user/workspace/data/notes/` |
 | Open a page with launch parameters | `python3 system/scripts/layout.py open terminal --launch new --param workdir=/data` |
 | Open a web page in a new browser | `python3 system/scripts/layout.py open https://example.com` |
 | Bring a window to the front | `python3 system/scripts/layout.py focus <window>` |
@@ -109,10 +118,12 @@ target client's active desktop (or `--desktop`), on top of that client's stack.
 
 Some paths worth knowing: your own chat is `open chat --path
 "/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`; a folder is `open files --path
-/notes/` (dufs serves `data/` at `/`, so `/notes/` is `data/notes`; the `path`
-launch parameter, `open files --param path=/notes/`, lands in the same folder
-but as a window at `/?path=/notes/`, and a window is focused only when its
-path matches exactly, so use one form per folder); a browser is `open browser
+/home/user/workspace/data/notes/` (the file viewer serves the filesystem root
+and opens at the workspace folder, so the path is absolute; the `path` launch
+parameter, `open files --param path=/home/user/workspace/data/notes/`, lands in
+the same folder but as a window at `/home/user/workspace/?path=...`, and a
+window is focused only when its path matches exactly, so use one form per
+folder); a browser is `open browser
 --path "/?session=<name>"`; a terminal is `open terminal --path
 "/?session=<name>"`.
 
@@ -136,7 +147,13 @@ window whose `scope` is `independent` (the chat's pinned root window: each
 viewer keeps their own path there), `navigate` moves the target client's page
 alone and leaves every other client where it was.
 
-The most common natural request, "put a terminal next to my chat", is:
+The most common natural request, "put a terminal next to my chat", is one op:
+
+```bash
+python3 system/scripts/layout.py open terminal --beside
+```
+
+Two `place`s put two windows that are both already open on the halves:
 
 ```bash
 python3 system/scripts/layout.py place self --zone left

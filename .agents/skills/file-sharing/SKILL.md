@@ -20,14 +20,14 @@ this section is for a shared path that has no copy here.
 1. **Use `latchkey curl`** calls to communicate with the remote WebDAV server. (They are the same as normal curl calls, just going through the Latchkey Gateway.)
 2. **Check existing access first.** Sometimes important context can be revealed simply by observing which directories or files the user already shared. See the "Check existing access" example below.
 3. **Submit a permission request to the user** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` when the curl request comes back with the "request not permitted by the user" message. See the "Ask for user permission" example below.
-4. **Stop working** in case of upstream connection failures. Those are most likely caused by the user closing their locally running Mind app. Restarting the Mind app should usually help.
+4. **Stop working** in case of upstream connection failures. Those are most likely caused by the user closing their locally running Imbue Studio app. Restarting the Imbue Studio app should usually help.
 
 The base URL is `http://latchkey-self.invalid/minds-api-proxy/api/v1/files`. Only the user's home directory and the user's system temp directory are accessible. MOVE and COPY operations are not supported.
 
 
 ## Folders the user keeps synced
 
-For a shared folder, the user can additionally ask Minds to keep a copy of it
+For a shared folder, the user can additionally ask Imbue Studio to keep a copy of it
 on this machine. When there is one, **use it instead of the WebDAV server
 above**: it is ordinary local files, so your normal tools work on it, there is
 no round trip per file, and it keeps working while the user's computer is
@@ -38,8 +38,8 @@ no copy here.
   folder that is syncing now. So `/Users/kim/notes` from device `host-abc`
   is at `~/synced_folders/host-abc/Users/kim/notes`.
 - `~/inactive_synced_folders/...` holds a copy whose syncing the user turned
-  off. **Treat it as Minds' own.** Do not create, move, or write anything under
-  it: Minds moves folders in and out of it by name, and anything of yours
+  off. **Treat it as Imbue Studio's own.** Do not create, move, or write anything under
+  it: Imbue Studio moves folders in and out of it by name, and anything of yours
   sitting where a folder belongs is deleted when the user turns syncing off
   again. If you need somewhere to put your own files, use your working
   directory or `/tmp`.
@@ -124,13 +124,28 @@ The body must be a JSON object with exactly four fields:
 sets `MINDS_CHAT_ID` on every agent it creates and an agent created any other way is its own
 chat), `rationale`, `type` (use "file-sharing"), and `payload`.
 
-`payload` must be an object with exactly two string fields: `path` and `access`. `path` should be absolute, `access` must be "READ" or "WRITE".
+`payload` must be an object with two string fields, `path` and `access`, and optionally a `sync` object (see below). `path` should be absolute, `access` must be "READ" or "WRITE".
 
 If you don't know the absolute path to the user's home directory, you can use "~" in your permission request. The backend will expand it to the full path, which you can use to work with the files once your request is approved.
 
 After posting, wait for an automated system message indicating whether the user approved or denied the permission request.
 
+### Ask for a synchronized copy
+
+Access through the file server only works while the user's computer is awake and the Imbue Studio app is running. If you need a folder to stay reachable while the user's computer is asleep or offline, ask for a synchronized copy of it on this machine in the same request, by adding `sync` to the payload:
+
+```bash
+latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
+  -H 'Content-Type: application/json' \
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "file-sharing", "payload": {"path": "/home/hynek/project", "access": "WRITE", "sync": {"conflict": "NEWER"}}, "rationale": "I'"'"'d like to keep working on the project while your laptop is asleep, so I need a copy of it on this machine."}'
+```
+
+- `sync` is an object. Only folders can be synced, never single files.
+- `conflict` is optional and says which side wins when a two-way sync finds the same file changed on both: "NEWER" (the default), "THIS_COMPUTER" (the user's computer) or "WORKSPACE" (this machine). It only matters for "WRITE" access; a "READ" grant syncs one way, from the user's computer to this machine.
+- The user decides. The approval dialog offers the sync switched on because you asked, and they can turn it off (or turn it on when you did not ask). The message you receive says which. When a sync was started it names where the copy lives, `~/synced_folders/<device id>/<the folder's full path on the user's computer>`; work with the files there directly, with ordinary file tools, not through the file server. When the user turned the sync off, the message says the copy was not enabled, and the file server is the only way to reach the folder.
+- The copy takes a moment to arrive after approval. If the directory is empty at first, wait briefly and look again.
+
 ## Notes
 
 - Users may run macOS or Linux, possible even other OSes.
-- In the permission request dialog that pops up in the Mind app on their machine, users can adjust the path, overriding the originally requested one. There are no other sharing settings the user can configure.
+- In the permission request dialog that pops up in the Imbue Studio app on their machine, users can adjust the path, overriding the originally requested one, and switch the synchronized copy on or off. There are no other sharing settings the user can configure.

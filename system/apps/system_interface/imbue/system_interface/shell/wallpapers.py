@@ -16,7 +16,8 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.primitives import WallpaperKind
 from imbue.system_interface.shell.primitives import WallpaperName
 
-# Under ``data/.apps/system_interface/``, relative to the workspace root the supervised process runs from.
+# Under ``data/.apps/system_interface/``, named relative to the workspace root ``build_shell_state`` resolves it
+# against.
 DEFAULT_WALLPAPER_FILES_DIRECTORY: Final[Path] = Path("data/.apps/system_interface/wallpapers")
 # Under the shell's static directory, beside the frontend bundle.
 BUNDLED_WALLPAPERS_DIRNAME: Final[str] = "wallpapers"

@@ -8,6 +8,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import pytest
+
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.testing import find_free_port
 
@@ -20,6 +22,7 @@ def _is_serving(base_url: str) -> bool:
         return False
 
 
+@pytest.mark.timeout(60)
 def test_a_preflight_boot_serves_health_without_running_mngr_or_registering(tmp_path: Path) -> None:
     # A recording ``mngr``: the pre-flight must never reach it (no observe, no discovery).
     fake_bin = tmp_path / "fake-bin"

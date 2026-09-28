@@ -37,11 +37,17 @@ Each is stated as an invariant, with the reason it exists. The scripts named are
 source of the logic; a harness that cannot run a script must reproduce its behaviour *and its
 exact wording*, so an agent gets an identical explanation everywhere.
 
-### P1. A command must not pipe into `tail` or `head`
-`agent_block_pipe_tail_head.sh` -- **hard block.**
+### P1. A command must not pipe output it cannot get back into `tail` or `head`
+`agent_block_pipe_tail_head.sh` -> `agent_block_pipe_tail_head_check.py` -- **hard block.**
 
-The pipe truncates output the agent then reasons about as if it were complete. Redirect to a
-file and read that instead, so the full output exists and can be re-read.
+The pipe truncates output the agent then reasons about as if it were complete, and getting
+the rest back means running the command again. Redirect to a file and read that instead, so
+the full output exists and can be re-read. A pipe is allowed when everything feeding it only
+reads files, directories or git history (`cat`, `grep`, `rg`, `sed`, `ls`, `find`,
+`git log/show/diff/status`, ...) or prints `--help`/`--version`, or when a `tee FILE` upstream
+keeps the full output: that output can be read again at no cost. Each pipeline in a compound
+command is judged on its own, and a pipe into `tail`/`head` the checker cannot place in one
+(inside quoted text or a substitution) is blocked.
 
 ### P2. A command must not rewrite git history
 `agent_prevent_commit_rewrite.sh` -- **hard block.**
@@ -132,6 +138,41 @@ per-turn ask therefore doubled every chat turn in the minds-v0.7.0 staging rehea
 **Chats only.** A worker's result reaches the user through the chat that launched it, and only
 chats appear in the feed; `MNGR_AGENT_ROLE=chat` (set by the `chat` create template) is how a
 chat is told apart.
+
+### P9. A secret file is read only by `with_secrets.py`
+`agent_secrets_guard.sh` -> `agent_secrets_guard_check.py` -- **hard block.**
+
+A file under `data/.secrets/` holds a value the user typed into the chat's **secret card**
+(the `connect-external-service` skill's `request_secret.py`) so that it would never enter the
+transcript. A `cat`, a `source`, a `sed`, a `python3 -c`, a redirect, or a `Read`/`Edit` tool call
+on such a file puts the value into a tool call, which defeats the point. The one sanctioned
+reader is `system/scripts/with_secrets.py`, which puts the file's variables into a child
+process's environment and execs the command; `ls` and `rm` on the directory are allowed, and so
+is the request script, whose output names the path it will write. The directory's README is not
+a secret. mcpc's store is `data/.secrets/mcpc/`, so a mention of `~/.mcpc` (its link) counts
+as a mention of the directory.
+
+Two halves: the shell half tokenises the command (a quoted rationale that mentions the
+directory stays inside one token) and unwraps `bash -c "..."`, so a supervisord program that
+runs the wrapper passes, and judges the command the wrapper runs after its `--` by the same
+rule, so the wrapper does not launder a `cat` of the file; the file-tool half refuses claude's
+`Read`/`Grep`/`Glob`/`Edit`/`Write`, pi's `read`/`edit`/`write`/`grep`/`find`, and a codex
+`apply_patch` whose file lines point under the directory. Unlike the other blockers, this one
+therefore polices every tool call, not only shell calls. The checker never prints the command or
+a path back, since either may carry a value.
+
+What it guarantees is narrower than "the value never leaves the file": the checker judges the
+text of a tool call, so it catches the ordinary reads and cannot see what a program run under
+the wrapper does with its environment, nor a path spelled so that the prefilter misses it. It
+is a backstop against a slip; the skill's own rule carries the rest.
+
+### P10. A secret request must be the only thing in its tool call
+`agent_latchkey_request_standalone.sh` -> `agent_latchkey_request_check.py` -- **hard block.**
+
+P3 for the secret card: `request_secret.py` prints the filed request as JSON, and the chat builds
+the card's password inputs from that echo in the same call's result. So the call stands alone,
+for exactly the reasons P3 gives, and the same files enforce it -- the checker counts a run of
+the request script as a filing alongside a POST to the permission-requests host.
 
 ## The rule that keeps this honest
 

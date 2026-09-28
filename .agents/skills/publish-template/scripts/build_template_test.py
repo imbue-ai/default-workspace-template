@@ -3,8 +3,7 @@
 The assembly script had no test at all, which is how a workspace-wiping hazard
 survived in it. These run the real script over a real repo and assert on the
 files a publisher ships, because every one of them is read by someone who is
-not the publisher: the adopter's agent boots the generated `/welcome`, and a
-human browsing GitHub reads the generated README.
+not the publisher: a human browsing GitHub reads the generated README.
 """
 
 import os
@@ -60,7 +59,6 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
     for relative in (
         "system",
         "system/supervisord.conf.d",
-        ".agents/skills/welcome",
         "docs",
         ".agents/skills/publish-template/scripts",
         "system/services/env_converge/src/env_converge",
@@ -77,7 +75,6 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
         "[program:system_interface]\ncommand=bash -c 'system-interface'\n"
     )
     (source / "README.md").write_text("# base\n")
-    (source / ".agents/skills/welcome/SKILL.md").write_text("base welcome\n")
     (source / "docs/VERSION_HISTORY.md").write_text("# V\n")
     (source / ".gitignore").write_text("data/*\n")
     for name in (
@@ -99,9 +96,29 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
 
     (source / "system/apps/demo").mkdir(parents=True)
     (source / "system/apps/demo/main.py").write_text("x = 1\n")
+    # An MCP server the app relies on, included beside it.
+    (source / "mcp-servers.json").write_text(
+        '{"mcpServers": {"demo": {"command": "demo-mcp", "args": []}}}\n'
+    )
     _git("add", "-A", cwd=source)
     _git("commit", "-qm", "the app being published", cwd=source)
     return source, base_ref
+
+
+def _declare_secret(source: Path) -> None:
+    """Give the demo app a `[[secrets]]` declaration, and the live workspace the file it names.
+
+    The env file stays untracked: it is what the writer checks the declaration
+    against, never something the snapshot may contain.
+    """
+    (source / "system/apps/demo/app.toml").write_text(
+        'name = "demo"\ndisplay_name = "Demo"\nicon = "icon.svg"\n\n'
+        '[[secrets]]\nfile = "demo"\nvariables = ["DEMO_TOKEN"]\nnote = "a Demo API token"\n'
+    )
+    _git("add", "-A", cwd=source)
+    _git("commit", "-qm", "Declare the demo app's secret", cwd=source)
+    (source / "data/.secrets").mkdir(parents=True)
+    (source / "data/.secrets/demo.env").write_text("DEMO_TOKEN='x'\n")
 
 
 def _update_self(source: Path, base_ref: str) -> None:
@@ -170,6 +187,8 @@ def _assemble(
             "A demo.",
             "--include",
             "system/apps/demo",
+            "--include",
+            "mcp-servers.json",
             *extra,
         ],
         cwd=cwd,
@@ -184,9 +203,10 @@ def built_snapshot(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A template assembled by the real script, in a real linked worktree."""
     root = tmp_path_factory.mktemp("publish")
     source, base_ref = _make_source_repo(root)
+    _declare_secret(source)
     worktree = _linked_worktree(source, root)
 
-    completed = _assemble(worktree, base_ref)
+    completed = _assemble(worktree, base_ref, live_workspace=source)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     return worktree
@@ -196,7 +216,7 @@ def test_assembly_refuses_to_run_outside_a_throwaway_worktree(tmp_path: Path) ->
     """The guard that exists because this once wiped a live workspace.
 
     Assembly resets the tree and runs `git clean -fdxq`, which deletes
-    untracked AND gitignored files -- in a live mind that is `data/`, `.mngr/`,
+    untracked AND gitignored files -- in a live agent that is `data/`, `.mngr/`,
     and the secrets. Run from a main worktree it must refuse before touching
     anything, rather than succeed and report a publish.
     """
@@ -209,6 +229,26 @@ def test_assembly_refuses_to_run_outside_a_throwaway_worktree(tmp_path: Path) ->
     assert completed.returncode == 2, completed.stdout + completed.stderr
     assert "MAIN worktree" in completed.stderr
     assert (source / "data/important.db").read_text() == "PRECIOUS USER DATA"
+
+
+@_needs_scanners
+def test_a_declared_secret_lands_in_both_halves_of_the_manifest(
+    built_snapshot: Path,
+) -> None:
+    """The TOML entry is generated from the app's declaration, and template.md gets
+    the matching requires_secret: line, which the validator counts against it."""
+    toml_text = (built_snapshot / "template.toml").read_text()
+    assert (
+        '[[requirements.secret]]\nfile = "demo"\nvariables = ["DEMO_TOKEN"]\n'
+        'note = "a Demo API token"\n'
+    ) in toml_text
+    markdown = (built_snapshot / "template.md").read_text()
+    assert (
+        "- requires_secret: data/.secrets/demo.env with DEMO_TOKEN (a Demo API token)"
+        in markdown
+    )
+    assert "DEMO_TOKEN='x'" not in markdown
+    assert not (built_snapshot / "data/.secrets/demo.env").exists()
 
 
 @_needs_scanners
@@ -240,20 +280,9 @@ def test_the_readme_is_regenerated_to_describe_this_template(
 
 
 @_needs_scanners
-def test_the_generated_welcome_replaces_the_base_one(built_snapshot: Path) -> None:
-    # A mind created from a template must open by naming THAT template, not
-    # with the generic greeting the base workspace ships.
-    welcome = (built_snapshot / ".agents/skills/welcome/SKILL.md").read_text()
-
-    assert "base welcome" not in welcome
-    assert "Demo" in welcome
-    assert "template.md" in welcome
-
-
-@_needs_scanners
 def test_the_version_history_never_ships(built_snapshot: Path) -> None:
     # docs/VERSION_HISTORY.md is the SOURCE workspace's ledger -- it records
-    # what that mind published, which is nobody else's business and wrong in an
+    # what that agent published, which is nobody else's business and wrong in an
     # adopter's tree.
     assert not (built_snapshot / "docs/VERSION_HISTORY.md").exists()
 
@@ -296,8 +325,8 @@ def test_an_updated_workspace_publishes_only_the_selected_app(tmp_path: Path) ->
 
 @_needs_scanners
 @pytest.mark.timeout(_REAL_ASSEMBLY_TIMEOUT_SECONDS)
-def test_a_mind_created_from_a_published_template_can_publish(tmp_path: Path) -> None:
-    """Its history carries the source mind's Initial workspace commit too.
+def test_an_agent_created_from_a_published_template_can_publish(tmp_path: Path) -> None:
+    """Its history carries the source agent's Initial workspace commit too.
 
     The published snapshot is parented on the source's marker and the adopter
     clones it with full history, so only the adopter's own, newest marker may

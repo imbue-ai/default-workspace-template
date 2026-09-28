@@ -28,7 +28,7 @@ class HarnessType(StrEnum):
     # this value MUST match the type, not the alias, or ``parse_harness`` falls through.
     ANTIGRAVITY = "antigravity"
     # Not a harness any agent runs: the pseudo-harness of a chat's seed segment, the turns
-    # the Mind app handed over when it created the workspace (``chat_seed.py``). Registered so
+    # the Imbue Studio app handed over when it created the workspace (``chat_seed.py``). Registered so
     # the segment reads through the registry like any archived one.
     SEED = "seed"
 

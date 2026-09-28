@@ -267,10 +267,11 @@ class QueuedMessageState(FrozenModel):
     is_sending: bool = Field(
         default=False,
         description=(
-            "True while this chip is a message the backend is actively re-sending (a codex "
-            "shoulder-tap's interrupt+resend, Fix 3): it stays continuously visible but is rendered "
-            "as an ordinary sent message rather than as a plain queued chip, so it never blinks "
-            "out (contract A1a). "
+            "True while this chip is a message the backend is actively delivering (a codex "
+            "shoulder-tap's interrupt+resend, Fix 3; or a Claude message still queued when the reply "
+            "landed, which Claude picks up after its end-of-turn hooks): it stays continuously "
+            "visible but is rendered as an ordinary sent message rather than as a plain queued "
+            "chip, so it never blinks out (contract A1a). "
             "False for an ordinary parked queue chip."
         ),
     )
@@ -651,7 +652,7 @@ class ProvisionalChat(FrozenModel):
 
 
 class SeedChatRequest(FrozenModel):
-    """Request body for POST /api/chats/seed: the conversation the Mind app had before the workspace existed."""
+    """Request body for POST /api/chats/seed: the conversation the Imbue Studio app had before the workspace existed."""
 
     title: str = Field(default="", description='The chat\'s display name; empty mints the first free "Chat N"')
     turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")

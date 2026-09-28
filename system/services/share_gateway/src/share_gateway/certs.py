@@ -24,8 +24,39 @@ _CERT_REQUEST_TIMEOUT_SECONDS = 300.0
 RENEWAL_THRESHOLD_DAYS = 30
 
 
+# Connector refusals a later attempt may clear: the connector is throttling
+# this share (429), timed out reading the request (408), or failed on its own
+# side (5xx). Every other 4xx means the connector rejected the request itself
+# (an invalid CSR, an unknown relay token), which no retry can fix.
+_RETRYABLE_REFUSAL_STATUS_CODES = frozenset({408, 429})
+
+
 class CertProvisioningError(RuntimeError):
-    """Raised when the connector could not sign the workspace's CSR."""
+    """Raised when the connector could not sign the workspace's CSR.
+
+    ``is_retryable`` separates failures a later attempt may clear (the
+    connector unreachable, a 5xx, a 429) from ones it never will (the
+    connector refused the request itself); ``retry_after_seconds`` carries the
+    connector's ``Retry-After`` when it sent one.
+    """
+
+    def __init__(self, message: str, is_retryable: bool, retry_after_seconds: int | None) -> None:
+        super().__init__(message)
+        self.is_retryable = is_retryable
+        self.retry_after_seconds = retry_after_seconds
+
+
+def classify_connector_refusal(status_code: int, retry_after_header: str | None) -> tuple[bool, int | None]:
+    """(is_retryable, retry_after_seconds) for a non-200 connector answer.
+
+    Only the delay-seconds form of ``Retry-After`` is honored; the HTTP-date
+    form is ignored (the connector never sends it).
+    """
+    is_retryable = status_code >= 500 or status_code in _RETRYABLE_REFUSAL_STATUS_CODES
+    retry_after_seconds = None
+    if retry_after_header is not None and retry_after_header.strip().isdigit():
+        retry_after_seconds = int(retry_after_header.strip())
+    return is_retryable, retry_after_seconds
 
 
 def load_or_create_workspace_key(key_path: Path) -> rsa.RSAPrivateKey:
@@ -68,12 +99,28 @@ def request_certificate(connector_url: str, relay_token: str, csr_pem: str) -> s
             timeout=_CERT_REQUEST_TIMEOUT_SECONDS,
         )
     except httpx.HTTPError as exc:
-        raise CertProvisioningError(f"cert request to the connector failed: {exc}") from exc
+        raise CertProvisioningError(
+            f"cert request to the connector failed: {exc}", is_retryable=True, retry_after_seconds=None
+        ) from exc
     if response.status_code != 200:
-        raise CertProvisioningError(f"connector refused the CSR ({response.status_code}): {response.text[:500]}")
-    cert_chain_pem = response.json().get("cert_chain_pem")
+        is_retryable, retry_after_seconds = classify_connector_refusal(
+            response.status_code, response.headers.get("Retry-After")
+        )
+        raise CertProvisioningError(
+            f"connector refused the CSR ({response.status_code}): {response.text[:500]}",
+            is_retryable=is_retryable,
+            retry_after_seconds=retry_after_seconds,
+        )
+    try:
+        cert_chain_pem = response.json().get("cert_chain_pem")
+    except ValueError as exc:
+        raise CertProvisioningError(
+            "connector returned a non-JSON certificate response", is_retryable=True, retry_after_seconds=None
+        ) from exc
     if not isinstance(cert_chain_pem, str) or not cert_chain_pem:
-        raise CertProvisioningError("connector returned no certificate chain")
+        raise CertProvisioningError(
+            "connector returned no certificate chain", is_retryable=True, retry_after_seconds=None
+        )
     return cert_chain_pem
 
 

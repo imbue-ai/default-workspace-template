@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { Desktop } from "../model/records";
@@ -28,7 +29,7 @@ export interface DesktopsWidgetAttrs {
   readonly isMenuOpen: boolean;
   readonly onSwitch: (desktopId: string) => void;
   readonly onOpenMenu: (event: MouseEvent) => void;
-  readonly onDesktopContextMenu: (desktopId: string, x: number, y: number) => void;
+  readonly onDesktopContextMenu: (desktopId: string, x: number, y: number, target: Element) => void;
 }
 
 export const DesktopsWidget: m.Component<DesktopsWidgetAttrs> = {
@@ -54,7 +55,7 @@ export const DesktopsWidget: m.Component<DesktopsWidgetAttrs> = {
             onclick: () => onSwitch(desktop.id),
             oncontextmenu: (event: MouseEvent) => {
               event.preventDefault();
-              onDesktopContextMenu(desktop.id, event.clientX, event.clientY);
+              onDesktopContextMenu(desktop.id, event.clientX, event.clientY, targetElementOf(event));
             },
           },
           m.trust(desktopIdentityMarkup(desktop, DESKTOP_GLYPH_SIZE)),

@@ -117,8 +117,9 @@ export interface QueuedMessage {
   queued_id: string;
   content: string;
   timestamp: string;
-  // True while the backend is actively re-sending this chip (a codex shoulder-tap's
-  // interrupt+resend): it renders as an ordinary send's bubble rather than as a plain queued chip.
+  // True while the backend is actively delivering this chip (a codex shoulder-tap's
+  // interrupt+resend, or a Claude message still queued when the reply landed): it renders as an
+  // ordinary send's bubble rather than as a plain queued chip.
   is_sending?: boolean;
 }
 
@@ -134,8 +135,8 @@ export interface ProvisionalChat {
   phase: ProvisionalChatPhase;
   // Why the create failed, in the failed phase.
   error: string | null;
-  // Whether the chat has a seed segment to show while it is created: the conversation the Mind
-  // app had before the workspace existed. Its page keeps the transcript and the composer up
+  // Whether the chat has a seed segment to show while it is created: the conversation the
+  // Imbue Studio app had before the workspace existed. Its page keeps the transcript and the composer up
   // through the create rather than the provisional screens.
   is_seeded: boolean;
 }
@@ -162,6 +163,9 @@ let chats: ChatSnapshot[] = [];
 // The JSON of the last chats_updated payload, to skip redundant identical pushes.
 let lastChatsSerialized = "";
 let provisionalChats: ProvisionalChat[] = [];
+// Whether the chat app has sent its chat list at least once: before that, a chat the page names
+// may simply not be known here yet.
+let isChatListReceived = false;
 // The ids of the provisional chats a (re)connect's replay has carried so far, while the replay
 // is in flight: from the socket opening to the chat list that ends it. Null otherwise.
 let replayedProvisionalIds: Set<string> | null = null;
@@ -230,6 +234,7 @@ function scheduleReconnect(): void {
 function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "chats_updated": {
+      isChatListReceived = true;
       // The backend can broadcast the same snapshot many times during a turn (transcript
       // churn), and a redraw on each identical push makes the model bar visibly flicker.
       const serialized = JSON.stringify(event.chats);
@@ -348,6 +353,11 @@ export function initChats(): void {
 
 export function isConnected(): boolean {
   return connected;
+}
+
+/** Whether the chat app has sent its chat list yet; until it has, a chat missing from it is unknown, not gone. */
+export function hasReceivedChatList(): boolean {
+  return isChatListReceived;
 }
 
 /** Every chat the app lists: the backend keeps the workspace's services-only "primary" agent

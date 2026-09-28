@@ -1,0 +1,1 @@
+The app contract gains a `closeChord` capability: a page that declares it (and gives `onCloseRequest`) owns the shell's close chord, so the shell sends `shell:close-request` and leaves the window open. Declaring it without a handler is refused at connect, like `navigation` without `onNavigate`.

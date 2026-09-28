@@ -240,3 +240,14 @@ def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
     assert json.loads(page_html[start : page_html.index("</script>", start)])["page"]["title"] == title
     assert 'import("/_static/app_contract.js")' in page_html
+
+
+def test_render_page_nudges_the_pty_frame_after_it_loads_so_ttyd_refits() -> None:
+    page = SessionPage(name="terminal-1", title="Terminal 1", pty_path="/?arg=session", pty_label="pty")
+
+    page_html = render_page(PageConfig(session="terminal-1", page=page))
+
+    # ttyd fits once at mount with the wrong cell width and refits only on a resize.
+    assert 'frame.addEventListener("load", scheduleRefitNudges);' in page_html
+    assert "const NUDGE_DELAYS_MS = [500, 2000];" in page_html
+    assert 'frame.style.height = "calc(100% - 1px)";' in page_html

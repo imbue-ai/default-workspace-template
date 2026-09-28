@@ -25,7 +25,7 @@ in both places a visitor reaches a shared workspace from:
   cookie is what stops a foreign page from making the browser attach the
   owner's session to such a GET.
 - ``imbue_machine_session_partitioned`` is ``SameSite=None; Secure;
-  Partitioned`` (CHIPS) so the hosted minds chrome can embed the workspace in
+  Partitioned`` (CHIPS) so the hosted Imbue Studio chrome can embed the workspace in
   a cross-site iframe: browsers only send a third-party cookie from an iframe
   when it is partitioned by the embedding site. A Lax cookie is not even
   stored from inside that iframe, so the two copies never overlap.
