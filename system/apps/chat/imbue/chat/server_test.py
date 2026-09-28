@@ -560,13 +560,7 @@ def test_send_message_to_an_agent_destroyed_mid_send_answers_not_found() -> None
     sender (``message_chat.py``) reads as a chat that no longer exists; a 500 would have it retry
     for hours."""
     agent_id = "agent-00000000000000000000000000000003"
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="destroyed-agent",
-        state="RUNNING",
-        agent_state_dir=Path("/tmp/test"),
-        claude_config_dir=Path("/tmp/.claude"),
-    )
+    agent_info = _agent_info(agent_id=agent_id, name="destroyed-agent")
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=VanishedAgentMngrMessenger())
     manager.note_agent_list_known()
     client = create_application(build_test_state(agent_manager=manager)).test_client()
