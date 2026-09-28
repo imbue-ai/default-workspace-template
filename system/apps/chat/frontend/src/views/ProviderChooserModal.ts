@@ -77,6 +77,13 @@ type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
 /** The paste step's label: the code is needed only when the browser ends on one. */
 export const PASTE_STEP_LABEL = "If the page shows a code, paste it here";
 
+/** How long the browser wait holds before saying nothing has come back, when the user is never seen returning. */
+export const NOTHING_BACK_AFTER_MS = 60_000;
+
+/** How long after the user returns to check the sign-in: past the flow's next poll, so a sign-in that did finish (the
+ *  desktop app brings the window forward as it does) shows as signed in rather than as nothing having come back. */
+export const RETURN_SETTLE_MS = 4_000;
+
 /** What a share visitor sees instead of the ways to sign in: accounts are the owner's to change. */
 const OWNER_ONLY_NOTICE = "Only the owner of this workspace can connect an AI account.";
 
@@ -122,6 +129,44 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let generation = 0;
   // Why the chooser moved the user to another way of signing in, shown above it.
   let notice: string | null = null;
+  // The browser wait has gone on with nothing back from the provider. Claude's Deny, and a closed tab, never call
+  // back, so this is all Studio can ever learn of them.
+  let isNothingBack = false;
+  // Studio lost focus to the browser during the wait, so the next sign of the user is them coming back.
+  let hasLeftForBrowser = false;
+  let nothingBackTimer: ReturnType<typeof setTimeout> | undefined;
+  let returnTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function stopWaitingOnBrowser(): void {
+    clearTimeout(nothingBackTimer);
+    clearTimeout(returnTimer);
+    nothingBackTimer = undefined;
+    returnTimer = undefined;
+    isNothingBack = false;
+    hasLeftForBrowser = false;
+  }
+
+  /** Start, or start over, waiting on the browser the desktop app opened. */
+  function waitOnBrowser(): void {
+    stopWaitingOnBrowser();
+    nothingBackTimer = setTimeout(markNothingBack, NOTHING_BACK_AFTER_MS);
+  }
+
+  function markNothingBack(): void {
+    const flow = getFlow();
+    if (mode !== "relay" || isNothingBack || flow === null || flow.status.state !== "pending") return;
+    isNothingBack = true;
+    m.redraw();
+  }
+
+  const onLeave = (): void => {
+    if (mode === "relay") hasLeftForBrowser = true;
+  };
+
+  const onReturn = (): void => {
+    if (mode !== "relay" || !hasLeftForBrowser || returnTimer !== undefined) return;
+    returnTimer = setTimeout(markNothingBack, RETURN_SETTLE_MS);
+  };
 
   function reset(): void {
     mode = "chooser";
@@ -140,6 +185,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     awaitingVerdict = false;
     isOpeningBrowser = false;
     notice = null;
+    stopWaitingOnBrowser();
     clearFlow();
   }
 
@@ -195,6 +241,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     reauthAccountId = options.accountId ?? null;
     isOpeningBrowser = false;
     notice = options.notice ?? null;
+    stopWaitingOnBrowser();
     keyProvider = chosen.key_providers.length === 1 ? chosen.key_providers[0].provider_id : null;
     // A terminal lane spends seconds spawning a CLI and scraping its first screen, so it
     // gets the waiting screen. A paste lane has nothing to wait for -- minting a folder
@@ -220,7 +267,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         const isRelaying = await relay(started.relay_url, started.flow_id);
         if (attempt !== generation) return;
         isOpeningBrowser = false;
-        if (isRelaying) mode = "relay";
+        if (isRelaying) {
+          mode = "relay";
+          waitOnBrowser();
+        }
       }
       if (mode !== "relay" && chosenMethod.shape === "browser") {
         // This sign-in cannot finish without the relay, so it gives way to one that can.
@@ -281,6 +331,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   function signInAnotherWay(current: Lane, why: string | null = null): void {
     const flow = getFlow();
     if (flow !== null && flow.status.state === "pending" && flow.shape === "url_then_code") {
+      stopWaitingOnBrowser();
       mode = "menu";
       notice = why;
       m.redraw();
@@ -772,26 +823,37 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ]);
   }
 
-  /** The desktop app opened the page and relays its callback: all that is left is the browser. */
+  /** The desktop app opened the page and relays its callback: all that is left is the browser. Once nothing has come
+   *  back, reopening the page is the way forward, since the sign-in is still listening for it. */
   function relayBody(current: Lane): m.Children {
     const flow = getFlow();
     return [
-      m("p", { class: css.LEAD }, `Finish signing in to ${current.provider_name} in your browser.`),
+      m(
+        "p",
+        { class: css.LEAD },
+        isNothingBack
+          ? `Nothing has come back from ${current.provider_name} yet. If you clicked Deny or closed the page, try again.`
+          : `Finish signing in to ${current.provider_name} in your browser.`,
+      ),
       m("div", { class: css.RELAY_ACTIONS }, [
         m(
           Button,
           {
-            variant: "secondary",
+            variant: isNothingBack ? "primary" : "secondary",
             "data-e2e": "open-sign-in-again",
             onclick: () => {
               if (flow === null || flow.relay_url === null) return;
               void relay(flow.relay_url, flow.flow_id).then((isRelaying) => {
-                if (!isRelaying)
+                if (isRelaying) {
+                  waitOnBrowser();
+                  m.redraw();
+                } else {
                   signInAnotherWay(current, "Imbue Studio couldn't open the sign-in page. Sign in here instead:");
+                }
               });
             },
           },
-          "Reopen sign-in window",
+          isNothingBack ? "Try again" : "Reopen sign-in window",
         ),
         hasOtherWays(current)
           ? m(
@@ -814,6 +876,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
 
   return {
     async oninit() {
+      // The page's own window: the desktop app opening the browser takes focus from it, and the user coming back
+      // either focuses it again or moves the pointer over the dialog.
+      window.addEventListener("blur", onLeave);
+      window.addEventListener("focus", onReturn);
+      document.addEventListener("pointermove", onReturn);
       await load();
       // Opened ON an account rather than to add one: a dead-account notice, or a provider
       // card whose credential expired. Land on that account's sign-in, not the lane list.
@@ -824,6 +891,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     },
 
     onremove() {
+      window.removeEventListener("blur", onLeave);
+      window.removeEventListener("focus", onReturn);
+      document.removeEventListener("pointermove", onReturn);
+      stopWaitingOnBrowser();
       // A modal closed mid-flow must not leave a CLI waiting on a browser tab that is gone.
       abortFlow();
     },
