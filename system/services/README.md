@@ -5,8 +5,6 @@ supervisord, some driven by cron instead. They keep the workspace running --
 backing it up, keeping tunnels alive, watching state -- without the user ever
 needing to open them.
 
-- `app_watcher/` - Watches the app registry (`data/.state/apps.toml`) and
-  writes server events for discovery.
 - `caretaker/` - The weekly Caretaker's deterministic check (cron-driven via
   `system/libs/automations/`, off by default; see the enable-caretaker
   skill).
@@ -21,6 +19,10 @@ needing to open them.
 - `agent-observer` (no directory: `system/supervisord.conf.d/agent-observer.conf`) - The
   workspace's one `mngr observe`, writing the agent lifecycle event file every
   chat instance follows.
+
+The app registry (`data/.state/apps.toml`) is announced to the minds desktop by
+the shell itself (`system/apps/system_interface`, its `service_events` module),
+which already watches the registry; there is no separate watcher service.
 - `oom_priority/` - The OOM-prevention machinery: priority bands, the shed
   ledger, and the earlyoom integration.
 

@@ -155,7 +155,7 @@ An app with `instances = false` declares no actions; the shell synthesizes its o
 A registry row carries `name`, `url`, `label`, `icon`, `internal`, and `program` from the registration, and `display_name`, `instances`, `instances_url`, `actions`, `default_shortcut`, `critical`, and `priority`, all copied from the manifest at registration.
 The `label` suffix has one job, an unguessable origin, and is never used as an identifier.
 Liveness (`is_running`) is derived from supervisord and is never stored.
-The app watcher, which writes the `service_registered` and `service_deregistered` events minds reads, reads `name`, `url`, `label`, and `icon` and ignores the manifest fields.
+The shell's services event writer, which writes the `service_registered` and `service_deregistered` events minds reads, reads `name`, `url`, `label`, and `icon` and ignores the manifest fields.
 
 ## 5. The app contract
 

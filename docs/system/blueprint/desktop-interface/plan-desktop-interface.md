@@ -376,7 +376,7 @@ It drops `instances` and `instances_url`.
 `actions` becomes `launch_paths`: `[[launch_paths]] id, label, path, params`, where `path` is a path under the app origin and `params` is the documented list of query parameter names the shell may append.
 `default_shortcut.action` becomes `default_shortcut.launch`, naming a declared launch path id or `open`.
 A `[pin]` table (`path`, and optionally `style`, `scope`, `default_mode`) declares the app's pinned window (pinned-taskbar-entries plan section 7.1).
-`forward_port.py` copies the new fields onto the registry row and drops the old ones; the app watcher and minds read `name`, `url`, `label`, `icon` as before.
+`forward_port.py` copies the new fields onto the registry row and drops the old ones; the shell's services event writer and minds read `name`, `url`, `label`, `icon` as before.
 
 ## 9. The built-in apps
 

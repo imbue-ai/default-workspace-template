@@ -1,5 +1,6 @@
 """Tests for the inventory: the registry read, liveness, the registry watch, and the diffed broadcast."""
 
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -151,3 +152,48 @@ def test_a_failing_pass_does_not_end_the_sweep(tmp_path: Path, broadcaster: WebS
     inventory.sweep_once()
     assert probed == [2, 2, 2]
     assert all(entry.is_running for entry in inventory.entries())
+
+
+def test_every_registry_read_is_handed_to_the_hook(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    handed: list[list[str]] = []
+    inventory = AppInventory(
+        registry_path=registry_path,
+        broadcaster=broadcaster,
+        liveness_prober=FakeLivenessProber(),
+        on_registry_read=lambda rows: handed.append([str(row.name) for row in rows]),
+    )
+
+    inventory.reload_registry()
+    write_registry(registry_path, registry_row_toml("files", TEST_FILES_URL, program="files"))
+    inventory.reload_registry()
+    registry_path.write_text("[[apps]\nname = ")
+    inventory.reload_registry()
+
+    # An unreadable registry keeps the last read and hands nothing on.
+    assert handed == [["terminal", "files"], ["files"]]
+
+
+def test_the_sweep_re_reads_a_registry_whose_mtime_moved(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    """The backstop for a write no watch event reported: a sweep pass compares the file's mtime with the
+    last read's and reads again when it moved."""
+    registry_path = write_two_app_registry(tmp_path)
+    inventory = build_inventory(registry_path, broadcaster)
+
+    write_registry(registry_path, registry_row_toml("files", TEST_FILES_URL, program="files"))
+    os.utime(registry_path, ns=(1, 1))
+    inventory.sweep_once()
+    assert [str(entry.row.name) for entry in inventory.entries()] == ["files"]
+
+    # A pass over an unchanged file reads nothing again.
+    handed: list[int] = []
+    inventory_with_hook = AppInventory(
+        registry_path=registry_path,
+        broadcaster=broadcaster,
+        liveness_prober=FakeLivenessProber(),
+        on_registry_read=lambda rows: handed.append(len(rows)),
+    )
+    inventory_with_hook.reload_registry()
+    inventory_with_hook.sweep_once()
+    inventory_with_hook.sweep_once()
+    assert handed == [1]

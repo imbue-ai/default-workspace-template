@@ -44,7 +44,7 @@ string on the entry, not a path to a file. A path would have to be readable by
 every consumer -- the system-interface server, the desktop client, and anything
 reading the registry off a shared host -- at whatever moment it renders, and
 those do not share a filesystem view with the service that registered. The
-markup travels with the entry through the existing apps.toml -> app-watcher
+markup travels with the entry through the existing apps.toml -> services
 event -> WebSocket path with no extra plumbing and no file access at all.
 ``--icon-file`` (and the manifest's ``icon``) is only an input convenience: the
 file is read once here, at registration time, and its contents (not its path)
@@ -498,7 +498,7 @@ def _save_apps(path: Path, apps: list[dict[str, object]]) -> None:
         return
 
     # Atomic write: write to a temp file in the same directory, then os.replace()
-    # into place. This guarantees that readers (like app-watcher) never observe
+    # into place. This guarantees that readers (like the shell) never observe
     # a truncated/partial file during the write window.
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(

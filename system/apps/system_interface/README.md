@@ -167,7 +167,18 @@ every connect, and on every change) keeps the list current from then on.
 Until that first read answers, a shortcut whose app the page cannot look up
 draws faint as "Connecting to the workspace..." and running it says the page is
 still connecting; only once the apps are known is a missing app reported as
-not registered.
+not registered. The sweep also compares the registry's mtime with the last
+read's and re-reads on a change, the backstop for a write no watch event
+reported (under gVisor and on lima, a change made outside the sandbox raises no
+inotify event in it).
+
+Every registry read is also announced to the minds desktop (`service_events.py`):
+one `service_registered` event per app whose URL, label, or icon differs from
+the last announced, and one `service_deregistered` per app that left, appended
+to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
+event envelope; the first read after the shell starts announces every app. The
+stream is what `mngr forward` and the desktop resolve app origins from. A
+preview shell announces nothing, since its registry is a copy.
 
 Stop and Start of the whole app act on its supervisord program and are refused
 for critical apps; the desktop offers them on the window menu

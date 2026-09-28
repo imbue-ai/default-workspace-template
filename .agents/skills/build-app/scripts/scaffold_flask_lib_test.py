@@ -150,7 +150,7 @@ def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
     `uv sync` regenerates it -- skipped here, as it is derived rather than authored.
     """
     root = _make_workspace(
-        tmp_path / "workspace", {"browser": 8081, "app-watcher": None}
+        tmp_path / "workspace", {"browser": 8081, "host-backup": None}
     )
     before_conf = (root / "system/supervisord.conf").read_text()
     before_pyproject = (root / "pyproject.toml").read_text()

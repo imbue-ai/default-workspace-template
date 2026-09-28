@@ -15,6 +15,7 @@ from app_manifest.manifest import LocationScope
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryLaunchPath
+from app_manifest.registry import RegistryRow
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -700,8 +701,11 @@ def build_shell_state(
     repo_root: Path = WORKSPACE_ROOT_DIRECTORY,
     profiles: ProfileResolver | None = None,
     launch_poster: LaunchPoster | None = None,
+    on_registry_read: Callable[[Sequence[RegistryRow]], None] | None = None,
 ) -> ShellState:
-    """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests, and
+    """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests (and
+    ``on_registry_read``, what the built inventory tells every registry read, is the production shell's services
+    event writer), and
     ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
     environment names; ``repo_root`` (the workspace the update notice's record and script live under) is the
     served tree by default; ``profiles`` (the resolver the composition root shares with presence) defaults to one
@@ -711,7 +715,7 @@ def build_shell_state(
         state_directory=state_directory,
         inventory=inventory
         if inventory is not None
-        else AppInventory(registry_path=registry_path, broadcaster=broadcaster),
+        else AppInventory(registry_path=registry_path, broadcaster=broadcaster, on_registry_read=on_registry_read),
         desktops=DesktopStore(state_directory=state_directory),
         placements=PlacementStore(state_directory=state_directory),
         window_paths=WindowPathStore(state_directory=state_directory),

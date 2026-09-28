@@ -64,7 +64,6 @@ RESERVED_NAMES = frozenset(
         "system_interface",
         "share-gateway",
         "share_gateway",
-        "app-watcher",
         "bootstrap",
         "github-sync",
         "host-backup",

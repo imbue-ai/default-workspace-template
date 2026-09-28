@@ -279,7 +279,7 @@ Ship mechanics (review finding -- vendor coupling made explicit):
   `claude-codex-pi-dwt` (PR #390) together with that vendored state. The two
   trees must be byte-identical in the touched files at every future vendor sync,
   or the next sync reverts the writers.
-- Restart `system_interface` (one deliberate moment; the app watcher does not
+- Restart `system_interface` (one deliberate moment; the services event stream does not
   auto-restart it).
 - Running claude agents keep their provisioned old hook writing the dead
   `claude_model_state.json` forever -- inert by design, not a failed deploy.

@@ -452,7 +452,7 @@ def test_classify_path_reveal_classes() -> None:
         "system/supervisord.conf": update_classification.CLASS_SERVICE,
         # A program's own drop-in is a service change like the main config is:
         # it needs the same services-agent restart to take effect.
-        "system/supervisord.conf.d/app-watcher.conf": update_classification.CLASS_SERVICE,
+        "system/supervisord.conf.d/host-backup.conf": update_classification.CLASS_SERVICE,
         "system/libs/bootstrap/src/bootstrap/main.py": update_classification.CLASS_SERVICE,
         "system/scripts/forward_port.py": update_classification.CLASS_SHARED_RUNTIME,
         ".agents/skills/update-self/SKILL.md": update_classification.CLASS_SHARED_RUNTIME,

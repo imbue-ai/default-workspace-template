@@ -89,7 +89,7 @@ Each `[[apps]]` row:
 `--remove` deletes the row.
 The script validates only what it copies from files; the shell validates every row against the `RegistryRow` model on read and logs and skips a row that fails, so a hand-edited registry degrades to a missing app rather than a crashed shell.
 
-The app watcher and the minds side read `name`, `url`, `label`, and `icon` and ignore the manifest keys.
+The shell's services event writer and the minds side read `name`, `url`, `label`, and `icon` and ignore the manifest keys.
 
 ## 4. The instances API
 

@@ -2,7 +2,7 @@
 
 A background service -- a supervisord `[program:<name>]` with no tab. Two
 homes: standalone services live under `system/services/<package>/` (their own
-uv workspace member, e.g. `host_backup`, `app_watcher`); a service that exists
+uv workspace member, e.g. `host_backup`, `share_gateway`); a service that exists
 solely to support one app lives in that app's folder under
 `system/apps/<package>/` and is named `<app>-<role>`.
 

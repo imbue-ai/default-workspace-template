@@ -633,7 +633,7 @@ reread && supervisorctl update` to start the new program.
 
 The `forward_port.py` call MUST come first in the command -- the port
 must be registered before the app starts listening, otherwise the
-app-watcher races with the backend coming up.
+shell's announcement of the registration races with the backend coming up.
 
 For the full program schema and logging knobs, see the shared
 [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).

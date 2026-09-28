@@ -7,6 +7,7 @@ from types import FrameType
 
 from app_manifest.registry import registry_path
 from flask import Flask
+from loguru import logger
 
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import get_state
@@ -19,6 +20,8 @@ from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
 from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.server import create_application
+from imbue.system_interface.service_events import ServiceEventWriter
+from imbue.system_interface.service_events import service_events_path_from_environment
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.state_files import DEFAULT_STATE_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -75,16 +78,31 @@ def build_production_state(
         cache_directory=presence_directory / PROFILES_DIRECTORY_NAME, share_env_path=DEFAULT_SHARE_ENV_PATH
     )
     presence = PresenceStore(directory=presence_directory)
+    service_event_writer = None if is_preview else build_service_event_writer()
     return SystemInterfaceState(
         config=config,
         shell=build_shell_state(
-            state_directory=state_directory, registry_path=registry_path(), broadcaster=broadcaster, profiles=profiles
+            state_directory=state_directory,
+            registry_path=registry_path(),
+            broadcaster=broadcaster,
+            profiles=profiles,
+            on_registry_read=service_event_writer.announce if service_event_writer is not None else None,
         ),
         presence=presence,
         presence_sweep=build_presence_sweep(presence, profiles, broadcaster),
         profiles=profiles,
         is_preview=is_preview,
     )
+
+
+def build_service_event_writer() -> ServiceEventWriter | None:
+    """The writer of the services event stream the minds desktop discovers apps from, or None (warned once)
+    outside a workspace, where no agent state directory names the stream."""
+    events_path = service_events_path_from_environment()
+    if events_path is None:
+        logger.warning("MNGR_AGENT_STATE_DIR is not set; app registrations will not be announced to minds")
+        return None
+    return ServiceEventWriter(events_path=events_path)
 
 
 def build_application(config: Config, args: argparse.Namespace) -> Flask:

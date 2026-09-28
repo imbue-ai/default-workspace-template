@@ -1,8 +1,11 @@
 """The app inventory: the registry and each app's liveness.
 
-The registry (``data/.state/apps.toml``) is watched for changes; liveness is re-derived on a
-sweep and after a stop or start. Every change of the inventory is broadcast as one
-``apps_updated`` message, diffed against the last one sent (desktop contracts.md section 6).
+The registry (``data/.state/apps.toml``) is watched for changes, and its mtime is compared on every sweep
+as the backstop for a write no watch event reported (under gVisor and on lima, a change made outside the
+sandbox raises no inotify event in it); liveness is re-derived on the sweep and after a stop or start. Every
+change of the inventory is broadcast as one ``apps_updated`` message, diffed against the last one sent
+(desktop contracts.md section 6), and every read of the registry is handed to ``on_registry_read`` (the
+production shell's services event writer).
 """
 
 import json
@@ -14,6 +17,7 @@ from typing import Any
 from typing import Final
 
 from app_manifest.errors import RegistryReadError
+from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
 from loguru import logger
 from pydantic import Field
@@ -52,6 +56,11 @@ class AppInventory(MutableModel):
     sweep_interval_seconds: float = Field(
         default=LIVENESS_SWEEP_INTERVAL_SECONDS, frozen=True, description="How often the sweep runs"
     )
+    on_registry_read: Callable[[Sequence[RegistryRow]], None] | None = Field(
+        default=None,
+        frozen=True,
+        description="Told the validated rows of every successful registry read, outside the inventory's lock",
+    )
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     # Held across serialize, compare, and broadcast, so two threads that snapshot the inventory
@@ -61,6 +70,7 @@ class AppInventory(MutableModel):
     _registry_order: list[str] = PrivateAttr(default_factory=list)
     _last_broadcast_json: str | None = PrivateAttr(default=None)
     _is_registry_read: bool = PrivateAttr(default=False)
+    _read_registry_mtime_ns: int | None = PrivateAttr(default=None)
     _observer: BaseObserver | None = PrivateAttr(default=None)
     _sweep_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _sweep_wake: threading.Event = PrivateAttr(default_factory=threading.Event)
@@ -114,6 +124,9 @@ class AppInventory(MutableModel):
         A file that cannot be read or parsed keeps the last good read (logged): a hand-edited
         registry must degrade to a stale inventory, not crash the shell or end the watch.
         """
+        # The mtime is taken before the read: a write that lands between the two makes the next sweep read
+        # again, which is the safe direction.
+        mtime_ns = self._registry_mtime_ns()
         try:
             rows = read_registry(self.registry_path)
         except RegistryReadError as e:
@@ -122,6 +135,7 @@ class AppInventory(MutableModel):
         is_changed = False
         with self._lock:
             self._is_registry_read = True
+            self._read_registry_mtime_ns = mtime_ns
             previous = dict(self._entry_by_name)
             self._entry_by_name = {}
             self._registry_order = []
@@ -140,6 +154,14 @@ class AppInventory(MutableModel):
         if is_changed:
             self._sweep_wake.set()
             self._broadcast_if_changed()
+        if self.on_registry_read is not None:
+            self.on_registry_read(rows)
+
+    def _registry_mtime_ns(self) -> int | None:
+        try:
+            return self.registry_path.stat().st_mtime_ns
+        except OSError:
+            return None
 
     def _start_registry_watch(self) -> None:
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
@@ -175,12 +197,16 @@ class AppInventory(MutableModel):
             self.sweep_once()
 
     def sweep_once(self) -> None:
-        """One pass of the sweep: re-derive liveness.
+        """One pass of the sweep: re-read a registry whose mtime moved since the last read, then re-derive liveness.
 
         A pass that raises (a registry url the probe cannot parse) is logged and the next pass
         runs: the sweep is what keeps every status current, so it must outlive one bad pass.
         """
         try:
+            with self._lock:
+                read_mtime_ns = self._read_registry_mtime_ns
+            if self._registry_mtime_ns() != read_mtime_ns:
+                self.reload_registry()
             self.refresh_liveness()
         except (OSError, ValueError) as e:
             logger.opt(exception=e).error("The app inventory sweep failed; the next pass will retry")
