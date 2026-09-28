@@ -495,11 +495,6 @@ class ShellState(MutableModel):
                     self.close_window(desktop.id, window.id)
         self.lifecycle.stop_app(app)
 
-    def count_windows_of_app(self, app: str) -> int:
-        """How many windows across every desktop show the app (minimized, pinned, and pulled-out ones included);
-        what the lifecycle manager's no-window rule counts."""
-        return sum(1 for desktop in self.desktops.list_desktops() for window in desktop.windows if window.app == app)
-
     def close_window(self, desktop_id: str, window_id: WindowId) -> bool:
         """Close a window for everyone: off the desktop and out of every client's layout of it, and its app told;
         False when the desktop did not hold it (idempotent). Raises PinnedWindowError (a 409) for a pinned window,
@@ -718,6 +713,12 @@ class ShellState(MutableModel):
         return outcome
 
 
+def count_windows_of_app(desktops: DesktopStore, app: str) -> int:
+    """How many windows across every desktop show the app (minimized, pinned, and pulled-out ones included); what
+    the lifecycle manager's no-window rule counts."""
+    return sum(1 for desktop in desktops.list_desktops() for window in desktop.windows if window.app == app)
+
+
 def _under_repo_root(directory: Path, repo_root: Path) -> Path:
     """A configured directory as an absolute path, a relative one naming a place under the served tree.
 
@@ -768,9 +769,7 @@ def build_shell_state(
         lifecycle=build_app_lifecycle_manager(
             resolved_inventory,
             is_lifecycle_enabled,
-            lambda app: sum(
-                1 for desktop in desktops.list_desktops() for window in desktop.windows if window.app == app
-            ),
+            lambda app: count_windows_of_app(desktops, app),
             no_windows_grace_seconds=no_windows_grace_seconds,
             idle_sweep_interval_seconds=idle_sweep_interval_seconds,
         ),
