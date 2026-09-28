@@ -146,14 +146,33 @@ def test_a_supervisord_block_no_app_owns_runs_the_band_check(workspace: Path) ->
 
 
 def test_documentation_alone_selects_nothing(workspace: Path) -> None:
-    selection = _select(workspace, ["README.md", "docs/guide.md", "system/libs/corelib/README.md"])
+    selection = _select(
+        workspace,
+        [
+            "system/libs/corelib/README.md",
+            "docs/system/blueprint/plan.md",
+            "system/changelog/work.md",
+            ".agents/changelog/work.md",
+        ],
+    )
 
     assert selection.commands == ()
     assert render_selection(selection) == "# every changed path is documentation, so nothing to run\n"
 
 
+def test_prose_the_always_run_checks_read_runs_the_always_run_set(workspace: Path) -> None:
+    # The live-prose terminology ratchets read the root prose and docs/, so an edit to them
+    # alone can fail an always-run guard.
+    selection = _select(workspace, ["AGENTS.md", "README.md", "docs/guide.md"])
+
+    assert _command_lines(selection) == [_ALWAYS_RUN]
+    assert {entry.classes for entry in selection.paths} == {(ChangedPathClass.GUARD,)}
+
+
 def test_documentation_beside_code_adds_nothing_to_what_the_code_selects(workspace: Path) -> None:
-    with_docs = _select(workspace, ["README.md", "system/libs/midlib/src/midlib/core.py"])
+    with_docs = _select(
+        workspace, ["system/libs/corelib/README.md", "system/libs/midlib/src/midlib/core.py"]
+    )
     without_docs = _select(workspace, ["system/libs/midlib/src/midlib/core.py"])
 
     assert _command_lines(with_docs) == _command_lines(without_docs)

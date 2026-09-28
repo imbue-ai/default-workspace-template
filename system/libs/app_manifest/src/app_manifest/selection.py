@@ -6,9 +6,9 @@ runs that unit's suite, plus the suites of the workspace members that depend on 
 manifests reference it (``[[references]]``). A supervisord block runs the app whose program
 it holds and the check that every block names its OOM band. ``uv.lock`` selects the members
 that depend on what it upgraded. A small always-run set guards the repo-wide invariants any
-edit can break; agent prose outside every skill selects only that set and the apps whose
-manifests reference it. Any other path belongs to no declared unit, so it runs the full root
-suite.
+edit can break; agent prose outside every skill, and the other markdown the always-run prose
+checks read, selects only that set and the apps whose manifests reference it. Any other path
+belongs to no declared unit, so it runs the full root suite.
 """
 
 import json
@@ -132,6 +132,11 @@ _RUNTIME_PREFIXES: Final[tuple[str, ...]] = (
     "system/apps/",
 )
 _MARKDOWN_SUFFIX: Final[str] = ".md"
+# The markdown the always-run live-prose checks read (``_live_prose_files`` in
+# ``system/test_meta_ratchets.py``), which is therefore never documentation that selects nothing.
+_GUARDED_PROSE_ROOT_FILES: Final[frozenset[str]] = frozenset({"README.md", "AGENTS.md", "CLAUDE.md"})
+_GUARDED_PROSE_DIRECTORIES: Final[tuple[str, ...]] = (".agents/", "docs/", "data/")
+_UNGUARDED_PROSE_PARTS: Final[frozenset[str]] = frozenset({"changelog", "blueprint", "specs", "vendor"})
 # How many of a command's reasons its comment line spells out before summarizing the rest.
 _MAX_REASONS_SHOWN: Final[int] = 3
 
@@ -282,10 +287,21 @@ def is_test_file_name(path: str) -> bool:
 
 
 @pure
+def _is_guarded_prose(path: str) -> bool:
+    pure_path = PurePosixPath(path)
+    if pure_path.suffix != _MARKDOWN_SUFFIX or _UNGUARDED_PROSE_PARTS.intersection(pure_path.parts):
+        return False
+    return path in _GUARDED_PROSE_ROOT_FILES or path.startswith(_GUARDED_PROSE_DIRECTORIES)
+
+
+@pure
 def is_docs_path(path: str) -> bool:
     """Whether a path is documentation, which selects no tests: a README or a changelog entry
-    anywhere, and any other markdown outside the directories where markdown is agent-run prose."""
+    anywhere, and any other markdown outside the directories where markdown is agent-run prose,
+    unless the always-run prose checks read it."""
     pure_path = PurePosixPath(path)
+    if _is_guarded_prose(path):
+        return False
     if pure_path.name == "README.md" or (
         pure_path.parent.name == "changelog" and pure_path.suffix == _MARKDOWN_SUFFIX
     ):
@@ -520,8 +536,8 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
         path in ALWAYS_RUN_GUARDS
         or (PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY and path.endswith(".py"))
         or (
-            path.startswith(f"{_AGENT_PROSE_DIRECTORY}/")
-            and path.endswith(_MARKDOWN_SUFFIX)
+            path.endswith(_MARKDOWN_SUFFIX)
+            and (path.startswith(f"{_AGENT_PROSE_DIRECTORY}/") or _is_guarded_prose(path))
             and find_owning_unit(path) is None
         )
     ):
