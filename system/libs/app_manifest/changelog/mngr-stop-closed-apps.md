@@ -1,0 +1,1 @@
+`app.toml` gains `stop_when_no_windows` (bool, default `false`): whether the shell may stop the app's program once no window on any desktop shows it. `critical = true` forces it `false`, and a manifest declaring both fails to load. `RegistryRow` reads the key `forward_port.py` copies from the manifest.

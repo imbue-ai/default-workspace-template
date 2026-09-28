@@ -1,0 +1,1 @@
+Getting Started's manifest declares `stop_when_no_windows = true`: the shell stops the program a minute after its last window closes and starts it again on the next request. The first-visit window is unaffected: the shell stops nothing before a client has arrived, and the app is running by then (`docs/system/specs/stop-when-no-windows.md`).

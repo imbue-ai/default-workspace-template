@@ -1,0 +1,1 @@
+The browser's manifest declares `stop_when_no_windows = true`: Chromium still stops on the close hint, and the shell stops the coordinator program a minute after the last browser window closes, starting it again on the next request (`docs/system/specs/stop-when-no-windows.md`).

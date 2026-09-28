@@ -1,6 +1,6 @@
 # Window-bound resources and new-window shortcuts
 
-Status: agreed design (2026-09-20), implemented on `mngr/desktop-ui-phase-6`.
+Status: agreed design (2026-09-20), implemented on `mngr/desktop-ui-phase-6`; amended by [stop-when-no-windows.md](stop-when-no-windows.md) (the close hint goes only to a running app, and an app's process is the shell's to stop once no window shows it).
 Audience: implementers of `system/apps/terminal`, `system/apps/browser`, `system/apps/chat`, `system/libs/app_manifest`, the shell (`system/apps/system_interface`), `system/scripts/layout.py`, and the `manage-desktop` and `agentic-browser-fleet` skills.
 
 This spec amends the desktop interface ([plan](../blueprint/desktop-interface/plan-desktop-interface.md), [contracts](../blueprint/desktop-interface/contracts.md), [concepts](../blueprint/desktop-interface/concepts.md)) in two places that the first live test showed do not feel like a desktop:
@@ -192,6 +192,7 @@ The manifest gains an optional `window_closed_path` (a launch-path-shaped value:
 
 Whenever a window of an app closes, for any reason (the close control, the window and taskbar menus, the minds close chord, `layout.py close`, a desktop's deletion), the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's registered URL plus its `window_closed_path`, from a daemon thread, with a 2 second timeout, after the close has been written and broadcast.
 A failed post is a debug log; the shell never waits for, retries, or acts on the answer, and the close is complete whether or not the app is up.
+The post goes only to an app that is running: a stopped app's port is the shell's own parker, which would wake the app to tell it a window closed ([stop-when-no-windows.md](stop-when-no-windows.md), decision 9); the app's next start sweeps the shell's windows anyway.
 The app's handler marks the resource the body's `path` names window-seen (the post is proof a window showed it), runs a sweep, and answers 204; what is shown now is read from the shell's desktops, never inferred from the body.
 The terminal and the browser declare `window_closed_path = "/api/window-closed"`; the chat and the files app declare none.
 

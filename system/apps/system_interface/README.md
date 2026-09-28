@@ -180,9 +180,16 @@ event envelope; the first read after the shell starts announces every app. The
 stream is what `mngr forward` and the desktop resolve app origins from. A
 preview shell announces nothing, since its registry is a copy.
 
-Stop and Start of the whole app act on its supervisord program and are refused
-for critical apps; the desktop offers them on the window menu
-(`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
+The shell also owns each stoppable app's process (`shell/app_lifecycle.py`,
+the stop-when-no-windows spec): an app whose manifest declares
+`stop_when_no_windows` is stopped once no window on any desktop has shown it
+for a minute (and only once someone has visited the workspace), and while any
+stoppable app is stopped the shell holds its port (`shell/port_parking.py`), so
+the first request for the app starts it again and is answered with a loading
+page that reloads into the app. "Quit <app>" on the window menu
+(`frontend/src/views/WindowMenu.ts`) closes every window of the app and stops
+it at once; critical apps offer nothing there and are never stopped or parked.
+The stop and start routes remain for agents. A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 `shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
 stored on its window and reopens there, one that declared `navigation`
