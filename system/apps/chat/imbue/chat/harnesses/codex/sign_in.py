@@ -46,5 +46,11 @@ def app_server_argv(socket_path: Path) -> list[str]:
 def connect_login_client(socket_path: Path) -> CodexLoginClient:
     """Connect to the app-server on `socket_path` and complete its handshake."""
     client = CodexAppServerClient(transport=connect_app_server_transport(socket_path))
-    client.initialize(_CLIENT_NAME, _CLIENT_VERSION)
+    is_ready = False
+    try:
+        client.initialize(_CLIENT_NAME, _CLIENT_VERSION)
+        is_ready = True
+    finally:
+        if not is_ready:
+            client.close()
     return client
