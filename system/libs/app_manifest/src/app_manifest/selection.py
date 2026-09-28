@@ -505,16 +505,20 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
         return _PathOutcome(classes=(ChangedPathClass.ROOT_CONFIG,), is_full_root=True)
     if path == _LOCKFILE:
         return _select_for_lockfile(context, path)
-    if path in _ALWAYS_RUN_GUARDS or (
-        PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY and path.endswith(".py")
-    ):
-        return _PathOutcome(classes=(ChangedPathClass.GUARD,))
     if (
-        path.startswith(f"{_AGENT_PROSE_DIRECTORY}/")
-        and path.endswith(_MARKDOWN_SUFFIX)
-        and find_owning_unit(path) is None
+        path in _ALWAYS_RUN_GUARDS
+        or (PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY and path.endswith(".py"))
+        or (
+            path.startswith(f"{_AGENT_PROSE_DIRECTORY}/")
+            and path.endswith(_MARKDOWN_SUFFIX)
+            and find_owning_unit(path) is None
+        )
     ):
-        return _PathOutcome(classes=(ChangedPathClass.GUARD,))
+        references = _select_for_manifest_references(layout, path)
+        return _PathOutcome(
+            classes=(ChangedPathClass.GUARD, *references.classes),
+            pytest_requests=references.pytest_requests,
+        )
 
     classes: list[ChangedPathClass] = []
     pytest_requests: list[_PytestRequest] = []
@@ -569,16 +573,9 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
         )
         is_owned = True
 
-    for match in match_referencing_manifests(layout.manifests, RepoRelativePath(path)):
-        owner = app_package_directory(layout.repo_root, match.manifest_path)
-        if owner is not None:
-            classes.append(ChangedPathClass.MANIFEST_REFERENCE)
-            reason = _reason(
-                path, ChangedPathClass.MANIFEST_REFERENCE, f"referenced by {match.manifest.name}"
-            )
-            pytest_requests.extend(
-                _present([_whole_request(layout, owner.rstrip("/"), is_browser_included=False, reason=reason)])
-            )
+    references = _select_for_manifest_references(layout, path)
+    classes.extend(references.classes)
+    pytest_requests.extend(references.pytest_requests)
 
     if not is_owned:
         classes.append(ChangedPathClass.UNOWNED)
@@ -588,6 +585,24 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
         frontend_requests=tuple(frontend_requests),
         is_full_root=not is_owned,
     )
+
+
+def _select_for_manifest_references(layout: RepoLayout, path: str) -> _PathOutcome:
+    """The apps whose manifests reference the path."""
+    classes: list[ChangedPathClass] = []
+    requests: list[_PytestRequest] = []
+    for match in match_referencing_manifests(layout.manifests, RepoRelativePath(path)):
+        owner = app_package_directory(layout.repo_root, match.manifest_path)
+        if owner is None:
+            continue
+        classes = [ChangedPathClass.MANIFEST_REFERENCE]
+        reason = _reason(
+            path, ChangedPathClass.MANIFEST_REFERENCE, f"referenced by {match.manifest.name}"
+        )
+        requests.extend(
+            _present([_whole_request(layout, owner.rstrip("/"), is_browser_included=False, reason=reason)])
+        )
+    return _PathOutcome(classes=tuple(classes), pytest_requests=tuple(requests))
 
 
 def _select_for_lockfile(context: _SelectionContext, path: str) -> _PathOutcome:

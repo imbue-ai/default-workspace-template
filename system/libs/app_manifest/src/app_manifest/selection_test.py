@@ -158,6 +158,26 @@ def test_agent_prose_outside_every_skill_runs_only_the_always_run_set(workspace:
     assert _command_lines(script) == [_FULL_ROOT]
 
 
+def test_agent_prose_an_app_manifest_references_runs_that_app(workspace: Path) -> None:
+    write_repo_file(workspace, ".agents/shared/references/notes-guide.md", "# guide\n")
+    write_app_manifest(
+        workspace,
+        "notes",
+        'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n\n'
+        '[[references]]\npath = ".agents/shared/references/notes-guide.md"\n',
+        is_icon_written=True,
+    )
+    commit_everything(workspace, "notes references a shared guide")
+
+    selection = _select(workspace, [".agents/shared/references/notes-guide.md"])
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
+    assert selection.paths[0].classes == (
+        ChangedPathClass.GUARD,
+        ChangedPathClass.MANIFEST_REFERENCE,
+    )
+
+
 def test_a_shared_frontend_library_change_builds_then_runs_consumer_checks_and_browser_tests(
     workspace: Path,
 ) -> None:
