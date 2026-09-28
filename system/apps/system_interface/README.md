@@ -156,7 +156,8 @@ framed pages' `minds:` messages to the minds chrome unchanged).
 
 A message the minds chrome sends the shell's page reaches an app another way
 too: an app whose manifest registers its type (`[[message_handlers]]`) has it
-posted, by the shell's page once and then by the shell's backend
+posted, by the shell's page once (never by a solo page, whose client is the
+main window's) and then by the shell's backend
 (`POST /api/embedder-messages`, `shell/embedder_messages.py`), to the route it
 named, with the client whose page received it. The shell reads no payload. An
 app that wants a window for what it was told asks the op route's `show`, which
