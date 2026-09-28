@@ -19,12 +19,12 @@ needing to open them.
 - `agent-observer` (no directory: `system/supervisord.conf.d/agent-observer.conf`) - The
   workspace's one `mngr observe`, writing the agent lifecycle event file every
   chat instance follows.
+- `oom_priority/` - The OOM-prevention machinery: priority bands, the shed
+  ledger, and the earlyoom integration.
 
 The app registry (`data/.state/apps.toml`) is announced to the minds desktop by
 the shell itself (`system/apps/system_interface`, its `service_events` module),
 which already watches the registry; there is no separate watcher service.
-- `oom_priority/` - The OOM-prevention machinery: priority bands, the shed
-  ledger, and the earlyoom integration.
 
 Each is a uv workspace member (the `system/services/*` glob) with its own
 README; `agent-observer` is the one program on the list with neither, since it
