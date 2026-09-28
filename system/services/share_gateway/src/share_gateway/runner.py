@@ -37,6 +37,8 @@ from datetime import timezone
 from pathlib import Path
 
 import httpx
+from inotify_simple import INotify
+from inotify_simple import flags as inotify_flags
 from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
@@ -75,35 +77,36 @@ _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
 
 
 def _try_setup_inotify(paths: list[Path]) -> object | None:
-    """Watch the parent directories of every gating file; None when inotify is unavailable."""
-    try:
-        import inotifyx  # type: ignore[import-untyped]
+    """Watch the parent directories of every gating file; None when inotify is unavailable.
 
-        fd = inotifyx.init()
+    Uses inotify_simple (pure Python, Linux only), the same library the
+    app_watcher service watches with.
+    """
+    try:
+        inotify = INotify()
         for parent in {path.parent for path in paths}:
             parent.mkdir(parents=True, exist_ok=True)
-            inotifyx.add_watch(
-                fd,
+            inotify.add_watch(
                 str(parent),
-                inotifyx.IN_MODIFY
-                | inotifyx.IN_CREATE
-                | inotifyx.IN_MOVED_TO
-                | inotifyx.IN_DELETE
-                | inotifyx.IN_MOVED_FROM,
+                inotify_flags.MODIFY
+                | inotify_flags.CREATE
+                | inotify_flags.MOVED_TO
+                | inotify_flags.DELETE
+                | inotify_flags.MOVED_FROM,
             )
-        return fd
-    except (ImportError, OSError):
+        return inotify
+    except OSError:
         return None
 
 
-def _wait_for_change_inotify(fd: object, timeout_seconds: float) -> bool:
-    try:
-        import inotifyx  # type: ignore[import-untyped]
-
-        events = inotifyx.get_events(fd, timeout_seconds)
-        return len(events) > 0
-    except (ImportError, OSError):
+def _wait_for_change_inotify(inotify: object, timeout_seconds: float) -> bool:
+    if not isinstance(inotify, INotify):
         return False
+    try:
+        events = inotify.read(timeout=int(timeout_seconds * 1000))
+    except OSError:
+        return False
+    return len(events) > 0
 
 
 def _stop_child(process: subprocess.Popen[bytes] | None, name: str) -> None:

@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from pathlib import Path
 
@@ -32,6 +33,23 @@ def test_a_layout_reads_empty_until_written_and_drops_placements_of_closed_windo
     assert saved.updated_at == TEST_NOW
     assert store.read_layout("home", "c1", frozenset({_WIN_2})).placements == ()
     assert (tmp_path / "placements" / "home" / "c1.json").is_file()
+
+
+def test_a_browser_save_keeps_which_windows_are_pulled_out(tmp_path: Path) -> None:
+    store = PlacementStore(state_directory=tmp_path)
+    saved = store.save_browser_layout(
+        "home",
+        "c1",
+        [placement_record(_WIN_1, is_detached=True), placement_record(_WIN_2)],
+        None,
+        _LIVE,
+        TEST_NOW,
+    )
+    assert saved is not None
+    read_back = store.read_layout("home", "c1", _LIVE)
+    assert [placement.is_detached for placement in read_back.placements] == [True, False]
+    stored = json.loads((tmp_path / "placements" / "home" / "c1.json").read_text())
+    assert [placement["is_detached"] for placement in stored["placements"]] == [True, False]
 
 
 def test_a_browser_save_is_refused_when_stale_and_skipped_when_unchanged(tmp_path: Path) -> None:

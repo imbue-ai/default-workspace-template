@@ -13,7 +13,9 @@
  * The provider row is the one that always renders. A provider is a property of the ACCOUNT,
  * not of the model, so it survives all three of the states in which there is no model to show.
  * While a switch is armed the menu describes the TARGET instead, since that is what the next
- * message runs on.
+ * message runs on. A chat with no agent yet (awaiting its first send, or being created) has no
+ * menu: the chip names the account the chat starts on, and with no provider signed in at all it
+ * says so and opens the provider chooser.
  *
  * How the menu opens, closes and grows its submenus is the workspace `Menu`'s
  * (`components/menu`), not this file's. What this file owns is the rows and the data behind
@@ -22,7 +24,7 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getChatById } from "../models/Chats";
+import { getChatById, getProvisionalChat } from "../models/Chats";
 import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
@@ -53,7 +55,14 @@ import {
   setPendingAccount,
   switchKind,
 } from "../models/PendingLane";
-import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
+import {
+  accountForAgent,
+  accountForFirstSend,
+  areAccountsLoaded,
+  getAccounts,
+  getDefaultAccountId,
+  openProviderChooser,
+} from "../models/Providers";
 import { beginSwitchTo, beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
 import type { ProviderAccount } from "../models/Providers";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -112,6 +121,37 @@ const MODEL_SEARCH_CAP = 100;
  *  that reads as near-black rather than as a deep green. */
 function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
+}
+
+/** The chip with no provider signed in: it says so, and a press opens the provider chooser. */
+function notConnectedChip(onSignedIn?: (accountId: string) => void): m.Vnode {
+  return m(
+    "button",
+    {
+      type: "button",
+      class: `model-selector-not-connected ${css.TRIGGER}`,
+      ...hoverTooltipAttrs("Connect a model provider", "above"),
+      onclick: () => openProviderChooser(onSignedIn === undefined ? {} : { onSignedIn }),
+    },
+    "Not connected",
+  );
+}
+
+/** The chip for a chat with no agent yet: the account it starts on. With no agent there is no
+ *  model to name or change. Null until there is something true to say. */
+function provisionalChip(chatId: string): m.Vnode | null {
+  const provisional = getProvisionalChat(chatId);
+  if (provisional === undefined || !areAccountsLoaded()) return null;
+  const account = accountForFirstSend(provisional.account_id);
+  if (account === null) return notConnectedChip();
+  return m(
+    "span",
+    {
+      class: `model-selector-provisional ${css.PROVISIONAL_CHIP}`,
+      ...hoverTooltipAttrs(`This chat starts on ${account.label}`, "above"),
+    },
+    account.provider,
+  );
 }
 
 export function ModelProviderMenu(): m.Component<{ chatId: string }> {
@@ -699,9 +739,15 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       // loaded; the live choice may not have resolved (every harness passes through this
       // before its first model read, and opencode never leaves it); or the live model may
       // match no catalog option. Only the Model/Effort/Fast rows are suppressed.
-      if (chat === undefined) return null;
-      // Nothing at all to say: no account to name and no model to show.
-      if (account === null && matched === null) return null;
+      if (chat === undefined) return provisionalChip(chatId);
+      // No account to name and no model to show: say so only when no provider is signed in.
+      if (account === null && matched === null) {
+        if (!areAccountsLoaded() || getAccounts().length > 0) return null;
+        return notConnectedChip((accountId) => {
+          beginSwitchToAccountId(chatId, accountId);
+          m.redraw();
+        });
+      }
 
       // opencode ships an empty catalog and a resolver that fails, so its every pick would
       // 500. Read-only is the honest render -- a picker there offers a switch that cannot work.
@@ -798,8 +844,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           kind: "submenu",
           key: "providers",
           label: "Provider",
-          value: account?.provider ?? "Not signed in",
-          sub: account?.harness_label,
+          value: account?.provider ?? "No account",
+          sub: account?.harness_label ?? "Pick one to move this chat to it",
           content: () => providerSubmenu(chatId, account),
         });
         rows.push({ kind: "divider" });
