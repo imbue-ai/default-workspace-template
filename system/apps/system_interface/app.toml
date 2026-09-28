@@ -6,30 +6,6 @@ internal = true
 critical = true
 priority = "system_interface"
 
-[[references]]
-path = "system/scripts/layout.py"
-note = "The agent's layout client; it posts every op to /api/layout/broadcast"
-
-[[references]]
-path = ".agents/skills/update-self/scripts/update_apply_contract.py"
-note = "Names the apply-state files the staleness banner reads"
-
-[[references]]
-path = "system/libs/bootstrap/src/bootstrap/manager.py"
-note = "Names the apply marker the staleness banner reads"
-
-[[references]]
-path = "docs/system/blueprint/desktop-interface/geometry_vectors.json"
-note = "The geometry vectors the desktop document's rules are checked against"
-
-[[references]]
-path = "system/libs/workspace_ui/src/origin.ts"
-note = "The canonical coordinate regex the not-built page carries a copy of"
-
-[[references]]
-path = ".mngr/settings.toml"
-note = "Holds the chat create template the not-built page's repair command mirrors"
-
 # A preview shell is the real desktop with one app swapped: it boots over a seeded
 # copy of the live state directory and a copied registry whose rows for previewed
 # sibling apps point at their previews (the preview script writes that copy and

@@ -1,1 +1,0 @@
-The shell manifest references the paths outside the app that the shell suite reads or runs, so a change to any of them runs the shell suite in a harden gate: `system/scripts/layout.py`, the apply-state names in update-self's `update_apply_contract.py` and bootstrap's `manager.py`, the desktop geometry vectors under `docs/`, `workspace_ui`'s `origin.ts`, and `.mngr/settings.toml`.
