@@ -50,8 +50,9 @@ Key fields:
   (see below) -- keep it as the outermost command, in front of any `bash -c`
   wrapper. `forward_port.py --manifest` reads the app's `app.toml` (its
   registered name, display name, icon, and the supervisord `program` that
-  runs it, which is what lets the workspace offer Stop/Start for the app) and
-  registers the app at `--url`. The manifest's `name` becomes the leading
+  runs it, which is what lets the shell Quit the app, stop it once no window
+  shows it, hold its port while it is stopped, and start it again on the next
+  request) and registers the app at `--url`. The manifest's `name` becomes the leading
   label of the app's origin hostname (`http://<name>.<workspace-host>/`), so
   it must be DNS-safe: lowercase letters/digits with single hyphens
   (underscores are tolerated only for legacy names like `system_interface`),

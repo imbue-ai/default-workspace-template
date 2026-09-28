@@ -715,7 +715,10 @@ Flags:
 - `--program`: name of the supervisord program that runs the app --
   the program-name-equals-service-name convention both paths follow, so
   pass the app's own name. Its presence on the registry entry is what
-  lets the workspace offer Stop/Start for the app (supervisord RPC);
+  lets the shell act on the app's process over supervisord's RPC: Quit it
+  from its window menu, stop it once no window shows it, hold its port
+  while it is stopped, and start it again on the next request (the
+  `/api/apps/<name>/stop` and `/start` routes remain for agents);
   omitting it clears any previously-stored value, so every registration
   call is authoritative. Never pass it for unsupervised instances
   (previews, `serve_isolated_instance.py` test servers) -- those own
