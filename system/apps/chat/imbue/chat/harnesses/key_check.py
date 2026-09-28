@@ -1,8 +1,8 @@
 """Asking a provider whether a pasted API key works, before it is saved.
 
-The harnesses' own sign-in probes only see whether a key is present, so a key with a typo in it
-used to be saved and then fail the account's first chat turn. Listing the provider's models is the
-cheapest request that needs a valid key.
+The harnesses' own sign-in probes only see whether a key is present, so without this a key with a
+typo in it would be saved and then fail the account's first chat turn. Listing the provider's
+models is the cheapest request that needs a valid key.
 """
 
 from __future__ import annotations
