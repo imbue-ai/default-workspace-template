@@ -148,6 +148,30 @@ class PasteMethod(FrozenModel):
     flow_deadline_s: float = 600.0
 
 
+class CodexLogin(StrEnum):
+    """Which ChatGPT login an app-server sign-in runs."""
+
+    # A page to open in a browser; codex listens for its loopback callback, which only a relay
+    # from the user's own machine can reach.
+    BROWSER = "browser"
+    # A page and a one-time code to type into it; works from any device.
+    DEVICE = "device"
+
+
+class AppServerMethod(FrozenModel):
+    """A ChatGPT sign-in driven through a short-lived `codex app-server`'s login RPCs."""
+
+    id: str
+    label: str
+    description: str
+    login: CodexLogin
+    # As on `PtyMethod`: nothing else bounds a flow the user may walk away from.
+    flow_deadline_s: float = 900.0
+
+
+SignInMethod = PtyMethod | PasteMethod | AppServerMethod
+
+
 class KeyProvider(FrozenModel):
     """One provider a bring-your-own-key sign-in can target.
 
@@ -168,7 +192,7 @@ class Lane(FrozenModel):
     subtitle: str
     harness: HarnessType
     # Primary first; the rest render under "Other ways to sign in".
-    methods: tuple[PtyMethod | PasteMethod, ...]
+    methods: tuple[SignInMethod, ...]
     # Only the bring-your-own-key lane populates this.
     key_providers: tuple[KeyProvider, ...] = ()
 
@@ -241,11 +265,10 @@ LANE_ANTHROPIC = Lane(
 )
 
 # codex
-# Its device flow is inverted from every other PTY method: the URL is fixed and the CODE is
-# what gets scraped, the user types it into the browser, and nothing comes back to the
-# terminal. The CLI polls and exits 0 on its own, so process exit is the success signal.
-# Pasting a key skips all of that -- it is a plain file write, and the only method on this
-# lane that can be driven without a person at a browser.
+# Both ChatGPT logins run through a short-lived `codex app-server`, which reports completion as a
+# notification. The browser login is the primary one and needs the minds desktop app to relay its
+# loopback callback; the device login works anywhere, which is why it stays. Pasting a key skips
+# all of that -- it is a plain file write.
 
 LANE_OPENAI = Lane(
     id="openai",
@@ -253,25 +276,18 @@ LANE_OPENAI = Lane(
     subtitle="Use your ChatGPT Plus or Pro subscription, or pay per token.",
     harness=HarnessType.CODEX,
     methods=(
-        PtyMethod(
-            id="device",
-            label="Continue with ChatGPT",
-            description="Enter a one-time code on another device.",
-            argv=("login", "--device-auth"),
-            static_url="https://auth.openai.com/codex/device",
-            scrape=Scrape(
-                trigger=r"[A-Z0-9]{4}-[A-Z0-9]{4,6}",
-                strict=r"[A-Z0-9]{4}-[A-Z0-9]{4,6}",
-                continuation=r"^[A-Z0-9-]+$",
-            ),
-            submit=Submit.NONE,
-            eof_policy=EofPolicy.SUCCESS,
-            # codex renders plainly, without Ink's synchronized updates.
-            frame_marker=None,
+        AppServerMethod(
+            id="chatgpt",
+            label="Use your ChatGPT plan (runs on Codex)",
+            description="Sign in with your ChatGPT account in your browser.",
+            login=CodexLogin.BROWSER,
         ),
-        # `codex login status`, the promote probe for this lane, is a presence check: it
-        # exits 0 for any key in the file. So a key with a typo in it commits happily here
-        # and surfaces as a failed first turn instead.
+        AppServerMethod(
+            id="device",
+            label="ChatGPT with a code",
+            description="Enter a one-time code on another device.",
+            login=CodexLogin.DEVICE,
+        ),
         PasteMethod(
             id="api_key",
             label="Use an API key",
@@ -504,7 +520,7 @@ def get_lane(lane_id: str) -> Lane:
     return lane
 
 
-def get_method(lane_id: str, method_id: str) -> PtyMethod | PasteMethod:
+def get_method(lane_id: str, method_id: str) -> SignInMethod:
     lane = get_lane(lane_id)
     for method in lane.methods:
         if method.id == method_id:
