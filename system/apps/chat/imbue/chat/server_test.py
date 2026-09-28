@@ -557,8 +557,8 @@ def test_send_message_success() -> None:
 
 def test_send_message_to_an_agent_destroyed_mid_send_answers_not_found() -> None:
     """A chat destroyed while a send to it is in flight answers 404, which an in-workspace
-    sender (``message_chat.py``) reads as a chat that no longer exists; a 500 would have it retry
-    for hours."""
+    sender (``message_chat.py``) reads as a chat that no longer exists; it reads a 500 as a refusal
+    and retries."""
     agent_id = "agent-00000000000000000000000000000003"
     agent_info = _agent_info(agent_id=agent_id, name="destroyed-agent")
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=VanishedAgentMngrMessenger())
