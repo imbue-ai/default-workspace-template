@@ -327,12 +327,13 @@ so the desktop app frees the port.
 Every way in stays reachable. With no desktop app to relay, Claude falls back to
 pasting the code its page shows, and ChatGPT to its one-time-code login. While
 the browser is out ("Finish signing in to <provider> in your browser", with
-"Reopen sign-in window" and "Sign in another way"), "Sign in another way" shows Claude's code steps for the same
+"Try again", which reopens the same sign-in page, and "Try another way"), "Try another way" shows Claude's code steps for the same
 sign-in (the CLI takes whichever code arrives first) or starts ChatGPT's code
 login, alongside the lane's other methods; a failed sign-in offers the same. A
 Claude sign-in succeeds on the CLI's clean exit with its success line, or, if
-the line was reworded, on its own probe; a denied one says access wasn't
-approved. A ChatGPT code login that ChatGPT refuses says to turn on device code
+the line was reworded, on its own probe; a denial the browser reports says
+access wasn't approved (claude.ai's own Deny reports nothing, so the chooser
+keeps waiting with Try again). A ChatGPT code login that ChatGPT refuses says to turn on device code
 sign-in for Codex in ChatGPT's security settings. "Sign in again" uses the kind
 of credential the account already holds (`reauth_method` on each account row).
 
