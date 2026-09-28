@@ -753,16 +753,15 @@ def build_shell_state(
 ) -> ShellState:
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests (and
     ``on_registry_read``, what the built inventory tells every registry read, is the production shell's services
-    event writer), and
-    ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
-    environment names; ``repo_root`` (the workspace the update notice's record and script, and the share materials
-    the lifecycle manager reads the per-app grants from, live under) is the served tree by default; ``profiles`` (the resolver the composition root shares with presence) defaults to one
-    that can reach no connector, so a shell built without one names visitors by email; ``launch_poster`` (how a
-    POST launch path is asked for its page) defaults to the loopback POST; ``is_lifecycle_enabled`` is whether the
-    lifecycle manager owns the live workspace's apps, sweeping them and waking one for a POST launch (the
-    production shell's yes; a preview's and a test's no, so neither starts a live app or parks a port by
-    accident), and the two timings are the manager's grace period and idle sweep interval, which a test
-    shortens."""
+    event writer), and ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to
+    the one the environment names; ``repo_root`` (the workspace the update notice's record and script, and the
+    share materials the lifecycle manager reads the per-app grants from, live under) is the served tree by
+    default; ``profiles`` (the resolver the composition root shares with presence) defaults to one that can reach
+    no connector, so a shell built without one names visitors by email; ``launch_poster`` (how a POST launch path
+    is asked for its page) defaults to the loopback POST; ``is_lifecycle_enabled`` is whether the lifecycle
+    manager owns the live workspace's apps, sweeping them and waking one for a POST launch (the production shell's
+    yes; a preview's and a test's no, so neither starts a live app or parks a port by accident), and the two
+    timings are the manager's grace period and idle sweep interval, which a test shortens."""
     resolved_inventory = (
         inventory
         if inventory is not None

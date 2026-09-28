@@ -115,6 +115,7 @@ def test_the_reader_warns_once_per_version_of_a_document_the_gateway_would_refus
 
 
 def _bump_mtime(path: Path) -> None:
-    """Move a file's mtime forward by a second, so a rewrite within the clock's resolution still reads as a new version."""
+    """Move a file's mtime forward by a second, so a rewrite within the clock's resolution still reads as a new
+    version."""
     stat = path.stat()
     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
