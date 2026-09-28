@@ -788,7 +788,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             "data-e2e": "open-sign-in-again",
             onclick: () => {
               if (flow === null || flow.relay_url === null) return;
-              void requestProviderRelay(flow.relay_url, flow.flow_id).then((isRelaying) => {
+              void relay(flow.relay_url, flow.flow_id).then((isRelaying) => {
                 if (!isRelaying)
                   signInAnotherWay(current, "Imbue Studio couldn't open the sign-in page. Sign in here instead:");
               });
