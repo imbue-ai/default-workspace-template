@@ -219,11 +219,14 @@ Selection reads only what the workspace declares. A path selects:
 - for an npm package, its and its consumers' `npm test`, `npm run lint` and
   `npm run format:check` (and `npm run typecheck` for a package with no build),
   after `npm ci && npm run build`, plus the browser tests of every app whose
-  frontend is among them.
+  frontend is among them; the npm root's configuration and its prebuild script
+  (`system/scripts/fetch_mngr_assets.sh`, with the `_mngr_git_auth.sh` it
+  sources) select every npm package.
 
-A path in no package, skill or npm package, that is not a supervisord block,
-`uv.lock`, a guard, or markdown under `.agents/` (agent prose, which only the
-always-run prose checks read), runs the full root suite (`uv run pytest` from the repo
+A path in no package, skill or npm package, that is not npm root
+configuration, a supervisord block, `uv.lock`, a guard, or markdown under
+`.agents/` (agent prose, which only the always-run prose checks and the apps
+referencing it read), runs the full root suite (`uv run pytest` from the repo
 root), which replaces the other root-collected commands; so does a change to
 the root `pyproject.toml` or `conftest.py`, and a `uv.lock` change that cannot
 be compared or that the root project depends on directly.
