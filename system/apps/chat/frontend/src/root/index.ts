@@ -27,12 +27,14 @@ import {
   PendingIntakeGoneError,
   addChatsUpdatedListener,
   applyPendingIntake,
+  awaitingChatForEmptyList,
   createChat,
   discardPendingIntake,
   fetchPendingIntake,
   getChatById,
   getChats,
   getProvisionalChats,
+  hasReceivedChatList,
   initChats,
   launchChat,
   removeChatsUpdatedListener,
@@ -56,7 +58,8 @@ import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
-import { intakeTokenFromSearch, rootPathFor, selectionFromSearch } from "./selection";
+import { intakeTokenFromSearch, rootPathFor, selectionFromSearch, slotFill } from "./selection";
+import type { SlotFill } from "./selection";
 import { prependToComposer } from "../views/MessageInput";
 
 // The desktop shell's compact breakpoint (desktop-interface contracts.md section 11): under
@@ -105,14 +108,51 @@ function reportLocation(): void {
   connection?.location(path, title);
 }
 
-/** Show ``chatId`` (or nothing): the URL, the frame, the shell's location, and the unread mark follow. */
+// Whether a chat for the empty list is being asked for, so the list asks once.
+let isOpeningChatForEmptyList = false;
+
+function slotFillFor(chatId: string | null): SlotFill {
+  return slotFill({
+    selectedChatId: chatId,
+    chatIds: groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats()), startedHere).map((row) => row.chatId),
+    isChatListKnown: hasReceivedChatList(),
+    isChoosing: pendingToken !== null || pendingPick !== null,
+    isCompact: compactQuery.matches,
+    isShown: isRootShown,
+  });
+}
+
+/** Show ``chatId``: the URL, the frame, the shell's location, and the unread mark follow. Asked to show nothing, the
+ *  root shows the most recent chat instead, or with no chats one awaiting its first send (``slotFill``). */
 function select(chatId: string | null): void {
-  selectedChatId = chatId;
-  history.replaceState(null, "", `${getBasePath()}${rootPathFor(chatId)}`);
-  pool?.show(chatId);
-  if (chatId !== null && isRootShown) markRead(chatId);
+  const fill = slotFillFor(chatId);
+  const shown = fill.kind === "select" ? fill.chatId : chatId;
+  selectedChatId = shown;
+  history.replaceState(null, "", `${getBasePath()}${rootPathFor(shown)}`);
+  pool?.show(shown);
+  if (shown !== null && isRootShown) markRead(shown);
   reportLocation();
   m.redraw();
+  if (fill.kind === "open_new") openChatForEmptyList();
+}
+
+/** Fill an empty slot now that something it depends on changed (the chat list arrived, the root came on screen). */
+function fillSlot(): void {
+  if (selectedChatId === null) select(null);
+}
+
+function openChatForEmptyList(): void {
+  if (isOpeningChatForEmptyList) return;
+  isOpeningChatForEmptyList = true;
+  awaitingChatForEmptyList()
+    .then((chatId) => {
+      awaitingListing.add(chatId);
+      if (selectedChatId === null) select(chatId);
+    })
+    .catch((error: unknown) => console.warn("[chat-root] could not open a chat for the empty list", error))
+    .finally(() => {
+      isOpeningChatForEmptyList = false;
+    });
 }
 
 async function createAndSelect(accountId: string): Promise<void> {
@@ -267,6 +307,7 @@ function onChatsUpdated(): void {
   }
   if (selectedChatId !== null && !isKept(selectedChatId)) select(null);
   else reportLocation();
+  fillSlot();
 }
 
 const ChatRoot: m.Component = {
@@ -369,6 +410,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       isRootShown = true;
       pool?.setRootShown(true);
       if (selectedChatId !== null) markRead(selectedChatId);
+      fillSlot();
       m.redraw();
     },
     onHidden: () => {

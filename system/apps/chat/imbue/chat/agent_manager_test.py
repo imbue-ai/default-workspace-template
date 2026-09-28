@@ -4769,6 +4769,21 @@ def test_an_awaiting_chat_is_launched_by_its_first_message_under_its_own_id(
     assert "Let's" in argv_line and "/welcome" not in argv_line
 
 
+def test_the_empty_list_chat_is_minted_once_and_handed_back_while_it_waits(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    q = broadcaster.register()
+
+    first = agent_manager.awaiting_chat_for_empty_list()
+    second = agent_manager.awaiting_chat_for_empty_list()
+
+    assert first.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    assert first.account_id == ""
+    assert second == first
+    assert json.loads(q.get_nowait() or "")["chat_id"] == first.chat_id
+    assert q.empty()
+
+
 def test_discarding_an_awaiting_chat_drops_it(agent_manager: AgentManager) -> None:
     minted = agent_manager.mint_awaiting_chat("")
 

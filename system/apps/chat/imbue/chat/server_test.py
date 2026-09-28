@@ -2328,6 +2328,28 @@ def test_seeding_a_chat_is_refused_until_the_agent_list_is_known() -> None:
     assert response.status_code == 503
 
 
+def test_an_empty_chat_list_gets_one_chat_awaiting_its_first_send(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    first = client.post("/api/chats/awaiting")
+    second = client.post("/api/chats/awaiting")
+
+    assert first.status_code == 200
+    assert second.get_json() == first.get_json()
+    provisional = agent_manager.get_provisional_chat(first.get_json()["chat_id"])
+    assert provisional is not None
+    assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    assert provisional.account_id == ""
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_empty_chat_list_chat_is_refused_until_the_agent_list_is_known() -> None:
+    client = create_application(build_test_state()).test_client()
+    assert client.post("/api/chats/awaiting").status_code == 503
+
+
 def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: FlaskClient) -> None:
     assert client.get("/api/settings").get_json() == {
         "settings": {"fast_mode_default": "auto", "fast_mode_turn_limit": 2, "is_fast_mode_notice_shown": False}

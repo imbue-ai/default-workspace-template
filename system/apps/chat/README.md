@@ -40,7 +40,8 @@ observe`, its own supervised service) writes, and serves:
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
   the queue actions, presence, destroy, rename, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
-  `/api/chats/create`, `/api/chats`, `/api/harnesses`, `/api/uploads`,
+  `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
+  `/api/harnesses`, `/api/uploads`,
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
   the transcript's secret card submits, declines, and re-reads it).

@@ -2739,16 +2739,34 @@ class AgentManager:
         send launches it through ``create_chat`` by ``chat_id``. It has no record, so a restart of
         this app drops it.
         """
-        chat_id = ChatId(str(AgentId()))
         with self._lock:
-            provisional = ProvisionalChat(
-                chat_id=chat_id,
-                name=self._mint_display_name_locked(""),
-                account_id=account_id,
-                phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
-            )
-            self._provisional_chats[chat_id] = provisional
+            provisional = self._mint_awaiting_chat_locked(account_id)
         self._broadcaster.broadcast_provisional_chat_created(provisional)
+        return provisional
+
+    def awaiting_chat_for_empty_list(self) -> ProvisionalChat:
+        """A chat for a chat list that has none to show: one already waiting for its first send, else a new one.
+
+        The chat list is never left open empty; it shows this chat, which launches on the first message sent in it.
+        Handing back a waiting chat keeps two lists that open empty at once from minting two.
+        """
+        with self._lock:
+            for provisional in self._provisional_chats.values():
+                if provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND and not provisional.is_seeded:
+                    return provisional
+            minted = self._mint_awaiting_chat_locked("")
+        self._broadcaster.broadcast_provisional_chat_created(minted)
+        return minted
+
+    def _mint_awaiting_chat_locked(self, account_id: str) -> ProvisionalChat:
+        chat_id = ChatId(str(AgentId()))
+        provisional = ProvisionalChat(
+            chat_id=chat_id,
+            name=self._mint_display_name_locked(""),
+            account_id=account_id,
+            phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
+        )
+        self._provisional_chats[chat_id] = provisional
         return provisional
 
     def get_fast_mode_state(self, chat_id: ChatId) -> ChatFastModeState:
