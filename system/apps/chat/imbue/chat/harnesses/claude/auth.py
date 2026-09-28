@@ -266,7 +266,7 @@ def record_api_key_approval(managed_env: Mapping[str, str], claude_json_path_ove
     ``claude -p`` runs skip the dialog, which is why probes and ``-p``-based
     tests do not reproduce it. mngr's ``approve_api_key_for_claude`` records
     the approval only for keys present at agent-creation time; keys written
-    later through the sign-in modal (the API-key and Imbue paths) must be
+    later through the sign-in modal or the adopt endpoint must be
     approved here, before the restart relaunches the agents. Mirrors that
     helper's format: append the suffix to ``approved``, reset ``rejected``.
 
