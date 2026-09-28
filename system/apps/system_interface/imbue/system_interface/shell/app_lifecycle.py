@@ -240,7 +240,8 @@ class AppLifecycleManager(MutableModel):
 
     def wake_and_wait(self, entry: AppInventoryEntry, timeout_seconds: float = WAKE_WAIT_SECONDS) -> bool:
         """Wake a stoppable app that is not running and wait until its port accepts a connection; True when it does
-        within the timeout. An app that is running, or that cannot be parked, is answered True at once."""
+        within the timeout, False when it does not or the manager is stopped meanwhile. An app that is running, or
+        that cannot be parked, is answered True at once."""
         target = parking_target_of(str(entry.row.url))
         if entry.is_running or target is None:
             return True
@@ -251,7 +252,8 @@ class AppLifecycleManager(MutableModel):
         while self.clock() < deadline:
             if _is_accepting(target):
                 return True
-            self._sweep_stop.wait(_WAKE_WAIT_POLL_SECONDS)
+            if self._sweep_stop.wait(_WAKE_WAIT_POLL_SECONDS):
+                return False
         return False
 
     # The sweep

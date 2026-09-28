@@ -273,6 +273,19 @@ def test_wake_and_wait_answers_once_the_app_accepts(
     assert running is not None and waiting.wake_and_wait(running, timeout_seconds=0.1) is True
 
 
+def test_wake_and_wait_gives_up_once_the_manager_is_stopped(
+    manager: AppLifecycleManager, supervisor: FakeSupervisor
+) -> None:
+    """A launch in flight while the shell stops is answered False at once rather than polled to its deadline
+    (the fake clock never reaches one, so a poll that ignored the stop would never return)."""
+    entry = manager.inventory.entry("docs")
+    assert entry is not None and entry.is_running is False
+    manager.stop()
+
+    assert manager.wake_and_wait(entry, timeout_seconds=5.0) is False
+    assert supervisor.started == ["docs"]
+
+
 def _clock_of(manager: AppLifecycleManager) -> FakeClock:
     clock = manager.clock
     assert isinstance(clock, FakeClock)
