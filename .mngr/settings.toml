@@ -488,14 +488,20 @@ host_log_dir = "/var/log/mngr"
 # socket inode. supervisord installs its control socket via a hard link, so on a
 # gofer-backed /run it wedges ("Unlinking stale socket") and never starts
 # system_interface -- the workspace then sits on the "Loading workspace" loader
-# forever. A tmpfs /run makes the hard link work. The same two mounts are applied
-# by the aws-<region> provider start args and by the imbue_cloud slice bake's
-# per-box `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2
-# slices run under runsc from the bake).
-# /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
-# persist or ride a backup. It says `exec` because Docker mounts a bare
-# `--tmpfs` noexec, and a stub executable a test writes under /tmp and puts on
-# PATH is then skipped, so the real binary it stands in for runs instead.
+# forever. A tmpfs /run makes the hard link work. This block covers the local
+# docker provider only: the cloud VM providers (aws / gcp / azure / vultr / ovh,
+# all on mngr_vps) add both mounts themselves whenever their `docker_runtime`
+# is runsc, with /tmp capped at an eighth of the VM's RAM, and the imbue_cloud
+# slice bake passes its own pair through its per-box
+# `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2 slices
+# run under runsc from the bake).
+# /tmp is tmpfs so it starts empty on every container start. It is memory: what
+# is written there counts against the container's limit and no process kill
+# frees it, so a multi-GB write can take a local workspace down; the cloud
+# providers cap theirs for that reason (mngr-internal #1402 tracks capping this
+# one). It says `exec` because Docker mounts a bare `--tmpfs` noexec, and a
+# stub executable a test writes under /tmp and puts on PATH is then skipped, so
+# the real binary it stands in for runs instead.
 default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec"]
 
 [providers.lima]
@@ -524,13 +530,16 @@ host_dir = "/home/user/.mngr"
 volume_home_path = "/home/user"
 host_log_dir = "/var/log/mngr"
 # Pin the Lima guest to the same Debian release the docker image uses (trixie),
-# so setup_system.sh provisions an identical toolchain everywhere. Set here
-# (dwt-side) rather than bumping mngr_lima's bookworm default, which outside
-# mngr users keep. Served from imbue's artifact mirror rather than
-# cloud.debian.org, which prunes old releases: the same image release the
-# gen-2 cloud slices boot (mngr's apps/minds_admin/.../slices/mirror_artifacts.py
-# is the manifest; bump both together, uploading the new release with
-# `minds-admin artifacts upload` before landing the bump here).
+# so setup_system.sh provisions an identical toolchain everywhere. mngr_lima's
+# library default is now this same release from the same mirror; the pin stays
+# here so the workspace's guest image is chosen by the template rather than by
+# whichever mngr version the desktop app happens to ship. Served from imbue's
+# artifact mirror rather than cloud.debian.org, which prunes old releases: the
+# same image release the gen-2 cloud slices boot (mngr's
+# apps/minds_admin/.../slices/mirror_artifacts.py is the manifest and
+# libs/mngr_lima/imbue/mngr_lima/constants.py the library default; bump all of
+# them together, uploading the new release with `minds-admin artifacts upload`
+# before landing the bump here).
 default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
 default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
 

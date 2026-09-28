@@ -1,0 +1,1 @@
+The `[providers.docker]` comment on the tmpfs `/run` and `/tmp` mounts no longer says the AWS provider's start args apply the same mounts: mngr_vps now adds them itself on every cloud VM provider whenever the container runtime is runsc, so the template's copy covers the local docker provider only. No setting changes.

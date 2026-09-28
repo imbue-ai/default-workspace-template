@@ -1,0 +1,1 @@
+The `[providers.lima]` comment in `.mngr/settings.toml` no longer says the trixie image pin exists because `mngr_lima` defaults to bookworm: the library default is the same trixie release from the same artifact mirror now, and the comment explains why the template still pins it and lists the library default among the sites to bump together. Comment-only; no behavior change.
