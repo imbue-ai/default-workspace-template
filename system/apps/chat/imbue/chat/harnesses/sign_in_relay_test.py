@@ -1,6 +1,7 @@
 import subprocess
 import threading
 from collections.abc import Iterator
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -93,24 +94,31 @@ def test_a_url_still_being_written_is_not_read(tmp_path: Path) -> None:
 
 
 class _CliListener(BaseHTTPRequestHandler):
-    """A sign-in CLI's loopback listener: records each request and answers the way claude's does."""
+    """A sign-in CLI's loopback listener: records each request, and answers its callback with a redirect.
+
+    `location` is where the callback redirects to, with `{port}` standing for the listener's own port.
+    """
 
     received: list[str] = []
+    location: str = ""
 
     def do_GET(self) -> None:
         type(self).received.append(self.path)
-        self.send_response(302)
-        self.send_header("Location", "https://platform.claude.com/oauth/code/success")
+        if self.path.startswith("/success"):
+            self.send_response(200)
+        else:
+            self.send_response(302)
+            self.send_header("Location", self.location.format(port=self.server.server_address[1]))
         self.end_headers()
 
     def log_message(self, format: str, *args: object) -> None:
         return
 
 
-@pytest.fixture
-def cli_listener() -> Iterator[tuple[int, list[str]]]:
+@contextmanager
+def _listening(location: str) -> Iterator[tuple[int, list[str]]]:
     received: list[str] = []
-    handler = type("_RecordingCliListener", (_CliListener,), {"received": received})
+    handler = type("_RecordingCliListener", (_CliListener,), {"received": received, "location": location})
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -121,12 +129,34 @@ def cli_listener() -> Iterator[tuple[int, list[str]]]:
         server.server_close()
 
 
-def test_the_callback_reaches_the_cli_and_its_redirect_is_not_followed(cli_listener: tuple[int, list[str]]) -> None:
-    port, received = cli_listener
-
-    fetch_loopback_callback(port, "/callback?code=c&state=s")
+@pytest.mark.parametrize(
+    "location",
+    [
+        pytest.param("https://platform.claude.com/oauth/code/success", id="claude-provider-page"),
+        pytest.param("http://localhost:1/success", id="another-loopback-port"),
+        pytest.param("http://evil.example:{port}/success", id="another-host"),
+    ],
+)
+def test_the_callback_reaches_the_cli_and_a_redirect_elsewhere_is_not_followed(location: str) -> None:
+    with _listening(location) as (port, received):
+        fetch_loopback_callback(port, "/callback?code=c&state=s")
 
     assert received == ["/callback?code=c&state=s"]
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        pytest.param("http://localhost:{port}/success?id_token=t", id="codex-absolute"),
+        pytest.param("/success?id_token=t", id="relative"),
+    ],
+)
+def test_a_redirect_back_to_the_same_listener_is_followed_once(location: str) -> None:
+    # codex finishes its login only once its own /success page is asked for.
+    with _listening(location) as (port, received):
+        fetch_loopback_callback(port, "/auth/callback?code=c&state=s")
+
+    assert received == ["/auth/callback?code=c&state=s", "/success?id_token=t"]
 
 
 def test_a_cli_that_is_not_listening_is_reported() -> None:
