@@ -70,6 +70,7 @@ from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 from imbue.chat.testing import RecordingMngrMessenger
+from imbue.chat.testing import VanishedAgentMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import drain_is_connecting_pushes
@@ -552,6 +553,28 @@ def test_send_message_success() -> None:
     # The endpoint routes through AgentManager.send_message_to_agent, which addresses
     # the agent by id (the live cache supplies the known location as the 3rd arg).
     assert messenger.sent == [(agent_id, "hello")]
+
+
+def test_send_message_to_an_agent_destroyed_mid_send_answers_not_found() -> None:
+    """A chat destroyed while a send to it is in flight answers 404, which an in-workspace
+    sender (``message_chat.py``) reads as a chat that no longer exists; a 500 would have it retry
+    for hours."""
+    agent_id = "agent-00000000000000000000000000000003"
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="destroyed-agent",
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=VanishedAgentMngrMessenger())
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "report"})
+
+    assert response.status_code == 404
+    assert response.get_json()["detail"] == f"Chat '{agent_id}' not found"
 
 
 def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:

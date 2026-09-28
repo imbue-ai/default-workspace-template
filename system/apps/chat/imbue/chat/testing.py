@@ -88,6 +88,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import release_observe_lock
+from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import SystemInterfaceState
@@ -406,6 +407,20 @@ class SummaryWritingMngrMessenger(RecordingMngrMessenger):
     ) -> SendFailure | None:
         write_summary_for_request(message)
         return super().send_to_agent(agent_id, message, known_locations)
+
+
+class VanishedAgentMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger whose agent is destroyed before the send reaches it.
+
+    The real messenger's fallback discovery then raises, as mngr's does for an id it no longer
+    lists.
+    """
+
+    def send_to_agent(
+        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
+    ) -> SendFailure | None:
+        super().send_to_agent(agent_id, message, known_locations)
+        raise AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}")
 
 
 class RecordingShell(MutableModel):

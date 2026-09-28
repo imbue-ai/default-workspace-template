@@ -163,6 +163,7 @@ from imbue.chat.wsgi import build_sock
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 
@@ -562,6 +563,9 @@ def _send_to_chat(
             return _chat_not_found_response(str(chat_id))
         try:
             outcome = _deliver_message(state, agent_info, send_message_request.message, message_id)
+        except AgentNotFoundError:
+            # Destroyed while the send was in flight: the chat is gone, not refusing.
+            return _chat_not_found_response(str(chat_id))
         except SendFailedError as send_failure:
             # The harness said why it refused, in words written for the person who has to fix it
             # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
