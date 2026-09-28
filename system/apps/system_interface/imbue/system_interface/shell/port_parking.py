@@ -167,8 +167,8 @@ class ParkedPort(MutableModel):
             # A close alone leaves an accept blocked in the other thread holding the port; the shutdown wakes it.
             try:
                 listener.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
+            except OSError as e:
+                logger.debug("The listener parked for {} was closed without a shutdown: {}", self.app, e)
             listener.close()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
@@ -181,8 +181,9 @@ class ParkedPort(MutableModel):
             return
         try:
             connection, _address = listener.accept()
-        except OSError:
-            # Released before anything connected.
+        except OSError as e:
+            # Released before anything connected, in the usual case.
+            logger.debug("Stopped accepting on the port parked for {}: {}", self.app, e)
             return
         with self._lock:
             self._is_woken = True
@@ -203,8 +204,8 @@ class ParkedPort(MutableModel):
                 connection.settimeout(_REQUEST_READ_TIMEOUT_SECONDS)
                 try:
                     connection.recv(_REQUEST_READ_LIMIT_BYTES)
-                except OSError:
-                    pass
+                except OSError as e:
+                    logger.debug("Answering the request that woke {} without reading it: {}", self.app, e)
                 connection.sendall(parked_response_bytes(self.page_for(kind)))
         except OSError as e:
             logger.debug("Could not answer the request that woke {}: {}", self.app, e)
