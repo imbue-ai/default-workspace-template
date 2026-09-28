@@ -1,6 +1,7 @@
 """``ShellState``: everything the shell's routes and WebSocket loop share, built in ``main.py`` (or by a test)."""
 
 import threading
+from collections import Counter
 from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -714,10 +715,10 @@ class ShellState(MutableModel):
         return outcome
 
 
-def _count_windows_of_app(desktops: DesktopStore, app: str) -> int:
-    """How many windows across every desktop show the app (minimized, pinned, and pulled-out ones included); what
-    the lifecycle manager's no-window rule counts."""
-    return sum(1 for desktop in desktops.list_desktops() for window in desktop.windows if window.app == app)
+def _count_windows_by_app(desktops: DesktopStore) -> Counter[str]:
+    """How many windows across every desktop show each app (minimized, pinned, and pulled-out ones included), in
+    one read of the desktops; what the lifecycle manager's no-window rule counts."""
+    return Counter(str(window.app) for desktop in desktops.list_desktops() for window in desktop.windows)
 
 
 def _under_repo_root(directory: Path, repo_root: Path) -> Path:
@@ -771,7 +772,7 @@ def build_shell_state(
         lifecycle=build_app_lifecycle_manager(
             resolved_inventory,
             is_lifecycle_enabled,
-            lambda app: _count_windows_of_app(desktops, app),
+            lambda: _count_windows_by_app(desktops),
             no_windows_grace_seconds=no_windows_grace_seconds,
             idle_sweep_interval_seconds=idle_sweep_interval_seconds,
         ),

@@ -243,7 +243,7 @@ def _launch_waking_manager(
     return AppLifecycleManager(
         inventory=shell.inventory,
         is_enabled=is_enabled,
-        count_windows_of_app=lambda app: 0,
+        count_windows_by_app=lambda: {},
         program_states=lambda: {"docs": "STOPPED"},
         start_program=start_program,
         stop_program=lambda program: None,

@@ -61,13 +61,15 @@ def supervisor() -> FakeSupervisor:
 
 
 class FakeWindows:
-    """How many windows each app has, as the manager's rule reads it."""
+    """How many windows each app has, as the manager's rule reads it, counting the reads."""
 
     def __init__(self) -> None:
         self.count_by_app: dict[str, int] = {}
+        self.read_count = 0
 
-    def get_count(self, app: str) -> int:
-        return self.count_by_app.get(app, 0)
+    def get_counts(self) -> dict[str, int]:
+        self.read_count += 1
+        return dict(self.count_by_app)
 
 
 @pytest.fixture
@@ -99,7 +101,7 @@ def manager(
     built = AppLifecycleManager(
         inventory=inventory,
         is_enabled=False,
-        count_windows_of_app=windows.get_count,
+        count_windows_by_app=windows.get_counts,
         program_states=supervisor.states,
         start_program=supervisor.start,
         stop_program=supervisor.stop,
@@ -212,7 +214,7 @@ def test_a_pass_does_not_park_an_app_woken_after_its_state_was_read(
     racing = AppLifecycleManager(
         inventory=manager.inventory,
         is_enabled=False,
-        count_windows_of_app=lambda app: 0,
+        count_windows_by_app=lambda: {},
         program_states=read_states_then_wake,
         start_program=supervisor.start,
         stop_program=supervisor.stop,
@@ -331,7 +333,7 @@ def test_wake_and_wait_answers_once_the_app_accepts(
     waiting = AppLifecycleManager(
         inventory=manager.inventory,
         is_enabled=False,
-        count_windows_of_app=lambda app: 0,
+        count_windows_by_app=lambda: {},
         program_states=supervisor.states,
         start_program=start,
         stop_program=supervisor.stop,
@@ -429,7 +431,7 @@ def test_an_app_that_does_not_declare_the_field_is_never_stopped(
     keeping = AppLifecycleManager(
         inventory=build_inventory(registry_path, broadcaster),
         is_enabled=False,
-        count_windows_of_app=lambda app: 0,
+        count_windows_by_app=lambda: {},
         program_states=supervisor.states,
         start_program=supervisor.start,
         stop_program=supervisor.stop,
@@ -485,3 +487,46 @@ def test_the_sweep_runs_at_its_transition_pace_while_a_program_is_between_states
     manager.sweep_once()
     assert supervisor.stopped == ["docs"]
     assert manager.sweep_interval_seconds() == TRANSITION_SWEEP_INTERVAL_SECONDS
+
+
+def test_a_pass_reads_the_window_counts_at_most_once_and_only_when_an_app_needs_them(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    closed_port: int,
+    supervisor: FakeSupervisor,
+    windows: FakeWindows,
+) -> None:
+    """The counts come from one read of every desktop (a file read under the shell's state lock): a pass over
+    several running apps that declare the field reads them once, and a pass with no such app reads nothing."""
+    notes_port = find_free_port()
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml("docs", f"http://127.0.0.1:{closed_port}", program="docs", stop_when_no_windows=True),
+        registry_row_toml("notes", f"http://127.0.0.1:{notes_port}", program="notes", stop_when_no_windows=True),
+        registry_row_toml("keeper", "http://127.0.0.1:1", program="keeper"),
+    )
+    supervisor.statename_by_program.update({"docs": "RUNNING", "notes": "RUNNING", "keeper": "RUNNING"})
+    windows.count_by_app["notes"] = 1
+    counting = AppLifecycleManager(
+        inventory=build_inventory(registry_path, broadcaster),
+        is_enabled=False,
+        count_windows_by_app=windows.get_counts,
+        program_states=supervisor.states,
+        start_program=supervisor.start,
+        stop_program=supervisor.stop,
+        clock=FakeClock(),
+    )
+    try:
+        counting.mark_visited()
+        counting.sweep_once()
+        assert windows.read_count == 1
+        counting.sweep_once()
+        assert windows.read_count == 2
+
+        # With every app that declares the field down, the rule has nothing to apply to and reads nothing.
+        supervisor.statename_by_program.update({"docs": "STOPPED", "notes": "STOPPED"})
+        counting.sweep_once()
+        assert windows.read_count == 2
+        assert counting.parked_app_names() == ["docs", "notes"]
+    finally:
+        counting.stop()
