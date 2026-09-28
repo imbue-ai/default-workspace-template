@@ -114,7 +114,7 @@ def _is_refused(port: int) -> bool:
 
 
 def test_a_pass_parks_a_stopped_stoppable_app_and_nothing_else(
-    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
+    manager: AppLifecycleManager, supervisor: FakeSupervisor
 ) -> None:
     manager.sweep_once()
 
