@@ -215,10 +215,16 @@ def test_a_wake_that_ends_in_fatal_re_parks_with_the_failure_page(
     manager.sweep_once()
 
     assert manager.is_app_parked("docs")
-    # The next request wakes it again (within the budget) and is answered as starting.
+    # The next request wakes it again (within the budget) and is told where to look while it waits.
     answer = _connect(docs_port)
-    assert b"Starting Docs" in answer
+    assert b"Docs could not start" in answer and b"supervisorctl tail docs stderr" in answer
     assert supervisor.started == ["docs", "docs"]
+    # Once the app has run again, a later stop is an ordinary one and its request is answered as starting.
+    supervisor.statename_by_program["docs"] = "RUNNING"
+    manager.sweep_once()
+    supervisor.statename_by_program["docs"] = "STOPPED"
+    manager.sweep_once()
+    assert b"Starting Docs" in _connect(docs_port)
 
 
 def test_stop_app_stops_the_program_and_refuses_what_it_cannot_stop(

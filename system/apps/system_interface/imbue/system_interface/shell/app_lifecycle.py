@@ -180,8 +180,8 @@ class AppLifecycleManager(MutableModel):
 
     def wake(self, app: str) -> ParkedPageKind:
         """Release the app's parked port (if any) and ask supervisord to start its program, within the wake budget.
-        Answers what a request that caused the wake should be told. Raises AppWakeRefusedError for an app the
-        workspace cannot start."""
+        Answers STARTING when the program was asked to start, FAILED when the budget refused it or supervisord could
+        not start it. Raises AppWakeRefusedError for an app the workspace cannot start."""
         entry = self.inventory.entry(app)
         program = stoppable_program_of(entry, self.inventory.entries()) if entry is not None else None
         if entry is None or program is None:
@@ -215,6 +215,15 @@ class AppLifecycleManager(MutableModel):
         self.inventory.refresh_liveness()
         self.wake_soon()
         return kind
+
+    def _wake_from_parked_port(self, app: str) -> ParkedPageKind:
+        """The parker's first connection: wake the app, and answer the failure page when its last wake ended in
+        FATAL or was refused (spec section 5.5), so the page names the program's log and reloads slowly; the wake
+        itself still happens within the budget, and that reload is the next attempt."""
+        with self._lock:
+            was_failed = app in self._failed_apps
+        kind = self.wake(app)
+        return ParkedPageKind.FAILED if was_failed else kind
 
     def stop_app(self, app: str) -> None:
         """Ask supervisord to stop the app's program; the next sweep parks its port. Raises
@@ -346,7 +355,7 @@ class AppLifecycleManager(MutableModel):
         parked = ParkedPort(
             app=app,
             target=target,
-            on_first_connection=lambda: self.wake(app),
+            on_first_connection=lambda: self._wake_from_parked_port(app),
             page_for=lambda kind: parked_page_html(kind, display_name, program),
         )
         try:
