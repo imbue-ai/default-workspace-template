@@ -504,6 +504,18 @@ def _clock_of(manager: AppLifecycleManager) -> FakeClock:
     return clock
 
 
+def _assert_docs_stops_only_once_the_grace_elapses(manager: AppLifecycleManager, supervisor: FakeSupervisor) -> None:
+    """From an idle mark just set: a pass a second short of the grace period stops nothing, the pass after it stops
+    ``docs``."""
+    clock = _clock_of(manager)
+    clock.now += NO_WINDOWS_GRACE_SECONDS - 1
+    manager.sweep_once()
+    assert supervisor.stopped == []
+    clock.now += 2
+    manager.sweep_once()
+    assert supervisor.stopped == ["docs"]
+
+
 def test_a_running_app_with_no_window_is_stopped_after_the_grace_period_once_visited(
     manager: AppLifecycleManager, supervisor: FakeSupervisor
 ) -> None:
@@ -519,12 +531,7 @@ def test_a_running_app_with_no_window_is_stopped_after_the_grace_period_once_vis
     manager.mark_visited()
     manager.sweep_once()
     assert supervisor.stopped == []
-    clock.now += NO_WINDOWS_GRACE_SECONDS - 1
-    manager.sweep_once()
-    assert supervisor.stopped == []
-    clock.now += 2
-    manager.sweep_once()
-    assert supervisor.stopped == ["docs"]
+    _assert_docs_stops_only_once_the_grace_elapses(manager, supervisor)
     manager.sweep_once()
     assert manager.is_app_parked("docs")
 
@@ -547,12 +554,7 @@ def test_a_window_opening_within_the_grace_period_keeps_the_app(
     # The clock starts over once the last window closes.
     windows.count_by_app["docs"] = 0
     manager.sweep_once()
-    clock.now += NO_WINDOWS_GRACE_SECONDS - 1
-    manager.sweep_once()
-    assert supervisor.stopped == []
-    clock.now += 2
-    manager.sweep_once()
-    assert supervisor.stopped == ["docs"]
+    _assert_docs_stops_only_once_the_grace_elapses(manager, supervisor)
 
 
 def test_an_app_with_a_per_app_share_grant_is_kept_running_until_the_grant_goes(
@@ -571,12 +573,7 @@ def test_an_app_with_a_per_app_share_grant_is_kept_running_until_the_grant_goes(
 
     share_grants.granted = set()
     manager.sweep_once()
-    clock.now += NO_WINDOWS_GRACE_SECONDS - 1
-    manager.sweep_once()
-    assert supervisor.stopped == []
-    clock.now += 2
-    manager.sweep_once()
-    assert supervisor.stopped == ["docs"]
+    _assert_docs_stops_only_once_the_grace_elapses(manager, supervisor)
 
 
 def test_a_pass_reads_the_share_grants_at_most_once_and_only_for_an_app_with_no_window(
