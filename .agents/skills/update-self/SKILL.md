@@ -411,8 +411,9 @@ review gates rule-driven and the report evidence-bearing. It must show which
 branch of the 4a and 4b rules applied (the footprint evidence, and each
 validation item's condition and whether it held), and either show the
 clean-pull skip's three conditions held (`has_merge_work: false`, no impacted
-user-created code, no worker-authored in-branch edits beyond a retry's
-rollback revert, shown by an empty diff against the landed merge) or carry
+user-created code, no worker-authored in-branch edits beyond Step 1's
+rollback reverts as git made them or with a `both added` file taken at the
+target's version, shown by an empty diff against the landed merge) or carry
 the gate run's own evidence (fix commits kept or reverted, or a clean run,
 plus architecture-gate verdicts); a side-picked conflict must carry the
 discarded-side accounting. A report missing any of this -- including one that
@@ -437,14 +438,22 @@ stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
 
 **When the update touches a critical app (`system/apps/system_interface/`,
-`system/apps/chat/`, `system/apps/terminal/`), `system/apps/getting_started/frontend/`,
-`system/libs/workspace_ui/`, or
-`system/package.json` / `system/package-lock.json` at all** (the trees the
-critical bundles are built from, the same set the careful flow's freshness
-check names), also take the `editing critical apps` lease through the apply, as
-`update-app/references/critical-app.md` does: check `tk ready` for a foreign one
-(surface instead of proceeding), then `tk create "editing critical apps" -t
-chore` and `tk start` it, each as its own command. Release it afterwards.
+`system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
+`system/apps/getting_started/frontend/`, `system/libs/workspace_ui/`, or
+`system/package.json` / `system/package-lock.json` at all** (every critical
+app's tree, plus the Getting Started frontend, the shared library, and the npm
+files, whose change rebuilds every frontend bundle), also take the `editing
+critical app <name>` lease for each critical app it touches through the apply,
+as `update-app/references/critical-app.md` does (`<name>` is the app's
+`app.toml` name, so `system/apps/terminal_pty/` is `terminal-pty`; the Getting
+Started frontend, `workspace_ui`, and the npm files count as both
+`system_interface` and `chat`). Take them all or none, as that reference says:
+check each one in `tk ready` (`grep -E -- "- editing critical app <name>$"`,
+anchored so `terminal` does not match `terminal-pty`'s lease), take them in
+name order (`tk create "editing
+critical app <name>" -t chore`, then `tk start` it, each as its own command),
+and if any is held by another agent, release the ones you took and surface it
+instead of proceeding. Release them afterwards.
 
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
@@ -494,9 +503,9 @@ Exit codes:
   with the kept pre-apply copies under `data/.state/update-apply/snapshots/`.
 - **`1` -- precondition; nothing changed** (dirty tree, `HEAD` moved under the
   pass, another apply in flight, this merge already landed and rolled back, or
-  a re-merge of a rolled-back target that does not revert the rollback commit
-  first). Re-dispatch a fresh worker pass off the current `HEAD`; the refusal
-  names the commit to revert.
+  a merge that does not first revert an earlier update's rollback commit).
+  Re-dispatch a fresh worker pass off the current `HEAD`; the refusal names the
+  commits to revert.
 
 What each outcome means for the user, the `provision-incomplete` and
 `emergency.json` records, an interrupted apply (re-run the same command; it
@@ -586,7 +595,7 @@ mngr stop update-self
 ```
 
 Release the leases and close the ticket last, each as its own tool call: `tk
-close` the `editing service system_interface` lease if 5b took one, then the
+close` each `editing critical app <name>` lease 5b took, then the
 `updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
 finished."`), then `tk close <ticket-id> "Updated to <ref> -- worker branch
 merged and applied."`, adding the `archive/update-self-<timestamp>` name when
