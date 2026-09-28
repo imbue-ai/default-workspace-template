@@ -1,3 +1,6 @@
+"""Tests for the per-app share grants: the parser over the gateway's grants document, and the reader over the share
+materials the minds desktop writes."""
+
 import os
 from pathlib import Path
 
