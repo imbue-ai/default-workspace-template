@@ -8,7 +8,7 @@
 
 - A pasted Anthropic or OpenAI key is checked with its provider before it is saved: a rejected key says "That key was rejected by <provider>." and saves nothing, and a provider that cannot be reached saves the key and says "Couldn't check this key".
 
-- Signing in again no longer takes the account's old credential away first; the account keeps working until the new sign-in lands. A credential an older build parked mid-re-auth is put back at boot. A Claude sign-in is decided by the CLI's clean exit with its "Login successful" line, or its own probe when the line was reworded. "Sign in again" on an API-key account asks for a key rather than opening a browser sign-in (`reauth_method` on each account row).
+- Signing in again no longer takes the account's old credential away first; the account keeps working until the new sign-in lands, and a sign-in is not counted as landed while the old credential is all the account holds. A credential an older build parked mid-re-auth is put back at boot. A Claude sign-in is decided by the CLI's clean exit with its "Login successful" line, or its own probe when the line was reworded. "Sign in again" on an API-key account asks for a key rather than opening a browser sign-in (`reauth_method` on each account row).
 
 - Clearer sign-in failures: a Claude sign-in denied in the browser says "Access wasn't approved on Claude's page."; a code Anthropic refuses says to start over; a ChatGPT sign-in ChatGPT refuses shows ChatGPT's reason; a ChatGPT code login that cannot start says to turn on device code sign-in for Codex in ChatGPT's security settings; and a sign-in stopped by a restart says it stopped rather than that it was replaced.
 
