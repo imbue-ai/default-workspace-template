@@ -39,6 +39,7 @@ from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.chat.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.claude.model import ClaudeModelResolver
+from imbue.chat.harnesses.claude.one_shot import ClaudeOneShotCompletion
 from imbue.chat.harnesses.claude.tap import ClaudeAtomicShoulderTap
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
@@ -59,6 +60,7 @@ from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import model_state_path
+from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.opencode.placeholder import OpenCodePlaceholderActivityTracker
 from imbue.chat.harnesses.pi_coding.account_binding import PiAccountBinding
 from imbue.chat.harnesses.pi_coding.activity import PI_STARTUP_READY_MARKER
@@ -336,6 +338,9 @@ class HarnessSpec(FrozenModel):
     # the rebind's edit, the sessions a rebind carries along). None for a harness no account can run:
     # no lane signs in to it, so nothing binds one.
     binding_class: type[AccountBinding] | None = None
+    # How the chat app asks this harness one question on a chat's account, outside the chat (a new
+    # chat's name). None for a harness that cannot yet: its chats keep the name they were minted with.
+    one_shot_completion_class: type[OneShotCompletion] | None = None
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -347,6 +352,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         process_started_marker_filename=ClaudeActivityTracker.marker_filename,
         startup_ready_marker=CLAUDE_STARTUP_READY_MARKER,
         binding_class=ClaudeAccountBinding,
+        one_shot_completion_class=ClaudeOneShotCompletion,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
         model_state_relative_path=CLAUDE_STATE_RELATIVE_PATH,
@@ -544,6 +550,12 @@ def build_account_binding(harness: HarnessType) -> AccountBinding:
     if binding_class is None:
         raise BindingError(f"{harness} has no account binding")
     return binding_class()
+
+
+def build_one_shot_completion(harness: HarnessType) -> OneShotCompletion | None:
+    """Build the one-shot completion for ``harness``, or None when the harness registers none."""
+    completion_class = get_harness_spec(harness).one_shot_completion_class
+    return completion_class() if completion_class is not None else None
 
 
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:

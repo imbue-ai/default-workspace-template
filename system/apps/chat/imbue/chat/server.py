@@ -540,6 +540,12 @@ class _SendAccepted(FrozenModel):
     held_phase: HandoffPhase | None = Field(description="The phase the send was held in; None when it was delivered")
 
 
+def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) -> None:
+    """Hand a message the user sent to a chat to the namer, which names a chat still called "Chat N" from it."""
+    if state.chat_namer is not None:
+        state.chat_namer.consider_message(chat_id, message)
+
+
 def _send_to_chat(
     state: ChatAppState, chat_id: ChatId, send_message_request: SendMessageRequest, message_id: str
 ) -> _SendAccepted | Response:
@@ -603,6 +609,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     accepted = _send_to_chat(state, ChatId(chat_id), send_message_request, message_id)
     if isinstance(accepted, Response):
         return accepted
+    _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.
     if accepted.held_phase is not None:
@@ -1365,6 +1372,7 @@ def _run_create_chat() -> CreatedChat | Response:
     )
     if isinstance(created, Response):
         return created
+    _consider_naming_chat(get_state(), created.chat_id, create_request.message)
     if not create_request.should_wait:
         return created
     outcome = agent_manager.wait_for_chat_creation(created.chat_id, CHAT_CREATION_WAIT_TIMEOUT_SECONDS)
@@ -1478,7 +1486,10 @@ def _deliver_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeReq
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
     )
     accepted = _send_to_chat(state, chat_id, send_message_request, message_id)
-    return accepted if isinstance(accepted, Response) else None
+    if isinstance(accepted, Response):
+        return accepted
+    _consider_naming_chat(state, chat_id, intake.message)
+    return None
 
 
 def _log_undelivered_intake_send(
@@ -1553,6 +1564,7 @@ def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Respons
         )
         if isinstance(created, Response):
             return created
+        _consider_naming_chat(state, created.chat_id, intake.message)
         return json_response(IntakeResponse(path=intake_path(created.chat_id, None)).model_dump())
     minted = agent_manager.mint_awaiting_chat(account or "")
     token = state.pending_intakes.mint(intake, minted.chat_id, needs_pick=False)

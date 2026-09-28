@@ -13,6 +13,7 @@ from pydantic import PrivateAttr
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.chat_intakes import PendingIntakeStore
+from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
@@ -71,6 +72,11 @@ class ChatAppState(MutableModel):
     # that need an account; in memory, so a restart drops them.
     pending_intakes: PendingIntakeStore = Field(default_factory=PendingIntakeStore)
     event_queues: AgentEventQueues
+    chat_namer: ChatNamer | None = Field(
+        default=None,
+        description="Names new chats from their first messages; None where chats are not named (a secondary "
+        "chat, whose renames would be the live chat's, and tests that do not exercise naming)",
+    )
     claude_auth_service: ClaudeAuthService
     auth_flows: AuthFlowService
     http_client: httpx.Client
@@ -263,6 +269,8 @@ class ChatAppState(MutableModel):
         if self._is_shut_down:
             return
         self._is_shut_down = True
+        if self.chat_namer is not None:
+            self.chat_namer.stop()
         self.event_queues.shutdown()
         self.broadcaster.shutdown()
         self.agent_manager.stop()

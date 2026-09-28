@@ -1899,6 +1899,40 @@ def test_rename_chat_rejects_a_name_with_no_usable_characters(
         manager.stop()
 
 
+def test_rename_minted_chat_renames_a_chat_still_called_chat_n(
+    broadcaster: WebSocketBroadcaster,
+    true_binary: str,
+) -> None:
+    manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
+    try:
+        _tracked_chat(manager, "agent-7", "Chat-2", display_name="Chat 2")
+
+        is_renamed = manager.rename_minted_chat(ChatId("agent-7"), "Rome trip: plan five days")
+
+        assert is_renamed
+        renamed = manager.get_agent_by_id("agent-7")
+        assert renamed is not None
+        assert renamed.name == "Rome-trip-plan-five-days"
+        assert renamed.labels["display_name"] == "Rome trip: plan five days"
+    finally:
+        manager.stop()
+
+
+def test_rename_minted_chat_leaves_a_chosen_name_alone_without_running_mngr(
+    broadcaster: WebSocketBroadcaster,
+    false_binary: str,
+) -> None:
+    """The always-failing stand-in binary proves no rename was attempted: running it would have raised."""
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        _tracked_chat(manager, "agent-7", "Planning-notes", display_name="Planning notes")
+
+        assert not manager.rename_minted_chat(ChatId("agent-7"), "Rome trip: plan five days")
+        assert not manager.rename_minted_chat(ChatId("agent-nowhere"), "Rome trip: plan five days")
+    finally:
+        manager.stop()
+
+
 def _finished_rename(returncode: int, stderr: str, is_timed_out: bool = False) -> FinishedProcess:
     """A rename subprocess's result, as ``run_local_command_modern_version`` shapes it."""
     return FinishedProcess(

@@ -139,6 +139,7 @@ from imbue.chat.models import TransitionKind
 from imbue.chat.naming import AUTO_NAME_WORD
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.naming import first_free_numbered_name
+from imbue.chat.naming import is_minted_chat_name
 from imbue.chat.naming import is_name_conflict
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
@@ -2551,6 +2552,16 @@ class AgentManager:
                     to_update(renamed.field_ref().labels, {**renamed.labels, "display_name": display_name}),
                 )
         self._broadcast_chats_updated()
+
+    def rename_minted_chat(self, chat_id: ChatId, display_name: str) -> bool:
+        """Rename a chat that still wears its minted "Chat N" name, as ``rename_chat`` would; False, running
+        nothing, when it has any other name, so an automatic name never replaces one a person or agent chose.
+        Raises what ``rename_chat`` raises."""
+        snapshot = self.get_chat_snapshot(chat_id)
+        if snapshot is None or not is_minted_chat_name(snapshot.title):
+            return False
+        self.rename_chat(chat_id, display_name)
+        return True
 
     def _start_session_sweep(self) -> None:
         """Start the background sweep that connects tracked agents' live backends once they come up."""

@@ -1,0 +1,196 @@
+from collections.abc import Callable
+from concurrent.futures import Executor
+from concurrent.futures import Future
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.chat_naming import CHAT_NAMING_FILENAME
+from imbue.chat.chat_naming import ChatNamer
+from imbue.chat.chat_naming import ChatNamingState
+from imbue.chat.chat_naming import MAX_NAMING_ATTEMPTS
+from imbue.chat.chat_naming import parse_generated_chat_name
+from imbue.chat.chat_naming import read_chat_naming_state
+from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
+from imbue.chat.harnesses.one_shot import OneShotCompletion
+from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.models import AgentNameConflictError
+from imbue.chat.primitives import ChatId
+
+_CHAT_ID = ChatId("agent-4f1c2a9e7b6d4c3a8e5f0b1d2c3e4f5a")
+
+
+class _InlineExecutor(Executor):
+    """Runs each submitted call at once, so a test sees the naming finished when the send returns."""
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        future: Future[Any] = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
+def _agent_info(display_name: str, tmp_path: Path, harness: HarnessType = HarnessType.CLAUDE) -> AgentInfo:
+    return AgentInfo(
+        id=str(_CHAT_ID),
+        name=display_name.replace(" ", "-"),
+        state="RUNNING",
+        agent_state_dir=tmp_path / "state",
+        claude_config_dir=tmp_path / "account",
+        labels={"display_name": display_name},
+        harness=harness,
+    )
+
+
+class _NamingHarness:
+    """The namer's collaborators, as a test drives them: one chat, a scripted model, and the renames it asked for."""
+
+    def __init__(self, tmp_path: Path, display_name: str, answers: list[str | OneShotCompletionError]) -> None:
+        self.agent_info: AgentInfo | None = _agent_info(display_name, tmp_path)
+        self.completion = ScriptedOneShotCompletion(answers)
+        self.renames: list[str] = []
+        self.rename_error: Exception | None = None
+        self.chat_files_root = tmp_path / "chats"
+        self.namer = ChatNamer(
+            chat_files_root=self.chat_files_root,
+            get_active_agent_info=lambda _chat_id: self.agent_info,
+            rename_minted_chat=self._rename,
+            build_one_shot_completion=self._build_completion,
+            agent_wait_seconds=0.0,
+            executor=_InlineExecutor(),
+        )
+
+    def _rename(self, _chat_id: ChatId, name: str) -> bool:
+        if self.rename_error is not None:
+            raise self.rename_error
+        self.renames.append(name)
+        return True
+
+    def _build_completion(self, harness: HarnessType) -> OneShotCompletion | None:
+        return self.completion if harness is HarnessType.CLAUDE else None
+
+    def naming_state(self) -> ChatNamingState:
+        return read_chat_naming_state(self.chat_files_root / _CHAT_ID)
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("Rome trip: plan five days in May", "Rome trip: plan five days in May"),
+        ('"Nginx 502: fix websockets behind proxy."', "Nginx 502: fix websockets behind proxy"),
+        ("  Stripe MRR: spreadsheet by customer\n", "Stripe MRR: spreadsheet by customer"),
+    ],
+)
+def test_parse_generated_chat_name_keeps_a_short_name_and_description(answer: str, expected: str) -> None:
+    assert parse_generated_chat_name(answer) == expected
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "NONE",
+        "Rome trip",
+        ": plan a trip",
+        "Rome trip: ",
+        "Rome trip: plan\nSecond line: more",
+        "Rome trip: " + "a very long description " * 4,
+        "!!!: ???",
+    ],
+)
+def test_parse_generated_chat_name_refuses_an_answer_that_is_not_a_usable_name(answer: str) -> None:
+    assert parse_generated_chat_name(answer) is None
+
+
+def test_a_minted_chat_is_named_from_its_first_message_and_never_again(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", ["Rome trip: plan five days in May", "Pasta: find a recipe"])
+
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome in May")
+    harness.namer.consider_message(_CHAT_ID, "Now find me a pasta recipe")
+
+    assert harness.renames == ["Rome trip: plan five days in May"]
+    assert harness.completion.prompts == ["Help me plan 5 days in Rome in May"]
+    assert harness.naming_state().is_settled
+
+
+def test_a_message_with_no_subject_leaves_the_minted_name_and_the_next_message_names_it(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", ["NONE", "Rome trip: plan five days in May"])
+
+    harness.namer.consider_message(_CHAT_ID, "hi")
+    assert harness.renames == []
+    assert harness.naming_state() == ChatNamingState(attempt_count=1, is_settled=False)
+
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome in May")
+    assert harness.renames == ["Rome trip: plan five days in May"]
+
+
+def test_naming_stops_trying_after_the_attempt_limit(tmp_path: Path) -> None:
+    answers: list[str | OneShotCompletionError] = [
+        "NONE",
+        OneShotCompletionError("claude -p exited 1"),
+        "no colon here",
+    ]
+    harness = _NamingHarness(tmp_path, "Chat 3", answers)
+
+    for message in ["hi", "hello?", "test", "Help me plan 5 days in Rome"]:
+        harness.namer.consider_message(_CHAT_ID, message)
+
+    assert len(harness.completion.prompts) == MAX_NAMING_ATTEMPTS
+    assert harness.renames == []
+
+
+def test_a_chat_named_any_other_way_is_left_alone_without_asking_the_model(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Welcome", ["Greeting: say hello"])
+
+    harness.namer.consider_message(_CHAT_ID, "Hi, what can you do?")
+
+    assert harness.completion.prompts == []
+    assert harness.renames == []
+    assert harness.naming_state().is_settled
+
+
+def test_a_harness_with_no_one_shot_completion_keeps_its_minted_name(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", [])
+    harness.agent_info = _agent_info("Chat 3", tmp_path, harness=HarnessType.CODEX)
+
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome")
+
+    assert harness.renames == []
+    assert not (harness.chat_files_root / _CHAT_ID / CHAT_NAMING_FILENAME).exists()
+
+
+def test_a_chat_that_never_comes_up_is_not_named(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", ["Rome trip: plan five days in May"])
+    harness.agent_info = None
+
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome")
+
+    assert harness.completion.prompts == []
+    assert harness.naming_state() == ChatNamingState()
+
+
+def test_a_refused_rename_costs_an_attempt(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", ["Rome trip: plan five days in May"])
+    harness.rename_error = AgentNameConflictError("A chat named 'Rome trip: plan five days in May' already exists")
+
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome")
+
+    assert harness.naming_state() == ChatNamingState(attempt_count=1, is_settled=False)
+
+
+def test_a_long_message_is_cut_before_it_is_sent_to_the_model(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", ["Log dump: find the failing request"])
+
+    harness.namer.consider_message(_CHAT_ID, "x" * 50_000)
+
+    assert len(harness.completion.prompts[0]) == 3000
+
+
+def test_a_stopped_namer_takes_no_more_messages(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", ["Rome trip: plan five days in May"])
+
+    harness.namer.stop()
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome")
+
+    assert harness.completion.prompts == []

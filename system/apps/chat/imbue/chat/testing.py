@@ -54,6 +54,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
 from imbue.chat.chat_records import ChatRebindRecord
@@ -466,6 +467,7 @@ def build_test_state(
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
     secret_requests: SecretRequestStore | None = None,
+    chat_namer: ChatNamer | None = None,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -500,6 +502,7 @@ def build_test_state(
         # under this package's own data/. A test that reads the files back injects a store
         # rooted in its tmp_path.
         secret_requests=secret_requests if secret_requests is not None else build_temporary_secret_request_store(),
+        chat_namer=chat_namer,
     )
     # Match production: eviction drops a destroyed/stopped agent's watcher.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)

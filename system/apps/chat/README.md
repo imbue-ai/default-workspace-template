@@ -295,6 +295,22 @@ new chats are set; `/fast on` and `/fast off` typed in the composer choose the
 mode too. The first time auto switches a chat in a workspace, a one-time notice
 over the model bar explains it.
 
+## Chat names
+
+A new chat is minted as "Chat N". Its first message is then sent, in the
+background and outside the chat, to a small model on the account the chat runs
+on (`chat_naming.py`, through the harness's `OneShotCompletion`: `claude -p` on
+Haiku, from an empty directory, with no tools and no session kept), and the
+answer, in the form "Short name: brief description", renames the chat the way
+the rail's rename does. The name is set once and does not follow the chat as its
+topic drifts. An opening with no clear subject ("hi") leaves "Chat N" and the
+next message is tried, up to three messages. Only a chat still called exactly
+"Chat N" is renamed: a name the user or an agent chose, or a seeded "Welcome",
+is left alone. What has been tried is kept in `naming.json` in the chat's
+folder, so a restart neither renames a named chat nor retries past the limit.
+A harness with no `OneShotCompletion` (every one but Claude, for now) keeps
+the minted name, and a secondary chat names nothing.
+
 ## Provider accounts
 
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per

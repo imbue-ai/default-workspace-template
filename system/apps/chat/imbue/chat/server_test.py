@@ -7,6 +7,8 @@ import json
 import os
 from collections.abc import Callable
 from collections.abc import Generator
+from concurrent.futures import Executor
+from concurrent.futures import Future
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +35,7 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
@@ -46,6 +49,7 @@ from imbue.chat.harnesses.codex.model import read_codex_model_options
 from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
+from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -550,6 +554,44 @@ def test_send_message_success() -> None:
     # The endpoint routes through AgentManager.send_message_to_agent, which addresses
     # the agent by id (the live cache supplies the known location as the 3rd arg).
     assert messenger.sent == [(agent_id, "hello")]
+
+
+class _InlineExecutor(Executor):
+    """Runs each submitted call at once, so the naming a send starts has finished when the response comes back."""
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        future: Future[Any] = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
+def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    agent_id = "agent-00000000000000000000000000000731"
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id, name="Chat-4", state="RUNNING", labels={"display_name": "Chat 4"}, work_dir=None
+        )
+    completion = ScriptedOneShotCompletion(["Rome trip: plan five days in May"])
+    renames: list[tuple[ChatId, str]] = []
+    namer = ChatNamer(
+        chat_files_root=tmp_path / "chats",
+        get_active_agent_info=manager.get_active_agent_info,
+        rename_minted_chat=lambda chat_id, name: (renames.append((chat_id, name)), True)[1],
+        build_one_shot_completion=lambda _harness: completion,
+        executor=_InlineExecutor(),
+    )
+    client = create_application(build_test_state(agent_manager=manager, chat_namer=namer)).test_client()
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "Help me plan 5 days in Rome"})
+
+    assert response.status_code == 200
+    assert completion.prompts == ["Help me plan 5 days in Rome"]
+    assert renames == [(ChatId(agent_id), "Rome trip: plan five days in May")]
 
 
 def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
