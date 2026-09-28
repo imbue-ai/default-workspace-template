@@ -87,9 +87,8 @@ from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.sign_in_relay import BROWSER_ENV_VAR
 from imbue.chat.harnesses.sign_in_relay import BROWSER_SHIM_RELATIVE_PATH
 from imbue.chat.harnesses.sign_in_relay import CallbackFetcher
-from imbue.chat.harnesses.sign_in_relay import FOLLOW_UP_WINDOW_SECONDS
+from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
 from imbue.chat.harnesses.sign_in_relay import RelayTarget
-from imbue.chat.harnesses.sign_in_relay import RelayedResponse
 from imbue.chat.harnesses.sign_in_relay import SIGN_IN_URL_FILENAME
 from imbue.chat.harnesses.sign_in_relay import SIGN_IN_URL_FILE_ENV_VAR
 from imbue.chat.harnesses.sign_in_relay import fetch_loopback_callback
@@ -119,6 +118,16 @@ KEY_UNCHECKED_DETAIL: Final = "Couldn't check this key"
 # over by then, so this bounds only the CLI's own exchange with its provider -- long enough
 # for a slow network, short enough that a spinner cannot outlive the user's patience.
 _VERDICT_DEADLINE_SECONDS: Final = 120.0
+# How long the relayed callback waits for the flow to settle once the CLI has it, so the page the
+# desktop app shows can say how the sign-in ended. A flow still pending after this is reported as
+# finishing, and the chooser shows how it ends.
+_RELAYED_VERDICT_WAIT_SECONDS: Final = 20.0
+_DEVICE_LOGIN_REFUSED_DETAIL: Final = (
+    "ChatGPT couldn't start a sign-in with a code. Turn on device code sign-in for Codex in "
+    "ChatGPT's security settings, or use an OpenAI API key instead."
+)
+# How much of a provider's own reason for a failed sign-in is shown.
+_MAX_PROVIDER_REASON_CHARS: Final = 200
 # How still a screen has to be before we call it drawn, when the method names no anchor to
 # expect. Short enough that a fast CLI is not held up; `settle_s` is the overall budget.
 _SETTLE_QUIET_SECONDS: Final = 0.2
@@ -213,9 +222,8 @@ class _Session:
     scratch_dir: Path | None
     relay_url: str | None
     relay_target: RelayTarget | None
-    # When the CLI first answered a relayed callback. Other requests on its port go through
-    # for a short while after, and no longer need the flow's `state`.
-    relay_answered_at: float | None
+    # The desktop app has handed this flow its callback. It gets exactly one.
+    is_callback_relayed: bool
     # A relayed request is out to the CLI. A poll must not settle the flow meanwhile: that
     # tears the CLI down, which could cut off the answer the browser is waiting on.
     is_relay_in_flight: bool
@@ -253,7 +261,7 @@ def _new_session(lane: Lane, method: SignInMethod, account_id: str, minted: bool
     session.scratch_dir = None
     session.relay_url = None
     session.relay_target = None
-    session.relay_answered_at = None
+    session.is_callback_relayed = False
     session.is_relay_in_flight = False
     session.login_client = None
     session.login_outcome = None
@@ -428,7 +436,14 @@ class AuthFlowService:
                 login_id, url, code = device_login.login_id, device_login.verification_url, device_login.user_code
         except (CodexAppServerError, OSError) as e:
             logger.warning("Codex sign-in could not begin: {}", e)
-            self._fail_locked(session, "Codex could not begin the sign-in.")
+            # A code sign-in is refused when the ChatGPT account has device codes turned off,
+            # which is the default for some accounts; the setting is the user's to change.
+            self._fail_locked(
+                session,
+                _DEVICE_LOGIN_REFUSED_DETAIL
+                if method.login is CodexLogin.DEVICE
+                else "Codex could not begin the sign-in.",
+            )
             raise FlowError(session.detail or "no login") from e
         threading.Thread(
             target=self._await_login,
@@ -653,40 +668,48 @@ class AuthFlowService:
             if self._session is not None and self._session.flow_id == flow_id:
                 self._drop_locked()
 
-    def relay_callback(self, flow_id: str, path_and_query: str) -> RelayedResponse:
-        """Replay one request the desktop app received on this flow's loopback callback port.
+    def provider_name(self, flow_id: str) -> str:
+        """The provider a live flow signs in to, as the chooser names it."""
+        with self._lock:
+            return self._require_locked(flow_id).lane.provider_name
 
-        The first request must be the provider's callback: the path the sign-in URL names and the
-        `state` it carries, while the flow is still waiting on it. Once the CLI has answered that,
-        other requests on the same port go through for a short while, since a CLI can redirect
-        the browser to a page of its own. The request itself runs outside the lock: the CLI takes
-        its time finishing the sign-in, and the polls that report it need the lock meanwhile.
+    def relay_callback(self, flow_id: str, path_and_query: str) -> FlowStatus:
+        """Deliver the callback the desktop app received on this flow's loopback port, and say how it went.
+
+        Only the provider's callback is taken -- the path the sign-in URL names and the `state` it
+        carries, while the flow is still waiting on it -- and only once. The CLI is asked outside
+        the lock, since it answers only after its own token exchange and the polls that report
+        that need the lock meanwhile. Then the flow is polled until it settles, briefly, so the
+        desktop app can tell the browser the outcome rather than guess it.
         """
         if not is_relayable_path(path_and_query):
             raise FlowError("that is not a callback this sign-in can take")
         with self._lock:
-            session = self._require_locked(flow_id)
+            session = self._require_locked(flow_id, must_be_pending=True)
             target = session.relay_target
             if target is None:
                 raise FlowError("this sign-in has no browser callback")
-            answered_at = session.relay_answered_at
-            if answered_at is None:
-                if session.state is not FlowState.PENDING:
-                    raise FlowError(session.detail or "that sign-in has already finished")
-                if path_and_query.split("?", 1)[0] != target.path or query_state(path_and_query) != target.state:
-                    raise FlowError("that callback does not belong to this sign-in")
-            elif self._clock() - answered_at > FOLLOW_UP_WINDOW_SECONDS:
+            if session.is_callback_relayed:
                 raise FlowError("that sign-in's callback has already been handled")
+            if path_and_query.split("?", 1)[0] != target.path or query_state(path_and_query) != target.state:
+                raise FlowError("that callback does not belong to this sign-in")
+            session.is_callback_relayed = True
             session.is_relay_in_flight = True
         try:
-            answer = self._fetch_callback(target.port, path_and_query)
+            self._fetch_callback(target.port, path_and_query)
+        except RelayCallbackError as e:
+            # The CLI could not be reached or took too long; what the flow makes of that is
+            # still the answer, so it is asked below like any other.
+            logger.warning("Sign-in {}: the CLI did not take the relayed callback: {}", flow_id, e)
         finally:
             with self._lock:
                 session.is_relay_in_flight = False
-        with self._lock:
-            if session.relay_answered_at is None:
-                session.relay_answered_at = self._clock()
-        return answer
+        deadline = self._clock() + _RELAYED_VERDICT_WAIT_SECONDS
+        status = self.poll(flow_id)
+        # Each poll reads the CLI's output for up to a second, which paces this loop.
+        while status.state is FlowState.PENDING and self._clock() < deadline:
+            status = self.poll(flow_id)
+        return status
 
     # internals
 
@@ -704,7 +727,13 @@ class AuthFlowService:
         if isinstance(outcome, LoginCompleted) and outcome.success:
             return self._commit_locked(session, session.lane.provider_name)
         logger.info("Codex sign-in {} did not complete: {}", session.flow_id, outcome)
-        self._fail_locked(session, "The sign-in did not complete.")
+        reason = outcome.error if isinstance(outcome, LoginCompleted) else None
+        self._fail_locked(
+            session,
+            f"ChatGPT didn't finish the sign-in: {reason.strip()[:_MAX_PROVIDER_REASON_CHARS]}"
+            if reason and reason.strip()
+            else "The sign-in did not complete.",
+        )
         return FlowStatus(state=FlowState.FAILED, detail=session.detail)
 
     def _settle_locked(self, session: _Session, method: PtyMethod) -> FlowStatus:
@@ -722,11 +751,20 @@ class AuthFlowService:
 
         alive = bool(session.process is not None and session.process.isalive())
         if method.success is not None:
-            # A CLI that announces its sign-in decides it: the line, then a clean exit. Its probe
-            # would also see an old credential, so on a re-auth it could not tell the two apart.
+            # A CLI that announces its sign-in decides it: a clean exit, with its success line. Its
+            # probe would also see an old credential, so on a re-auth it could not tell the two apart.
             if alive:
                 return FlowStatus(state=FlowState.PENDING)
-            if re.search(method.success, session.output) is not None and session.process.exitstatus == 0:
+            if session.process.exitstatus != 0:
+                self._fail_locked(session, "The sign-in did not complete.")
+                return FlowStatus(state=FlowState.FAILED, detail=session.detail)
+            if re.search(method.success, session.output) is not None:
+                return self._commit_locked(session, session.lane.provider_name)
+            # A clean exit whose wording changed: the probe decides, rather than a reworded line
+            # throwing away a sign-in that worked.
+            verdict = self._probe(session.lane.harness, accounts.account_dir(session.account_id, self._home))
+            session.last_verdict = verdict
+            if verdict is SignedIn.YES:
                 return self._commit_locked(session, session.lane.provider_name)
             self._fail_locked(session, "The sign-in did not complete.")
             return FlowStatus(state=FlowState.FAILED, detail=session.detail)

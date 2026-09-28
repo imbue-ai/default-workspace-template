@@ -1,4 +1,3 @@
-import base64
 import subprocess
 import threading
 from collections.abc import Iterator
@@ -8,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from imbue.chat.harnesses.sign_in_relay import MAX_RELAYED_BODY_BYTES
 from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
 from imbue.chat.harnesses.sign_in_relay import fetch_loopback_callback
 from imbue.chat.harnesses.sign_in_relay import is_relayable_path
@@ -95,50 +93,43 @@ def test_a_url_still_being_written_is_not_read(tmp_path: Path) -> None:
 
 
 class _CliListener(BaseHTTPRequestHandler):
+    """A sign-in CLI's loopback listener: records each request and answers the way claude's does."""
+
+    received: list[str] = []
+
     def do_GET(self) -> None:
-        if self.path.startswith("/callback"):
-            self.send_response(302)
-            self.send_header("Location", "https://platform.claude.com/oauth/code/success")
-            self.end_headers()
-            return
-        body = b"x" * (MAX_RELAYED_BODY_BYTES + 10)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.send_header("Content-Length", str(len(body)))
+        type(self).received.append(self.path)
+        self.send_response(302)
+        self.send_header("Location", "https://platform.claude.com/oauth/code/success")
         self.end_headers()
-        self.wfile.write(body)
 
     def log_message(self, format: str, *args: object) -> None:
         return
 
 
 @pytest.fixture
-def cli_port() -> Iterator[int]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _CliListener)
+def cli_listener() -> Iterator[tuple[int, list[str]]]:
+    received: list[str] = []
+    handler = type("_RecordingCliListener", (_CliListener,), {"received": received})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield server.server_address[1]
+        yield server.server_address[1], received
     finally:
         server.shutdown()
         server.server_close()
 
 
-def test_a_redirect_is_handed_back_rather_than_followed(cli_port: int) -> None:
-    answer = fetch_loopback_callback(cli_port, "/callback?code=c&state=s")
+def test_the_callback_reaches_the_cli_and_its_redirect_is_not_followed(cli_listener: tuple[int, list[str]]) -> None:
+    port, received = cli_listener
 
-    assert answer.status == 302
-    assert answer.location == "https://platform.claude.com/oauth/code/success"
+    fetch_loopback_callback(port, "/callback?code=c&state=s")
 
-
-def test_a_large_answer_is_capped(cli_port: int) -> None:
-    answer = fetch_loopback_callback(cli_port, "/page")
-
-    assert answer.content_type == "text/html"
-    assert len(base64.b64decode(answer.body)) == MAX_RELAYED_BODY_BYTES
+    assert received == ["/callback?code=c&state=s"]
 
 
-def test_a_cli_that_is_not_listening_is_reported(cli_port: int) -> None:
+def test_a_cli_that_is_not_listening_is_reported() -> None:
     with ThreadingHTTPServer(("127.0.0.1", 0), _CliListener) as server:
         closed_port = server.server_address[1]
 

@@ -22,7 +22,6 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.codex.model import codex_model_options_path
 from imbue.chat.harnesses.codex.model import write_codex_model_options
-from imbue.chat.harnesses.sign_in_relay import RelayedResponse
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
@@ -97,7 +96,7 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
         response = client.get("/api/accounts")
     assert response.status_code == 200
     payload = response.get_json()
-    assert set(payload) == {"accounts", "mru", "default"}
+    assert set(payload) == {"accounts", "mru", "default", "can_manage"}
     (row,) = payload["accounts"]
     # `label` is the composed string for anything showing one; `provider` / `harness_label` /
     # `seq` are its parts, which the combo card renders at different sizes on one row.
@@ -111,6 +110,7 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
         "name",
         "label",
         "holds_subscription_token",
+        "reauth_method",
     }
     assert row["provider"] == "Anthropic"
     assert row["harness_label"] == "Claude Code"
@@ -427,34 +427,45 @@ def test_a_callback_needs_its_path_and_query(tmp_path: Path) -> None:
     assert response.status_code == 400
 
 
-def test_a_relayed_callback_answers_with_what_the_cli_said(tmp_path: Path) -> None:
+def test_a_relayed_callback_answers_with_how_the_sign_in_ended(tmp_path: Path) -> None:
     relay_url = (
         "https://claude.ai/oauth/authorize?client_id=c"
         "&redirect_uri=http%3A%2F%2Flocalhost%3A54871%2Fcallback&state=relay-state"
     )
     manual_url = "https://claude.ai/oauth/authorize?client_id=c&state=manual"
 
+    process = FakePexpectProcess([(0, manual_url)])
+
     def spawner(*_args: object, env: dict[str, str], **_kwargs: object) -> FakePexpectProcess:
         Path(env["MINDS_SIGNIN_URL_FILE"]).write_text(relay_url + "\n")
-        return FakePexpectProcess([(0, manual_url)])
+        return process
+
+    def deny(_port: int, _path: str) -> None:
+        process.print_output("Login failed: No authorization code received\r\n")
+        process.exit(1)
 
     service = AuthFlowService.create(
         home=None,
         work_dir=tmp_path / "work",
         spawner=spawner,
         probe=lambda *_a: SignedIn.YES,
-        fetch_callback=lambda _port, _path: RelayedResponse(status=200, content_type="text/html", body="aGk="),
+        fetch_callback=deny,
     )
     with _client(service) as client:
         started = client.post("/api/accounts", json={"lane_id": "anthropic", "method_id": "subscription"}).get_json()
         response = client.post(
             f"/api/accounts/flow/{started['flow_id']}/callback",
-            json={"path_and_query": "/callback?code=c&state=relay-state"},
+            json={"path_and_query": "/callback?error=access_denied&state=relay-state"},
         )
 
     assert started["relay_url"] == relay_url
     assert response.status_code == 200
-    assert response.get_json() == {"status": 200, "location": None, "content_type": "text/html", "body": "aGk="}
+    assert response.get_json() == {
+        "state": "failed",
+        "detail": "Access wasn't approved on Claude's page.",
+        "account_id": None,
+        "provider_name": "Anthropic",
+    }
 
 
 @pytest.mark.parametrize(
@@ -498,3 +509,31 @@ def test_an_account_on_a_pasted_subscription_token_is_flagged() -> None:
         rows = client.get("/api/accounts").get_json()["accounts"]
 
     assert {row["id"]: row["holds_subscription_token"] for row in rows} == {token_id: True, key_id: False}
+
+
+def test_an_api_key_account_signs_in_again_with_a_key() -> None:
+    subscription_id, _ = mint_account_dir()
+    commit_account(subscription_id, "anthropic", "Anthropic")
+    key_id, key_dir = mint_account_dir()
+    commit_account(key_id, "anthropic", "Anthropic")
+    (key_dir / "settings.json").write_text('{"env": {"ANTHROPIC_API_KEY": "sk-ant-api03-key-5c1e"}}')
+    codex_key_id, codex_key_dir = mint_account_dir()
+    commit_account(codex_key_id, "openai", "OpenAI")
+    (codex_key_dir / "auth.json").write_text('{"auth_mode": "apikey", "OPENAI_API_KEY": "sk-proj-7d2a"}')
+
+    with _client() as client:
+        rows = client.get("/api/accounts").get_json()["accounts"]
+
+    assert {row["id"]: row["reauth_method"] for row in rows} == {
+        subscription_id: "subscription",
+        key_id: "api_key",
+        codex_key_id: "api_key",
+    }
+
+
+def test_the_account_list_tells_a_visitor_it_cannot_manage_accounts(tmp_path: Path) -> None:
+    with _client(_signed_in_service(tmp_path)) as client:
+        owner = client.get("/api/accounts").get_json()
+        visitor = client.get("/api/accounts", headers={"X-Imbue-Identity": _VISITOR}).get_json()
+
+    assert (owner["can_manage"], visitor["can_manage"]) == (True, False)

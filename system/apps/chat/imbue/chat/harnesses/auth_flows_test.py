@@ -6,7 +6,9 @@ belongs in a manual check against the actual binaries, not here -- a fake termin
 only assert that our fake behaves like our fake.
 """
 
+import itertools
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -25,7 +27,7 @@ from imbue.chat.harnesses.key_check import CheckedProvider
 from imbue.chat.harnesses.key_check import KeyCheck
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.registry import build_account_binding
-from imbue.chat.harnesses.sign_in_relay import RelayedResponse
+from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
 
@@ -589,21 +591,25 @@ def _finished_claude(output: str, exitstatus: int | None) -> FakePexpectProcess:
 
 
 @pytest.mark.parametrize(
-    ("output", "exitstatus", "state"),
+    ("output", "exitstatus", "probe_answer", "state", "is_probed"),
     [
-        pytest.param("Login successful.\r\n", 0, FlowState.OK, id="success-line-and-clean-exit"),
-        pytest.param("", 0, FlowState.FAILED, id="clean-exit-without-the-line"),
-        pytest.param("Login successful.\r\n", 1, FlowState.FAILED, id="line-then-an-error-exit"),
-        pytest.param("Login successful.\r\n", None, FlowState.FAILED, id="killed"),
+        pytest.param("Login successful.\r\n", 0, SignedIn.NO, FlowState.OK, False, id="success-line-and-clean-exit"),
+        pytest.param("", 0, SignedIn.YES, FlowState.OK, True, id="clean-exit-reworded-probe-confirms"),
+        pytest.param("", 0, SignedIn.NO, FlowState.FAILED, True, id="clean-exit-reworded-probe-refuses"),
+        pytest.param("Login successful.\r\n", 1, SignedIn.YES, FlowState.FAILED, False, id="line-then-an-error-exit"),
+        pytest.param("Login successful.\r\n", None, SignedIn.YES, FlowState.FAILED, False, id="killed"),
     ],
 )
-def test_claude_decides_its_own_sign_in(tmp_path: Path, output: str, exitstatus: int | None, state: FlowState) -> None:
-    """The probe is never asked: it would also answer yes for the credential a re-auth replaces."""
+def test_claude_decides_its_own_sign_in(
+    tmp_path: Path, output: str, exitstatus: int | None, probe_answer: SignedIn, state: FlowState, is_probed: bool
+) -> None:
+    """The CLI's exit decides. The probe, which would also answer yes for the credential a re-auth
+    replaces, is asked only about a clean exit whose success line did not match its wording."""
     probed: list[HarnessType] = []
 
     def probe(harness: HarnessType, _path: Path) -> SignedIn:
         probed.append(harness)
-        return SignedIn.YES
+        return probe_answer
 
     process = _finished_claude(output, exitstatus)
     service = AuthFlowService.create(
@@ -616,7 +622,7 @@ def test_claude_decides_its_own_sign_in(tmp_path: Path, output: str, exitstatus:
     started = service.start("anthropic", "subscription")
 
     assert service.poll(started.flow_id).state is state
-    assert probed == []
+    assert (probed != []) is is_probed
 
 
 def test_a_claude_sign_in_still_running_waits(tmp_path: Path) -> None:
@@ -669,21 +675,25 @@ def _claude_flow_service(
     process: FakePexpectProcess,
     relay_url: str | None,
     fetched: list[tuple[int, str]],
-    clock: list[float],
+    on_callback: Callable[[], None] = lambda: None,
 ) -> AuthFlowService:
-    """A service whose fake `claude` runs `$BROWSER` with `relay_url`, as the real one does."""
-    seen_env: dict[str, str] = {}
+    """A service whose fake `claude` runs `$BROWSER` with `relay_url`, as the real one does.
+
+    `on_callback` is what the CLI does when the relayed callback reaches its listener. The clock
+    moves ten seconds each time it is read, so a flow still pending after the callback is reported
+    as such within a few polls rather than after the real wait.
+    """
 
     def spawner(*_args: object, env: dict[str, str], **_kwargs: object) -> FakePexpectProcess:
-        seen_env.update(env)
         if relay_url is not None:
             Path(env["MINDS_SIGNIN_URL_FILE"]).write_text(relay_url + "\n")
         return process
 
-    def fetch(port: int, path_and_query: str) -> RelayedResponse:
+    def fetch(port: int, path_and_query: str) -> None:
         fetched.append((port, path_and_query))
-        return RelayedResponse(status=302, location="https://platform.claude.com/oauth/code/success")
+        on_callback()
 
+    ticks = itertools.count(start=0.0, step=10.0)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
     return AuthFlowService.create(
@@ -693,7 +703,7 @@ def _claude_flow_service(
         spawner=spawner,
         probe=lambda *_a: SignedIn.YES,
         fetch_callback=fetch,
-        clock=lambda: clock[0],
+        clock=lambda: next(ticks),
     )
 
 
@@ -702,7 +712,7 @@ def _claude_process() -> FakePexpectProcess:
 
 
 def test_a_claude_sign_in_offers_the_page_its_cli_opened_for_relaying(tmp_path: Path) -> None:
-    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, [], [0.0])
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, [])
 
     started = service.start("anthropic", "subscription")
 
@@ -711,7 +721,7 @@ def test_a_claude_sign_in_offers_the_page_its_cli_opened_for_relaying(tmp_path: 
 
 
 def test_a_claude_sign_in_whose_cli_opened_nothing_offers_no_relay(tmp_path: Path) -> None:
-    service = _claude_flow_service(tmp_path, _claude_process(), None, [], [0.0])
+    service = _claude_flow_service(tmp_path, _claude_process(), None, [])
 
     started = service.start("anthropic", "subscription")
 
@@ -720,21 +730,57 @@ def test_a_claude_sign_in_whose_cli_opened_nothing_offers_no_relay(tmp_path: Pat
 
 
 def test_a_page_whose_callback_is_not_loopback_is_not_offered_for_relaying(tmp_path: Path) -> None:
-    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_MANUAL_URL, [], [0.0])
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_MANUAL_URL, [])
 
     assert service.start("anthropic", "subscription").relay_url is None
 
 
-def test_the_callback_is_replayed_against_the_port_the_sign_in_named(tmp_path: Path) -> None:
+def test_the_callback_is_replayed_against_the_port_the_sign_in_named_and_answered_with_the_verdict(
+    tmp_path: Path,
+) -> None:
     fetched: list[tuple[int, str]] = []
-    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, fetched, [0.0])
+    process = _claude_process()
+
+    def sign_in() -> None:
+        process.print_output("Login successful.\r\n")
+        process.exit(0)
+
+    service = _claude_flow_service(tmp_path, process, _CLAUDE_RELAY_URL, fetched, on_callback=sign_in)
     started = service.start("anthropic", "subscription")
 
-    answer = service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+    status = service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
 
     assert fetched == [(54871, "/callback?code=the-code&state=relay-state")]
-    assert answer.status == 302
-    assert answer.location == "https://platform.claude.com/oauth/code/success"
+    assert status.state is FlowState.OK
+    assert status.account_id is not None
+
+
+def test_a_callback_carrying_a_denial_is_answered_with_why_the_sign_in_failed(tmp_path: Path) -> None:
+    process = _claude_process()
+
+    def deny() -> None:
+        process.print_output("Login failed: No authorization code received\r\n")
+        process.exit(1)
+
+    service = _claude_flow_service(tmp_path, process, _CLAUDE_RELAY_URL, [], on_callback=deny)
+    started = service.start("anthropic", "subscription")
+
+    status = service.relay_callback(started.flow_id, "/callback?error=access_denied&state=relay-state")
+
+    assert status.state is FlowState.FAILED
+    assert status.detail == "Access wasn't approved on Claude's page."
+
+
+def test_a_callback_the_cli_does_not_take_is_answered_with_how_the_flow_stands(tmp_path: Path) -> None:
+    def unreachable() -> None:
+        raise RelayCallbackError("the sign-in did not answer (ConnectTimeout)")
+
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, [], on_callback=unreachable)
+    started = service.start("anthropic", "subscription")
+
+    status = service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+
+    assert status.state is FlowState.PENDING
 
 
 @pytest.mark.parametrize(
@@ -749,7 +795,7 @@ def test_the_callback_is_replayed_against_the_port_the_sign_in_named(tmp_path: P
 )
 def test_a_first_request_that_is_not_this_sign_ins_callback_is_refused(tmp_path: Path, path_and_query: str) -> None:
     fetched: list[tuple[int, str]] = []
-    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, fetched, [0.0])
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, fetched)
     started = service.start("anthropic", "subscription")
 
     with pytest.raises(FlowError):
@@ -758,26 +804,20 @@ def test_a_first_request_that_is_not_this_sign_ins_callback_is_refused(tmp_path:
     assert fetched == []
 
 
-def test_other_requests_on_the_port_go_through_only_shortly_after_the_callback(tmp_path: Path) -> None:
+def test_the_callback_is_taken_only_once(tmp_path: Path) -> None:
     fetched: list[tuple[int, str]] = []
-    clock = [100.0]
-    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, fetched, clock)
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, fetched)
     started = service.start("anthropic", "subscription")
 
-    with pytest.raises(FlowError):
-        service.relay_callback(started.flow_id, "/success")
     service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
-    clock[0] = 150.0
-    service.relay_callback(started.flow_id, "/success")
-    clock[0] = 170.0
-    with pytest.raises(FlowError):
-        service.relay_callback(started.flow_id, "/success")
+    with pytest.raises(FlowError, match="already been handled"):
+        service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
 
-    assert fetched == [(54871, "/callback?code=the-code&state=relay-state"), (54871, "/success")]
+    assert fetched == [(54871, "/callback?code=the-code&state=relay-state")]
 
 
 def test_a_sign_in_without_a_relay_takes_no_callback(tmp_path: Path) -> None:
-    service = _claude_flow_service(tmp_path, _claude_process(), None, [], [0.0])
+    service = _claude_flow_service(tmp_path, _claude_process(), None, [])
     started = service.start("anthropic", "subscription")
 
     with pytest.raises(FlowError):

@@ -315,14 +315,37 @@ auth login`, or a short-lived `codex app-server` for ChatGPT) runs with
 would open; the flow offers it as `relay_url`, and the chooser hands it to the
 minds desktop app (`minds:provider-sign-in` in the embed contract). The desktop
 app opens the page and listens on the loopback port it calls back to, posting
-each request to `POST /api/accounts/flow/<flow_id>/callback`, which replays the
-callback against the CLI here (`harnesses/sign_in_relay.py`). With no desktop
-app to relay, Claude falls back to pasting the code its page shows, and ChatGPT
-to its one-time-code login. Changing the accounts is the owner's alone: every
-route that starts, advances or removes a sign-in answers 403 to a request whose
-`X-Imbue-Identity` says `owner: false`. A pasted Anthropic or OpenAI key is
-checked with its provider before it is saved, and a Claude subscription token is
-never accepted or kept.
+the callback to `POST /api/accounts/flow/<flow_id>/callback`. That route takes
+the flow's own callback once, replays it against the CLI here
+(`harnesses/sign_in_relay.py`), waits briefly for the flow to settle, and
+answers with the flow's status and provider name; the desktop app turns that
+into the page the browser ends on. The CLI's own answer is not passed back,
+since claude sends the browser to its success page before its token exchange
+has succeeded. When a flow ends the chooser sends `minds:provider-sign-in-end`,
+so the desktop app frees the port.
+
+Every way in stays reachable. With no desktop app to relay, Claude falls back to
+pasting the code its page shows, and ChatGPT to its one-time-code login. While
+the browser is out, "Sign in another way" shows Claude's code steps for the same
+sign-in (the CLI takes whichever code arrives first) or starts ChatGPT's code
+login, alongside the lane's other methods; a failed sign-in offers the same. A
+Claude sign-in succeeds on the CLI's clean exit with its success line, or, if
+the line was reworded, on its own probe; a denied one says access wasn't
+approved. A ChatGPT code login that ChatGPT refuses says to turn on device code
+sign-in for Codex in ChatGPT's security settings. "Sign in again" uses the kind
+of credential the account already holds (`reauth_method` on each account row).
+
+Changing the accounts is the owner's alone: every route that starts, advances
+or removes a sign-in answers 403 to a request whose `X-Imbue-Identity` says
+`owner: false`, and `GET /api/accounts` carries `can_manage`, so the chooser
+shows a visitor the accounts without the actions that would be refused. A
+pasted Anthropic or OpenAI key is checked with its provider before it is saved,
+and a Claude subscription token is never accepted or kept.
+
+A failed turn from an account that has run out is not a sign-in problem: a spent
+balance or spending limit is an API error of kind `billing`, and a reached usage
+limit one of kind `usage_limit` (`harnesses/error_patterns.py`), each shown with
+what fixes it and a link to switch the chat to another provider.
 
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare

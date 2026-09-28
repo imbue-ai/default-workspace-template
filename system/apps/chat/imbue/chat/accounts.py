@@ -350,9 +350,36 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
 # is not.
 KEPT_ON_DISCARD: Final = ("projects",)
 
-# CLEANUP: where a re-auth used to park the credential it replaced. `reconcile` deletes any left
-# behind; remove this and that deletion once every workspace has booted a build without parking.
+# CLEANUP: where a re-auth used to park the credential it replaced, and the marker for a file that
+# did not exist before it. `reconcile` restores and removes any left behind; remove these and
+# `_restore_legacy_reauth_backup` once every workspace has booted a build without parking.
 _LEGACY_REAUTH_BACKUP_DIRNAME: Final = ".minds-reauth-backup"
+_LEGACY_ABSENT_SUFFIX: Final = ".absent"
+
+
+def _restore_legacy_reauth_backup(account_id: str, home: Path | None) -> int:
+    """Put back a credential an older build parked mid-re-auth, and remove the parking spot.
+
+    A re-auth on that build moved the working credential aside before signing in, so one that
+    died part way left the only copy here. Returns how many files it covered.
+    """
+    folder = account_dir(account_id, home)
+    backup = folder / _LEGACY_REAUTH_BACKUP_DIRNAME
+    if not backup.is_dir():
+        return 0
+    restored = 0
+    for child in sorted(backup.iterdir()):
+        if child.name.endswith(_LEGACY_ABSENT_SUFFIX):
+            continue
+        target = folder / child.name
+        if (backup / f"{child.name}{_LEGACY_ABSENT_SUFFIX}").exists():
+            target.unlink(missing_ok=True)
+        else:
+            target.write_bytes(child.read_bytes())
+            target.chmod(0o600)
+        restored += 1
+    shutil.rmtree(backup, ignore_errors=True)
+    return restored
 
 
 def discard_account_dir(account_id: str, home: Path | None = None) -> None:
@@ -561,7 +588,11 @@ def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...
         index = read_index(home)
         known = {a.id for a in index.accounts}
         for account in index.accounts:
-            shutil.rmtree(account_dir(account.id, home) / _LEGACY_REAUTH_BACKUP_DIRNAME, ignore_errors=True)
+            restored = _restore_legacy_reauth_backup(account.id, home)
+            if restored:
+                logger.warning(
+                    "Restored {} credential file(s) for account {} from an interrupted re-auth", restored, account.id
+                )
         removed = []
         for child in sorted(root.iterdir()):
             if child.name == _LOCK_FILENAME:

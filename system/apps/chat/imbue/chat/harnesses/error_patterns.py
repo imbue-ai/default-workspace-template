@@ -17,10 +17,12 @@ harness-agnostic; only the surface-form regexes differ, and both live below.
 Auth-family failures are handled by :mod:`auth_errors`, which has its own recovery surface --
 so they are deliberately NOT classified here. That is enforced rather than left to the tables:
 :func:`classify_api_error` returns ``None`` for anything the auth vocabulary claims, so a
-message can never carry both subtexts. Without it the two families overlap by construction --
-Anthropic reports exhausted third-party usage as a 400 ``invalid_request_error``, which is in
-BOTH this module's type table and the auth one. :func:`kind_for_status` is the exception: it
-sees a status and no text, so it leaves that decision to its caller.
+message can never carry both subtexts. :func:`kind_for_status` is the exception: it sees a
+status and no text, so it leaves that decision to its caller.
+
+A spent balance or a reached usage limit is classified here, as ``billing`` or ``usage_limit``
+(:func:`entitlement_kind`), ahead of the status and the type it arrives with: the credential
+works, so the way forward is credit or time, never a sign-in.
 
 The kind set and the provider-fault split are ordinary HTTP semantics, so they
 are harness-agnostic; only the two surface-form regexes are Claude-shaped. A
@@ -35,6 +37,26 @@ from __future__ import annotations
 import re
 
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
+
+# A spent ENTITLEMENT rather than a failed request: the credential works, but the account behind it
+# has no credit left or has reached a usage limit. Each gets its own kind, because the way forward
+# differs -- add credit, or wait for the limit to reset -- and neither is signing in again.
+# Anthropic reports exhausted usage as a 400 `invalid_request_error` and codex as
+# `usage_limit_exceeded`, so these are matched before the status and the type.
+_ENTITLEMENT_KIND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"credit balance is too low|exceeded your current quota|insufficient_quota|budget has been exceeded"
+            r"|exceededbudget|out of usage credits|spend limit",
+            re.IGNORECASE,
+        ),
+        "billing",
+    ),
+    (
+        re.compile(r"usage_limit_exceeded|usage limit|hit your (?:[\w-]+ )?limit", re.IGNORECASE),
+        "usage_limit",
+    ),
+)
 
 # HTTP status -> normalized kind. Sourced from the Anthropic API errors reference
 # (platform.claude.com/docs/en/api/errors). 401 is intentionally omitted -- auth is
@@ -75,6 +97,14 @@ _BARE_STATUS_RE = re.compile(r"^\s*(\d{3})\s*[{\s]", re.IGNORECASE)
 _API_ERROR_TYPE_RE = re.compile(r'"type"\s*:\s*"([a-z_]+error)"', re.IGNORECASE)
 
 
+def entitlement_kind(text: str) -> str | None:
+    """``billing`` or ``usage_limit`` when ``text`` says the account has run out, else ``None``."""
+    for pattern, kind in _ENTITLEMENT_KIND_PATTERNS:
+        if pattern.search(text):
+            return kind
+    return None
+
+
 def classify_api_error(text: str) -> str | None:
     """Return a normalized API-error kind for ``text``, or ``None`` when it is not
     a recognized model API error.
@@ -85,6 +115,9 @@ def classify_api_error(text: str) -> str | None:
     """
     if not text or is_auth_error_text(text):
         return None
+    entitlement = entitlement_kind(text)
+    if entitlement is not None:
+        return entitlement
     status_match = _API_ERROR_STATUS_RE.search(text) or _BARE_STATUS_RE.match(text)
     if status_match is not None:
         status_kind = _STATUS_KINDS.get(status_match.group(1))

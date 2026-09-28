@@ -12,16 +12,20 @@
 import {
   PROVIDER_SIGN_IN,
   PROVIDER_SIGN_IN_ACK,
+  PROVIDER_SIGN_IN_END,
   clearEmbedderMessageHandler,
   sendToEmbedder,
   setEmbedderMessageHandler,
 } from "@imbue/workspace-ui/src/embed";
 
-/** How long to wait for the desktop app to answer before signing in without it. */
-export const RELAY_ACK_TIMEOUT_MS = 1000;
+/** How long to wait for an embedder to answer before signing in without it. Only a chrome that
+ *  predates the relay stays silent; the current ones answer as soon as the page is opened. */
+export const RELAY_ACK_TIMEOUT_MS = 5000;
 
 /** Ask the desktop app to relay this sign-in and open its page; whether it will. */
 export function requestProviderRelay(url: string, flowId: string): Promise<boolean> {
+  // A page with no embedder at all has nobody to ask.
+  if (typeof window !== "undefined" && window.parent === window) return Promise.resolve(false);
   return new Promise((resolve) => {
     let isSettled = false;
     const settle = (isRelaying: boolean): void => {
@@ -35,4 +39,9 @@ export function requestProviderRelay(url: string, flowId: string): Promise<boole
     setEmbedderMessageHandler(PROVIDER_SIGN_IN_ACK, (message) => settle(message.relay === true));
     sendToEmbedder(PROVIDER_SIGN_IN, { url, flowId });
   });
+}
+
+/** Tell the desktop app a sign-in it may be relaying has ended, so it stops listening for it. */
+export function endProviderRelay(flowId: string): void {
+  sendToEmbedder(PROVIDER_SIGN_IN_END, { flowId });
 }

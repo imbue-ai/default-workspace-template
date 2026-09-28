@@ -591,10 +591,16 @@ class FakePexpectProcess:
     def isalive(self) -> bool:
         return self._is_alive
 
-    def exit(self) -> None:
+    def print_output(self, chunk: str) -> None:
+        """Have the scripted CLI print ``chunk``, for the next drain to read."""
+        self._drain_chunks.append(chunk)
+
+    def exit(self, exitstatus: int | None = None) -> None:
         """Let the scripted CLI finish. `terminate` does not: the production teardown calls
         it on paths where the process was already gone, so it cannot mean "now exited"."""
         self._is_alive = False
+        if exitstatus is not None:
+            self.exitstatus = exitstatus
 
     def terminate(self, force: bool = False) -> None:
         self.terminate_calls += 1

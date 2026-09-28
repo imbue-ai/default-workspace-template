@@ -28,18 +28,15 @@ from typing import Any
 
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
 from imbue.chat.harnesses.error_patterns import classify_api_error
+from imbue.chat.harnesses.error_patterns import entitlement_kind
 from imbue.chat.harnesses.error_patterns import kind_for_status
 from imbue.imbue_common.frozen_model import FrozenModel
 
-# The kinds whose only way forward is different credentials. They belong to the auth
-# family (which has its own recovery surface) rather than the API-error one, for the
-# reason :mod:`auth_errors` gives: none is an authentication failure in the HTTP sense,
-# but a spent balance and a rejected token are the same dead end for the user. This is
-# also what already happens by prose -- "Credit balance is too low", the text the auth
-# vocabulary claims, is exactly the text Claude Code stamps ``billing_error`` on.
-_AUTH_ERROR_KINDS: frozenset[str] = frozenset(
-    {"authentication_failed", "oauth_org_not_allowed", "account_on_hold", "billing_error"}
-)
+# The kinds whose only way forward is different credentials, which route to the auth family's
+# recovery surface. ``billing_error`` is not one: the credential works and the account needs
+# credit, which is an API error of its own kind.
+_AUTH_ERROR_KINDS: frozenset[str] = frozenset({"authentication_failed", "oauth_org_not_allowed", "account_on_hold"})
+_ENTITLEMENT_KIND_BY_CLAUDE_ERROR: dict[str, str] = {"billing_error": "billing"}
 
 # Claude Code's kind -> our normalized kind, for a failure that carries no HTTP status.
 # ``server_error`` is deliberately absent: Claude Code also stamps it on failures that
@@ -100,7 +97,15 @@ def classify_error_notice(raw: dict[str, Any], text: str) -> ErrorNotice:
     # precedence rule.)
     if claude_kind in _AUTH_ERROR_KINDS or is_auth_error_text(text):
         return ErrorNotice(is_auth_error=True)
-    kind = kind_for_status(status) or _KIND_BY_CLAUDE_ERROR.get(claude_kind) or classify_api_error(text)
+    # A spent balance or usage limit comes first: Claude Code stamps it with a 400 or a 429,
+    # which would otherwise read as a bad request or a passing rate limit.
+    kind = (
+        entitlement_kind(text)
+        or _ENTITLEMENT_KIND_BY_CLAUDE_ERROR.get(claude_kind)
+        or kind_for_status(status)
+        or _KIND_BY_CLAUDE_ERROR.get(claude_kind)
+        or classify_api_error(text)
+    )
     if kind is None and raw.get("isApiErrorMessage") is not True:
         return _NO_ERROR
     return ErrorNotice(is_api_error=True, api_error_kind=kind)

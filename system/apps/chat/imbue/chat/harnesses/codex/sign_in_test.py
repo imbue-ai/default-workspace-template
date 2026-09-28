@@ -1,5 +1,6 @@
 """The ChatGPT sign-ins the flow service runs through a short-lived `codex app-server`."""
 
+import itertools
 import threading
 from pathlib import Path
 
@@ -11,7 +12,6 @@ from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.codex.sign_in import app_server_argv
-from imbue.chat.harnesses.sign_in_relay import RelayedResponse
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
 from imbue.chat.testing import wait_until_true
@@ -61,6 +61,7 @@ def _service(tmp_path: Path, client: _ScriptedLoginClient, spawned: list[list[st
         Path(args[-1].removeprefix("unix://")).touch()
         return FakePexpectProcess([(0, "")])
 
+    ticks = itertools.count(start=0.0, step=10.0)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
     return AuthFlowService.create(
@@ -69,7 +70,10 @@ def _service(tmp_path: Path, client: _ScriptedLoginClient, spawned: list[list[st
         spawner=spawner,
         probe=lambda *_a: SignedIn.YES,
         login_client_connector=lambda _socket: client,
-        fetch_callback=lambda _port, _path: RelayedResponse(status=200),
+        fetch_callback=lambda _port, _path: None,
+        # Moves on each read, so a flow still pending after a relayed callback is reported within a
+        # few polls rather than after the real wait.
+        clock=lambda: next(ticks),
     )
 
 
@@ -111,7 +115,7 @@ def test_codex_saying_the_login_failed_fails_the_flow(tmp_path: Path) -> None:
 
     status = service.poll(started.flow_id)
     assert status.state is FlowState.FAILED
-    assert status.detail == "The sign-in did not complete."
+    assert status.detail == "ChatGPT didn't finish the sign-in: access_denied"
     assert read_index(tmp_path).accounts == ()
 
 
@@ -141,9 +145,10 @@ def test_the_browser_logins_callback_is_relayed_to_codexs_listener(tmp_path: Pat
     service = _service(tmp_path, _ScriptedLoginClient(None))
     started = service.start("openai", "chatgpt")
 
-    answer = service.relay_callback(started.flow_id, "/auth/callback?code=c&state=codex-state")
+    status = service.relay_callback(started.flow_id, "/auth/callback?code=c&state=codex-state")
 
-    assert answer.status == 200
+    # Codex has not said how its login ended, so the flow is still finishing.
+    assert status.state is FlowState.PENDING
     service.abort(started.flow_id)
 
 

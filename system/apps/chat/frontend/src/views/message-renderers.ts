@@ -196,7 +196,8 @@ function resolvedResultSignature(
  *  which account it is bound to. It sits outside the event, so the memo below has to carry it --
  *  the chat list can land after the transcript, and the switch link is only offered once it has. */
 function reauthNoteSignature(event: AssistantMessageEvent, chatId: string): string {
-  if (!event.is_auth_error) return "";
+  const isSpentAccount = event.api_error_kind !== null && event.api_error_kind in SPENT_ACCOUNT_NOTES;
+  if (!event.is_auth_error && !isSpentAccount) return "";
   const chat = getChatById(chatId);
   return chat === undefined ? "unknown" : `bound:${chat.active_agent.account_id ?? ""}`;
 }
@@ -457,24 +458,45 @@ function renderReauthAction(chatId: string): m.Children {
     // moves this chat to the account picked: a rebind for another account on the same harness and
     // lane, a handoff otherwise. It waits for the chat list, which can land after the transcript:
     // the move needs the chat, and the chooser fixes which account it refuses when it opens.
-    chat === undefined
-      ? null
-      : [
-          " or ",
-          m(
-            "button",
-            {
-              type: "button",
-              class: REAUTH_ACTION_CLASS,
-              onclick: () =>
-                openProviderChooser({
-                  onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen),
-                  ...(accountId ? { unpickable: { accountId, reason: "failing" as const } } : {}),
-                }),
-            },
-            "switch to another provider",
-          ),
-        ],
+    chat === undefined ? null : [" or ", switchProviderAction(chatId, accountId)],
+    ".",
+  ]);
+}
+
+/** The link that moves a chat to an account picked in the chooser: a rebind for another account on
+ *  the same harness and lane, a handoff otherwise. The chat's own account is listed but refused. */
+function switchProviderAction(chatId: string, accountId: string): m.Vnode {
+  return m(
+    "button",
+    {
+      type: "button",
+      class: REAUTH_ACTION_CLASS,
+      onclick: () =>
+        openProviderChooser({
+          onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen),
+          ...(accountId ? { unpickable: { accountId, reason: "failing" as const } } : {}),
+        }),
+    },
+    "switch to another provider",
+  );
+}
+
+/** The note under a failure from an account that has run out, by kind. Signing in again would
+ *  change nothing, so it names what would -- credit, or time -- and offers the switch. */
+const SPENT_ACCOUNT_NOTES: Record<string, string> = {
+  billing: "This account is out of credit or has reached its spending limit. Add credit with the provider, or ",
+  usage_limit: "This account has reached its usage limit, which resets on its own. Until then you can ",
+};
+
+/** That note, or null for a failure of any other kind. */
+function renderSpentAccountNote(kind: string | null, chatId: string): m.Children {
+  const lead = kind === null ? undefined : SPENT_ACCOUNT_NOTES[kind];
+  if (lead === undefined) return null;
+  const chat = getChatById(chatId);
+  if (chat === undefined) return null;
+  return m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" }, [
+    lead,
+    switchProviderAction(chatId, chat.active_agent.account_id ?? ""),
     ".",
   ]);
 }
@@ -651,7 +673,7 @@ function appendEventParts(
                 providerFaultNote(event.api_error_kind),
               )
             : null,
-          event.is_auth_error ? renderReauthAction(chatId) : null,
+          event.is_auth_error ? renderReauthAction(chatId) : renderSpentAccountNote(event.api_error_kind, chatId),
         ]),
       );
     } else {

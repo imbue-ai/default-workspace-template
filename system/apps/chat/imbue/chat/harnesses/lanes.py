@@ -217,10 +217,17 @@ _CLAUDE_URL_SCRAPE = Scrape(
     strict=rf"https://{_CLAUDE_URL_CHARSET}*oauth/authorize{_CLAUDE_URL_CHARSET}*",
     continuation=rf"^{_CLAUDE_URL_CHARSET}+$",
 )
-# Two failure classes with different copy: an OAuth error parks the CLI on a retry prompt
-# and needs a restart, while a login failure explains itself and is worth echoing.
+# An OAuth error parks the CLI on a retry prompt and needs a restart. A login failure names its
+# cause: the two the browser can cause get words a user can act on (the callback came back with no
+# code when access was denied; Anthropic refused a code that was used or had expired), and any
+# other is echoed.
 _CLAUDE_FAILURES: Final = (
     (r"OAuth error", "Anthropic rejected the code. Start over to get a fresh link."),
+    (r"Login failed: No authorization code received", "Access wasn't approved on Claude's page."),
+    (
+        r"Login failed: Request failed with status code 4\d\d",
+        "Anthropic didn't accept that sign-in. Start over to get a fresh link.",
+    ),
     (r"Login failed: ?([^\r\n]*)", "{1}"),
 )
 

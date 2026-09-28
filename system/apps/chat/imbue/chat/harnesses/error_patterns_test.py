@@ -93,7 +93,32 @@ def test_a_status_quoted_mid_message_is_not_a_failure() -> None:
 
 
 def test_auth_wins_so_the_two_subtexts_cannot_stack() -> None:
-    """Anthropic reports exhausted third-party usage as a 400 `invalid_request_error`, which
-    is in BOTH this module's type table and the auth vocabulary. Classifying it here as well
-    would put two contradictory next steps under one message."""
-    assert classify_api_error('400 {"type":"invalid_request_error","message":"credit balance is too low"}') is None
+    """A message the auth vocabulary claims gets no API-error kind as well."""
+    assert classify_api_error('API Error: 401 {"type":"authentication_error","message":"invalid x-api-key"}') is None
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        pytest.param(
+            '400 {"type":"invalid_request_error","message":"credit balance is too low"}',
+            "billing",
+            id="anthropic-credit",
+        ),
+        pytest.param(
+            "You exceeded your current quota, please check your plan and billing details.",
+            "billing",
+            id="openai-quota",
+        ),
+        pytest.param(
+            "You've hit your monthly spend limit · raise it at claude.ai/settings/usage",
+            "billing",
+            id="claude-spend-limit",
+        ),
+        pytest.param("You've hit your session limit · resets 2:50pm", "usage_limit", id="claude-session-limit"),
+        pytest.param("you have hit your usage_limit_exceeded", "usage_limit", id="codex-usage-limit"),
+    ],
+)
+def test_a_spent_account_is_classified_by_what_would_fix_it(text: str, kind: str) -> None:
+    """Credit or time, never a sign-in -- and ahead of the 400 or 429 it arrives with."""
+    assert classify_api_error(text) == kind

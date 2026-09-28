@@ -557,16 +557,16 @@ def test_a_failed_turn_classifies_off_the_structured_tag() -> None:
     assert failure["is_provider_fault"] is True
 
 
-def test_a_spent_quota_is_an_auth_failure_not_a_provider_fault() -> None:
-    """Not an authentication failure in the HTTP sense, but the only way forward is different
-    credentials -- which is exactly what the auth subtext offers."""
+def test_a_spent_quota_is_a_usage_limit_not_a_sign_in_problem() -> None:
+    """The credential works; the account has run out, which waiting or another provider fixes."""
     events = parse_lines(
         _task_complete({"message": "you have hit your usage_limit_exceeded", "codex_error_info": {"type": "quota"}}),
         {},
     )
     failure = events[0]
-    assert failure["is_auth_error"] is True
-    assert failure["is_api_error"] is False
+    assert failure["is_auth_error"] is False
+    assert failure["api_error_kind"] == "usage_limit"
+    assert failure["is_provider_fault"] is False
 
 
 def test_a_clean_turn_still_yields_only_its_marker() -> None:
@@ -654,4 +654,3 @@ def test_context_compaction_synthetic_id_when_no_turn_or_item_id() -> None:
     assert len(events) == 1
     event = events[0]
     assert event["event_id"].startswith("codex-context_compacted-2026-09-21T19:30:50.404Z-")
-

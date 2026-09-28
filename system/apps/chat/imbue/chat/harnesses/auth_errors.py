@@ -5,9 +5,11 @@ same everywhere: the account this chat runs on no longer works, and the user nee
 credentials. So the vocabulary is shared and only the extraction is per-harness.
 
 claude had its own copy of this list (`claude/auth_patterns.py`, sourced from claude's own
-errors reference). It is folded in here: two tables answering one question is how they drift,
-and claude's entries are not actually claude-specific -- a credit balance and a proxy budget
-are facts about a billing relationship, not about a CLI.
+errors reference). It is folded in here: two tables answering one question is how they drift.
+
+A spent balance or a reached usage limit is not in it. The credential works; the account behind
+it has run out, and signing in again cannot fix that -- adding credit, waiting, or moving to
+another provider can. Those are API errors of their own kinds (`error_patterns.entitlement_kind`).
 
 Measured against the pinned CLIs rather than guessed, because each of these was previously
 filled in as `False` with a comment saying the shape was unknown:
@@ -36,8 +38,9 @@ _SOURCES: Final[tuple[str, ...]] = (
     # Status codes, however the CLI frames them ("401 Unauthorized", "status 401", "API Error: 401").
     r"\b(?:401|403)\b[^\n]{0,40}(?:unauthorized|forbidden|invalid|expired|auth)",
     r"(?:status|error)[^\n]{0,10}\b(?:401|403)\b",
-    # The structured error type every Anthropic-shaped and OpenAI-shaped API returns.
-    r'"type"\s*:\s*"(?:authentication_error|invalid_request_error)"',
+    # The structured error type every Anthropic-shaped and OpenAI-shaped API returns. Not
+    # `invalid_request_error`: it also covers a prompt that is too long or a bad parameter.
+    r'"type"\s*:\s*"authentication_error"',
     r'"code"\s*:\s*"(?:invalid_api_key|invalid_token|token_expired)"',
     r"auth error code:\s*\w+",
     # Prose the CLIs use when they know it is the credential.
@@ -53,18 +56,7 @@ _SOURCES: Final[tuple[str, ...]] = (
     # From claude's errors reference.
     r"invalid authentication credentials",
     r"organization has been disabled",
-    # Exhausted ENTITLEMENT rather than a rejected credential, and deliberately in the same
-    # family. Neither is an authentication failure in the HTTP sense -- Anthropic reports
-    # exhausted third-party usage as a 400 `invalid_request_error`, codex reports a spent quota
-    # as `usage_limit_exceeded` -- but the only way forward for both is different credentials,
-    # which is exactly what the subtext offers.
-    r"credit balance is too low",
-    r"usage_limit_exceeded",
-    r"exceeded your current quota",
-    # LiteLLM proxy rejections. The Imbue sign-in mode routes claude through a proxy with a
-    # per-key rolling budget; exhausting it is the same dead end.
-    r"budget has been exceeded",
-    r"exceededbudget",
+    # A LiteLLM proxy refusing the key itself.
     r"authentication error, invalid proxy server token passed",
 )
 

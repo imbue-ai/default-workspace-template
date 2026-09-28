@@ -27,7 +27,8 @@ const state: {
   accounts: ProviderAccount[];
   loaded: boolean;
   flow: unknown;
-} = { lanes: [], accounts: [], loaded: true, flow: null };
+  canManage: boolean;
+} = { lanes: [], accounts: [], loaded: true, flow: null, canManage: true };
 
 const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
 const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
@@ -41,6 +42,7 @@ vi.mock("../models/Providers", async (importOriginal) => ({
   getLanes: () => state.lanes,
   getAccounts: () => state.accounts,
   areLanesLoaded: () => state.loaded,
+  canManageAccounts: () => state.canManage,
   getFlow: () => state.flow,
   loadLanes: async () => undefined,
   loadAccounts: async () => undefined,
@@ -122,6 +124,7 @@ function account(id: string, laneId: string, label: string): ProviderAccount {
     name: "",
     label,
     holds_subscription_token: false,
+    reauth_method: "subscription",
   };
 }
 
@@ -134,6 +137,7 @@ beforeEach(() => {
   state.accounts = [];
   state.loaded = true;
   state.flow = null;
+  state.canManage = true;
 });
 
 describe("the provider chooser", () => {
@@ -158,6 +162,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic (Claude Code)",
         holds_subscription_token: false,
+        reauth_method: "subscription",
       },
       {
         id: "a2",
@@ -171,6 +176,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic 2 (Claude Code)",
         holds_subscription_token: false,
+        reauth_method: "subscription",
       },
     ];
     const text = render();
@@ -201,6 +207,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic (Claude Code)",
         holds_subscription_token: false,
+        reauth_method: "subscription",
       },
     ];
     const root = document.createElement("div");
@@ -434,14 +441,115 @@ describe("a sign-in finished in the browser", () => {
     expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
   });
 
-  it("starts the top row's sign-in as the chooser opens", async () => {
+  it("starts no sign-in until a row is clicked, so opening the chooser never displaces one", async () => {
     openProviderChooser();
     const root = document.createElement("div");
     m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
 
     await settled();
 
-    expect(startFlow).toHaveBeenCalledExactlyOnceWith("anthropic", "subscription");
+    expect(startFlow).not.toHaveBeenCalled();
+  });
+
+  it("keeps Claude's code steps one click from the browser wait, on the same sign-in", async () => {
+    state.lanes = [
+      lane({
+        methods: [
+          ...lane().methods,
+          {
+            id: "api_key",
+            label: "Use an API key",
+            description: "",
+            signup_url: "",
+            shape: "paste",
+            is_primary: false,
+          },
+        ],
+      }),
+    ];
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    const root = await clickLane("anthropic");
+
+    (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    expect(root.textContent).toContain("Approve, then paste the code shown");
+    expect(root.textContent).toContain("Use an API key");
+    expect(startFlow).toHaveBeenCalledOnce();
+  });
+
+  it("moves ChatGPT to its one-time code when the browser is not coming back", async () => {
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+    const root = await clickLane("openai");
+
+    (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();
+    await settled();
+
+    expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
+  });
+
+  it("moves to another way in when the desktop app can no longer open the page", async () => {
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    const root = await clickLane("anthropic");
+    requestProviderRelay.mockResolvedValue(false);
+
+    (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
+    await settled();
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    expect(root.textContent).toContain("Imbue Studio couldn't open the sign-in page.");
+    expect(root.textContent).toContain("Approve, then paste the code shown");
+  });
+
+  it("offers another way in after a sign-in fails", async () => {
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+    const root = await clickLane("openai");
+    state.flow = { ...(state.flow as object), status: { state: "failed", detail: "Denied.", account_id: null } };
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();
+    await settled();
+
+    expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
+  });
+
+  it("signs an API-key account in again with a key, not a browser sign-in", () => {
+    state.lanes = [
+      lane({
+        methods: [
+          ...lane().methods,
+          {
+            id: "api_key",
+            label: "Use an API key",
+            description: "",
+            signup_url: "",
+            shape: "paste",
+            is_primary: false,
+          },
+        ],
+      }),
+    ];
+    state.accounts = [{ ...account("a1", "anthropic", "Anthropic (Claude Code)"), reauth_method: "api_key" }];
+    const root = document.createElement("div");
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    [...root.querySelectorAll("button")].find((b) => b.textContent === "Sign in again")!.click();
+
+    expect(startFlow).toHaveBeenCalledExactlyOnceWith("anthropic", "api_key", "a1");
+  });
+
+  it("shows a visitor the accounts but none of the ways to change them", () => {
+    state.canManage = false;
+    state.accounts = [account("a1", "anthropic", "Anthropic (Claude Code)")];
+
+    const text = render();
+
+    expect(text).toContain("Anthropic (Claude Code)");
+    expect(text).toContain("Only the owner of this workspace can connect an AI account.");
+    expect(text).not.toContain("Sign in again");
+    expect(text).not.toContain("Add more");
   });
 
   it("offers an account on a pasted subscription token a normal sign-in instead", () => {

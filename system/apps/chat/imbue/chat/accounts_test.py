@@ -372,17 +372,23 @@ def test_committing_an_account_onto_a_different_lane_is_refused(tmp_path: Path) 
     assert resolve_account(account_id, tmp_path).lane == "anthropic"
 
 
-def test_a_credential_parked_by_an_older_build_is_removed_at_boot(tmp_path: Path) -> None:
+def test_a_credential_parked_by_an_older_build_is_put_back_at_boot(tmp_path: Path) -> None:
     account_id, _ = mint_account_dir(tmp_path)
     commit_account(account_id, "anthropic", "Anthropic", tmp_path)
-    parked = account_dir(account_id, tmp_path) / ".minds-reauth-backup"
+    folder = account_dir(account_id, tmp_path)
+    parked = folder / ".minds-reauth-backup"
     parked.mkdir()
-    (parked / ".credentials.json").write_bytes(b"old")
+    (parked / ".credentials.json").write_bytes(b"working-credential-4e71")
+    # A file the interrupted re-auth wrote that did not exist before it.
+    (folder / "settings.json").write_text("{}")
+    (parked / "settings.json").write_bytes(b"")
+    (parked / "settings.json.absent").write_bytes(b"")
 
     reconcile(tmp_path)
 
     assert not parked.exists()
-    assert account_dir(account_id, tmp_path).is_dir()
+    assert (folder / ".credentials.json").read_bytes() == b"working-credential-4e71"
+    assert not (folder / "settings.json").exists()
 
 
 def test_pinning_a_default_survives_later_launches_and_sign_ins(tmp_path: Path) -> None:

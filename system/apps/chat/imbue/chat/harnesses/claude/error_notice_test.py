@@ -18,8 +18,7 @@ def test_a_rate_limit_whose_prose_names_no_status_is_still_an_error() -> None:
     status as a field and nothing resembling one in their wording, so matching the prose
     left the whole rate-limit family rendering as ordinary assistant output."""
     notice = classify_error_notice(
-        _stamped(apiErrorStatus=429, error="rate_limit"),
-        "You've hit your monthly spend limit · raise it at claude.ai/settings/usage?from=cc_cli_limit_message",
+        _stamped(apiErrorStatus=429, error="rate_limit"), "Too many requests. Slow down and try again shortly."
     )
     assert notice.is_api_error is True
     assert notice.api_error_kind == "rate_limit"
@@ -75,7 +74,7 @@ def test_a_404_names_the_model_rather_than_the_provider() -> None:
         pytest.param(
             "rate_limit",
             "rate_limit",
-            "You've hit your session limit · resets 2:50pm (America/Los_Angeles)",
+            "Too many requests right now.",
             id="rate-limit",
         ),
         pytest.param("overloaded", "overloaded", "API Error: Overloaded. Please try again later.", id="overloaded"),
@@ -97,6 +96,28 @@ def test_a_failure_with_no_status_is_named_by_claude_codes_own_kind(claude_kind:
     assert notice.api_error_kind == kind
 
 
+def test_a_spent_balance_is_an_api_error_of_its_own_kind_not_a_sign_in_problem() -> None:
+    notice = classify_error_notice(
+        _stamped(error="billing_error", apiErrorStatus=400), "Your credit balance is too low to make this request."
+    )
+    assert (notice.is_auth_error, notice.is_api_error, notice.api_error_kind) == (False, True, "billing")
+
+
+def test_a_monthly_spend_limit_is_billing_whatever_status_it_arrives_with() -> None:
+    notice = classify_error_notice(
+        _stamped(apiErrorStatus=429, error="rate_limit"),
+        "You've hit your monthly spend limit · raise it at claude.ai/settings/usage?from=cc_cli_limit_message",
+    )
+    assert (notice.is_api_error, notice.api_error_kind) == (True, "billing")
+
+
+def test_a_reached_session_limit_is_a_usage_limit_not_a_passing_rate_limit() -> None:
+    notice = classify_error_notice(
+        _stamped(error="rate_limit", apiErrorStatus=429), "You've hit your session limit · resets 2:50pm"
+    )
+    assert (notice.is_auth_error, notice.api_error_kind) == (False, "usage_limit")
+
+
 @pytest.mark.parametrize(
     ("claude_kind", "text"),
     [
@@ -106,7 +127,6 @@ def test_a_failure_with_no_status_is_named_by_claude_codes_own_kind(claude_kind:
             id="oauth-session-expired",
         ),
         pytest.param("authentication_failed", "Login expired · Please run /login", id="login-expired"),
-        pytest.param("billing_error", "Credit balance is too low", id="credit-balance"),
         pytest.param("account_on_hold", "Your account is on hold.", id="account-on-hold"),
         pytest.param("oauth_org_not_allowed", "Your organization does not allow this.", id="org-disallows-oauth"),
     ],
@@ -182,7 +202,7 @@ def test_an_error_field_that_is_not_a_name_is_ignored_rather_than_raised_on() ->
     record: the status still names the failure."""
     notice = classify_error_notice(
         _stamped(error={"type": "rate_limit"}, apiErrorStatus=429),
-        "You've hit your monthly spend limit",
+        "Too many requests right now.",
     )
     assert notice.is_api_error is True
     assert notice.api_error_kind == "rate_limit"

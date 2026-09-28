@@ -11,28 +11,34 @@ starts a flow and the polls that advance it.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Final
 
 from flask import Flask
 from flask import Response
+from flask import request
 from loguru import logger as _loguru_logger
 
 from imbue.chat import accounts
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import flow_shape
+from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
 from imbue.chat.harnesses.claude.auth import ClaudeAuthError
 from imbue.chat.harnesses.claude.auth import read_managed_auth_env
+from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.lanes import LaneNotFoundError
 from imbue.chat.harnesses.lanes import PasteMethod
+from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import numbered_provider
 from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.registry import get_catalog
 from imbue.chat.harnesses.registry import list_account_options
-from imbue.chat.harnesses.sign_in_relay import RelayCallbackError
+from imbue.chat.identity import IDENTITY_HEADER
 from imbue.chat.identity import forbid_unless_owner
+from imbue.chat.identity import is_owner_identity
 from imbue.chat.models import ErrorResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.request_helpers import parse_json_object_body
@@ -123,10 +129,52 @@ def list_accounts() -> Response:
             "name": numbered.account.name,
             "label": numbered.label,
             "holds_subscription_token": _holds_subscription_token(numbered.account),
+            "reauth_method": _reauth_method_id(numbered.account, numbered.harness),
         }
         for numbered in accounts.number_accounts(index.accounts)
     ]
-    return _json_response({"accounts": rows, "mru": index.mru, "default": index.default_account})
+    return _json_response(
+        {
+            "accounts": rows,
+            "mru": index.mru,
+            "default": index.default_account,
+            # Reading is open to visitors, since their chats render from it; changing is not, and the
+            # chooser shows a visitor the accounts without the actions that would be refused.
+            "can_manage": is_owner_identity(request.headers.get(IDENTITY_HEADER)),
+        }
+    )
+
+
+def _reauth_method_id(account: accounts.Account, harness: HarnessType) -> str:
+    """The method "Sign in again" runs for an account: the kind of credential it already holds.
+
+    An API-key account is given a key again, not sent to a browser sign-in it never used.
+    """
+    lane = get_lane(account.lane)
+    folder = accounts.account_dir(account.id)
+    match harness:
+        case HarnessType.CLAUDE:
+            is_key = ANTHROPIC_API_KEY_ENV_VAR in read_managed_auth_env(
+                settings_path_override=folder / "settings.json"
+            )
+        case HarnessType.CODEX:
+            is_key = _codex_auth_mode(folder) == "apikey"
+        case _:
+            is_key = False
+    if is_key:
+        paste = next((method for method in lane.methods if isinstance(method, PasteMethod)), None)
+        if paste is not None:
+            return paste.id
+    return lane.methods[0].id
+
+
+def _codex_auth_mode(account_folder: Path) -> str | None:
+    try:
+        auth = json.loads((account_folder / "auth.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    mode = auth.get("auth_mode") if isinstance(auth, dict) else None
+    return mode if isinstance(mode, str) else None
 
 
 def _holds_subscription_token(account: accounts.Account) -> bool:
@@ -226,10 +274,11 @@ def submit_flow(flow_id: str) -> Response:
 
 
 def relay_flow_callback(flow_id: str) -> Response:
-    """Replay a request the minds desktop app received on this flow's loopback callback port.
+    """Deliver the callback the minds desktop app received on this flow's loopback callback port.
 
-    The desktop app listens where the user's browser runs and posts each request here as
-    `{path_and_query}`; the answer is the CLI's own, which the desktop app hands the browser.
+    The desktop app listens where the user's browser runs and posts the callback here as
+    `{path_and_query}`; the answer is the flow's status once the CLI has it, plus the provider's
+    name, which the desktop app turns into the page the browser ends on.
     """
     refusal = forbid_unless_owner()
     if refusal is not None:
@@ -240,13 +289,13 @@ def relay_flow_callback(flow_id: str) -> Response:
     path_and_query = payload.get("path_and_query")
     if not isinstance(path_and_query, str):
         return _error_response("path_and_query must be a string")
+    service = get_state().auth_flows
     try:
-        answer = get_state().auth_flows.relay_callback(flow_id, path_and_query)
+        provider_name = service.provider_name(flow_id)
+        status = service.relay_callback(flow_id, path_and_query)
     except FlowError as e:
         return _error_response(str(e), status_code=409)
-    except RelayCallbackError as e:
-        return _error_response(str(e), status_code=502)
-    return _json_response(answer.model_dump())
+    return _json_response({**status.model_dump(), "provider_name": provider_name})
 
 
 def abort_flow(flow_id: str) -> Response:
