@@ -237,6 +237,7 @@ Specified in the mngr repo's `blueprint/critical-app-editing/plan-critical-app-e
 
 ### Integration and system tests
 
+- `test_preview_app_lifecycle.py`: a fixture app booted through `preview_app.py` and the real `serve_isolated_instance.py` and `forward_port.py`: it comes up from its manifest's `[preview]` table over a copy of the live data, registers its two rows, re-boots on `refresh` to serve a rebuild at the same URL, and after `down` its port, its rows, and its record are gone.
 - `test_chat_system.py`: the two-server fixture with a real `mngr observe` writing the events file; the chat's instances API lists the agents the observer reports; restarting the observer under the chat leaves the list intact and the health field flips degraded and back.
 - Shell `test_e2e.py`: over stub apps, a seeded record renders one banner naming its apps and no notice on any tab; "Everything seems good" clears it everywhere; a preview shell hides the verbs and refuses them.
 - Terminal: `test_terminal_app.py` boots with `--no-register` and two custom ports.
