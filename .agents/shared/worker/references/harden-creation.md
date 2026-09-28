@@ -276,9 +276,10 @@ line's run reported coverage (the chat app's, the shell's and Getting
 Started's do): a run of only some tests fails the coverage floor. In the chat
 app's or the shell's suite add `-m ''` too, or a browser test named in it is
 deselected (AGENTS.md). A test that passes on that rerun without any change of
-yours is flaky, not broken: name it on your report's `Flaky tests:` line and
-move on, without rerunning its suite. A suite runs whole again only after you
-commit a fix, and then as whatever the fix reaches:
+yours is flaky, not broken: name it on your report's `Flaky tests:` line
+(your lead reports or tickets it) and move on, without rerunning its suite.
+A suite runs whole again only after you commit a fix, and then as whatever the
+fix reaches:
 `select-tests --diff-base <the commit before the fix>`.
 
 **A suite the selector left out.** The selector reads only declarations:

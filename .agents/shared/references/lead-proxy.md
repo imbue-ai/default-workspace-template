@@ -240,7 +240,11 @@ On `type: status`:
 - `name: done` -- if the body lists `Undeclared couplings:`, they are built-in
   defects (a built-in suite observes a path nothing declares, so the test
   selector missed it): add them to the pass's single report per
-  `.agents/shared/references/report-built-in-issues.md`.
+  `.agents/shared/references/report-built-in-issues.md`. If it lists
+  `Flaky tests:`, the worker left them unfixed: a test of a built-in suite is
+  a built-in defect and goes in that same report; a test of a creation the
+  workspace built goes in a regular ticket (`tk create`), so it is fixed later
+  rather than lost with the report.
   Then merge the worker's branch:
   ```bash
   git merge --no-ff <WORKER_BRANCH>
