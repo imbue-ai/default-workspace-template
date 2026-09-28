@@ -73,7 +73,9 @@ class ChatOomPrioritizer:
     the primary agent). ``resolve_pid`` maps a chat to its active agent's live main-process
     pid, or None when it has no running process.
     ``set_adj`` writes ``oom_score_adj`` for a pid (best-effort; its return value
-    is ignored). ``resolve_process_started_at`` returns the epoch time at which a
+    is ignored); None makes an inert prioritizer that still accepts every report but
+    computes nothing, writes nothing, and runs no sweep.
+    ``resolve_process_started_at`` returns the epoch time at which a
     chat's claude process last started, or None when unknown; it floors the
     engagement clock so a revived chat is never treated as stale. ``clock``
     supplies wall-clock epoch seconds -- absolute, not monotonic, because idle
@@ -87,7 +89,7 @@ class ChatOomPrioritizer:
         *,
         list_chat_ids: Callable[[], Iterable[ChatId]],
         resolve_pid: Callable[[ChatId], int | None],
-        set_adj: Callable[[int, int], bool],
+        set_adj: Callable[[int, int], bool] | None,
         resolve_process_started_at: Callable[[ChatId], float | None],
         clock: Callable[[], float] = time.time,
         sweep_interval_seconds: float = SWEEP_INTERVAL_SECONDS,
@@ -116,8 +118,10 @@ class ChatOomPrioritizer:
 
         Separate from construction so tests (and any caller that only wants the
         event-driven behaviour) can drive ``record_*``/``reapply`` directly
-        without a background thread.
+        without a background thread. Does nothing without a ``set_adj``.
         """
+        if self._set_adj is None:
+            return
         self.reapply()
         self._sweep_stop.clear()
         thread = threading.Thread(target=self._run_sweep, daemon=True, name="oom-chat-sweep")
@@ -208,7 +212,11 @@ class ChatOomPrioritizer:
         lock, so a write (or a call into the agent manager / pid registry) never
         blocks a concurrent activity report. Chats with no live process are
         skipped. Idempotent: concurrent reapplies converge on the same result.
+        Does nothing without a ``set_adj``.
         """
+        set_adj = self._set_adj
+        if set_adj is None:
+            return
         with self._lock:
             running_ids = set(self._running)
             last_message_at = dict(self._last_message_at)
@@ -243,7 +251,7 @@ class ChatOomPrioritizer:
                 idle_seconds=self._idle_seconds(chat_id, last_engaged_at, now),
                 is_mid_turn=chat_id in running_ids,
             )
-            self._set_adj(pid, adj)
+            set_adj(pid, adj)
 
     def _idle_seconds(self, chat_id: ChatId, last_engaged_at: dict[ChatId, float], now: float) -> float | None:
         """How long ``chat_id`` has gone without engagement, or None if unknown.
