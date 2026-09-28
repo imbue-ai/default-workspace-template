@@ -4,7 +4,8 @@
  * What a row CLICK does is the caller's; the trailing controls are the row's own: the default
  * star, a rename pencil, a sign-out bin, and the tick marking the current account. Those
  * controls carry the only fiddly logic here (arming, an inline field, three ways out of an
- * edit).
+ * edit). The star, the pencil and the bin change the account, which only the workspace's owner
+ * may do, so a visitor's row has none of them.
  *
  * State stays with the CALLER. The menu already owns the lifecycle its controls hang off --
  * an open removal confirmation belongs to the flyout it was opened from and has to be
@@ -13,7 +14,7 @@
  */
 
 import m from "mithril";
-import { deleteAccount, loadAccounts, renameAccount, setDefaultAccount } from "../models/Providers";
+import { canManageAccounts, deleteAccount, loadAccounts, renameAccount, setDefaultAccount } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -139,45 +140,12 @@ function renameField(opts: AccountRowOptions): m.Vnode {
   });
 }
 
-/** One account row, complete with its trailing controls. Keyed -- both callers render these
- *  as a list, and mithril refuses a fragment mixing keyed vnodes with anything else. */
-export function accountRow(opts: AccountRowOptions): m.Vnode {
+/** The star, the bin and the pencil, with the removal confirmation the bin opens: each changes the
+ *  account, so a row gets them only for someone who may. */
+function accountControls(opts: AccountRowOptions): m.Children {
   const { row, state, isCurrent } = opts;
   const confirmingRemoval = state.confirmingRemoval === row.id;
-  const renaming = state.renamingId === row.id;
-
-  // Mid-rename the row is only the field: the tick, the bin and the pencil all stand down so
-  // the name has the full width to be typed in, and so nothing destructive sits under a
-  // pointer that is there to click into text.
-  if (renaming) {
-    return m("div", { key: row.id, class: css.ROW_RENAME_WRAP }, renameField(opts));
-  }
-
-  return m("div", { key: row.id, class: css.ROW_WRAP }, [
-    m(
-      "button",
-      {
-        type: "button",
-        class: opts.rowClass,
-        ...(opts.rowAttrs ?? {}),
-        onclick: (event: MouseEvent) => {
-          event.stopPropagation();
-          opts.onSelect();
-        },
-      },
-      [
-        m("span", { class: css.SUBMENU_ROW_NAME }, row.provider),
-        m("span", { class: css.SUBMENU_ROW_SUB }, `(${row.harness_label})`),
-        opts.badge !== undefined
-          ? m("span", { class: `account-row-badge ${css.NEXT_BADGE} ml-1 shrink-0 font-medium` }, opts.badge)
-          : null,
-      ],
-    ),
-    // Siblings of the row button rather than children -- buttons cannot nest -- each pinned
-    // to its own offset from the right edge so none of the three ever displaces another.
-    isCurrent
-      ? m("span", { class: css.SUBMENU_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
-      : null,
+  return [
     m(
       "button",
       {
@@ -256,5 +224,47 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
           },
         )
       : null,
+  ];
+}
+
+/** One account row, complete with its trailing controls. Keyed -- both callers render these
+ *  as a list, and mithril refuses a fragment mixing keyed vnodes with anything else. */
+export function accountRow(opts: AccountRowOptions): m.Vnode {
+  const { row, state, isCurrent } = opts;
+  const renaming = state.renamingId === row.id;
+
+  // Mid-rename the row is only the field: the tick, the bin and the pencil all stand down so
+  // the name has the full width to be typed in, and so nothing destructive sits under a
+  // pointer that is there to click into text.
+  if (renaming) {
+    return m("div", { key: row.id, class: css.ROW_RENAME_WRAP }, renameField(opts));
+  }
+
+  return m("div", { key: row.id, class: css.ROW_WRAP }, [
+    m(
+      "button",
+      {
+        type: "button",
+        class: opts.rowClass,
+        ...(opts.rowAttrs ?? {}),
+        onclick: (event: MouseEvent) => {
+          event.stopPropagation();
+          opts.onSelect();
+        },
+      },
+      [
+        m("span", { class: css.SUBMENU_ROW_NAME }, row.provider),
+        m("span", { class: css.SUBMENU_ROW_SUB }, `(${row.harness_label})`),
+        opts.badge !== undefined
+          ? m("span", { class: `account-row-badge ${css.NEXT_BADGE} ml-1 shrink-0 font-medium` }, opts.badge)
+          : null,
+      ],
+    ),
+    // Siblings of the row button rather than children -- buttons cannot nest -- each pinned
+    // to its own offset from the right edge so none of the three ever displaces another.
+    isCurrent
+      ? m("span", { class: css.SUBMENU_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+      : null,
+    canManageAccounts() ? accountControls(opts) : null,
   ]);
 }
