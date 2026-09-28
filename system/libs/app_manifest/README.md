@@ -224,7 +224,7 @@ Selection reads only what the workspace declares. A path selects:
   sources) select every npm package.
 
 A path in no package, skill or npm package, that is not npm root
-configuration, a supervisord block, `uv.lock`, a guard, or markdown under
+configuration, a supervisord block, `uv.lock`, a guard, a collected test file, or markdown under
 `.agents/` (agent prose, which only the always-run prose checks and the apps
 referencing it read), runs the full root suite (`uv run pytest` from the repo
 root), which replaces the other root-collected commands; so does a change to
