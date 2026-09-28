@@ -37,6 +37,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.codex.ledger import write_codex_model_state
 from imbue.chat.harnesses.codex.live_user_turns import was_live_user_turn_broadcast
 from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
+from imbue.chat.harnesses.codex.session_parser import SETTINGS_CHANGED_SINCE_TURN_KEY
 from imbue.chat.harnesses.codex.session_parser import SOURCE as _SOURCE
 from imbue.chat.harnesses.codex.session_parser import THINKING_SOURCE_MARKER_TYPE
 from imbue.chat.harnesses.codex.session_parser import parse_line_detail
@@ -165,7 +166,7 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
         self._turn_state = {}
         self._pending_thinking_source = None
 
-    # -- base hooks -----------------------------------------------------------------------
+    # base hooks
 
     def _refresh_locked(self) -> None:
         """Bring the store up to date with the live rollout, following rotation."""
@@ -235,14 +236,17 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
 
         # Reflect the effective per-turn model into the model-bar state file, so a
         # framework fallback (turn_context.model differing from the selected setting) shows
-        # in the bar. Runs on every refresh (reads included), gated on divergence, so the
+        # in the bar. Runs on every refresh that read new lines, gated on divergence, so the
         # write is rare and cheap enough to do under the lock -- no callback runs here.
-        self._reflect_effective_model(self._turn_state.get("model"), self._turn_state.get("effort"))
+        # Skipped while applied settings are newer than the last turn_context: that turn may
+        # predate them, and the ledger writes what the agent is set to.
+        if not self._turn_state.get(SETTINGS_CHANGED_SINCE_TURN_KEY):
+            self._reflect_effective_model(self._turn_state.get("model"), self._turn_state.get("effort"))
 
     def _reflect_effective_model(self, model: Any, effort: Any) -> None:
         """Hand the effective per-turn model to the model bar. A loader has no bar to update."""
 
-    # -- codex plumbing -------------------------------------------------------------------
+    # codex plumbing
 
     def _resolve_active_rollout(self) -> Path | None:
         marker = read_marker_rollout_path(self._marker_path)
@@ -297,7 +301,7 @@ class CodexTranscriptLoader(StoreBackedTranscriptLoader):
             return []
         return parse_lines(record, self._tool_name_by_call_id, self._turn_state)
 
-    # -- on-demand payload detail ---------------------------------------------------------
+    # on-demand payload detail
 
     def _parse_detail(
         self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
@@ -375,7 +379,7 @@ class CodexSessionWatcher(CodexTranscriptLoader, StoreBackedWatcher):
         self._model_state_path = model_state_path(agent_state_dir, CODEX_STATE_RELATIVE_PATH)
         return self
 
-    # -- base hooks -----------------------------------------------------------------------
+    # base hooks
 
     def _watch_paths(self) -> tuple[Path, ...]:
         # CODEX_HOME (the parent of ``sessions/``), recursively, so an append to whichever
