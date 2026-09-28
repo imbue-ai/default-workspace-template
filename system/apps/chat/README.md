@@ -313,7 +313,7 @@ A Claude or ChatGPT sign-in finishes in the user's own browser. The CLI (`claude
 auth login`, or a short-lived `codex app-server` for ChatGPT) runs with
 `system/scripts/minds_browser_shim` as `$BROWSER`, which records the page it
 would open; the flow offers it as `relay_url`, and the chooser hands it to the
-minds desktop app (`minds:provider-sign-in` in the embed contract). The desktop
+minds desktop app (`minds:provider-sign-in` in the embed contract; the chat root passes the desktop app's answer, `minds:provider-sign-in-ack`, down to the chat page that asked, since the shell frames the root and not the page). The desktop
 app opens the page and listens on the loopback port it calls back to, posting
 the callback to `POST /api/accounts/flow/<flow_id>/callback`. That route takes
 the flow's own callback once, replays it against the CLI here
