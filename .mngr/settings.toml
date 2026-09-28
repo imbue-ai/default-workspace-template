@@ -117,6 +117,23 @@ create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_ac
 [work_dir_extra_paths]
 ".mngr/settings.local.toml" = "SHARE"
 
+# A worker's worktree holds only tracked files, and all of `data/` is gitignored -- so the
+# inputs a build works from were simply absent from it. Every node of both roadmap runs hit
+# that: each one ran into a missing `data/.tasks/fetch-process-show/...` path, then reached
+# back into `/home/user/workspace/data/...` by absolute path between 4 and 9 times, and one
+# hand-copied the sample into place before it could start.
+#
+# These two are the build's *inputs*, read and not written: what the user uploaded, and what
+# the fetch-process-show flow extracted and the user confirmed. Shared rather than copied so
+# a worker reads what the workspace actually holds now, and so nothing is duplicated per node.
+#
+# Deliberately NOT shared: the rest of `data/.tasks/`. Each node's own runtime directory
+# lives under `data/.tasks/build-app/<app>/nodes/N/`, which is how its task file and report
+# reach the orchestrator; sharing that tree would put every node's report plumbing in one
+# place for them all to write over.
+"data/uploads" = "SHARE"
+"data/.tasks/fetch-process-show" = "SHARE"
+
 # Agent types
 
 # Agent type defaults -- apply to all claude agents created from this repo
