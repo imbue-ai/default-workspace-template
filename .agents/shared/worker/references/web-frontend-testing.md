@@ -34,11 +34,10 @@ is a `pytest.mark.timeout(120, func_only=False)` marker, since the repo-wide
 `pytest.mark.frontend`: when only the chat app's or the shell's frontend
 changed, the test gate runs just those two kinds of its tests (an app the root
 suite runs, as one you build does, runs whole). The chat app's and the shell's
-own suites
-skip their browser tests by default: run them with `-m ''` (everything) or
-`-m browser --no-cov` (only them; each suite fails a run under its coverage
-floor, so a partial run needs `--no-cov`). The test gate passes `-m ''` when the
-app's Python changed.
+own suites skip their browser tests by default: run them with `-m ''`
+(everything) or `-m browser --no-cov` (only them; each suite fails a run under
+its coverage floor, so a partial run needs `--no-cov`). The test gate passes
+`-m ''` when the app's Python changed.
 
 ## Look at the rendered page
 
