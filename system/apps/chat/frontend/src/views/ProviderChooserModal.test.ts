@@ -414,10 +414,40 @@ describe("a sign-in finished in the browser", () => {
     const root = await clickLane("anthropic");
 
     expect(requestProviderRelay).toHaveBeenCalledExactlyOnceWith(CLAUDE_RELAY_URL, "flow-1");
-    expect(root.textContent).toContain("We opened the Anthropic sign-in page.");
-    expect(root.textContent).toContain("Seeing malformed_certificate? Sign out of claude.ai and sign in again.");
-    expect(root.querySelector('[data-e2e="open-sign-in-again"]')).not.toBeNull();
-    expect(root.querySelector('[data-e2e="cancel-sign-in"]')).not.toBeNull();
+    expect(root.textContent).toContain("Finish signing in to Anthropic in your browser.");
+    expect(root.querySelector('[data-e2e="open-sign-in-again"]')?.textContent).toBe("Reopen sign-in window");
+    expect(root.textContent).not.toContain("malformed_certificate");
+  });
+
+  it("names the claude.ai certificate fix only once the browser wait runs long", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      state.lanes = [
+        lane({
+          methods: [
+            ...lane().methods,
+            {
+              id: "api_key",
+              label: "Use an API key",
+              description: "",
+              signup_url: "",
+              shape: "paste",
+              is_primary: false,
+            },
+          ],
+        }),
+      ];
+      state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+      const root = await clickLane("anthropic");
+      expect(root.querySelector('[data-e2e="sign-in-another-way"]')?.textContent).toBe("Sign in another way");
+
+      vi.setSystemTime(Date.now() + 20_001);
+      m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+      expect(root.textContent).toContain("Seeing malformed_certificate? Sign out of claude.ai and sign in again.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows Claude's paste-the-code steps when nothing relays", async () => {
@@ -427,7 +457,7 @@ describe("a sign-in finished in the browser", () => {
     const root = await clickLane("anthropic");
 
     expect(root.textContent).toContain(PASTE_STEP_LABEL);
-    expect(root.textContent).not.toContain("We opened the Anthropic sign-in page.");
+    expect(root.textContent).not.toContain("Finish signing in to Anthropic in your browser.");
   });
 
   it("falls back to ChatGPT's one-time code when nothing relays", async () => {

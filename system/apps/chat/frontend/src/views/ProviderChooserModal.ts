@@ -74,13 +74,18 @@ export interface ProviderChooserModalAttrs {
 
 type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
 
+/** How long the browser wait runs before the certificate hint shows. */
+const STUCK_HINT_AFTER_MS = 20_000;
+
 /** The paste step's label: the code is needed only when the browser ends on one. */
 export const PASTE_STEP_LABEL = "If the page shows a code, paste it here";
 
 /** What a share visitor sees instead of the ways to sign in: accounts are the owner's to change. */
 const OWNER_ONLY_NOTICE = "Only the owner of this workspace can connect an AI account.";
 
-/** What Claude's sign-in page can show when claude.ai's own session is in a bad state. */
+/** What Claude's sign-in page can show when claude.ai's own session is in a bad state. Testers hit
+ *  it on claude.ai's Google sign-in often enough to name the fix, but only a wait that runs long
+ *  shows it, so a sign-in that works never does. */
 const CLAUDE_CERTIFICATE_HINT = "Seeing malformed_certificate? Sign out of claude.ai and sign in again.";
 
 /** The chooser's last scroll offset, so a drill-in and back lands where you were. The
@@ -125,6 +130,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let generation = 0;
   // Why the chooser moved the user to another way of signing in, shown above it.
   let notice: string | null = null;
+  // When the browser wait began, for the hint a long wait earns.
+  let relayWaitStartedAt: number | null = null;
 
   function reset(): void {
     mode = "chooser";
@@ -143,6 +150,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     awaitingVerdict = false;
     isOpeningBrowser = false;
     notice = null;
+    relayWaitStartedAt = null;
     clearFlow();
   }
 
@@ -223,7 +231,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         const isRelaying = await relay(started.relay_url, started.flow_id);
         if (attempt !== generation) return;
         isOpeningBrowser = false;
-        if (isRelaying) mode = "relay";
+        if (isRelaying) {
+          mode = "relay";
+          relayWaitStartedAt = Date.now();
+          window.setTimeout(() => m.redraw(), STUCK_HINT_AFTER_MS);
+        }
       }
       if (mode !== "relay" && chosenMethod.shape === "browser") {
         // This sign-in cannot finish without the relay, so it gives way to one that can.
@@ -778,19 +790,14 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** The desktop app opened the page and relays its callback: all that is left is the browser. */
   function relayBody(current: Lane): m.Children {
     const flow = getFlow();
+    const isWaitingLong = relayWaitStartedAt !== null && Date.now() - relayWaitStartedAt >= STUCK_HINT_AFTER_MS;
     return [
-      m(
-        "p",
-        { class: css.LEAD },
-        `We opened the ${current.provider_name} sign-in page. Finish there, and this closes by itself.`,
-      ),
-      m("p", { class: css.HINT }, [
-        "Didn't open? ",
+      m("p", { class: css.LEAD }, `Finish signing in to ${current.provider_name} in your browser.`),
+      m("div", { class: css.RELAY_ACTIONS }, [
         m(
-          "button",
+          Button,
           {
-            type: "button",
-            class: css.HINT_ACTION,
+            variant: "secondary",
             "data-e2e": "open-sign-in-again",
             onclick: () => {
               if (flow === null || flow.relay_url === null) return;
@@ -800,30 +807,17 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               });
             },
           },
-          "Open it again",
+          "Reopen sign-in window",
         ),
-      ]),
-      hasOtherWays(current)
-        ? m("p", { class: css.HINT }, [
-            "Browser not coming back? ",
-            m(
-              "button",
-              {
-                type: "button",
-                class: css.HINT_ACTION,
-                "data-e2e": "sign-in-another-way",
-                onclick: () => signInAnotherWay(current),
-              },
+        hasOtherWays(current)
+          ? m(
+              Button,
+              { variant: "secondary", "data-e2e": "sign-in-another-way", onclick: () => signInAnotherWay(current) },
               "Sign in another way",
-            ),
-          ])
-        : null,
-      current.harness === "claude" ? m("p", { class: css.HINT }, CLAUDE_CERTIFICATE_HINT) : null,
-      m(
-        "div",
-        { class: css.FOOTER_ROW },
-        m(Button, { variant: "secondary", "data-e2e": "cancel-sign-in", onclick: back }, "Cancel"),
-      ),
+            )
+          : null,
+      ]),
+      isWaitingLong && current.harness === "claude" ? m("p", { class: css.HINT }, CLAUDE_CERTIFICATE_HINT) : null,
     ];
   }
 

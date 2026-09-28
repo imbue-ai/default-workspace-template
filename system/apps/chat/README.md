@@ -326,7 +326,8 @@ so the desktop app frees the port.
 
 Every way in stays reachable. With no desktop app to relay, Claude falls back to
 pasting the code its page shows, and ChatGPT to its one-time-code login. While
-the browser is out, "Sign in another way" shows Claude's code steps for the same
+the browser is out ("Finish signing in to <provider> in your browser", with
+"Reopen sign-in window" and "Sign in another way"), "Sign in another way" shows Claude's code steps for the same
 sign-in (the CLI takes whichever code arrives first) or starts ChatGPT's code
 login, alongside the lane's other methods; a failed sign-in offers the same. A
 Claude sign-in succeeds on the CLI's clean exit with its success line, or, if
