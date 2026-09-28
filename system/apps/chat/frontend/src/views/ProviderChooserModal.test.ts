@@ -515,6 +515,40 @@ describe("a sign-in finished in the browser", () => {
     expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
   });
 
+  it("offers Claude's code steps after a sign-in fails, rather than the browser again", async () => {
+    state.lanes = [
+      lane({
+        methods: [
+          ...lane().methods,
+          {
+            id: "api_key",
+            label: "Use an API key",
+            description: "",
+            signup_url: "",
+            shape: "paste",
+            is_primary: false,
+          },
+        ],
+      }),
+    ];
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    const root = await clickLane("anthropic");
+    state.flow = { ...(state.flow as object), status: { state: "failed", detail: "Denied.", account_id: null } };
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    requestProviderRelay.mockClear();
+    startFlow.mockImplementationOnce(async () => {
+      state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    });
+
+    (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();
+    await settled();
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    expect(startFlow).toHaveBeenLastCalledWith("anthropic", "subscription", undefined);
+    expect(requestProviderRelay).not.toHaveBeenCalled();
+    expect(root.textContent).toContain("Approve, then paste the code shown");
+  });
+
   it("signs an API-key account in again with a key, not a browser sign-in", () => {
     state.lanes = [
       lane({
