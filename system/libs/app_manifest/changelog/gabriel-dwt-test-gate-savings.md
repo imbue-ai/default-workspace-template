@@ -6,7 +6,7 @@ Added `app-manifest select-tests`, which prints the test commands a change calls
 
 - The chat app and the shell run with their browser tests only when they changed themselves, after a frontend build. The chat app's type check runs as a separate command.
 
-- A path in no package or skill (a flat script, an agent hook, repo-level config) runs the full root suite. The npm root's prebuild script (`system/scripts/fetch_mngr_assets.sh`, and `_mngr_git_auth.sh`, which it sources) instead runs every frontend's build and checks. A consumer the declarations do not show (a script run as a subprocess, a service called over HTTP) is not selected; for an app, declaring the path in its manifest's `[[references]]` selects it.
+- A path in no package or skill (a flat script, an agent hook, repo-level config) runs the full root suite, and so does a non-test path in a package the root project depends on (such as `tk_command_parsing`, which the agent-hook checks in `system/scripts` import), directly or through a member that depends on it. The npm root's prebuild script (`system/scripts/fetch_mngr_assets.sh`, and `_mngr_git_auth.sh`, which it sources) instead runs every frontend's build and checks. A consumer the declarations do not show (a script run as a subprocess, a service called over HTTP) is not selected; for an app, declaring the path in its manifest's `[[references]]` selects it.
 
 - A `--diff-base` selection that runs to the checked-out commit refuses to run while the working tree holds uncommitted or untracked changes, and names them: the tests run against the working tree, so a selection read from commits alone would leave those changes untested.
 

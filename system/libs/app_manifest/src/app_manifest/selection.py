@@ -3,12 +3,13 @@
 Selection reads only what the workspace declares: a changed path inside a package or skill
 runs that unit's suite, plus the suites of the workspace members that depend on the package
 (``pyproject.toml``), the npm packages that depend on it (``package.json``), and the apps whose
-manifests reference it (``[[references]]``). A supervisord block runs the app whose program
-it holds and the check that every block names its OOM band. ``uv.lock`` selects the members
-that depend on what it upgraded. A small always-run set guards the repo-wide invariants any
-edit can break; agent prose outside every skill, and the other markdown the always-run prose
-checks read, selects only that set and the apps whose manifests reference it. Any other path
-belongs to no declared unit, so it runs the full root suite.
+manifests reference it (``[[references]]``); a package the root project depends on also runs
+the full root suite, the root project's own tests. A supervisord block runs the app whose
+program it holds and the check that every block names its OOM band. ``uv.lock`` selects the
+members that depend on what it upgraded. A small always-run set guards the repo-wide
+invariants any edit can break; agent prose outside every skill, and the other markdown the
+always-run prose checks read, selects only that set and the apps whose manifests reference
+it. Any other path belongs to no declared unit, so it runs the full root suite.
 """
 
 import json
@@ -57,6 +58,7 @@ from app_manifest.workspace_graph import read_coverage_measured_units
 from app_manifest.workspace_graph import read_npm_packages
 from app_manifest.workspace_graph import read_own_root_units
 from app_manifest.workspace_graph import read_python_members
+from app_manifest.workspace_graph import read_root_dependencies
 from app_manifest.workspace_graph import read_root_ignored_directories
 
 _PACKAGE_PARENT_DIRECTORIES: Final[tuple[str, ...]] = (
@@ -226,6 +228,9 @@ class RepoLayout(FrozenModel):
         description="The own-root suites whose pytest configuration measures coverage"
     )
     python_members: tuple[PythonMember, ...] = Field(description="The uv workspace members")
+    root_dependent_members: frozenset[str] = Field(
+        description="The member directories the root project depends on directly"
+    )
     npm_packages: tuple[NpmPackage, ...] = Field(description="The npm workspace packages")
     manifests: tuple[LoadedManifest, ...] = Field(description="The app manifests that load")
     wiring_owners: Mapping[str, tuple[str, ...]] = Field(
@@ -367,6 +372,7 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
         )
     )
     manifests = load_app_manifests(repo_root)
+    root_dependencies = read_root_dependencies(repo_root)
     return RepoLayout(
         repo_root=repo_root,
         tracked_files=tracked_files,
@@ -381,6 +387,9 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
         own_root_units=own_root_units,
         coverage_measured_units=read_coverage_measured_units(repo_root, own_root_units),
         python_members=python_members,
+        root_dependent_members=frozenset(
+            str(member.directory) for member in python_members if member.name in root_dependencies
+        ),
         npm_packages=read_npm_packages(repo_root),
         manifests=manifests,
         wiring_owners=_wiring_owners(repo_root, manifests),
@@ -466,9 +475,10 @@ def _referenced_directory_requests(
     return requests
 
 
-def _select_for_unit(context: _SelectionContext, path: str, unit: str) -> list[_PytestRequest]:
+def _select_for_unit(context: _SelectionContext, path: str, unit: str) -> _PathOutcome:
     """A package's or skill's own suite; for a package's non-test file, also the suites of the
-    members that depend on it and of the directories an app's manifest references."""
+    members that depend on it and of the directories an app's manifest references, and the full
+    root suite when the root project depends on the package or on one of those members."""
     layout = context.layout
     requests = list(
         _present(
@@ -483,18 +493,24 @@ def _select_for_unit(context: _SelectionContext, path: str, unit: str) -> list[_
         )
     )
     if is_test_file_name(path) or unit.startswith(f"{_SKILLS_DIRECTORY}/"):
-        return requests
+        return _PathOutcome(pytest_requests=tuple(requests))
     requests.extend(_referenced_directory_requests(layout, path, unit))
     # An app's frontend is built into the app's own bundle, which no Python package that
     # depends on the app loads; its npm consumers are the frontend selection's.
     if _owning_npm_package(layout, path) is not None:
-        return requests
-    for consumer in context.python_consumers.get(unit, ()):
+        return _PathOutcome(pytest_requests=tuple(requests))
+    consumers = context.python_consumers.get(unit, ())
+    for consumer in consumers:
         reason = _reason(path, ChangedPathClass.PACKAGE, f"{consumer} depends on {unit}")
         requests.extend(
             _present([_whole_request(layout, consumer, is_browser_included=False, reason=reason)])
         )
-    return requests
+    # The root project's own tests (flat scripts, shared agent scripts, skills) are the full
+    # root suite.
+    return _PathOutcome(
+        pytest_requests=tuple(requests),
+        is_full_root=any(member in layout.root_dependent_members for member in (unit, *consumers)),
+    )
 
 
 def _frontend_requests(
@@ -551,6 +567,7 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
     pytest_requests: list[_PytestRequest] = []
     frontend_requests: list[_FrontendRequest] = []
     is_owned = False
+    is_root_dependency = False
 
     if path == _SUPERVISORD_CONF or PurePosixPath(path).parent.as_posix() == _SUPERVISORD_DROPIN_DIRECTORY:
         # The always-run set checks the layout, and the wiring guards every block's OOM band;
@@ -603,7 +620,9 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
         classes.append(
             ChangedPathClass.SKILL if unit.startswith(f"{_SKILLS_DIRECTORY}/") else ChangedPathClass.PACKAGE
         )
-        pytest_requests.extend(_select_for_unit(context, path, unit))
+        unit_outcome = _select_for_unit(context, path, unit)
+        pytest_requests.extend(unit_outcome.pytest_requests)
+        is_root_dependency = unit_outcome.is_full_root
         is_owned = True
     elif path in layout.test_files:
         classes.append(ChangedPathClass.TEST_FILE)
@@ -622,7 +641,7 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
         classes=tuple(dict.fromkeys(classes)),
         pytest_requests=tuple(pytest_requests),
         frontend_requests=tuple(frontend_requests),
-        is_full_root=not is_owned,
+        is_full_root=not is_owned or is_root_dependency,
     )
 
 

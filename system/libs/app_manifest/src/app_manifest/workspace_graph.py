@@ -119,6 +119,23 @@ def _string_list(value: object) -> list[str]:
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
 
 
+def _declared_dependency_names(pyproject: Mapping[str, object]) -> tuple[str, ...]:
+    """The normalized names a ``pyproject.toml`` depends on: its dependencies, optional
+    dependencies and dependency groups."""
+    project = _table(pyproject.get("project"))
+    requirements: list[object] = list(_string_list(project.get("dependencies")))
+    for extra in _table(project.get("optional-dependencies")).values():
+        requirements.extend(_string_list(extra))
+    for group in _table(pyproject.get("dependency-groups")).values():
+        requirements.extend(_string_list(group))
+    return _requirement_names(requirements)
+
+
+def read_root_dependencies(repo_root: Path) -> frozenset[str]:
+    """The normalized names the root project itself depends on."""
+    return frozenset(_declared_dependency_names(_read_toml(repo_root / "pyproject.toml")))
+
+
 def read_python_members(repo_root: Path) -> tuple[PythonMember, ...]:
     """The uv workspace members the root ``pyproject.toml`` declares, with what each depends on."""
     root_pyproject = _read_toml(repo_root / "pyproject.toml")
@@ -131,20 +148,14 @@ def read_python_members(repo_root: Path) -> tuple[PythonMember, ...]:
             if member_directory in excluded or not pyproject_path.is_file():
                 continue
             pyproject = _read_toml(pyproject_path)
-            project = _table(pyproject.get("project"))
-            name = project.get("name")
+            name = _table(pyproject.get("project")).get("name")
             if not isinstance(name, str) or not name:
                 continue
-            requirements: list[object] = list(_string_list(project.get("dependencies")))
-            for extra in _table(project.get("optional-dependencies")).values():
-                requirements.extend(_string_list(extra))
-            for group in _table(pyproject.get("dependency-groups")).values():
-                requirements.extend(_string_list(group))
             members.append(
                 PythonMember(
                     directory=RepoRelativePath(member_directory.relative_to(repo_root).as_posix()),
                     name=NonEmptyStr(normalize_distribution_name(name)),
-                    dependencies=_requirement_names(requirements),
+                    dependencies=_declared_dependency_names(pyproject),
                 )
             )
     return tuple(members)

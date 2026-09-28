@@ -72,6 +72,34 @@ def test_a_shared_library_test_change_runs_only_the_librarys_own_suite(workspace
     assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/libs/corelib"]
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "system/libs/midlib/src/midlib/core.py",
+        # Reaches the root project through midlib, which depends on it.
+        "system/libs/corelib/src/corelib/core.py",
+    ],
+)
+def test_a_package_the_root_project_depends_on_runs_the_full_root_suite(
+    workspace: Path, path: str
+) -> None:
+    root_pyproject = workspace / "pyproject.toml"
+    root_pyproject.write_text(
+        root_pyproject.read_text().replace(
+            'version = "0.1.0"\n', 'version = "0.1.0"\ndependencies = ["midlib"]\n', 1
+        )
+    )
+
+    selection = _select(workspace, [path])
+
+    assert selection.is_full_root
+    assert _FULL_ROOT in _command_lines(selection)
+    assert f"{path} (full root suite)" in render_selection(selection)
+    # A test file is run by nothing that depends on its package.
+    test_only = _select(workspace, ["system/libs/midlib/src/midlib/core_test.py"])
+    assert _command_lines(test_only) == [_ALWAYS_RUN, "uv run pytest system/libs/midlib"]
+
+
 def test_a_consumer_change_does_not_run_what_it_consumes(workspace: Path) -> None:
     selection = _select(workspace, ["system/apps/notes/src/notes/core.py"])
 
