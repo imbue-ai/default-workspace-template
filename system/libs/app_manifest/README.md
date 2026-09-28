@@ -229,11 +229,11 @@ A path in no package, skill or npm package, that is not npm root
 configuration, a supervisord block, `uv.lock`, a guard, a collected test file,
 markdown under `.agents/` (agent prose, which only the always-run prose checks
 and the apps referencing it read), or other markdown those checks read, runs
-the full root suite
-(`uv run pytest` from the repo root), which replaces the other root-collected
-commands; so does a change to the root `pyproject.toml` or `conftest.py`, and a
-`uv.lock` change that cannot be compared or that the root project depends on
-directly.
+the full root suite (`uv run pytest` from the repo root), which replaces the
+other root-collected commands; so does a change to the root `pyproject.toml` or
+`conftest.py`, and a `uv.lock` change that cannot be compared or that the root
+project depends on directly. A `system/*.py` that is not a test file (a
+`system/conftest.py`, say) is no guard, so it runs the full root suite too.
 
 Every change that is not entirely documentation (README and changelog files
 anywhere, and other markdown outside `.agents/` and
@@ -241,11 +241,11 @@ anywhere, and other markdown outside `.agents/` and
 but not the markdown `system/test_meta_ratchets.py`'s live-prose checks read:
 the root `README.md`, `AGENTS.md` and `CLAUDE.md`, and markdown under
 `.agents/`, `docs/` and `data/` outside a changelog, blueprint, specs or vendor
-directory) also runs the always-run set: `system/*.py`, the cross-cutting `system/scripts`
-guards, and the checks that read every skill's prose. A listed guard git does
-not track (an always-run one, or the OOM band check a supervisord block
-selects) fails the selection rather than dropping out of it. A change made only
-of documentation selects nothing.
+directory) also runs the always-run set: the test files in `system/*.py`, the
+cross-cutting `system/scripts` guards, and the checks that read every skill's
+prose. A listed guard git does not track (an always-run one, or the OOM band
+check a supervisord block selects) fails the selection rather than dropping out
+of it. A change made only of documentation selects nothing.
 
 `system/apps/chat` and `system/apps/system_interface` run as their own pytest
 roots: workspace members with their own pytest configuration, which the root
