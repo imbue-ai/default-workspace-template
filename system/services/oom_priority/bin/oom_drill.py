@@ -296,9 +296,9 @@ def read_meminfo() -> dict[str, int]:
     return values
 
 
-def snapshot_processes() -> list[ProcessSample]:
+def snapshot_processes(proc: Path) -> list[ProcessSample]:
     samples: list[ProcessSample] = []
-    for entry in PROC.iterdir():
+    for entry in proc.iterdir():
         if not entry.name.isdigit():
             continue
         try:
@@ -528,7 +528,7 @@ def main() -> int:
     # A kill is judged against the last snapshot before its victim shrank,
     # which may be a few snapshots back by the time its ledger line is read.
     snapshots: deque[Snapshot] = deque(
-        [Snapshot(time.time(), snapshot_processes())], maxlen=30
+        [Snapshot(time.time(), snapshot_processes(PROC))], maxlen=30
     )
     deadline = time.monotonic() + args.timeout
     every_sleeper_gone_at: float | None = None
@@ -581,13 +581,13 @@ def main() -> int:
                 # Let the kill settle before growing again, so earlyoom picks one
                 # victim at a time, and see the settled state before the next.
                 time.sleep(2)
-                snapshots.append(Snapshot(time.time(), snapshot_processes()))
+                snapshots.append(Snapshot(time.time(), snapshot_processes(PROC)))
             else:
                 hog.stdin.write(f"{step_kib}\n")
                 hog.stdin.flush()
                 hog.stdout.readline()
             if time.time() - snapshots[-1].taken_at >= 1:
-                snapshots.append(Snapshot(time.time(), snapshot_processes()))
+                snapshots.append(Snapshot(time.time(), snapshot_processes(PROC)))
             time.sleep(0.1)
     finally:
         hog.kill()
