@@ -218,6 +218,9 @@ class _Session:
     # What the probe last said, or None if it has not run. Only UNKNOWN matters: it means
     # "the check failed", not "the credential is bad", so the folder is worth keeping.
     last_verdict: SignedIn | None
+    # A terminal re-auth's credential files as they were when it began. The probes only see that a
+    # credential is there, so while these still hold the same bytes a yes would be about the old one.
+    reauth_credentials: Mapping[Path, bytes | None]
     # Where the browser shim records the sign-in URL; removed with the session.
     scratch_dir: Path | None
     relay_url: str | None
@@ -258,6 +261,7 @@ def _new_session(lane: Lane, method: SignInMethod, account_id: str, minted: bool
     session.timer = None
     session.code_submitted = False
     session.last_verdict = None
+    session.reauth_credentials = {}
     session.scratch_dir = None
     session.relay_url = None
     session.relay_target = None
@@ -358,6 +362,8 @@ class AuthFlowService:
             # over it, and the account keeps working meanwhile. What decides that a sign-in
             # landed is the CLI saying so, never a probe that would also see the old credential.
             session = _new_session(lane, method, account_id, minted)
+            if not minted and isinstance(method, PtyMethod):
+                session.reauth_credentials = _read_credentials(binding.credential_paths(account_path))
             self._session = session
 
             if isinstance(method, PasteMethod):
@@ -762,9 +768,7 @@ class AuthFlowService:
                 return self._commit_locked(session, session.lane.provider_name)
             # A clean exit whose wording changed: the probe decides, rather than a reworded line
             # throwing away a sign-in that worked.
-            verdict = self._probe(session.lane.harness, accounts.account_dir(session.account_id, self._home))
-            session.last_verdict = verdict
-            if verdict is SignedIn.YES:
+            if self._probe_new_sign_in_locked(session) is SignedIn.YES:
                 return self._commit_locked(session, session.lane.provider_name)
             self._fail_locked(session, "The sign-in did not complete.")
             return FlowStatus(state=FlowState.FAILED, detail=session.detail)
@@ -777,12 +781,8 @@ class AuthFlowService:
         if not (exited_meaning_success or not alive or session.code_submitted):
             return FlowStatus(state=FlowState.PENDING)
 
-        # The CLI is done talking.
-        path = accounts.account_dir(session.account_id, self._home)
-
-        # Its own probe, not the screen, decides.
-        verdict = self._probe(session.lane.harness, path)
-        session.last_verdict = verdict
+        # The CLI is done talking. Its own probe, not the screen, decides.
+        verdict = self._probe_new_sign_in_locked(session)
         if verdict is SignedIn.YES:
             return self._commit_locked(session, session.lane.provider_name)
         if verdict is SignedIn.UNKNOWN:
@@ -801,6 +801,20 @@ class AuthFlowService:
             self._fail_locked(session, "The sign-in did not complete.")
             return FlowStatus(state=FlowState.FAILED, detail=session.detail)
         return FlowStatus(state=FlowState.PENDING)
+
+    def _probe_new_sign_in_locked(self, session: _Session) -> SignedIn:
+        """Whether the account now holds a sign-in this flow landed, by the harness's own probe.
+
+        On a re-auth whose credential files still hold what they held when it began, the answer is
+        no without asking: the probe would only be reporting the credential the account already had.
+        """
+        credentials = session.reauth_credentials
+        if credentials and _read_credentials(tuple(credentials)) == credentials:
+            verdict = SignedIn.NO
+        else:
+            verdict = self._probe(session.lane.harness, accounts.account_dir(session.account_id, self._home))
+        session.last_verdict = verdict
+        return verdict
 
     def _commit_locked(self, session: _Session, display: str) -> FlowStatus:
         # A RE-AUTH commits into a row that must still be there. Another tab can delete the
