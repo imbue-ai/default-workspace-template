@@ -11,12 +11,15 @@ from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_WINDOW_SECONDS
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
+from imbue.system_interface.shell.liveness import probe_tcp_url
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
+from imbue.system_interface.testing import can_bind_loopback_port
 from imbue.system_interface.testing import find_free_port
+from imbue.system_interface.testing import send_raw_get_over_socket
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 
@@ -50,11 +53,6 @@ class FakeClock:
 
 
 @pytest.fixture
-def docs_port() -> int:
-    return find_free_port()
-
-
-@pytest.fixture
 def supervisor() -> FakeSupervisor:
     return FakeSupervisor({"docs": "STOPPED", "shell": "RUNNING", "plain": "RUNNING"})
 
@@ -76,16 +74,20 @@ def windows() -> FakeWindows:
 
 @pytest.fixture
 def manager(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster, docs_port: int, supervisor: FakeSupervisor, windows: FakeWindows
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    closed_port: int,
+    supervisor: FakeSupervisor,
+    windows: FakeWindows,
 ) -> Iterator[AppLifecycleManager]:
-    """A manager over a stoppable ``docs`` app on a free loopback port that stops when no window shows it, a
+    """A manager over a stoppable ``docs`` app on the closed loopback port that stops when no window shows it, a
     critical ``shell``, and an unsupervised ``plain`` row, against a fake supervisord that starts with ``docs``
     stopped."""
     prober = FakeLivenessProber()
     prober.is_running_by_name["docs"] = False
     registry_path = write_registry(
         tmp_path / "apps.toml",
-        registry_row_toml("docs", f"http://127.0.0.1:{docs_port}", program="docs", stop_when_no_windows=True),
+        registry_row_toml("docs", f"http://127.0.0.1:{closed_port}", program="docs", stop_when_no_windows=True),
         registry_row_toml("shell", "http://127.0.0.1:1", program="shell", is_critical=True),
         registry_row_toml("plain", "http://127.0.0.1:1"),
     )
@@ -106,36 +108,12 @@ def manager(
         built.stop()
 
 
-def _connect(port: int) -> bytes:
-    with socket.create_connection(("127.0.0.1", port), timeout=5.0) as connection:
-        connection.sendall(b"GET / HTTP/1.1\r\nHost: docs\r\n\r\n")
-        return b"".join(iter(lambda: connection.recv(65536), b""))
-
-
 def _is_refused(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
-            return False
-    except OSError:
-        return True
-
-
-def _is_held(port: int) -> bool:
-    """Whether something listens on the port, probed by a bind rather than a connection: a connection to a parked
-    port is itself the wake."""
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        probe.bind(("127.0.0.1", port))
-        return False
-    except OSError:
-        return True
-    finally:
-        probe.close()
+    return not probe_tcp_url(f"http://127.0.0.1:{port}")
 
 
 def test_a_pass_parks_a_stopped_stoppable_app_and_nothing_else(
-    manager: AppLifecycleManager, docs_port: int, supervisor: FakeSupervisor
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
 ) -> None:
     manager.sweep_once()
 
@@ -147,7 +125,7 @@ def test_a_pass_parks_a_stopped_stoppable_app_and_nothing_else(
 
 
 def test_a_pass_releases_a_parked_app_that_came_up_on_its_own(
-    manager: AppLifecycleManager, docs_port: int, supervisor: FakeSupervisor
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
 ) -> None:
     manager.sweep_once()
     assert manager.is_app_parked("docs")
@@ -156,7 +134,7 @@ def test_a_pass_releases_a_parked_app_that_came_up_on_its_own(
     manager.sweep_once()
 
     assert not manager.is_app_parked("docs")
-    assert _is_refused(docs_port)
+    assert _is_refused(closed_port)
     # A program supervisord is retrying (BACKOFF) needs the port too.
     supervisor.statename_by_program["docs"] = "STOPPED"
     manager.sweep_once()
@@ -167,11 +145,11 @@ def test_a_pass_releases_a_parked_app_that_came_up_on_its_own(
 
 
 def test_a_connection_to_a_parked_port_wakes_the_app(
-    manager: AppLifecycleManager, docs_port: int, supervisor: FakeSupervisor
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
 ) -> None:
     manager.sweep_once()
 
-    answer = _connect(docs_port)
+    answer = send_raw_get_over_socket(closed_port)
 
     assert answer.startswith(b"HTTP/1.1 503") and b"Starting Docs" in answer
     assert supervisor.started == ["docs"]
@@ -182,7 +160,7 @@ def test_a_connection_to_a_parked_port_wakes_the_app(
 
 
 def test_a_parked_port_follows_its_row_and_is_released_once_the_row_is_gone(
-    manager: AppLifecycleManager, docs_port: int, supervisor: FakeSupervisor, tmp_path: Path
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor, tmp_path: Path
 ) -> None:
     """A parker outlives neither the port its row names nor the row itself: an app re-registered on another port
     moves the shell's hold there, and one that left the registry gets its port back at once, so whatever binds it
@@ -200,14 +178,14 @@ def test_a_parked_port_follows_its_row_and_is_released_once_the_row_is_gone(
     manager.sweep_once()
 
     assert manager.parked_app_names() == ["docs"]
-    assert _is_refused(docs_port) and _is_held(moved_port)
+    assert _is_refused(closed_port) and not can_bind_loopback_port(moved_port)
 
     write_registry(registry_path, registry_row_toml("plain", "http://127.0.0.1:1"))
     manager.inventory.reload_registry()
     manager.sweep_once()
 
     assert manager.parked_app_names() == []
-    assert not _is_held(moved_port)
+    assert can_bind_loopback_port(moved_port)
     assert supervisor.started == []
 
 
@@ -220,13 +198,13 @@ def test_a_pass_does_nothing_when_supervisord_does_not_answer(
 
 
 def test_a_wake_releases_the_parker_before_starting(
-    manager: AppLifecycleManager, docs_port: int, supervisor: FakeSupervisor
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
 ) -> None:
     manager.sweep_once()
 
     assert manager.wake("docs") is ParkedPageKind.STARTING
     assert supervisor.started == ["docs"]
-    assert _is_refused(docs_port)
+    assert _is_refused(closed_port)
     with pytest.raises(AppLifecycleRefusedError):
         manager.wake("shell")
     with pytest.raises(AppLifecycleRefusedError):
@@ -250,17 +228,17 @@ def test_the_wake_budget_refuses_a_fourth_wake_in_the_window(
 
 
 def test_a_wake_that_ends_in_fatal_re_parks_with_the_failure_page(
-    manager: AppLifecycleManager, docs_port: int, supervisor: FakeSupervisor
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
 ) -> None:
     manager.sweep_once()
-    _connect(docs_port)
+    send_raw_get_over_socket(closed_port)
     supervisor.statename_by_program["docs"] = "FATAL"
 
     manager.sweep_once()
 
     assert manager.is_app_parked("docs")
     # The next request wakes it again (within the budget) and is told where to look while it waits.
-    answer = _connect(docs_port)
+    answer = send_raw_get_over_socket(closed_port)
     assert b"Docs could not start" in answer and b"supervisorctl tail docs stderr" in answer
     assert supervisor.started == ["docs", "docs"]
     # Once the app has run again, a later stop is an ordinary one and its request is answered as starting.
@@ -268,7 +246,7 @@ def test_a_wake_that_ends_in_fatal_re_parks_with_the_failure_page(
     manager.sweep_once()
     supervisor.statename_by_program["docs"] = "STOPPED"
     manager.sweep_once()
-    assert b"Starting Docs" in _connect(docs_port)
+    assert b"Starting Docs" in send_raw_get_over_socket(closed_port)
 
 
 def test_stop_app_stops_the_program_and_refuses_what_it_cannot_stop(
@@ -282,7 +260,7 @@ def test_stop_app_stops_the_program_and_refuses_what_it_cannot_stop(
 
 
 def test_wake_and_wait_answers_once_the_app_accepts(
-    manager: AppLifecycleManager, docs_port: int, supervisor: FakeSupervisor
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
 ) -> None:
     entry = manager.inventory.entry("docs")
     assert entry is not None and entry.is_running is False
@@ -294,7 +272,7 @@ def test_wake_and_wait_answers_once_the_app_accepts(
     def start(program: str) -> None:
         supervisor.start(program)
         if not is_bound[0]:
-            listener.bind(("127.0.0.1", docs_port))
+            listener.bind(("127.0.0.1", closed_port))
             listener.listen(1)
             is_bound[0] = True
 
@@ -413,11 +391,11 @@ def test_an_app_that_does_not_declare_the_field_is_never_stopped(
     assert supervisor.stopped == []
 
 
-def test_stop_releases_every_parked_port(manager: AppLifecycleManager, docs_port: int) -> None:
+def test_stop_releases_every_parked_port(manager: AppLifecycleManager, closed_port: int) -> None:
     manager.sweep_once()
     assert manager.is_app_parked("docs")
 
     manager.stop()
 
     assert manager.parked_app_names() == []
-    assert _is_refused(docs_port)
+    assert _is_refused(closed_port)

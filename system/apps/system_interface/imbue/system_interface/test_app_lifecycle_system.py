@@ -22,7 +22,6 @@ from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.testing import build_test_state
-from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _GRACE_SECONDS = 0.3
@@ -30,21 +29,16 @@ _SWEEP_SECONDS = 0.1
 
 
 @pytest.fixture
-def docs_port() -> int:
-    return find_free_port()
-
-
-@pytest.fixture
 def started_shell(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster, fake_supervisor: FakeSupervisorServer, docs_port: int
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, fake_supervisor: FakeSupervisorServer, closed_port: int
 ) -> Iterator[Flask]:
     """A started shell over a ``docs`` app that stops when no window shows it, running (as supervisord tells it)
-    on ``docs_port`` where nothing actually listens, and a critical ``shell`` row."""
+    on ``closed_port`` where nothing actually listens, and a critical ``shell`` row."""
     fake_supervisor.statename_by_program["docs"] = "RUNNING"
     fake_supervisor.statename_by_program["shell"] = "RUNNING"
     registry_path = write_registry(
         tmp_path / "apps.toml",
-        registry_row_toml("docs", f"http://127.0.0.1:{docs_port}", program="docs", stop_when_no_windows=True),
+        registry_row_toml("docs", f"http://127.0.0.1:{closed_port}", program="docs", stop_when_no_windows=True),
         registry_row_toml("shell", "http://127.0.0.1:1", program="shell", is_critical=True),
     )
     state = build_test_state(
@@ -91,7 +85,7 @@ def _wait_for_sweeps(fake_supervisor: FakeSupervisorServer, count: int) -> None:
 
 
 def test_an_app_with_no_windows_stops_after_the_grace_and_comes_back_on_a_request(
-    started_shell: Flask, fake_supervisor: FakeSupervisorServer, docs_port: int
+    started_shell: Flask, fake_supervisor: FakeSupervisorServer, closed_port: int
 ) -> None:
     client = started_shell.test_client()
     # Nobody has visited: the app keeps running well past the grace period.
@@ -115,7 +109,7 @@ def test_an_app_with_no_windows_stops_after_the_grace_and_comes_back_on_a_reques
     assert client.get("/api/inventory").get_json()["apps"][0]["is_running"] is False
 
     # The next request for the app is answered with the loading page, and the app is started.
-    status, body = _fetch(docs_port)
+    status, body = _fetch(closed_port)
     assert status == 503 and "Starting Docs" in body
     wait_for(
         lambda: fake_supervisor.statename_by_program["docs"] == "RUNNING",
@@ -127,7 +121,7 @@ def test_an_app_with_no_windows_stops_after_the_grace_and_comes_back_on_a_reques
 
 
 def test_quit_closes_the_windows_and_stops_the_app_at_once(
-    started_shell: Flask, fake_supervisor: FakeSupervisorServer, docs_port: int
+    started_shell: Flask, fake_supervisor: FakeSupervisorServer, closed_port: int
 ) -> None:
     client = started_shell.test_client()
     shell = started_shell.config["SYSTEM_INTERFACE_STATE"].shell

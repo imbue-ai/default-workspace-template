@@ -291,6 +291,25 @@ def find_free_port() -> int:
         return probe.getsockname()[1]
 
 
+def can_bind_loopback_port(port: int) -> bool:
+    """Whether nothing listens on the loopback port, probed by a bind rather than a connect: a connect to a port
+    the shell parks is itself the wake."""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+        return True
+
+
+def send_raw_get_over_socket(port: int) -> bytes:
+    """One GET to the loopback port over a bare socket, read until the server closes: what a parked port answers."""
+    with socket.create_connection(("127.0.0.1", port), timeout=5.0) as connection:
+        connection.sendall(b"GET /some/page HTTP/1.1\r\nHost: docs.localhost\r\n\r\n")
+        return b"".join(iter(lambda: connection.recv(65536), b""))
+
+
 def is_server_answering(base_url: str) -> bool:
     """Whether the shell at ``base_url`` answers HTTP at all: any response to ``/api/desktops``, an error included."""
     try:
