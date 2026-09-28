@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from flask.testing import FlaskClient
+
 from imbue.chat.accounts import read_index
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.pty_auth import spawn_pty
@@ -32,7 +34,8 @@ def _fake_claude_spawner(script: Path) -> Any:
     return spawner
 
 
-def test_a_relayed_callback_signs_claude_in() -> None:
+def _start_claude_sign_in() -> tuple[FlaskClient, dict[str, Any]]:
+    """A chat app whose `claude` is the stand-in, and the Claude sign-in it has started."""
     service = AuthFlowService.create(
         home=None,
         work_dir=_REPO_ROOT,
@@ -40,8 +43,12 @@ def test_a_relayed_callback_signs_claude_in() -> None:
         probe=lambda *_a: SignedIn.NO,
     )
     client = create_application(build_test_state(auth_flows=service)).test_client()
-
     started = client.post("/api/accounts", json={"lane_id": "anthropic", "method_id": "subscription"}).get_json()
+    return client, started
+
+
+def test_a_relayed_callback_signs_claude_in() -> None:
+    client, started = _start_claude_sign_in()
     relay_url = started["relay_url"]
     assert relay_url is not None and "redirect_uri=http%3A%2F%2Flocalhost%3A" in relay_url
 
@@ -60,14 +67,7 @@ def test_a_relayed_callback_signs_claude_in() -> None:
 
 
 def test_a_callback_with_another_flows_state_never_reaches_the_cli() -> None:
-    service = AuthFlowService.create(
-        home=None,
-        work_dir=_REPO_ROOT,
-        spawner=_fake_claude_spawner(_FAKE_CLAUDE_SCRIPT),
-        probe=lambda *_a: SignedIn.NO,
-    )
-    client = create_application(build_test_state(auth_flows=service)).test_client()
-    started = client.post("/api/accounts", json={"lane_id": "anthropic", "method_id": "subscription"}).get_json()
+    client, started = _start_claude_sign_in()
 
     answer = client.post(
         f"/api/accounts/flow/{started['flow_id']}/callback",
