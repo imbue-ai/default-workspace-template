@@ -31,7 +31,7 @@ from imbue.system_interface.wsgi import make_threaded_server
 def _exit_on_signal(signum: int, frame: FrameType | None) -> None:
     """Turn SIGTERM/SIGINT into a clean exit so the ``atexit`` teardown runs.
 
-    The shutdown itself (the broadcaster and the shell's inventory) is registered
+    The shutdown itself (the broadcaster, and the shell's inventory and lifecycle manager) is registered
     via ``atexit`` in ``main``; raising ``SystemExit`` here ensures that interpreter-exit
     path runs instead of the default abrupt termination.
     """
@@ -124,14 +124,16 @@ def main() -> None:
         state = get_state()
 
     # Start the shell now that the app is assembled: the stale-client prune, the registry
-    # watch, the liveness sweep, and the presence sweep. This is the one place they are started;
-    # ``build_application`` only constructs, so tests that build an app never start them.
+    # watch, the liveness and lifecycle sweeps, and the presence sweep. This is the one place
+    # they are started; ``build_application`` only constructs, so tests that build an app never
+    # start them.
     state.shell.start()
     state.presence_sweep.start()
 
-    # Tear down the broadcaster and the inventory on exit. ``atexit`` covers a normal return;
-    # the signal handlers cover supervisord's SIGTERM and an interactive SIGINT (Ctrl-C), which
-    # ``serve_forever`` would otherwise turn into an abrupt exit.
+    # Tear down the broadcaster, the inventory, and the lifecycle manager (which lets go of
+    # every parked port) on exit. ``atexit`` covers a normal return; the signal handlers cover
+    # supervisord's SIGTERM and an interactive SIGINT (Ctrl-C), which ``serve_forever`` would
+    # otherwise turn into an abrupt exit.
     atexit.register(state.shutdown)
     signal.signal(signal.SIGTERM, _exit_on_signal)
     signal.signal(signal.SIGINT, _exit_on_signal)
