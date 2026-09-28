@@ -42,7 +42,7 @@ the exception: `data/uploads` and `data/.tasks/fetch-process-show` are symlinks
 to the workspace's own copies. Everything else under `data/` is in the workspace,
 at `/home/user/workspace/data/`.
 
-Read it as much as you need. Never modify it.
+Read data from here if you need to.
 
 # Progress tracking is not yours
 
