@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseClientArrival,
   WireShapeError,
+  isSamePlacement,
   isSameWindowPaths,
   parseAppRecord,
   parseAvatarCatalog,
@@ -98,6 +99,17 @@ describe("parseLayout", () => {
     });
     expect(layout.updated_at).toBe("2026-09-19T14:12:40.001Z");
     expect(layout.placements[0].state).toBe("NORMAL");
+    // A placement without ``is_detached`` (a file from before the flag) reads as attached, and the flag is
+    // part of what tells two placements apart.
+    expect(layout.placements[0].is_detached).toBe(false);
+    const detached = parseLayout({
+      version: 1,
+      updated_at: null,
+      placements: [{ ...layout.placements[0], is_detached: true }],
+    }).placements[0];
+    expect(detached.is_detached).toBe(true);
+    expect(isSamePlacement(layout.placements[0], detached)).toBe(false);
+    expect(isSamePlacement(layout.placements[0], { ...detached, is_detached: false })).toBe(true);
     // A layout with no ``window_paths`` (the save route's echo) reads as one with none.
     expect(parseLayout({ version: 1, updated_at: null, placements: [] })).toEqual({
       updated_at: null,
