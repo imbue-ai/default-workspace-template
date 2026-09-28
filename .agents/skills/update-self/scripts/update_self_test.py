@@ -1190,6 +1190,7 @@ def test_bootstrap_skill_refuses_a_ref_that_does_not_resolve(tmp_path, capsys) -
     # would follow its own, older flow for a target it never looked at.
     repo = tmp_path / "repo"
     _init_repo_with_skill(repo, skill_body="LOCAL FLOW\n")
+    staging = tmp_path / "staging"
 
     code = update_self.main(
         [
@@ -1197,7 +1198,7 @@ def test_bootstrap_skill_refuses_a_ref_that_does_not_resolve(tmp_path, capsys) -
             "--ref",
             "electric-husky",
             "--dest",
-            str(tmp_path / "staging"),
+            str(staging),
             "--repo-root",
             str(repo),
         ]
@@ -1206,6 +1207,7 @@ def test_bootstrap_skill_refuses_a_ref_that_does_not_resolve(tmp_path, capsys) -
     captured = capsys.readouterr()
     assert code == 1
     assert captured.out == ""
+    assert not staging.exists()
     assert captured.err.startswith("error: ")
     assert "electric-husky" in captured.err
     assert "Traceback" not in captured.err
