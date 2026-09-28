@@ -15,6 +15,7 @@ import threading
 from collections.abc import Callable
 from enum import auto
 from typing import Final
+from typing import assert_never
 from urllib.parse import urlsplit
 
 from loguru import logger
@@ -75,18 +76,30 @@ height:100vh;margin:0;color:#334155}}div{{text-align:center;max-width:32rem}}cod
 
 
 @pure
+def parked_refresh_seconds(kind: ParkedPageKind) -> int:
+    """How long a page of the kind waits before asking again: the page's meta refresh and the answer's Retry-After."""
+    match kind:
+        case ParkedPageKind.STARTING:
+            return STARTING_REFRESH_SECONDS
+        case ParkedPageKind.FAILED:
+            return FAILED_REFRESH_SECONDS
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
 def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> str:
     """The page the parker answers with: starting (reloading every few seconds) or could not start."""
     name = html.escape(display_name)
     if kind is ParkedPageKind.STARTING:
         return _PAGE_TEMPLATE.format(
-            refresh=STARTING_REFRESH_SECONDS,
+            refresh=parked_refresh_seconds(kind),
             title=f"Starting {name}",
             heading=f"Starting {name}&hellip;",
             detail="The app was stopped while nothing showed it. This page opens it once it answers.",
         )
     return _PAGE_TEMPLATE.format(
-        refresh=FAILED_REFRESH_SECONDS,
+        refresh=parked_refresh_seconds(kind),
         title=f"{name} could not start",
         heading=f"{name} could not start",
         detail=(
@@ -97,13 +110,13 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
 
 
 @pure
-def parked_response_bytes(page: str) -> bytes:
-    """One complete HTTP/1.1 503 answer carrying ``page``, closing the connection so nothing is pooled against
-    the parker."""
+def parked_response_bytes(kind: ParkedPageKind, page: str) -> bytes:
+    """One complete HTTP/1.1 503 answer carrying ``page``, asking for the kind's own retry and closing the
+    connection so nothing is pooled against the parker."""
     body = page.encode("utf-8")
     head = (
         "HTTP/1.1 503 Service Unavailable\r\n"
-        f"Retry-After: {STARTING_REFRESH_SECONDS}\r\n"
+        f"Retry-After: {parked_refresh_seconds(kind)}\r\n"
         "Cache-Control: no-store\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
         f"Content-Length: {len(body)}\r\n"
@@ -206,6 +219,6 @@ class ParkedPort(MutableModel):
                     connection.recv(_REQUEST_READ_LIMIT_BYTES)
                 except OSError as e:
                     logger.debug("Answering the request that woke {} without reading it: {}", self.app, e)
-                connection.sendall(parked_response_bytes(self.page_for(kind)))
+                connection.sendall(parked_response_bytes(kind, self.page_for(kind)))
         except OSError as e:
             logger.debug("Could not answer the request that woke {}: {}", self.app, e)

@@ -84,6 +84,8 @@ def test_a_wake_that_fails_is_told_so(closed_port: int) -> None:
 
     assert b"Docs could not start" in answer and b"supervisorctl tail docs stderr" in answer
     assert f'content="{FAILED_REFRESH_SECONDS}"'.encode() in answer
+    # The header makes the page's slower retry the promise a fetch sees too.
+    assert f"Retry-After: {FAILED_REFRESH_SECONDS}".encode() in answer
 
 
 def test_a_wake_that_raises_still_answers_the_request(closed_port: int) -> None:
@@ -117,7 +119,7 @@ def test_release_before_any_connection_frees_the_port(parked_port: ParkedPort) -
 
 def test_the_response_bytes_carry_the_page_length() -> None:
     page = parked_page_html(ParkedPageKind.STARTING, "A <b>Name</b>", "prog")
-    response = parked_response_bytes(page)
+    response = parked_response_bytes(ParkedPageKind.STARTING, page)
     head, _, body = response.partition(b"\r\n\r\n")
     assert f"Content-Length: {len(page.encode())}".encode() in head
     assert body == page.encode()
