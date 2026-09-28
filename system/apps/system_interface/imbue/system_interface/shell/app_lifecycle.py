@@ -117,7 +117,7 @@ class AppLifecycleManager(MutableModel):
     _lock: threading.RLock = PrivateAttr(default_factory=threading.RLock)
     _parked_by_app: dict[str, ParkedPort] = PrivateAttr(default_factory=dict)
     _wake_times_by_app: dict[str, list[float]] = PrivateAttr(default_factory=dict)
-    _woken_at_by_app: dict[str, float] = PrivateAttr(default_factory=dict)
+    _apps_awaiting_wake_outcome: set[str] = PrivateAttr(default_factory=set)
     _failed_apps: set[str] = PrivateAttr(default_factory=set)
     _idle_since_by_app: dict[str, float] = PrivateAttr(default_factory=dict)
     _is_visited: bool = PrivateAttr(default=False)
@@ -198,7 +198,7 @@ class AppLifecycleManager(MutableModel):
                 kind = ParkedPageKind.FAILED
             else:
                 wake_times.append(now)
-                self._woken_at_by_app[app] = now
+                self._apps_awaiting_wake_outcome.add(app)
                 self._failed_apps.discard(app)
                 kind = ParkedPageKind.STARTING
         if parked is not None:
@@ -271,7 +271,7 @@ class AppLifecycleManager(MutableModel):
 
     def _sweep_interval_seconds(self) -> float:
         with self._lock:
-            is_transitioning = bool(self._parked_by_app) or bool(self._woken_at_by_app)
+            is_transitioning = bool(self._parked_by_app) or bool(self._apps_awaiting_wake_outcome)
         return (
             min(TRANSITION_SWEEP_INTERVAL_SECONDS, self.idle_sweep_interval_seconds)
             if is_transitioning
@@ -303,7 +303,7 @@ class AppLifecycleManager(MutableModel):
             with self._lock:
                 parked = self._parked_by_app.pop(app, None)
                 if statename == SUPERVISOR_RUNNING_STATENAME:
-                    self._woken_at_by_app.pop(app, None)
+                    self._apps_awaiting_wake_outcome.discard(app)
                     self._failed_apps.discard(app)
             if parked is not None:
                 parked.release()
@@ -316,9 +316,9 @@ class AppLifecycleManager(MutableModel):
             # STOPPING: the port is still the app's until it exits.
             return
         with self._lock:
-            if statename == SUPERVISOR_FATAL_STATENAME and app in self._woken_at_by_app:
+            if statename == SUPERVISOR_FATAL_STATENAME and app in self._apps_awaiting_wake_outcome:
                 self._failed_apps.add(app)
-                self._woken_at_by_app.pop(app, None)
+                self._apps_awaiting_wake_outcome.discard(app)
             if app in self._parked_by_app:
                 return
         self._park(entry, program)
