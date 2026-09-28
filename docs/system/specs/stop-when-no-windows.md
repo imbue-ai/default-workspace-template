@@ -134,7 +134,7 @@ And a bind that fails with address-in-use means something is listening on the ap
 
 ### 5.3 The loading page
 
-The parker answers `503 Service Unavailable` with `Retry-After: 2`, `Cache-Control: no-store`, and an HTML body that says the app is starting and carries `<meta http-equiv="refresh" content="2">`, so a window's frame reloads itself until the app answers.
+The parker answers `503 Service Unavailable` with `Retry-After` set to the page's own refresh (2 seconds; 15 for the failure page below), `Cache-Control: no-store`, and an HTML body that says the app is starting and carries `<meta http-equiv="refresh" content="2">`, so a window's frame reloads itself until the app answers.
 A fetch from a page gets the same 503 and retries on its own terms.
 Nothing here depends on the shell's liveness sweep: the page reloads into the app the moment the app binds.
 
@@ -151,7 +151,7 @@ Its sweep runs every 2 seconds while any app is parked, a wake is awaiting its o
 Each pass:
 
 1. reads every supervised program's state in one RPC (none when supervisord cannot be reached: the pass does nothing, logged at debug);
-2. for each parkable app whose state is not `RUNNING` or `STARTING` and that is not parked, parks it (a bind refused with address-in-use leaves it unparked; an app woken after the pass read the states is left for the next pass, since the reading is stale for it and the app is about to bind);
+2. for each parkable app whose state is `STOPPED`, `EXITED`, `FATAL`, or `UNKNOWN` and that is not parked, parks it (a program `STOPPING` keeps its port until it exits; a bind refused with address-in-use leaves it unparked; an app woken after the pass read the states is left for the next pass, since the reading is stale for it and the app is about to bind);
 3. for each parked app whose state is `RUNNING`, `STARTING`, or `BACKOFF`, releases the parker (someone started it behind the shell's back, `supervisorctl start` say; its first bind may have failed, and supervisord's retry lands once the port is free, within a few seconds, which is why a program in `BACKOFF` needs the port too), and likewise releases a parker the pass no longer reaches (its row left the registry, or its program is unknown to supervisord) or one on a port the row no longer names (the app re-registered elsewhere; the current port is parked instead), so the shell never holds a port it cannot start an app behind;
 4. for each app that was woken and whose state is `FATAL`, re-parks it as failed (section 5.5);
 5. applies Part D (section 6).
@@ -216,7 +216,7 @@ Closing the window is what says the user is done with it.
 ### 7.1 The route
 
 `POST /api/apps/<name>/quit` (contracts section 5.1): refused as the stop route refuses (preview `403`, unknown `404`, no program or critical `400`), else it closes every window of the app on every desktop through the shell's own close (each close broadcasts and posts the close hint as any close does; a pinned window, which is never closed, stays), then stops the program at once with no grace period, refreshes liveness, and answers `{"name", "is_running"}`.
-`POST /api/apps/<name>/stop` and `.../start` remain as they are for agents and tests.
+`POST /api/apps/<name>/stop` and `.../start` remain for agents and tests, through the manager: a start is a wake (the parker released first, budgeted, answered `502` once the budget is spent), a stop is followed by the liveness refresh that lets the next pass park the port.
 
 ### 7.2 The menu
 
