@@ -63,6 +63,19 @@ describe("asking the desktop app to relay a sign-in", () => {
     expect(embed.handlers.has("minds:provider-sign-in-ack")).toBe(false);
   });
 
+  it("hears the answer to a sign-in started while an earlier one was still waiting", async () => {
+    const older = requestProviderRelay("https://claude.ai/x", "flow-1");
+    vi.advanceTimersByTime(RELAY_ACK_TIMEOUT_MS - 1000);
+    const newer = requestProviderRelay("https://claude.ai/x", "flow-2");
+
+    vi.advanceTimersByTime(2000);
+    ack(true);
+    vi.advanceTimersByTime(RELAY_ACK_TIMEOUT_MS);
+
+    expect(await newer).toBe(true);
+    expect(await older).toBe(false);
+  });
+
   it("reads anything but a true relay as no", async () => {
     const relaying = requestProviderRelay("https://claude.ai/x", "flow-1");
     ack("true");

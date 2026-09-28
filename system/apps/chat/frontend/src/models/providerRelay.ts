@@ -22,19 +22,25 @@ import {
  *  predates the relay stays silent; the current ones answer as soon as the page is opened. */
 export const RELAY_ACK_TIMEOUT_MS = 5000;
 
+/** Settles the request still waiting on an ack. The ack has one handler slot, so only one request may own it. */
+let settlePending: ((isRelaying: boolean) => void) | null = null;
+
 /** Ask the desktop app to relay this sign-in and open its page; whether it will. */
 export function requestProviderRelay(url: string, flowId: string): Promise<boolean> {
   // A page with no embedder at all has nobody to ask.
   if (typeof window !== "undefined" && window.parent === window) return Promise.resolve(false);
+  settlePending?.(false);
   return new Promise((resolve) => {
     let isSettled = false;
     const settle = (isRelaying: boolean): void => {
       if (isSettled) return;
       isSettled = true;
+      if (settlePending === settle) settlePending = null;
       clearTimeout(timer);
       clearEmbedderMessageHandler(PROVIDER_SIGN_IN_ACK);
       resolve(isRelaying);
     };
+    settlePending = settle;
     const timer = setTimeout(() => settle(false), RELAY_ACK_TIMEOUT_MS);
     setEmbedderMessageHandler(PROVIDER_SIGN_IN_ACK, (message) => settle(message.relay === true));
     sendToEmbedder(PROVIDER_SIGN_IN, { url, flowId });
