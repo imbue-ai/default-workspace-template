@@ -34,8 +34,8 @@ WINDOW_OPS: Final[frozenset[str]] = frozenset(
 SHORTCUT_OPS: Final[frozenset[str]] = frozenset(
     {"shortcuts", "shortcut_set", "shortcut_move", "shortcut_remove", "wallpaper"}
 )
-# Ops that change what is on screen without changing the files: they alone reach the browser as a
-# ``layout_op`` message.
+# Ops that change what is on screen without changing the files: they reach the browser as a ``layout_op``
+# message, as does a ``show`` that lands on a pulled-out window.
 TRANSIENT_OPS: Final[frozenset[str]] = frozenset({"refresh", RELOAD_SYSTEM_INTERFACE_OP})
 KNOWN_OPS: Final[frozenset[str]] = (
     frozenset({CONTEXT_OP, LOAD_OP, SHOW_OP, "open"}) | INVENTORY_OPS | WINDOW_OPS | SHORTCUT_OPS | TRANSIENT_OPS

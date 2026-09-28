@@ -1361,7 +1361,7 @@ def test_show_raises_the_frontmost_window_already_showing_the_path_on_the_active
     nearest the top of this client's stack wins, whatever order the windows were opened in."""
     app = _pinned_shell(tmp_path, broadcaster, pin=("/", "plain", "independent", "bar"))
     client = app.test_client()
-    _register_client(app, "c1", "home")
+    client_queue = _register_client(app, "c1", "home")
     at_path = _window_id_at(client, "buddy", _SHOW_PATH)
     at_showing_path = _window_id_at(client, "buddy", _SHOWING_PATH)
     assert _op(client, "focus", {"window": at_path, "client": "c1"}, None).status_code == 200
@@ -1376,6 +1376,7 @@ def test_show_raises_the_frontmost_window_already_showing_the_path_on_the_active
     assert answer["layout"]["placements"][-1]["window_id"] == at_path
     assert _placement_of(client, at_showing_path)["is_minimized"] is False
     assert _paths_by_window(client) == paths_before
+    assert _shown_pulled_out_windows(client_queue) == []
 
 
 def test_show_switches_the_client_to_another_desktop_already_showing_the_path(
@@ -1539,6 +1540,113 @@ def test_show_opens_a_window_at_the_path_when_the_app_has_no_pinned_window(
     assert _paths_by_window(client) == {minimized: "/?doc=agent-2", answer["window_id"]: _SHOW_PATH}
     on_top = answer["layout"]["placements"][-1]
     assert (on_top["window_id"], on_top["is_minimized"]) == (answer["window_id"], False)
+
+
+def _pull_out(
+    client: FlaskClient, window_id: str, client_id: str = "c1", desktop_id: str = "home", is_ghost_hidden: bool = False
+) -> None:
+    """Save the client's layout with ``window_id`` pulled out, as the desktop's page does once the chrome has it."""
+    layout = client.get(f"/api/placements/{desktop_id}?client={client_id}").get_json()
+    placements = [
+        {**placement, "is_detached": True, "is_minimized": is_ghost_hidden}
+        if placement["window_id"] == window_id
+        else placement
+        for placement in layout["placements"]
+    ]
+    saved = client.post(
+        f"/api/placements/{desktop_id}",
+        json={
+            "client_id": client_id,
+            "save_id": "save-00000000000000aa",
+            "base_updated_at": layout["updated_at"],
+            "placements": placements,
+        },
+    )
+    assert saved.status_code == 200
+
+
+def _shown_pulled_out_windows(client_queue: "queue.Queue[str | None]") -> list[tuple[Any, Any, Any]]:
+    return [
+        (message["args"], message["target_client_id"], message["requester"])
+        for message in drain_messages(client_queue)
+        if message["type"] == "layout_op" and message["op"] == "show"
+    ]
+
+
+def test_show_leaves_a_pulled_out_window_already_showing_the_path_out_and_asks_its_client_to_show_it(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A pulled-out window is on screen in a desktop window of the chrome's own, which only the client's page can
+    bring forward: the layout is left as it stands (the window stays out, nothing is restacked) and the client alone
+    is asked, as a ``show`` layout op naming the window, to show it."""
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    client_queue = _register_client(app, "c1", "home")
+    other_queue = _register_client(app, "c2", "home")
+    pulled_out = _window_id_at(client, "buddy", _SHOW_PATH)
+    _window_id_at(client, "terminal", "/?session=t1")
+    _pull_out(client, pulled_out)
+    placements_before = _placements(client, "c1")
+    drain_messages(client_queue)
+    drain_messages(other_queue)
+
+    shown = _show(client)
+
+    assert shown.status_code == 200
+    answer = shown.get_json()
+    assert (answer["shown"], answer["window_id"], answer["desktop_id"]) == ("raised", pulled_out, "home")
+    assert _placements(client, "c1") == placements_before
+    assert _shown_pulled_out_windows(client_queue) == [({"window": pulled_out}, "c1", "buddy")]
+    assert _shown_pulled_out_windows(other_queue) == []
+
+
+def test_show_leaves_the_client_on_its_desktop_for_a_pulled_out_window_on_another(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A pulled-out window's desktop window is not the main window's desktop, so showing it switches nothing."""
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    client_queue = _register_client(app, "c1", "home")
+    client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
+    elsewhere = _window_id_at(client, "buddy", _SHOWING_PATH, desktop_id="research")
+    _pull_out(client, elsewhere, desktop_id="research")
+    assert _op(client, "load", {"desktop": "home", "client": "c1"}, None).status_code == 200
+    drain_messages(client_queue)
+
+    shown = _show(client)
+
+    assert shown.status_code == 200
+    answer = shown.get_json()
+    assert (answer["shown"], answer["window_id"], answer["desktop_id"]) == ("raised", elsewhere, "research")
+    recorded = _shell(app).clients.get_client("c1")
+    assert recorded is not None and recorded.active_desktop == "home"
+    assert _placement_of(client, elsewhere, desktop_id="research")["is_detached"] is True
+    messages = drain_messages(client_queue)
+    assert "active_desktop_changed" not in [message["type"] for message in messages]
+    assert [message["args"] for message in messages if message["type"] == "layout_op"] == [{"window": elsewhere}]
+
+
+def test_show_repoints_a_pulled_out_window_with_its_ghost_hidden_and_leaves_it_out(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A pulled-out window whose ghost is hidden is still on screen in the chrome's window, so it is repointed
+    before the pinned window is: pointed at the path, left out, and shown there."""
+    app = _pinned_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    client_queue = _register_client(app, "c1", "home")
+    pulled_out = _window_id_at(client, "buddy", "/?doc=agent-2")
+    _pull_out(client, pulled_out, is_ghost_hidden=True)
+    drain_messages(client_queue)
+
+    shown = _show(client)
+
+    assert shown.status_code == 200
+    answer = shown.get_json()
+    assert (answer["shown"], answer["window_id"]) == ("navigated", pulled_out)
+    assert _paths_by_window(client)[pulled_out] == _SHOW_PATH
+    placement = _placement_of(client, pulled_out)
+    assert (placement["is_detached"], placement["is_minimized"]) == (True, True)
+    assert _shown_pulled_out_windows(client_queue) == [({"window": pulled_out}, "c1", "buddy")]
 
 
 @pytest.mark.parametrize(

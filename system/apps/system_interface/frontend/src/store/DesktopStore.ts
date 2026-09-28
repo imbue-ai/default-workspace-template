@@ -886,6 +886,15 @@ export class DesktopStore {
       case "reload_system_interface":
         this.deps.reloadInterface();
         return;
+      case "show": {
+        // A pulled-out window the shell left out: its desktop window is raised as the taskbar's "Show" raises it,
+        // by the main window's page (a solo page shares its client).
+        const windowId = event.args.window;
+        if (this.soloWindowId === null && typeof windowId === "string" && windowId !== "") {
+          this.showDetachedWindow(windowId);
+        }
+        return;
+      }
     }
   }
 

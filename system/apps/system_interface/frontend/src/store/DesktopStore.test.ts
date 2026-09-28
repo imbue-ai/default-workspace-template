@@ -1479,6 +1479,34 @@ describe("pulled-out windows", () => {
     expect(savedCalls()).toHaveLength(2);
   });
 
+  it("shows a pulled-out window's own desktop window when a show op lands on it, leaving it out", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    const { store, calls } = makePopOutStore();
+    await store.start(NO_LINK);
+
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1" }, requester: "buddy" });
+
+    expect(calls).toEqual([["request", expect.objectContaining({ windowId: "win-1", title: "Docs" })]]);
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
+    expect(savedCalls()).toHaveLength(0);
+  });
+
+  it("leaves a show op on a pulled-out window to the main window's page when it is a solo shell", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    const { store, calls } = makePopOutStore("win-1");
+    await store.start(NO_LINK);
+
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1" }, requester: "buddy" });
+
+    expect(calls).toEqual([]);
+  });
+
   it("hides a pulled-out window's ghost and shows it again from its taskbar entry, the window staying out", async () => {
     const { store, calls, reports } = makePopOutStore();
     await store.start(NO_LINK);

@@ -805,10 +805,20 @@ def _show(
         if choice.outcome is not ShowOutcome.RAISED:
             # As a ``navigate`` does: an independent window moves for this client alone, a linked one for everyone.
             shell.report_window_location(desktop.id, window_id, client_id, path, choice.window.title)
-        shell.edit_desktop_layout(desktop, client_id, lambda current: with_window_raised(current, window_id))
-        # Switched after the raise, so the layout the client fetches on arriving already has the window on top.
-        if desktop.id != target.desktop.id:
-            shell.set_client_active_desktop(client_id, desktop.id)
+        if placement_of(shell.read_desktop_layout(desktop, client_id), window_id).is_detached:
+            # Its desktop window is the chrome's, which only the client's page can bring forward; raising the
+            # placement would pull the window back onto the desktop instead.
+            shell.broadcaster.broadcast_layout_op(
+                SHOW_OP,
+                {"window": str(window_id)},
+                requester=_requester_wire(requester),
+                target_client_id=str(client_id),
+            )
+        else:
+            shell.edit_desktop_layout(desktop, client_id, lambda current: with_window_raised(current, window_id))
+            # Switched after the raise, so the layout the client fetches on arriving already has the window on top.
+            if desktop.id != target.desktop.id:
+                shell.set_client_active_desktop(client_id, desktop.id)
     logger.info(
         "layout op={} requester={} desktop={} client={} app={} path={} shown={}",
         SHOW_OP,
