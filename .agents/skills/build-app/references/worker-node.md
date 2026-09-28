@@ -120,14 +120,11 @@ A node that drives the app drives it headlessly, the way
 conventions". Never the browser fleet: it streams a browser to a pane for the
 user to watch and take over, and that is a conversation the orchestrator owns.
 
-## Two hooks that will refuse your commands
+## A hook that will refuse your commands
 
-Both refusals cost you a turn, and both are easy to avoid:
-
-- **Never pipe anything through `tail` or `head`** to shorten it. Redirect to a
-  file and read the file instead.
-- **A `tk` command must be the only thing in its tool call** -- no `cd` in front,
-  nothing chained after it with `&&` or `;`, no redirect.
+The refusal costs you a turn, and it is easy to avoid: **never pipe anything
+through `tail` or `head`** to shorten it. Redirect to a file and read the file
+instead.
 
 ## Reporting back
 

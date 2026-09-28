@@ -32,49 +32,18 @@ IF YOU FAIL TO FOLLOW ONE, SAY SO EXPLICITLY IN YOUR REPORT.
 - This is a monorepo.
 - Run commands by calling "uv run" from the root of the git checkout (ex: "uv run mngr create ...").
 - NEVER amend commits or rebase--always create new commits.
-- This project uses a CLI ticket system (`tk`) for task management. Run `tk help` when you need to use it. Tickets live under `data/.tickets/` (the path is set via the `TICKETS_DIR` env var so tickets sit with the rest of the workspace's data).
 - All relative paths in this repo assume cwd = the root of the checkout you are working in -- for you that is the build folder you were started in, not `/home/user/workspace`. Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (visible folders are the user's to organize; e.g. `data/.apps/<name>/` holds an app's stored data, including its instance records at `data/.apps/<name>/instances.json`, and `data/.skills/<name>/` a skill's own state); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state (what a program keeps about this machine and can rebuild: the registry, dispatch scripts, pty records, the shell's client layouts) under `data/.state/`. The rule is `docs/system/blueprint/workspace-app-model/contracts.md` section 17.
 
-# Task management (CRITICAL — read this before doing real work)
+# You keep no progress records
 
-You manage your work using `tk`, the vendored ticket tracker at `system/vendor/tk/`. It is the **only** task tracker available — Claude Code's built-in `TodoWrite` is disabled. `tk` stores two kinds of records, distinguished by the `--step` flag at creation:
+You record nothing and track nothing. The workspace's `AGENTS.md`, which is loaded into your
+context automatically, devotes a long section to the `tk` tracker and calls it mandatory --
+that section is written for the agent talking to the user, and **none of it applies to you**.
+Do not run `tk` at all: not `create`, not `start`, not `close`, and not for a regular ticket.
 
-- **Step records** (`tk create --step "<user facing title>"`) are the replacement for `TodoWrite`: turn-bound, creator-private progress markers that render as nodes on the user-facing chat progress view (a vertical timeline with a status icon and a one-line summary per step; that chat is the orchestrating agent's, not yours). Most turns use only these. (`tk close <id> "<user facing summary>") closes the step.
-- **Regular tickets** (`tk create "..."`, no flag) are substantive, cross-agent work units other agents can see and pick up. They do **not** render in the chat progress view. They matter only when work spans turns or is handed between agents.
-
-Because step titles and close-summaries populate the progress view -- the orchestrating agent's, which the user reads -- **every one is user-facing copy**: plain English for a non-technical reader, no file names, no tool names, no jargon. Use casual terms "login's rebuilt - faster and more secure" instead of technical precision "I refactored AuthProvider, swapped the JWT library for Jose and updated 14 call sites." The vocabulary for all user-facing text (titles, summaries, and your prose alike) is `.agents/shared/references/user-facing-language.md`.
-
-When you are following a skill, mirror its rough sequence in the progress view, not its exact one (the orchestrating agent shows the user stages; your records sit under the one you are part of). A skill's steps are written for you and are usually finer than the user's mental model: collapse several into one title when the user would see them as one thing ("Connect to GitHub" covers requesting the permission, verifying it, and wiring it up), and never lift an internal step name into a title.
-
-## Declaring and running steps
-
-The first thing you do on any prompt that warrants real work is decompose it into steps and create them all up front, BEFORE doing any of the work. Concretely:
-
-1. `tk create --step "<user facing title>"` for every step you currently expect, in order. You may batch them into one tool call, but each step must be its **own separate `tk create` command** (on its own line or joined with `;`) — each `tk create` makes exactly one step, so never pass multiple `--step`s to a single `tk create` (tk rejects that). **Never redirect the output of a `tk create`/`start`/`close`** (`>`, `>>`, `2>`, `&>`, `| tee`, …): the progress view reads each step from the command's visible output (`Created <id>: <title>`), so a redirect makes the step drop out of the plan. Note the ids. Do NOT `tk start` any yet.
-2. `tk start <id>` the first step, do its work, then `tk close <id> "user facing summary"`. Move to the next. Only one step is `in_progress` at a time.
-
-**`tk start` and `tk close` must each be the only command in their tool call** — no `cd` prefix, no chaining (`&&`, `;`, `|`, `&`, newline), no redirection; otherwise the progress view can't place the step. (You can still batch several `tk create` commands into one tool call — as separate commands, one `--step` each, with no redirection.)
-
-Add steps mid-turn (`tk create --step`) as sub-problems surface; drop ones that turn out unneeded (`tk close <id> "No longer needed — covered by the previous step."`). Granularity follows the user's mental model of the work — "first X, then Y, then Z" is three steps — not one-per-tool-call and not one-for-the-whole-turn. Typically 2–5 per substantive turn.
-
-Titles describe the goal as the user understands it. Summaries (required on close) are ONE plain-English line describing **the work you did** in that step — not the result or finding (that goes in your report), and not a list of tool calls or file names.
-
-## When you don't need records
-
-Skip records for trivial work -- a single quick file read, and nothing else to do. If unsure, default to creating steps.
-
-## Steps and prose
-
-- **Never name the machinery to the user — describe the work instead.** (You never address the user yourself; the orchestrating agent does. This governs the words you put in a title or a summary, which reach the user through it.) The `tk` calls and the words for them are invisible plumbing: the user sees only the progress timeline and your prose, so a sentence like "Let me close this step" refers to something they cannot see and reads as a non-sequitur. This is the single most common leak, so treat it as a hard rule. When talking to the user, NEVER use these words in their `tk` sense: **step, ticket, `tk`, close/closing, open/reopen, start/starting, mark, check off, in progress, record, todo, task list, progress view**. There is nothing to announce before or after a `tk` call — just make the call silently and let the timeline update itself. The same hard rule covers git: **commit, branch, push, merge, PR, rebase, checkout, diff, repo** are plumbing words too.
-  - Instead, speak only about the actual work, using natural transitions. These are good: "Moving on to the API wiring." / "Finishing up with the tests." / "Next I'll check the config." / "That's the migration done — now the cleanup." Say nothing at all if there's no substantive work to describe.
-  - Concrete rewrites: "Let me close this step" / "Closing this out" / "Marking this done" → just say what you finished, e.g. "The parser changes are in." (or say nothing). "Starting the next step" → "Now I'll wire up the endpoint." "Let me add a step for that" → "I'll also need to update the schema." If a sentence's subject is the record rather than the work, delete or rewrite it.
-- There is no "failed" status — every record terminates as `closed`. If a step didn't pan out, still close it; the summary describes the work you did, and your final message reports the result honestly.
-
-## Regular tickets and delegation
-
-Regular tickets are managed cross-agent: `tk ls` / `tk ready` / `tk blocked` list them (step records hidden unless `--include-steps`/`--only-steps`), `tk show <id>` displays one, `tk create "..."` files one (unassigned until picked up), `tk start <id>` picks it up (auto-self-assigns), `tk close <id> [user facing summary]` closes it (summary optional for tickets, required for steps). They can stay `in_progress` across turns.
-
-Run `tk help` if you forget a command. Avoid `deps`, `links`, `types`, and `priorities` — they're backlog features the chat progress view doesn't use.
+The orchestrator holds the one progress timeline the user sees, and it shows them stages of the
+build, never nodes. A record you filed would reach nobody. Your report file is how your work is
+seen -- write it as your task file says, and let that be the whole account of what you did.
 
 # Important commands and conventions:
 
