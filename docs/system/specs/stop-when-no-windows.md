@@ -139,7 +139,8 @@ When the app fails to start (section 5.5), the page instead says the app could n
 
 ### 5.4 The lifecycle manager
 
-`shell/app_lifecycle.py` holds `AppLifecycleManager`, the one owner of every stop, start, park, and wake, with one lock per app so a wake that arrives while a stop is in flight waits for the stop to land and then starts.
+`shell/app_lifecycle.py` holds `AppLifecycleManager`, the one owner of every stop, start, park, and wake, with one lock over its tables (which parker holds which port, each app's wake times, the idle marks) and none held across a supervisord call.
+A wake that lands while a stop is in flight is a start of a `STOPPING` program, which supervisord ignores; the program finishes stopping, the next pass parks it again, and the request's reload wakes it.
 It is built by `build_shell_state`, started and stopped with the shell, and disabled outright in a preview shell (which refuses the stop and start verbs already) and in tests unless a test enables it, so no test binds a port by accident.
 Its supervisord access is injectable: a states reader (`getAllProcessInfo`, answering each program's `statename`), a start, and a stop, defaulting to the RPC functions of `shell/liveness.py`.
 
