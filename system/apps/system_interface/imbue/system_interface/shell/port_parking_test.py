@@ -7,7 +7,7 @@ from collections.abc import Iterator
 import pytest
 
 from imbue.mngr.utils.polling import wait_for
-from imbue.system_interface.shell.errors import AppWakeRefusedError
+from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import PortInUseError
 from imbue.system_interface.shell.port_parking import FAILED_REFRESH_SECONDS
 from imbue.system_interface.shell.port_parking import ParkedPageKind
@@ -88,7 +88,7 @@ def test_a_wake_that_fails_is_told_so(closed_port: int) -> None:
 
 def test_a_wake_that_raises_still_answers_the_request(closed_port: int) -> None:
     def explode() -> ParkedPageKind:
-        raise AppWakeRefusedError("supervisord went away")
+        raise AppLifecycleRefusedError("supervisord went away")
 
     parked_port = _parked_port(closed_port, explode)
     parked_port.start()

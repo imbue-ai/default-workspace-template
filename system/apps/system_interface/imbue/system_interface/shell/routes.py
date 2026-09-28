@@ -25,7 +25,6 @@ from imbue.system_interface.shell.desktop_routes import inventory_document_json
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
 from imbue.system_interface.shell.desktop_routes import resolved_client_wire_json
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
-from imbue.system_interface.shell.errors import AppWakeRefusedError
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import DesktopConflictError
 from imbue.system_interface.shell.errors import DesktopNotFoundError
@@ -92,7 +91,6 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
         case (
             InvalidShellValueError()
             | AppLifecycleRefusedError()
-            | AppWakeRefusedError()
             | LayoutOpError()
             | DesktopValueError()
             | LaunchRefusedError()

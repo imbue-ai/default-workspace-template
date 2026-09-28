@@ -27,7 +27,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import stoppable_program_of
-from imbue.system_interface.shell.errors import AppWakeRefusedError
+from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import PortInUseError
 from imbue.system_interface.shell.errors import PortParkingError
 from imbue.system_interface.shell.errors import SupervisorProgramActionError
@@ -181,11 +181,11 @@ class AppLifecycleManager(MutableModel):
     def wake(self, app: str) -> ParkedPageKind:
         """Release the app's parked port (if any) and ask supervisord to start its program, within the wake budget.
         Answers STARTING when the program was asked to start, FAILED when the budget refused it or supervisord could
-        not start it. Raises AppWakeRefusedError for an app the workspace cannot start."""
+        not start it. Raises AppLifecycleRefusedError for an app the workspace cannot start."""
         entry = self.inventory.entry(app)
         program = stoppable_program_of(entry, self.inventory.entries()) if entry is not None else None
         if entry is None or program is None:
-            raise AppWakeRefusedError(f"App {app!r} cannot be started through the workspace")
+            raise AppLifecycleRefusedError(f"App {app!r} cannot be started through the workspace")
         now = self.clock()
         with self._lock:
             parked = self._parked_by_app.pop(app, None)
@@ -227,11 +227,12 @@ class AppLifecycleManager(MutableModel):
 
     def stop_app(self, app: str) -> None:
         """Ask supervisord to stop the app's program; the next sweep parks its port. Raises
-        SupervisorProgramActionError as the stop route does."""
+        AppLifecycleRefusedError for an app the workspace cannot stop, and SupervisorProgramActionError as the stop
+        route does."""
         entry = self.inventory.entry(app)
         program = stoppable_program_of(entry, self.inventory.entries()) if entry is not None else None
         if entry is None or program is None:
-            raise AppWakeRefusedError(f"App {app!r} cannot be stopped through the workspace")
+            raise AppLifecycleRefusedError(f"App {app!r} cannot be stopped through the workspace")
         self.stop_program(program)
         logger.info("Stopped app {} (program {})", app, program)
         self.inventory.refresh_liveness()

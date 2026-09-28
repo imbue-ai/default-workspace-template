@@ -110,7 +110,3 @@ class PortParkingError(ShellError, OSError):
 
 class PortInUseError(PortParkingError):
     """Something already listens on the port the shell meant to park (the app itself, most likely)."""
-
-
-class AppWakeRefusedError(ShellError, RuntimeError):
-    """The app was not woken: its wake budget is spent, or it cannot be started through the workspace."""

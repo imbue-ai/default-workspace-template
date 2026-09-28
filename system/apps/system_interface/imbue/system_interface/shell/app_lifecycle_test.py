@@ -10,7 +10,7 @@ from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_WINDOW_SECONDS
-from imbue.system_interface.shell.errors import AppWakeRefusedError
+from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import build_inventory
@@ -183,9 +183,9 @@ def test_a_wake_releases_the_parker_before_starting(
     assert manager.wake("docs") is ParkedPageKind.STARTING
     assert supervisor.started == ["docs"]
     assert _is_refused(docs_port)
-    with pytest.raises(AppWakeRefusedError):
+    with pytest.raises(AppLifecycleRefusedError):
         manager.wake("shell")
-    with pytest.raises(AppWakeRefusedError):
+    with pytest.raises(AppLifecycleRefusedError):
         manager.wake("plain")
 
 
@@ -233,7 +233,7 @@ def test_stop_app_stops_the_program_and_refuses_what_it_cannot_stop(
     supervisor.statename_by_program["docs"] = "RUNNING"
     manager.stop_app("docs")
     assert supervisor.stopped == ["docs"]
-    with pytest.raises(AppWakeRefusedError):
+    with pytest.raises(AppLifecycleRefusedError):
         manager.stop_app("shell")
 
 
