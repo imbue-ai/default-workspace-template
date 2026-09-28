@@ -545,9 +545,9 @@ def _lane_of_account_label(account_label: str) -> str:
 
 
 def _record_mru(account_id: str) -> None:
-    """Record ``account_id``, which the user just chose to run a chat on, as the most recently used account,
-    which the next launch that names no account picks. A switch the user later cancels leaves it recorded.
-    Best-effort: the mru is a convenience, so a store that refuses is logged, not raised."""
+    """Record ``account_id``, the account a chat was just created on or is switching to, as the most recently
+    used account: the one the next launch that names no account picks. A switch the user later cancels leaves
+    it recorded. Best-effort: the mru is a convenience, so a store that refuses is logged, not raised."""
     try:
         set_mru(account_id)
     except AccountError as e:
