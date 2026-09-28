@@ -274,13 +274,16 @@ supervisord blocks, and app manifests' `[[references]]`. A coupling none of
 those shows is invisible to it. When you have a concrete reason to think a
 suite it left out can observe your change (it runs your script as a
 subprocess, calls your service over HTTP, reads a file your change writes),
-run that suite too. When that suite is an app's and the path lies outside the
-app, declare the coupling as part of your change: add the path to the app's
-`app.toml` as a `[[references]]` entry, so the next change to it selects the
-app without anyone having to notice. A coupling between built-in pieces is a
-built-in defect (AGENTS.md, "Updates"): name it in your `done` report under
-`Undeclared couplings:`, and your lead includes it in its report of built-in
-issues for the pass.
+run that suite too. When that suite is an app the workspace built and the path
+lies outside the app, declare the coupling as part of your change: add the
+path to the app's `app.toml` as a `[[references]]` entry, so the next change
+to it selects the app without anyone having to notice. When the suite is
+built-in, leave its declarations alone: a local edit to a built-in file only
+makes divergence for the next update, and a reference would widen a built-in
+app's footprint into other units' files. Such a coupling is a built-in defect
+(AGENTS.md, "Updates"): name the suite and the path it observes in your `done`
+report under `Undeclared couplings:`, and your lead includes it in its report
+of built-in issues for the pass.
 
 **A regression the gate let through.** When your task fixes something an
 earlier change broke, and a test catches the break (one that already existed,

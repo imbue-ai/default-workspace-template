@@ -59,7 +59,7 @@ Hardened <app> on branch `<branch>`.
 - Frontend / backend: <which, and the files touched>
 - Bundles built: <the static/ path of every bundle you built, all three when the shared library changed>
 - Tests run: <the test gate's commands (select-tests) and Playwright -- all pass>
-- Undeclared couplings: <none, or each built-in suite select-tests missed, with the reference you added or why none fits>
+- Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 - Screenshots reviewed: <pages/states you eyeballed>
 ```
 
@@ -157,7 +157,7 @@ Write a `type: gate`, `name: final-creation` report plus "Approve and save? (yes
   consumer or surface would need to adapt to>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
-- Undeclared couplings: <none, or each built-in suite select-tests missed, with the reference you added or why none fits>
+- Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 ```
 
 **App or service:**
@@ -169,11 +169,12 @@ Updated app or service `<name>`:
 - Scenarios / tests run: <list, all pass>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
-- Undeclared couplings: <none, or each built-in suite select-tests missed, with the reference you added or why none fits>
+- Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 ```
 
-The last two lines come from the scope file (`harden-creation.md`); a
-creation with no footprint writes `none` for both.
+The `References registered` and `Outside footprint` lines come from the scope
+file (`harden-creation.md`); a creation with no footprint writes `none` for
+both.
 
 Push it and stop. On approval, emit a `name: done` terminal report. In the
 committed path a clean verification may produce no new worker commits -- that is

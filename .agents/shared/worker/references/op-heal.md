@@ -26,7 +26,7 @@ Fixed <app> on branch `<branch>`. Ready to preview.
 - Change: <one-sentence (root cause + fix)>
 - Frontend / backend: <which, and the files touched>
 - Tests run: <the test gate's commands (select-tests) and Playwright -- all pass>
-- Undeclared couplings: <none, or each built-in suite select-tests missed, with the reference you added or why none fits>
+- Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 - Screenshots reviewed: <pages/states you eyeballed>
 ```
 
@@ -87,7 +87,7 @@ Fixed `<name>`:
 - Scenarios run: <list, all pass>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
-- Undeclared couplings: <none, or each built-in suite select-tests missed, with the reference you added or why none fits>
+- Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 ```
 
 **App or service:**
@@ -99,11 +99,12 @@ Fixed app or service `<name>`:
 - Scenarios / tests run: <list, all pass>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
-- Undeclared couplings: <none, or each built-in suite select-tests missed, with the reference you added or why none fits>
+- Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 ```
 
-The last two lines come from the scope file (`harden-creation.md`); a
-creation with no footprint writes `none` for both.
+The `References registered` and `Outside footprint` lines come from the scope
+file (`harden-creation.md`); a creation with no footprint writes `none` for
+both.
 
 Push it and stop. On approval, commit on your branch and emit a `name: done`
 terminal report.

@@ -121,7 +121,7 @@ report with this body plus an "Approve and save? (yes / no with notes)" prompt:
   exit-code deltas a consumer or surface would need to adapt to>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
-- Undeclared couplings: <none, or each built-in suite select-tests missed, with the reference you added or why none fits>
+- Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 ```
 
 Push it and stop. On approval, commit on your branch and emit a `name: done`
@@ -136,7 +136,7 @@ the two footprint lines from `harden-creation.md`:
 Committed on branch `<branch-name>`. Ready to merge.
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
-- Undeclared couplings: <none, or each built-in suite select-tests missed, with the reference you added or why none fits>
+- Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 ```
 
 ## If you need to give up
