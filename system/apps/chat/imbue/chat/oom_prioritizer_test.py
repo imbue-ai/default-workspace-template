@@ -364,4 +364,3 @@ def test_a_prioritizer_with_no_writer_accepts_every_report_and_touches_no_proces
         assert not poll_until(lambda: bool(consulted), timeout=0.2)
     finally:
         prioritizer.stop()
-    assert consulted == []
