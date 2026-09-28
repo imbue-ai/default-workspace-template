@@ -30,13 +30,13 @@ ENV_SUPERVISOR_SOCKET: Final[str] = "MINDS_SUPERVISOR_SOCKET"
 # targets are loopback-local, so anything slower than this is effectively down.
 _PROBE_TIMEOUT_SECONDS: Final[float] = 2.0
 
-# The supervisord process states that mean "the program is up (or coming up)".
-# STOPPED / STOPPING / EXITED / BACKOFF / FATAL / UNKNOWN all render as stopped.
-_RUNNING_STATE_NAMES: Final[frozenset[str]] = frozenset({"RUNNING", "STARTING"})
 SUPERVISOR_RUNNING_STATENAME: Final[str] = "RUNNING"
 SUPERVISOR_STARTING_STATENAME: Final[str] = "STARTING"
 SUPERVISOR_BACKOFF_STATENAME: Final[str] = "BACKOFF"
 SUPERVISOR_FATAL_STATENAME: Final[str] = "FATAL"
+# The supervisord process states that mean "the program is up (or coming up)".
+# STOPPED / STOPPING / EXITED / BACKOFF / FATAL / UNKNOWN all render as stopped.
+_RUNNING_STATE_NAMES: Final[frozenset[str]] = frozenset({SUPERVISOR_RUNNING_STATENAME, SUPERVISOR_STARTING_STATENAME})
 # The states in which a program is neither up nor about to bind its port again on its own: what the shell parks.
 SUPERVISOR_DOWN_STATENAMES: Final[frozenset[str]] = frozenset({"STOPPED", "EXITED", "FATAL", "UNKNOWN"})
 
