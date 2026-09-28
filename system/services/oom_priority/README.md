@@ -13,6 +13,11 @@ the kernel's "badness", computed from each process's `oom_score_adj` and memory:
 
     VmRSS + VmSwap + VmPTE + oom_score_adj * (MemTotal + SwapTotal) / 1000
 
+Under gVisor the fork counts the sum of the `Anonymous:` lines in
+`/proc/<pid>/smaps` in place of `VmRSS`: gVisor's `VmRSS` counts every page of
+each range it has mapped, so each claude process would carry the whole claude
+binary, which killing one of them does not free.
+
 Upstream earlyoom reads `/proc/*/oom_score` instead, which gVisor serves as 0
 for every process, so under gVisor it shed the largest process whatever its
 band. On a Linux kernel (runc) the fork's order is the kernel's own. So the
@@ -283,4 +288,8 @@ Two things here are best-effort, not hard guarantees:
   comparable; in the common case the services are lightweight and the order
   holds. Widening the gaps would need to push the top service bands past the
   agent bands, which would defeat the "services outlive agents" goal, so the
-  bands stay a steer rather than a strict priority.
+  bands stay a steer rather than a strict priority. Under gVisor the memory
+  counted is also approximate: anonymous memory is counted in 2 MiB-aligned
+  blocks (about a fifth too much, summed over a workspace), and file pages and
+  shared memory are not counted, so Chromium's shared buffers do not add to
+  its badness.

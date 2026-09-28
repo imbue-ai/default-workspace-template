@@ -25,7 +25,7 @@ def _sample(
         pid=pid,
         comm=comm,
         oom_score_adj=adj,
-        vm_rss_kib=rss,
+        rss_kib=rss,
         vm_swap_kib=swap,
         vm_pte_kib=pte,
     )
@@ -220,15 +220,38 @@ def test_earlyoom_kill_lines_are_read_whole_and_new(tmp_path: Path) -> None:
 
 def test_status_memory_reads_gvisor_and_kernel_threads() -> None:
     assert oom_drill.parse_status_memory(
-        "Name:\tx\nVmRSS:\t  812 kB\nVmPTE:\t 64 kB\nVmSwap:\t 3 kB\n"
-    ) == (812, 3, 64)
-    # gVisor serves no VmSwap or VmPTE.
-    assert oom_drill.parse_status_memory("Name:\tx\nVmRSS:\t812 kB\n") == (812, 0, 0)
+        "Name:\tx\nVmSize:\t9000 kB\nVmRSS:\t  812 kB\nRssAnon:\t 700 kB\nVmPTE:\t 64 kB\nVmSwap:\t 3 kB\n"
+    ) == (812, 3, 64, True)
+    # gVisor serves no VmSwap, VmPTE or RssAnon.
+    assert oom_drill.parse_status_memory(
+        "Name:\tx\nVmSize:\t9000 kB\nVmRSS:\t812 kB\n"
+    ) == (812, 0, 0, False)
     assert oom_drill.parse_status_memory("Name:\tkthreadd\nThreads:\t1\n") == (
         None,
         0,
         0,
+        False,
     )
+
+
+def test_status_memory_reads_a_gvisor_task_without_an_mm_as_the_fork_does() -> None:
+    # gVisor prints every Vm* line as 0 for a zombie or an exiting task.
+    zombie = "Name:\tpulseaudio\nState:\tZ (zombie)\nVmSize:\t0 kB\nVmRSS:\t0 kB\n"
+    assert oom_drill.parse_status_memory(zombie + "Threads:\t1\n").vm_rss_kib is None
+    # A zombie leader whose threads still run competes on its adj alone.
+    assert oom_drill.parse_status_memory(zombie + "Threads:\t3\n").vm_rss_kib == 0
+
+
+def test_smaps_anonymous_sums_every_mapping_and_skips_file_pages() -> None:
+    smaps = (
+        "55d5c0a00000-55d5c0c00000 r-xp 00000000 00:31 99 /root/.local/share/claude/versions/2.1.280\n"
+        "Rss:\t225000 kB\nAnonymous:\t0 kB\nAnonHugePages:\t0 kB\n"
+        "55d5c1000000-55d5c1400000 rw-p 00000000 00:00 0 [heap]\n"
+        "Rss:\t4096 kB\nAnonymous:\t4096 kB\nAnonHugePages:\t0 kB\n"
+        "7f3a00000000-7f3a00200000 rw-p 00000000 00:00 0\n"
+        "Rss:\t2048 kB\nAnonymous:\t2048 kB\n"
+    )
+    assert oom_drill.parse_smaps_anonymous(smaps) == 6144
 
 
 def test_avoid_regex_is_read_from_earlyoom_argv() -> None:
