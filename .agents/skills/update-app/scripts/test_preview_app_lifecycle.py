@@ -32,7 +32,7 @@ _spec.loader.exec_module(mod)
 
 # The shared script gives each health wait up to 60 one-second attempts, and this test
 # waits three times: the instance and its wrapper page at ``up``, the instance at ``refresh``.
-_BOOT_TIMEOUT_SECONDS = 180
+_LIFECYCLE_TIMEOUT_SECONDS = 180
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
@@ -93,7 +93,7 @@ def _registered_rows(registry: Path) -> dict[str, dict[str, object]]:
     }
 
 
-@pytest.mark.timeout(_BOOT_TIMEOUT_SECONDS)
+@pytest.mark.timeout(_LIFECYCLE_TIMEOUT_SECONDS)
 def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tears_down(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
