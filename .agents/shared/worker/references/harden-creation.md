@@ -279,8 +279,9 @@ deselected (AGENTS.md). A test that passes on that rerun without any change of
 yours is flaky, not broken: name it on your report's `Flaky tests:` line
 (your lead reports or tickets it) and move on, without rerunning its suite.
 Check the shed ledger for its run first (below): a failure the ledger shows
-was shed is a shed, handled as one, not a flaky test. Other than a shed command's rerun, a suite runs whole again only after you
-commit a fix, and then as whatever the fix reaches:
+was shed is a shed, handled as one, not a flaky test. Other than a shed
+command's rerun, a suite runs whole again only after you commit a fix, and
+then as whatever the fix reaches:
 `select-tests --diff-base <the commit before the fix>`.
 
 **A suite the selector left out.** The selector reads only declarations:
