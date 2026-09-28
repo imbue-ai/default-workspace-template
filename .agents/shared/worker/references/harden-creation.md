@@ -270,6 +270,13 @@ frontend checks. A changed path outside every package and skill, or in a
 package the root project depends on, brings in the full root suite; that is
 the gate working, not a gap. Do not drop any line of it.
 
+**A failing test.** Rerun only the tests that failed (their node ids, from the
+same directory the line ran in) before anything else. A test that passes on
+that rerun without any change of yours is flaky, not broken: name it in your
+`done` report and move on, without rerunning its suite. A suite runs whole
+again only after you commit a fix, and then as whatever the fix reaches:
+`select-tests --diff-base <the commit before the fix>`.
+
 **A suite the selector left out.** The selector reads only declarations:
 `pyproject.toml` and `package.json` dependencies, `uv.lock`, the programs in
 supervisord blocks, and app manifests' `[[references]]`. A coupling none of

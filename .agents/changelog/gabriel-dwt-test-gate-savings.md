@@ -4,11 +4,13 @@ Harden workers and update-self now run only the tests a change can reach, as `ap
 
 - A worker that has a concrete reason to think a suite the selector left out can observe its change runs that suite too, and, when the suite is an app the workspace built, declares the path in the app's `[[references]]`. A heal that fixes a regression checks whether the selector would have picked the catching test for the change that caused it, and declares the missing coupling when it would not. A built-in suite's coupling is never declared locally: the worker names the suite and the path it observes in its report under `Undeclared couplings:`, which the lead adds to its single report of built-in issues.
 
+- A test that fails in the gate is rerun on its own first. One that passes on that rerun is reported as flaky, not fixed, and its suite is not rerun; a suite runs whole again only as what a committed fix reaches.
+
 - A gate command that dies from a signal is checked against the shed ledger. A shed is rerun once memory is settling, or raised to the lead as a `question`, and is never skipped or treated as a test failure.
 
 - When an agent reports a shed, the lead follows the new `shared/references/freeing-memory.md`: list what could be stopped, offer it to the user, and stop only what they approve.
 
-- Update-self's validation step runs the selector over the merged files, the update's changes inside every creation that carries local content, the creations the impact analysis found (listed in `impacted-paths.txt`), and the worker's own edits.
+- Update-self's validation step runs the selector over the merged files, the update's changes inside every creation that carries local content, the creations the impact analysis found (listed in `impacted-paths.txt`), and the worker's own edits. Its review gates reuse that run instead of selecting again: a worker that selected against the target release re-tested everything the workspace had ever changed, repeating suites the validation step had already run.
 
 - The critical-app handoff says which commit the harden task's `diff_base` is: the one the branch forked from the served tree.
 
