@@ -157,7 +157,7 @@ timeout_func_only = true
 # Each app's pyproject declares the same markers for its own run.
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
-    "browser: marks tests that drive a browser against a built bundle",
+    "browser: marks tests that drive a browser",
     "frontend: marks tests that read an app's frontend source",
     "real_claude: marks tests that run the real claude binary",
     "flaky: marks tests as known-flaky (retried by offload with a separate retry count)",
