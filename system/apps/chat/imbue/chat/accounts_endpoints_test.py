@@ -22,9 +22,11 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.codex.model import codex_model_options_path
 from imbue.chat.harnesses.codex.model import write_codex_model_options
+from imbue.chat.harnesses.sign_in_relay import RelayedResponse
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
+from imbue.chat.testing import FakePexpectProcess
 from imbue.chat.testing import build_test_state
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr_codex.app_server_client import CodexModel
@@ -377,3 +379,69 @@ def test_account_model_options_offers_nothing_for_a_harness_whose_model_the_chat
         answered = client.get(f"/api/accounts/{agy_id}/model-options")
         assert answered.status_code == 200
         assert answered.get_json() == {"models": None, "options": []}
+
+
+# the relayed browser callback
+
+
+_VISITOR = '{"owner": false, "user_id": "u-1", "email": "visitor@example.com"}'
+
+
+def test_a_visitor_cannot_relay_a_sign_in_callback(tmp_path: Path) -> None:
+    with _client(_signed_in_service(tmp_path)) as client:
+        response = client.post(
+            "/api/accounts/flow/any/callback",
+            json={"path_and_query": "/callback?state=s"},
+            headers={"X-Imbue-Identity": _VISITOR},
+        )
+
+    assert response.status_code == 403
+    assert response.get_json() == {"detail": "Only the owner of this workspace can connect an AI account."}
+
+
+def test_a_callback_for_a_flow_that_is_not_running_is_a_conflict(tmp_path: Path) -> None:
+    with _client(_signed_in_service(tmp_path)) as client:
+        response = client.post(
+            "/api/accounts/flow/gone/callback",
+            json={"path_and_query": "/callback?state=s"},
+            headers={"X-Imbue-Identity": '{"owner": true}'},
+        )
+
+    assert response.status_code == 409
+
+
+def test_a_callback_needs_its_path_and_query(tmp_path: Path) -> None:
+    with _client(_signed_in_service(tmp_path)) as client:
+        response = client.post("/api/accounts/flow/any/callback", json={"path_and_query": 3})
+
+    assert response.status_code == 400
+
+
+def test_a_relayed_callback_answers_with_what_the_cli_said(tmp_path: Path) -> None:
+    relay_url = (
+        "https://claude.ai/oauth/authorize?client_id=c"
+        "&redirect_uri=http%3A%2F%2Flocalhost%3A54871%2Fcallback&state=relay-state"
+    )
+    manual_url = "https://claude.ai/oauth/authorize?client_id=c&state=manual"
+
+    def spawner(*_args: object, env: dict[str, str], **_kwargs: object) -> FakePexpectProcess:
+        Path(env["MINDS_SIGNIN_URL_FILE"]).write_text(relay_url + "\n")
+        return FakePexpectProcess([(0, manual_url)])
+
+    service = AuthFlowService.create(
+        home=None,
+        work_dir=tmp_path / "work",
+        spawner=spawner,
+        probe=lambda *_a: SignedIn.YES,
+        fetch_callback=lambda _port, _path: RelayedResponse(status=200, content_type="text/html", body="aGk="),
+    )
+    with _client(service) as client:
+        started = client.post("/api/accounts", json={"lane_id": "anthropic", "method_id": "subscription"}).get_json()
+        response = client.post(
+            f"/api/accounts/flow/{started['flow_id']}/callback",
+            json={"path_and_query": "/callback?code=c&state=relay-state"},
+        )
+
+    assert started["relay_url"] == relay_url
+    assert response.status_code == 200
+    assert response.get_json() == {"status": 200, "location": None, "content_type": "text/html", "body": "aGk="}

@@ -22,6 +22,7 @@ from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.registry import build_account_binding
+from imbue.chat.harnesses.sign_in_relay import RelayedResponse
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
 
@@ -607,3 +608,171 @@ def test_an_abandoned_re_auth_puts_the_old_credential_back(tmp_path: Path) -> No
     service.abort(again.flow_id)
 
     assert token.read_text() == "live-token"
+
+
+# What `claude auth login` prints for a person to open by hand: its callback is Anthropic's own page.
+_CLAUDE_MANUAL_URL = (
+    "https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    "&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback"
+    "&scope=user%3Ainference&code_challenge=abc&code_challenge_method=S256&state=manual-state"
+)
+# What it hands `$BROWSER`: the same sign-in, called back on its own loopback listener.
+_CLAUDE_RELAY_URL = (
+    "https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    "&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A54871%2Fcallback"
+    "&scope=user%3Ainference&code_challenge=abc&code_challenge_method=S256&state=relay-state"
+)
+
+
+def _claude_flow_service(
+    tmp_path: Path,
+    process: FakePexpectProcess,
+    relay_url: str | None,
+    fetched: list[tuple[int, str]],
+    clock: list[float],
+) -> AuthFlowService:
+    """A service whose fake `claude` runs `$BROWSER` with `relay_url`, as the real one does."""
+    seen_env: dict[str, str] = {}
+
+    def spawner(*_args: object, env: dict[str, str], **_kwargs: object) -> FakePexpectProcess:
+        seen_env.update(env)
+        if relay_url is not None:
+            Path(env["MINDS_SIGNIN_URL_FILE"]).write_text(relay_url + "\n")
+        return process
+
+    def fetch(port: int, path_and_query: str) -> RelayedResponse:
+        fetched.append((port, path_and_query))
+        return RelayedResponse(status=302, location="https://platform.claude.com/oauth/code/success")
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    return AuthFlowService.create(
+        home=tmp_path,
+        work_dir=work_dir,
+        spawner=spawner,
+        probe=lambda *_a: SignedIn.YES,
+        fetch_callback=fetch,
+        clock=lambda: clock[0],
+    )
+
+
+def _claude_process() -> FakePexpectProcess:
+    return FakePexpectProcess([(0, f"Browser didn't open? Use the url below\r\n{_CLAUDE_MANUAL_URL}")])
+
+
+def test_a_claude_sign_in_offers_the_page_its_cli_opened_for_relaying(tmp_path: Path) -> None:
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, [], [0.0])
+
+    started = service.start("anthropic", "subscription")
+
+    assert started.url == _CLAUDE_MANUAL_URL
+    assert started.relay_url == _CLAUDE_RELAY_URL
+
+
+def test_a_claude_sign_in_whose_cli_opened_nothing_offers_no_relay(tmp_path: Path) -> None:
+    service = _claude_flow_service(tmp_path, _claude_process(), None, [], [0.0])
+
+    started = service.start("anthropic", "subscription")
+
+    assert started.url == _CLAUDE_MANUAL_URL
+    assert started.relay_url is None
+
+
+def test_a_page_whose_callback_is_not_loopback_is_not_offered_for_relaying(tmp_path: Path) -> None:
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_MANUAL_URL, [], [0.0])
+
+    assert service.start("anthropic", "subscription").relay_url is None
+
+
+def test_the_callback_is_replayed_against_the_port_the_sign_in_named(tmp_path: Path) -> None:
+    fetched: list[tuple[int, str]] = []
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, fetched, [0.0])
+    started = service.start("anthropic", "subscription")
+
+    answer = service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+
+    assert fetched == [(54871, "/callback?code=the-code&state=relay-state")]
+    assert answer.status == 302
+    assert answer.location == "https://platform.claude.com/oauth/code/success"
+
+
+@pytest.mark.parametrize(
+    "path_and_query",
+    [
+        pytest.param("/callback?code=the-code&state=someone-elses", id="wrong-state"),
+        pytest.param("/callback?code=the-code", id="no-state"),
+        pytest.param("/elsewhere?code=the-code&state=relay-state", id="wrong-path"),
+        pytest.param("//evil.example/callback?state=relay-state", id="another-host"),
+        pytest.param("http://127.0.0.1:22/?state=relay-state", id="absolute-url"),
+    ],
+)
+def test_a_first_request_that_is_not_this_sign_ins_callback_is_refused(tmp_path: Path, path_and_query: str) -> None:
+    fetched: list[tuple[int, str]] = []
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, fetched, [0.0])
+    started = service.start("anthropic", "subscription")
+
+    with pytest.raises(FlowError):
+        service.relay_callback(started.flow_id, path_and_query)
+
+    assert fetched == []
+
+
+def test_other_requests_on_the_port_go_through_only_shortly_after_the_callback(tmp_path: Path) -> None:
+    fetched: list[tuple[int, str]] = []
+    clock = [100.0]
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, fetched, clock)
+    started = service.start("anthropic", "subscription")
+
+    with pytest.raises(FlowError):
+        service.relay_callback(started.flow_id, "/success")
+    service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+    clock[0] = 150.0
+    service.relay_callback(started.flow_id, "/success")
+    clock[0] = 170.0
+    with pytest.raises(FlowError):
+        service.relay_callback(started.flow_id, "/success")
+
+    assert fetched == [(54871, "/callback?code=the-code&state=relay-state"), (54871, "/success")]
+
+
+def test_a_sign_in_without_a_relay_takes_no_callback(tmp_path: Path) -> None:
+    service = _claude_flow_service(tmp_path, _claude_process(), None, [], [0.0])
+    started = service.start("anthropic", "subscription")
+
+    with pytest.raises(FlowError):
+        service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+
+
+def test_the_sign_in_url_file_goes_with_the_flow(tmp_path: Path) -> None:
+    url_files: list[Path] = []
+
+    def spawner(*_args: object, env: dict[str, str], **_kwargs: object) -> FakePexpectProcess:
+        url_files.append(Path(env["MINDS_SIGNIN_URL_FILE"]))
+        url_files[0].write_text(_CLAUDE_RELAY_URL + "\n")
+        return _claude_process()
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir, spawner=spawner, probe=lambda *_a: SignedIn.YES)
+    started = service.start("anthropic", "subscription")
+    assert url_files[0].exists()
+
+    service.abort(started.flow_id)
+
+    assert not url_files[0].parent.exists()
+
+
+def test_the_cli_is_given_the_browser_shim(tmp_path: Path) -> None:
+    browsers: list[str] = []
+
+    def spawner(*_args: object, env: dict[str, str], **_kwargs: object) -> FakePexpectProcess:
+        browsers.append(env["BROWSER"])
+        return _claude_process()
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir, spawner=spawner, probe=lambda *_a: SignedIn.YES)
+
+    service.start("anthropic", "console")
+
+    assert browsers == [str(work_dir / "system" / "scripts" / "minds_browser_shim")]
