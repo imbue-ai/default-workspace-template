@@ -152,6 +152,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return candidate.methods.filter((each) => !(isRelayUnavailable && each.shape === "browser"));
   }
 
+  /** The way into a lane that needs no relay and no pasted key, for a browser-only sign-in that
+   *  nothing will relay; null when the lane has none. */
+  function relaylessFallback(candidate: Lane): LaneMethod | null {
+    return offeredMethods(candidate).find((each) => each.shape !== "browser" && !isPaste(each)) ?? null;
+  }
+
   /** Hand a started flow's page to the desktop app; whether it is relaying. */
   async function relay(url: string, flowId: string): Promise<boolean> {
     const isRelaying = await requestProviderRelay(url, flowId);
@@ -178,9 +184,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** Open a lane's method. `fromChooser` decides where back goes. */
   async function begin(
     chosen: Lane,
-    chosenMethod: LaneMethod,
+    requested: LaneMethod,
     options: { fromChooser: boolean; accountId?: string; notice?: string; isRelaySkipped?: boolean },
   ): Promise<void> {
+    // A browser-only sign-in nothing will relay would only be started to be thrown away for the
+    // fallback below, so it goes straight to that.
+    const chosenMethod =
+      requested.shape === "browser" && isRelayUnavailable ? (relaylessFallback(chosen) ?? requested) : requested;
     lane = chosen;
     method = chosenMethod;
     cameFromChooser = options.fromChooser;
@@ -224,7 +234,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       }
       if (mode !== "relay" && chosenMethod.shape === "browser") {
         // This sign-in cannot finish without the relay, so it gives way to one that can.
-        fallback = offeredMethods(chosen).find((each) => each.shape !== "browser" && !isPaste(each)) ?? null;
+        fallback = relaylessFallback(chosen);
       }
     } catch (e) {
       if (attempt !== generation) return;

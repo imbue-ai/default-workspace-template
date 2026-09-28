@@ -464,6 +464,20 @@ describe("a sign-in finished in the browser", () => {
     expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
   });
 
+  it("goes straight to ChatGPT's one-time code once nothing relays, rather than starting the browser login again", async () => {
+    requestProviderRelay.mockResolvedValue(false);
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+    const root = await clickLane("openai");
+
+    (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    (root.querySelector('[data-e2e="lane-openai"]') as HTMLElement).click();
+    await settled();
+
+    expect(startFlow.mock.calls.map((call) => call[1])).toEqual(["chatgpt", "device", "device"]);
+  });
+
   it("starts no sign-in until a row is clicked, so opening the chooser never displaces one", async () => {
     openProviderChooser();
     const root = document.createElement("div");
