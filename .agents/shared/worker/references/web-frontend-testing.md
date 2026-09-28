@@ -31,8 +31,10 @@ cannot launch must fail the run. The only per-suite setup a browser test needs
 is a `pytest.mark.timeout(120, func_only=False)` marker, since the repo-wide
 10-second default does not cover a browser launch. Mark every browser test
 `pytest.mark.browser`, and every test that reads an app's frontend source
-`pytest.mark.frontend`: when only an app's frontend changed, the test gate runs
-just those two kinds of its tests. The chat app's and the shell's own suites
+`pytest.mark.frontend`: when only the chat app's or the shell's frontend
+changed, the test gate runs just those two kinds of its tests (an app the root
+suite runs, as one you build does, runs whole). The chat app's and the shell's
+own suites
 skip their browser tests by default: run them with `-m ''` (everything) or
 `-m browser --no-cov` (only them; each suite fails a run under its coverage
 floor, so a partial run needs `--no-cov`). The test gate passes `-m ''` when the

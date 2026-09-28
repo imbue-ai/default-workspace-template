@@ -12,6 +12,6 @@ Harden workers and update-self now run only the tests a change can reach, as `ap
 
 - The critical-app handoff says which commit the harden task's `diff_base` is: the one the branch forked from the served tree.
 
-- The web-frontend testing guidance asks for every browser test to be marked `browser` and every test that reads an app's frontend source `frontend`: when only an app's frontend changed, the test gate runs just those of its tests.
+- The web-frontend testing guidance asks for every browser test to be marked `browser` and every test that reads an app's frontend source `frontend`: when only the chat app's or the shell's frontend changed, the test gate runs just those of its tests, and any other app runs whole.
 
 - The live nested-dispatch test, which boots real claude agents, is marked `real_claude`.

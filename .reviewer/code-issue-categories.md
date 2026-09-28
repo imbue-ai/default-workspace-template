@@ -66,7 +66,7 @@ The diff should not include excessive changes, or changes unrelated to the user'
     - If the codebase uses specific import/export patterns (e.g., relative vs. absolute imports), new code should use the same patterns
 - The diff should integrate functionally with existing code by adding invocations, updating invocations, replacing code with newly defined functions or variables, removing duplicate code when a new piece replaces it, etc.
 - Prefer using existing library/dependency APIs over custom implementations when the library provides (or will provide) the needed functionality.
-- Tests should be given the correct decorators (ex: @pytest.mark.acceptance for tests that require network access/credentials and @pytest.mark.browser for tests that drive a browser, @pytest.mark.frontend for tests that read an app's frontend source, and @pytest.mark.real_claude for tests that run the real claude binary: the test gate selects by these markers, so an unmarked one is skipped when only a frontend changed)
+- Tests should be given the correct decorators (ex: @pytest.mark.acceptance for tests that require network access/credentials and @pytest.mark.browser for tests that drive a browser, @pytest.mark.frontend for tests that read an app's frontend source, and @pytest.mark.real_claude for tests that run the real claude binary: the test gate selects by these markers, so in the chat app and the shell an unmarked one is skipped when only a frontend changed)
 - Tests should be placed in the correctly named file (ex: *_test.py for unit tests, test_*.py for integration/acceptance/release tests)
 
 **Examples:**
