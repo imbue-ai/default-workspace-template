@@ -135,12 +135,16 @@ fi
 cd "$WORK_DIR"
 
 planner_status=0
-# The model alias, not an exact id: it tracks whatever the workspace's pinned
-# Claude Code calls the current Opus, which is what the agents here run on.
+# The model alias, not an exact id: it tracks whatever the workspace's pinned Claude Code
+# calls the current Opus, which is what the agents here run on. The effort is stated even
+# though it is today's default, because `--setting-sources user` means this process never
+# reads the workspace's own `effortLevel` -- without it the planner would be the one agent
+# here whose effort was whatever Claude Code happened to default to.
 env -u MNGR_AGENT_STATE_DIR -u MNGR_AGENT_ID -u MNGR_AGENT_NAME -u MAIN_CLAUDE_SESSION_ID \
     -u CLAUDE_PROJECT_DIR -u CLAUDE_CODE_OAUTH_TOKEN_FILE \
     nice -n 19 timeout "$RUN_TIMEOUT_SECONDS" claude -p \
     --model opus \
+    --effort medium \
     --setting-sources user \
     --allowed-tools "Read,Grep,Glob" \
     --max-budget-usd "$MAX_BUDGET_USD" \
