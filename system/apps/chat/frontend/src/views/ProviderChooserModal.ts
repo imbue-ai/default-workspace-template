@@ -791,13 +791,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               });
             },
           },
-          "Reopen sign-in window",
+          "Try again",
         ),
         hasOtherWays(current)
           ? m(
               Button,
               { variant: "secondary", "data-e2e": "sign-in-another-way", onclick: () => signInAnotherWay(current) },
-              "Sign in another way",
+              "Try another way",
             )
           : null,
       ]),
@@ -885,7 +885,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                     "data-e2e": "sign-in-another-way",
                     onclick: () => signInAnotherWay(current),
                   },
-                  "Sign in another way",
+                  "Try another way",
                 )
               : null,
             m(

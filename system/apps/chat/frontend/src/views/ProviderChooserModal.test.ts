@@ -415,7 +415,7 @@ describe("a sign-in finished in the browser", () => {
 
     expect(requestProviderRelay).toHaveBeenCalledExactlyOnceWith(CLAUDE_RELAY_URL, "flow-1");
     expect(root.textContent).toContain("Finish signing in to Anthropic in your browser.");
-    expect(root.querySelector('[data-e2e="open-sign-in-again"]')?.textContent).toBe("Reopen sign-in window");
+    expect(root.querySelector('[data-e2e="open-sign-in-again"]')?.textContent).toBe("Try again");
   });
 
   it("offers reopening the page and another way in side by side while the browser is out", async () => {
@@ -438,8 +438,8 @@ describe("a sign-in finished in the browser", () => {
 
     const root = await clickLane("anthropic");
 
-    expect(root.querySelector('[data-e2e="open-sign-in-again"]')?.textContent).toBe("Reopen sign-in window");
-    expect(root.querySelector('[data-e2e="sign-in-another-way"]')?.textContent).toBe("Sign in another way");
+    expect(root.querySelector('[data-e2e="open-sign-in-again"]')?.textContent).toBe("Try again");
+    expect(root.querySelector('[data-e2e="sign-in-another-way"]')?.textContent).toBe("Try another way");
     expect(root.textContent).not.toContain(PASTE_STEP_LABEL);
   });
 
