@@ -7,3 +7,5 @@ The shell owns app lifecycles (`docs/system/specs/stop-when-no-windows.md`):
 - `POST /api/apps/<name>/quit` closes every window of the app on every desktop and stops its program; the window menu offers "Quit <app>" in place of Stop and Start. A stoppable app's window keeps its page while the app is stopped (the parker answers it); the stopped placeholder, without its Start button, survives only for rows the shell cannot start.
 
 - The registry read announces registrations to the minds desktop (`service_events.py`, formerly the `app-watcher` service), and the inventory's sweep re-reads the registry when its mtime moved. The `app` wire object carries `stop_when_no_windows`.
+
+- The liveness sweep answers a supervised row from supervisord alone: when supervisord cannot answer for it, the row keeps its last liveness instead of being TCP-probed, since a connect on a stopped app's port would now wake it through the parker. Rows without a program are still probed over TCP.

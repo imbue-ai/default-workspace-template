@@ -68,8 +68,9 @@ def test_probe_all_app_liveness_answers_supervised_rows_from_one_rpc_and_probes_
     fake_supervisor: FakeSupervisorServer, listening_port: int, closed_port: int
 ) -> None:
     """Supervised rows read the batched supervisord answer (even while something
-    still listens on the port); rows supervisord does not know, and unsupervised
-    rows, fall back to their TCP probe."""
+    still listens on the port); a row supervisord does not know is left out, since
+    a TCP connect on a supervised row's port could be the wake of a parked app;
+    unsupervised rows are answered by their TCP probe."""
     fake_supervisor.statename_by_program["web"] = "STOPPED"
     fake_supervisor.statename_by_program["files"] = "RUNNING"
 
@@ -82,17 +83,21 @@ def test_probe_all_app_liveness_answers_supervised_rows_from_one_rpc_and_probes_
         ]
     )
 
-    assert is_running_by_name == {"web": False, "files": True, "forgotten": True, "plain": False}
+    assert is_running_by_name == {"web": False, "files": True, "plain": False}
 
 
-def test_probe_all_app_liveness_falls_back_to_tcp_when_supervisord_is_unreachable(
+def test_probe_all_app_liveness_leaves_supervised_rows_unanswered_when_supervisord_is_unreachable(
     tmp_path: Path, listening_port: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """With no supervisord answer a supervised row keeps its last liveness rather than being TCP-probed: the
+    listener on its port may be the shell's own parker, whose first connection starts the app."""
     monkeypatch.setenv("MINDS_SUPERVISOR_SOCKET", str(tmp_path / "absent.sock"))
 
-    is_running_by_name = probe_all_app_liveness([("web", "web", f"http://127.0.0.1:{listening_port}")])
+    is_running_by_name = probe_all_app_liveness(
+        [("web", "web", f"http://127.0.0.1:{listening_port}"), ("plain", "", f"http://127.0.0.1:{listening_port}")]
+    )
 
-    assert is_running_by_name == {"web": True}
+    assert is_running_by_name == {"plain": True}
 
 
 def test_probe_all_app_liveness_makes_no_rpc_when_no_row_is_supervised(
