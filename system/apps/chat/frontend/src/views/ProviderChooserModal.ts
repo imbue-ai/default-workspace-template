@@ -10,11 +10,17 @@
  * What each mode renders:
  *
  *   chooser    the lane rows
- *   menu       a lane's primary method, plus "Other ways to sign in" under it
+ *   relay      "Finish in your browser": the desktop app opened the page and relays its callback
+ *   menu       a lane's method, plus "Other ways to sign in" under it
  *   steps      one browser method, as the numbered 1-2 sequence
  *   apiKey     one paste method: pick a provider, paste the key
  *   verifying  the spinner screen
- *   success    the check screen, with a Done footer
+ *   success    a sign-in that has something to say about itself, with a Done footer
+ *
+ * A browser sign-in first goes to the minds desktop app, which opens the page and relays the
+ * provider's callback into this workspace. Only when no desktop app answers does the chooser
+ * fall back: to pasting a code for Claude, and to the one-time-code login for ChatGPT, whose
+ * browser login cannot finish without the relay.
  *
  * Two shapes worth knowing about:
  *
@@ -49,6 +55,7 @@ import {
   getFlow,
   getLanes,
   getUnpickableAccount,
+  isPendingFlowFor,
   isPickingAccount,
   loadAccounts,
   pickAccount,
@@ -58,12 +65,16 @@ import {
   submitCode,
   submitKey,
 } from "../models/Providers";
+import { requestProviderRelay } from "../models/providerRelay";
 
 export interface ProviderChooserModalAttrs {
   onDismiss: () => void;
 }
 
-type Mode = "chooser" | "menu" | "steps" | "apiKey";
+type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
+
+/** What Claude's sign-in page can show when claude.ai's own session is in a bad state. */
+const CLAUDE_CERTIFICATE_HINT = "Seeing malformed_certificate? Sign out of claude.ai and sign in again.";
 
 /** The chooser's last scroll offset, so a drill-in and back lands where you were. The
  *  chooser's DOM unmounts while a sign-in is up, so this outlives it at module scope. */
@@ -99,6 +110,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   // so `busy` alone leaves a gap where the flow is still pending and nothing marks it. That
   // gap rendered the menu again, which read as being bounced back to the start.
   let awaitingVerdict = false;
+  // The page is being handed to the desktop app, which has a second to answer.
+  let isOpeningBrowser = false;
+  // Set once no desktop app answered a relay, so this chooser stops offering sign-ins that need one.
+  let isRelayUnavailable = false;
   // Bumped by every `begin`, so a request that has been superseded can tell and stand down.
   let generation = 0;
 
@@ -117,11 +132,24 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     copied = "";
     copyFailed = false;
     awaitingVerdict = false;
+    isOpeningBrowser = false;
     clearFlow();
   }
 
   function isPaste(candidate: LaneMethod): boolean {
     return candidate.shape === "paste";
+  }
+
+  /** A lane's methods this page can offer: a browser-only sign-in needs a relay. */
+  function offeredMethods(candidate: Lane): LaneMethod[] {
+    return candidate.methods.filter((each) => !(isRelayUnavailable && each.shape === "browser"));
+  }
+
+  /** Hand a started flow's page to the desktop app; whether it is relaying. */
+  async function relay(url: string, flowId: string): Promise<boolean> {
+    const isRelaying = await requestProviderRelay(url, flowId);
+    if (!isRelaying) isRelayUnavailable = true;
+    return isRelaying;
   }
 
   async function copyToClipboard(value: string, kind: "link" | "code"): Promise<void> {
@@ -158,6 +186,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     keyInput = "";
     awaitingVerdict = false;
     reauthAccountId = options.accountId ?? null;
+    isOpeningBrowser = false;
     keyProvider = chosen.key_providers.length === 1 ? chosen.key_providers[0].provider_id : null;
     // A terminal lane spends seconds spawning a CLI and scraping its first screen, so it
     // gets the waiting screen. A paste lane has nothing to wait for -- minting a folder
@@ -172,8 +201,26 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     generation += 1;
     const attempt = generation;
     m.redraw();
+    let fallback: LaneMethod | null = null;
     try {
-      await startFlow(chosen.id, chosenMethod.id, options.accountId);
+      const target = { laneId: chosen.id, methodId: chosenMethod.id, accountId: options.accountId ?? null };
+      // The chooser starts its top row in the background when it opens, so that row's click
+      // finds its sign-in already running.
+      if (!isPendingFlowFor(target)) await startFlow(chosen.id, chosenMethod.id, options.accountId);
+      if (attempt !== generation) return;
+      const started = getFlow();
+      if (started !== null && started.relay_url !== null && !isRelayUnavailable) {
+        isOpeningBrowser = true;
+        m.redraw();
+        const isRelaying = await relay(started.relay_url, started.flow_id);
+        if (attempt !== generation) return;
+        isOpeningBrowser = false;
+        if (isRelaying) mode = "relay";
+      }
+      if (mode !== "relay" && chosenMethod.shape === "browser") {
+        // This sign-in cannot finish without the relay, so it gives way to one that can.
+        fallback = offeredMethods(chosen).find((each) => each.shape !== "browser" && !isPaste(each)) ?? null;
+      }
     } catch (e) {
       if (attempt !== generation) return;
       error = errorText(e);
@@ -182,6 +229,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         busy = false;
         m.redraw();
       }
+    }
+    if (fallback !== null && attempt === generation) {
+      await begin(chosen, fallback, options);
     }
   }
 
@@ -207,7 +257,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** Back: a deep screen returns to the menu, an entry screen to the chooser. */
   function back(): void {
     abortFlow();
-    if (mode === "menu" || cameFromChooser || lane === null) {
+    if (mode === "menu" || mode === "relay" || cameFromChooser || lane === null) {
       reset();
       m.redraw();
       return;
@@ -377,10 +427,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
                 variant: "ghost",
                 sm: true,
                 extra: css.ACCOUNT_ACTION,
-                title: "Sign in again, keeping this account and every chat on it",
+                title: account.holds_subscription_token
+                  ? "Sign in with your Claude subscription instead of a pasted token, keeping every chat on this account"
+                  : "Sign in again, keeping this account and every chat on it",
                 onclick: () => void reauthenticate(account.id, account.lane),
               },
-              "Sign in again",
+              account.holds_subscription_token ? "Switch to a normal sign-in" : "Sign in again",
             ),
             m(
               Button,
@@ -635,8 +687,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** The menu: this lane's primary method inline, with its alternates under it. The
    *  the harness's own menu, which is why the section labels read the way they do. */
   function menuBody(current: Lane): m.Children {
-    const primary = current.methods[0];
-    const others = current.methods.slice(1);
+    const primary = method ?? current.methods[0];
+    const others = offeredMethods(current).filter((candidate) => candidate.id !== primary.id);
     return m("div", { class: "flex flex-col" }, [
       m("div", { class: css.SECTION_LABEL }, isPaste(primary) ? "Use an API key" : "Use your subscription"),
       isPaste(primary) ? apiKeyBody(current) : stepsBody(current, primary),
@@ -678,6 +730,39 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ]);
   }
 
+  /** The desktop app opened the page and relays its callback: all that is left is the browser. */
+  function relayBody(current: Lane): m.Children {
+    const flow = getFlow();
+    return [
+      m(
+        "p",
+        { class: css.LEAD },
+        `We opened the ${current.provider_name} sign-in page. Finish there, and this closes by itself.`,
+      ),
+      m("p", { class: css.HINT }, [
+        "Didn't open? ",
+        m(
+          "button",
+          {
+            type: "button",
+            class: css.HINT_ACTION,
+            "data-e2e": "open-sign-in-again",
+            onclick: () => {
+              if (flow !== null && flow.relay_url !== null) void requestProviderRelay(flow.relay_url, flow.flow_id);
+            },
+          },
+          "Open it again",
+        ),
+      ]),
+      current.harness === "claude" ? m("p", { class: css.HINT }, CLAUDE_CERTIFICATE_HINT) : null,
+      m(
+        "div",
+        { class: css.FOOTER_ROW },
+        m(Button, { variant: "secondary", "data-e2e": "cancel-sign-in", onclick: back }, "Cancel"),
+      ),
+    ];
+  }
+
   /** Start this account's own lane's primary sign-in, into the folder it already has. */
   async function reauthenticate(accountId: string, laneId: string): Promise<void> {
     const owner = getLanes().find((candidate) => candidate.id === laneId);
@@ -691,7 +776,15 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       // Opened ON an account rather than to add one: a dead-account notice, or a provider
       // card whose credential expired. Land on that account's sign-in, not the lane list.
       const accountId = takeChooserAccountId();
-      if (accountId === null) return;
+      if (accountId === null) {
+        // The top row's sign-in takes seconds to start, so it starts now, while the user reads.
+        const top = getLanes()[0];
+        const topMethod = top === undefined ? undefined : offeredMethods(top)[0];
+        if (top !== undefined && topMethod !== undefined && !isPaste(topMethod) && lane === null) {
+          startFlow(top.id, topMethod.id).catch(() => undefined);
+        }
+        return;
+      }
       const account = getAccounts().find((candidate) => candidate.id === accountId);
       if (account !== undefined) await reauthenticate(account.id, account.lane);
     },
@@ -737,9 +830,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         body = statusScreen(
           "success",
           "All set",
-          reauthAccountId === null
-            ? `Signed in. ${current.provider_name} is ready to use.`
-            : "Signed in again. Every chat on this provider can take a turn once more.",
+          [
+            reauthAccountId === null
+              ? `Signed in. ${current.provider_name} is ready to use.`
+              : "Signed in again. Every chat on this provider can take a turn once more.",
+            flow.status.detail === null ? "" : ` ${flow.status.detail}.`,
+          ].join(""),
           m("div", { class: css.STATUS_MARK }, [m.trust(providerMark(current.id, 18)), current.provider_name]),
         );
       } else if (isFailed || error !== null) {
@@ -767,8 +863,14 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         body = statusScreen(
           "pending",
           "Signing in...",
-          awaitingVerdict ? "Checking your code with the provider." : "Preparing your sign-in.",
+          awaitingVerdict
+            ? "Checking your code with the provider."
+            : isOpeningBrowser
+              ? "Opening your browser."
+              : "Preparing your sign-in.",
         );
+      } else if (mode === "relay") {
+        body = relayBody(current);
       } else if (mode === "apiKey") {
         body = apiKeyBody(current);
       } else if (mode === "menu") {

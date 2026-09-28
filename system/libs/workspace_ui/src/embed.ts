@@ -15,7 +15,6 @@
 
 import {
   CLOSE_ACTIVE_TAB,
-  OPEN_AI_KEYS_ACK,
   createWorkspaceEndpoint,
   type ContractEndpoint,
   type ContractMessage,
@@ -71,6 +70,14 @@ export const REATTACH_WINDOW: "minds:reattach-window" =
 // desktop window follows it, came back inside, or was released out there.
 // Payload: { windowId, phase: "out" | "in" | "released" }.
 export const TEAR_OUT: "minds:tear-out" = "TEAR_OUT" in embedContract ? embedContract.TEAR_OUT : "minds:tear-out";
+// The provider sign-in pair (contract v7), probed the same way.
+// Workspace -> embedder: relay a provider sign-in's loopback callback into this workspace's flow and
+// open its page. Payload: { url, flowId }.
+export const PROVIDER_SIGN_IN: "minds:provider-sign-in" =
+  "PROVIDER_SIGN_IN" in embedContract ? embedContract.PROVIDER_SIGN_IN : "minds:provider-sign-in";
+// Embedder -> workspace: whether the chrome is relaying that sign-in. Payload: { relay }.
+export const PROVIDER_SIGN_IN_ACK: "minds:provider-sign-in-ack" =
+  "PROVIDER_SIGN_IN_ACK" in embedContract ? embedContract.PROVIDER_SIGN_IN_ACK : "minds:provider-sign-in-ack";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
@@ -95,12 +102,12 @@ function getEndpoint(): ContractEndpoint {
     endpoint = createWorkspaceEndpoint({
       handlers: {
         [CLOSE_ACTIVE_TAB]: (message) => handlerByType[CLOSE_ACTIVE_TAB]?.(message),
-        [OPEN_AI_KEYS_ACK]: (message) => handlerByType[OPEN_AI_KEYS_ACK]?.(message),
         [PERMISSION_RESOLUTIONS]: (message) => handlerByType[PERMISSION_RESOLUTIONS]?.(message),
         [FOCUS_CHAT]: (message) => handlerByType[FOCUS_CHAT]?.(message),
         [EMBEDDER_CAPABILITIES]: (message) => handlerByType[EMBEDDER_CAPABILITIES]?.(message),
         [REATTACH_WINDOW]: (message) => handlerByType[REATTACH_WINDOW]?.(message),
         [TEAR_OUT]: (message) => handlerByType[TEAR_OUT]?.(message),
+        [PROVIDER_SIGN_IN_ACK]: (message) => handlerByType[PROVIDER_SIGN_IN_ACK]?.(message),
       },
     });
   }
