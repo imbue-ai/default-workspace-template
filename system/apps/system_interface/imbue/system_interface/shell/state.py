@@ -452,6 +452,7 @@ class ShellState(MutableModel):
         self.broadcast_desktops_updated()
         self._announce_placements_edit(opened_on, request.client_id, placed)
         logger.info("Opened window {} of {} at {} on desktop {}", window.id, window.app, window.path, desktop.id)
+        self.lifecycle.wake_soon()
         return WindowOpenOutcome(window=window, is_new=True)
 
     def open_window_unplaced(
@@ -482,6 +483,11 @@ class ShellState(MutableModel):
         )
         return self.desktops.open_window(desktop.id, window), window
 
+    def count_windows_of_app(self, app: str) -> int:
+        """How many windows across every desktop show the app (minimized, pinned, and pulled-out ones included);
+        what the lifecycle manager's no-window rule counts."""
+        return sum(1 for desktop in self.desktops.list_desktops() for window in desktop.windows if window.app == app)
+
     def close_window(self, desktop_id: str, window_id: WindowId) -> bool:
         """Close a window for everyone: off the desktop and out of every client's layout of it, and its app told;
         False when the desktop did not hold it (idempotent). Raises PinnedWindowError (a 409) for a pinned window,
@@ -500,13 +506,16 @@ class ShellState(MutableModel):
         self._broadcast_placements_written(rewritten)
         logger.info("Closed window {} on desktop {} ({} layout(s) rewritten)", window_id, desktop_id, len(rewritten))
         self._hint_windows_closed(desktop.id, (closing,))
+        self.lifecycle.wake_soon()
         return True
 
     def _hint_windows_closed(self, desktop_id: DesktopId, windows: Sequence[Window]) -> None:
-        """Tell each closed window's app, when its row names a window_closed_path (spec section 4.6)."""
+        """Tell each closed window's app, when its row names a window_closed_path (window-bound-resources spec
+        section 4.6) and the app is running: a stopped app's port is the shell's parker, which would wake the app
+        to tell it a window closed (the stop-when-no-windows spec, decision 9)."""
         for window in windows:
             entry = self.inventory.entry(str(window.app))
-            if entry is None:
+            if entry is None or not entry.is_running:
                 continue
             hint = window_closed_hint(entry, desktop_id, window)
             if hint is not None:
@@ -551,6 +560,7 @@ class ShellState(MutableModel):
         self.broadcast_desktops_updated()
         logger.info("Deleted desktop {} (fallback {})", desktop_id, outcome.fallback_desktop_id)
         self._hint_windows_closed(outcome.deleted.id, outcome.deleted.windows)
+        self.lifecycle.wake_soon()
         return outcome
 
     def set_client_active_desktop(self, client_id: ClientId, desktop_id: DesktopId) -> bool:
@@ -586,6 +596,7 @@ class ShellState(MutableModel):
             # Every arrival stamps the user it came as (None for the owner), so the returning-client rule never
             # reads a user the browser has since stopped being.
             recorded = self.clients.record_arrival(client_id, user_id, outcome.desktop_id, now)
+        self.lifecycle.mark_visited()
         if outcome.created_desktop is not None:
             self.broadcast_desktops_updated()
         # A client that already had a record may have other windows open on the desktop it was moved off.
@@ -735,11 +746,16 @@ def build_shell_state(
         if inventory is not None
         else AppInventory(registry_path=registry_path, broadcaster=broadcaster, on_registry_read=on_registry_read)
     )
+    desktops = DesktopStore(state_directory=state_directory)
     return ShellState(
         state_directory=state_directory,
         inventory=resolved_inventory,
-        lifecycle=build_app_lifecycle_manager(resolved_inventory, is_lifecycle_enabled),
-        desktops=DesktopStore(state_directory=state_directory),
+        lifecycle=build_app_lifecycle_manager(
+            resolved_inventory,
+            is_lifecycle_enabled,
+            lambda app: sum(1 for desktop in desktops.list_desktops() for window in desktop.windows if window.app == app),
+        ),
+        desktops=desktops,
         placements=PlacementStore(state_directory=state_directory),
         window_paths=WindowPathStore(state_directory=state_directory),
         wallpaper_files_directory=_under_repo_root(wallpaper_files_directory, repo_root),

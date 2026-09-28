@@ -2,8 +2,11 @@
 stop-when-no-windows spec, sections 5 and 6).
 
 Its sweep reads every supervised program's state in one supervisord RPC, parks the port of each stoppable app
-that is down (``shell/port_parking.py``), releases a parker whose app is up or about to bind again, and re-parks
-an app that failed to start with the failure page. A wake releases the parker before asking supervisord to start
+that is down (``shell/port_parking.py``), releases a parker whose app is up or about to bind again, re-parks
+an app that failed to start with the failure page, and stops a running app that declares
+``stop_when_no_windows`` once no window on any desktop has shown it for the grace period, provided a client has
+arrived at the shell since it started (spec section 6: before anyone has looked at the workspace, "no windows"
+says nothing about use, and the apps that deliver something on the first visit need to be running for it). A wake releases the parker before asking supervisord to start
 the program, so the app's first bind never collides with the shell's listener, and is budgeted so a broken app
 cannot be restarted by every reload. Supervisord access is injectable, and the sweep thread runs only when the
 manager is enabled (never in a preview shell, and in tests only when a test says so).
@@ -52,6 +55,8 @@ IDLE_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 # How many wakes an app gets in a window before its page stops asking for more (spec section 5.5).
 WAKE_BUDGET_COUNT: Final[int] = 3
 WAKE_BUDGET_WINDOW_SECONDS: Final[float] = 300.0
+# How long an app must have shown no window before it is stopped (spec section 6.1).
+NO_WINDOWS_GRACE_SECONDS: Final[float] = 60.0
 # How long a POST launch waits for a woken app to accept a connection (spec section 5.6).
 WAKE_WAIT_SECONDS: Final[float] = 20.0
 _WAKE_WAIT_POLL_SECONDS: Final[float] = 0.2
@@ -88,6 +93,12 @@ class AppLifecycleManager(MutableModel):
     is_enabled: bool = Field(
         frozen=True, description="Whether the sweep thread runs; a preview shell and most tests leave it off"
     )
+    count_windows_of_app: Callable[[str], int] = Field(
+        frozen=True, description="How many windows across every desktop show the app, by app name"
+    )
+    no_windows_grace_seconds: float = Field(
+        default=NO_WINDOWS_GRACE_SECONDS, frozen=True, description="How long an app goes without a window before a stop"
+    )
     program_states: ProgramStatesReader = Field(
         default=read_supervisor_program_statenames,
         frozen=True,
@@ -102,6 +113,8 @@ class AppLifecycleManager(MutableModel):
     _wake_times_by_app: dict[str, list[float]] = PrivateAttr(default_factory=dict)
     _woken_at_by_app: dict[str, float] = PrivateAttr(default_factory=dict)
     _failed_apps: set[str] = PrivateAttr(default_factory=set)
+    _idle_since_by_app: dict[str, float] = PrivateAttr(default_factory=dict)
+    _is_visited: bool = PrivateAttr(default=False)
     _sweep_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _sweep_wake: threading.Event = PrivateAttr(default_factory=threading.Event)
     _sweep_thread: threading.Thread | None = PrivateAttr(default=None)
@@ -131,7 +144,20 @@ class AppLifecycleManager(MutableModel):
         """Run a sweep pass as soon as the thread is free (a window closed or opened, a stop or start happened)."""
         self._sweep_wake.set()
 
+    def mark_visited(self) -> None:
+        """A client has arrived at the shell: the no-window rule applies from here on."""
+        with self._lock:
+            if not self._is_visited:
+                self._is_visited = True
+                logger.info("The workspace has been visited; apps without windows now stop after {}s", self.no_windows_grace_seconds)
+        self.wake_soon()
+
     # Reads
+
+    @property
+    def is_visited(self) -> bool:
+        with self._lock:
+            return self._is_visited
 
     def parked_app_names(self) -> list[str]:
         with self._lock:
@@ -226,8 +252,9 @@ class AppLifecycleManager(MutableModel):
         return TRANSITION_SWEEP_INTERVAL_SECONDS if is_transitioning else IDLE_SWEEP_INTERVAL_SECONDS
 
     def sweep_once(self) -> None:
-        """One pass (spec section 5.4): park every stoppable app that is down, release every parker whose app is
-        up or retrying, and note an app whose wake ended in FATAL."""
+        """One pass (spec sections 5.4 and 6.1): park every stoppable app that is down, release every parker whose
+        app is up or retrying, note an app whose wake ended in FATAL, and stop a running app that has had no window
+        for the grace period."""
         statename_by_program = self.program_states()
         if statename_by_program is None:
             logger.debug("Skipped an app lifecycle pass: supervisord did not answer")
@@ -253,7 +280,11 @@ class AppLifecycleManager(MutableModel):
                     self._failed_apps.discard(app)
             if parked is not None:
                 parked.release()
+            if statename != SUPERVISOR_BACKOFF_STATENAME:
+                self._apply_no_window_rule(entry, program)
             return
+        with self._lock:
+            self._idle_since_by_app.pop(app, None)
         if statename not in SUPERVISOR_DOWN_STATENAMES:
             # STOPPING: the port is still the app's until it exits.
             return
@@ -264,6 +295,30 @@ class AppLifecycleManager(MutableModel):
             if app in self._parked_by_app:
                 return
         self._park(entry, program)
+
+    def _apply_no_window_rule(self, entry: AppInventoryEntry, program: str) -> None:
+        """Stop a running app that declares ``stop_when_no_windows`` once no window has shown it for the grace
+        period, and only once the workspace has been visited (spec section 6.1)."""
+        app = str(entry.row.name)
+        if not entry.row.stop_when_no_windows or self.count_windows_of_app(app) > 0:
+            with self._lock:
+                self._idle_since_by_app.pop(app, None)
+            return
+        now = self.clock()
+        with self._lock:
+            if not self._is_visited:
+                return
+            idle_since = self._idle_since_by_app.setdefault(app, now)
+            if now - idle_since < self.no_windows_grace_seconds:
+                return
+            self._idle_since_by_app.pop(app, None)
+        try:
+            self.stop_program(program)
+        except SupervisorProgramActionError as e:
+            logger.warning("Could not stop {} after {}s without a window: {}", app, self.no_windows_grace_seconds, e)
+            return
+        logger.info("Stopped app {} (program {}): no window showed it for {}s", app, program, self.no_windows_grace_seconds)
+        self.inventory.refresh_liveness()
 
     def _park(self, entry: AppInventoryEntry, program: str) -> None:
         app = str(entry.row.name)
@@ -298,5 +353,7 @@ def _is_accepting(target: ParkingTarget) -> bool:
         return False
 
 
-def build_app_lifecycle_manager(inventory: AppInventory, is_enabled: bool) -> AppLifecycleManager:
-    return AppLifecycleManager(inventory=inventory, is_enabled=is_enabled)
+def build_app_lifecycle_manager(
+    inventory: AppInventory, is_enabled: bool, count_windows_of_app: Callable[[str], int]
+) -> AppLifecycleManager:
+    return AppLifecycleManager(inventory=inventory, is_enabled=is_enabled, count_windows_of_app=count_windows_of_app)

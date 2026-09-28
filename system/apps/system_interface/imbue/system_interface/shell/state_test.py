@@ -31,6 +31,7 @@ from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import TEST_TERMINAL_URL
 from imbue.system_interface.shell.testing import TEST_TERMINAL_WINDOW_CLOSED_PATH
+from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import placement_record
 from imbue.system_interface.shell.testing import write_two_app_registry
@@ -116,6 +117,40 @@ def test_closing_a_window_tells_its_app_when_the_row_names_a_window_closed_path(
     assert shell.close_window(home.id, terminal_window) is False
     assert shell.close_window(home.id, files_window) is True
     assert len(hints) == 1
+
+
+def test_a_stopped_app_is_not_told_of_its_closed_window(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    """The post would reach the shell's own parker and wake the app to tell it a window closed."""
+    hints: list[WindowClosedHint] = []
+    prober = FakeLivenessProber()
+    prober.is_running_by_name["terminal"] = False
+    registry_path = write_two_app_registry(tmp_path)
+    built = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster, prober=prober),
+    )
+    shell = built.model_copy_update(to_update(built.field_ref().close_hint_poster, hints.append))
+    (home,) = shell.list_desktops()
+    terminal_window = _open(shell, home.id, "terminal", "/?session=terminal-1")
+
+    assert shell.close_window(home.id, terminal_window) is True
+
+    assert hints == []
+
+
+def test_an_arrival_marks_the_workspace_visited(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    shell = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+    assert shell.lifecycle.is_visited is False
+    shell.list_desktops()
+
+    shell.arrive_client(ClientId("laptop"), RequestIdentity(owner=True))
+
+    assert shell.lifecycle.is_visited is True
 
 
 def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(

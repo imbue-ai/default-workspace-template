@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_WINDOW_SECONDS
 from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
@@ -58,17 +59,33 @@ def supervisor() -> FakeSupervisor:
     return FakeSupervisor({"docs": "STOPPED", "shell": "RUNNING", "plain": "RUNNING"})
 
 
+class FakeWindows:
+    """How many windows each app has, as the manager's rule reads it."""
+
+    def __init__(self) -> None:
+        self.count_by_app: dict[str, int] = {}
+
+    def get_count(self, app: str) -> int:
+        return self.count_by_app.get(app, 0)
+
+
+@pytest.fixture
+def windows() -> FakeWindows:
+    return FakeWindows()
+
+
 @pytest.fixture
 def manager(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster, docs_port: int, supervisor: FakeSupervisor
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, docs_port: int, supervisor: FakeSupervisor, windows: FakeWindows
 ) -> Iterator[AppLifecycleManager]:
-    """A manager over a stoppable ``docs`` app on a free loopback port, a critical ``shell``, and an unsupervised
-    ``plain`` row, against a fake supervisord that starts with ``docs`` stopped."""
+    """A manager over a stoppable ``docs`` app on a free loopback port that stops when no window shows it, a
+    critical ``shell``, and an unsupervised ``plain`` row, against a fake supervisord that starts with ``docs``
+    stopped."""
     prober = FakeLivenessProber()
     prober.is_running_by_name["docs"] = False
     registry_path = write_registry(
         tmp_path / "apps.toml",
-        registry_row_toml("docs", f"http://127.0.0.1:{docs_port}", program="docs"),
+        registry_row_toml("docs", f"http://127.0.0.1:{docs_port}", program="docs", stop_when_no_windows=True),
         registry_row_toml("shell", "http://127.0.0.1:1", program="shell", is_critical=True),
         registry_row_toml("plain", "http://127.0.0.1:1"),
     )
@@ -77,6 +94,7 @@ def manager(
     built = AppLifecycleManager(
         inventory=inventory,
         is_enabled=False,
+        count_windows_of_app=windows.get_count,
         program_states=supervisor.states,
         start_program=supervisor.start,
         stop_program=supervisor.stop,
@@ -233,6 +251,7 @@ def test_wake_and_wait_answers_once_the_app_accepts(
     waiting = AppLifecycleManager(
         inventory=manager.inventory,
         is_enabled=False,
+        count_windows_of_app=lambda app: 0,
         program_states=supervisor.states,
         start_program=start,
         stop_program=supervisor.stop,
@@ -246,6 +265,89 @@ def test_wake_and_wait_answers_once_the_app_accepts(
     assert waiting.wake_and_wait(entry, timeout_seconds=0.3) is False
     running = manager.inventory.entry("plain")
     assert running is not None and waiting.wake_and_wait(running, timeout_seconds=0.1) is True
+
+
+def _clock_of(manager: AppLifecycleManager) -> FakeClock:
+    clock = manager.clock
+    assert isinstance(clock, FakeClock)
+    return clock
+
+
+def test_a_running_app_with_no_window_is_stopped_after_the_grace_period_once_visited(
+    manager: AppLifecycleManager, supervisor: FakeSupervisor
+) -> None:
+    supervisor.statename_by_program["docs"] = "RUNNING"
+    clock = _clock_of(manager)
+
+    # Before anyone has arrived, no window says nothing about use.
+    manager.sweep_once()
+    clock.now += NO_WINDOWS_GRACE_SECONDS + 1
+    manager.sweep_once()
+    assert supervisor.stopped == []
+
+    manager.mark_visited()
+    manager.sweep_once()
+    assert supervisor.stopped == []
+    clock.now += NO_WINDOWS_GRACE_SECONDS - 1
+    manager.sweep_once()
+    assert supervisor.stopped == []
+    clock.now += 2
+    manager.sweep_once()
+    assert supervisor.stopped == ["docs"]
+    # The stopped program is parked on the next pass.
+    manager.sweep_once()
+    assert manager.is_app_parked("docs")
+
+
+def test_a_window_opening_within_the_grace_period_keeps_the_app(
+    manager: AppLifecycleManager, supervisor: FakeSupervisor, windows: FakeWindows
+) -> None:
+    supervisor.statename_by_program["docs"] = "RUNNING"
+    clock = _clock_of(manager)
+    manager.mark_visited()
+    manager.sweep_once()
+    clock.now += NO_WINDOWS_GRACE_SECONDS / 2
+
+    windows.count_by_app["docs"] = 1
+    manager.sweep_once()
+    clock.now += NO_WINDOWS_GRACE_SECONDS
+    manager.sweep_once()
+    assert supervisor.stopped == []
+
+    # The clock starts over once the last window closes.
+    windows.count_by_app["docs"] = 0
+    manager.sweep_once()
+    clock.now += NO_WINDOWS_GRACE_SECONDS - 1
+    manager.sweep_once()
+    assert supervisor.stopped == []
+    clock.now += 2
+    manager.sweep_once()
+    assert supervisor.stopped == ["docs"]
+
+
+def test_an_app_that_does_not_declare_the_field_is_never_stopped(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, supervisor: FakeSupervisor
+) -> None:
+    registry_path = write_registry(
+        tmp_path / "apps.toml", registry_row_toml("docs", "http://127.0.0.1:1", program="docs")
+    )
+    supervisor.statename_by_program["docs"] = "RUNNING"
+    clock = FakeClock()
+    keeping = AppLifecycleManager(
+        inventory=build_inventory(registry_path, broadcaster),
+        is_enabled=False,
+        count_windows_of_app=lambda app: 0,
+        program_states=supervisor.states,
+        start_program=supervisor.start,
+        stop_program=supervisor.stop,
+        clock=clock,
+    )
+    keeping.mark_visited()
+    keeping.sweep_once()
+    clock.now += NO_WINDOWS_GRACE_SECONDS * 2
+    keeping.sweep_once()
+
+    assert supervisor.stopped == []
 
 
 def test_stop_releases_every_parked_port(manager: AppLifecycleManager, docs_port: int) -> None:
