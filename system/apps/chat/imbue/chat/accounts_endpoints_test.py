@@ -101,7 +101,17 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
     (row,) = payload["accounts"]
     # `label` is the composed string for anything showing one; `provider` / `harness_label` /
     # `seq` are its parts, which the combo card renders at different sizes on one row.
-    assert set(row) == {"id", "lane", "harness", "provider", "harness_label", "seq", "name", "label"}
+    assert set(row) == {
+        "id",
+        "lane",
+        "harness",
+        "provider",
+        "harness_label",
+        "seq",
+        "name",
+        "label",
+        "holds_subscription_token",
+    }
     assert row["provider"] == "Anthropic"
     assert row["harness_label"] == "Claude Code"
     assert row["label"] == "Anthropic (Claude Code)"
@@ -474,3 +484,17 @@ def test_a_visitor_still_sees_the_accounts_its_chats_run_on(tmp_path: Path) -> N
         response = client.get("/api/accounts", headers={"X-Imbue-Identity": _VISITOR})
 
     assert response.status_code == 200
+
+
+def test_an_account_on_a_pasted_subscription_token_is_flagged() -> None:
+    token_id, token_dir = mint_account_dir()
+    commit_account(token_id, "anthropic", "Anthropic")
+    (token_dir / "settings.json").write_text('{"env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-legacy"}}')
+    key_id, key_dir = mint_account_dir()
+    commit_account(key_id, "anthropic", "Anthropic")
+    (key_dir / "settings.json").write_text('{"env": {"ANTHROPIC_API_KEY": "sk-ant-api03-key"}}')
+
+    with _client() as client:
+        rows = client.get("/api/accounts").get_json()["accounts"]
+
+    assert {row["id"]: row["holds_subscription_token"] for row in rows} == {token_id: True, key_id: False}

@@ -24,6 +24,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.claude.auth import ProcessSetupError
+from imbue.chat.harnesses.claude.auth import SUBSCRIPTION_TOKEN_REFUSAL
 from imbue.chat.server import create_application
 from imbue.chat.testing import FakeFinishedProcess
 from imbue.chat.testing import build_test_state
@@ -128,14 +129,19 @@ def test_submit_credentials_rejects_unmanaged_keys(isolated_claude_config: Path)
     assert "Unsupported keys" in response.get_json()["detail"]
 
 
-def test_submit_credentials_rejects_mixed_modes(isolated_claude_config: Path) -> None:
+@pytest.mark.parametrize(
+    "credentials",
+    [
+        pytest.param(f"CLAUDE_CODE_OAUTH_TOKEN={_FAKE_TOKEN}", id="token-line"),
+        pytest.param(f"ANTHROPIC_API_KEY=sk-1\nCLAUDE_CODE_OAUTH_TOKEN={_FAKE_TOKEN}", id="token-with-a-key"),
+        pytest.param(_FAKE_TOKEN, id="bare-token"),
+    ],
+)
+def test_submit_credentials_refuses_a_subscription_token(isolated_claude_config: Path, credentials: str) -> None:
     with _client() as client:
-        response = client.post(
-            "/api/claude-auth/submit-credentials",
-            json={"credentials": f"ANTHROPIC_API_KEY=sk-1\nCLAUDE_CODE_OAUTH_TOKEN={_FAKE_TOKEN}"},
-        )
+        response = client.post("/api/claude-auth/submit-credentials", json={"credentials": credentials})
     assert response.status_code == 400
-    assert "not both" in response.get_json()["detail"]
+    assert response.get_json()["detail"] == SUBSCRIPTION_TOKEN_REFUSAL
 
 
 def test_submit_credentials_rejects_empty_body() -> None:

@@ -52,6 +52,11 @@ CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR: Final[str] = "CLAUDE_CODE_OAUTH_TOKEN"
 MANAGED_AUTH_ENV_KEYS: Final[frozenset[str]] = frozenset(
     (ANTHROPIC_API_KEY_ENV_VAR, ANTHROPIC_BASE_URL_ENV_VAR, CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR)
 )
+SUBSCRIPTION_TOKEN_REFUSAL: Final = (
+    "A Claude subscription token can't be pasted here. Sign in with your Claude subscription instead."
+)
+# What a paste may set: every managed key but the subscription token, which is only ever removed.
+_PASTEABLE_ENV_KEYS: Final[frozenset[str]] = frozenset((ANTHROPIC_API_KEY_ENV_VAR, ANTHROPIC_BASE_URL_ENV_VAR))
 # Characters of the key/token shown in the modal's "currently signed in via"
 # header; long enough to disambiguate, short enough to stay a non-secret.
 _DISPLAY_SUFFIX_LENGTH: Final = 4
@@ -154,9 +159,9 @@ def parse_credential_lines(pasted_text: str) -> dict[str, str]:
 
     Strict by design: the settings env block is fully controlled, so a paste
     is rejected (rather than partially applied) when it contains any key
-    outside the managed set, mixes an OAuth token with an API key (the key
-    would silently outrank the token at runtime), supplies a base URL with
-    no key, or contains no managed key at all.
+    outside the accepted set, holds a Claude subscription token (Anthropic's
+    terms do not let a third party take one in), supplies a base URL with no
+    key, or contains no accepted key at all.
 
     Raises CredentialPasteError with a user-facing message on any violation.
     """
@@ -164,21 +169,17 @@ def parse_credential_lines(pasted_text: str) -> dict[str, str]:
     stripped = {key: value.strip() for key, value in parsed.items() if value.strip()}
     if not stripped:
         raise CredentialPasteError("No credentials found. Paste lines like ANTHROPIC_API_KEY=sk-ant-...")
-    unknown_keys = sorted(set(stripped) - MANAGED_AUTH_ENV_KEYS)
+    if CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR in stripped:
+        raise CredentialPasteError(SUBSCRIPTION_TOKEN_REFUSAL)
+    unknown_keys = sorted(set(stripped) - _PASTEABLE_ENV_KEYS)
     if unknown_keys:
         raise CredentialPasteError(
             "Unsupported keys in paste: {}. Only {} are accepted.".format(
-                ", ".join(unknown_keys), ", ".join(sorted(MANAGED_AUTH_ENV_KEYS))
+                ", ".join(unknown_keys), ", ".join(sorted(_PASTEABLE_ENV_KEYS))
             )
         )
-    has_token = CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR in stripped
     has_key = ANTHROPIC_API_KEY_ENV_VAR in stripped
     has_base_url = ANTHROPIC_BASE_URL_ENV_VAR in stripped
-    if has_token and (has_key or has_base_url):
-        raise CredentialPasteError(
-            "Paste either an OAuth token OR an API key (with optional base URL), not both: "
-            "an API key would silently take precedence over the token."
-        )
     if has_base_url and not has_key:
         raise CredentialPasteError(
             f"{ANTHROPIC_BASE_URL_ENV_VAR} requires an accompanying {ANTHROPIC_API_KEY_ENV_VAR}."

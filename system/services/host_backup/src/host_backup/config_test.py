@@ -272,3 +272,8 @@ def test_publish_service_events_dir_is_noop_without_host_dir(
     publish_service_events_dir(tmp_path / "state" / "events" / "backup")
     # And resolution falls back to the caller's own dir.
     assert resolve_service_events_dir() == tmp_path / "state" / "events" / "backup"
+
+
+def test_claude_sign_in_credentials_are_never_backed_up() -> None:
+    """Anthropic's terms do not let a Claude subscription credential leave the machine it was issued to."""
+    assert "**/.minds/accounts/*/.credentials.json" in BackupConfig().excludes
