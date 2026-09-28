@@ -308,7 +308,8 @@ in your report.
   selector names them from those paths -- each changed package's or skill's
   own tests, the suites of whatever declares a dependency on it, the frontend
   checks, the repo guards, and the full root suite for a path in no package or
-  skill; a set made only of documentation selects nothing.
+  skill or in a package the root project depends on; a set made only of
+  documentation selects nothing.
   The update's changes inside a creation that carries local content (every
   creation whose Step 4 `.local.json` and `.update.json` both list files
   inside its footprint) go in by rule, so the user's own tests of it run

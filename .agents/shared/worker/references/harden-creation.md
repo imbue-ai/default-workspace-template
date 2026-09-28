@@ -265,8 +265,8 @@ invocation breaks collection. What it selects, and why, is in
 changed packages' and skills' own suites with their ratchets, the suites of
 whatever declares a dependency on them, the browser tests of an app that
 itself changed, and the frontend checks. A changed path outside every package
-and skill brings in the full root suite; that is the gate working, not a gap.
-Do not drop any line of it.
+and skill, or in a package the root project depends on, brings in the full
+root suite; that is the gate working, not a gap. Do not drop any line of it.
 
 **A suite the selector left out.** The selector reads only declarations:
 `pyproject.toml` and `package.json` dependencies, `uv.lock`, the programs in
