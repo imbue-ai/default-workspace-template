@@ -6,8 +6,9 @@ runs that unit's suite, plus the suites of the workspace members that depend on 
 manifests reference it (``[[references]]``); a package the root project depends on also runs
 the full root suite, the root project's own tests. A supervisord block runs the app whose
 program it holds and the check that every block names its OOM band. ``uv.lock`` selects the
-members that depend on what it upgraded. A change inside an app's frontend runs only the
-app's tests marked ``browser`` or ``frontend``. A small always-run set guards the repo-wide
+members that depend on what it upgraded. A change inside the frontend of an app with its own
+pytest root runs only the app's tests marked ``browser`` or ``frontend``; any other app runs
+whole. A small always-run set guards the repo-wide
 invariants any edit can break; agent prose outside every skill, and the other markdown the
 always-run prose checks read, selects only that set and the apps whose manifests reference
 it. Any other path belongs to no declared unit, so it runs the full root suite.
