@@ -85,15 +85,23 @@ def test_a_skill_change_runs_only_that_skills_suite(workspace: Path) -> None:
     assert selection.paths[0].classes == (ChangedPathClass.SKILL,)
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "system/scripts/forward_port.py",
+        # Beside the guards but not one: it applies to every root-collected test under system/.
+        "system/conftest.py",
+    ],
+)
 def test_a_path_outside_every_package_and_skill_runs_the_full_root_suite(
-    workspace: Path,
+    workspace: Path, path: str
 ) -> None:
-    selection = _select(workspace, ["system/scripts/forward_port.py"])
+    selection = _select(workspace, [path])
 
     assert _command_lines(selection) == [_FULL_ROOT]
     assert selection.is_full_root
     assert selection.paths[0].classes == (ChangedPathClass.UNOWNED,)
-    assert "system/scripts/forward_port.py (full root suite)" in render_selection(selection)
+    assert f"{path} (full root suite)" in render_selection(selection)
 
 
 def test_a_changed_test_file_outside_every_package_runs_only_itself(workspace: Path) -> None:

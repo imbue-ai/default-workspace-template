@@ -534,7 +534,7 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
         return _select_for_lockfile(context, path)
     if (
         path in ALWAYS_RUN_GUARDS
-        or (PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY and path.endswith(".py"))
+        or (PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY and is_test_file_name(path))
         or (
             path.endswith(_MARKDOWN_SUFFIX)
             and (path.startswith(f"{_AGENT_PROSE_DIRECTORY}/") or _is_guarded_prose(path))
