@@ -67,7 +67,7 @@ def _resolve_host_env_path() -> Path:
 
 
 def migrate() -> bool:
-    """Move managed auth keys out of the host env file and into an account.
+    """Move an API key out of the host env file into an account, and scrub every managed key.
 
     Returns True when anything changed.
     """
@@ -89,7 +89,8 @@ def migrate() -> bool:
         for key, value in stale_managed.items()
         if key != CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
     }
-    if ANTHROPIC_API_KEY_ENV_VAR in movable:
+    is_moving = ANTHROPIC_API_KEY_ENV_VAR in movable
+    if is_moving:
         pasted = "\n".join(f"{key}={value}" for key, value in sorted(movable.items()))
         account = AuthFlowService.create().adopt_claude_credentials(pasted)
         print(
@@ -107,9 +108,14 @@ def migrate() -> bool:
     }
     host_env_path.write_text(_format_env_file(remaining))
     print(f"Scrubbed {', '.join(sorted(stale_managed))} from {host_env_path}.")
-    print(
-        "Existing chats keep their current credential; new chats will use this account."
-    )
+    if is_moving:
+        print(
+            "Existing chats keep their current credential; new chats will use this account."
+        )
+    else:
+        print(
+            "No account was made from it; sign in with your Claude subscription in the chat."
+        )
     return True
 
 
