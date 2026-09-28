@@ -84,7 +84,9 @@ def test_migrate_rerun_after_success_mints_only_one_account(host_dir: Path) -> N
 
 def test_migrate_scrubs_a_subscription_token_without_keeping_it(host_dir: Path) -> None:
     """Anthropic's terms do not let a third party keep a Claude.ai credential, so its owner signs in instead."""
-    (host_dir / "env").write_text("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-example\nGH_TOKEN=gh\n")
+    (host_dir / "env").write_text(
+        "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-example\nGH_TOKEN=gh\n"
+    )
 
     assert migration.migrate() is True
 
