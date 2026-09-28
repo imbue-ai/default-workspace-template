@@ -372,6 +372,30 @@ def test_the_wake_budget_refuses_a_fourth_wake_in_the_window(
     assert manager.wake("docs") is ParkedPageKind.STARTING
 
 
+def test_a_request_past_the_wake_budget_is_answered_the_failure_page_and_starts_nothing(
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
+) -> None:
+    """The budget as a request sees it: the fourth wake in the window is answered as a failed start and starts
+    nothing, the port is parked again for the next request, and the window's end lets a request wake the app."""
+    clock = _clock_of(manager)
+    manager.sweep_once()
+    for _ in range(WAKE_BUDGET_COUNT):
+        assert b"Starting Docs" in send_raw_get_over_socket(closed_port)
+        supervisor.statename_by_program["docs"] = "STOPPED"
+        manager.sweep_once()
+        assert manager.is_app_parked("docs")
+
+    refused = send_raw_get_over_socket(closed_port)
+
+    assert refused.startswith(b"HTTP/1.1 503") and b"Docs could not start" in refused
+    assert len(supervisor.started) == WAKE_BUDGET_COUNT
+    manager.sweep_once()
+    assert manager.is_app_parked("docs")
+    clock.now += WAKE_BUDGET_WINDOW_SECONDS + 1
+    assert b"Docs could not start" in send_raw_get_over_socket(closed_port)
+    assert len(supervisor.started) == WAKE_BUDGET_COUNT + 1
+
+
 def test_a_wake_after_which_the_app_runs_spends_none_of_the_budget(
     manager: AppLifecycleManager, supervisor: FakeSupervisor
 ) -> None:
