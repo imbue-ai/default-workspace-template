@@ -714,7 +714,7 @@ class ShellState(MutableModel):
         return outcome
 
 
-def count_windows_of_app(desktops: DesktopStore, app: str) -> int:
+def _count_windows_of_app(desktops: DesktopStore, app: str) -> int:
     """How many windows across every desktop show the app (minimized, pinned, and pulled-out ones included); what
     the lifecycle manager's no-window rule counts."""
     return sum(1 for desktop in desktops.list_desktops() for window in desktop.windows if window.app == app)
@@ -771,7 +771,7 @@ def build_shell_state(
         lifecycle=build_app_lifecycle_manager(
             resolved_inventory,
             is_lifecycle_enabled,
-            lambda app: count_windows_of_app(desktops, app),
+            lambda app: _count_windows_of_app(desktops, app),
             no_windows_grace_seconds=no_windows_grace_seconds,
             idle_sweep_interval_seconds=idle_sweep_interval_seconds,
         ),
