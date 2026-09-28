@@ -213,8 +213,7 @@ Repeat until every node is done.
    uv run .agents/skills/launch-task/scripts/create_worker.py launch \
        --name "$APP-node-N" \
        --template worktree_worker \
-       --create-arg=--branch \
-       --create-arg="build-app/$APP:mngr/$APP-node-N" \
+       --branch "build-app/$APP:mngr/$APP-node-N" \
        --runtime-dir "$RUN/nodes/N/" \
        --task-file "$RUN/nodes/N/task.md" \
        --create-arg=-S \
@@ -242,7 +241,9 @@ Repeat until every node is done.
      now**, which is how the node sees everything merged before it, and it names
      the branch you will merge back. Without it mngr branches from your own
      checkout's HEAD, and the node would start from a workspace where none of the
-     build has happened.
+     build has happened. Write both halves: the `BASE:NEW` form cuts a new branch
+     from the build branch without checking it out, which is what lets this work
+     while `$BUILD` has that same branch checked out.
 
    - `--message-with-mngr` sends the task with `mngr message`, and you pass it to
      `reply` too. These workers are not chats anyone opens, and the chat app's
