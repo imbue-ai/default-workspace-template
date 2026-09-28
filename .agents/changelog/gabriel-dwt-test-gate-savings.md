@@ -10,7 +10,7 @@ Harden workers and update-self now run only the tests a change can reach, as `ap
 
 - When an agent reports a shed, the lead follows the new `shared/references/freeing-memory.md`: list what could be stopped, offer it to the user, and stop only what they approve.
 
-- Update-self's validation step runs the selector over the merged files, the update's changes inside every creation that carries local content, the creations the impact analysis found (listed in `impacted-paths.txt`), and the worker's own edits. Its review gates reuse that run instead of selecting again: a worker that selected against the target release re-tested everything the workspace had ever changed, repeating suites the validation step had already run.
+- Update-self's validation step runs the selector over the merged files, the update's changes inside every creation that carries local content, the creations the impact analysis found (listed in `impacted-paths.txt`), and the worker's own edits. Its review gates reuse that run instead of selecting again, and never select against the target release, whose diff is everything the workspace ever changed.
 
 - The critical-app handoff says which commit the harden task's `diff_base` is: the one the branch forked from the served tree.
 
