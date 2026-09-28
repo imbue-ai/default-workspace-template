@@ -82,10 +82,12 @@ def test_migrate_rerun_after_success_mints_only_one_account(host_dir: Path) -> N
     assert len(read_index().accounts) == 1
 
 
-def test_migrate_carries_a_token_rather_than_a_key(host_dir: Path) -> None:
-    """A subscription workspace that was given a long-lived token still migrates."""
-    (host_dir / "env").write_text("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-example\n")
+def test_migrate_scrubs_a_subscription_token_without_keeping_it(host_dir: Path) -> None:
+    """Anthropic's terms do not let a third party keep a Claude.ai credential, so its owner signs in instead."""
+    (host_dir / "env").write_text("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-example\nGH_TOKEN=gh\n")
 
     assert migration.migrate() is True
 
-    assert _only_account_env() == {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-example"}
+    assert read_index().accounts == ()
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in (host_dir / "env").read_text()
+    assert "GH_TOKEN" in (host_dir / "env").read_text()

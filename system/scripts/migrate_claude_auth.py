@@ -6,9 +6,11 @@ host env file (``$MNGR_HOST_DIR/env``), which every process freezes at start. Au
 lives in a provider account under ``~/.minds/accounts``, and a chat binds to one when it
 is created. This script performs the one-time move:
 
-1. Mint an Anthropic account from any managed auth keys in the host env file
-   (``ANTHROPIC_API_KEY``, ``ANTHROPIC_BASE_URL``, ``CLAUDE_CODE_OAUTH_TOKEN``).
-2. Scrub those keys from the host env file, so a stale value can never shadow the
+1. Mint an Anthropic account from any API key in the host env file
+   (``ANTHROPIC_API_KEY``, with its ``ANTHROPIC_BASE_URL``). A ``CLAUDE_CODE_OAUTH_TOKEN``
+   is not moved: Anthropic's terms do not let a third party keep a Claude.ai credential,
+   so its owner signs in with their subscription in the chat instead.
+2. Scrub every managed key from the host env file, so a stale value can never shadow the
    account's credential in some process's frozen environment.
 
 Subscription-based workspaces (no key in the host env) need no migration: their existing
@@ -32,7 +34,12 @@ import os
 from pathlib import Path
 
 from imbue.chat.harnesses.auth_flows import AuthFlowService
-from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS, derive_auth_mode
+from imbue.chat.harnesses.claude.auth import (
+    ANTHROPIC_API_KEY_ENV_VAR,
+    CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR,
+    MANAGED_AUTH_ENV_KEYS,
+    derive_auth_mode,
+)
 from imbue.mngr.utils.env_utils import parse_env_file
 
 
@@ -77,15 +84,17 @@ def migrate() -> bool:
         print("Host env file holds no Claude auth keys; nothing to migrate.")
         return False
 
-    pasted = "\n".join(f"{key}={value}" for key, value in sorted(stale_managed.items()))
-    account = AuthFlowService.create().adopt_claude_credentials(pasted)
-    print(
-        "Moved {} into account {} ({} mode).".format(
-            ", ".join(sorted(stale_managed)),
-            account.id,
-            derive_auth_mode(stale_managed).value,
+    movable = {key: value for key, value in stale_managed.items() if key != CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR}
+    if ANTHROPIC_API_KEY_ENV_VAR in movable:
+        pasted = "\n".join(f"{key}={value}" for key, value in sorted(movable.items()))
+        account = AuthFlowService.create().adopt_claude_credentials(pasted)
+        print(
+            "Moved {} into account {} ({} mode).".format(
+                ", ".join(sorted(movable)),
+                account.id,
+                derive_auth_mode(movable).value,
+            )
         )
-    )
 
     remaining = {
         key: value
