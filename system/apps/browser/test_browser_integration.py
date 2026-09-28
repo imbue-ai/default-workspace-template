@@ -316,9 +316,22 @@ def test_startup_opens_gate_even_if_restore_fails(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(bsession.BrowserSessionManager, "restore", boom)
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    # The real starters would leave the shared manager's checkpoint and window-sweep loops
+    # running on the session-wide bridge loop for every later test, writing the manifest
+    # at its real path once this test's redirect is undone.
+    started: list[str] = []
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager, "start_checkpointing", lambda _self: started.append("checkpointing")
+    )
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager,
+        "start_window_sweeping",
+        lambda _self, *_args: started.append("window sweeping"),
+    )
     runner._init_done.clear()
     runner.bridge.run(runner._startup())  # the loop runs the same startup coroutine
     assert runner._init_done.is_set()
+    assert started == ["checkpointing", "window sweeping"]
 
 
 def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
