@@ -136,6 +136,8 @@ _RUNTIME_PREFIXES: Final[tuple[str, ...]] = (
 )
 _MARKDOWN_SUFFIX: Final[str] = ".md"
 
+# The calls that join their arguments into a path, as a test builds one from parts.
+_PATH_JOINING_CALLS: Final[frozenset[str]] = frozenset({"Path", "PurePosixPath", "joinpath", "join"})
 # A run of characters a file path is written with; a token naming a file carries a '.' or '/'.
 _PATH_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_.\-/]+")
 _PATH_GLOB_STYLE: Final[str] = "gitignore"
@@ -491,13 +493,12 @@ def build_name_index(test_texts: Mapping[str, str]) -> dict[str, frozenset[str]]
 
     A token is indexed whole and by each of its trailing path components, so a test that
     writes ``system/scripts/layout.py`` is found by ``layout.py`` too; an imported module
-    ``a.b`` counts as writing ``a/b.py``.
+    ``a.b`` counts as writing ``a/b.py``. Only the code counts: a file a comment or docstring
+    mentions is not one the test uses.
     """
     index: dict[str, set[str]] = defaultdict(set)
     for test_file, text in test_texts.items():
-        written = {
-            token.removeprefix("./").rstrip("./") for token in _PATH_TOKEN_PATTERN.findall(text)
-        }
+        written = {token.removeprefix("./").rstrip("./") for token in _written_tokens(text)}
         imported = {f"{module.replace('.', '/')}.py" for module in _imported_modules_in_text(text)}
         for token in written | imported:
             if "." not in token and "/" not in token:
@@ -508,6 +509,61 @@ def build_name_index(test_texts: Mapping[str, str]) -> dict[str, frozenset[str]]
                 if suffix:
                     index[suffix].add(test_file)
     return {token: frozenset(files) for token, files in index.items()}
+
+
+@pure
+def _written_tokens(text: str) -> list[str]:
+    """The file-like tokens in a source's string literals, leaving out docstrings and other
+    string statements, plus each run of literals a path is built from (``root / "a" / "b.py"``,
+    ``joinpath("a", "b.py")``) joined into one; a source that does not parse is read whole."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return _PATH_TOKEN_PATTERN.findall(text)
+    prose = {
+        id(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+    }
+    literals = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in prose
+    ]
+    joined = [
+        "/".join(run)
+        for node in ast.walk(tree)
+        for run in _literal_runs(_path_parts(node))
+        if len(run) > 1
+    ]
+    return [token for value in (*literals, *joined) for token in _PATH_TOKEN_PATTERN.findall(value)]
+
+
+@pure
+def _path_parts(node: ast.AST) -> list[ast.expr]:
+    """The operands a path expression joins, in order: a ``/`` chain's, or the arguments of a
+    ``Path(...)``, ``joinpath(...)`` or ``os.path.join(...)`` call; empty for anything else."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left = _path_parts(node.left) or [node.left]
+        return [*left, node.right]
+    if isinstance(node, ast.Call):
+        function = node.func
+        name = function.attr if isinstance(function, ast.Attribute) else getattr(function, "id", "")
+        if name in _PATH_JOINING_CALLS:
+            return list(node.args)
+    return []
+
+
+@pure
+def _literal_runs(parts: Sequence[ast.expr]) -> list[list[str]]:
+    """The maximal runs of consecutive string literals among a path expression's parts."""
+    runs: list[list[str]] = [[]]
+    for part in parts:
+        if isinstance(part, ast.Constant) and isinstance(part.value, str):
+            runs[-1].append(part.value.strip("/"))
+        elif runs[-1]:
+            runs.append([])
+    return [run for run in runs if run]
 
 
 @pure
@@ -585,6 +641,26 @@ def build_import_index(layout: RepoLayout) -> dict[str, tuple[str, ...]]:
                     importers[member_directory].add(path)
                     break
     return {directory: tuple(sorted(paths)) for directory, paths in importers.items()}
+
+
+def build_sibling_import_index(layout: RepoLayout) -> dict[str, tuple[str, ...]]:
+    """Each Python file in a flat script directory, and the files beside it that import it by
+    module name, as a flat script imports its siblings (its own directory is on sys.path)."""
+    by_directory: dict[str, dict[str, str]] = defaultdict(dict)
+    for path in layout.tracked_files:
+        if path.endswith(".py") and any(
+            path.startswith(f"{directory}/") for directory in _FLAT_SCRIPT_DIRECTORIES
+        ):
+            pure_path = PurePosixPath(path)
+            by_directory[pure_path.parent.as_posix()][pure_path.stem] = path
+    importers: dict[str, set[str]] = defaultdict(set)
+    for siblings in by_directory.values():
+        for path in siblings.values():
+            for module in _imported_modules(layout.repo_root / path):
+                imported = siblings.get(module.split(".")[0])
+                if imported is not None and imported != path:
+                    importers[imported].add(path)
+    return {path: tuple(sorted(paths)) for path, paths in importers.items()}
 
 
 def _own_root_for(layout: RepoLayout, path: str) -> str:
@@ -743,6 +819,9 @@ class _SelectionContext(FrozenModel):
     import_index: Mapping[str, tuple[str, ...]] = Field(
         description="Unpackaged importers by member"
     )
+    sibling_import_index: Mapping[str, tuple[str, ...]] = Field(
+        description="Flat scripts by the sibling scripts that import them"
+    )
     python_consumers: Mapping[str, tuple[str, ...]] = Field(description="Each member's consumers")
     npm_consumers: Mapping[str, tuple[str, ...]] = Field(description="Each npm package's consumers")
     lockfile: LockfileChange | None = Field(
@@ -784,6 +863,9 @@ def _select_for_lockfile(context: _SelectionContext, path: str) -> _PathOutcome:
             _present([_whole_request(context.layout, member, is_browser_included=False, reason=reason)])
         )
         requests.extend(_importer_requests(context, path, ChangedPathClass.LOCKFILE, member))
+        requests.extend(
+            _member_override_requests(context.layout, path, ChangedPathClass.LOCKFILE, member)
+        )
     return _PathOutcome(
         classes=(ChangedPathClass.LOCKFILE,),
         pytest_requests=tuple(requests),
@@ -844,6 +926,7 @@ def _select_for_owning_unit(context: _SelectionContext, path: str) -> _PathOutco
             paired = _own_unit_requests(
                 layout, path, _reason(path, ChangedPathClass.PAIRED_SCRIPT, "paired by filename")
             )
+            paired.extend(_sibling_importer_requests(context, path))
             # A deleted script leaves nothing to pair with or map; the tests that name it and
             # the always-run guards are what can observe that it is gone.
             if not paired and (layout.repo_root / path).exists():
@@ -853,6 +936,24 @@ def _select_for_owning_unit(context: _SelectionContext, path: str) -> _PathOutco
             )
         case _ as unreachable:
             assert_never(unreachable)
+
+
+def _sibling_importer_requests(context: _SelectionContext, path: str) -> list[_PytestRequest]:
+    """The tests of every script beside ``path`` that imports it, directly or through another
+    sibling: each importer's paired tests, the importer itself when it is a test, and the
+    whole directory when its conftest imports it."""
+    importers: set[str] = set()
+    frontier = [path]
+    while frontier:
+        for importer in context.sibling_import_index.get(frontier.pop(), ()):
+            if importer not in importers:
+                importers.add(importer)
+                frontier.append(importer)
+    requests: list[_PytestRequest] = []
+    for importer in sorted(importers):
+        reason = _reason(path, ChangedPathClass.PAIRED_SCRIPT, f"imported by {importer}")
+        requests.extend(_own_unit_requests(context.layout, importer, reason))
+    return requests
 
 
 def _select_for_package(
@@ -869,6 +970,10 @@ def _select_for_package(
     if is_test_file_name(path):
         return requests
     requests.extend(_referenced_directory_requests(layout, path, unit.directory))
+    # An app's frontend is built into the app's own bundle, which no Python package that
+    # depends on the app loads; its npm consumers are the frontend selection's.
+    if _owning_npm_package(layout, path) is not None:
+        return requests
     requests.extend(_importer_requests(context, path, ChangedPathClass.PACKAGE, unit.directory))
     for consumer in context.python_consumers.get(unit.directory, ()):
         reason = _reason(path, ChangedPathClass.PACKAGE, f"{consumer} depends on {unit.directory}")
@@ -876,6 +981,24 @@ def _select_for_package(
             _present([_whole_request(layout, consumer, is_browser_included=False, reason=reason)])
         )
         requests.extend(_importer_requests(context, path, ChangedPathClass.PACKAGE, consumer))
+        requests.extend(_member_override_requests(layout, path, ChangedPathClass.PACKAGE, consumer))
+    return requests
+
+
+def _member_override_requests(
+    layout: RepoLayout, path: str, path_class: ChangedPathClass, member: str
+) -> list[_PytestRequest]:
+    """The suites the override file's consumer entries record for any of ``member``'s files,
+    for a change that reaches the member without changing one of them."""
+    member_files = [file for file in layout.tracked_files if is_path_covered_by(member, file)]
+    requests: list[_PytestRequest] = []
+    for consumer in layout.overrides.consumer:
+        spec = pathspec.PathSpec.from_lines(_PATH_GLOB_STYLE, consumer.paths)
+        if any(spec.match_file(file) for file in member_files):
+            reason = _reason(path, path_class, f"{consumer.note} (reached through {member})")
+            requests.extend(
+                _present(_suite_request(layout, suite, reason) for suite in consumer.suites)
+            )
     return requests
 
 
@@ -1294,11 +1417,15 @@ def select_tests(
         for member in layout.python_members
         for path in paths
     )
+    reaches_flat_scripts = any(
+        path.startswith(f"{directory}/") for directory in _FLAT_SCRIPT_DIRECTORIES for path in paths
+    )
     context = _SelectionContext(
         layout=layout,
         name_index=build_name_index(layout.test_texts),
         unique_suffixes=unique_path_suffixes(layout.tracked_files),
         import_index=build_import_index(layout) if reaches_member else {},
+        sibling_import_index=build_sibling_import_index(layout) if reaches_flat_scripts else {},
         python_consumers=python_consumers(layout.python_members),
         npm_consumers=npm_consumers(layout.npm_packages),
         lockfile=lockfile,

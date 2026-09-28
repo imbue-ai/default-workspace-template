@@ -205,15 +205,19 @@ A path selects:
   (`.agents/skills/<name>`) it sits in, or, in the flat script directories
   (`system/scripts`, `.agents/shared/scripts`), the tests paired with it by
   filename (`<stem>.py`, `<stem>.sh` and `<stem>/` pair with `<stem>_test.py`
-  and `test_<stem>*.py`; a deleted script needs no pair);
+  and `test_<stem>*.py`; a deleted script needs no pair), plus those of every
+  script beside it that imports it, directly or through another (the whole
+  directory when its `conftest.py` does);
 - its consumers: every workspace member that depends on its package, directly
-  or transitively (`pyproject.toml` dependencies and dependency groups), and
+  or transitively (`pyproject.toml` dependencies and dependency groups), with
+  the suites the override file records for any of that member's files, and
   the unpackaged scripts that import one of its modules, through the tests
   paired with each and the suites the override file records for it (not for a
-  test file, which nothing that depends on the package runs);
+  test file, which nothing that depends on the package runs, and not for a
+  path in an app's frontend, which is built into the app's own bundle);
 - for a `uv.lock` change, every member that depends on a package the lock
-  upgraded (a package only added selects nothing beyond the member whose
-  `pyproject.toml` added it);
+  upgraded, with what the override file records for its files (a package only
+  added selects nothing beyond the member whose `pyproject.toml` added it);
 - for an npm package, its and its consumers' `npm test`, `npm run lint` and
   `npm run format:check` (and `npm run typecheck` for a package with no build),
   after `npm ci && npm run build`, plus the browser tests of every app whose
@@ -222,7 +226,9 @@ A path selects:
 - for a path in an app other than a test file, the tests beneath each
   directory the app's manifest references (a referenced skill drives the
   app's surface);
-- every test file that names it;
+- every test file whose code names it: in a string, or in a path joined from
+  literal parts (`root / "system" / "scripts" / "layout.py"`), but not in a
+  comment or docstring;
 - what the override file says.
 
 Every change that is not entirely documentation (README and changelog files

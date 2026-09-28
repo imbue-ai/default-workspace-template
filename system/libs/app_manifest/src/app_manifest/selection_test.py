@@ -154,7 +154,7 @@ def test_a_deleted_script_and_its_test_are_classified_without_the_full_root_suit
     write_repo_file(
         workspace,
         "system/scripts/gate_callers_test.py",
-        "# Runs system/scripts/create_gate.py.\ndef test_callers() -> None:\n    pass\n",
+        'GATE = "system/scripts/create_gate.py"\n\n\ndef test_callers() -> None:\n    pass\n',
     )
     commit_everything(workspace, "a test that names the gate")
     (workspace / "system/scripts/create_gate.py").unlink()
@@ -195,6 +195,69 @@ def test_a_helper_module_a_test_imports_runs_that_test(workspace: Path) -> None:
     selection = _select(workspace, ["system/scripts/shape_testing.py"])
 
     assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/scripts/shape_test.py"]
+
+
+def test_a_path_named_only_in_a_comment_or_docstring_runs_no_test(workspace: Path) -> None:
+    write_repo_file(workspace, "system/scripts/motd.txt", "hi\n")
+    write_repo_file(
+        workspace,
+        "system/scripts/greeting_test.py",
+        '"""Reads the greeting the way system/scripts/motd.txt does."""\n\n\n'
+        "def test_greeting() -> None:\n"
+        "    # system/scripts/motd.txt is not what this test reads.\n"
+        "    pass\n",
+    )
+    commit_everything(workspace, "a test that only mentions a file")
+
+    selection = _select(workspace, ["system/scripts/motd.txt"])
+
+    assert selection.unclassified == ("system/scripts/motd.txt",)
+
+
+def test_a_file_a_test_reaches_through_path_parts_runs_that_test(workspace: Path) -> None:
+    write_repo_file(workspace, ".claude/settings.json", "{}\n")
+    write_repo_file(workspace, ".codex/settings.json", "{}\n")
+    write_repo_file(
+        workspace,
+        "system/scripts/plugins_test.py",
+        "from pathlib import Path\n\n"
+        '_SETTINGS = Path(__file__).resolve().parents[2] / ".claude" / "settings.json"\n\n\n'
+        "def test_plugins() -> None:\n    assert _SETTINGS\n",
+    )
+    commit_everything(workspace, "a test that reads a settings file through path parts")
+
+    selection = _select(workspace, [".claude/settings.json"])
+
+    assert "uv run pytest system/scripts/plugins_test.py" in _command_lines(selection)
+
+
+def test_a_script_change_runs_the_tests_of_the_sibling_scripts_that_import_it(
+    workspace: Path,
+) -> None:
+    write_repo_file(workspace, "system/scripts/greeter.py", "from forward_port import PORT\n")
+    write_repo_file(workspace, "system/scripts/welcome.py", "import greeter\n")
+    write_repo_file(
+        workspace, "system/scripts/welcome_test.py", "def test_welcome() -> None:\n    pass\n"
+    )
+    commit_everything(workspace, "a script importing a script importing forward_port")
+
+    selection = _select(workspace, ["system/scripts/forward_port.py"])
+
+    assert (
+        "uv run pytest system/scripts/forward_port_test.py system/scripts/welcome_test.py"
+        in _command_lines(selection)
+    )
+
+
+def test_a_script_the_directorys_conftest_imports_runs_the_whole_directory(
+    workspace: Path,
+) -> None:
+    write_repo_file(workspace, "system/scripts/conftest.py", "from shape_testing import SHAPE\n")
+    commit_everything(workspace, "a conftest that imports a helper")
+
+    selection = _select(workspace, ["system/scripts/shape_testing.py"])
+
+    assert "uv run pytest system/scripts" in _command_lines(selection)
 
 
 def test_documentation_alone_selects_nothing(workspace: Path) -> None:
@@ -264,6 +327,33 @@ def test_a_frontend_change_to_the_app_runs_its_npm_checks_and_its_whole_suite(
         _CHAT_WHOLE_WITH_BROWSER,
         _CHAT_TYPE_CHECK,
     ]
+
+
+def test_a_frontend_change_does_not_reach_the_python_consumers_of_the_apps_package(
+    workspace: Path,
+) -> None:
+    _write_chat_consumer(workspace)
+
+    frontend = _select(workspace, ["system/apps/chat/frontend/src/main.ts"])
+    backend = _select(workspace, ["system/apps/chat/imbue/chat/server.py"])
+
+    assert "uv run pytest system/apps/shelf" not in _command_lines(frontend)
+    assert _CHAT_WHOLE_WITH_BROWSER in _command_lines(frontend)
+    assert "uv run pytest system/apps/shelf" in _command_lines(backend)
+
+
+def _write_chat_consumer(workspace: Path) -> None:
+    write_repo_file(
+        workspace,
+        "system/apps/shelf/pyproject.toml",
+        '[project]\nname = "shelf"\ndependencies = ["chat"]\n\n'
+        '[tool.hatch.build.targets.wheel]\npackages = ["src/shelf"]\n',
+    )
+    write_repo_file(workspace, "system/apps/shelf/src/shelf/__init__.py", "")
+    write_repo_file(
+        workspace, "system/apps/shelf/src/shelf/shelf_test.py", "def test_shelf() -> None:\n    pass\n"
+    )
+    commit_everything(workspace, "an app that depends on the chat app")
 
 
 def test_a_path_an_app_manifest_references_runs_that_app(workspace: Path) -> None:
@@ -341,6 +431,24 @@ def test_an_upgraded_lock_entry_runs_the_members_that_depend_on_it(workspace: Pa
         _CHAT_WHOLE_WITHOUT_BROWSER,
         _CHAT_TYPE_CHECK,
     ]
+
+
+def test_an_upgrade_runs_the_suites_the_override_file_records_for_a_dependent_members_files(
+    workspace: Path,
+) -> None:
+    overrides = workspace / "system/config/test_selection_overrides.toml"
+    write_repo_file(
+        workspace,
+        "system/config/test_selection_overrides.toml",
+        overrides.read_text()
+        + '\n[[consumer]]\npaths = ["system/libs/midlib/src/midlib/*.py"]\n'
+        + 'suites = ["system/scripts/agy_shim"]\nnote = "runs midlib as a subprocess"\n',
+    )
+    commit_everything(workspace, "a subprocess consumer of midlib")
+
+    selection = _select(workspace, ["uv.lock"], (selection_lock("2.0"), selection_lock("2.1")))
+
+    assert "uv run pytest system/scripts/agy_shim" in _command_lines(selection)
 
 
 def test_a_lock_that_only_adds_packages_runs_nothing_beyond_the_adder(workspace: Path) -> None:

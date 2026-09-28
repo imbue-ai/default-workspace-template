@@ -242,7 +242,7 @@ def build_selection_workspace(repo_root: Path) -> None:
     write_repo_file(
         repo_root,
         "system/scripts/banner_test.py",
-        '# Exercises system/scripts/banner.txt.\ndef test_banner() -> None:\n    pass\n',
+        'BANNER = "system/scripts/banner.txt"\n\n\ndef test_banner() -> None:\n    pass\n',
     )
     write_repo_file(repo_root, "system/scripts/banner.txt", "hello\n")
     write_repo_file(repo_root, "system/scripts/shape_testing.py", "SHAPE = 1\n")
