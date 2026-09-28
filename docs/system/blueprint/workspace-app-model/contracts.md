@@ -175,7 +175,7 @@ An app whose fetch fails keeps its last known list with every instance's status 
 
 ## 6. Shell routes the browser calls
 
-Page and app routes: `GET /` and the SPA catch-all, `/assets/<path>`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start` (the app-level verbs, supervisord via the shell; the tab menu offers them only on a single-instance app's tab, and the rail's per-app row menu offers them for every stoppable app), `/api/ws`.
+Page and app routes: `GET /` and the SPA catch-all, `/assets/<path>`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start`, `POST /api/apps/<name>/quit` (the app-level verbs, supervisord via the shell; the menus offer Quit alone, on a single-instance app's tab and on the rail's per-app row menu for every stoppable app, and stop and start stay for agents), `/api/ws`.
 `/plugins/<basename>` is the chat app's route, served from the chat's own origin; the shell has none.
 `POST /api/layout/broadcast` is the agent-facing op route of section 12 (loopback only).
 

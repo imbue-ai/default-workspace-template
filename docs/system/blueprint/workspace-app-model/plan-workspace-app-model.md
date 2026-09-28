@@ -273,9 +273,9 @@ The tab menu and the rail row build from one definition keyed by capabilities, n
 - Close: undock in this client. When this was the last reference to a `referenced` instance, the shell also calls the app's Delete.
 - Delete: shown for `explicit` instances of `instances = true` apps; calls the app. The tab disappears when the app's list no longer carries the instance.
 - Stop and Start the instance: shown when the instance reports `stoppable` (a chat's agent, a browser's Chromium, a terminal's session); calls the app, which keeps the instance and answers it as `stopped` until started again.
-- Stop and Start the app: supervisord via the shell, for apps with a `program` that are not `critical`. On a single-instance app's tab, where the two coincide; for every other app, on the rail's per-app row menu (the app's presence in a view), never on an instance's tab.
+- Quit the app: closes every window of the app and stops its program, supervisord via the shell, for apps with a `program` that are not `critical` (the stop-when-no-windows spec, Part E). On a single-instance app's tab, where the two coincide; for every other app, on the rail's per-app row menu (the app's presence in a view), never on an instance's tab.
 
-A stopped app's tabs render a placeholder with a Start button; instances of a stopped app show `stopped`. A stopped instance of a running app keeps its page (a stopped chat's transcript stays readable; the browser's viewer shows a stopped overlay with a Start button).
+A stopped stoppable app's tabs keep their page, which the shell's parker answers with a loading page until the app is up; the tabs of a stopped app the workspace cannot start render a placeholder with no button. Instances of a stopped app show `stopped`. A stopped instance of a running app keeps its page (a stopped chat's transcript stays readable; the browser's viewer shows a stopped overlay with a Start button).
 
 ### 6.5 `layout.py`
 
