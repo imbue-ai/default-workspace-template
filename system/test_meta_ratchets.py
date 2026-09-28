@@ -342,10 +342,13 @@ def _live_prose_files() -> list[Path]:
             continue
         if not path.is_file():
             continue
-        # Skip symlinks into system/vendor/ (e.g. the docs/system/style_guide.md
-        # link): vendored prose is exempt by path via _LIVE_PROSE_EXEMPT_PARTS,
-        # and reaching the same bytes through a link does not make them this
-        # template's prose to govern.
+        # Skip symlinks whose targets live outside the live tree (e.g. the
+        # docs/system/style_guide.md link into system/vendor/). Vendored prose
+        # is already exempt by path via _LIVE_PROSE_EXEMPT_PARTS; reaching the
+        # same bytes through a link does not make them this template's prose to
+        # govern. Resolved rather than inferred from is_file(), which only
+        # excluded this link back when its target path was stale and it
+        # resolved to nothing.
         if _VENDORED_DIR in path.resolve().parents:
             continue
         files.append(path)
