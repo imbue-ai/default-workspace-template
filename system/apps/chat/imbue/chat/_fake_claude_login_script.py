@@ -17,6 +17,7 @@ state = "fake-state"
 redirect = urllib.parse.quote(f"http://localhost:{port}/callback", safe="")
 url = f"https://claude.ai/oauth/authorize?code=true&client_id=c&redirect_uri={redirect}&state={state}"
 
+
 class Callback(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
@@ -29,6 +30,7 @@ class Callback(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
 
 server.RequestHandlerClass = Callback
 server.succeeded = False
