@@ -103,7 +103,7 @@ export function squiggleMarkup(glyphIndex: number, color: string | null, size: n
 }
 
 // The CIE L* at which black ink stops beating white ink on a tile of that
-// lightness. Mirrors the minds chrome's titlebar recipe
+// lightness. Mirrors the Imbue Studio chrome's titlebar recipe
 // (`lch(from var(--titlebar-bg) calc((49.44 - l) * infinity) 0 0)` in the
 // shell's static/app.css), so a desktop's tile and the window chrome around it
 // flip at exactly the same point.

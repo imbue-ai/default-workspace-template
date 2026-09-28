@@ -41,7 +41,7 @@ it will be skipped when the machine is off.
 ## Timezone: confirm it before scheduling anything
 
 The container's clock is set to the **user's local timezone at each boot** (the
-bootstrap fetches it from the minds app on the user's machine, and re-applies the
+bootstrap fetches it from the Imbue Studio app on the user's machine, and re-applies the
 last zone it set, from `data/.state/user_timezone`, when that fetch fails). But the user may
 have moved since boot, so **when the user asks to schedule something, re-check
 their current timezone first**:

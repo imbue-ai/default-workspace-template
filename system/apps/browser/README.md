@@ -17,7 +17,7 @@ background agent, which is its own chat -- or the human).
   the other way (see `videopipe.py` / `audiopipe.py` / `mediastream.py`). Each browser
   is addressed by NAME: daemon-minted ones are numbered `browser-<N>` (shown as
   "Browser N" in the workspace UI -- the same display-name/canonical-name pairing
-  chats and minds hosts use), while browsers created by older builds keep their
+  chats and Imbue Studio hosts use), while browsers created by older builds keep their
   random english names. Closing a browser retires its name and deletes its
   profile, which is what frees the number for a later create; the fleet starts
   empty and there is no default browser.

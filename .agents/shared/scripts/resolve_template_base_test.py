@@ -160,7 +160,7 @@ def test_the_origin_is_this_workspaces_own_marker_not_an_ancestors(
 
 
 def test_an_update_self_merge_does_not_move_the_origin(tmp_path: Path) -> None:
-    """Where the mind started never changes; only the base it is on does."""
+    """Where the agent started never changes; only the base it is on does."""
     repo, template, initial = _new_workspace(tmp_path)
     _git(repo, "checkout", "-q", "-b", "upstream", template)
     upstream = _commit(repo, "system/release_two.py", "Template release two")
@@ -188,7 +188,7 @@ def test_find_template_base_takes_the_newest_marker() -> None:
         "eee5555\tfff6666\tInitial workspace commit",
     ]
     # `--origin` takes the newest `Initial workspace commit` instead, ignoring
-    # the merges entirely: where the mind started, not the base it is on now.
+    # the merges entirely: where the agent started, not the base it is on now.
     assert resolve_template_base.find_template_base(log) == "up09999"
 
 

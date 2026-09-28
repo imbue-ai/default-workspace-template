@@ -123,7 +123,7 @@ def _visible_text(content: str) -> str:
     return content[: match.start()].rstrip()
 
 
-# When a latchkey permission request is resolved, minds injects a plain user message
+# When a latchkey permission request is resolved, Imbue Studio injects a plain user message
 # announcing the outcome, tagged machine-readably by ``format_resolution_notice`` in the
 # mngr repo's ``latchkey/handlers/messaging.py``: "(resolution: granted, request_id: <id>)".
 # The tag is the classification contract -- no reading of the handler-authored English.
@@ -133,7 +133,7 @@ _RESOLUTION_TAG_RE = re.compile(r"\(resolution:\s*(granted|denied|error),\s*requ
 # suffix); recognise them loosely so historical transcripts keep their verdicts hidden
 # and classified. New notices never take this path.
 # CLEANUP: remove these prose fallbacks once no live workspace transcript predates the
-# tagged notices (minds desktop clients older than embed contract v3).
+# tagged notices (Imbue Studio desktop clients older than embed contract v3).
 _RESOLUTION_GRANTED_RE = re.compile(r"^Your\b.*\brequest\b.*\bwas granted\b")
 _RESOLUTION_DENIED_RE = re.compile(r"^Your\b.*\brequest\b.*\bwas denied\b")
 _RESOLUTION_ERROR_RE = re.compile(r"^Your\b.*\brequest\b.*\bcould not be completed\b")

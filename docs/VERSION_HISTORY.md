@@ -17,5 +17,5 @@ and Templates line ends in the commit it was cut from.
 
 ## Adopted templates
 
-Each template this mind has adopted and the version it is on;
+Each template this agent has adopted and the version it is on;
 `update-installed-template` appends here when it pulls a newer version.
