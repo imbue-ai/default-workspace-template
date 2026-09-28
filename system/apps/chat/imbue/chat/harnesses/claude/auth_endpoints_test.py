@@ -51,7 +51,6 @@ def isolated_claude_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     config_dir = tmp_path / "claude-config"
     config_dir.mkdir()
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
     return config_dir
 
 
