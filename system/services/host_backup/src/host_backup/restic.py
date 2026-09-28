@@ -22,7 +22,7 @@ _RESOURCE_LIMIT_ENV: Final[Mapping[str, str]] = {
     "GOMAXPROCS": "1",
     "RESTIC_READ_CONCURRENCY": "1",
 }
-# Tags the minds backup restore stamps on its safety + restored-state snapshots
+# Tags the Imbue Studio backup restore stamps on its safety + restored-state snapshots
 # (kept in sync with the desktop client's restore script). The retention forget
 # preserves any snapshot carrying either so a recent "Restored from ..." timeline
 # marker survives the normal hourly/daily thinning; the runner ages old ones out.

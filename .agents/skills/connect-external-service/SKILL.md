@@ -18,9 +18,9 @@ explain; do not ask them to choose a mechanism.
 | # | Method | Workable when | What you say | Read |
 |---|---|---|---|---|
 | 1 | **Builtin latchkey service** | `latchkey services list` names the service, possibly under a name other than the product's (Notion is `notion-mcp`); `latchkey services info <name>` gives auth options and status. | "I'll use your connected Slack account." | `references/latchkey.md` |
-| 2 | **Custom latchkey service, with a key** | The API is HTTPS and takes a key the user can copy from their account settings as one header (`Authorization: Bearer <token>`, or a named header via `payload.header`). A key that goes in the query string, a signature scheme, or two values that must be combined are NOT workable here. | "I'll ask you to approve a connection to api.example.com and paste its API key into the approval window; the key stays in Mind's credential store." | `references/latchkey.md`, "Custom services" |
+| 2 | **Custom latchkey service, with a key** | The API is HTTPS and takes a key the user can copy from their account settings as one header (`Authorization: Bearer <token>`, or a named header via `payload.header`). A key that goes in the query string, a signature scheme, or two values that must be combined are NOT workable here. | "I'll ask you to approve a connection to api.example.com and paste its API key into the approval window; the key stays in Imbue Studio's credential store." | `references/latchkey.md`, "Custom services" |
 | 3 | **Official MCP server** | The service itself publishes an MCP server: its docs link to it, or it lives in the service's own GitHub organization. Local or hosted, key or OAuth sign-in, all equally fine. Anyone else's server is never run. | "Example has its own connector, so I'll set that up; it needs you to sign in to Example once." | `references/mcp.md` |
-| 4 | **Custom latchkey service, with a sign-in** | No key works (the documented API needs a registered OAuth app, or there is none), but the service's own website loads its data from endpoints its sign-in authorises: `cookie-capture` when the session cookie is the credential, `token-capture` when the page fetches a bearer token from an endpoint of its own. | "I'll ask you to sign in to Example once, in a window Mind opens on your computer; your session stays in Mind's credential store." | `references/latchkey.md`, "Signing in instead of a key" |
+| 4 | **Custom latchkey service, with a sign-in** | No key works (the documented API needs a registered OAuth app, or there is none), but the service's own website loads its data from endpoints its sign-in authorises: `cookie-capture` when the session cookie is the credential, `token-capture` when the page fetches a bearer token from an endpoint of its own. | "I'll ask you to sign in to Example once, in a window Imbue Studio opens on your computer; your session stays in Imbue Studio's credential store." | `references/latchkey.md`, "Signing in instead of a key" |
 | 5 | **Direct API** | An official SDK, CLI, or documented HTTP API takes a key the user can copy from their account settings. An API that needs an OAuth app registration is workable too, but offered as the more technical option, with row 6 the default. | "Example has an API; I'll ask you for its key and call it from here." | `references/direct-api.md` |
 | 6 | **Browser** | Always. Sign-ins, CAPTCHAs, and two-factor prompts go to the user through `handoff`. | "I'll drive a browser you can watch and take over." | the `agentic-browser-fleet` skill |
 
@@ -44,7 +44,7 @@ explanation, try the row, and move to the next one when it actually fails.
   (registering an OAuth app for row 5 versus driving the browser for row 6),
   default to the browser and mention the OAuth alternative in one line.
 - **A credential value never enters a command, a file you write, or your prose.**
-  Rows 1, 2 and 4 keep the value in Mind's credential store and inject it at the
+  Rows 1, 2 and 4 keep the value in Imbue Studio's credential store and inject it at the
   gateway. Rows 3 and 5 take a key through the **secret card**: you run
   `request_secret.py` (below), the user types the value into the card, and the
   chat app writes `data/.secrets/<name>.env`. You never see the value; you name
@@ -68,7 +68,7 @@ explanation, try the row, and move to the next one when it actually fails.
   has no chat to show a card in; it reports the need in its finish report and the
   lead requests it.
 - **No chat app, no card.** `request_secret.py` fails plainly when it cannot
-  reach the chat app (an agent created outside Mind, a headless run). The last
+  reach the chat app (an agent created outside Imbue Studio, a headless run). The last
   resort is to ask the user to place `data/.secrets/<name>.env` from a terminal
   themselves, with one `NAME='value'` line per variable and `chmod 600`.
 - **Look for the newest documentation of the public API online**, whichever row

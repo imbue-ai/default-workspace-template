@@ -234,7 +234,7 @@ def test_a_backoff_mngr_that_timed_out_is_a_failure_not_this_scripts_absence(
     fake_mngr: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
     """mngr exits 2 on a timeout, and 2 out of this script means it never ran or never
-    understood the request -- what the Minds app reads as "this template has no such script"
+    understood the request -- what Imbue Studio reads as "this template has no such script"
     before running its own `mngr`. Pass mngr's 2 through and a timed-out backoff create is
     answered with a second create of the same chat."""
     registry = tmp_path / "apps.toml"

@@ -4,7 +4,7 @@
 # own flags).
 #
 # Scope: the scan runs `betterleaks dir` over the STAGING directory, which
-# holds exactly the files overlaid out of the live mind (the selected
+# holds exactly the files overlaid out of the live agent (the selected
 # --include / --data-include paths; the manifest files are generated after).
 # The clean template base is trusted, public, and never scanned -- its own
 # test fixtures legitimately contain placeholder token strings.

@@ -1,6 +1,6 @@
 ---
 name: update-self
-description: Safely pull updates from the upstream template repo (default target is the release the running Mind app was built against). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+description: Safely pull updates from the upstream template repo (default target is the release the running Imbue Studio app was built against). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
 ---
@@ -26,7 +26,7 @@ still wait for the user: an `--override` past the version ceiling (asked at
 launch, while they are present) and an update that cannot keep something they
 built (the Step 4 hold).
 
-The default target is **the release the Mind app driving this workspace was
+The default target is **the release the Imbue Studio app driving this workspace was
 built against**, and only that one: the template ships the code that app talks
 to, and no other pairing was verified. See `references/version-ceiling.md`. Once the target is resolved,
 the pass **re-points itself at the target version's own copy of this skill**
@@ -71,7 +71,7 @@ UPDATE_LEASE_ID=$(tk create "updating workspace" -t chore \
 
 then `tk start "$UPDATE_LEASE_ID"`.
 
-**Record the run for the Mind app** -- as soon as the lease is yours, so the
+**Record the run for the Imbue Studio app** -- as soon as the lease is yours, so the
 app can see a run is under way:
 
 ```bash
@@ -120,7 +120,7 @@ append `--override main` or `--override minds-v0.3.6`. The `|| exit 1` leaves a
 refusal's `error:` line as the last thing printed. The output carries `ref`,
 `kind`, `ceiling` and `exceeds_ceiling`; `main` resolves to `upstream/main`.
 Tell the user which version you are updating to, and never mention a release
-above `ceiling` that they did not ask for by name: the Mind app announces its
+above `ceiling` that they did not ask for by name: the Imbue Studio app announces its
 own updates.
 
 **If the command exits non-zero, stop.** Its single `error:` line says why no
@@ -140,7 +140,7 @@ record the verdict it calls for -- never resolve a ref by hand:
 **`"exceeds_ceiling": true`** means the user's `--override` names a version
 this app cannot vouch for. Do not dispatch on it silently: tell them what it
 risks and get an explicit go-ahead, unless the message that started this pass
-already carries that confirmation (the Mind app's "Update to a specific
+already carries that confirmation (the Imbue Studio app's "Update to a specific
 version" prompt says so). If they decline, record `run-status verdict REFUSED
 --detail "<the version they asked for, and that they chose not to attempt
 it>"` and end the pass. Details in `references/version-ceiling.md`.
@@ -203,7 +203,7 @@ they decline every option, record `run-status verdict REFUSED --detail "..."`.
 
 ### 3b. Launch
 
-Surface your own chat window first (the Mind app sends the user into this
+Surface your own chat window first (the Imbue Studio app sends the user into this
 workspace when it starts an update, and this conversation is where they should
 land). The command detaches a helper that retries until a client is there; it
 is best-effort, and a failure is not a reason to stop:
@@ -311,7 +311,7 @@ git branch -m mngr/update-self "$ARCHIVE" && echo "$ARCHIVE"
 ```
 
 Launch with the plain `worker` template, record the hand-off (from here until
-the worker reports this chat is idle, and naming the worker lets the Mind app
+the worker reports this chat is idle, and naming the worker lets the Imbue Studio app
 read the worker's liveness instead of "waiting for you"), then background-poll:
 
 ```bash

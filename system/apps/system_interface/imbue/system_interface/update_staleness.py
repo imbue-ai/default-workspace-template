@@ -14,7 +14,7 @@ agent.
 
 "No longer matches" is judged by *what this process runs*, not by raw HEAD
 equality. The workspace repo moves for plenty of reasons that leave this
-server perfectly current -- minds commit their ordinary work here constantly,
+server perfectly current -- agents commit their ordinary work here constantly,
 the apply's own version-history commit lands after the restart, and a
 frontend-only apply rebuilds the served bundle without restarting -- so a bare
 HEAD comparison would show the banner near-permanently and erode the trust the

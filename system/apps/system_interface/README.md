@@ -30,7 +30,7 @@ format. In brief:
   the whole of what the shell knows about what a window shows.
 - A **placement** is where one client keeps one window: its frame in fractions
   of the backdrop, whether it is snapped or maximized, whether it is
-  minimized, whether it is pulled out into a desktop window of the Mind app's
+  minimized, whether it is pulled out into a desktop window of the Imbue Studio app's
   own; the order is the stack. A **client** is one browser context,
   identified by a stored id, with an active desktop. Truth is shared,
   arrangement is scoped.
@@ -218,7 +218,7 @@ are in one app, not in the workspace.
 not the header: the shell (`profiles.py`) fetches `GET {broker_url}/users/<user_id>/profile`
 (public; `{"user_id", "display_name", "profile_picture_url"}`) with a 2 second bound,
 where `broker_url` is `SHARE_BROKER_URL` in `data/.secrets/share.env`, the
-file the minds desktop writes while the workspace is shared (read fresh on
+file the Imbue Studio desktop writes while the workspace is shared (read fresh on
 every miss; no file means no profiles). Each answer, and each failure, is
 cached for 5 minutes under `data/.state/presence/profiles/<user_id>.json`, so
 a connector outage costs one failed fetch per user per 5 minutes and no
@@ -386,7 +386,7 @@ header and checks that the module script comes back as JavaScript). Only then
 does it ask every open view to reload, through
 `system/scripts/refresh_workspace_view.py` (a `reload_system_interface` op on
 the loopback-only op route, which reloads the top-level page and every child
-frame, plus the minds app's own refresh endpoint). On any failure it reverts
+frame, plus the Imbue Studio app's own refresh endpoint). On any failure it reverts
 the merge as a forward revert commit, restores the pre-apply snapshots it took
 before anything destructive ran, and re-confirms health; the exit code reports
 the outcome (`0` applied, `2` rolled back, `3` emergency, `1` precondition).
@@ -514,7 +514,7 @@ this order:
 
 "Affects what this process runs" is the whole design (see `update_staleness.py`
 for the rules and their test table). A bare HEAD comparison would show the
-banner near-permanently -- minds commit their ordinary work in this repo
+banner near-permanently -- agents commit their ordinary work in this repo
 constantly, the apply's own version-history commit lands after the restart, and
 a frontend-only apply rebuilds the served bundle without restarting -- so the
 check diffs the startup HEAD against the current one and reports only when a
