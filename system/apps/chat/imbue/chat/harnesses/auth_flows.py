@@ -600,7 +600,7 @@ class AuthFlowService:
                 if key_provider not in known:
                     raise FlowError(f"{session.lane.provider_name} has no key provider {key_provider!r}")
             # Asked of the provider before anything is written: the harnesses' own probes only
-            # see that a key is there, so a mistyped one used to be saved and fail the first turn.
+            # see that a key is there, so a mistyped one would otherwise be saved and fail the first turn.
             checked = _key_to_check(method.sink, session.lane, api_key, key_provider)
             key_check = KeyCheck.UNCHECKED if checked is None else self._check_key(*checked)
             if checked is not None and key_check is KeyCheck.REJECTED:
