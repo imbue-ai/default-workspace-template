@@ -191,6 +191,18 @@ def _chat_not_found_response(chat_id: str) -> Response:
     return json_response(error.model_dump(), status_code=404)
 
 
+def _chat_has_no_agent_yet_response(chat_id: str) -> Response:
+    """A chat that exists but has not launched its agent yet.
+
+    A seeded chat has no ``active_agent_id`` until its first message launches one, so a lookup
+    for its agent legitimately comes back empty. That is "not ready", not "no such chat": 404
+    tells a caller to stop, and the caller that matters here -- the eval harness's bring-up,
+    which posts a model choice straight after creating the chat -- does stop, ending the run.
+    """
+    failure = ErrorResponse(detail=f"Chat '{chat_id}' has no agent yet; try again shortly.")
+    return json_response(failure.model_dump(), status_code=503)
+
+
 def _agent_list_not_known_response() -> Response:
     failure = ErrorResponse(detail="The chat app has not read its agent list from mngr yet; try again shortly.")
     return json_response(failure.model_dump(), status_code=503)
@@ -690,14 +702,18 @@ def _set_model_choice_endpoint(chat_id: str) -> Response:
     model-choice broadcast so the frontend reconciles.
     """
     agent_manager: AgentManager = get_state().agent_manager
-    # In the seconds after a chat-app boot the agent list is not read yet, and every chat looks
-    # absent. Answering 404 there says "this chat does not exist", which a caller cannot retry;
-    # 503 says "not ready", which it can. Every other endpoint that looks a chat up guards this
-    # way -- this one did not, and a model switch posted during those seconds failed for good.
+    # Two ways this lookup comes back empty, and only one of them is permanent. The agent list
+    # may not be read yet, or the chat may exist while still waiting for the first message that
+    # launches its agent. Both are "try again shortly"; answering 404 for either tells the
+    # caller to stop, and the eval harness's bring-up -- which posts a model choice right after
+    # creating the chat -- did stop, ending the run before a word was said.
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
+        parsed = parse_chat_ref(chat_id)
+        if parsed is not None and agent_manager.get_chat_segments(parsed) is not None:
+            return _chat_has_no_agent_yet_response(chat_id)
         return _chat_not_found_response(chat_id)
     converging = _refuse_while_converging(chat_id)
     if converging is not None:
