@@ -166,7 +166,7 @@ def build_selection_workspace(repo_root: Path) -> None:
     (``corelib``) that another library (``midlib``) and the chat app depend on, an app
     (``notes``) that depends on ``midlib`` and references a script, the chat app as its own
     pytest root with a browser test and a frontend, the shared ``ui`` npm library that
-    frontend depends on, flat scripts and their tests, a skill, and the repo guards."""
+    frontend depends on, a flat script and its test, a skill, and the repo guards."""
     init_git_repository(repo_root)
     write_repo_file(repo_root, "pyproject.toml", _SELECTION_ROOT_PYPROJECT)
     write_repo_file(repo_root, "conftest.py", "")
@@ -231,30 +231,12 @@ def build_selection_workspace(repo_root: Path) -> None:
     # Flat scripts, a skill, and the repo guards
     write_repo_file(repo_root, "system/scripts/forward_port.py", "PORT = 1\n")
     write_repo_file(repo_root, "system/scripts/forward_port_test.py", "def test_port() -> None:\n    pass\n")
-    write_repo_file(repo_root, "system/scripts/agy_shim/agy_shim.sh", "#!/bin/sh\n")
-    write_repo_file(repo_root, "system/scripts/agy_shim/agy_shim_test.py", "def test_shim() -> None:\n    pass\n")
-    write_repo_file(repo_root, "system/scripts/create_gate.py", "GATE = 1\n")
-    write_repo_file(repo_root, "system/scripts/test_create_gate.py", "def test_gate() -> None:\n    pass\n")
     for guard in SELECTION_ALWAYS_RUN_GUARDS:
         write_repo_file(repo_root, guard, "def test_guard() -> None:\n    pass\n")
-    write_repo_file(
-        repo_root,
-        "system/scripts/banner_test.py",
-        'BANNER = "system/scripts/banner.txt"\n\n\ndef test_banner() -> None:\n    pass\n',
-    )
-    write_repo_file(repo_root, "system/scripts/banner.txt", "hello\n")
-    write_repo_file(repo_root, "system/scripts/shape_testing.py", "SHAPE = 1\n")
-    write_repo_file(
-        repo_root,
-        "system/scripts/shape_test.py",
-        "from shape_testing import SHAPE\n\n\ndef test_shape() -> None:\n    assert SHAPE\n",
-    )
     write_repo_file(repo_root, "system/test_layout.py", "def test_layout() -> None:\n    pass\n")
     write_repo_file(repo_root, ".agents/skills/refresh/SKILL.md", "# refresh\n")
-    write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "from corelib.core import VALUE\n")
+    write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "VALUE = 1\n")
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n")
-    write_repo_file(repo_root, ".mngr/settings.toml", "")
-    write_repo_file(repo_root, "catalog/templates.json", "[]\n")
     commit_everything(repo_root, "workspace")
 
 
