@@ -331,7 +331,11 @@ class AppManifest(FrozenModel):
     name: AppName = Field(description="The registered app name")
     display_name: DisplayName = Field(description="What users see")
     icon: IconPath | None = Field(default=None, description="The icon file, relative to the manifest; required unless internal")
-    critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
+    critical: bool = Field(
+        default=False,
+        description="No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the "
+        "update apply",
+    )
     stop_when_no_windows: bool = Field(
         default=False,
         description="Whether the shell may stop the app's program once no window on any desktop shows it "
