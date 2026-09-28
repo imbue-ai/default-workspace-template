@@ -615,14 +615,8 @@ def _agy_account(tmp_path: Path, service: AuthFlowService) -> tuple[str, Path]:
     return account.id, token
 
 
-def test_a_re_auth_is_judged_on_the_new_sign_in_not_the_old_credential(tmp_path: Path) -> None:
-    """The one thing re-auth exists for, and it could not fail.
-
-    A re-auth keeps the folder, and three of the four promote probes are presence checks --
-    `claude auth status --json` reports loggedIn for a bogus key, and so do codex and pi. So a
-    user whose account died, who hit re-auth and then declined in the browser, was told
-    "signed in again" on the strength of the credential that was already there.
-    """
+def test_a_re_auth_leaves_the_live_credential_in_place(tmp_path: Path) -> None:
+    """The account keeps working while its owner signs in again; the CLI writes over it."""
     service = AuthFlowService.create(
         key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
     )
@@ -632,12 +626,68 @@ def test_a_re_auth_is_judged_on_the_new_sign_in_not_the_old_credential(tmp_path:
     service._spawner = lambda *_a, **_k: process
     service.start("google", "oauth", account_id=account_id)
 
-    assert not token.exists(), "the old credential is still there for the probe to answer with"
+    assert token.read_text() == "live-token"
 
 
-def test_an_abandoned_re_auth_puts_the_old_credential_back(tmp_path: Path) -> None:
-    """Taking it away is only safe if every exit restores it: the credential the account had
-    is more use than none, and the user asked to REPLACE it, not to lose it."""
+def _finished_claude(output: str, exitstatus: int | None) -> FakePexpectProcess:
+    process = FakePexpectProcess(
+        [(0, f"Browser didn't open? Use the url below\r\n{_CLAUDE_MANUAL_URL}")],
+        drain_chunks=[output],
+        exitstatus=exitstatus,
+    )
+    process.exit()
+    return process
+
+
+@pytest.mark.parametrize(
+    ("output", "exitstatus", "state"),
+    [
+        pytest.param("Login successful.\r\n", 0, FlowState.OK, id="success-line-and-clean-exit"),
+        pytest.param("", 0, FlowState.FAILED, id="clean-exit-without-the-line"),
+        pytest.param("Login successful.\r\n", 1, FlowState.FAILED, id="line-then-an-error-exit"),
+        pytest.param("Login successful.\r\n", None, FlowState.FAILED, id="killed"),
+    ],
+)
+def test_claude_decides_its_own_sign_in(tmp_path: Path, output: str, exitstatus: int | None, state: FlowState) -> None:
+    """The probe is never asked: it would also answer yes for the credential a re-auth replaces."""
+    probed: list[HarnessType] = []
+
+    def probe(harness: HarnessType, _path: Path) -> SignedIn:
+        probed.append(harness)
+        return SignedIn.YES
+
+    process = _finished_claude(output, exitstatus)
+    service = AuthFlowService.create(
+        key_checker=_accept_key,
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: process,
+        probe=probe,
+    )
+    started = service.start("anthropic", "subscription")
+
+    assert service.poll(started.flow_id).state is state
+    assert probed == []
+
+
+def test_a_claude_sign_in_still_running_waits(tmp_path: Path) -> None:
+    process = FakePexpectProcess(
+        [(0, f"Browser didn't open? Use the url below\r\n{_CLAUDE_MANUAL_URL}")],
+        drain_chunks=["Login successful.\r\n"],
+    )
+    service = AuthFlowService.create(
+        key_checker=_accept_key,
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: process,
+        probe=lambda *_a: SignedIn.YES,
+    )
+    started = service.start("anthropic", "subscription")
+
+    assert service.poll(started.flow_id).state is FlowState.PENDING
+
+
+def test_an_abandoned_re_auth_leaves_the_credential_as_it_was(tmp_path: Path) -> None:
     service = AuthFlowService.create(
         key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
     )

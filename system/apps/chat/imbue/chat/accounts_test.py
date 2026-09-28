@@ -13,10 +13,8 @@ import pytest
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import INDEX_VERSION
-from imbue.chat.accounts import REAUTH_BACKUP_DIRNAME
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import accounts_root
-from imbue.chat.accounts import clear_reauth_backup
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import discard_account_dir
@@ -27,7 +25,6 @@ from imbue.chat.accounts import reconcile
 from imbue.chat.accounts import regenerate_create_defaults
 from imbue.chat.accounts import rename_account
 from imbue.chat.accounts import resolve_account
-from imbue.chat.accounts import save_reauth_backup
 from imbue.chat.accounts import set_default_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.create_defaults import create_defaults_path
@@ -375,70 +372,17 @@ def test_committing_an_account_onto_a_different_lane_is_refused(tmp_path: Path) 
     assert resolve_account(account_id, tmp_path).lane == "anthropic"
 
 
-def test_an_interrupted_reauth_has_its_credential_restored_at_boot(tmp_path: Path) -> None:
-    """The window where the only copy was in process memory is now survivable.
-
-    A re-auth deletes the working credential before driving the CLI. If the process dies in
-    that window the account keeps a folder -- so nothing notices -- and every chat bound there
-    fails its next turn while the picker shows it as healthy.
-    """
+def test_a_credential_parked_by_an_older_build_is_removed_at_boot(tmp_path: Path) -> None:
     account_id, _ = mint_account_dir(tmp_path)
     commit_account(account_id, "anthropic", "Anthropic", tmp_path)
-    folder = account_dir(account_id, tmp_path)
-    credential = folder / ".credentials.json"
-    credential.write_bytes(b'{"real": true}')
-
-    # What `start()` does: park, then unlink.
-    save_reauth_backup(account_id, {credential: credential.read_bytes()}, tmp_path)
-    credential.unlink()
-    assert not credential.exists()
+    parked = account_dir(account_id, tmp_path) / ".minds-reauth-backup"
+    parked.mkdir()
+    (parked / ".credentials.json").write_bytes(b"old")
 
     reconcile(tmp_path)
-    assert credential.read_bytes() == b'{"real": true}'
-    # And the park is gone, so a later boot cannot put it back over a newer credential.
-    assert not (folder / REAUTH_BACKUP_DIRNAME).exists()
 
-
-def test_a_reauth_backup_of_a_file_that_did_not_exist_removes_it_again(tmp_path: Path) -> None:
-    """Restoring "it was absent" means deleting, not writing an empty file.
-
-    A first sign-in on a freshly minted folder has no credential to save; if the flow then
-    dies, boot must not leave a zero-byte file that the harness would try to parse.
-    """
-    account_id, _ = mint_account_dir(tmp_path)
-    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
-    folder = account_dir(account_id, tmp_path)
-    credential = folder / ".credentials.json"
-
-    save_reauth_backup(account_id, {credential: None}, tmp_path)
-    credential.write_bytes(b"half-written")
-
-    reconcile(tmp_path)
-    assert not credential.exists()
-
-
-def test_clearing_a_reauth_backup_stops_boot_undoing_a_commit(tmp_path: Path) -> None:
-    account_id, _ = mint_account_dir(tmp_path)
-    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
-    folder = account_dir(account_id, tmp_path)
-    credential = folder / ".credentials.json"
-    credential.write_bytes(b"old")
-
-    save_reauth_backup(account_id, {credential: b"old"}, tmp_path)
-    credential.write_bytes(b"new")
-    clear_reauth_backup(account_id, tmp_path)
-
-    reconcile(tmp_path)
-    assert credential.read_bytes() == b"new"
-
-
-def test_a_kept_reauth_backup_does_not_make_a_deleted_account_look_like_debris(tmp_path: Path) -> None:
-    """`reconcile` removes folders with no row. A parked backup must not save one from that."""
-    account_id, _ = mint_account_dir(tmp_path)
-    folder = account_dir(account_id, tmp_path)
-    (folder / REAUTH_BACKUP_DIRNAME).mkdir()
-    reconcile(tmp_path)
-    assert not folder.exists()
+    assert not parked.exists()
+    assert account_dir(account_id, tmp_path).is_dir()
 
 
 def test_pinning_a_default_survives_later_launches_and_sign_ins(tmp_path: Path) -> None:

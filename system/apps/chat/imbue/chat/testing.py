@@ -546,8 +546,11 @@ class FakePexpectProcess:
         expect_script: Sequence[tuple[int, str]],
         drain_chunks: Sequence[str] = (),
         is_alive: bool = True,
+        exitstatus: int | None = 0,
     ) -> None:
         assert expect_script, "expect_script must have at least one entry"
+        # What pexpect reports once the process has exited: its exit code, or None if a signal ended it.
+        self.exitstatus = exitstatus
         self._script = list(expect_script)
         # Scriptable so the "the CLI has exited" arms are reachable from tests: process exit
         # is the only success signal codex's device flow has.
