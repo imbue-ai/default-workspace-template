@@ -13,6 +13,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.app_context import state_of
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
@@ -100,7 +101,7 @@ def test_an_app_with_no_windows_stops_after_the_grace_and_comes_back_on_a_reques
     assert fake_supervisor.statename_by_program["docs"] == "RUNNING"
 
     # A visit, then a window opened and closed: the app stops a grace period after the close and its port is parked.
-    shell = started_shell.config["SYSTEM_INTERFACE_STATE"].shell
+    shell = state_of(started_shell).shell
     shell.arrive_client(ClientId("laptop"), RequestIdentity(owner=True))
     window_id = _open_docs_window(client, "/a/")
     assert client.post(f"/api/desktops/home/windows/{window_id}/close").status_code == 204
@@ -129,7 +130,7 @@ def test_quit_closes_the_windows_and_stops_the_app_at_once(
     started_shell: Flask, fake_supervisor: FakeSupervisorServer, closed_port: int
 ) -> None:
     client = started_shell.test_client()
-    shell = started_shell.config["SYSTEM_INTERFACE_STATE"].shell
+    shell = state_of(started_shell).shell
     shell.arrive_client(ClientId("laptop"), RequestIdentity(owner=True))
     _open_docs_window(client, "/a/")
     _open_docs_window(client, "/b/")
