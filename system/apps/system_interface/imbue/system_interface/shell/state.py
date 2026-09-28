@@ -296,7 +296,7 @@ class ShellState(MutableModel):
         if launch_path.method is LaunchPathMethod.POST and not entry.is_running and self.lifecycle.is_enabled:
             is_stoppable = stoppable_program_of(entry, self.inventory.entries()) is not None
             if is_stoppable and not self.lifecycle.wake_and_wait(entry):
-                raise LaunchUnavailableError(f"{entry.row.name} did not come up in time for the launch")
+                raise LaunchUnavailableError(f"{entry.row.name} is stopped and could not be brought up for the launch")
         return resolve_launch_destination(
             entry, launch_path, params, client_id, desktop_id, window_path, self.launch_poster
         )

@@ -214,7 +214,7 @@ def test_a_post_launch_to_a_stopped_stoppable_app_wakes_it_and_waits_for_it_to_a
     never_up = built.model_copy_update(
         to_update(built.field_ref().lifecycle, _launch_waking_manager(built, started.append, lambda: next(ticks)))
     )
-    with pytest.raises(LaunchUnavailableError, match="did not come up in time"):
+    with pytest.raises(LaunchUnavailableError, match="could not be brought up"):
         never_up.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
     assert started == ["docs", "docs"] and len(posts) == 1
 
