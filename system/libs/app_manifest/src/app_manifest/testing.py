@@ -125,20 +125,6 @@ exclude = ["system/libs/ui"]
 addopts = ["--ignore=system/apps/chat"]
 """
 
-_SELECTION_OVERRIDES: Final[str] = """
-always_run = ["system/scripts/hook_wiring_test.py"]
-
-[[consumer]]
-paths = ["catalog/**"]
-suites = ["system/apps/notes"]
-note = "reads the catalog"
-
-[[integration]]
-test = "system/scripts/test_create_gate.py"
-paths = [".mngr/settings.toml"]
-note = "runs the real mngr create"
-"""
-
 _NOTES_MANIFEST: Final[str] = """
 name = "notes"
 display_name = "Notes"
@@ -168,8 +154,7 @@ def build_selection_workspace(repo_root: Path) -> None:
     (``corelib``) that another library (``midlib``) and the chat app depend on, an app
     (``notes``) that depends on ``midlib`` and references a script, the chat app as its own
     pytest root with a browser test and a frontend, the shared ``ui`` npm library that
-    frontend depends on, flat scripts with paired and unpaired tests, a skill whose script
-    imports ``corelib``, the repo guards, and an override file."""
+    frontend depends on, flat scripts and their tests, a skill, and the repo guards."""
     init_git_repository(repo_root)
     write_repo_file(repo_root, "pyproject.toml", _SELECTION_ROOT_PYPROJECT)
     write_repo_file(repo_root, "conftest.py", "")
@@ -238,7 +223,7 @@ def build_selection_workspace(repo_root: Path) -> None:
     write_repo_file(repo_root, "system/scripts/agy_shim/agy_shim_test.py", "def test_shim() -> None:\n    pass\n")
     write_repo_file(repo_root, "system/scripts/create_gate.py", "GATE = 1\n")
     write_repo_file(repo_root, "system/scripts/test_create_gate.py", "def test_gate() -> None:\n    pass\n")
-    write_repo_file(repo_root, "system/scripts/hook_wiring_test.py", "def test_wiring() -> None:\n    pass\n")
+    write_repo_file(repo_root, "system/scripts/agent_hook_wiring_test.py", "def test_wiring() -> None:\n    pass\n")
     write_repo_file(
         repo_root,
         "system/scripts/banner_test.py",
@@ -257,7 +242,6 @@ def build_selection_workspace(repo_root: Path) -> None:
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n")
     write_repo_file(repo_root, ".mngr/settings.toml", "")
     write_repo_file(repo_root, "catalog/templates.json", "[]\n")
-    write_repo_file(repo_root, "system/config/test_selection_overrides.toml", _SELECTION_OVERRIDES)
     commit_everything(repo_root, "workspace")
 
 

@@ -19,8 +19,8 @@ class ScopeComputationError(AppManifestError):
 
 
 class SuiteSelectionError(AppManifestError):
-    """The suite selection cannot be computed: the override file is malformed or names a missing suite,
-    or a diff selection would miss the working tree's uncommitted changes."""
+    """The suite selection cannot be computed: a file it reads cannot be read or parsed, or a diff
+    selection would miss the working tree's uncommitted changes."""
 
 
 class AppRegistrationError(AppManifestError):

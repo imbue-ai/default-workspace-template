@@ -1,24 +1,16 @@
 """Which test suites a set of changed paths calls for, and the commands that run them.
 
-A test runs when its subject changed: the package, skill directory, or script it sits beside,
-or something that subject consumes. Consumers come from what the workspace already declares --
-``pyproject.toml`` and ``package.json`` workspace dependencies, ``uv.lock``'s dependency edges,
-app manifests' ``[[references]]`` and supervisord wiring -- plus the test files that name a
-changed file, the workspace modules the unpackaged scripts import, and the override file in
-``system/config/`` for the consumers none of those can see. A small always-run set guards the
-repo-wide invariants any edit can break. A path nothing classifies falls back to the full root
-suite, which costs time. A consumer none of those sources shows (a script run as a subprocess,
-a service called over HTTP, a file one component writes and another reads) is not selected at
-all, which costs coverage; the override file is where such a consumer is recorded.
+Selection reads only what the workspace declares: a changed path inside a package or skill
+runs that unit's suite, plus the suites of the workspace members that depend on the package
+(``pyproject.toml``), the npm packages that depend on it (``package.json``), and the apps whose
+manifests reference it (``[[references]]``). ``uv.lock`` selects the members that depend on
+what it upgraded. A small always-run set guards the repo-wide invariants any edit can break.
+Any other path belongs to no declared unit, so it runs the full root suite.
 """
 
-import ast
 import json
-import re
 import shlex
-import tomllib
 from collections import defaultdict
-from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -27,24 +19,18 @@ from enum import auto
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Final
-from typing import assert_never
 
-import pathspec
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
-from loguru import logger
 from pydantic import Field
-from pydantic import ValidationError
 
-from app_manifest.errors import ScopeComputationError
 from app_manifest.errors import SuiteSelectionError
 from app_manifest.manifest import app_package_directory
 from app_manifest.primitives import RepoRelativePath
 from app_manifest.primitives import is_path_covered_by
 from app_manifest.scope import LoadedManifest
-from app_manifest.scope import find_wiring_sections
 from app_manifest.scope import list_changed_files
 from app_manifest.scope import list_tracked_files
 from app_manifest.scope import list_uncommitted_paths
@@ -64,13 +50,8 @@ from app_manifest.workspace_graph import python_consumers
 from app_manifest.workspace_graph import read_coverage_measured_units
 from app_manifest.workspace_graph import read_npm_packages
 from app_manifest.workspace_graph import read_own_root_units
-from app_manifest.workspace_graph import read_root_ignored_directories
 from app_manifest.workspace_graph import read_python_members
-
-OVERRIDES_PATH: Final[RepoRelativePath] = RepoRelativePath(
-    "system/config/test_selection_overrides.toml"
-)
-
+from app_manifest.workspace_graph import read_root_ignored_directories
 
 _PACKAGE_PARENT_DIRECTORIES: Final[tuple[str, ...]] = (
     "system/libs",
@@ -78,22 +59,21 @@ _PACKAGE_PARENT_DIRECTORIES: Final[tuple[str, ...]] = (
     "system/apps",
 )
 _SKILLS_DIRECTORY: Final[str] = ".agents/skills"
-# Directories of standalone scripts with no package around them, where a test pairs with the
-# script it covers by filename.
-_FLAT_SCRIPT_DIRECTORIES: Final[tuple[str, ...]] = (
-    "system/scripts",
-    ".agents/shared/scripts",
-)
-_SCRIPT_SUFFIXES: Final[tuple[str, ...]] = (".py", ".sh")
-_CONFTEST_FILENAME: Final[str] = "conftest.py"
 
 # Root files every root-collected test reads: the pytest and workspace configuration.
-_ROOT_CONFIG_FILES: Final[frozenset[str]] = frozenset({"pyproject.toml", _CONFTEST_FILENAME})
+_ROOT_CONFIG_FILES: Final[frozenset[str]] = frozenset({"pyproject.toml", "conftest.py"})
 _LOCKFILE: Final[RepoRelativePath] = RepoRelativePath("uv.lock")
 # ``system/*.py``: the repo-wide invariants, part of the always-run set.
 _GUARD_DIRECTORY: Final[str] = "system"
-_SUPERVISORD_CONF: Final[str] = "system/supervisord.conf"
-_SUPERVISORD_DROPIN_DIRECTORY: Final[str] = "system/supervisord.conf.d"
+# The cross-cutting system/scripts guards, run beside system/*.py for every change.
+_ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
+    "system/scripts/agent_hook_wiring_test.py",
+    "system/scripts/agent_guard_tool_scope_test.py",
+    "system/scripts/provision_guard_test.py",
+    "system/scripts/stdlib_only_scripts_test.py",
+    "system/scripts/tool_env_sync_test.py",
+    "system/scripts/claude_memory_settings_test.py",
+)
 
 # The npm workspace root, and the files there that every package's build and checks read.
 _NPM_ROOT_CONFIG_FILES: Final[frozenset[str]] = frozenset(
@@ -103,10 +83,6 @@ _NPM_ROOT_CONFIG_FILES: Final[frozenset[str]] = frozenset(
         "system/eslint.config.js",
         "system/tsconfig.base.json",
         "system/.prettierrc",
-        # The npm root's prebuild and what it sources: every bundle compiles in the assets it
-        # fetches.
-        "system/scripts/fetch_mngr_assets.sh",
-        "system/scripts/_mngr_git_auth.sh",
     }
 )
 _NPM_CHECK_SCRIPTS: Final[tuple[str, ...]] = ("test", "lint", "format:check")
@@ -123,7 +99,7 @@ _ALL_MARKERS_EXPRESSION: Final[str] = ""
 # only the whole suite can reach.
 _NO_COVERAGE_FLAG: Final[str] = "--no-cov"
 # A test file that drives a browser imports the library it drives it with.
-_BROWSER_TEST_LIBRARY: Final[str] = "playwright"
+_BROWSER_TEST_MARKERS: Final[tuple[str, ...]] = ("from playwright", "import playwright")
 
 # Where a markdown file is agent-run prose rather than documentation: mirrors the update-self
 # change classes (``.agents/skills/update-self/scripts/update_classification.py``).
@@ -135,12 +111,6 @@ _RUNTIME_PREFIXES: Final[tuple[str, ...]] = (
     "system/apps/",
 )
 _MARKDOWN_SUFFIX: Final[str] = ".md"
-
-# The calls that join their arguments into a path, as a test builds one from parts.
-_PATH_JOINING_CALLS: Final[frozenset[str]] = frozenset({"Path", "PurePosixPath", "joinpath", "join"})
-# A run of characters a file path is written with; a token naming a file carries a '.' or '/'.
-_PATH_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_.\-/]+")
-_PATH_GLOB_STYLE: Final[str] = "gitignore"
 # How many of a command's reasons its comment line spells out before summarizing the rest.
 _MAX_REASONS_SHOWN: Final[int] = 3
 
@@ -150,17 +120,14 @@ class ChangedPathClass(LowerCaseStrEnum):
 
     PACKAGE = auto()
     SKILL = auto()
-    PAIRED_SCRIPT = auto()
+    TEST_FILE = auto()
     GUARD = auto()
     LOCKFILE = auto()
     FRONTEND_PACKAGE = auto()
     MANIFEST_REFERENCE = auto()
-    WIRING = auto()
-    NAMED_BY_TEST = auto()
-    OVERRIDE = auto()
     ROOT_CONFIG = auto()
     DOCS = auto()
-    UNCLASSIFIED = auto()
+    UNOWNED = auto()
 
 
 class SuiteKind(LowerCaseStrEnum):
@@ -173,14 +140,6 @@ class SuiteKind(LowerCaseStrEnum):
     FULL_ROOT = auto()
     PYTEST = auto()
     TYPE_CHECK = auto()
-
-
-class UnitKind(LowerCaseStrEnum):
-    """What sort of directory owns a changed path."""
-
-    PACKAGE = auto()
-    SKILL = auto()
-    FLAT_SCRIPTS = auto()
 
 
 class SelectionReason(FrozenModel):
@@ -206,9 +165,7 @@ class ClassifiedPath(FrozenModel):
     """A changed path and every class it fell into."""
 
     path: RepoRelativePath = Field(description="The changed path")
-    classes: tuple[ChangedPathClass, ...] = Field(
-        description="Its classes; UNCLASSIFIED alone when none"
-    )
+    classes: tuple[ChangedPathClass, ...] = Field(description="Its classes")
 
 
 class SuiteSelection(FrozenModel):
@@ -216,55 +173,11 @@ class SuiteSelection(FrozenModel):
 
     commands: tuple[SuiteCommand, ...] = Field(description="What to run, in order")
     paths: tuple[ClassifiedPath, ...] = Field(description="Every changed path and its classes")
-    unclassified: tuple[RepoRelativePath, ...] = Field(
-        description="The paths nothing classified, which bring in the full root suite"
-    )
     is_full_root: bool = Field(
         description="Whether the full root suite replaces the root-collected commands"
     )
     notes: tuple[str, ...] = Field(
         description="Anything the selection could not settle, for the reader"
-    )
-
-
-class OwningUnit(FrozenModel):
-    """The directory whose tests own a changed path."""
-
-    kind: UnitKind = Field(description="What sort of directory it is")
-    directory: RepoRelativePath = Field(description="The directory")
-
-
-class ConsumerOverride(FrozenModel):
-    """A consumer the workspace declarations cannot see: paths whose change selects suites."""
-
-    paths: tuple[NonEmptyStr, ...] = Field(
-        description="gitignore-style globs of the paths it covers"
-    )
-    suites: tuple[RepoRelativePath, ...] = Field(
-        description="Suite directories or test files to run; empty when no suite beyond the always-run set can observe the paths"
-    )
-    note: NonEmptyStr = Field(description="Why these paths reach these suites")
-
-
-class IntegrationOverride(FrozenModel):
-    """A test that drives a real installed tool, and the paths whose change it can observe."""
-
-    test: RepoRelativePath = Field(description="The test file")
-    paths: tuple[NonEmptyStr, ...] = Field(
-        description="gitignore-style globs of the paths that select it"
-    )
-    note: NonEmptyStr = Field(description="What real tool it drives")
-
-
-class SelectionOverrides(FrozenModel):
-    """The hand-kept part of the mapping; a table the file leaves out is empty."""
-
-    always_run: tuple[RepoRelativePath, ...] = Field(
-        default=(), description="Cross-cutting guards run for every diff, beside system/*.py"
-    )
-    consumer: tuple[ConsumerOverride, ...] = Field(default=(), description="Non-import consumers")
-    integration: tuple[IntegrationOverride, ...] = Field(
-        default=(), description="Real-tool integration tests"
     )
 
 
@@ -276,7 +189,6 @@ class RepoLayout(FrozenModel):
     test_files: tuple[str, ...] = Field(
         description="Every tracked test file some suite collects, in path order"
     )
-    test_texts: Mapping[str, str] = Field(description="Each test file's text")
     browser_test_files: frozenset[str] = Field(
         description="The own-root test files that drive a browser"
     )
@@ -289,14 +201,10 @@ class RepoLayout(FrozenModel):
     python_members: tuple[PythonMember, ...] = Field(description="The uv workspace members")
     npm_packages: tuple[NpmPackage, ...] = Field(description="The npm workspace packages")
     manifests: tuple[LoadedManifest, ...] = Field(description="The app manifests that load")
-    wiring_owners: Mapping[str, tuple[str, ...]] = Field(
-        description="Each supervisord config file and the app directories with blocks in it"
-    )
-    overrides: SelectionOverrides = Field(description="The override file")
 
 
 class _PytestRequest(FrozenModel):
-    """A suite, or some of its files, that a changed path calls for."""
+    """A suite, or one of its files, that a changed path calls for."""
 
     root: str = Field(description="The pytest root the command runs from")
     group: str = Field(description="The unit the files belong to; one command per group")
@@ -317,7 +225,7 @@ class _FrontendRequest(FrozenModel):
 
 
 class _PathOutcome(FrozenModel):
-    """What one changed path selects, or one part of it; the empty outcome selects nothing."""
+    """What one changed path selects; the empty outcome selects nothing."""
 
     classes: tuple[ChangedPathClass, ...] = Field(default=(), description="Its classes")
     pytest_requests: tuple[_PytestRequest, ...] = Field(
@@ -331,16 +239,15 @@ class _PathOutcome(FrozenModel):
     )
 
 
-def load_overrides(path: Path) -> SelectionOverrides:
-    """The override file, validated; a missing or malformed file raises SuiteSelectionError."""
-    try:
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as e:
-        raise SuiteSelectionError(f"cannot read {path}: {e}") from e
-    try:
-        return SelectionOverrides.model_validate(raw)
-    except ValidationError as e:
-        raise SuiteSelectionError(f"{path} is not a valid override file: {e}") from e
+class _SelectionContext(FrozenModel):
+    """What every per-path selection reads, computed once per selection."""
+
+    layout: RepoLayout = Field(description="The tree")
+    python_consumers: Mapping[str, tuple[str, ...]] = Field(description="Each member's consumers")
+    npm_consumers: Mapping[str, tuple[str, ...]] = Field(description="Each npm package's consumers")
+    lockfile: LockfileChange | None = Field(
+        description="The lockfile change, when it could be read"
+    )
 
 
 @pure
@@ -352,9 +259,7 @@ def is_test_file_name(path: str) -> bool:
 @pure
 def is_docs_path(path: str) -> bool:
     """Whether a path is documentation, which selects no tests: a README or a changelog entry
-    anywhere, and any other markdown outside the directories where markdown is agent-run prose.
-    The always-run prose ratchets read some of it (AGENTS.md, docs/), so a documentation-only
-    change they would fail is caught by the next run of them, not by its own selection."""
+    anywhere, and any other markdown outside the directories where markdown is agent-run prose."""
     pure_path = PurePosixPath(path)
     if pure_path.name == "README.md" or (
         pure_path.parent.name == "changelog" and pure_path.suffix == _MARKDOWN_SUFFIX
@@ -366,46 +271,12 @@ def is_docs_path(path: str) -> bool:
 
 
 @pure
-def find_owning_unit(path: str) -> OwningUnit | None:
-    """The package, skill, or flat script directory a path belongs to, or None when it has none."""
+def find_owning_unit(path: str) -> str | None:
+    """The package or skill directory a path belongs to, or None when it has neither."""
     parts = PurePosixPath(path).parts
-    if len(parts) >= 4 and "/".join(parts[:2]) in _PACKAGE_PARENT_DIRECTORIES:
-        return OwningUnit(kind=UnitKind.PACKAGE, directory=RepoRelativePath("/".join(parts[:3])))
-    if len(parts) >= 4 and "/".join(parts[:2]) == _SKILLS_DIRECTORY:
-        return OwningUnit(kind=UnitKind.SKILL, directory=RepoRelativePath("/".join(parts[:3])))
-    for directory in _FLAT_SCRIPT_DIRECTORIES:
-        if path.startswith(f"{directory}/"):
-            return OwningUnit(kind=UnitKind.FLAT_SCRIPTS, directory=RepoRelativePath(directory))
+    if len(parts) >= 4 and "/".join(parts[:2]) in (*_PACKAGE_PARENT_DIRECTORIES, _SKILLS_DIRECTORY):
+        return "/".join(parts[:3])
     return None
-
-
-@pure
-def find_paired_tests(path: str, flat_directory: str, test_files: Iterable[str]) -> tuple[str, ...]:
-    """The tests a flat script directory pairs with a path by filename.
-
-    ``<stem>.py``, ``<stem>.sh``, and anything under ``<stem>/`` pair with ``<stem>_test.py``
-    and ``test_<stem>*.py``, beside the script or under ``<stem>/``. A test file pairs with
-    itself.
-    """
-    relative_parts = PurePosixPath(path).relative_to(flat_directory).parts
-    first = relative_parts[0]
-    if is_test_file_name(path):
-        return (path,)
-    stem = first
-    if len(relative_parts) == 1:
-        for suffix in _SCRIPT_SUFFIXES:
-            if first.endswith(suffix):
-                stem = first.removesuffix(suffix)
-    paired: list[str] = []
-    for test_file in test_files:
-        test_path = PurePosixPath(test_file)
-        parent = test_path.parent.as_posix()
-        if parent not in (flat_directory, f"{flat_directory}/{stem}"):
-            continue
-        name = test_path.name
-        if name == f"{stem}_test.py" or (name.startswith(f"test_{stem}") and name.endswith(".py")):
-            paired.append(test_file)
-    return tuple(sorted(paired))
 
 
 def _read_text(path: Path) -> str:
@@ -413,32 +284,6 @@ def _read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         raise SuiteSelectionError(f"cannot read {path}: {e}") from e
-
-
-@pure
-def _drives_a_browser(test_text: str) -> bool:
-    return any(
-        module.split(".")[0] == _BROWSER_TEST_LIBRARY
-        for module in _imported_modules_in_text(test_text)
-    )
-
-
-def _wiring_owners(
-    repo_root: Path, manifests: Sequence[LoadedManifest]
-) -> dict[str, tuple[str, ...]]:
-    owners: dict[str, set[str]] = defaultdict(set)
-    for loaded in manifests:
-        package_directory = app_package_directory(repo_root, loaded.manifest_path)
-        if package_directory is None:
-            continue
-        try:
-            sections = find_wiring_sections(repo_root, loaded.manifest)
-        except ScopeComputationError as e:
-            logger.warning("Skipping the wiring of {}: {}", loaded.manifest_path, e)
-            continue
-        for section in sections:
-            owners[section.path].add(package_directory.rstrip("/"))
-    return {path: tuple(sorted(directories)) for path, directories in owners.items()}
 
 
 def load_repo_layout(repo_root: Path) -> RepoLayout:
@@ -462,205 +307,23 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
             and not any(is_path_covered_by(directory, path) for directory in uncollected_directories)
         )
     )
-    test_texts = {
-        path: _read_text(repo_root / path) for path in test_files if (repo_root / path).is_file()
-    }
-    manifests = load_app_manifests(repo_root)
     return RepoLayout(
         repo_root=repo_root,
         tracked_files=tracked_files,
         test_files=test_files,
-        test_texts=test_texts,
         browser_test_files=frozenset(
             path
-            for path, text in test_texts.items()
+            for path in test_files
             if any(is_path_covered_by(unit, path) for unit in own_root_units)
-            and _drives_a_browser(text)
+            and (repo_root / path).is_file()
+            and any(marker in _read_text(repo_root / path) for marker in _BROWSER_TEST_MARKERS)
         ),
         own_root_units=own_root_units,
         coverage_measured_units=read_coverage_measured_units(repo_root, own_root_units),
         python_members=python_members,
         npm_packages=read_npm_packages(repo_root),
-        manifests=manifests,
-        wiring_owners=_wiring_owners(repo_root, manifests),
-        overrides=load_overrides(repo_root / OVERRIDES_PATH),
+        manifests=load_app_manifests(repo_root),
     )
-
-
-@pure
-def build_name_index(test_texts: Mapping[str, str]) -> dict[str, frozenset[str]]:
-    """Every file-like token the test files write or import, and the test files that do.
-
-    A token is indexed whole and by each of its trailing path components, so a test that
-    writes ``system/scripts/layout.py`` is found by ``layout.py`` too; an imported module
-    ``a.b`` counts as writing ``a/b.py``. Only the code counts: a file a comment or docstring
-    mentions is not one the test uses.
-    """
-    index: dict[str, set[str]] = defaultdict(set)
-    for test_file, text in test_texts.items():
-        written = {token.removeprefix("./").rstrip("./") for token in _written_tokens(text)}
-        imported = {f"{module.replace('.', '/')}.py" for module in _imported_modules_in_text(text)}
-        for token in written | imported:
-            if "." not in token and "/" not in token:
-                continue
-            parts = token.split("/")
-            for start in range(len(parts)):
-                suffix = "/".join(parts[start:])
-                if suffix:
-                    index[suffix].add(test_file)
-    return {token: frozenset(files) for token, files in index.items()}
-
-
-@pure
-def _written_tokens(text: str) -> list[str]:
-    """The file-like tokens in a source's string literals, leaving out docstrings and other
-    string statements, plus each run of literals a path is built from (``root / "a" / "b.py"``,
-    ``joinpath("a", "b.py")``) joined into one; a source that does not parse is read whole."""
-    try:
-        tree = ast.parse(text)
-    except (SyntaxError, ValueError):
-        return _PATH_TOKEN_PATTERN.findall(text)
-    prose = {
-        id(node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
-    }
-    literals = [
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in prose
-    ]
-    joined = [
-        "/".join(run)
-        for node in ast.walk(tree)
-        for run in _literal_runs(_path_parts(node))
-        if len(run) > 1
-    ]
-    return [token for value in (*literals, *joined) for token in _PATH_TOKEN_PATTERN.findall(value)]
-
-
-@pure
-def _path_parts(node: ast.AST) -> list[ast.expr]:
-    """The operands a path expression joins, in order: a ``/`` chain's, or the arguments of a
-    ``Path(...)``, ``joinpath(...)`` or ``os.path.join(...)`` call; empty for anything else."""
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        left = _path_parts(node.left) or [node.left]
-        return [*left, node.right]
-    if isinstance(node, ast.Call):
-        function = node.func
-        name = function.attr if isinstance(function, ast.Attribute) else getattr(function, "id", "")
-        if name in _PATH_JOINING_CALLS:
-            return list(node.args)
-    return []
-
-
-@pure
-def _literal_runs(parts: Sequence[ast.expr]) -> list[list[str]]:
-    """The maximal runs of consecutive string literals among a path expression's parts."""
-    runs: list[list[str]] = [[]]
-    for part in parts:
-        if isinstance(part, ast.Constant) and isinstance(part.value, str):
-            runs[-1].append(part.value.strip("/"))
-        elif runs[-1]:
-            runs.append([])
-    return [run for run in runs if run]
-
-
-@pure
-def unique_path_suffixes(tracked_files: Iterable[str]) -> frozenset[str]:
-    """The trailing path components (a basename, a parent and a basename, ...) exactly one
-    tracked file ends with, so a test naming one of them names that file."""
-    counts: dict[str, int] = defaultdict(int)
-    for path in tracked_files:
-        parts = path.split("/")
-        for start in range(1, len(parts)):
-            counts["/".join(parts[start:])] += 1
-    return frozenset(suffix for suffix, count in counts.items() if count == 1)
-
-
-@pure
-def naming_tokens(path: str, unique_suffixes: Set[str]) -> tuple[str, ...]:
-    """What a test would write to name ``path``: the path itself, and its shortest trailing
-    components that no other tracked file shares."""
-    parts = path.split("/")
-    for start in range(len(parts) - 1, 0, -1):
-        suffix = "/".join(parts[start:])
-        if suffix in unique_suffixes:
-            return (path, suffix)
-    return (path,)
-
-
-def _imported_modules(path: Path) -> set[str]:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
-        logger.debug("Not reading the imports of {}, which cannot be read: {}", path, e)
-        return set()
-    return _imported_modules_in_text(text)
-
-
-@pure
-def _imported_modules_in_text(text: str) -> set[str]:
-    """The absolute imports a Python source names; none when it does not parse."""
-    try:
-        tree = ast.parse(text)
-    except (SyntaxError, ValueError):
-        return set()
-    modules: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module is not None:
-            modules.add(node.module)
-    return modules
-
-
-def build_import_index(layout: RepoLayout) -> dict[str, tuple[str, ...]]:
-    """Each member directory, and the unpackaged Python files (skills, flat scripts, repo-root
-    guards) that import one of its modules -- consumers no ``pyproject.toml`` declares."""
-    member_by_module = {
-        module: member.directory
-        for member in layout.python_members
-        for module in member.module_names
-    }
-    member_directories = tuple(member.directory for member in layout.python_members)
-    collected_tests = frozenset(layout.test_files)
-    importers: dict[str, set[str]] = defaultdict(set)
-    for path in sorted(layout.tracked_files):
-        if (
-            not path.endswith(".py")
-            or any(is_path_covered_by(directory, path) for directory in member_directories)
-            or (is_test_file_name(path) and path not in collected_tests)
-        ):
-            continue
-        for module in _imported_modules(layout.repo_root / path):
-            parts = module.split(".")
-            for length in (2, 1):
-                member_directory = member_by_module.get(".".join(parts[:length]))
-                if member_directory is not None:
-                    importers[member_directory].add(path)
-                    break
-    return {directory: tuple(sorted(paths)) for directory, paths in importers.items()}
-
-
-def build_sibling_import_index(layout: RepoLayout) -> dict[str, tuple[str, ...]]:
-    """Each Python file in a flat script directory, and the files beside it that import it by
-    module name, as a flat script imports its siblings (its own directory is on sys.path)."""
-    by_directory: dict[str, dict[str, str]] = defaultdict(dict)
-    for path in layout.tracked_files:
-        if path.endswith(".py") and any(
-            path.startswith(f"{directory}/") for directory in _FLAT_SCRIPT_DIRECTORIES
-        ):
-            pure_path = PurePosixPath(path)
-            by_directory[pure_path.parent.as_posix()][pure_path.stem] = path
-    importers: dict[str, set[str]] = defaultdict(set)
-    for siblings in by_directory.values():
-        for path in siblings.values():
-            for module in _imported_modules(layout.repo_root / path):
-                imported = siblings.get(module.split(".")[0])
-                if imported is not None and imported != path:
-                    importers[imported].add(path)
-    return {path: tuple(sorted(paths)) for path, paths in importers.items()}
 
 
 def _own_root_for(layout: RepoLayout, path: str) -> str:
@@ -674,24 +337,15 @@ def _unit_has_tests(layout: RepoLayout, directory: str) -> bool:
     return any(is_path_covered_by(directory, test_file) for test_file in layout.test_files)
 
 
-def _invocation_group(layout: RepoLayout, test_file: str) -> str:
-    own_root = _own_root_for(layout, test_file)
-    if own_root != ROOT_DIRECTORY:
-        return own_root
-    unit = find_owning_unit(test_file)
-    if unit is not None:
-        return unit.directory
-    return PurePosixPath(test_file).parent.as_posix()
-
-
 def _file_request(
     layout: RepoLayout, test_file: str, reason: SelectionReason
 ) -> _PytestRequest | None:
     if not (layout.repo_root / test_file).is_file():
         return None
+    own_root = _own_root_for(layout, test_file)
     return _PytestRequest(
-        root=_own_root_for(layout, test_file),
-        group=_invocation_group(layout, test_file),
+        root=own_root,
+        group=own_root if own_root != ROOT_DIRECTORY else PurePosixPath(test_file).parent.as_posix(),
         test_files=(test_file,),
         is_browser_included=True,
         reason=reason,
@@ -716,54 +370,14 @@ def _whole_request(
     )
 
 
-def _suite_request(
-    layout: RepoLayout, suite: str, reason: SelectionReason
-) -> _PytestRequest | None:
-    """The request for a suite the override file names: a test file, or a suite directory."""
-    if (layout.repo_root / suite).is_file():
-        return _file_request(layout, suite, reason)
-    if (layout.repo_root / suite).is_dir():
-        return _whole_request(layout, suite, is_browser_included=False, reason=reason)
-    raise SuiteSelectionError(
-        f"{OVERRIDES_PATH} names {suite!r}, which does not exist; fix the entry that names it"
+def _present(requests: Iterable[_PytestRequest | None]) -> tuple[_PytestRequest, ...]:
+    return tuple(request for request in requests if request is not None)
+
+
+def _reason(path: str, path_class: ChangedPathClass, detail: str) -> SelectionReason:
+    return SelectionReason(
+        path=RepoRelativePath(path), path_class=path_class, detail=NonEmptyStr(detail)
     )
-
-
-def _own_unit_requests(
-    layout: RepoLayout, path: str, reason: SelectionReason
-) -> list[_PytestRequest]:
-    """The tests a path's own unit runs for it: the whole package or skill, or the flat
-    script directory's tests paired with it by filename (all of them for its conftest)."""
-    unit = find_owning_unit(path)
-    if unit is None:
-        return (
-            [request for request in [_file_request(layout, path, reason)] if request is not None]
-            if is_test_file_name(path)
-            else []
-        )
-    match unit.kind:
-        case UnitKind.FLAT_SCRIPTS:
-            if PurePosixPath(path).name == _CONFTEST_FILENAME:
-                whole = _whole_request(
-                    layout, unit.directory, is_browser_included=False, reason=reason
-                )
-                return [whole] if whole is not None else []
-            paired = find_paired_tests(path, unit.directory, layout.test_files)
-            return [
-                request
-                for request in (_file_request(layout, test, reason) for test in paired)
-                if request is not None
-            ]
-        case UnitKind.PACKAGE | UnitKind.SKILL:
-            whole = _whole_request(
-                layout,
-                unit.directory,
-                is_browser_included=unit.directory in layout.own_root_units,
-                reason=reason,
-            )
-            return [whole] if whole is not None else []
-        case _ as unreachable:
-            assert_never(unreachable)
 
 
 def _owning_npm_package(layout: RepoLayout, path: str) -> NpmPackage | None:
@@ -773,6 +387,55 @@ def _owning_npm_package(layout: RepoLayout, path: str) -> NpmPackage | None:
     return max(covering, key=lambda package: len(package.directory)) if covering else None
 
 
+def _referenced_directory_requests(
+    layout: RepoLayout, path: str, app_directory: str
+) -> list[_PytestRequest]:
+    """The tests beneath each directory the app's manifest references."""
+    requests: list[_PytestRequest] = []
+    for loaded in layout.manifests:
+        owner = app_package_directory(layout.repo_root, loaded.manifest_path)
+        if owner is None or owner.rstrip("/") != app_directory:
+            continue
+        for reference in loaded.manifest.references:
+            directory = reference.path.rstrip("/")
+            reason = _reason(path, ChangedPathClass.PACKAGE, f"{app_directory} references {directory}")
+            requests.extend(
+                _present([_whole_request(layout, directory, is_browser_included=False, reason=reason)])
+            )
+    return requests
+
+
+def _select_for_unit(context: _SelectionContext, path: str, unit: str) -> list[_PytestRequest]:
+    """A package's or skill's own suite; for a package's non-test file, also the suites of the
+    members that depend on it and of the directories an app's manifest references."""
+    layout = context.layout
+    requests = list(
+        _present(
+            [
+                _whole_request(
+                    layout,
+                    unit,
+                    is_browser_included=unit in layout.own_root_units,
+                    reason=_reason(path, ChangedPathClass.PACKAGE, f"changed in {unit}"),
+                )
+            ]
+        )
+    )
+    if is_test_file_name(path) or unit.startswith(f"{_SKILLS_DIRECTORY}/"):
+        return requests
+    requests.extend(_referenced_directory_requests(layout, path, unit))
+    # An app's frontend is built into the app's own bundle, which no Python package that
+    # depends on the app loads; its npm consumers are the frontend selection's.
+    if _owning_npm_package(layout, path) is not None:
+        return requests
+    for consumer in context.python_consumers.get(unit, ()):
+        reason = _reason(path, ChangedPathClass.PACKAGE, f"{consumer} depends on {unit}")
+        requests.extend(
+            _present([_whole_request(layout, consumer, is_browser_included=False, reason=reason)])
+        )
+    return requests
+
+
 def _frontend_requests(
     layout: RepoLayout,
     consumers: Mapping[str, tuple[str, ...]],
@@ -780,8 +443,7 @@ def _frontend_requests(
     reason: SelectionReason,
 ) -> tuple[list[_FrontendRequest], list[_PytestRequest]]:
     """The npm checks for some packages and their consumers, and the browser tests of every
-    app whose frontend is among them (not the rest of that app's suite, which cannot observe
-    a frontend it does not build)."""
+    app whose frontend is among them."""
     selected = sorted(
         {
             *package_directories,
@@ -798,366 +460,100 @@ def _frontend_requests(
             continue
         for test_file in sorted(layout.browser_test_files):
             if is_path_covered_by(own_root, test_file):
-                request = _file_request(layout, test_file, reason)
-                if request is not None:
-                    browser.append(request)
+                browser.extend(_present([_file_request(layout, test_file, reason)]))
     return frontend, browser
 
 
-def _matches_any(globs: Sequence[str], path: str) -> bool:
-    return pathspec.PathSpec.from_lines(_PATH_GLOB_STYLE, globs).match_file(path)
+def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
+    """Everything one changed (non-documentation) path calls for."""
+    layout = context.layout
+    if path in _ROOT_CONFIG_FILES:
+        return _PathOutcome(classes=(ChangedPathClass.ROOT_CONFIG,), is_full_root=True)
+    if path == _LOCKFILE:
+        return _select_for_lockfile(context, path)
+    if path in _ALWAYS_RUN_GUARDS or (
+        PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY and path.endswith(".py")
+    ):
+        return _PathOutcome(classes=(ChangedPathClass.GUARD,))
 
+    classes: list[ChangedPathClass] = []
+    pytest_requests: list[_PytestRequest] = []
+    frontend_requests: list[_FrontendRequest] = []
+    is_owned = False
 
-class _SelectionContext(FrozenModel):
-    """What every per-path selection reads, computed once per selection."""
+    npm_package = _owning_npm_package(layout, path)
+    if path in _NPM_ROOT_CONFIG_FILES or npm_package is not None:
+        directories = (
+            [package.directory for package in layout.npm_packages]
+            if npm_package is None
+            else [npm_package.directory]
+        )
+        frontend, browser = _frontend_requests(
+            layout,
+            context.npm_consumers,
+            directories,
+            _reason(path, ChangedPathClass.FRONTEND_PACKAGE, "frontend changed"),
+        )
+        classes.append(ChangedPathClass.FRONTEND_PACKAGE)
+        frontend_requests.extend(frontend)
+        pytest_requests.extend(browser)
+        is_owned = True
 
-    layout: RepoLayout = Field(description="The tree")
-    name_index: Mapping[str, frozenset[str]] = Field(
-        description="Test files by the file names they write"
+    unit = find_owning_unit(path)
+    if unit is not None:
+        classes.append(
+            ChangedPathClass.SKILL if unit.startswith(f"{_SKILLS_DIRECTORY}/") else ChangedPathClass.PACKAGE
+        )
+        pytest_requests.extend(_select_for_unit(context, path, unit))
+        is_owned = True
+    elif path in layout.test_files:
+        classes.append(ChangedPathClass.TEST_FILE)
+        pytest_requests.extend(
+            _present([_file_request(layout, path, _reason(path, ChangedPathClass.TEST_FILE, "changed"))])
+        )
+        is_owned = True
+
+    for match in match_referencing_manifests(layout.manifests, RepoRelativePath(path)):
+        owner = app_package_directory(layout.repo_root, match.manifest_path)
+        if owner is not None:
+            classes.append(ChangedPathClass.MANIFEST_REFERENCE)
+            reason = _reason(
+                path, ChangedPathClass.MANIFEST_REFERENCE, f"referenced by {match.manifest.name}"
+            )
+            pytest_requests.extend(
+                _present([_whole_request(layout, owner.rstrip("/"), is_browser_included=False, reason=reason)])
+            )
+
+    if not is_owned:
+        classes.append(ChangedPathClass.UNOWNED)
+    return _PathOutcome(
+        classes=tuple(dict.fromkeys(classes)),
+        pytest_requests=tuple(pytest_requests),
+        frontend_requests=tuple(frontend_requests),
+        is_full_root=not is_owned,
     )
-    unique_suffixes: frozenset[str] = Field(description="Path suffixes that name one tracked file")
-    import_index: Mapping[str, tuple[str, ...]] = Field(
-        description="Unpackaged importers by member"
-    )
-    sibling_import_index: Mapping[str, tuple[str, ...]] = Field(
-        description="Flat scripts by the sibling scripts that import them"
-    )
-    python_consumers: Mapping[str, tuple[str, ...]] = Field(description="Each member's consumers")
-    npm_consumers: Mapping[str, tuple[str, ...]] = Field(description="Each npm package's consumers")
-    lockfile: LockfileChange | None = Field(
-        description="The lockfile change, when it could be read"
-    )
-
-
-def _reason(path: str, path_class: ChangedPathClass, detail: str) -> SelectionReason:
-    return SelectionReason(
-        path=RepoRelativePath(path), path_class=path_class, detail=NonEmptyStr(detail)
-    )
-
-
-def _present(requests: Iterable[_PytestRequest | None]) -> tuple[_PytestRequest, ...]:
-    return tuple(request for request in requests if request is not None)
-
-
-def _select_for_root_config(context: _SelectionContext, path: str) -> _PathOutcome:
-    if path not in _ROOT_CONFIG_FILES:
-        return _PathOutcome()
-    return _PathOutcome(classes=(ChangedPathClass.ROOT_CONFIG,), is_full_root=True)
 
 
 def _select_for_lockfile(context: _SelectionContext, path: str) -> _PathOutcome:
     """The members that depend on what the lock upgraded; the full root suite when the change
     could not be read, or when the root project depends on an upgrade directly."""
-    if path != _LOCKFILE:
-        return _PathOutcome()
     lockfile = context.lockfile
     if lockfile is None:
         return _PathOutcome(classes=(ChangedPathClass.LOCKFILE,), is_full_root=True)
     upgraded = ", ".join(change.name for change in lockfile.upgraded)
-    requests: list[_PytestRequest] = []
-    for member in lockfile.dependent_members:
-        reason = _reason(
-            path, ChangedPathClass.LOCKFILE, f"{member} depends on upgraded {upgraded}"
-        )
-        requests.extend(
-            _present([_whole_request(context.layout, member, is_browser_included=False, reason=reason)])
-        )
-        requests.extend(_importer_requests(context, path, ChangedPathClass.LOCKFILE, member))
-        requests.extend(
-            _member_override_requests(context.layout, path, ChangedPathClass.LOCKFILE, member)
-        )
-    return _PathOutcome(
-        classes=(ChangedPathClass.LOCKFILE,),
-        pytest_requests=tuple(requests),
-        is_full_root=lockfile.is_root_dependent,
-    )
-
-
-def _select_for_guard(context: _SelectionContext, path: str) -> _PathOutcome:
-    is_guard = path in context.layout.overrides.always_run or (
-        PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY and path.endswith(".py")
-    )
-    return _PathOutcome(classes=(ChangedPathClass.GUARD,)) if is_guard else _PathOutcome()
-
-
-def _select_for_frontend(context: _SelectionContext, path: str) -> _PathOutcome:
-    """The npm package's checks and its consumers', and the browser tests of the apps among
-    them; a change to the npm root's own configuration reaches every package."""
-    layout = context.layout
-    npm_package = _owning_npm_package(layout, path)
-    if path in _NPM_ROOT_CONFIG_FILES:
-        directories = [package.directory for package in layout.npm_packages]
-    elif npm_package is not None:
-        directories = [npm_package.directory]
-    else:
-        return _PathOutcome()
-    frontend, browser = _frontend_requests(
-        layout,
-        context.npm_consumers,
-        directories,
-        _reason(path, ChangedPathClass.FRONTEND_PACKAGE, "frontend changed"),
-    )
-    return _PathOutcome(
-        classes=(ChangedPathClass.FRONTEND_PACKAGE,),
-        pytest_requests=tuple(browser),
-        frontend_requests=tuple(frontend),
-    )
-
-
-def _select_for_owning_unit(context: _SelectionContext, path: str) -> _PathOutcome:
-    """A package's own suite with its consumers', a skill's suite, or a flat script's paired tests."""
-    layout = context.layout
-    unit = find_owning_unit(path)
-    if unit is None:
-        return _PathOutcome()
-    match unit.kind:
-        case UnitKind.PACKAGE:
-            return _PathOutcome(
-                classes=(ChangedPathClass.PACKAGE,),
-                pytest_requests=tuple(_select_for_package(context, path, unit)),
-            )
-        case UnitKind.SKILL:
-            reason = _reason(path, ChangedPathClass.SKILL, f"changed in {unit.directory}")
-            return _PathOutcome(
-                classes=(ChangedPathClass.SKILL,),
-                pytest_requests=tuple(_own_unit_requests(layout, path, reason)),
-            )
-        case UnitKind.FLAT_SCRIPTS:
-            paired = _own_unit_requests(
-                layout, path, _reason(path, ChangedPathClass.PAIRED_SCRIPT, "paired by filename")
-            )
-            paired.extend(_sibling_importer_requests(context, path))
-            # A deleted script leaves nothing to pair with or map; the tests that name it and
-            # the always-run guards are what can observe that it is gone.
-            if not paired and (layout.repo_root / path).exists():
-                return _PathOutcome()
-            return _PathOutcome(
-                classes=(ChangedPathClass.PAIRED_SCRIPT,), pytest_requests=tuple(paired)
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
-
-
-def _sibling_importer_requests(context: _SelectionContext, path: str) -> list[_PytestRequest]:
-    """The tests of every script beside ``path`` that imports it, directly or through another
-    sibling: each importer's paired tests, the importer itself when it is a test, and the
-    whole directory when its conftest imports it."""
-    importers: set[str] = set()
-    frontier = [path]
-    while frontier:
-        for importer in context.sibling_import_index.get(frontier.pop(), ()):
-            if importer not in importers:
-                importers.add(importer)
-                frontier.append(importer)
-    requests: list[_PytestRequest] = []
-    for importer in sorted(importers):
-        reason = _reason(path, ChangedPathClass.PAIRED_SCRIPT, f"imported by {importer}")
-        requests.extend(_own_unit_requests(context.layout, importer, reason))
-    return requests
-
-
-def _select_for_package(
-    context: _SelectionContext, path: str, unit: OwningUnit
-) -> list[_PytestRequest]:
-    """The package's own suite, the suites of the members that depend on it, the tests of the
-    unpackaged scripts that import it or one of those members, and, for an app, the tests of
-    the directories its manifest references. A test file reaches only its own suite, since
-    nothing that depends on the package runs its tests."""
-    layout = context.layout
-    requests = _own_unit_requests(
-        layout, path, _reason(path, ChangedPathClass.PACKAGE, f"changed in {unit.directory}")
-    )
-    if is_test_file_name(path):
-        return requests
-    requests.extend(_referenced_directory_requests(layout, path, unit.directory))
-    # An app's frontend is built into the app's own bundle, which no Python package that
-    # depends on the app loads; its npm consumers are the frontend selection's.
-    if _owning_npm_package(layout, path) is not None:
-        return requests
-    requests.extend(_importer_requests(context, path, ChangedPathClass.PACKAGE, unit.directory))
-    for consumer in context.python_consumers.get(unit.directory, ()):
-        reason = _reason(path, ChangedPathClass.PACKAGE, f"{consumer} depends on {unit.directory}")
-        requests.extend(
-            _present([_whole_request(layout, consumer, is_browser_included=False, reason=reason)])
-        )
-        requests.extend(_importer_requests(context, path, ChangedPathClass.PACKAGE, consumer))
-        requests.extend(_member_override_requests(layout, path, ChangedPathClass.PACKAGE, consumer))
-    return requests
-
-
-def _member_override_requests(
-    layout: RepoLayout, path: str, path_class: ChangedPathClass, member: str
-) -> list[_PytestRequest]:
-    """The suites the override file's consumer entries record for any of ``member``'s files,
-    for a change that reaches the member without changing one of them."""
-    member_files = [file for file in layout.tracked_files if is_path_covered_by(member, file)]
-    requests: list[_PytestRequest] = []
-    for consumer in layout.overrides.consumer:
-        spec = pathspec.PathSpec.from_lines(_PATH_GLOB_STYLE, consumer.paths)
-        if any(spec.match_file(file) for file in member_files):
-            reason = _reason(path, path_class, f"{consumer.note} (reached through {member})")
-            requests.extend(
-                _present(_suite_request(layout, suite, reason) for suite in consumer.suites)
-            )
-    return requests
-
-
-def _referenced_directory_requests(
-    layout: RepoLayout, path: str, app_directory: str
-) -> list[_PytestRequest]:
-    """The tests beneath each directory the app's manifest references (a referenced skill
-    drives the app's surface); a referenced file, and a directory with no tests, select
-    nothing."""
-    requests: list[_PytestRequest] = []
-    for loaded in layout.manifests:
-        owner = app_package_directory(layout.repo_root, loaded.manifest_path)
-        if owner is None or owner.rstrip("/") != app_directory:
-            continue
-        for reference in loaded.manifest.references:
-            directory = reference.path.rstrip("/")
-            reason = _reason(
-                path, ChangedPathClass.PACKAGE, f"{app_directory} references {directory}"
-            )
-            requests.extend(
-                _present(
-                    [_whole_request(layout, directory, is_browser_included=False, reason=reason)]
-                )
-            )
-    return requests
-
-
-def _importer_requests(
-    context: _SelectionContext, path: str, path_class: ChangedPathClass, member: str
-) -> list[_PytestRequest]:
-    """The tests of the unpackaged scripts that import one of ``member``'s modules: those paired
-    with each script, and the suites the override file's consumer entries record for it."""
-    layout = context.layout
-    requests: list[_PytestRequest] = []
-    for importer in context.import_index.get(member, ()):
-        reason = _reason(path, path_class, f"{importer} imports {member}")
-        requests.extend(_own_unit_requests(layout, importer, reason))
-        requests.extend(
-            _present(
-                _suite_request(layout, suite, reason)
-                for consumer in layout.overrides.consumer
-                if _matches_any(consumer.paths, importer)
-                for suite in consumer.suites
-            )
-        )
-    return requests
-
-
-def _select_for_wiring(context: _SelectionContext, path: str) -> _PathOutcome:
-    """The apps whose supervisord blocks the file holds (the always-run set checks the layout)."""
-    if (
-        path != _SUPERVISORD_CONF
-        and PurePosixPath(path).parent.as_posix() != _SUPERVISORD_DROPIN_DIRECTORY
-    ):
-        return _PathOutcome()
     requests = _present(
         _whole_request(
             context.layout,
-            owner,
+            member,
             is_browser_included=False,
-            reason=_reason(path, ChangedPathClass.WIRING, f"runs {owner}"),
+            reason=_reason(path, ChangedPathClass.LOCKFILE, f"{member} depends on upgraded {upgraded}"),
         )
-        for owner in context.layout.wiring_owners.get(path, ())
+        for member in lockfile.dependent_members
     )
-    return _PathOutcome(classes=(ChangedPathClass.WIRING,), pytest_requests=requests)
-
-
-def _select_for_manifest_references(context: _SelectionContext, path: str) -> _PathOutcome:
-    layout = context.layout
-    matches = match_referencing_manifests(layout.manifests, RepoRelativePath(path))
-    if not matches:
-        return _PathOutcome()
-    requests: list[_PytestRequest | None] = []
-    for match in matches:
-        owner = app_package_directory(layout.repo_root, match.manifest_path)
-        if owner is not None:
-            reason = _reason(
-                path, ChangedPathClass.MANIFEST_REFERENCE, f"referenced by {match.manifest.name}"
-            )
-            requests.append(
-                _whole_request(layout, owner.rstrip("/"), is_browser_included=False, reason=reason)
-            )
     return _PathOutcome(
-        classes=(ChangedPathClass.MANIFEST_REFERENCE,), pytest_requests=_present(requests)
-    )
-
-
-def _select_for_naming_tests(context: _SelectionContext, path: str) -> _PathOutcome:
-    """The test files that write the path's name. The root configuration and the lockfile are
-    read by every test, so their names select nothing here."""
-    if path in _ROOT_CONFIG_FILES or path == _LOCKFILE:
-        return _PathOutcome()
-    tokens = naming_tokens(path, context.unique_suffixes)
-    naming_tests = sorted(
-        {test for token in tokens for test in context.name_index.get(token, ())} - {path}
-    )
-    requests = _present(
-        _file_request(
-            context.layout,
-            test_file,
-            _reason(path, ChangedPathClass.NAMED_BY_TEST, f"named by {test_file}"),
-        )
-        for test_file in naming_tests
-    )
-    if not requests:
-        return _PathOutcome()
-    return _PathOutcome(classes=(ChangedPathClass.NAMED_BY_TEST,), pytest_requests=requests)
-
-
-def _select_for_overrides(context: _SelectionContext, path: str) -> _PathOutcome:
-    layout = context.layout
-    requests: list[_PytestRequest | None] = []
-    is_matched = False
-    for consumer in layout.overrides.consumer:
-        if _matches_any(consumer.paths, path):
-            is_matched = True
-            reason = _reason(path, ChangedPathClass.OVERRIDE, consumer.note)
-            requests.extend(_suite_request(layout, suite, reason) for suite in consumer.suites)
-    for integration in layout.overrides.integration:
-        if _matches_any(integration.paths, path):
-            is_matched = True
-            reason = _reason(path, ChangedPathClass.OVERRIDE, integration.note)
-            requests.append(_suite_request(layout, integration.test, reason))
-    if not is_matched:
-        return _PathOutcome()
-    return _PathOutcome(classes=(ChangedPathClass.OVERRIDE,), pytest_requests=_present(requests))
-
-
-_PATH_SELECTORS: Final[tuple[Callable[[_SelectionContext, str], _PathOutcome], ...]] = (
-    _select_for_root_config,
-    _select_for_lockfile,
-    _select_for_guard,
-    _select_for_frontend,
-    _select_for_owning_unit,
-    _select_for_wiring,
-    _select_for_manifest_references,
-    _select_for_naming_tests,
-    _select_for_overrides,
-)
-
-
-def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
-    """Everything one changed (non-documentation) path calls for; a path no selector
-    classifies brings in the full root suite."""
-    outcomes = [selector(context, path) for selector in _PATH_SELECTORS]
-    classes = tuple(
-        dict.fromkeys(path_class for outcome in outcomes for path_class in outcome.classes)
-    )
-    if not classes:
-        return _PathOutcome(classes=(ChangedPathClass.UNCLASSIFIED,), is_full_root=True)
-    return _PathOutcome(
-        classes=classes,
-        pytest_requests=tuple(
-            request for outcome in outcomes for request in outcome.pytest_requests
-        ),
-        frontend_requests=tuple(
-            request for outcome in outcomes for request in outcome.frontend_requests
-        ),
-        is_full_root=any(outcome.is_full_root for outcome in outcomes),
+        classes=(ChangedPathClass.LOCKFILE,),
+        pytest_requests=requests,
+        is_full_root=lockfile.is_root_dependent,
     )
 
 
@@ -1167,12 +563,8 @@ def _always_run_files(layout: RepoLayout) -> tuple[str, ...]:
         for path in layout.test_files
         if PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY
     ]
-    for guard in layout.overrides.always_run:
-        if guard not in layout.tracked_files:
-            raise SuiteSelectionError(
-                f"{OVERRIDES_PATH} lists {guard!r} in always_run, which git does not track"
-            )
-    return tuple(sorted({*guards, *layout.overrides.always_run}))
+    present = [guard for guard in _ALWAYS_RUN_GUARDS if guard in layout.tracked_files]
+    return tuple(sorted({*guards, *present}))
 
 
 @pure
@@ -1185,6 +577,20 @@ def _unique_reasons(
     requests: Iterable[_PytestRequest | _FrontendRequest],
 ) -> tuple[SelectionReason, ...]:
     return tuple(dict.fromkeys(request.reason for request in requests))
+
+
+def _command(
+    kind: SuiteKind,
+    working_directory: str,
+    argv: Sequence[str],
+    reasons: tuple[SelectionReason, ...],
+) -> SuiteCommand:
+    return SuiteCommand(
+        kind=kind,
+        working_directory=NonEmptyStr(working_directory),
+        argv=tuple(argv),
+        reasons=reasons,
+    )
 
 
 def _pytest_commands(
@@ -1212,12 +618,7 @@ def _pytest_commands(
             targets = [group] if whole else [file for file in files if file not in always_run]
             if targets:
                 root_commands.append(
-                    _command(
-                        SuiteKind.PYTEST,
-                        root,
-                        ("uv", "run", "pytest", *targets),
-                        reasons,
-                    )
+                    _command(SuiteKind.PYTEST, root, ("uv", "run", "pytest", *targets), reasons)
                 )
             continue
         own_root_commands.extend(
@@ -1260,12 +661,7 @@ def _own_root_commands(
         is_browser_included = any(request.is_browser_included for request in whole)
         markers = ("-m", _ALL_MARKERS_EXPRESSION) if is_browser_included else ()
         commands.append(
-            _command(
-                SuiteKind.PYTEST,
-                root,
-                ("uv", "run", "pytest", *markers, *deselect),
-                reasons,
-            )
+            _command(SuiteKind.PYTEST, root, ("uv", "run", "pytest", *markers, *deselect), reasons)
         )
         named_browser_files = [
             _relative_to_root(root, file) for file in files if file in browser_test_files
@@ -1294,20 +690,6 @@ def _own_root_commands(
     return commands
 
 
-def _command(
-    kind: SuiteKind,
-    working_directory: str,
-    argv: Sequence[str],
-    reasons: tuple[SelectionReason, ...],
-) -> SuiteCommand:
-    return SuiteCommand(
-        kind=kind,
-        working_directory=NonEmptyStr(working_directory),
-        argv=tuple(argv),
-        reasons=reasons,
-    )
-
-
 def _frontend_commands(
     layout: RepoLayout,
     requests: Sequence[_FrontendRequest],
@@ -1320,12 +702,7 @@ def _frontend_commands(
     reasons = _unique_reasons(requests) or browser_reasons
     commands = [
         _command(SuiteKind.FRONTEND_INSTALL, NPM_ROOT, ("npm", "ci"), reasons),
-        _command(
-            SuiteKind.FRONTEND_BUILD,
-            NPM_ROOT,
-            ("npm", "run", _NPM_BUILD_SCRIPT),
-            reasons,
-        ),
+        _command(SuiteKind.FRONTEND_BUILD, NPM_ROOT, ("npm", "run", _NPM_BUILD_SCRIPT), reasons),
     ]
     package_by_directory = {str(package.directory): package for package in layout.npm_packages}
     directories = sorted({request.package_directory for request in requests})
@@ -1352,10 +729,7 @@ def _frontend_commands(
     if unbuilt:
         commands.append(
             _command(
-                SuiteKind.FRONTEND_CHECK,
-                NPM_ROOT,
-                ("npm", "run", _NPM_TYPECHECK_SCRIPT, *unbuilt),
-                reasons,
+                SuiteKind.FRONTEND_CHECK, NPM_ROOT, ("npm", "run", _NPM_TYPECHECK_SCRIPT, *unbuilt), reasons
             )
         )
     return commands
@@ -1394,12 +768,10 @@ def select_tests(
                 ClassifiedPath(path=RepoRelativePath(path), classes=(ChangedPathClass.DOCS,))
                 for path in paths
             ),
-            unclassified=(),
             is_full_root=False,
             notes=(),
         )
 
-    # Read the lockfile change, if there is one
     lockfile: LockfileChange | None = None
     notes: list[str] = []
     if _LOCKFILE in paths:
@@ -1412,26 +784,13 @@ def select_tests(
                 lockfile = classify_lockfile_change(*lockfile_texts)
             except SuiteSelectionError as e:
                 notes.append(f"{e}; the full root suite runs")
-    reaches_member = lockfile is not None or any(
-        is_path_covered_by(member.directory, path)
-        for member in layout.python_members
-        for path in paths
-    )
-    reaches_flat_scripts = any(
-        path.startswith(f"{directory}/") for directory in _FLAT_SCRIPT_DIRECTORIES for path in paths
-    )
     context = _SelectionContext(
         layout=layout,
-        name_index=build_name_index(layout.test_texts),
-        unique_suffixes=unique_path_suffixes(layout.tracked_files),
-        import_index=build_import_index(layout) if reaches_member else {},
-        sibling_import_index=build_sibling_import_index(layout) if reaches_flat_scripts else {},
         python_consumers=python_consumers(layout.python_members),
         npm_consumers=npm_consumers(layout.npm_packages),
         lockfile=lockfile,
     )
 
-    # Classify every path
     classified: list[ClassifiedPath] = []
     pytest_requests: list[_PytestRequest] = []
     frontend_requests: list[_FrontendRequest] = []
@@ -1448,60 +807,41 @@ def select_tests(
         frontend_requests.extend(outcome.frontend_requests)
         is_full_root = is_full_root or outcome.is_full_root
 
-    # Assemble the commands: frontends first (the browser tests need their bundles), then the
-    # root-collected tests, then the own-root suites
+    # Frontends first (the browser tests need their bundles), then the root-collected tests,
+    # then the own-root suites
     always_run = _always_run_files(layout)
-    root_reasons = tuple(
-        SelectionReason(
-            path=entry.path,
-            path_class=entry.classes[0],
-            detail=NonEmptyStr("every change"),
-        )
-        for entry in classified
-        if ChangedPathClass.DOCS not in entry.classes
-    )
     commands = _frontend_commands(
         layout, frontend_requests, _browser_run_reasons(layout, pytest_requests)
     )
     if is_full_root:
         full_root_reasons = tuple(
             SelectionReason(
-                path=entry.path,
-                path_class=entry.classes[0],
-                detail=NonEmptyStr("full root suite"),
+                path=entry.path, path_class=entry.classes[-1], detail=NonEmptyStr("full root suite")
             )
             for entry in classified
-            if {
-                ChangedPathClass.UNCLASSIFIED,
-                ChangedPathClass.ROOT_CONFIG,
-                ChangedPathClass.LOCKFILE,
-            }
+            if {ChangedPathClass.UNOWNED, ChangedPathClass.ROOT_CONFIG, ChangedPathClass.LOCKFILE}
             & set(entry.classes)
         )
         commands.append(
-            _command(
-                SuiteKind.FULL_ROOT,
-                ROOT_DIRECTORY,
-                ("uv", "run", "pytest"),
-                full_root_reasons,
-            )
+            _command(SuiteKind.FULL_ROOT, ROOT_DIRECTORY, ("uv", "run", "pytest"), full_root_reasons)
         )
     else:
+        root_reasons = tuple(
+            SelectionReason(
+                path=entry.path, path_class=entry.classes[0], detail=NonEmptyStr("every change")
+            )
+            for entry in classified
+            if ChangedPathClass.DOCS not in entry.classes
+        )
         commands.append(
             _command(
-                SuiteKind.ALWAYS_RUN,
-                ROOT_DIRECTORY,
-                ("uv", "run", "pytest", *always_run),
-                root_reasons,
+                SuiteKind.ALWAYS_RUN, ROOT_DIRECTORY, ("uv", "run", "pytest", *always_run), root_reasons
             )
         )
     commands.extend(_pytest_commands(layout, pytest_requests, set(always_run), is_full_root))
     return SuiteSelection(
         commands=tuple(commands),
         paths=tuple(classified),
-        unclassified=tuple(
-            entry.path for entry in classified if ChangedPathClass.UNCLASSIFIED in entry.classes
-        ),
         is_full_root=is_full_root,
         notes=tuple(notes),
     )
@@ -1587,11 +927,6 @@ def render_selection(selection: SuiteSelection) -> str:
         lines.append(f"# {command.kind}: {_render_reasons(command.reasons)}")
         lines.append(render_command_line(command))
     lines.extend(f"# note: {note}" for note in selection.notes)
-    if selection.unclassified:
-        lines.append(
-            f"# unclassified -- these brought in the full root suite; add a mapping for each to {OVERRIDES_PATH}:"
-        )
-        lines.extend(f"#   {path}" for path in selection.unclassified)
     return "\n".join(lines) + "\n"
 
 
