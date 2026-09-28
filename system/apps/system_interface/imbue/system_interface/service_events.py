@@ -112,7 +112,9 @@ class ServiceEventWriter(MutableModel):
 
     model_config = {"extra": "forbid", "frozen": False}
 
-    events_path: Path = Field(frozen=True, description="The stream's file, created with its directories on first write")
+    events_path: Path = Field(
+        frozen=True, description="The stream's file, created with its directories on first write"
+    )
 
     _announced: dict[str, AnnouncedRow] = PrivateAttr(default_factory=dict)
 

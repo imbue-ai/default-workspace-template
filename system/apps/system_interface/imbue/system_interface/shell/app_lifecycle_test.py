@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_WINDOW_SECONDS
-from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.errors import AppWakeRefusedError
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.testing import FakeLivenessProber

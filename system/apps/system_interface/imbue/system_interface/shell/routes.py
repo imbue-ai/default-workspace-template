@@ -19,6 +19,7 @@ from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientActivityReport
 from imbue.system_interface.shell.data_types import EntryPresentation
+from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
 from imbue.system_interface.shell.desktop_routes import inventory_document_json
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
@@ -48,7 +49,6 @@ from imbue.system_interface.shell.layout_ops import CONTEXT_OP
 from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.layout_ops import is_known_op
 from imbue.system_interface.shell.layout_ops import parse_op_requester
-from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.primitives import AppLifecycleAction
 from imbue.system_interface.shell.primitives import ClientActivityKind
@@ -167,7 +167,9 @@ def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
                 shell.lifecycle.stop_app(name)
             case AppLifecycleAction.START:
                 if shell.lifecycle.wake(name) is ParkedPageKind.FAILED:
-                    return detail_response(f"App {name!r} (program {program!r}) could not be started", HTTP_BAD_GATEWAY)
+                    return detail_response(
+                        f"App {name!r} (program {program!r}) could not be started", HTTP_BAD_GATEWAY
+                    )
             case _ as unreachable:
                 assert_never(unreachable)
     except SupervisorProgramActionError as e:

@@ -19,7 +19,6 @@ from collections.abc import Callable
 from collections.abc import Sequence
 from typing import Final
 
-from app_manifest.primitives import AppName
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -97,10 +96,14 @@ class AppLifecycleManager(MutableModel):
         frozen=True, description="How many windows across every desktop show the app, by app name"
     )
     no_windows_grace_seconds: float = Field(
-        default=NO_WINDOWS_GRACE_SECONDS, frozen=True, description="How long an app goes without a window before a stop"
+        default=NO_WINDOWS_GRACE_SECONDS,
+        frozen=True,
+        description="How long an app goes without a window before a stop",
     )
     idle_sweep_interval_seconds: float = Field(
-        default=IDLE_SWEEP_INTERVAL_SECONDS, frozen=True, description="How often the sweep runs while nothing is in transition"
+        default=IDLE_SWEEP_INTERVAL_SECONDS,
+        frozen=True,
+        description="How often the sweep runs while nothing is in transition",
     )
     program_states: ProgramStatesReader = Field(
         default=read_supervisor_program_statenames,
@@ -152,7 +155,10 @@ class AppLifecycleManager(MutableModel):
         with self._lock:
             if not self._is_visited:
                 self._is_visited = True
-                logger.info("The workspace has been visited; apps without windows now stop after {}s", self.no_windows_grace_seconds)
+                logger.info(
+                    "The workspace has been visited; apps without windows now stop after {}s",
+                    self.no_windows_grace_seconds,
+                )
         self.wake_soon()
 
     # Reads
@@ -185,7 +191,9 @@ class AppLifecycleManager(MutableModel):
             parked = self._parked_by_app.pop(app, None)
             wake_times = self._wake_times_by_app.setdefault(app, [])
             if is_wake_budget_spent(wake_times, now):
-                logger.warning("Refused to wake {} again: {} wakes within {}s", app, WAKE_BUDGET_COUNT, WAKE_BUDGET_WINDOW_SECONDS)
+                logger.warning(
+                    "Refused to wake {} again: {} wakes within {}s", app, WAKE_BUDGET_COUNT, WAKE_BUDGET_WINDOW_SECONDS
+                )
                 self._failed_apps.add(app)
                 kind = ParkedPageKind.FAILED
             else:
@@ -252,7 +260,11 @@ class AppLifecycleManager(MutableModel):
     def _sweep_interval_seconds(self) -> float:
         with self._lock:
             is_transitioning = bool(self._parked_by_app) or bool(self._woken_at_by_app)
-        return min(TRANSITION_SWEEP_INTERVAL_SECONDS, self.idle_sweep_interval_seconds) if is_transitioning else self.idle_sweep_interval_seconds
+        return (
+            min(TRANSITION_SWEEP_INTERVAL_SECONDS, self.idle_sweep_interval_seconds)
+            if is_transitioning
+            else self.idle_sweep_interval_seconds
+        )
 
     def sweep_once(self) -> None:
         """One pass (spec sections 5.4 and 6.1): park every stoppable app that is down, release every parker whose
@@ -320,7 +332,9 @@ class AppLifecycleManager(MutableModel):
         except SupervisorProgramActionError as e:
             logger.warning("Could not stop {} after {}s without a window: {}", app, self.no_windows_grace_seconds, e)
             return
-        logger.info("Stopped app {} (program {}): no window showed it for {}s", app, program, self.no_windows_grace_seconds)
+        logger.info(
+            "Stopped app {} (program {}): no window showed it for {}s", app, program, self.no_windows_grace_seconds
+        )
         self.inventory.refresh_liveness()
 
     def _park(self, entry: AppInventoryEntry, program: str) -> None:

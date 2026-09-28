@@ -34,7 +34,9 @@ def test_the_first_announcement_registers_every_app(tmp_path: Path) -> None:
     events_path = tmp_path / "events.jsonl"
     writer = ServiceEventWriter(events_path=events_path)
 
-    writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:8300")))
+    writer.announce(
+        _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:8300"))
+    )
 
     events = _events(events_path)
     assert [(event["type"], event["service"]) for event in events] == [
@@ -62,9 +64,13 @@ def test_an_unchanged_registry_announces_nothing(tmp_path: Path) -> None:
 def test_only_the_app_whose_row_changed_is_re_announced(tmp_path: Path) -> None:
     events_path = tmp_path / "events.jsonl"
     writer = ServiceEventWriter(events_path=events_path)
-    writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:8300")))
+    writer.announce(
+        _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:8300"))
+    )
 
-    writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:9999")))
+    writer.announce(
+        _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:9999"))
+    )
 
     events = _events(events_path)
     assert [(event["type"], event["service"]) for event in events[2:]] == [("service_registered", "files")]
@@ -74,9 +80,13 @@ def test_only_the_app_whose_row_changed_is_re_announced(tmp_path: Path) -> None:
 def test_a_new_app_registers_and_a_removed_one_deregisters(tmp_path: Path) -> None:
     events_path = tmp_path / "events.jsonl"
     writer = ServiceEventWriter(events_path=events_path)
-    writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("old", "http://localhost:8200")))
+    writer.announce(
+        _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("old", "http://localhost:8200"))
+    )
 
-    writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("new", "http://localhost:8400")))
+    writer.announce(
+        _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("new", "http://localhost:8400"))
+    )
 
     assert [(event["type"], event["service"]) for event in _events(events_path)[2:]] == [
         ("service_registered", "new"),

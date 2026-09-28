@@ -28,10 +28,10 @@ from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
+from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import TEST_TERMINAL_URL
 from imbue.system_interface.shell.testing import TEST_TERMINAL_WINDOW_CLOSED_PATH
-from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import placement_record
 from imbue.system_interface.shell.testing import write_two_app_registry

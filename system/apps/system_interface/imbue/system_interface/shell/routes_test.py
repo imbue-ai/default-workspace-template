@@ -210,7 +210,10 @@ def test_quit_closes_every_window_of_the_app_on_every_desktop_and_stops_it(
     assert client.post("/api/desktops", json={"name": "Work", "color": "#123456", "glyph": 1}).status_code == 201
     assert _open_window(client, "files", "/a/").status_code == 201
     assert _open_window(client, "files", "/b/").status_code == 201
-    assert client.post("/api/desktops/work/windows", json={"app": "files", "path": "/c/", "client_id": "c1"}).status_code == 201
+    assert (
+        client.post("/api/desktops/work/windows", json={"app": "files", "path": "/c/", "client_id": "c1"}).status_code
+        == 201
+    )
     assert _open_window(client, "terminal", "/?session=terminal-1").status_code == 201
 
     quit_answer = client.post("/api/apps/files/quit")

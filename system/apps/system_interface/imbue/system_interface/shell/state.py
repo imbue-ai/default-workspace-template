@@ -31,9 +31,9 @@ from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
+from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
-from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import build_app_lifecycle_manager
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
@@ -768,7 +768,9 @@ def build_shell_state(
         lifecycle=build_app_lifecycle_manager(
             resolved_inventory,
             is_lifecycle_enabled,
-            lambda app: sum(1 for desktop in desktops.list_desktops() for window in desktop.windows if window.app == app),
+            lambda app: sum(
+                1 for desktop in desktops.list_desktops() for window in desktop.windows if window.app == app
+            ),
             no_windows_grace_seconds=no_windows_grace_seconds,
             idle_sweep_interval_seconds=idle_sweep_interval_seconds,
         ),

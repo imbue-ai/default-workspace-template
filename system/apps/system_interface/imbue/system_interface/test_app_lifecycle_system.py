@@ -132,8 +132,18 @@ def test_quit_closes_the_windows_and_stops_the_app_at_once(
     client = started_shell.test_client()
     shell = started_shell.config["SYSTEM_INTERFACE_STATE"].shell
     shell.arrive_client(ClientId("laptop"), RequestIdentity(owner=True))
-    assert client.post("/api/desktops/home/windows", json={"app": "docs", "path": "/a/", "client_id": "laptop"}).status_code == 201
-    assert client.post("/api/desktops/home/windows", json={"app": "docs", "path": "/b/", "client_id": "laptop"}).status_code == 201
+    assert (
+        client.post(
+            "/api/desktops/home/windows", json={"app": "docs", "path": "/a/", "client_id": "laptop"}
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/api/desktops/home/windows", json={"app": "docs", "path": "/b/", "client_id": "laptop"}
+        ).status_code
+        == 201
+    )
     assert _windows(client) == [["docs", "docs"]]
 
     answer = client.post("/api/apps/docs/quit")
