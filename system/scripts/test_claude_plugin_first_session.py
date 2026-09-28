@@ -42,6 +42,7 @@ _SKILL_LIST_PROMPT = (
 # Marks, not a call in the test body: they are evaluated before any fixture runs,
 # so a skipped run never builds the fixture's worktree.
 pytestmark = [
+    pytest.mark.real_claude,
     pytest.mark.skipif(
         shutil.which("claude") is None, reason="the claude CLI is not installed"
     ),

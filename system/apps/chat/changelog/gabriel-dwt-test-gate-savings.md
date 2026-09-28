@@ -1,4 +1,4 @@
-- A plain `uv run pytest` in `system/apps/chat` now skips the `release` tests (the browser tests and the ones that drive a real claude). `-m ''` runs everything, as CI does, and `-m release` runs only the release tests; naming a browser test file without either reports "N deselected" and runs nothing.
+- The chat tests are marked by what they are: `browser` (the two end-to-end files), `frontend` (the embed checks, which read the frontend source) and `real_claude` (the settings-env auth, message-conservation and handoff tests, which run the real claude binary); the `release` marker is gone. A plain `uv run pytest` in `system/apps/chat` now skips the `browser` and `real_claude` tests. `-m ''` runs everything, as CI does, and `-m browser` runs only the browser tests; naming a browser test file without either reports "N deselected" and runs nothing.
 
 - The frontend's `npm test` no longer runs eslint and prettier. `npm run lint` is eslint alone, the new `npm run typecheck` is `tsc --noEmit`, and `npm run format:check` is prettier; `npm run build` still typechecks.
 

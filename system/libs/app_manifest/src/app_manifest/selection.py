@@ -6,7 +6,8 @@ runs that unit's suite, plus the suites of the workspace members that depend on 
 manifests reference it (``[[references]]``); a package the root project depends on also runs
 the full root suite, the root project's own tests. A supervisord block runs the app whose
 program it holds and the check that every block names its OOM band. ``uv.lock`` selects the
-members that depend on what it upgraded. A small always-run set guards the repo-wide
+members that depend on what it upgraded. A change inside an app's frontend runs only the
+app's tests marked ``browser`` or ``frontend``. A small always-run set guards the repo-wide
 invariants any edit can break; agent prose outside every skill, and the other markdown the
 always-run prose checks read, selects only that set and the apps whose manifests reference
 it. Any other path belongs to no declared unit, so it runs the full root suite.
@@ -118,11 +119,13 @@ _SPLIT_TYPE_CHECKS: Final[Mapping[str, str]] = {
     "system/apps/chat": "imbue/chat/test_ratchets.py::test_no_type_errors",
 }
 _ALL_MARKERS_EXPRESSION: Final[str] = ""
+# The pytest markers the selection runs by: a test that drives a browser against the built
+# bundles, and one that reads an app's frontend source.
+_BROWSER_MARKER: Final[str] = "browser"
+_FRONTEND_MARKERS_EXPRESSION: Final[str] = "browser or frontend"
 # A run of only some of a coverage-measured suite's tests would fail its coverage floor, which
 # only the whole suite can reach.
 _NO_COVERAGE_FLAG: Final[str] = "--no-cov"
-# A test file that drives a browser imports the library it drives it with.
-_BROWSER_TEST_MARKERS: Final[tuple[str, ...]] = ("from playwright", "import playwright")
 
 # Where a markdown file is agent-run prose rather than documentation: mirrors the update-self
 # change classes (``.agents/skills/update-self/scripts/update_classification.py``).
@@ -157,6 +160,14 @@ class ChangedPathClass(LowerCaseStrEnum):
     ROOT_CONFIG = auto()
     DOCS = auto()
     UNOWNED = auto()
+
+
+class MarkerScope(LowerCaseStrEnum):
+    """Which of an own-root suite's tests a request runs, by marker."""
+
+    DEFAULT = auto()
+    EVERYTHING = auto()
+    FRONTEND = auto()
 
 
 class SuiteKind(LowerCaseStrEnum):
@@ -218,9 +229,6 @@ class RepoLayout(FrozenModel):
     test_files: tuple[str, ...] = Field(
         description="Every tracked test file some suite collects, in path order"
     )
-    browser_test_files: frozenset[str] = Field(
-        description="The own-root test files that drive a browser"
-    )
     own_root_units: tuple[str, ...] = Field(
         description="Suites with their own pytest configuration"
     )
@@ -246,8 +254,9 @@ class _PytestRequest(FrozenModel):
     test_files: tuple[str, ...] | None = Field(
         description="The files to run; None for the group's whole suite"
     )
-    is_browser_included: bool = Field(
-        description="Whether a whole own-root suite includes its browser tests"
+    marker_scope: MarkerScope = Field(
+        description="Which of a whole own-root suite's tests run: its default run, every test, "
+        "or only those marked browser or frontend"
     )
     reason: SelectionReason = Field(description="Why")
 
@@ -377,13 +386,6 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
         repo_root=repo_root,
         tracked_files=tracked_files,
         test_files=test_files,
-        browser_test_files=frozenset(
-            path
-            for path in test_files
-            if any(is_path_covered_by(unit, path) for unit in own_root_units)
-            and (repo_root / path).is_file()
-            and any(marker in _read_text(repo_root / path) for marker in _BROWSER_TEST_MARKERS)
-        ),
         own_root_units=own_root_units,
         coverage_measured_units=read_coverage_measured_units(repo_root, own_root_units),
         python_members=python_members,
@@ -417,7 +419,7 @@ def _file_request(
         root=own_root,
         group=own_root if own_root != ROOT_DIRECTORY else PurePosixPath(test_file).parent.as_posix(),
         test_files=(test_file,),
-        is_browser_included=True,
+        marker_scope=MarkerScope.EVERYTHING,
         reason=reason,
     )
 
@@ -425,7 +427,7 @@ def _file_request(
 def _whole_request(
     layout: RepoLayout,
     directory: str,
-    is_browser_included: bool,
+    marker_scope: MarkerScope,
     reason: SelectionReason,
 ) -> _PytestRequest | None:
     if not (layout.repo_root / directory).is_dir() or not _unit_has_tests(layout, directory):
@@ -435,7 +437,7 @@ def _whole_request(
         root=own_root,
         group=own_root if own_root != ROOT_DIRECTORY else directory,
         test_files=None,
-        is_browser_included=is_browser_included and own_root != ROOT_DIRECTORY,
+        marker_scope=marker_scope if own_root != ROOT_DIRECTORY else MarkerScope.DEFAULT,
         reason=reason,
     )
 
@@ -470,7 +472,7 @@ def _referenced_directory_requests(
             directory = reference.path.rstrip("/")
             reason = _reason(path, ChangedPathClass.PACKAGE, f"{app_directory} references {directory}")
             requests.extend(
-                _present([_whole_request(layout, directory, is_browser_included=False, reason=reason)])
+                _present([_whole_request(layout, directory, marker_scope=MarkerScope.DEFAULT, reason=reason)])
             )
     return requests
 
@@ -480,13 +482,20 @@ def _select_for_unit(context: _SelectionContext, path: str, unit: str) -> _PathO
     members that depend on it and of the directories an app's manifest references, and the full
     root suite when the root project depends on the package or on one of those members."""
     layout = context.layout
+    # An app's frontend is built into the app's own bundle, which no Python code of the app or
+    # of a package that depends on it loads; its tests marked browser or frontend, and its npm
+    # consumers, are the frontend selection's.
+    if _owning_npm_package(layout, path) is not None and not is_test_file_name(path):
+        return _PathOutcome()
     requests = list(
         _present(
             [
                 _whole_request(
                     layout,
                     unit,
-                    is_browser_included=unit in layout.own_root_units,
+                    marker_scope=(
+                        MarkerScope.EVERYTHING if unit in layout.own_root_units else MarkerScope.DEFAULT
+                    ),
                     reason=_reason(path, ChangedPathClass.PACKAGE, f"changed in {unit}"),
                 )
             ]
@@ -495,15 +504,11 @@ def _select_for_unit(context: _SelectionContext, path: str, unit: str) -> _PathO
     if is_test_file_name(path) or unit.startswith(f"{_SKILLS_DIRECTORY}/"):
         return _PathOutcome(pytest_requests=tuple(requests))
     requests.extend(_referenced_directory_requests(layout, path, unit))
-    # An app's frontend is built into the app's own bundle, which no Python package that
-    # depends on the app loads; its npm consumers are the frontend selection's.
-    if _owning_npm_package(layout, path) is not None:
-        return _PathOutcome(pytest_requests=tuple(requests))
     consumers = context.python_consumers.get(unit, ())
     for consumer in consumers:
         reason = _reason(path, ChangedPathClass.PACKAGE, f"{consumer} depends on {unit}")
         requests.extend(
-            _present([_whole_request(layout, consumer, is_browser_included=False, reason=reason)])
+            _present([_whole_request(layout, consumer, marker_scope=MarkerScope.DEFAULT, reason=reason)])
         )
     # The root project's own tests (flat scripts, shared agent scripts, skills) are the full
     # root suite.
@@ -519,8 +524,8 @@ def _frontend_requests(
     package_directories: Sequence[str],
     reason: SelectionReason,
 ) -> tuple[list[_FrontendRequest], list[_PytestRequest]]:
-    """The npm checks for some packages and their consumers, and the browser tests of every
-    app whose frontend is among them."""
+    """The npm checks for some packages and their consumers, and the tests marked browser or
+    frontend of every app whose frontend is among them."""
     selected = sorted(
         {
             *package_directories,
@@ -530,15 +535,16 @@ def _frontend_requests(
     frontend = [
         _FrontendRequest(package_directory=directory, reason=reason) for directory in selected
     ]
-    browser: list[_PytestRequest] = []
-    for directory in selected:
-        own_root = _own_root_for(layout, directory)
-        if own_root == ROOT_DIRECTORY:
-            continue
-        for test_file in sorted(layout.browser_test_files):
-            if is_path_covered_by(own_root, test_file):
-                browser.extend(_present([_file_request(layout, test_file, reason)]))
-    return frontend, browser
+    own_roots = sorted(
+        {_own_root_for(layout, directory) for directory in selected} - {ROOT_DIRECTORY}
+    )
+    marked = list(
+        _present(
+            _whole_request(layout, own_root, marker_scope=MarkerScope.FRONTEND, reason=reason)
+            for own_root in own_roots
+        )
+    )
+    return frontend, marked
 
 
 def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
@@ -589,7 +595,7 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
                 _whole_request(
                     layout,
                     owner,
-                    is_browser_included=False,
+                    marker_scope=MarkerScope.DEFAULT,
                     reason=_reason(path, ChangedPathClass.WIRING, f"runs {owner}"),
                 )
                 for owner in layout.wiring_owners.get(path, ())
@@ -604,7 +610,7 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
             if npm_package is None
             else [npm_package.directory]
         )
-        frontend, browser = _frontend_requests(
+        frontend, marked = _frontend_requests(
             layout,
             context.npm_consumers,
             directories,
@@ -612,7 +618,7 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
         )
         classes.append(ChangedPathClass.FRONTEND_PACKAGE)
         frontend_requests.extend(frontend)
-        pytest_requests.extend(browser)
+        pytest_requests.extend(marked)
         is_owned = True
 
     unit = find_owning_unit(path)
@@ -658,7 +664,9 @@ def _select_for_manifest_references(layout: RepoLayout, path: str) -> _PathOutco
             path, ChangedPathClass.MANIFEST_REFERENCE, f"referenced by {match.manifest.name}"
         )
         requests.extend(
-            _present([_whole_request(layout, owner.rstrip("/"), is_browser_included=False, reason=reason)])
+            _present(
+                [_whole_request(layout, owner.rstrip("/"), marker_scope=MarkerScope.DEFAULT, reason=reason)]
+            )
         )
     return _PathOutcome(classes=tuple(classes), pytest_requests=tuple(requests))
 
@@ -676,7 +684,7 @@ def _select_for_lockfile(context: _SelectionContext, path: str) -> _PathOutcome:
         _whole_request(
             layout,
             member,
-            is_browser_included=False,
+            marker_scope=MarkerScope.DEFAULT,
             reason=_reason(path, ChangedPathClass.LOCKFILE, f"{member} depends on upgraded {upgraded}"),
         )
         for member in lockfile.dependent_members
@@ -774,7 +782,6 @@ def _pytest_commands(
                 root,
                 whole,
                 files,
-                layout.browser_test_files,
                 root in layout.coverage_measured_units,
                 reasons,
             )
@@ -786,56 +793,59 @@ def _own_root_commands(
     root: str,
     whole: Sequence[_PytestRequest],
     files: Sequence[str],
-    browser_test_files: Set[str],
     is_coverage_measured: bool,
     reasons: tuple[SelectionReason, ...],
 ) -> list[SuiteCommand]:
-    """The run of an own-root suite: whole (with its browser tests when the app itself
-    changed), or just the named files in full, without coverage; then its split-out type
-    check."""
+    """The runs of an own-root suite: every test when the app itself changed, its default run
+    when something it depends on did, only its browser and frontend tests when just a frontend
+    it builds changed, and any files named on their own, all markers included; then its
+    split-out type check when a run includes the test it replaces."""
     commands: list[SuiteCommand] = []
     partial_run = ("uv", "run", "pytest", *((_NO_COVERAGE_FLAG,) if is_coverage_measured else ()))
+    scopes = {request.marker_scope for request in whole}
     split_type_check = _SPLIT_TYPE_CHECKS.get(root)
     relative_files = [_relative_to_root(root, file) for file in files]
+    is_whole_run = bool(scopes - {MarkerScope.FRONTEND})
     runs_type_check_test = split_type_check is not None and (
-        bool(whole) or split_type_check.split("::")[0] in relative_files
+        is_whole_run or split_type_check.split("::")[0] in relative_files
     )
     deselect = (
         ("--deselect", split_type_check)
         if split_type_check is not None and runs_type_check_test
         else ()
     )
-    if whole:
-        is_browser_included = any(request.is_browser_included for request in whole)
-        markers = ("-m", _ALL_MARKERS_EXPRESSION) if is_browser_included else ()
-        commands.append(
-            _command(SuiteKind.PYTEST, root, ("uv", "run", "pytest", *markers, *deselect), reasons)
+    if MarkerScope.EVERYTHING in scopes:
+        argv = ("uv", "run", "pytest", "-m", _ALL_MARKERS_EXPRESSION, *deselect)
+        commands.append(_command(SuiteKind.PYTEST, root, argv, reasons))
+        return [*commands, *_split_type_check_commands(root, deselect, reasons)]
+    if MarkerScope.DEFAULT in scopes:
+        commands.append(_command(SuiteKind.PYTEST, root, ("uv", "run", "pytest", *deselect), reasons))
+        if MarkerScope.FRONTEND in scopes:
+            # The default run already holds the frontend-marked tests, not the browser ones.
+            argv = (*partial_run, "-m", _BROWSER_MARKER)
+            commands.append(_command(SuiteKind.PYTEST, root, argv, reasons))
+    elif MarkerScope.FRONTEND in scopes:
+        argv = (*partial_run, "-m", _FRONTEND_MARKERS_EXPRESSION)
+        commands.append(_command(SuiteKind.PYTEST, root, argv, reasons))
+    if relative_files:
+        # A file named on its own runs in full, whatever its markers; a whole run may skip it.
+        argv = (
+            *partial_run,
+            "-m",
+            _ALL_MARKERS_EXPRESSION,
+            *(() if is_whole_run else deselect),
+            *relative_files,
         )
-        named_browser_files = [
-            _relative_to_root(root, file) for file in files if file in browser_test_files
-        ]
-        if named_browser_files and not is_browser_included:
-            # The whole run skips the browser tests, which were asked for by name.
-            commands.append(
-                _command(
-                    SuiteKind.PYTEST,
-                    root,
-                    (*partial_run, "-m", _ALL_MARKERS_EXPRESSION, *named_browser_files),
-                    reasons,
-                )
-            )
-    elif relative_files:
-        commands.append(
-            _command(
-                SuiteKind.PYTEST,
-                root,
-                (*partial_run, "-m", _ALL_MARKERS_EXPRESSION, *deselect, *relative_files),
-                reasons,
-            )
-        )
-    if deselect:
-        commands.append(_command(SuiteKind.TYPE_CHECK, root, ("uv", "run", "ty", "check"), reasons))
-    return commands
+        commands.append(_command(SuiteKind.PYTEST, root, argv, reasons))
+    return [*commands, *_split_type_check_commands(root, deselect, reasons)]
+
+
+def _split_type_check_commands(
+    root: str, deselect: Sequence[str], reasons: tuple[SelectionReason, ...]
+) -> list[SuiteCommand]:
+    if not deselect:
+        return []
+    return [_command(SuiteKind.TYPE_CHECK, root, ("uv", "run", "ty", "check"), reasons)]
 
 
 def _frontend_commands(
@@ -883,16 +893,15 @@ def _frontend_commands(
     return commands
 
 
-def _browser_run_reasons(
-    layout: RepoLayout, requests: Sequence[_PytestRequest]
-) -> tuple[SelectionReason, ...]:
-    """The reasons of every request that runs a browser test, which needs the bundles built
-    first (the browser tests skip, rather than fail, when they are missing)."""
+def _browser_run_reasons(requests: Sequence[_PytestRequest]) -> tuple[SelectionReason, ...]:
+    """The reasons of every request that may run a browser test, which needs the bundles built
+    first (the browser tests skip, rather than fail, when they are missing): an own-root run
+    that includes its browser-marked tests, or one of files named on their own."""
     runs_browser = [
         request
         for request in requests
-        if (request.test_files is None and request.is_browser_included)
-        or any(file in layout.browser_test_files for file in (request.test_files or ()))
+        if request.root != ROOT_DIRECTORY
+        and (request.test_files is not None or request.marker_scope != MarkerScope.DEFAULT)
     ]
     return _unique_reasons(runs_browser)
 
@@ -961,7 +970,7 @@ def select_tests(
     # then the own-root suites
     always_run = _always_run_files(layout)
     commands = _frontend_commands(
-        layout, frontend_requests, _browser_run_reasons(layout, pytest_requests)
+        layout, frontend_requests, _browser_run_reasons(pytest_requests)
     )
     if is_full_root:
         commands.append(

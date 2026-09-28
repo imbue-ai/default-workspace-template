@@ -466,6 +466,7 @@ def test_the_three_definitions_of_the_apply_state_paths_agree() -> None:
 _BANNER_SOURCE_REL = "system/apps/system_interface/frontend/src/views/UpdateStalenessBanner.ts"
 
 
+@pytest.mark.frontend
 def test_the_banner_has_a_message_for_every_variant_and_no_others() -> None:
     """The variant strings are written twice, once per language.
 

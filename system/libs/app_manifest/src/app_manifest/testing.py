@@ -177,7 +177,7 @@ def build_selection_workspace(repo_root: Path) -> None:
         "system/apps/chat/pyproject.toml",
         '[project]\nname = "chat"\ndependencies = ["corelib"]\n\n'
         '[tool.hatch.build.targets.wheel]\npackages = ["imbue"]\n\n'
-        '[tool.pytest.ini_options]\naddopts = ["--cov=imbue.chat", "-m", "not release"]\n',
+        '[tool.pytest.ini_options]\naddopts = ["--cov=imbue.chat", "-m", "not browser and not real_claude"]\n',
     )
     write_repo_file(repo_root, "system/apps/chat/imbue/chat/__init__.py", "")
     write_repo_file(repo_root, "system/apps/chat/imbue/chat/server.py", "PORT = 1\n")
@@ -185,7 +185,7 @@ def build_selection_workspace(repo_root: Path) -> None:
     write_repo_file(
         repo_root,
         "system/apps/chat/imbue/chat/test_e2e.py",
-        "from playwright.sync_api import Page\n\n\ndef test_page(page: Page) -> None:\n    pass\n",
+        "import pytest\n\npytestmark = pytest.mark.browser\n\n\ndef test_page() -> None:\n    pass\n",
     )
     write_repo_file(repo_root, "system/apps/chat/imbue/chat/test_ratchets.py", "def test_no_type_errors() -> None:\n    pass\n")
 

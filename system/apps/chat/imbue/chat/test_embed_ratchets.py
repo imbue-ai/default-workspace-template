@@ -20,7 +20,7 @@ from imbue.imbue_common.ratchet_testing.core import check_regex_ratchet
 
 _FRONTEND_SRC = Path(__file__).parent.parent.parent / "frontend" / "src"
 
-pytestmark = pytest.mark.xdist_group(name="ratchets")
+pytestmark = [pytest.mark.xdist_group(name="ratchets"), pytest.mark.frontend]
 
 _RAW_POST_MESSAGE_RULE = RatchetRuleInfo(
     rule_name="raw postMessage / message-listener usages in the chat frontend",

@@ -11,3 +11,5 @@ Harden workers and update-self now run only the tests a change can reach, as `ap
 - Update-self's validation step runs the selector over the merged files, the update's changes inside every creation that carries local content, the creations the impact analysis found (listed in `impacted-paths.txt`), and the worker's own edits.
 
 - The critical-app handoff says which commit the harden task's `diff_base` is: the one the branch forked from the served tree.
+
+- The web-frontend testing guidance asks for every browser test to be marked `browser` and every test that reads an app's frontend source `frontend`: when only an app's frontend changed, the test gate runs just those of its tests.

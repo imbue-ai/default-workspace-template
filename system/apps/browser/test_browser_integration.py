@@ -356,6 +356,7 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
 # Persistence, the core promise, against real Chromium.
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -389,6 +390,7 @@ def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest
     asyncio.run(go())
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
@@ -410,6 +412,7 @@ def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
     asyncio.run(go())
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -666,6 +669,7 @@ def _held_keycodes(display: str) -> list[int]:
         disp.close()
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> None:
@@ -706,6 +710,7 @@ def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> Non
             asyncio.run(go())
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -739,6 +744,7 @@ def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkey
         asyncio.run(go())
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(180)
 def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:

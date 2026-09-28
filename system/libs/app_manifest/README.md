@@ -220,8 +220,9 @@ Selection reads only what the workspace declares. A path selects:
   `pyproject.toml` added it);
 - for an npm package, its and its consumers' `npm test`, `npm run lint` and
   `npm run format:check` (and `npm run typecheck` for a package with no build),
-  after `npm ci && npm run build`, plus the browser tests of every app whose
-  frontend is among them; the npm root's configuration and its prebuild script
+  after `npm ci && npm run build`, plus the tests marked `browser` or
+  `frontend` of every app whose frontend is among them (and nothing else of
+  that app, since no Python code loads its frontend); the npm root's configuration and its prebuild script
   (`system/scripts/fetch_mngr_assets.sh`, with the `_mngr_git_auth.sh` it
   sources) select every npm package.
 
@@ -255,10 +256,12 @@ of it. A change made only of documentation selects nothing.
 roots: workspace members with their own pytest configuration, which the root
 configuration ignores. Any other directory it ignores (a vendored subtree such
 as `system/vendor/tk`) is no suite, and its tests are never selected. The two
-apps' suites deselect their browser tests (the `release` marker) by default.
-Such an app runs with them (`-m ''`) when the app itself changed, and without
-them when it was reached as a consumer. A run of only some of such a suite's
-files (its browser tests, or a changed test file) passes
+apps' suites deselect their `browser` (and chat its `real_claude`) tests by
+default. Such an app runs everything (`-m ''`) when its Python changed, its
+default run when it was reached as a consumer, and only its tests marked
+`browser` or `frontend` (`-m 'browser or frontend'`) when only a frontend it
+builds changed. The selection reads the markers, never the test files. A run of
+only some of such a suite's tests (by marker, or a changed test file) passes
 `--no-cov` when the suite measures coverage, since only a whole run can reach
 its coverage floor. The chat suite's `test_no_type_errors`
 is deselected and its `ty check` printed as a command of its own, so the two

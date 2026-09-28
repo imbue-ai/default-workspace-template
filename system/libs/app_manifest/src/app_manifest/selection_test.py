@@ -29,6 +29,7 @@ _CHAT_WHOLE_WITH_BROWSER = (
     "(cd system/apps/chat && uv run pytest -m '' --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
 )
 _CHAT_TYPE_CHECK = "(cd system/apps/chat && uv run ty check)"
+_CHAT_BROWSER_AND_FRONTEND = "(cd system/apps/chat && uv run pytest --no-cov -m 'browser or frontend')"
 _FRONTEND_BUILD = ["(cd system && npm ci)", "(cd system && npm run build)"]
 
 
@@ -301,8 +302,8 @@ def test_a_shared_frontend_library_change_builds_then_runs_consumer_checks_and_b
         # The library has no build, so the build does not type-check it.
         "(cd system && npm run typecheck --workspace=libs/ui)",
         _ALWAYS_RUN,
-        # Only the chat app's browser tests can observe the library; the rest of its suite cannot.
-        "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_e2e.py)",
+        # Only the chat app's browser and frontend tests can observe the library.
+        _CHAT_BROWSER_AND_FRONTEND,
     ]
 
 
@@ -318,7 +319,7 @@ def test_the_npm_roots_prebuild_script_runs_every_frontends_checks_instead_of_th
         "(cd system && npm run format:check --workspace=apps/chat/frontend --workspace=libs/ui)",
         "(cd system && npm run typecheck --workspace=libs/ui)",
         _ALWAYS_RUN,
-        "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_e2e.py)",
+        _CHAT_BROWSER_AND_FRONTEND,
     ]
 
 
@@ -336,20 +337,35 @@ def test_a_backend_change_to_the_app_runs_its_browser_tests_and_splits_out_its_t
     ]
 
 
-def test_a_frontend_change_to_the_app_runs_its_npm_checks_and_its_whole_suite(
+def test_a_frontend_change_to_the_app_runs_its_npm_checks_and_only_its_browser_and_frontend_tests(
     workspace: Path,
 ) -> None:
     selection = _select(workspace, ["system/apps/chat/frontend/src/main.ts"])
 
+    # No Python code loads the frontend, so neither the rest of the suite nor the type check runs.
     assert _command_lines(selection) == [
         *_FRONTEND_BUILD,
         "(cd system && npm test --workspace=apps/chat/frontend)",
         "(cd system && npm run lint --workspace=apps/chat/frontend)",
         "(cd system && npm run format:check --workspace=apps/chat/frontend)",
         _ALWAYS_RUN,
-        _CHAT_WHOLE_WITH_BROWSER,
-        _CHAT_TYPE_CHECK,
+        _CHAT_BROWSER_AND_FRONTEND,
     ]
+
+
+def test_an_app_reached_through_a_library_and_its_frontend_adds_only_its_browser_tests(
+    workspace: Path,
+) -> None:
+    selection = _select(
+        workspace, ["system/libs/corelib/src/corelib/core.py", "system/libs/ui/src/index.ts"]
+    )
+
+    lines = _command_lines(selection)
+    # The default run already holds the frontend-marked tests.
+    assert _CHAT_WHOLE_WITHOUT_BROWSER in lines
+    assert "(cd system/apps/chat && uv run pytest --no-cov -m browser)" in lines
+    assert _CHAT_BROWSER_AND_FRONTEND not in lines
+    assert lines[-1] == _CHAT_TYPE_CHECK
 
 
 def test_a_frontend_change_does_not_reach_the_python_consumers_of_the_apps_package(
@@ -371,7 +387,7 @@ def test_a_frontend_change_does_not_reach_the_python_consumers_of_the_apps_packa
     backend = _select(workspace, ["system/apps/chat/imbue/chat/server.py"])
 
     assert "uv run pytest system/apps/shelf" not in _command_lines(frontend)
-    assert _CHAT_WHOLE_WITH_BROWSER in _command_lines(frontend)
+    assert _CHAT_BROWSER_AND_FRONTEND in _command_lines(frontend)
     assert "uv run pytest system/apps/shelf" in _command_lines(backend)
 
 
