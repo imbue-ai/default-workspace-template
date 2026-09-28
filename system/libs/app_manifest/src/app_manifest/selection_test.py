@@ -196,6 +196,22 @@ def test_a_shared_frontend_library_change_builds_then_runs_consumer_checks_and_b
     ]
 
 
+def test_the_npm_roots_prebuild_script_runs_every_frontends_checks_instead_of_the_full_root_suite(
+    workspace: Path,
+) -> None:
+    selection = _select(workspace, ["system/scripts/fetch_mngr_assets.sh"])
+
+    assert _command_lines(selection) == [
+        *_FRONTEND_BUILD,
+        "(cd system && npm test --workspace=apps/chat/frontend --workspace=libs/ui)",
+        "(cd system && npm run lint --workspace=apps/chat/frontend --workspace=libs/ui)",
+        "(cd system && npm run format:check --workspace=apps/chat/frontend --workspace=libs/ui)",
+        "(cd system && npm run typecheck --workspace=libs/ui)",
+        _ALWAYS_RUN,
+        "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_e2e.py)",
+    ]
+
+
 def test_a_backend_change_to_the_app_runs_its_browser_tests_and_splits_out_its_type_check(
     workspace: Path,
 ) -> None:
