@@ -58,20 +58,25 @@ def test_an_error_signing_in_cannot_fix_is_not_flagged(text: str) -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        pytest.param("Credit balance is too low", id="claude-credit-balance"),
         pytest.param("This organization has been disabled", id="claude-org-disabled"),
         pytest.param("OAuth token does not meet scope requirements", id="claude-oauth-scope"),
-        pytest.param("Budget has been exceeded for this key", id="litellm-budget"),
-        pytest.param("ExceededBudget", id="litellm-budget-code"),
         pytest.param("Authentication Error, Invalid proxy server token passed", id="litellm-proxy-token"),
-        pytest.param("usage_limit_exceeded", id="codex-quota"),
     ],
 )
-def test_folded_claude_and_quota_patterns(text: str) -> None:
-    """These came from `claude/auth_patterns.py`, now folded in.
-
-    Exhausted ENTITLEMENT rather than a rejected credential, and deliberately the same family:
-    none is an authentication failure in the HTTP sense, but the only way forward for all of
-    them is different credentials, which is what the subtext offers.
-    """
+def test_folded_claude_patterns(text: str) -> None:
+    """These came from `claude/auth_patterns.py`, now folded in."""
     assert is_auth_error_text(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("Credit balance is too low", id="claude-credit-balance"),
+        pytest.param("Budget has been exceeded for this key", id="litellm-budget"),
+        pytest.param("usage_limit_exceeded", id="codex-quota"),
+        pytest.param('400 {"type":"invalid_request_error","message":"prompt is too long"}', id="bad-request"),
+    ],
+)
+def test_a_spent_account_or_a_bad_request_is_not_a_sign_in_problem(text: str) -> None:
+    """The credential works in each of these; signing in again would change nothing."""
+    assert is_auth_error_text(text) is False

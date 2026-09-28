@@ -18,9 +18,10 @@
  *   success    a sign-in that has something to say about itself, with a Done footer
  *
  * A browser sign-in first goes to the minds desktop app, which opens the page and relays the
- * provider's callback into this workspace. Only when no desktop app answers does the chooser
- * fall back: to pasting a code for Claude, and to the one-time-code login for ChatGPT, whose
- * browser login cannot finish without the relay.
+ * provider's callback into this workspace. When no desktop app answers, the chooser falls back: to
+ * pasting a code for Claude, and to the one-time-code login for ChatGPT, whose browser login cannot
+ * finish without the relay. The same ways in stay one click away while the browser is out, and
+ * after a sign-in fails, so a browser that never comes back is never a dead end.
  *
  * Two shapes worth knowing about:
  *
@@ -49,13 +50,13 @@ import type { Lane, LaneMethod, UnpickableReason } from "../models/Providers";
 import {
   abortFlow,
   areLanesLoaded,
+  canManageAccounts,
   clearFlow,
   deleteAccount,
   getAccounts,
   getFlow,
   getLanes,
   getUnpickableAccount,
-  isPendingFlowFor,
   isPickingAccount,
   loadAccounts,
   pickAccount,
@@ -72,6 +73,9 @@ export interface ProviderChooserModalAttrs {
 }
 
 type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
+
+/** What a share visitor sees instead of the ways to sign in: accounts are the owner's to change. */
+const OWNER_ONLY_NOTICE = "Only the owner of this workspace can connect an AI account.";
 
 /** What Claude's sign-in page can show when claude.ai's own session is in a bad state. */
 const CLAUDE_CERTIFICATE_HINT = "Seeing malformed_certificate? Sign out of claude.ai and sign in again.";
@@ -116,6 +120,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let isRelayUnavailable = false;
   // Bumped by every `begin`, so a request that has been superseded can tell and stand down.
   let generation = 0;
+  // Why the chooser moved the user to another way of signing in, shown above it.
+  let notice: string | null = null;
 
   function reset(): void {
     mode = "chooser";
@@ -133,6 +139,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     copyFailed = false;
     awaitingVerdict = false;
     isOpeningBrowser = false;
+    notice = null;
     clearFlow();
   }
 
@@ -172,7 +179,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   async function begin(
     chosen: Lane,
     chosenMethod: LaneMethod,
-    options: { fromChooser: boolean; accountId?: string },
+    options: { fromChooser: boolean; accountId?: string; notice?: string },
   ): Promise<void> {
     lane = chosen;
     method = chosenMethod;
@@ -187,6 +194,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     awaitingVerdict = false;
     reauthAccountId = options.accountId ?? null;
     isOpeningBrowser = false;
+    notice = options.notice ?? null;
     keyProvider = chosen.key_providers.length === 1 ? chosen.key_providers[0].provider_id : null;
     // A terminal lane spends seconds spawning a CLI and scraping its first screen, so it
     // gets the waiting screen. A paste lane has nothing to wait for -- minting a folder
@@ -203,10 +211,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     m.redraw();
     let fallback: LaneMethod | null = null;
     try {
-      const target = { laneId: chosen.id, methodId: chosenMethod.id, accountId: options.accountId ?? null };
-      // The chooser starts its top row in the background when it opens, so that row's click
-      // finds its sign-in already running.
-      if (!isPendingFlowFor(target)) await startFlow(chosen.id, chosenMethod.id, options.accountId);
+      await startFlow(chosen.id, chosenMethod.id, options.accountId);
       if (attempt !== generation) return;
       const started = getFlow();
       if (started !== null && started.relay_url !== null && !isRelayUnavailable) {
@@ -269,6 +274,28 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     // sign-in, gets a second row for the same provider, and the account they were trying to
     // revive is still dead along with every chat bound to it.
     void begin(owner, primary, { fromChooser: true, accountId: reauthAccountId ?? undefined });
+  }
+
+  /** Offer this lane's ways in that need no relay: the code steps for the live Claude sign-in,
+   *  whose pasted code the CLI still takes, or a fresh sign-in that needs no browser callback. */
+  function signInAnotherWay(current: Lane, why: string | null = null): void {
+    const flow = getFlow();
+    if (flow !== null && flow.status.state === "pending" && flow.shape === "url_then_code") {
+      mode = "menu";
+      notice = why;
+      m.redraw();
+      return;
+    }
+    const manual = current.methods.find((each) => each.shape !== "browser" && !isPaste(each)) ?? current.methods[0];
+    void begin(current, manual, {
+      fromChooser: true,
+      accountId: reauthAccountId ?? undefined,
+      notice: why ?? undefined,
+    });
+  }
+
+  function hasOtherWays(current: Lane): boolean {
+    return current.methods.length > 1;
   }
 
   function stepBlock(step: 1 | 2, isLast: boolean, children: m.Children): m.Vnode {
@@ -366,6 +393,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     // once there IS a signed-in section -- a first-run user sees the bare provider list,
     // with nothing to explain.
     const signedIn = renderAccounts();
+    if (!canManageAccounts()) {
+      return [signedIn, m("p", { class: css.LEAD }, OWNER_ONLY_NOTICE)];
+    }
     return [
       signedIn,
       // Removing an account can fail -- a row with no folder, a store that will not write --
@@ -421,33 +451,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             picking && unpickableNote !== null
               ? m("span", { class: unpickableNote.class }, unpickableNote.text)
               : null,
-            m(
-              Button,
-              {
-                variant: "ghost",
-                sm: true,
-                extra: css.ACCOUNT_ACTION,
-                title: account.holds_subscription_token
-                  ? "Sign in with your Claude subscription instead of a pasted token, keeping every chat on this account"
-                  : "Sign in again, keeping this account and every chat on it",
-                onclick: () => void reauthenticate(account.id, account.lane),
-              },
-              account.holds_subscription_token ? "Switch to a normal sign-in" : "Sign in again",
-            ),
-            m(
-              Button,
-              {
-                variant: "ghost",
-                sm: true,
-                icon: true,
-                extra: css.ACCOUNT_ACTION,
-                "aria-label": `Remove ${account.label}`,
-                onclick: () => {
-                  confirmingDelete = account.id;
-                },
-              },
-              m.trust(icon("trash", { size: 15 })),
-            ),
+            canManageAccounts() ? accountActions(account) : null,
           ]);
         }),
       ),
@@ -464,6 +468,39 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           )
         : null,
     ]);
+  }
+
+  /** "Sign in again" and remove, for someone who may change accounts. */
+  function accountActions(account: ReturnType<typeof getAccounts>[number]): m.Children {
+    return [
+      m(
+        Button,
+        {
+          variant: "ghost",
+          sm: true,
+          extra: css.ACCOUNT_ACTION,
+          title: account.holds_subscription_token
+            ? "Sign in with your Claude subscription instead of a pasted token, keeping every chat on this account"
+            : "Sign in again, keeping this account and every chat on it",
+          onclick: () => void reauthenticate(account.id, account.lane, account.reauth_method),
+        },
+        account.holds_subscription_token ? "Switch to a normal sign-in" : "Sign in again",
+      ),
+      m(
+        Button,
+        {
+          variant: "ghost",
+          sm: true,
+          icon: true,
+          extra: css.ACCOUNT_ACTION,
+          "aria-label": `Remove ${account.label}`,
+          onclick: () => {
+            confirmingDelete = account.id;
+          },
+        },
+        m.trust(icon("trash", { size: 15 })),
+      ),
+    ];
   }
 
   /** ProviderSignInModal's stepsBlock, step 1, plus the old modal's copy-link fallback. */
@@ -690,6 +727,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     const primary = method ?? current.methods[0];
     const others = offeredMethods(current).filter((candidate) => candidate.id !== primary.id);
     return m("div", { class: "flex flex-col" }, [
+      notice !== null ? m("p", { class: css.HINT }, notice) : null,
       m("div", { class: css.SECTION_LABEL }, isPaste(primary) ? "Use an API key" : "Use your subscription"),
       isPaste(primary) ? apiKeyBody(current) : stepsBody(current, primary),
       others.length > 0
@@ -748,12 +786,31 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             class: css.HINT_ACTION,
             "data-e2e": "open-sign-in-again",
             onclick: () => {
-              if (flow !== null && flow.relay_url !== null) void requestProviderRelay(flow.relay_url, flow.flow_id);
+              if (flow === null || flow.relay_url === null) return;
+              void requestProviderRelay(flow.relay_url, flow.flow_id).then((isRelaying) => {
+                if (!isRelaying)
+                  signInAnotherWay(current, "Imbue Studio couldn't open the sign-in page. Sign in here instead:");
+              });
             },
           },
           "Open it again",
         ),
       ]),
+      hasOtherWays(current)
+        ? m("p", { class: css.HINT }, [
+            "Browser not coming back? ",
+            m(
+              "button",
+              {
+                type: "button",
+                class: css.HINT_ACTION,
+                "data-e2e": "sign-in-another-way",
+                onclick: () => signInAnotherWay(current),
+              },
+              "Sign in another way",
+            ),
+          ])
+        : null,
       current.harness === "claude" ? m("p", { class: css.HINT }, CLAUDE_CERTIFICATE_HINT) : null,
       m(
         "div",
@@ -763,11 +820,12 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ];
   }
 
-  /** Start this account's own lane's primary sign-in, into the folder it already has. */
-  async function reauthenticate(accountId: string, laneId: string): Promise<void> {
+  /** Sign in to this account again, into the folder it already has, the way it signed in before. */
+  async function reauthenticate(accountId: string, laneId: string, methodId: string): Promise<void> {
     const owner = getLanes().find((candidate) => candidate.id === laneId);
     if (owner === undefined) return;
-    await begin(owner, owner.methods[0], { fromChooser: true, accountId });
+    const reauthMethod = owner.methods.find((candidate) => candidate.id === methodId) ?? owner.methods[0];
+    await begin(owner, reauthMethod, { fromChooser: true, accountId });
   }
 
   return {
@@ -776,17 +834,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       // Opened ON an account rather than to add one: a dead-account notice, or a provider
       // card whose credential expired. Land on that account's sign-in, not the lane list.
       const accountId = takeChooserAccountId();
-      if (accountId === null) {
-        // The top row's sign-in takes seconds to start, so it starts now, while the user reads.
-        const top = getLanes()[0];
-        const topMethod = top === undefined ? undefined : offeredMethods(top)[0];
-        if (top !== undefined && topMethod !== undefined && !isPaste(topMethod) && lane === null) {
-          startFlow(top.id, topMethod.id).catch(() => undefined);
-        }
-        return;
-      }
+      if (accountId === null || !canManageAccounts()) return;
       const account = getAccounts().find((candidate) => candidate.id === accountId);
-      if (account !== undefined) await reauthenticate(account.id, account.lane);
+      if (account !== undefined) await reauthenticate(account.id, account.lane, account.reauth_method);
     },
 
     onremove() {
@@ -841,9 +891,19 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       } else if (isFailed || error !== null) {
         body = [
           statusScreen("error", "That didn't work", (isFailed ? flow.status.detail : null) ?? error),
-          m(
-            "div",
-            { class: css.FOOTER_ROW },
+          m("div", { class: css.FOOTER_ROW }, [
+            hasOtherWays(current)
+              ? m(
+                  Button,
+                  {
+                    variant: "secondary",
+                    disabled: busy,
+                    "data-e2e": "sign-in-another-way",
+                    onclick: () => signInAnotherWay(current),
+                  },
+                  "Sign in another way",
+                )
+              : null,
             m(
               Button,
               {
@@ -857,7 +917,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               },
               "Try again",
             ),
-          ),
+          ]),
         ];
       } else if (isPending) {
         body = statusScreen(

@@ -78,6 +78,9 @@ export const PROVIDER_SIGN_IN: "minds:provider-sign-in" =
 // Embedder -> workspace: whether the chrome is relaying that sign-in. Payload: { relay }.
 export const PROVIDER_SIGN_IN_ACK: "minds:provider-sign-in-ack" =
   "PROVIDER_SIGN_IN_ACK" in embedContract ? embedContract.PROVIDER_SIGN_IN_ACK : "minds:provider-sign-in-ack";
+// Workspace -> embedder: that sign-in has ended, so the chrome can stop relaying it. Payload: { flowId }.
+export const PROVIDER_SIGN_IN_END: "minds:provider-sign-in-end" =
+  "PROVIDER_SIGN_IN_END" in embedContract ? embedContract.PROVIDER_SIGN_IN_END : "minds:provider-sign-in-end";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 

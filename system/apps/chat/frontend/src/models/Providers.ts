@@ -23,6 +23,7 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
+import { endProviderRelay } from "./providerRelay";
 
 export type FlowShape = "url_then_code" | "code_then_wait" | "paste" | "browser";
 export type FlowState = "pending" | "ok" | "failed";
@@ -73,6 +74,8 @@ export interface ProviderAccount {
   label: string;
   /** The account runs on a pasted Claude subscription token, which signing in again drops. */
   holds_subscription_token: boolean;
+  /** The lane method "Sign in again" runs: a key account is given a key again, not a browser sign-in. */
+  reauth_method: string;
 }
 
 interface FlowStart {
@@ -106,6 +109,9 @@ let defaultAccountId: string | null = null;
 let lanesLoaded = false;
 // Whether the account list has been fetched once, so an empty list can be told from one not read yet.
 let accountsLoaded = false;
+// Whether this viewer may add, re-authenticate or remove accounts: the owner may, a share visitor
+// may not. Assumed until the list says otherwise, as the server assumes a request with no identity.
+let canManage = true;
 
 export function getLanes(): Lane[] {
   return lanes;
@@ -139,6 +145,11 @@ export async function setDefaultAccount(accountId: string, isDefault: boolean): 
   await loadAccounts();
 }
 
+/** Whether this viewer may change accounts; a share visitor can only use the ones there are. */
+export function canManageAccounts(): boolean {
+  return canManage;
+}
+
 export function areAccountsLoaded(): boolean {
   return accountsLoaded;
 }
@@ -155,13 +166,19 @@ export async function loadLanes(): Promise<void> {
 }
 
 export async function loadAccounts(): Promise<void> {
-  const body = await m.request<{ accounts: ProviderAccount[]; mru: string | null; default: string | null }>({
+  const body = await m.request<{
+    accounts: ProviderAccount[];
+    mru: string | null;
+    default: string | null;
+    can_manage: boolean;
+  }>({
     method: "GET",
     url: apiUrl("/api/accounts"),
   });
   accounts = body.accounts;
   mru = body.mru;
   defaultAccountId = body.default;
+  canManage = body.can_manage;
   accountsLoaded = true;
 }
 
@@ -207,17 +224,6 @@ export function getFlow(): (FlowStart & FlowTarget & { status: FlowStatus }) | n
   return flow;
 }
 
-/** Whether the live flow is still waiting on exactly this sign-in, so it can be used as is. */
-export function isPendingFlowFor(target: FlowTarget): boolean {
-  return (
-    flow !== null &&
-    flow.status.state === "pending" &&
-    flow.laneId === target.laneId &&
-    flow.methodId === target.methodId &&
-    flow.accountId === target.accountId
-  );
-}
-
 /**
  * Start a sign-in. Pass `accountId` to re-authenticate INTO an existing folder, which is
  * what lets every chat already bound to it recover rather than being orphaned.
@@ -233,7 +239,7 @@ export async function startFlow(laneId: string, methodId: string, accountId?: st
   startGeneration += 1;
   const attempt = startGeneration;
   // Clear stale sign-in state on client before server replaces it.
-  flow = null;
+  releaseFlow();
   m.redraw();
   const started = await m.request<FlowStart>({
     method: "POST",
@@ -291,6 +297,7 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
   if (flow.status.state === "ok" || flow.status.state === "failed") return;
   flow = { ...flow, status };
   if (status.state === "ok") {
+    releaseRelay(flow);
     stopPolling();
     // The account the user just created is the one their next chat should use. Without
     // this, someone who picked an account earlier and then added a provider gets the old
@@ -307,6 +314,7 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
     // Nothing left to say, so the chooser goes by itself; a note about the key stays up.
     if (status.detail === null) closeProviderChooser();
   } else if (status.state === "failed") {
+    releaseRelay(flow);
     stopPolling();
   }
   m.redraw();
@@ -327,7 +335,7 @@ function startPolling(): void {
         // leaves this screen spinning forever.
         if (error.code === 404 && flow !== null && flow.flow_id === flowId) {
           void settle(
-            { state: "failed", detail: "That sign-in was replaced by a newer one.", account_id: null },
+            { state: "failed", detail: "That sign-in stopped before it finished. Start it again.", account_id: null },
             flowId,
           );
           return;
@@ -349,14 +357,24 @@ export function abortFlow(): void {
   stopPolling();
   if (flow !== null) {
     const id = flow.flow_id;
-    flow = null;
+    releaseFlow();
     m.request({ method: "DELETE", url: apiUrl(`/api/accounts/flow/${id}`) }).catch(() => undefined);
   }
 }
 
 export function clearFlow(): void {
   stopPolling();
+  releaseFlow();
+}
+
+/** Forget the live flow, telling the desktop app to stop relaying it if it might be. */
+function releaseFlow(): void {
+  if (flow !== null) releaseRelay(flow);
   flow = null;
+}
+
+function releaseRelay(ended: FlowStart): void {
+  if (ended.relay_url !== null) endProviderRelay(ended.flow_id);
 }
 
 /**

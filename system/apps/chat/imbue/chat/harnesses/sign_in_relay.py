@@ -3,15 +3,16 @@
 A provider's browser sign-in ends on a loopback redirect (`http://localhost:<port>/callback?...`)
 to a listener the sign-in CLI opened inside this workspace. The user's browser runs on their own
 machine, where nothing listens on that port, so the minds desktop app listens there instead and
-hands each request it receives to the chat app, which replays it against the CLI here.
+hands the callback to the chat app, which replays it against the CLI here.
 
-This module is that replay: it reads the loopback callback a sign-in URL names, and forwards one
-request to the CLI's listener. The flow service decides which requests are allowed through.
+This module is that replay: it reads the loopback callback a sign-in URL names, and delivers the
+callback to the CLI's listener. What the listener answers is not passed back: claude sends the
+browser to its success page before its token exchange has succeeded, so the flow's own verdict is
+what the desktop app is told.
 """
 
 from __future__ import annotations
 
-import base64
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
@@ -30,13 +31,8 @@ BROWSER_ENV_VAR: Final = "BROWSER"
 SIGN_IN_URL_FILE_ENV_VAR: Final = "MINDS_SIGNIN_URL_FILE"
 SIGN_IN_URL_FILENAME: Final = "relay_url"
 
-# How long the CLI may take to answer one relayed request.
-CALLBACK_TIMEOUT_SECONDS: Final = 60.0
-# How long after the callback other requests on the same port still go through: a CLI can
-# answer the callback with a redirect to a page it serves itself.
-FOLLOW_UP_WINDOW_SECONDS: Final = 60.0
-# Bounds what one relayed response can carry back to the browser.
-MAX_RELAYED_BODY_BYTES: Final = 64 * 1024
+# How long the CLI may take to answer the relayed callback: it answers once its token exchange ends.
+CALLBACK_TIMEOUT_SECONDS: Final = 30.0
 MAX_PATH_AND_QUERY_LENGTH: Final = 8192
 
 _LOOPBACK_HOSTS: Final = frozenset({"localhost", "127.0.0.1"})
@@ -51,15 +47,6 @@ class RelayTarget(FrozenModel):
     port: int = Field(description="The port the sign-in CLI listens on inside this workspace")
     path: str = Field(description="The callback path the provider redirects to")
     state: str = Field(description="The OAuth state the provider echoes back on the callback")
-
-
-class RelayedResponse(FrozenModel):
-    """What the CLI answered one relayed request with, in the shape the desktop relay reads."""
-
-    status: int = Field(description="HTTP status the CLI answered with")
-    location: str | None = Field(default=None, description="The CLI's Location header")
-    content_type: str | None = Field(default=None, description="The CLI's Content-Type header")
-    body: str = Field(default="", description="The CLI's response body, base64-encoded and capped")
 
 
 class RelayCallbackError(PtyAuthError):
@@ -128,22 +115,15 @@ def read_sign_in_url(url_file: Path) -> str | None:
     return url or None
 
 
-def fetch_loopback_callback(port: int, path_and_query: str) -> RelayedResponse:
-    """Replay one request against the sign-in CLI's listener, without following its redirects."""
+def fetch_loopback_callback(port: int, path_and_query: str) -> None:
+    """Deliver the callback to the sign-in CLI's listener, waiting for it to answer.
+
+    Raises RelayCallbackError when the listener cannot be reached or does not answer in time.
+    """
     try:
-        response = httpx.get(
-            f"http://127.0.0.1:{port}{path_and_query}",
-            timeout=CALLBACK_TIMEOUT_SECONDS,
-            follow_redirects=False,
-        )
+        httpx.get(f"http://127.0.0.1:{port}{path_and_query}", timeout=CALLBACK_TIMEOUT_SECONDS, follow_redirects=False)
     except httpx.HTTPError as e:
         raise RelayCallbackError(f"the sign-in did not answer ({type(e).__name__})") from e
-    return RelayedResponse(
-        status=response.status_code,
-        location=response.headers.get("location"),
-        content_type=response.headers.get("content-type"),
-        body=base64.b64encode(response.content[:MAX_RELAYED_BODY_BYTES]).decode("ascii"),
-    )
 
 
-CallbackFetcher = Callable[[int, str], RelayedResponse]
+CallbackFetcher = Callable[[int, str], None]

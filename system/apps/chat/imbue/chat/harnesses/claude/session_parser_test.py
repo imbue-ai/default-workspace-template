@@ -254,7 +254,6 @@ def test_slash_command_expansion_with_empty_args_drops_trailing_space() -> None:
     assert events[0]["content"] == "/clear"
 
 
-
 def test_queued_slash_command_expansion_normalized() -> None:
     """A slash command queued while the agent is busy is normalized the same way
     on the queued_command path, so it too reconciles against its optimistic
@@ -604,7 +603,7 @@ def test_agent_tool_result_prefers_structured_over_trailer() -> None:
         pytest.param("Invalid authentication credentials provided.", True, id="invalid-credentials"),
         pytest.param(
             "Your credit balance is too low to make this request.",
-            True,
+            False,
             id="credit-balance-too-low",
         ),
         pytest.param("This organization has been disabled.", True, id="org-disabled"),
@@ -774,7 +773,6 @@ def test_compaction_command_and_output_dropped() -> None:
     assert len(events) == 0
 
 
-
 def test_synthetic_model_assistant_message_not_emitted() -> None:
     """The synthetic "No response requested." reply -- the answer half of the
     resume turn-pair -- is bookkeeping, not a real agent turn, and must not
@@ -896,7 +894,7 @@ def test_a_limit_notice_reaches_the_wire_as_an_error() -> None:
     )
     event = parse_lines([line])[0]
     assert event["is_api_error"] is True
-    assert event["api_error_kind"] == "rate_limit"
+    assert event["api_error_kind"] == "billing"
     assert event["is_provider_fault"] is False
     assert event["is_auth_error"] is False
 

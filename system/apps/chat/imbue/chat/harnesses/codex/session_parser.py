@@ -99,6 +99,8 @@ _CODEX_ERROR_KINDS: Final[dict[str, str]] = {
     "rate_limit": "rate_limit",
     "overloaded": "overloaded",
     "context_window_exceeded": "request_too_large",
+    "usage_limit_exceeded": "usage_limit",
+    "insufficient_quota": "billing",
 }
 
 

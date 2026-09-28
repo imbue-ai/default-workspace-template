@@ -735,3 +735,40 @@ describe("the auth-error note's switch link", () => {
     expect(findButton(children, "Sign in again")).not.toBeNull();
   });
 });
+
+describe("the note under a failure from an account that has run out", () => {
+  const OPENAI_ID = "acct-openai";
+
+  function findButton(node: unknown, label: string): { attrs: { onclick: () => void } } | null {
+    const found = findVnode(node, (v) => v.tag === "button" && allText(v).trim() === label);
+    return found === null ? null : (found as { attrs: { onclick: () => void } });
+  }
+
+  beforeEach(() => {
+    closeProviderChooser();
+    switching.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: OPENAI_ID } });
+  });
+
+  it.each([
+    ["billing", "Your credit balance is too low.", "out of credit"],
+    ["usage_limit", "You've hit your session limit · resets 2:50pm", "reached its usage limit"],
+  ])("names what fixes a %s failure and offers the switch, never a sign-in", (kind, text, phrase) => {
+    const children = renderAssistantMessageChildren(apiErrorEvent(text, kind, false), new Map(), "chat-1");
+
+    expect(allText(children)).toContain(phrase);
+    expect(findButton(children, "Sign in again")).toBeNull();
+    findButton(children, "switch to another provider")!.attrs.onclick();
+    expect(getUnpickableAccount()).toEqual({ accountId: OPENAI_ID, reason: "failing" });
+    closeProviderChooser();
+  });
+
+  it("adds nothing under an ordinary failed request", () => {
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("API Error: 400", "invalid_request", false),
+      new Map(),
+      "chat-1",
+    );
+
+    expect(findButton(children, "switch to another provider")).toBeNull();
+  });
+});
