@@ -84,7 +84,11 @@ def migrate() -> bool:
         print("Host env file holds no Claude auth keys; nothing to migrate.")
         return False
 
-    movable = {key: value for key, value in stale_managed.items() if key != CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR}
+    movable = {
+        key: value
+        for key, value in stale_managed.items()
+        if key != CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
+    }
     if ANTHROPIC_API_KEY_ENV_VAR in movable:
         pasted = "\n".join(f"{key}={value}" for key, value in sorted(movable.items()))
         account = AuthFlowService.create().adopt_claude_credentials(pasted)
