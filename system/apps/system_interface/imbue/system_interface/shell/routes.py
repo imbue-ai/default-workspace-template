@@ -120,9 +120,10 @@ def _shell() -> ShellState:
 
 # What a preview shell answers to a verb whose effect lands outside its own copy of the state: an
 # app's stop and start reach supervisord, the update notice's verbs act on the live apply's
-# rollback point, and the embedder-message relay posts to live apps. Everything else a preview offers (opening, placing, and closing windows, a
-# refresh, the interface reload, the avatar) edits the preview's own state or reaches only the
-# preview's own windows, so it stays live for the person judging the change.
+# rollback point, and the embedder-message relay posts to live apps. Everything else a preview
+# offers (opening, placing, and closing windows, a refresh, the interface reload, the avatar)
+# edits the preview's own state or reaches only the preview's own windows, so it stays live for
+# the person judging the change.
 PREVIEW_REFUSAL_DETAIL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
 
 
