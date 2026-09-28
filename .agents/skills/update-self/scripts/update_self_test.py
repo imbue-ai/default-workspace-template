@@ -450,7 +450,7 @@ def _clone_workspace_with_upstream_branch(
 
     The workspace fetched ``branch`` (so ``upstream/<branch>`` exists) but never
     checked it out, as on a real workspace: there is no local branch of that name.
-    ``branch`` carries its own update-self skill, unlike ``main``.
+    ``branch`` carries a different copy of the update-self skill from ``main``'s.
     """
     upstream = tmp_path / "upstream"
     _init_repo_with_skill(upstream, skill_body="MAIN FLOW\n")
