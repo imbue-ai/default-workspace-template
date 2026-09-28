@@ -170,6 +170,26 @@ def test_a_pass_parks_a_stopped_stoppable_app_and_nothing_else(
     assert manager.parked_app_names() == ["docs"]
 
 
+def test_a_pass_leaves_an_app_whose_port_something_holds_unparked(
+    manager: AppLifecycleManager, closed_port: int
+) -> None:
+    """A bind refused with address-in-use means something listens on the app's port already (the app itself, most
+    likely): the pass leaves it alone, finishes, and parks the port once it is free."""
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    holder.bind(("127.0.0.1", closed_port))
+    holder.listen(1)
+    try:
+        manager.sweep_once()
+        assert manager.parked_app_names() == []
+    finally:
+        holder.close()
+
+    manager.sweep_once()
+
+    assert manager.parked_app_names() == ["docs"]
+
+
 def test_a_pass_releases_a_parked_app_that_came_up_on_its_own(
     manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
 ) -> None:
