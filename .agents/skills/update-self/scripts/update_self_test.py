@@ -1055,6 +1055,64 @@ def test_footprint_ranges_on_a_same_target_retry_after_a_moved_target_retry(
     ]
 
 
+def test_footprint_ranges_after_reverting_several_rollbacks_in_a_row(
+    tmp_path, capsys
+) -> None:
+    # A pass whose guide predates the rollback revert landed v2 over v1's rollback,
+    # and v2 was rolled back too, so this pass reverts both rollbacks before merging
+    # v3. The live tree is the newer rollback's: v1 and v2 are update, whichever
+    # of the reverts put them back.
+    history = _footprint_history(tmp_path)
+    history.release("v1", "upstream_v1.txt")
+    local = history.commit_file("system/apps/mine/app.py", "local work")
+    history.merge_update("v1")
+    older = history.roll_back(local)
+    history.release("v2", "upstream_v2.txt")
+    history.merge_update("v2")
+    newer = history.roll_back(older)
+    history.release("v3", "upstream_v3.txt")
+    history.git("revert", "--no-edit", newer)
+    history.git("revert", "--no-edit", older)
+    history.merge_update("v3")
+
+    ranges = history.ranges("v3", capsys)
+
+    assert ranges["update_base"] == newer
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "upstream_v1.txt",
+        "upstream_v2.txt",
+        "upstream_v3.txt",
+    ]
+
+
+def test_footprint_ranges_on_a_same_target_retry_after_several_rollbacks(
+    tmp_path, capsys
+) -> None:
+    # As above, but the pass retries v2: once both reverts land, merging v2 has
+    # nothing to do, and the two reverts together are the update.
+    history = _footprint_history(tmp_path)
+    history.release("v1", "upstream_v1.txt")
+    local = history.commit_file("system/apps/mine/app.py", "local work")
+    history.merge_update("v1")
+    older = history.roll_back(local)
+    history.release("v2", "upstream_v2.txt")
+    history.merge_update("v2")
+    newer = history.roll_back(older)
+    history.git("revert", "--no-edit", newer)
+    history.git("revert", "--no-edit", older)
+
+    ranges = history.ranges("v2", capsys)
+
+    assert ranges["local_ref"] == ranges["update_base"] == newer
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "upstream_v1.txt",
+        "upstream_v2.txt",
+    ]
+
+
 def test_footprint_ranges_refuses_an_earlier_updates_merge(tmp_path, capsys) -> None:
     # A workspace updated before carries older merges under the same subject;
     # without this pass's merge the ranges would silently describe that one.

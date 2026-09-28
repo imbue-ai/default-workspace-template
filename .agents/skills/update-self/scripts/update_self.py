@@ -349,6 +349,15 @@ def _is_rollback_revert(commit: str, repo_root: Path) -> bool:
     return subject.startswith(ROLLBACK_REVERT_SUBJECT_PREFIX)
 
 
+def _before_rollback_reverts(commit: str, repo_root: Path) -> str:
+    """The first commit at or below ``commit``, along first parents, that is not
+    the revert of a rollback: the tree the workspace ran before this pass reverted
+    its pending rollbacks, which it does in a row."""
+    while _is_rollback_revert(commit, repo_root):
+        commit = _commit_sha(f"{commit}^", repo_root)
+    return commit
+
+
 def _first_attempt_first_parent(merge: str, repo_root: Path) -> str:
     """The first parent of the first merge in ``merge``'s chain of retries.
 
@@ -379,17 +388,18 @@ def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
     ``update-self: merge upstream template`` commit rather than on ``HEAD``, so
     a fix committed on top of the merge leaves them unchanged.
 
-    A retry after a rolled-back apply shifts the anchors. The worker reverts the
-    rollback before merging, so on a retry whose target moved, the merge's first
-    parent is that revert, which already carries the landed release: the update
-    range starts at the commit the revert sits on instead. On a retry of the
-    same target the revert leaves ``git merge`` nothing to do, so the merge found
-    is the landed attempt's own; the revert is then the whole update, and the
-    local range runs to the commit it sits on, which carries every local commit
-    since that attempt branched. That commit runs the tree from before every
-    rolled-back attempt, so its fork point is taken from the first attempt in
-    the chain rather than from the landed one, which may itself have been a
-    moved-target retry on top of an earlier release.
+    A retry after a rolled-back apply shifts the anchors. The worker reverts
+    every pending rollback, in a row, before merging, so on a retry whose target
+    moved, the merge's first parent is the last revert, and the reverts already
+    carry the landed releases: the update range starts at the commit the first
+    revert sits on instead. On a retry of the same target the reverts leave
+    ``git merge`` nothing to do, so the merge found is the landed attempt's own;
+    the reverts are then the whole update, and the local range runs to the
+    commit they sit on, which carries every local commit since that attempt
+    branched. That commit runs the tree from before every rolled-back attempt,
+    so its fork point is taken from the first attempt in the chain rather than
+    from the landed one, which may itself have been a moved-target retry on top
+    of an earlier release.
     """
     target_sha = _commit_sha(target, repo_root)
     merge = _latest_commit_with_subject(UPDATE_SELF_MERGE_SUBJECT, "HEAD", repo_root)
@@ -409,15 +419,13 @@ def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
     )
     if same_target_revert is not None:
         local_fork = _first_attempt_first_parent(merge, repo_root)
-        local_ref = update_base = _commit_sha(f"{same_target_revert}^", repo_root)
+        local_ref = update_base = _before_rollback_reverts(
+            same_target_revert, repo_root
+        )
         update_ref = same_target_revert
     else:
         local_fork = local_ref = first_parent
-        update_base = (
-            _commit_sha(f"{first_parent}^", repo_root)
-            if _is_rollback_revert(first_parent, repo_root)
-            else first_parent
-        )
+        update_base = _before_rollback_reverts(first_parent, repo_root)
         update_ref = merge
     local_base = _git(["merge-base", local_fork, target_sha], repo_root)
     return {
