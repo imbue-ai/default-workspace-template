@@ -710,7 +710,7 @@ class AuthFlowService:
                 session.is_relay_in_flight = False
         deadline = self._clock() + _RELAYED_VERDICT_WAIT_SECONDS
         status = self.poll(flow_id)
-        # Each poll reads the CLI's output for up to a second, which paces this loop.
+        # Each poll waits briefly on the CLI's output, which paces this loop.
         while status.state is FlowState.PENDING and self._clock() < deadline:
             status = self.poll(flow_id)
         return status
