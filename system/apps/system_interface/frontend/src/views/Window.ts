@@ -54,9 +54,10 @@ export interface WindowAttrs {
   /** Whether the shield covers the content: every unfocused window, and every window while a menu or the
    *  launcher is open. */
   readonly isShielded: boolean;
-  /** Whether the app behind the window is stopped and nothing brings it back on a request (a row with no
-   *  supervised program, or a critical one): its page is replaced by the stopped placeholder. A stoppable app's
-   *  window keeps its page, which the shell's parker answers with a loading page until the app is up. */
+  /** Whether the app behind the window is stopped and nothing brings it back on a request (a row the workspace
+   *  cannot start: no supervised program, critical, or inside a critical app's program): its page is replaced by
+   *  the stopped placeholder. A stoppable app's window keeps its page, which the shell's parker answers with a
+   *  loading page until the app is up. */
   readonly isStopped: boolean;
   readonly onRaise: () => void;
   readonly onControl: (control: WindowControl, event: MouseEvent) => void;
