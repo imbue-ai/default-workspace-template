@@ -3,12 +3,12 @@
 The stand-in does what `claude auth login` does on the wire: it listens on a loopback port, runs
 `$BROWSER` with an authorize URL whose `redirect_uri` is that port, and prints "Login successful"
 once the callback carrying its `state` arrives. The chat app's own routes do the rest -- start the
-flow, replay the callback the desktop app would relay, and report the sign-in -- over a real PTY.
+flow, deliver the callback the desktop app would relay, and answer with how the sign-in ended --
+over a real PTY.
 """
 
 from __future__ import annotations
 
-import base64
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,7 +19,6 @@ from imbue.chat.harnesses.pty_auth import spawn_pty
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.server import create_application
 from imbue.chat.testing import build_test_state
-from imbue.chat.testing import wait_until_true
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 
@@ -86,18 +85,12 @@ def test_a_relayed_callback_signs_claude_in(tmp_path: Path) -> None:
         json={"path_and_query": "/callback?code=the-code&state=fake-state"},
     )
 
+    # The route waits for the CLI to finish, so its answer is the sign-in's outcome.
     assert answer.status_code == 200
     relayed = answer.get_json()
-    assert relayed["status"] == 302
-    assert relayed["location"] == "https://platform.claude.com/oauth/code/success"
-    assert base64.b64decode(relayed["body"]) == b""
-    wait_until_true(
-        lambda: client.get(f"/api/accounts/flow/{started['flow_id']}").get_json()["state"] != "pending",
-        10.0,
-        "the sign-in settling",
-    )
-    assert client.get(f"/api/accounts/flow/{started['flow_id']}").get_json()["state"] == "ok"
+    assert (relayed["state"], relayed["provider_name"]) == ("ok", "Anthropic")
     (account,) = read_index().accounts
+    assert relayed["account_id"] == account.id
     assert account.lane == "anthropic"
 
 
