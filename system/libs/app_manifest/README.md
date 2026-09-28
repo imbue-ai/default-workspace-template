@@ -212,7 +212,9 @@ Selection reads only what the workspace declares. A path selects:
   directory the app's manifest references (a referenced skill drives the
   app's surface);
 - the app whose manifest references it (`[[references]]`), or whose program a
-  supervisord block holds;
+  supervisord block holds; a supervisord block also selects
+  `oom_priority`'s `oom_tag_service_test.py`, which checks that every program
+  block names its OOM band;
 - for a `uv.lock` change, every member that depends on a package the lock
   upgraded (a package only added selects nothing beyond the member whose
   `pyproject.toml` added it);

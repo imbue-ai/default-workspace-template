@@ -21,6 +21,7 @@ _ALWAYS_RUN = " ".join(
     ("uv", "run", "pytest", *sorted({*ALWAYS_RUN_GUARDS, "system/test_layout.py"}))
 )
 _FULL_ROOT = "uv run pytest"
+_BAND_CHECK = "uv run pytest system/services/oom_priority/bin/oom_tag_service_test.py"
 _CHAT_WHOLE_WITHOUT_BROWSER = (
     "(cd system/apps/chat && uv run pytest --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
 )
@@ -119,14 +120,29 @@ def test_the_full_root_suite_replaces_the_root_collected_runs_but_not_the_own_ro
     assert _CHAT_WHOLE_WITH_BROWSER in lines
 
 
-def test_a_supervisord_block_runs_the_app_it_starts(workspace: Path) -> None:
+def test_a_supervisord_block_runs_the_app_it_starts_and_the_band_check(workspace: Path) -> None:
     write_supervisord_dropin(workspace, "notes", ("program:notes",))
     commit_everything(workspace, "wire notes")
 
     selection = _select(workspace, ["system/supervisord.conf.d/notes.conf"])
 
-    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/apps/notes"]
+    assert _command_lines(selection) == [
+        _ALWAYS_RUN,
+        "uv run pytest system/apps/notes",
+        _BAND_CHECK,
+    ]
     assert selection.paths[0].classes == (ChangedPathClass.WIRING,)
+
+
+def test_a_supervisord_block_no_app_owns_runs_the_band_check(workspace: Path) -> None:
+    # A service's block: no manifest claims it, but it still has to name its OOM band.
+    write_supervisord_dropin(workspace, "fetcher", ("program:fetcher",))
+    commit_everything(workspace, "wire a service")
+
+    selection = _select(workspace, ["system/supervisord.conf.d/fetcher.conf"])
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, _BAND_CHECK]
+    assert not selection.is_full_root
 
 
 def test_documentation_alone_selects_nothing(workspace: Path) -> None:

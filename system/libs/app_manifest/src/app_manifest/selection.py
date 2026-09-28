@@ -4,7 +4,7 @@ Selection reads only what the workspace declares: a changed path inside a packag
 runs that unit's suite, plus the suites of the workspace members that depend on the package
 (``pyproject.toml``), the npm packages that depend on it (``package.json``), and the apps whose
 manifests reference it (``[[references]]``). A supervisord block runs the app whose program
-it holds. ``uv.lock`` selects the members that depend on what it upgraded. A small always-run
+it holds and the check that every block names its OOM band. ``uv.lock`` selects the members that depend on what it upgraded. A small always-run
 set guards the repo-wide invariants any edit can break; agent prose outside every skill selects
 only that set and the apps whose manifests reference it. Any other path belongs to no declared
 unit, so it runs the full root suite.
@@ -74,6 +74,10 @@ _LOCKFILE: Final[RepoRelativePath] = RepoRelativePath("uv.lock")
 _GUARD_DIRECTORY: Final[str] = "system"
 _SUPERVISORD_CONF: Final[str] = "system/supervisord.conf"
 _SUPERVISORD_DROPIN_DIRECTORY: Final[str] = "system/supervisord.conf.d"
+# The checks outside the always-run set that read every real supervisord program block.
+_WIRING_GUARDS: Final[tuple[str, ...]] = (
+    "system/services/oom_priority/bin/oom_tag_service_test.py",
+)
 # The cross-cutting checks run beside system/*.py for every change: the system/scripts guards,
 # and the checks that read every skill's prose, which a change to any one skill can break.
 ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
@@ -532,8 +536,17 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
     is_owned = False
 
     if path == _SUPERVISORD_CONF or PurePosixPath(path).parent.as_posix() == _SUPERVISORD_DROPIN_DIRECTORY:
-        # The always-run set checks the layout; the apps whose blocks the file holds run too.
+        # The always-run set checks the layout, and the wiring guards every block's OOM band;
+        # the apps whose blocks the file holds run too.
         classes.append(ChangedPathClass.WIRING)
+        pytest_requests.extend(
+            _present(
+                _file_request(
+                    layout, guard, _reason(path, ChangedPathClass.WIRING, "checks every program block")
+                )
+                for guard in _WIRING_GUARDS
+            )
+        )
         pytest_requests.extend(
             _present(
                 _whole_request(

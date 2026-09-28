@@ -156,7 +156,8 @@ def build_selection_workspace(repo_root: Path) -> None:
     (``corelib``) that another library (``midlib``) and the chat app depend on, an app
     (``notes``) that depends on ``midlib`` and references a script, the chat app as its own
     pytest root with a browser test and a frontend, the shared ``ui`` npm library that
-    frontend depends on, a flat script and its test, a skill, and the repo guards."""
+    frontend depends on, a flat script and its test, a skill, the repo guards, and the check
+    that every supervisord block names its OOM band."""
     init_git_repository(repo_root)
     write_repo_file(repo_root, "pyproject.toml", _SELECTION_ROOT_PYPROJECT)
     write_repo_file(repo_root, "conftest.py", "")
@@ -224,6 +225,11 @@ def build_selection_workspace(repo_root: Path) -> None:
     for guard in ALWAYS_RUN_GUARDS:
         write_repo_file(repo_root, guard, "def test_guard() -> None:\n    pass\n")
     write_repo_file(repo_root, "system/test_layout.py", "def test_layout() -> None:\n    pass\n")
+    write_repo_file(
+        repo_root,
+        "system/services/oom_priority/bin/oom_tag_service_test.py",
+        "def test_every_program_has_a_band() -> None:\n    pass\n",
+    )
     write_repo_file(repo_root, ".agents/skills/refresh/SKILL.md", "# refresh\n")
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "VALUE = 1\n")
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n")
