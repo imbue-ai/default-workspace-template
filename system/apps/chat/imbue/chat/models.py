@@ -803,41 +803,6 @@ class ClaudeAuthStatusResponse(FrozenModel):
     )
 
 
-class ClaudeOAuthLoginStartRequest(FrozenModel):
-    """Request body for POST /api/claude-auth/oauth/start."""
-
-    provider: str = Field(description="Which browser sign-in to run: 'claudeai' or 'console'")
-
-
-class ClaudeSetupTokenStartResponse(FrozenModel):
-    """Response from POST /api/claude-auth/setup-token/start."""
-
-    session_id: str = Field(description="Opaque token identifying the in-flight setup-token session")
-    oauth_url: str = Field(description="URL the user opens to authorize the login")
-
-
-class ClaudeSetupTokenPollRequest(FrozenModel):
-    """Request body for POST /api/claude-auth/setup-token/poll."""
-
-    session_id: str = Field(description="session_id returned by /setup-token/start")
-
-
-class ClaudeSetupTokenPollResponse(FrozenModel):
-    """Response from POST /api/claude-auth/setup-token/poll."""
-
-    is_complete: bool = Field(description="Whether the token was minted and written")
-    status: ClaudeAuthStatusResponse | None = Field(
-        default=None, description="Auth status after completion; None while still pending"
-    )
-
-
-class ClaudeSetupTokenSubmitCodeRequest(FrozenModel):
-    """Request body for POST /api/claude-auth/setup-token/submit-code."""
-
-    session_id: str = Field(description="session_id returned by /setup-token/start")
-    code: str = Field(description="The CODE#STATE the user pasted from the browser")
-
-
 class ClaudeAuthCredentialsRequest(FrozenModel):
     """Request body for POST /api/claude-auth/submit-credentials.
 

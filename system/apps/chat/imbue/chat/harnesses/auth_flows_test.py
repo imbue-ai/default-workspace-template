@@ -19,6 +19,7 @@ from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.auth_flows import flow_shape
+from imbue.chat.harnesses.claude.auth import CredentialPasteError
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.key_check import CheckedProvider
 from imbue.chat.harnesses.key_check import KeyCheck
@@ -407,86 +408,34 @@ def test_an_account_id_that_is_a_path_is_refused(service: AuthFlowService) -> No
 _OAT = "sk-ant-oat01-" + "A" * 80
 
 
-def test_a_minted_token_is_written_into_the_account(tmp_path: Path) -> None:
-    """`claude setup-token` prints a 1-year token and persists NOTHING -- its credential-store
-    write is on the other arm of the OAuth completion. The token has to come off the screen
-    and into the account, or the probe reads an empty folder and the flow fails with a valid
-    token sitting in the pane."""
-    process = FakePexpectProcess(
-        [(0, "Visit https://claude.ai/oauth/authorize?code=1")],
-        drain_chunks=["Visit https://claude.ai/oauth/authorize?code=1\r\n", f"{_OAT}\r\n"],
-    )
-    service = AuthFlowService.create(
-        key_checker=_accept_key,
-        home=tmp_path,
-        work_dir=tmp_path / "work",
-        spawner=lambda *_a, **_k: process,
-        probe=lambda *_a: SignedIn.YES,
-    )
-    started = service.start("anthropic", "setup_token")
-    process.exit()
+def test_a_pasted_subscription_token_is_refused(service: AuthFlowService, tmp_path: Path) -> None:
+    started = service.start("anthropic", "api_key")
 
-    status = service.poll(started.flow_id)
+    with pytest.raises(CredentialPasteError, match="subscription token can't be pasted"):
+        service.submit_key(started.flow_id, "sk-ant-oat01-" + "x" * 90)
 
-    assert status.state is FlowState.OK
-    (account,) = read_index(tmp_path).accounts
-    settings = json.loads((tmp_path / ".minds" / "accounts" / account.id / "settings.json").read_text())
-    assert settings["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": _OAT}
-
-
-def test_a_token_flow_that_prints_nothing_fails_rather_than_committing(tmp_path: Path) -> None:
-    """Committing here would offer an account whose folder holds no credential at all."""
-    process = FakePexpectProcess(
-        [(0, "Visit https://claude.ai/oauth/authorize?code=1")],
-        drain_chunks=["Visit https://claude.ai/oauth/authorize?code=1\r\n"],
-    )
-    service = AuthFlowService.create(
-        key_checker=_accept_key,
-        home=tmp_path,
-        work_dir=tmp_path / "work",
-        spawner=lambda *_a, **_k: process,
-        probe=lambda *_a: SignedIn.YES,
-    )
-    started = service.start("anthropic", "setup_token")
-    process.exit()
-
-    assert service.poll(started.flow_id).state is FlowState.FAILED
     assert read_index(tmp_path).accounts == ()
 
 
-def test_a_token_flow_still_running_keeps_waiting(tmp_path: Path) -> None:
-    """The token appears well after the URL does; a poll in between is not a failure."""
-    process = FakePexpectProcess(
-        [(0, "Visit https://claude.ai/oauth/authorize?code=1")],
-        drain_chunks=["Visit https://claude.ai/oauth/authorize?code=1\r\n"],
-    )
-    service = AuthFlowService.create(
-        key_checker=_accept_key,
-        home=tmp_path,
-        work_dir=tmp_path / "work",
-        spawner=lambda *_a, **_k: process,
-        probe=lambda *_a: SignedIn.YES,
-    )
-    started = service.start("anthropic", "setup_token")
-
-    assert service.poll(started.flow_id).state is FlowState.PENDING
-
-
-def test_a_bare_oauth_token_pasted_into_the_key_field_is_not_read_as_an_api_key(
-    tmp_path: Path,
-) -> None:
-    """They are different managed keys and claude reads them from different variables, so
-    filing a token under ANTHROPIC_API_KEY leaves the account signed out."""
+def test_a_claude_browser_sign_in_clears_credentials_pasted_into_the_account(tmp_path: Path) -> None:
+    """A key or a token left in the settings env would outrank the sign-in that just landed."""
     service = AuthFlowService.create(
         key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
     )
     started = service.start("anthropic", "api_key")
-
-    service.submit_key(started.flow_id, _OAT)
-
+    service.submit_key(started.flow_id, "sk-ant-api03-old")
     (account,) = read_index(tmp_path).accounts
-    settings = json.loads((tmp_path / ".minds" / "accounts" / account.id / "settings.json").read_text())
-    assert settings["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": _OAT}
+    settings = tmp_path / ".minds" / "accounts" / account.id / "settings.json"
+    managed = json.loads(settings.read_text())
+    managed["env"]["CLAUDE_CODE_OAUTH_TOKEN"] = "sk-ant-oat01-legacy"
+    settings.write_text(json.dumps(managed))
+
+    process = _finished_claude("Login successful.\r\n", 0)
+    service._spawner = lambda *_a, **_k: process
+    again = service.start("anthropic", "subscription", account_id=account.id)
+
+    assert service.poll(again.flow_id).state is FlowState.OK
+    assert json.loads(settings.read_text())["env"] == {}
 
 
 def test_a_pasted_api_key_is_approved_so_claude_does_not_challenge_it(tmp_path: Path) -> None:

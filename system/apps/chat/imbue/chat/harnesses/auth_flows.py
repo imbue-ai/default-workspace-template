@@ -47,8 +47,9 @@ from loguru import logger as _loguru_logger
 from imbue.chat import accounts
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_BASE_URL_ENV_VAR
-from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
+from imbue.chat.harnesses.claude.auth import CredentialPasteError
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
+from imbue.chat.harnesses.claude.auth import SUBSCRIPTION_TOKEN_REFUSAL
 from imbue.chat.harnesses.claude.auth import parse_credential_lines
 from imbue.chat.harnesses.claude.auth import record_api_key_approval
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -56,7 +57,6 @@ from imbue.chat.harnesses.key_check import CheckedProvider
 from imbue.chat.harnesses.key_check import KeyCheck
 from imbue.chat.harnesses.key_check import PROVIDER_DISPLAY
 from imbue.chat.harnesses.key_check import check_key
-from imbue.chat.harnesses.lanes import DrainUntil
 from imbue.chat.harnesses.lanes import EofPolicy
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.lanes import Lane
@@ -153,11 +153,6 @@ def flow_shape(method: PtyMethod | PasteMethod) -> FlowShape:
     if isinstance(method, PasteMethod):
         return FlowShape.PASTE
     return FlowShape.CODE_THEN_WAIT if method.submit is Submit.NONE else FlowShape.URL_THEN_CODE
-
-
-def _never_done(_buffer: str) -> bool:
-    """Drain to EOF: the value only appears as the CLI exits."""
-    return False
 
 
 def _extract(raw: str, scrape: Scrape, frame_marker: str | None) -> str | None:
@@ -436,12 +431,8 @@ class AuthFlowService:
                 raise FlowError(session.detail or "no value")
             session.output += (session.process.before or "") + (session.process.after or "")
         # A URL is drained until it can be extracted -- the CLI animates forever afterwards,
-        # so there is no quiet gap to wait for. A minted token is drained to process exit,
-        # because the CLI prints it and leaves.
-        is_done: Callable[[str], bool] = (
-            _never_done if method.scrape.drain_until is DrainUntil.EOF else session.is_value_ready
-        )
-        session.output = drain_pty_stream(session.process, session.output, is_done)
+        # so there is no quiet gap to wait for.
+        session.output = drain_pty_stream(session.process, session.output, session.is_value_ready)
         value = _extract(session.output, method.scrape, method.frame_marker)
         if value is None:
             self._fail_locked(session, "Could not read the sign-in details from the terminal.")
@@ -643,28 +634,6 @@ class AuthFlowService:
         # The CLI is done talking.
         path = accounts.account_dir(session.account_id, self._home)
 
-        # `claude setup-token` prints a token and persists nothing -- the credential store
-        # write happens only on the other arm of its OAuth completion. So for a method that
-        # declares a result, the value has to be scraped off the screen and written into the
-        # account before anything asks whether the account works; otherwise the probe reads
-        # an empty folder and the flow fails with a valid 1-year token on screen.
-        if method.result_scrape is not None and method.result_sink is not None:
-            result = _extract(session.output, method.result_scrape, method.frame_marker)
-            if result is None:
-                # Nothing printed yet. If the CLI has also exited, nothing is coming.
-                if alive:
-                    return FlowStatus(state=FlowState.PENDING)
-                self._fail_locked(session, "The sign-in finished without printing a token.")
-                return FlowStatus(state=FlowState.FAILED, detail=session.detail)
-            with _credentials_restored_on_error(_credential_paths(method.result_sink, path)) as before:
-                _write_paste(method.result_sink, path, result, None, session.lane)
-                session.last_verdict = self._probe(session.lane.harness, path)
-                if session.last_verdict is SignedIn.NO:
-                    _restore_credentials(before)
-                    self._fail_locked(session, "The token that was minted was not accepted.")
-                    return FlowStatus(state=FlowState.FAILED, detail=session.detail)
-            return self._commit_locked(session, session.lane.provider_name)
-
         # Its own probe, not the screen, decides.
         verdict = self._probe(session.lane.harness, path)
         session.last_verdict = verdict
@@ -699,6 +668,11 @@ class AuthFlowService:
         if not session.minted and not accounts.account_exists(session.account_id, self._home):
             self._fail_locked(session, "That account was removed while you were signing in.")
             raise FlowError(session.detail or "account removed")
+        if session.lane.harness is HarnessType.CLAUDE and isinstance(session.method, PtyMethod):
+            # A key or a subscription token left in the settings env outranks the sign-in that
+            # just landed, so a browser sign-in clears them. It is also how an account holding a
+            # pasted subscription token stops holding one.
+            write_claude_env(accounts.account_dir(session.account_id, self._home), {})
         account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
         # A re-auth is only worth doing if the chats on that account come back. They do not on
         # their own: claude reads its settings env at process start, and nothing shows codex's
@@ -854,7 +828,8 @@ def _binary_for(lane: Lane) -> str:
     return {"pi-coding": "pi", "antigravity": "agy"}.get(lane.harness.value, lane.harness.value)
 
 
-# The prefix claude stamps on a `setup-token` result. Mirrors `_CLAUDE_TOKEN_SCRAPE`.
+# The prefix of a Claude subscription token, which a paste is refused for: Anthropic's terms
+# do not let a third party take in or keep a Claude.ai credential.
 _OAUTH_TOKEN_PREFIX: Final = "sk-ant-oat01-"
 
 
@@ -886,16 +861,13 @@ def claude_env_from_paste(pasted: str) -> dict[str, str]:
 
     A bare key is the common case, but the same field takes an env-file paste -- which is
     how a proxied setup arrives, since ANTHROPIC_BASE_URL only means anything alongside its
-    key. `parse_credential_lines` is what rejects an unmanaged key or a token mixed with a
-    key, so both shapes go through it rather than only the pasted-block one.
+    key. `parse_credential_lines` is what rejects an unmanaged key or a subscription token,
+    so both shapes go through it rather than only the pasted-block one.
     """
     if "=" in pasted:
         return dict(parse_credential_lines(pasted))
-    # A long-lived subscription token and an API key are different managed keys, and claude
-    # reads them from different variables. The `setup_token` method scrapes one of these off
-    # the screen, and users paste them into the key field too.
     if pasted.startswith(_OAUTH_TOKEN_PREFIX):
-        return {CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR: pasted}
+        raise CredentialPasteError(SUBSCRIPTION_TOKEN_REFUSAL)
     return {ANTHROPIC_API_KEY_ENV_VAR: pasted}
 
 

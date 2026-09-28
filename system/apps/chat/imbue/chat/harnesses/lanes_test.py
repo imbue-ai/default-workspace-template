@@ -115,13 +115,9 @@ def test_agy_declares_no_frame_marker() -> None:
         assert method.frame_marker is None
 
 
-def test_setup_token_is_the_one_method_whose_output_is_the_credential() -> None:
-    method = get_method("anthropic", "setup_token")
-    assert isinstance(method, PtyMethod)
-    assert method.result_scrape is not None
-    assert method.result_sink is not None
-    # It completes on the CLI's own polling as well as on a pasted code.
-    assert method.submit is Submit.OPTIONAL
+def test_no_claude_method_mints_a_subscription_token() -> None:
+    """Anthropic's terms do not let a third party take in or keep a Claude.ai credential."""
+    assert "setup_token" not in {method.id for method in get_lane("anthropic").methods}
 
 
 def test_both_pi_lanes_are_paste_only() -> None:

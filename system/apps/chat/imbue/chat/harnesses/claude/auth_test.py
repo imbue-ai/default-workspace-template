@@ -151,9 +151,9 @@ def test_parse_credential_lines_accepts_key_with_base_url() -> None:
     }
 
 
-def test_parse_credential_lines_accepts_oauth_token_alone() -> None:
-    parsed = auth.parse_credential_lines(f"CLAUDE_CODE_OAUTH_TOKEN={_FAKE_TOKEN}")
-    assert parsed == {"CLAUDE_CODE_OAUTH_TOKEN": _FAKE_TOKEN}
+def test_parse_credential_lines_refuses_a_subscription_token() -> None:
+    with pytest.raises(auth.CredentialPasteError, match="subscription token can't be pasted"):
+        auth.parse_credential_lines(f"CLAUDE_CODE_OAUTH_TOKEN={_FAKE_TOKEN}")
 
 
 def test_parse_credential_lines_rejects_unknown_keys() -> None:
@@ -161,8 +161,8 @@ def test_parse_credential_lines_rejects_unknown_keys() -> None:
         auth.parse_credential_lines("ANTHROPIC_API_KEY=sk-1\nSOME_OTHER_KEY=x")
 
 
-def test_parse_credential_lines_rejects_mixed_token_and_key() -> None:
-    with pytest.raises(auth.CredentialPasteError, match="not both"):
+def test_parse_credential_lines_refuses_a_token_beside_a_key() -> None:
+    with pytest.raises(auth.CredentialPasteError, match="subscription token can't be pasted"):
         auth.parse_credential_lines(f"ANTHROPIC_API_KEY=sk-1\nCLAUDE_CODE_OAUTH_TOKEN={_FAKE_TOKEN}")
 
 

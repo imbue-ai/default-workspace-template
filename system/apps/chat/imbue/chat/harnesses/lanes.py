@@ -38,18 +38,6 @@ class LaneNotFoundError(LookupError):
     """
 
 
-class DrainUntil(StrEnum):
-    """When to stop reading the PTY while hunting for a scraped value.
-
-    The two real cases differ: a URL is drained until it can be extracted (the CLI keeps
-    animating afterwards, so there is no quiet gap to wait for), while a minted token is
-    drained to process exit because the CLI prints it and leaves.
-    """
-
-    VALUE_EXTRACTABLE = "value_extractable"
-    EOF = "eof"
-
-
 class EofPolicy(StrEnum):
     """What end-of-stream means for a flow.
 
@@ -62,15 +50,10 @@ class EofPolicy(StrEnum):
 
 
 class Submit(StrEnum):
-    """What the user sends back after approving in the browser.
-
-    `OPTIONAL` is not hedging: `claude setup-token` completes on its own polling *and*
-    accepts a pasted code, both live against the same session.
-    """
+    """What the user sends back after approving in the browser."""
 
     CODE = "code"
     NONE = "none"
-    OPTIONAL = "optional"
 
 
 class PasteSink(StrEnum):
@@ -100,10 +83,8 @@ class Scrape(FrozenModel):
     trigger: str
     strict: str
     continuation: str
-    # A shorter extraction is a wrapped fragment, not the value -- keep draining. Only the
-    # setup-token path needs this (real tokens are ~110 chars).
+    # A shorter extraction is a wrapped fragment, not the value -- keep draining.
     min_length: int | None = None
-    drain_until: DrainUntil = DrainUntil.VALUE_EXTRACTABLE
 
 
 class PtyMethod(FrozenModel):
@@ -137,11 +118,6 @@ class PtyMethod(FrozenModel):
     failures: tuple[tuple[str, str], ...] = ()
     eof_policy: EofPolicy = EofPolicy.FAILURE
     submit: Submit = Submit.CODE
-
-    # For the one method where the PTY output IS the credential rather than a step toward
-    # it: `claude setup-token` prints the token it just minted.
-    result_scrape: Scrape | None = None
-    result_sink: PasteSink | None = None
 
     # Ink's synchronized-update marker. None means the CLI emits no frame boundaries, so
     # the replay collapses to a single final-screen snapshot -- a real loss of the
@@ -217,13 +193,6 @@ _CLAUDE_URL_SCRAPE = Scrape(
     strict=rf"https://{_CLAUDE_URL_CHARSET}*oauth/authorize{_CLAUDE_URL_CHARSET}*",
     continuation=rf"^{_CLAUDE_URL_CHARSET}+$",
 )
-_CLAUDE_TOKEN_SCRAPE = Scrape(
-    trigger=r"sk-ant-oat01-[A-Za-z0-9_-]+",
-    strict=r"sk-ant-oat01-[A-Za-z0-9_-]*",
-    continuation=r"^[A-Za-z0-9_-]+$",
-    min_length=60,
-    drain_until=DrainUntil.EOF,
-)
 # Two failure classes with different copy: an OAuth error parks the CLI on a retry prompt
 # and needs a restart, while a login failure explains itself and is worth echoing.
 _CLAUDE_FAILURES: Final = (
@@ -256,17 +225,6 @@ LANE_ANTHROPIC = Lane(
             label="Use an API key",
             description="Paste a raw sk-ant-... API key.",
             sink=PasteSink.CLAUDE_ENV,
-        ),
-        PtyMethod(
-            id="setup_token",
-            label="Get a long-lived token",
-            description="Mint a 1-year subscription token.",
-            argv=("setup-token",),
-            scrape=_CLAUDE_URL_SCRAPE,
-            failures=_CLAUDE_FAILURES,
-            submit=Submit.OPTIONAL,
-            result_scrape=_CLAUDE_TOKEN_SCRAPE,
-            result_sink=PasteSink.CLAUDE_ENV,
         ),
         PtyMethod(
             id="console",

@@ -20,7 +20,9 @@ from loguru import logger as _loguru_logger
 from imbue.chat import accounts
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import flow_shape
+from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
 from imbue.chat.harnesses.claude.auth import ClaudeAuthError
+from imbue.chat.harnesses.claude.auth import read_managed_auth_env
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.lanes import LaneNotFoundError
@@ -120,10 +122,17 @@ def list_accounts() -> Response:
             "seq": numbered.number,
             "name": numbered.account.name,
             "label": numbered.label,
+            "holds_subscription_token": _holds_subscription_token(numbered.account),
         }
         for numbered in accounts.number_accounts(index.accounts)
     ]
     return _json_response({"accounts": rows, "mru": index.mru, "default": index.default_account})
+
+
+def _holds_subscription_token(account: accounts.Account) -> bool:
+    """Whether a Claude account runs on a pasted subscription token, which it has to be signed in again to drop."""
+    settings = accounts.account_dir(account.id) / "settings.json"
+    return CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR in read_managed_auth_env(settings_path_override=settings)
 
 
 def account_model_options(account_id: str) -> Response:
