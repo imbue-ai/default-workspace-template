@@ -308,11 +308,15 @@ It lists:
 
 The browser service stops a browser on its own once a window has shown it and
 none shows it any more (`system/apps/browser/README.md`). So the browsers this
-lists are ones no window ever showed, such as an agent's browser opened while
-no client was connected.
+lists are ones no window ever showed. The fleet CLI opens a window for every
+browser it starts, so one reaches this list only when that open failed (no
+shell answered) or something started the browser through the service's API
+directly.
 
 The sums count shared pages once per process, so they overstate what stopping
-frees. Read them as a ranking.
+frees, most of all for Chromium, whose processes share most of their memory: a
+browser whose processes summed to 2.8 GB freed about 460 MB when stopped. Read
+them as a ranking, and read the free memory again after stopping something.
 
 Each source is read on its own. When `mngr list`, the browser service or the
 shell cannot be read, that section says so, and its candidates are `null` in

@@ -22,8 +22,11 @@ what could be freed and let them choose; you never stop anything on your own.
 
 2. **Offer them to the user.** In plain language, say that the workspace ran
    low on memory and something was paused, how much memory is free, and each
-   candidate with what it is, when it was last used, and roughly what stopping
-   it would free. Say that a stopped chat comes back by itself the next time
+   candidate with what it is, when it was last used, and how large it is next
+   to the others. Do not quote a candidate's memory as what stopping it frees:
+   the figures rank candidates, and a browser's can run several times what it
+   frees. After stopping something, the free memory the command reports again
+   is the real answer. Say that a stopped chat comes back by itself the next time
    they send it a message. Ask which, if any, to stop. Never pick for them, and
    never offer the chat they are talking to you in.
 

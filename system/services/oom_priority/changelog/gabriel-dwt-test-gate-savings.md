@@ -8,4 +8,8 @@ Added `bin/memory_candidates.py`, which a lead runs after one of its agents repo
 
 The README's new "Memory candidates" section covers how to stop what the user approves: a chat with `mngr stop` (it restarts on its next message), a worker with `create_worker.py stop`, a browser with the service's stop route.
 
+The sums rank candidates rather than predict what stopping frees; the README and `freeing-memory.md` say so, since a browser's processes share most of their memory.
+
+`proctree.list_descendant_pids` no longer returns threads. gVisor lists a child process's threads beside it in `/proc/<pid>/task/*/children`, and each thread's status reports its whole process's RSS, so one browser summed to 18 GB in a 6.5 GB workspace.
+
 The registry gained `live_pids_by_agent_id`, which returns every live pid of each agent; `lookup_pid_by_agent_id` now uses it. `agent_identity` exposes its label names and `is_label_true`, so a caller that already holds an agent's labels can classify it. `app_registry` gained `read_app_url`.

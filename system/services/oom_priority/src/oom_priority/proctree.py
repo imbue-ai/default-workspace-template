@@ -16,7 +16,9 @@ def list_descendant_pids(pid: int, proc_dir: Path = _PROC_DIR) -> list[int]:
 
     Best-effort: a process that exits mid-walk is skipped, and on a host without
     ``/proc`` (e.g. macOS) the result is empty. The ``seen`` guard makes the walk
-    terminate even on an inconsistent snapshot of a changing process tree.
+    terminate even on an inconsistent snapshot of a changing process tree. gVisor
+    lists a child process's threads in ``children`` beside the process itself; a
+    thread is left out, since its process is listed and walked in its own right.
     """
     seen: set[int] = {pid}
     frontier = [pid]
@@ -38,6 +40,22 @@ def list_descendant_pids(pid: int, proc_dir: Path = _PROC_DIR) -> list[int]:
                     continue
                 child = int(child_text)
                 seen.add(child)
+                if _is_thread(child, proc_dir):
+                    continue
                 descendants.append(child)
                 frontier.append(child)
     return descendants
+
+
+def _is_thread(task_id: int, proc_dir: Path) -> bool:
+    """Whether ``/proc`` says ``task_id`` is a thread of another process (its Tgid is
+    not its own id); False when its status cannot be read."""
+    try:
+        status = (proc_dir / str(task_id) / "status").read_text()
+    except OSError:
+        return False
+    for line in status.splitlines():
+        key, _, value = line.partition(":")
+        if key == "Tgid":
+            return value.strip() != str(task_id)
+    return False
