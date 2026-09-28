@@ -204,6 +204,7 @@ claude_status=0
 # hold the recorder on one model while the workspace moved past it.
 nice -n 19 timeout "$RUN_TIMEOUT_SECONDS" claude -p \
     --model opus \
+    --effort medium \
     --setting-sources user \
     --allowed-tools "Read,Grep,Glob" \
     --max-budget-usd "$MAX_BUDGET_USD" \
