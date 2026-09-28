@@ -1,6 +1,5 @@
 import ast
 import io
-import os
 import re
 import subprocess
 import tokenize
@@ -308,18 +307,6 @@ def test_dockerignore_is_symlink_to_gitignore() -> None:
 _LIVE_PROSE_EXEMPT_PARTS = frozenset({"changelog", "blueprint", "specs", "vendor"})
 
 
-def _links_into_vendored(path: Path) -> bool:
-    """Whether ``path`` is a link into ``system/vendor/``, judged by the link's own
-    target as well as where it finally resolves: a worker worktree shares the
-    workspace's ``system/vendor/mngr-assets`` as a symlink, so the style guide
-    resolves into the workspace's vendor directory, not this tree's."""
-    if _VENDORED_DIR in path.resolve().parents:
-        return True
-    if not path.is_symlink():
-        return False
-    return _VENDORED_DIR in Path(os.path.normpath(path.parent / os.readlink(path))).parents
-
-
 def _live_prose_files() -> list[Path]:
     """The agent-facing markdown whose vocabulary the rename governs.
 
@@ -359,7 +346,7 @@ def _live_prose_files() -> list[Path]:
         # link): vendored prose is exempt by path via _LIVE_PROSE_EXEMPT_PARTS,
         # and reaching the same bytes through a link does not make them this
         # template's prose to govern.
-        if _links_into_vendored(path):
+        if _VENDORED_DIR in path.resolve().parents:
             continue
         files.append(path)
     return files
