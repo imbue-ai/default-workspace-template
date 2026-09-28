@@ -11,6 +11,7 @@ from flask.testing import FlaskClient
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
+from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.identity import RequestIdentity
@@ -191,6 +192,22 @@ def test_stop_and_start_drive_the_supervised_program(
     assert client.post("/api/apps/chat/stop").status_code == 400
     assert client.post("/api/apps/plain/stop").status_code == 400
     assert client.post("/api/apps/unknown/stop").status_code == 404
+
+
+def test_a_start_past_the_wake_budget_is_a_502(client: FlaskClient, fake_supervisor: FakeSupervisorServer) -> None:
+    """A start is a wake, and the budget counts wakes the app did not come up from: with no sweep to see the app
+    RUNNING, the count past the budget is refused without asking supervisord."""
+    fake_supervisor.statename_by_program["files"] = "STOPPED"
+    for _ in range(WAKE_BUDGET_COUNT):
+        assert client.post("/api/apps/files/start").status_code == 200
+        assert fake_supervisor.statename_by_program["files"] == "RUNNING"
+        fake_supervisor.statename_by_program["files"] = "STOPPED"
+
+    refused = client.post("/api/apps/files/start")
+
+    assert refused.status_code == 502
+    assert "could not be started" in refused.get_json()["detail"]
+    assert fake_supervisor.statename_by_program["files"] == "STOPPED"
 
 
 def test_quit_closes_every_window_of_the_app_on_every_desktop_and_stops_it(
