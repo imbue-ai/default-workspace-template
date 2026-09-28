@@ -290,6 +290,7 @@ Two things here are best-effort, not hard guarantees:
   agent bands, which would defeat the "services outlive agents" goal, so the
   bands stay a steer rather than a strict priority. Under gVisor the memory
   counted is also approximate: anonymous memory is counted in 2 MiB-aligned
-  blocks (about a fifth too much, summed over a workspace), and file pages and
+  blocks (summed over a workspace, about a fifth of what was counted had never
+  been touched), and file pages and
   shared memory are not counted, so Chromium's shared buffers do not add to
   its badness.
