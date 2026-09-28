@@ -58,6 +58,11 @@ def test_parse_granted_app_names_reads_a_quoted_table_key_and_each_of_the_three_
         ("[services]\ndocs = 1\n", "must be a table"),
         ('[services.docs]\nusers = "3f1c"\n', "must be a list of strings"),
         ("[services.docs]\nemails = [1]\n", "must be a list of strings"),
+        # Every list of a table is checked, not only the first that names someone.
+        ('[services.docs]\nusers = ["3f1c"]\nemails = 1\n', "scope 'services.docs': emails must be a list"),
+        # The workspace table is checked too: a malformed one makes the gateway admit nobody.
+        ('workspace = 1\n\n[services.docs]\nusers = ["3f1c"]\n', "scope 'workspace' must be a table"),
+        ('[workspace]\nusers = "3f1c"\n\n[services.docs]\nusers = ["3f1c"]\n', "scope 'workspace': users must be"),
     ],
 )
 def test_parse_granted_app_names_refuses_what_the_gateway_refuses(grants_text: str, reason: str) -> None:

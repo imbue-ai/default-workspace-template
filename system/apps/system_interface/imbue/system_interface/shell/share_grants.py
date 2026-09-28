@@ -10,6 +10,7 @@ document the gateway would refuse admits nobody there, so here it grants no app.
 
 import tomllib
 from collections.abc import Callable
+from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 from typing import Final
@@ -24,7 +25,9 @@ from imbue.system_interface.shell.errors import ShareGrantsError
 
 # Beside ``DEFAULT_SHARE_ENV_PATH`` (``profiles.py``): relative to the workspace root the supervised process runs from.
 DEFAULT_SHARE_GRANTS_PATH: Final[Path] = Path("data/.secrets/share_grants.toml")
-# The document's per-app tables and the three allow-lists each holds, as the gateway's ``grants.py`` names them.
+# The document's workspace-level table, its per-app tables, and the three allow-lists every table holds, as the
+# gateway's ``grants.py`` names them.
+_WORKSPACE_TABLE_KEY: Final[str] = "workspace"
 _PER_APP_TABLE_KEY: Final[str] = "services"
 _GRANT_LIST_KEYS: Final[tuple[str, ...]] = ("users", "emails", "email_domains")
 
@@ -33,8 +36,7 @@ GrantedAppsReader = Callable[[], AbstractSet[str]]
 
 
 @pure
-def _is_anyone_listed(raw_list: object, scope: str, key: str) -> bool:
-    """Whether an allow-list names anyone: the gateway ignores blank entries, so they grant no one here either."""
+def _validated_string_list(raw_list: object, scope: str, key: str) -> list[str]:
     if not isinstance(raw_list, list):
         raise ShareGrantsError(f"grants scope {scope!r}: {key} must be a list of strings")
     entries: list[str] = []
@@ -42,27 +44,44 @@ def _is_anyone_listed(raw_list: object, scope: str, key: str) -> bool:
         if not isinstance(entry, str):
             raise ShareGrantsError(f"grants scope {scope!r}: {key} must be a list of strings")
         entries.append(entry)
-    return any(entry.strip() for entry in entries)
+    return entries
+
+
+@pure
+def _validated_grant_lists(raw_table: object, scope: str) -> list[list[str]]:
+    """One scope's three allow-lists as the gateway's parser reads them (an absent list is empty). Raises
+    ShareGrantsError for a table the gateway would refuse: every list is checked, whatever the others hold."""
+    if not isinstance(raw_table, dict):
+        raise ShareGrantsError(f"grants scope {scope!r} must be a table")
+    # What TOML parsed: keys and values are anything until each list is checked.
+    raw_list_by_key: dict[object, object] = {key: value for key, value in raw_table.items()}
+    return [_validated_string_list(raw_list_by_key.get(key, []), scope, key) for key in _GRANT_LIST_KEYS]
+
+
+@pure
+def _is_anyone_listed(grant_lists: Sequence[Sequence[str]]) -> bool:
+    """Whether any allow-list names anyone: the gateway ignores blank entries, so they grant no one here either."""
+    return any(entry.strip() for entries in grant_lists for entry in entries)
 
 
 @pure
 def parse_granted_app_names(grants_text: str) -> set[str]:
     """The apps the document admits someone to on their own origin: each ``[services.<name>]`` table with a
     non-empty ``users``, ``emails``, or ``email_domains``. Raises ShareGrantsError for a document the gateway would
-    refuse."""
+    refuse, its ``[workspace]`` table included (a workspace-level grant exempts no app, but a malformed one makes
+    the gateway admit nobody)."""
     try:
         document = tomllib.loads(grants_text)
     except tomllib.TOMLDecodeError as e:
         raise ShareGrantsError(f"grants file is not valid TOML: {e}") from e
+    # Checked for its shape only: whom the workspace table names does not matter here.
+    _validated_grant_lists(document.get(_WORKSPACE_TABLE_KEY, {}), _WORKSPACE_TABLE_KEY)
     raw_tables = document.get(_PER_APP_TABLE_KEY, {})
     if not isinstance(raw_tables, dict):
         raise ShareGrantsError(f"grants [{_PER_APP_TABLE_KEY}] must be a table of per-app tables")
     granted: set[str] = set()
     for name, raw_table in raw_tables.items():
-        scope = f"{_PER_APP_TABLE_KEY}.{name}"
-        if not isinstance(raw_table, dict):
-            raise ShareGrantsError(f"grants scope {scope!r} must be a table")
-        if any(_is_anyone_listed(raw_table.get(key, []), scope, key) for key in _GRANT_LIST_KEYS):
+        if _is_anyone_listed(_validated_grant_lists(raw_table, f"{_PER_APP_TABLE_KEY}.{name}")):
             granted.add(name)
     return granted
 
