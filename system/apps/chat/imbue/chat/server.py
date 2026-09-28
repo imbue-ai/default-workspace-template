@@ -563,8 +563,9 @@ def _send_to_chat(
             return _chat_not_found_response(str(chat_id))
         try:
             outcome = _deliver_message(state, agent_info, send_message_request.message, message_id)
-        except AgentNotFoundError:
+        except AgentNotFoundError as e:
             # Destroyed while the send was in flight: the chat is gone, not refusing.
+            logger.info("Agent {} was destroyed while a message to it was in flight: {}", agent_info.name, e)
             return _chat_not_found_response(str(chat_id))
         except SendFailedError as send_failure:
             # The harness said why it refused, in words written for the person who has to fix it
