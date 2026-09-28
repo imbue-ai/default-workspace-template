@@ -72,6 +72,13 @@ def _windows(client: FlaskClient) -> list[list[str]]:
     return [[window["app"] for window in desktop["windows"]] for desktop in listing["desktops"]]
 
 
+def _open_docs_window(client: FlaskClient, path: str) -> str:
+    """Open a window of ``docs`` at ``path`` for the arrived client and answer its window id."""
+    opened = client.post("/api/desktops/home/windows", json={"app": "docs", "path": path, "client_id": "laptop"})
+    assert opened.status_code == 201
+    return opened.get_json()["window"]["id"]
+
+
 def _wait_for_sweeps(fake_supervisor: FakeSupervisorServer, count: int) -> None:
     """Wait until the lifecycle sweep has read supervisord ``count`` more times, so a "nothing happened" assertion
     covers passes that actually ran."""
@@ -95,9 +102,7 @@ def test_an_app_with_no_windows_stops_after_the_grace_and_comes_back_on_a_reques
     # A visit, then a window opened and closed: the app stops a grace period after the close and its port is parked.
     shell = started_shell.config["SYSTEM_INTERFACE_STATE"].shell
     shell.arrive_client(ClientId("laptop"), RequestIdentity(owner=True))
-    opened = client.post("/api/desktops/home/windows", json={"app": "docs", "path": "/a/", "client_id": "laptop"})
-    assert opened.status_code == 201
-    window_id = opened.get_json()["window"]["id"]
+    window_id = _open_docs_window(client, "/a/")
     assert client.post(f"/api/desktops/home/windows/{window_id}/close").status_code == 204
     wait_for(
         lambda: fake_supervisor.statename_by_program["docs"] == "STOPPED",
@@ -126,18 +131,8 @@ def test_quit_closes_the_windows_and_stops_the_app_at_once(
     client = started_shell.test_client()
     shell = started_shell.config["SYSTEM_INTERFACE_STATE"].shell
     shell.arrive_client(ClientId("laptop"), RequestIdentity(owner=True))
-    assert (
-        client.post(
-            "/api/desktops/home/windows", json={"app": "docs", "path": "/a/", "client_id": "laptop"}
-        ).status_code
-        == 201
-    )
-    assert (
-        client.post(
-            "/api/desktops/home/windows", json={"app": "docs", "path": "/b/", "client_id": "laptop"}
-        ).status_code
-        == 201
-    )
+    _open_docs_window(client, "/a/")
+    _open_docs_window(client, "/b/")
     assert _windows(client) == [["docs", "docs"]]
 
     answer = client.post("/api/apps/docs/quit")
