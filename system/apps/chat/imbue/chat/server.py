@@ -689,13 +689,6 @@ def _set_model_choice_endpoint(chat_id: str) -> Response:
     for an unknown agent, 500 when the switch fails. On success it forces one authoritative
     model-choice broadcast so the frontend reconciles.
     """
-    agent_manager: AgentManager = get_state().agent_manager
-    # In the seconds after a chat-app boot the agent list is not read yet, and every chat looks
-    # absent. Answering 404 there says "this chat does not exist", which a caller cannot retry;
-    # 503 says "not ready", which it can. Every other endpoint that looks a chat up guards this
-    # way -- this one did not, and a model switch posted during those seconds failed for good.
-    if not agent_manager.is_agent_list_known():
-        return _agent_list_not_known_response()
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
         return _chat_not_found_response(chat_id)
@@ -704,6 +697,7 @@ def _set_model_choice_endpoint(chat_id: str) -> Response:
         return converging
 
     req = SetModelChoiceRequest.model_validate(request.get_json())
+    agent_manager: AgentManager = get_state().agent_manager
     options = _agent_switch_options(agent_manager, agent_info)
     try:
         validate_model_pick(options, req.model_id, req.effort, req.fast)
