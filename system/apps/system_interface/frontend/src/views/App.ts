@@ -13,8 +13,13 @@ import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import type { MenuAlign, MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
+import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
+import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows";
+import { describeElement } from "@imbue/workspace-ui/src/element_reference";
+import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperImageUrl } from "../model/api";
 import { launchPathOf } from "../model/launch";
+import { SHELL_APP_NAME } from "../model/UpdateNotice";
 import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
 import { shortcutKey } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
@@ -51,6 +56,7 @@ import { LauncherMenu } from "./LauncherMenu";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyRectStyle } from "./pixelStyle";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
+import { SoloView } from "./SoloView";
 import { Taskbar } from "./Taskbar";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
@@ -65,10 +71,38 @@ import { SQUIGGLE_GLYPHS } from "./squiggles";
 type OpenMenu =
   | { readonly kind: "window"; readonly windowId: string }
   | { readonly kind: "size"; readonly windowId: string }
-  | { readonly kind: "entry"; readonly windowId: string }
-  | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut }
+  | { readonly kind: "entry"; readonly windowId: string; readonly referenceRows: readonly MenuRow[] }
+  | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "desktops" }
-  | { readonly kind: "desktop"; readonly desktopId: string };
+  | { readonly kind: "desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
+  | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
+
+/** The scope of a reference to the shell's own chrome: this client and desktop, and the window whose chrome
+ *  holds the target, when one does. */
+function shellReferenceScope(store: DesktopStore, target: Element): ReferenceScope {
+  const state = store.getState();
+  return {
+    app: SHELL_APP_NAME,
+    windowId: target.closest(`[${WINDOW_ID_ATTRIBUTE}]`)?.getAttribute(WINDOW_ID_ATTRIBUTE) ?? null,
+    desktopId: state.activeDesktopId,
+    clientId: state.clientId,
+  };
+}
+
+/** The reference rows a right-click menu of the shell's own ends with (element-reference-menu plan section
+ *  4.4): none for a menu opened without a right-click (a long press with nothing under it). */
+function referenceRowsFor(store: DesktopStore, target: Element | null, x: number, y: number): MenuRow[] {
+  if (target === null) return [];
+  const click = { clientX: x, clientY: y, pageX: x + window.scrollX, pageY: y + window.scrollY };
+  const reference = describeElement(target, click, shellReferenceScope(store, target));
+  return elementReferenceRows(reference, (text) => void store.draftText(text), true);
+}
+
+/** ``rows`` followed by the reference rows after a divider, or ``rows`` alone when there are none. */
+function withReferenceRows(rows: MenuRow[] | null, referenceRows: readonly MenuRow[]): MenuRow[] | null {
+  if (rows === null || referenceRows.length === 0) return rows;
+  return [...rows, { kind: "divider" }, ...referenceRows];
+}
 
 /** The width the desktop's menus never go under, so a menu of two-word verbs is still a card. */
 const MENU_MIN_WIDTH = 176;
@@ -77,6 +111,11 @@ const MENU_MIN_WIDTH = 176;
  *  pointer should hold the closed hand (style.css). Written straight onto the element: the drag
  *  paints without redrawing, and mithril leaves an attribute no vnode carries alone. */
 const WINDOW_DRAGGING_ATTRIBUTE = "data-window-dragging";
+
+/** Set on the desktop's root for the length of a press, which is longer than the drag it may
+ *  become, so a window the pointer carries is held by it rather than trailing it (style.css). The
+ *  snap a release commits is written after the press has ended, and travels the last step. */
+const WINDOW_MOTION_ATTRIBUTE = "data-window-motion";
 
 interface SettingsDialogState {
   readonly desktopId: string;
@@ -114,9 +153,16 @@ export function App(): m.Component<AppAttrs> {
   let launcherFieldRise = 0;
   let selectedShortcutKey: string | null = null;
   let pages: LivePagesLayer | null = null;
+  // The window the last redraw painted as dragged, for one more paint once the gesture is gone.
+  let draggedWindowId: string | null = null;
   let backdropArea: HTMLElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
+  /** How many of a travelling window's properties are still in transition, by window id. A count
+   *  rather than a flag: a move runs one transition per property it changes, each ending on its own. */
+  const travellingWindows = new Map<string, number>();
+  let travelFrame: number | null = null;
   let detachGestures: (() => void) | null = null;
+  let uninstallContextMenu: (() => void) | null = null;
   let store: DesktopStore | null = null;
 
   // The one menu the desktop ever has open. Which menu it is and what it was opened for is
@@ -137,7 +183,7 @@ export function App(): m.Component<AppAttrs> {
       return openMenu?.kind === "size" ? "center" : undefined;
     },
     // The marker class each menu is known by. Read off the open menu on every render, so one
-    // component can wear all five names.
+    // component can wear every kind's name.
     get extraClass(): string | undefined {
       return openMenu === null ? undefined : `${openMenu.kind}-menu`;
     },
@@ -170,6 +216,15 @@ export function App(): m.Component<AppAttrs> {
 
   const onDocumentKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
+    // A window drag in progress is cancelled first of all: the window returns to where the drag began, and a
+    // tear-out drops the desktop window the chrome was dragging.
+    const gesture = store?.getGesture() ?? null;
+    if (store !== null && gesture !== null && gesture.kind === "move") {
+      store.cancelGesture();
+      paintWindow(store, gesture.windowId);
+      m.redraw();
+      return;
+    }
     // One layer per Escape: a dialog (the settings dialog, the avatar chooser) takes it through the
     // Modal's own listener, an open menu through the menu's own, and the layer under it stays.
     if (document.querySelector('.modal-overlay, [data-menu-part="menu"]') !== null) return;
@@ -194,6 +249,12 @@ export function App(): m.Component<AppAttrs> {
     m.redraw();
   };
 
+  /** The chrome of one window as the backdrop holds it now, else null (its window is closed, or its desktop
+   *  is no longer the one on screen). */
+  function windowElement(windowId: string): HTMLElement | null {
+    return backdropArea?.querySelector<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`) ?? null;
+  }
+
   /** Paint a window as the store now has it, straight onto the DOM: its rectangle onto its element, its
    *  page over the content box that just moved, and the snap preview shown or hidden. Per pointer move
    *  of a drag or resize, with no redraw (one per move would re-render the whole desktop and reposition
@@ -203,11 +264,84 @@ export function App(): m.Component<AppAttrs> {
   function paintWindow(current: DesktopStore, windowId: string): void {
     const area = backdropArea;
     if (area === null) return;
-    const element = area.querySelector<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`);
+    const element = windowElement(windowId);
     if (element !== null) applyRectStyle(element, current.windowRect(windowId));
+    // A window pulled past the viewport is drawn by the chrome under the cursor: hidden here, chrome and page,
+    // until the drag comes back inside or ends.
+    const isTornOut = current.isTearingOut(windowId);
+    if (element !== null) element.style.visibility = isTornOut ? "hidden" : "";
+    pages?.setTornOutWindow(isTornOut ? windowId : null);
     pages?.placePage(windowId);
     const preview = area.querySelector<HTMLElement>(`[${SNAP_PREVIEW_ATTRIBUTE}]`);
     if (preview !== null) applySnapPreviewStyle(preview, current.snapPreviewRect());
+  }
+
+  /** Feed ``element``'s size to the store as the backdrop's, now and whenever it changes: the backdrop area of a
+   *  desktop, or the pages host of a solo shell, whose one page is laid over it on every redraw. */
+  function observeBackdropSize(current: DesktopStore, element: HTMLElement): void {
+    const measure = (): void => {
+      const box = element.getBoundingClientRect();
+      current.setBackdropSize({ width: box.width, height: box.height });
+    };
+    resizeObserver?.disconnect();
+    resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(element);
+    measure();
+  }
+
+  /** Build the live-pages layer over ``host`` once the render that made the host is over (the window chrome is
+   *  in the DOM), and place the pages now: when every load had already landed no further redraw follows. */
+  function startPagesLayer(current: DesktopStore, host: HTMLElement, attrs: AppAttrs): void {
+    pages = new LivePagesLayer(host, current, { host: attrs.host, protocol: attrs.protocol });
+    pages.start();
+    pages.reconcile();
+  }
+
+  /** The window a transition belongs to, else null: the chrome's root is the only element whose
+   *  travel moves the window, so a transition on something laid out inside it (a control taking
+   *  its hover colour) must not drive the page. */
+  function travellingWindowId(event: Event): string | null {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return null;
+    return target.getAttribute(WINDOW_ID_ATTRIBUTE);
+  }
+
+  /** Lay each travelling window's page over the content box as it stands this frame.
+   *
+   *  A page is positioned by measuring the chrome it sits in rather than by being handed a
+   *  rectangle, so it cannot carry the same transition: it would have nothing to transition
+   *  towards, and would sit at the old rectangle until something measured the chrome again.
+   *  Re-measuring per frame is the placement a drag already does, driven by the transition
+   *  instead of by the pointer. */
+  function followTravellingWindows(): void {
+    for (const windowId of [...travellingWindows.keys()]) {
+      // A window that leaves the desktop mid-travel (closed, or its desktop swapped for another) has its
+      // transitions cancelled on a chrome already out of the document, where the event never reaches the
+      // backdrop that listens for it: the frame that cannot find the chrome is what ends its travel.
+      if (windowElement(windowId) === null) travellingWindows.delete(windowId);
+      else pages?.placePage(windowId);
+    }
+    travelFrame = travellingWindows.size > 0 ? requestAnimationFrame(followTravellingWindows) : null;
+  }
+
+  function onWindowTravelStart(event: Event): void {
+    const windowId = travellingWindowId(event);
+    if (windowId === null) return;
+    travellingWindows.set(windowId, (travellingWindows.get(windowId) ?? 0) + 1);
+    if (travelFrame === null) travelFrame = requestAnimationFrame(followTravellingWindows);
+  }
+
+  function onWindowTravelEnd(event: Event): void {
+    const windowId = travellingWindowId(event);
+    if (windowId === null) return;
+    const stillRunning = (travellingWindows.get(windowId) ?? 1) - 1;
+    if (stillRunning > 0) {
+      travellingWindows.set(windowId, stillRunning);
+      return;
+    }
+    travellingWindows.delete(windowId);
+    // Where the chrome landed, not the last value a frame happened to catch on the way.
+    pages?.placePage(windowId);
   }
 
   /** Paint a floating entry as the store now has it, straight onto its box: the per-move step of its drag, and
@@ -244,11 +378,16 @@ export function App(): m.Component<AppAttrs> {
       },
       // Inert for the whole press: the pixels before the threshold are spent beside the handle, often
       // over a neighbouring page, and a move the root cannot see is a move the threshold never counts.
-      onPressStart: () => {
+      onPressStart: (binding) => {
+        const pressedWindowId =
+          binding.kind === "window-move" || binding.kind === "window-resize" ? binding.windowId : null;
+        pages?.takeFocusFromOtherPages(pressedWindowId);
         pages?.setGestureActive(true);
+        root.setAttribute(WINDOW_MOTION_ATTRIBUTE, "off");
       },
       onPressEnd: () => {
         pages?.setGestureActive(false);
+        root.removeAttribute(WINDOW_MOTION_ATTRIBUTE);
       },
       onBegin: (binding, rootPoint, rootPress) => {
         const point = toBackdrop(rootPoint);
@@ -332,6 +471,8 @@ export function App(): m.Component<AppAttrs> {
       },
       onLongPress: (binding, client) => {
         const anchor = anchorForPoint(client.x, client.y);
+        const referenceRows = (): MenuRow[] =>
+          referenceRowsFor(current, document.elementFromPoint(client.x, client.y), client.x, client.y);
         switch (binding.kind) {
           case "window-move":
           case "window-resize":
@@ -341,15 +482,17 @@ export function App(): m.Component<AppAttrs> {
             const shortcut = activeDesktop(current.getState())?.shortcuts.find(
               (candidate) => candidate.target.app === binding.app && candidate.target.launch === binding.launch,
             );
-            if (shortcut !== undefined) openMenuAt({ kind: "shortcut", shortcut }, anchor);
+            if (shortcut !== undefined) {
+              openMenuAt({ kind: "shortcut", shortcut, referenceRows: referenceRows() }, anchor);
+            }
             break;
           }
           case "taskbar-entry":
-            openMenuAt({ kind: "entry", windowId: binding.windowId }, anchor);
+            openMenuAt({ kind: "entry", windowId: binding.windowId, referenceRows: referenceRows() }, anchor);
             break;
           case "floating-entry": {
             const windowId = pinnedWindowIdOf(binding.app);
-            if (windowId !== null) openMenuAt({ kind: "entry", windowId }, anchor);
+            if (windowId !== null) openMenuAt({ kind: "entry", windowId, referenceRows: referenceRows() }, anchor);
             break;
           }
         }
@@ -401,6 +544,7 @@ export function App(): m.Component<AppAttrs> {
         app !== undefined && current.canStopApp(app)
           ? (action) => void current.setAppLifecycle(app.name, action)
           : null,
+      popOut: current.getCanPopOut() && !state.modes.isCompact ? () => void current.detachWindow(windowId) : null,
       close: () => void current.closeOrMinimizeWindow(windowId),
     });
   }
@@ -415,6 +559,10 @@ export function App(): m.Component<AppAttrs> {
       {
         isMinimized: placement.is_minimized,
         isMaximized: placement.state === "MAXIMIZED",
+        isDetached: placement.is_detached,
+        show: () => current.showDetachedWindow(windowId),
+        showGhost: () => current.showWindowGhost(windowId),
+        bringBack: () => void current.reattachWindow(windowId, null),
         restore: () => current.restoreWindow(windowId),
         minimize: () => current.minimizeWindow(windowId),
         maximize: () => current.setWindowState(windowId, "MAXIMIZED"),
@@ -550,13 +698,15 @@ export function App(): m.Component<AppAttrs> {
       case "size":
         return rowsOfSizeMenu(current, open.windowId);
       case "entry":
-        return rowsOfEntryMenu(current, open.windowId);
+        return withReferenceRows(rowsOfEntryMenu(current, open.windowId), open.referenceRows);
       case "shortcut":
-        return rowsOfShortcutMenu(current, open.shortcut);
+        return withReferenceRows(rowsOfShortcutMenu(current, open.shortcut), open.referenceRows);
       case "desktops":
         return rowsOfDesktopsMenu(current);
       case "desktop":
-        return rowsOfDesktopMenu(current, open.desktopId);
+        return withReferenceRows(rowsOfDesktopMenu(current, open.desktopId), open.referenceRows);
+      case "element":
+        return [...open.rows];
     }
   }
 
@@ -721,13 +871,35 @@ export function App(): m.Component<AppAttrs> {
 
   return {
     oncreate(vnode) {
-      store = vnode.attrs.store;
+      const current = vnode.attrs.store;
+      store = current;
       document.addEventListener("keydown", onDocumentKeyDown);
       document.addEventListener("pointerdown", onDocumentPointerDown, true);
       const root = vnode.dom as HTMLElement;
-      detachGestures = vnode.attrs.gestures.attach(root, gestureListener(vnode.attrs.store, root));
+      detachGestures = vnode.attrs.gestures.attach(root, gestureListener(current, root));
+      // The element menu over the shell's own chrome (element-reference-menu plan section 6): what a right-click
+      // the views do not handle themselves opens, drawn as the desktop's one menu. The shell is no frame's page:
+      // its draft route is the store's, and a draft can always go.
+      uninstallContextMenu = installElementContextMenu({
+        draft: (text) => void current.draftText(text),
+        isDraftAvailable: () => true,
+        scope: (target) => shellReferenceScope(current, target.element),
+        open: (rows, point) => {
+          openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));
+          m.redraw();
+        },
+      });
     },
     onupdate() {
+      // The chrome's word on a tear-out arrives between pointer moves (its window has the cursor by then), so
+      // the dragged window is painted here too, hidden or shown as the store now has it. Its word can also end
+      // the gesture, with no release for the pointer source to end it by, so the window it was dragging is
+      // painted once more when the gesture is gone: shown again, its page's torn-out mark lifted.
+      const gesture = store?.getGesture() ?? null;
+      const movingWindowId = gesture !== null && gesture.kind === "move" ? gesture.windowId : null;
+      const windowToPaint = movingWindowId ?? draggedWindowId;
+      if (store !== null && windowToPaint !== null) paintWindow(store, windowToPaint);
+      draggedWindowId = movingWindowId;
       pages?.reconcile();
     },
     onremove() {
@@ -735,13 +907,32 @@ export function App(): m.Component<AppAttrs> {
       document.removeEventListener("pointerdown", onDocumentPointerDown, true);
       // A menu still open here would keep its own window listeners for good.
       menu.dispose();
+      uninstallContextMenu?.();
       detachGestures?.();
       resizeObserver?.disconnect();
+      if (travelFrame !== null) cancelAnimationFrame(travelFrame);
     },
     view(vnode) {
       const current = vnode.attrs.store;
       store = current;
       const state = current.getState();
+      const soloWindowId = current.getSoloWindowId();
+      if (soloWindowId !== null) {
+        // A pulled-out window's own desktop window: that one window edge to edge, and the banners above it.
+        return m("div", { class: "app-layout flex h-screen flex-col bg-page" }, [
+          m(UpdateStalenessBanner),
+          m(UpdateNoticeBanner, { store: current }),
+          m(SoloView, {
+            store: current,
+            windowId: soloWindowId,
+            onPagesHostCreated: (host) => {
+              startPagesLayer(current, host, vnode.attrs);
+              // The host is the whole viewport here: the page is laid over it edge to edge, and follows its size.
+              observeBackdropSize(current, host);
+            },
+          }),
+        ]);
+      }
       const desktop: Desktop | null = activeDesktop(state);
       const placements = activePlacements(state);
       const focused = activeFocusedWindowId(state);
@@ -749,8 +940,11 @@ export function App(): m.Component<AppAttrs> {
       const launcher = launcherMenu(current);
       // A pinned entry answers the same way in the bar and afloat.
       const onEntryClick = (windowId: string): void => current.toggleTaskbarEntry(windowId);
-      const onEntryContextMenu = (windowId: string, x: number, y: number): void => {
-        openMenuAt({ kind: "entry", windowId }, anchorForPoint(x, y));
+      const onEntryContextMenu = (windowId: string, x: number, y: number, target: Element): void => {
+        openMenuAt(
+          { kind: "entry", windowId, referenceRows: referenceRowsFor(current, target, x, y) },
+          anchorForPoint(x, y),
+        );
       };
       const menuRows = openMenu === null ? null : rowsOfOpenMenu(current, openMenu);
       // The wallpaper is painted here rather than on the backdrop so it spans the whole viewport:
@@ -774,13 +968,12 @@ export function App(): m.Component<AppAttrs> {
               class: "backdrop-area relative min-h-0 flex-1 overflow-hidden",
               oncreate: (created: m.VnodeDOM) => {
                 backdropArea = created.dom as HTMLElement;
-                const measure = (): void => {
-                  const box = backdropArea?.getBoundingClientRect();
-                  if (box !== undefined) current.setBackdropSize({ width: box.width, height: box.height });
-                };
-                resizeObserver = new ResizeObserver(measure);
-                resizeObserver.observe(backdropArea);
-                measure();
+                observeBackdropSize(current, backdropArea);
+                // The window roots are rendered and re-rendered under here, so the travel is bound
+                // once to the backdrop the events bubble to rather than per window.
+                backdropArea.addEventListener("transitionrun", onWindowTravelStart);
+                backdropArea.addEventListener("transitionend", onWindowTravelEnd);
+                backdropArea.addEventListener("transitioncancel", onWindowTravelEnd);
               },
             },
             [
@@ -807,20 +1000,21 @@ export function App(): m.Component<AppAttrs> {
                       selectedShortcutKey = key;
                     },
                     onRunShortcut: (shortcut) => void current.runShortcut(shortcut),
-                    onShortcutContextMenu: (shortcut, point) => {
-                      openMenuAt({ kind: "shortcut", shortcut }, anchorForPoint(point.x, point.y));
+                    onShortcutContextMenu: (shortcut, point, target) => {
+                      openMenuAt(
+                        {
+                          kind: "shortcut",
+                          shortcut,
+                          referenceRows: referenceRowsFor(current, target, point.x, point.y),
+                        },
+                        anchorForPoint(point.x, point.y),
+                      );
                     },
                     onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
-                    onPagesHostCreated: (host) => {
-                      pages = new LivePagesLayer(host, current, {
-                        host: vnode.attrs.host,
-                        protocol: vnode.attrs.protocol,
-                      });
-                      pages.start();
-                      // The render that made the host is over (the window chrome is in the DOM), and when every
-                      // load had already landed no further redraw follows it: the pages are placed now.
-                      pages.reconcile();
-                    },
+                    onShowDetachedWindow: (windowId) => current.showDetachedWindow(windowId),
+                    onHideWindowGhost: (windowId) => current.minimizeWindow(windowId),
+                    onBringBackWindow: (windowId) => void current.reattachWindow(windowId, null),
+                    onPagesHostCreated: (host) => startPagesLayer(current, host, vnode.attrs),
                   }),
               isLauncherOpen
                 ? m(LauncherMenu, {
@@ -872,8 +1066,11 @@ export function App(): m.Component<AppAttrs> {
                 if (openMenu?.kind === "desktops") menu.close();
                 else openMenuAt({ kind: "desktops" }, anchorForEvent(event));
               },
-              onDesktopContextMenu: (desktopId, x, y) => {
-                openMenuAt({ kind: "desktop", desktopId }, anchorForPoint(x, y));
+              onDesktopContextMenu: (desktopId, x, y, target) => {
+                openMenuAt(
+                  { kind: "desktop", desktopId, referenceRows: referenceRowsFor(current, target, x, y) },
+                  anchorForPoint(x, y),
+                );
               },
             },
             onEntryClick,

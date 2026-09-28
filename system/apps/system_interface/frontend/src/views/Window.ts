@@ -18,6 +18,7 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import type { PixelRect, ResizeEdge } from "../geometry/frames";
 import { RESIZE_EDGES } from "../geometry/frames";
+import { windowChromeZIndex } from "../geometry/stacking";
 import type { AppRecord, WindowRecord, WindowState } from "../model/records";
 import { rectStyle } from "./pixelStyle";
 import { TitleBar } from "./TitleBar";
@@ -95,8 +96,7 @@ export function Window(): m.Component<WindowAttrs> {
           class: "window absolute",
           style: {
             ...rectStyle(rect),
-            // Interleaved with the pages: this chrome over its own page (2i+1) and every lower window.
-            zIndex: String(2 * stackIndex + 2),
+            zIndex: windowChromeZIndex(stackIndex),
           },
           onpointerdown: () => {
             if (!isFocused) attrs.onRaise();
@@ -138,12 +138,14 @@ export function Window(): m.Component<WindowAttrs> {
                   isStopped ? stoppedPlaceholder(app, attrs.onStartApp) : null,
                   // The shield: the press that raises the window (or closes an open menu or the launcher)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
-                  // the document.
+                  // the document. A right-click here is that press and nothing more: handled, so the
+                  // desktop's element menu yields to it (element-reference-menu plan section 12).
                   attrs.isShielded
                     ? m("div", {
                         "data-window-shield": "",
                         class: "absolute inset-0 cursor-default",
                         onpointerdown: (event: PointerEvent) => event.preventDefault(),
+                        oncontextmenu: (event: MouseEvent) => event.preventDefault(),
                       })
                     : null,
                 ],

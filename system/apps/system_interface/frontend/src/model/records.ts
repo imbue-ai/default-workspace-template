@@ -86,6 +86,10 @@ export interface Placement {
   readonly frame: Frame;
   readonly state: WindowState;
   readonly is_minimized: boolean;
+  /** Whether the window is pulled out into a desktop window of the embedding chrome's own (the pull-out-window
+   *  spec): drawn as a ghost at its frame here, its page shown elsewhere. Orthogonal to the state; a file
+   *  without the key reads as attached. */
+  readonly is_detached: boolean;
 }
 
 /** One client's path and title for an independent window (pinned-taskbar-entries plan section 5.1). */
@@ -375,6 +379,7 @@ export function parsePlacement(raw: unknown): Placement {
     frame: parseFrame(record.frame),
     state: asOneOf(record.state, WINDOW_STATES, "placement.state"),
     is_minimized: asBoolean(record.is_minimized, "placement.is_minimized"),
+    is_detached: record.is_detached === undefined ? false : asBoolean(record.is_detached, "placement.is_detached"),
   };
 }
 
@@ -625,7 +630,8 @@ export function isSamePlacement(first: Placement, second: Placement): boolean {
     first.frame.width === second.frame.width &&
     first.frame.height === second.frame.height &&
     first.state === second.state &&
-    first.is_minimized === second.is_minimized
+    first.is_minimized === second.is_minimized &&
+    first.is_detached === second.is_detached
   );
 }
 

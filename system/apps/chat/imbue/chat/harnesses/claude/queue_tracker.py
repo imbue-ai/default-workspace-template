@@ -1,10 +1,10 @@
 """The Claude queued-message populator -- the ONLY harness-specific queue code.
 
 Wraps one common :class:`QueuedSet` and maps Claude's raw queue ledger onto its
-``add`` / ``resolve_oldest`` / ``clear`` mutators. It is a pure function of the
-ledger it is fed (plus the coarse ``on_idle`` backstop); it holds no UI state and
-knows nothing about the frontend or the two common actions -- those all read the
-shared entity.
+``add`` / ``resolve_oldest`` / ``resolve`` / ``clear`` mutators. It is a function of the
+ledger it is fed plus the agent's idle and working readings (the ``on_idle`` /
+``on_busy`` backstop); it holds no UI state and knows nothing about the frontend or
+the two common actions -- those all read the shared entity.
 
 The model is the conservation law ``enqueue = dequeue + remove + popAll`` (see
 ``docs/claude_queued_messages_impl.md``):
@@ -15,8 +15,15 @@ The model is the conservation law ``enqueue = dequeue + remove + popAll`` (see
 * dequeue / remove / popAll -> ``resolve_oldest`` (pop the FIFO head, phantom or
   real). One record = one pop; popAll emits one record per flushed message, so a
   per-record pop is uniform (no special "clear all").
-* working -> IDLE -> ``clear`` (the one backstop; sweeps interrupts, SIGKILL,
-  crashes -- none of which the poll loop would otherwise reconcile).
+* working -> IDLE -> mark every entry (phantom or real) as being delivered, and ``resolve`` the
+  ones still there :data:`DELIVERY_GRACE_SECONDS` later (the one backstop; sweeps
+  interrupts, SIGKILL, crashes -- none of which the poll loop would otherwise
+  reconcile). The agent reads as IDLE the moment its reply lands, but Claude only
+  dequeues a parked message after its end-of-turn hooks run, so clearing at once
+  would blank the message until its turn arrives. A marked entry renders as a
+  message being sent (``is_sending``) until its leave record or the grace expiry.
+* IDLE -> working -> forget the marks (``on_busy``): what is still queued waits for
+  that turn.
 
 This keys resolution off the ledger's LEAVE ops ONLY -- never ``promptSource`` or
 the ``queued_command`` attachment -- because in the real Mind flow every message
@@ -35,11 +42,18 @@ queue is gone) and calls ``reset`` when a new latest session is registered, so
 """
 
 import hashlib
+from typing import Any
+from typing import Final
 
 from imbue.chat.harnesses.claude.session_parser import QueueSignal
 from imbue.chat.harnesses.claude.session_parser import QueueSignalKind
 from imbue.chat.harnesses.claude.session_parser import TASK_NOTIFICATION_CONTENT_PREFIX
 from imbue.chat.harnesses.queued_set import QueuedSet
+
+# How long a message may still sit in the queue after the agent went idle before it is
+# treated as stranded. Covers Claude's end-of-turn hooks, which run between the reply
+# landing and the queue being dequeued.
+DELIVERY_GRACE_SECONDS: Final[float] = 10.0
 
 
 def _queued_id(session_id: str, enqueue_ts: str, content: str) -> str:
@@ -65,6 +79,8 @@ class ClaudeQueueTracker:
     # Declared at class level so ``build`` (no ``__init__``, matching the other
     # live-state holders) can assign it.
     _queued_set: QueuedSet
+    # queued_id -> monotonic time the agent was first seen idle with it still queued.
+    _idle_since_by_id: dict[str, float]
 
     @classmethod
     def build(cls) -> "ClaudeQueueTracker":
@@ -93,27 +109,60 @@ class ClaudeQueueTracker:
                 )
             case QueueSignalKind.LEAVE:
                 self._queued_set.resolve_oldest()
+                # Claude opened a turn with the head, so whatever is still queued is parked
+                # behind that turn again rather than about to be delivered.
+                self._idle_since_by_id.clear()
 
-    def on_idle(self) -> None:
-        """Clear the queue -- the working->IDLE backstop.
+    def on_idle(self, now: float) -> None:
+        """The working->IDLE backstop: mark what is still queued, and drop what outstayed the grace.
 
-        At a genuine IDLE the queue is drained (a queued message would have opened
-        a turn), so any survivor is stale (an interrupt, a flush-restart SIGKILL, a
-        crash -- none of which write a resolution record) and is dropped.
+        A message still queued at IDLE is normally about to be dequeued, so it stays
+        (rendered as being sent) rather than blanking until its turn lands. One still
+        queued :data:`DELIVERY_GRACE_SECONDS` later is stale (an interrupt, a
+        flush-restart SIGKILL, a crash -- none of which write a resolution record) and
+        is dropped. Phantom slots are swept too: a stale one left at the FIFO head would
+        take the next message's positional leave.
         """
-        self._queued_set.clear()
+        for message in self._queued_set.pending:
+            self._idle_since_by_id.setdefault(message.queued_id, now)
+        self.expire(now)
+
+    def on_busy(self) -> None:
+        """The agent reads as working again: whatever is still queued is parked behind that turn.
+
+        Undoes marks from an idle reading taken before the turn's events were folded in (the
+        queue snapshot a leave produces is pushed ahead of the prompt it opened a turn with), so
+        the rest of the queue is not dropped at the grace expiry while it waits.
+        """
+        self._idle_since_by_id = {}
+
+    def expire(self, now: float) -> None:
+        """Drop the entries still queued :data:`DELIVERY_GRACE_SECONDS` after the agent went idle."""
+        expired_ids = [
+            queued_id
+            for queued_id, idle_since in self._idle_since_by_id.items()
+            if now - idle_since >= DELIVERY_GRACE_SECONDS
+        ]
+        for queued_id in expired_ids:
+            self._queued_set.resolve(queued_id)
+            del self._idle_since_by_id[queued_id]
 
     def clear(self) -> None:
         """Drop everything (a flush restart invalidated the harness queue)."""
         self._queued_set.clear()
+        self._idle_since_by_id = {}
 
     def reset(self) -> None:
         """Reset to an empty set (a truncation, or a new latest main session)."""
         self._queued_set = QueuedSet.build()
+        self._idle_since_by_id = {}
 
-    def snapshot(self) -> list[dict[str, str]]:
+    def snapshot(self) -> list[dict[str, Any]]:
         """The full wire snapshot of currently-queued messages, in enqueue order."""
-        return self._queued_set.snapshot()
+        return [
+            {**entry, "is_sending": entry["queued_id"] in self._idle_since_by_id}
+            for entry in self._queued_set.snapshot()
+        ]
 
     def concatenated_block(self) -> str:
         """The queue as one newline-joined turn (shared by both common actions)."""

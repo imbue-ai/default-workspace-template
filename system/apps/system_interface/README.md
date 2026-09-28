@@ -30,7 +30,8 @@ format. In brief:
   the whole of what the shell knows about what a window shows.
 - A **placement** is where one client keeps one window: its frame in fractions
   of the backdrop, whether it is snapped or maximized, whether it is
-  minimized; the order is the stack. A **client** is one browser context,
+  minimized, whether it is pulled out into a desktop window of the Mind app's
+  own; the order is the stack. A **client** is one browser context,
   identified by a stored id, with an active desktop. Truth is shared,
   arrangement is scoped.
 - A **shortcut** is an icon on a desktop's backdrop that runs one app's launch
@@ -49,10 +50,15 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
   apply and the preview flow poll.
-- `/_static/app_contract.js`: the browser-side contract module (source in
-  `system/libs/workspace_ui/src/app_contract.ts`), built into this app's static
-  output; every app serves that same file from its own origin, since a
-  cross-origin module import carries no cookie and the forwarder refuses it.
+- `/_static/app_contract.js` and `/_static/context_menu.js`: the browser-side
+  contract module and the element context menu module (sources in
+  `system/libs/workspace_ui/src/app_contract.ts` and `context_menu.ts`), built
+  into this app's static output; every app serves those same files from its
+  own origin, since a cross-origin module import carries no cookie and the
+  forwarder refuses it. The desktop's own chrome draws the element menu too: a
+  right-click the views leave alone opens it, and the entry, shortcut, and
+  desktop menus end with its reference rows
+  (`docs/system/blueprint/element-reference-menu/`).
 - The shell routes of contracts sections 5 and 8: desktops (`/api/desktops`,
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
@@ -92,7 +98,7 @@ and the profile cache.
   wallpaper, shortcuts, windows), a `Window` (an app, a path
   under its origin, and the title its page last reported; shared), and per
   client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
-  backdrop, state, minimized; the order is the stack).
+  backdrop, state, minimized, detached; the order is the stack).
 - **Pinned windows** (`docs/system/blueprint/pinned-taskbar-entries/`): an
   app whose manifest declares a `[pin]` has exactly one pinned window on
   every desktop, reconciled on every read after the registry is read and
@@ -111,7 +117,8 @@ and the profile cache.
   a while are pruned with their placement files. `users.json` holds the
   desktop made for each visiting user (see "Who is here").
 - **The pure editor** (`shell/desktop_document.py`): every verb (open, close,
-  focus, minimize, restore, maximize, snap, place, the shortcut edits) and
+  focus, minimize, restore, maximize, snap, place, detach, reattach, the
+  shortcut edits) and
   every geometry rule (cascade, fit, snap zones, un-snap, the grid, nearest
   free cell, reading order, shortcut placement) as pure functions over the
   records. The rules the frontend also applies pass the shared vectors in
@@ -167,8 +174,10 @@ for critical apps; the desktop offers them on the window menu
 (`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 `shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
-stored on its window and reopens there, and one that declared `navigation`
-is sent `shell:navigate` when an agent points its window elsewhere.
+stored on its window and reopens there, one that declared `navigation`
+is sent `shell:navigate` when an agent points its window elsewhere, and one
+that declared `closeChord` keeps its window on the close chord (it is only sent
+`shell:close-request`; the browser closes one of its own tabs that way).
 
 ### Who is here
 
@@ -269,7 +278,11 @@ highlighted; the arrows move it, hovering moves it, Enter or a click runs it,
 and a run closes the menu and clears the field. A framed page starts a chat
 without naming the chat app through `shell:start-with-text`, which the shell
 answers by running the primary free-text row (the Getting Started app's
-intents and templates use it). The shell names no app in any of this. A
+intents and templates use it), and drafts a text into the chat on screen
+through `shell:draft-text`, which the shell answers by running the pinned
+app's launch path with a `draft_param` into the pinned window, as the avatar
+dialog's "Design your own..." does (the element context menu's "Explain..."
+uses it). The shell names no app in any of this. A
 fresh install lands on its `Home` desktop with the Getting Started window
 open, placed there once by that app for the first client that connects.
 
@@ -314,7 +327,7 @@ and windows (desktop-interface contracts.md section 8):
 ```bash
 python3 system/scripts/layout.py desktops
 python3 system/scripts/layout.py context
-python3 system/scripts/layout.py open files --path /notes/ --desktop Research
+python3 system/scripts/layout.py open files --path /home/user/workspace/data/notes/ --desktop Research
 python3 system/scripts/layout.py open terminal
 python3 system/scripts/layout.py place self --zone left
 python3 system/scripts/layout.py navigate win-0123456789abcdef /other/
@@ -329,12 +342,15 @@ clients listed otherwise); `--desktop` edits that desktop and switches the
 client to it; `open` opens a window at `--path` or at a launch path
 (`--launch`, `--param`; a bare URL is the browser's `new`; a POST launch path
 is posted the params for the page it answers), minimized with
-`--minimized`, and prints the window's id; an `open` with no client to target
-still writes the window, unplaced. A close is posted to the app's registered
-`window_closed_path`, when it has one, so an app whose resources live as long
-as their windows (the terminal, the browser) can collect at once
-(`docs/system/specs/window-bound-resources.md`). Only `refresh` and the
-interface reload reach the browser as messages. See the `manage-desktop` skill for end-to-end orientation.
+`--minimized` or beside a window (`--beside [window]`, bare the caller's own
+chat), which is moved across only where it has to be and never resized unless
+it is over half the backdrop wide, and prints the window's id;
+an `open` with no client to target still writes the window, unplaced. A close
+is posted to the app's registered `window_closed_path`, when it has one, so an
+app whose resources live as long as their windows (the terminal, the browser)
+can collect at once (`docs/system/specs/window-bound-resources.md`). Only
+`refresh` and the interface reload reach the browser as messages. See the
+`manage-desktop` skill for end-to-end orientation.
 
 ## Updating the running UI
 

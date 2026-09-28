@@ -1,0 +1,1 @@
+The manage-desktop skill's file viewer examples use absolute paths (`open files --path /home/user/workspace/data/notes/`): the viewer now serves the filesystem root and opens at the workspace folder, so a folder is no longer named relative to `data/`.

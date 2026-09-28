@@ -830,11 +830,13 @@ class AgentManager:
     _activity_state_by_agent: dict[str, ActivityState]
     # Per-agent live queued-message snapshot (a sibling of ``_activity_state_by_agent``),
     # pushed to the frontend on the agents WebSocket. Fed by the agent's watcher via
-    # ``update_queued_messages`` and cleared on a working->IDLE transition through the
-    # per-agent idle handler the watcher registers (its ``notify_idle`` -- the queue
-    # backstop). Both are dropped when activity tracking stops.
+    # ``update_queued_messages`` and swept while IDLE through the per-agent idle handler
+    # the watcher registers (its ``notify_idle`` -- the queue backstop), whose marks the
+    # busy handler (``notify_busy``) undoes on IDLE->working.
+    # All are dropped when activity tracking stops.
     _queued_messages_by_agent: dict[str, tuple[QueuedMessageState, ...]]
     _queue_idle_handler_by_agent: dict[str, Callable[[], list[dict[str, Any]]]]
+    _queue_busy_handler_by_agent: dict[str, Callable[[], list[dict[str, Any]] | None]]
     # Per-agent live harness session (``HarnessSpec.session_class``): the control surface that
     # owns the send + its Sending records, tap availability, the native tap/interrupt dispatch,
     # daemon liveness (codex's app-server connection + ledger live inside its session), and the
@@ -966,6 +968,7 @@ class AgentManager:
         manager._activity_state_by_agent = {}
         manager._queued_messages_by_agent = {}
         manager._queue_idle_handler_by_agent = {}
+        manager._queue_busy_handler_by_agent = {}
         manager._session_by_agent = {}
         manager._model_choice_by_agent = {}
         manager._model_state_poller = ModelStatePoller.build(
@@ -1079,6 +1082,7 @@ class AgentManager:
             self._activity_state_by_agent.clear()
             self._queued_messages_by_agent.clear()
             self._queue_idle_handler_by_agent.clear()
+            self._queue_busy_handler_by_agent.clear()
             self._model_choice_by_agent.clear()
         for session in sessions:
             session.close()
@@ -3611,6 +3615,7 @@ class AgentManager:
             self._activity_state_by_agent.pop(agent_id, None)
             self._queued_messages_by_agent.pop(agent_id, None)
             self._queue_idle_handler_by_agent.pop(agent_id, None)
+            self._queue_busy_handler_by_agent.pop(agent_id, None)
         # Reap the live backend outside the lock (codex's join blocks on its reader thread);
         # idempotent, and a re-track rebuilds it via ensure_live.
         if session is not None:
@@ -3754,15 +3759,27 @@ class AgentManager:
         return session.switch_options()
 
     def register_queue_idle_handler(self, agent_id: str, handler: Callable[[], list[dict[str, Any]]]) -> None:
-        """Register the agent watcher's working->IDLE queue backstop.
+        """Register the agent watcher's idle queue backstop.
 
-        Called once when the watcher is created. On a working->IDLE transition
-        ``_recompute_activity_state`` invokes it: the handler clears the harness
-        queue populator and returns the resulting (empty) snapshot, which the same
-        broadcast that carries the IDLE state also carries.
+        Called once when the watcher is created. ``_recompute_activity_state`` invokes it
+        on every recompute that finds the agent IDLE with something queued, not only on the
+        working->IDLE transition: the handler applies the harness queue populator's idle
+        backstop and returns the resulting snapshot, which the same broadcast that carries
+        the IDLE state also carries.
         """
         with self._lock:
             self._queue_idle_handler_by_agent[agent_id] = handler
+
+    def register_queue_busy_handler(self, agent_id: str, handler: Callable[[], list[dict[str, Any]] | None]) -> None:
+        """Register the agent watcher's IDLE->working counterpart of the queue backstop.
+
+        Called once when the watcher is created. On an IDLE->working transition with something
+        queued, ``_recompute_activity_state`` invokes it: the handler undoes the idle backstop's
+        marks and returns the resulting snapshot (None when its harness keeps no marks), which
+        is folded in the same way the idle handler's is.
+        """
+        with self._lock:
+            self._queue_busy_handler_by_agent[agent_id] = handler
 
     def update_queued_messages(self, agent_id: str, snapshot: list[dict[str, Any]]) -> None:
         """Cache and broadcast a fresh queued-message snapshot from the agent's watcher.
@@ -3774,9 +3791,10 @@ class AgentManager:
         A replayed snapshot can arrive with no recompute ever following it (e.g. a
         priming replay for a stopped agent, whose lifecycle never changes again),
         so the level-triggered idle sweep is run here, after caching and BEFORE the
-        broadcast: an idle agent's stale snapshot is drained via its idle handler
-        and the single broadcast below carries the post-sweep state, so phantoms
-        are never rendered. A live mid-turn agent derives non-IDLE (its transcript
+        broadcast: an idle agent's snapshot goes through its idle handler (which
+        drops stale entries, or for Claude shows them as being sent until the
+        delivery grace runs out) and the single broadcast below carries the
+        post-sweep state. A live mid-turn agent derives non-IDLE (its transcript
         signals are seeded before the watcher starts) and the snapshot stands.
         """
         queued = tuple(QueuedMessageState.model_validate(entry) for entry in snapshot)
@@ -3989,17 +4007,19 @@ class AgentManager:
             )
             old_state = self._activity_state_by_agent.get(agent_id)
             # The queued-message backstop is LEVEL-triggered, not edge-triggered: an
-            # IDLE agent's harness queue is drained by definition, so ANY queued
-            # survivor while idle is stale -- an interrupt, our flush-restart SIGKILL,
-            # a crash, a hole in the harness's own ledger (an enqueue with no matching
-            # leave), or a stale entry re-surfaced by a backend restart's full replay
-            # (which sees no new working->IDLE transition to sweep it). So sweep
-            # whenever the agent is idle with a non-empty queue, even if the activity
-            # state itself did not change this cycle -- an edge-only backstop leaves
-            # such survivors stranded on an idle agent forever.
+            # IDLE agent's harness queue is about to drain, so a queued survivor while
+            # idle is either on its way in (Claude dequeues only after its end-of-turn
+            # hooks; its backstop shows such entries as being sent for a grace period)
+            # or stale -- an interrupt, our flush-restart SIGKILL, a crash, a hole in
+            # the harness's own ledger (an enqueue with no matching leave), or a stale
+            # entry re-surfaced by a backend restart's full replay (which sees no new
+            # working->IDLE transition to sweep it). So run the backstop whenever the
+            # agent is idle with a non-empty queue, even if the activity state itself
+            # did not change this cycle -- an edge-only backstop leaves such survivors
+            # stranded on an idle agent forever.
             is_idle = new_state == ActivityState.IDLE
-            has_stale_queue = is_idle and bool(self._queued_messages_by_agent.get(agent_id))
-            if old_state == new_state and agent_state.activity_state == new_state.value and not has_stale_queue:
+            has_idle_queue = is_idle and bool(self._queued_messages_by_agent.get(agent_id))
+            if old_state == new_state and agent_state.activity_state == new_state.value and not has_idle_queue:
                 return
             self._activity_state_by_agent[agent_id] = new_state
             # Update just this slot so any cached ``model_choice`` stays intact --
@@ -4007,21 +4027,33 @@ class AgentManager:
             self._agents[agent_id] = agent_state.model_copy_update(
                 to_update(agent_state.field_ref().activity_state, new_state)
             )
-            idle_handler = self._queue_idle_handler_by_agent.get(agent_id) if has_stale_queue else None
+            # An idle reading can predate the fold of the turn a leave just opened (the watcher
+            # pushes the queue snapshot ahead of that turn's events), so the backstop may have
+            # marked what is parked behind it; the working reading that follows undoes that.
+            is_leaving_idle = (
+                old_state == ActivityState.IDLE and not is_idle and bool(self._queued_messages_by_agent.get(agent_id))
+            )
+            if has_idle_queue:
+                queue_handler = self._queue_idle_handler_by_agent.get(agent_id)
+            elif is_leaving_idle:
+                queue_handler = self._queue_busy_handler_by_agent.get(agent_id)
+            else:
+                queue_handler = None
 
-        # The idle handler clears the watcher's queue populator and returns the
-        # resulting (empty) snapshot; it calls into the watcher, so it runs outside
-        # the lock, and its snapshot is folded into the same broadcast as the IDLE
+        # The queue handler applies the watcher's queue backstop (or undoes it) and
+        # returns the resulting snapshot; it calls into the watcher, so it runs outside
+        # the lock, and its snapshot is folded into the same broadcast as the activity
         # state below. Runs regardless of ``broadcast_on_change`` (it is a state
         # mutation); only the broadcast itself is gated.
-        if idle_handler is not None:
-            drained = tuple(QueuedMessageState.model_validate(entry) for entry in idle_handler())
+        handled_snapshot = queue_handler() if queue_handler is not None else None
+        if handled_snapshot is not None:
+            handled_queue = tuple(QueuedMessageState.model_validate(entry) for entry in handled_snapshot)
             with self._lock:
-                idle_agent_state = self._agents.get(agent_id)
-                if idle_agent_state is not None and idle_agent_state.queued_messages != drained:
-                    self._queued_messages_by_agent[agent_id] = drained
-                    self._agents[agent_id] = idle_agent_state.model_copy_update(
-                        to_update(idle_agent_state.field_ref().queued_messages, drained)
+                handled_agent_state = self._agents.get(agent_id)
+                if handled_agent_state is not None and handled_agent_state.queued_messages != handled_queue:
+                    self._queued_messages_by_agent[agent_id] = handled_queue
+                    self._agents[agent_id] = handled_agent_state.model_copy_update(
+                        to_update(handled_agent_state.field_ref().queued_messages, handled_queue)
                     )
 
         if broadcast_on_change:
