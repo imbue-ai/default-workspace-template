@@ -260,7 +260,9 @@ command).
    system interface HTTP API, a shared data file's format, a script's CLI
    flags) has callers that reference no file of it.
 4. **Bias toward "impacted" when uncertain**, and record what you checked and
-   how, so the lead sees the coverage.
+   how, so the lead sees the coverage. List each impacted creation in
+   `data/.tasks/update-self/impacted-paths.txt` as 4b's suites step describes,
+   so its tests run in the same gate.
 5. **Verify "workspace-added" by provenance, not directory**: a path is
    built-in if it exists at the target ref (`git ls-tree -r --name-only
    "$TARGET_REF" -- <dir>`; empty output = genuinely workspace-added).
@@ -300,11 +302,20 @@ in your report.
   merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
   is a precise blocker (an unparseable root lock means no service in the
   workspace can start); fix it before running anything else.
-- **Suites, lint, ratchets** for what the merged set and your own edits can
-  reach, and for nothing else (with neither, no suite runs at all). The test
+- **Suites, lint, ratchets** for what the merged set, the update's changes to
+  your creations, 4a's impacted consumers, and your own edits can reach, and
+  for nothing else (with none of them, no suite runs at all). The test
   selector names them from those paths -- each changed package's, skill's, or
   script's own tests, the suites of whatever consumes it, the frontend checks,
-  and the repo guards; a set made only of documentation selects nothing:
+  and the repo guards; a set made only of documentation selects nothing.
+  The update's changes inside a creation that carries local content (every
+  creation whose Step 4 `.local.json` and `.update.json` both list files
+  inside its footprint) go in by rule, so the user's own tests of it run
+  whether or not a file changed on both sides. What 4a found impacted by
+  search or reasoning goes in through `impacted-paths.txt`: one line per
+  impacted creation, naming a file that stands for its whole suite (an app's
+  `app.toml`, a skill's `SKILL.md`, a package's `pyproject.toml`, or a flat
+  script itself); no file means 4a found none, or did not run:
 
   ```bash
   MERGE="$(git log --merges -1 --format=%H --fixed-strings \
@@ -313,6 +324,12 @@ in your report.
       classify-merge --local "$MERGE^1" --target "$TARGET_REF" \
       > data/.tasks/update-self/classify.json
   { jq -r '.merged[].path' data/.tasks/update-self/classify.json
+    for update in data/.tasks/update-self/scopes/*.update.json; do
+        [ -e "$update" ] || continue
+        jq -e '.diff.inside_footprint | length > 0' "${update%.update.json}.local.json" >/dev/null \
+            && jq -r '.diff.inside_footprint[]' "$update"
+    done
+    cat data/.tasks/update-self/impacted-paths.txt 2>/dev/null
     git diff --name-only "$MERGE" HEAD; } | sort -u \
       > data/.tasks/update-self/validate-paths.txt
   [ -s data/.tasks/update-self/validate-paths.txt ] \
@@ -321,7 +338,7 @@ in your report.
           $(sed 's/^/--path /' data/.tasks/update-self/validate-paths.txt)
   ```
 
-  Commit your own edits first: the second half of the list reads commits.
+  Commit your own edits first: the `git diff` line reads commits.
   `--diff-base` here only names what a merged `uv.lock` is compared against,
   so a lock that upgraded a package selects the suites that depend on it. Run
   every printed line, in order, plus `uv run ruff check` when a Python file is

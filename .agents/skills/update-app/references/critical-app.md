@@ -247,6 +247,10 @@ branch you are about to hand the worker is the only copy.
 tracking ticket, the task file with `operation: update` / `type: app`
 frontmatter, launch, background-poll) with these specifics:
 
+- The task file's `diff_base` is the commit the branch forked from the served
+  tree, `$(git merge-base HEAD "mngr/update-$SLUG")` run in the served tree, so
+  the worker's test gate selects from exactly the branch's changes. There is no
+  `## Change origin` to pick it by.
 - Launch with the **branch passthrough**, so the worker checks out and extends
   the branch you built up instead of branching anew from the served HEAD:
 
