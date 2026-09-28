@@ -88,15 +88,15 @@ def submit_credentials() -> Response:
         return _error_response(str(e), status_code=400)
     except (AccountError, FlowError) as e:
         return _error_response(str(e), status_code=500)
-    # `auth_mode` rides along because mngr's deployment test asserts on it: it is how the
-    # Imbue path proves the blob it sent was understood as a proxied setup and not as a
-    # plain key. Derived from what was pasted, not from a probe.
+    # `auth_mode` rides along because mngr's deployment test asserts on it: it is how that test
+    # proves the blob it sent was understood as a proxied setup and not as a plain key.
+    # Derived from what was pasted, not from a probe.
     #
     # Through `claude_env_from_paste`, which is the SAME function that decided what to write,
     # so the two cannot disagree. `parse_credential_lines` is the strict env-block parser and
     # rejects a bare key outright -- and it ran after the account was already committed and
-    # outside the try, so pasting a plain `sk-ant-...` (what the keys page hands you) minted
-    # the account, made it the MRU, and then answered 500.
+    # outside the try, so posting a plain `sk-ant-...` minted the account, made it the MRU, and
+    # then answered 500.
     return _json_response(
         {
             "account_id": account.id,

@@ -457,7 +457,7 @@ def test_a_pasted_api_key_is_approved_so_claude_does_not_challenge_it(tmp_path: 
 
 
 def test_re_keying_through_imbue_reuses_its_own_account(tmp_path: Path) -> None:
-    """The keys page posts on every visit. A fresh account per visit leaves a row per
+    """Re-keying posts a new credential each time. A fresh account per post leaves a row per
     re-key, all but the newest holding a dead credential -- and the newest silently becoming
     the account every new chat launches on."""
     service = AuthFlowService.create(
@@ -474,8 +474,8 @@ def test_re_keying_through_imbue_reuses_its_own_account(tmp_path: Path) -> None:
 
 
 def test_re_keying_does_not_overwrite_a_browser_sign_in(tmp_path: Path) -> None:
-    """Both live on the anthropic lane, so matching on the lane alone would let the keys
-    page silently replace the credential the user signed in with."""
+    """Both live on the anthropic lane, so matching on the lane alone would let a re-key
+    silently replace the credential the user signed in with."""
     service = AuthFlowService.create(
         key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
     )
