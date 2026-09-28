@@ -288,6 +288,8 @@ class AppLifecycleManager(MutableModel):
         app is up or retrying (or that the pass no longer reaches: the row left the registry, or its program is
         unknown to supervisord), note an app whose wake ended in FATAL, and stop a running app that has had no
         window for the grace period."""
+        # A wake that lands after this moment makes the reading stale for its app (see ``_is_woken_since``).
+        states_read_at = self.clock()
         statename_by_program = self.program_states()
         if statename_by_program is None:
             logger.debug("Skipped an app lifecycle pass: supervisord did not answer")
@@ -302,7 +304,7 @@ class AppLifecycleManager(MutableModel):
             if statename is None:
                 continue
             reconciled_apps.add(str(entry.row.name))
-            self._reconcile_app(entry, program, statename)
+            self._reconcile_app(entry, program, statename, states_read_at)
         self._release_parked_except(reconciled_apps)
 
     def _release_parked_except(self, apps: AbstractSet[str]) -> None:
@@ -316,7 +318,7 @@ class AppLifecycleManager(MutableModel):
             parked.release()
             logger.info("Released the parked port of {}: the app is no longer one the shell can start", app)
 
-    def _reconcile_app(self, entry: AppInventoryEntry, program: str, statename: str) -> None:
+    def _reconcile_app(self, entry: AppInventoryEntry, program: str, statename: str, states_read_at: float) -> None:
         app = str(entry.row.name)
         if statename in (SUPERVISOR_RUNNING_STATENAME, SUPERVISOR_STARTING_STATENAME, SUPERVISOR_BACKOFF_STATENAME):
             # Up, or about to bind again on its own: the port must be free.
@@ -335,6 +337,9 @@ class AppLifecycleManager(MutableModel):
         if statename not in SUPERVISOR_DOWN_STATENAMES:
             # STOPPING: the port is still the app's until it exits.
             return
+        if self._is_woken_since(app, states_read_at):
+            logger.debug("Left {} unparked this pass: it was woken after its state was read", app)
+            return
         target = parking_target_of(str(entry.row.url))
         with self._lock:
             if statename == SUPERVISOR_FATAL_STATENAME and app in self._apps_awaiting_wake_outcome:
@@ -352,6 +357,13 @@ class AppLifecycleManager(MutableModel):
             )
         if target is not None:
             self._park(entry, program, target)
+
+    def _is_woken_since(self, app: str, moment: float) -> bool:
+        """Whether a wake started the app's program after ``moment``: a state read before it is stale for the app,
+        and a park on that reading would take the port the app is about to bind. The next pass reads the outcome."""
+        with self._lock:
+            wake_times = self._wake_times_by_app.get(app)
+            return bool(wake_times) and wake_times[-1] > moment
 
     def _apply_no_window_rule(self, entry: AppInventoryEntry, program: str) -> None:
         """Stop a running app that declares ``stop_when_no_windows`` once no window has shown it for the grace

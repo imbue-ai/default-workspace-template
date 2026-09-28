@@ -189,6 +189,47 @@ def test_a_parked_port_follows_its_row_and_is_released_once_the_row_is_gone(
     assert supervisor.started == []
 
 
+def test_a_pass_does_not_park_an_app_woken_after_its_state_was_read(
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
+) -> None:
+    """A wake that lands between a pass's state read and its park (the parker's first connection, the start
+    route, a POST launch) has started the program; parking on the stale STOPPED reading would take the port the
+    app is about to bind. The pass leaves it, and the next one reads the outcome."""
+    clock = _clock_of(manager)
+    read_count = [0]
+
+    def read_states_then_wake() -> dict[str, str] | None:
+        states = supervisor.states()
+        read_count[0] += 1
+        if read_count[0] == 1:
+            clock.now += 1
+            racing.wake("docs")
+        return states
+
+    racing = AppLifecycleManager(
+        inventory=manager.inventory,
+        is_enabled=False,
+        count_windows_of_app=lambda app: 0,
+        program_states=read_states_then_wake,
+        start_program=supervisor.start,
+        stop_program=supervisor.stop,
+        clock=clock,
+    )
+    try:
+        racing.sweep_once()
+        assert supervisor.started == ["docs"]
+        assert racing.parked_app_names() == [] and can_bind_loopback_port(closed_port)
+
+        # The next pass reads the wake's outcome: STARTING parks nothing, and a STOPPED someone else caused does.
+        racing.sweep_once()
+        assert racing.parked_app_names() == []
+        supervisor.statename_by_program["docs"] = "STOPPED"
+        racing.sweep_once()
+        assert racing.parked_app_names() == ["docs"]
+    finally:
+        racing.stop()
+
+
 def test_a_pass_does_nothing_when_supervisord_does_not_answer(
     manager: AppLifecycleManager, supervisor: FakeSupervisor
 ) -> None:
