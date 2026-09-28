@@ -176,7 +176,7 @@ class AppLifecycleManager(MutableModel):
             if not self._is_visited:
                 self._is_visited = True
                 logger.info(
-                    "The workspace has been visited; apps without windows now stop after {}s",
+                    "Marked the workspace visited: apps without windows now stop after {}s",
                     self.no_windows_grace_seconds,
                 )
         self.wake_soon()

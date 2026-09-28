@@ -185,7 +185,7 @@ class ParkedPort(MutableModel):
             try:
                 listener.shutdown(socket.SHUT_RDWR)
             except OSError as e:
-                logger.debug("The listener parked for {} was closed without a shutdown: {}", self.app, e)
+                logger.debug("Closed the listener parked for {} without a shutdown: {}", self.app, e)
             listener.close()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
@@ -215,7 +215,7 @@ class ParkedPort(MutableModel):
                 kind = self.on_first_connection()
             except (ShellError, OSError) as e:
                 logger.opt(exception=e).error(
-                    "The wake of {} raised; answering its request as a failed start", self.app
+                    "Answered the request that woke {} as a failed start: the wake raised", self.app
                 )
                 kind = ParkedPageKind.FAILED
             self._answer(connection, kind)
