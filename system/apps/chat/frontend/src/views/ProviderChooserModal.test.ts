@@ -416,38 +416,31 @@ describe("a sign-in finished in the browser", () => {
     expect(requestProviderRelay).toHaveBeenCalledExactlyOnceWith(CLAUDE_RELAY_URL, "flow-1");
     expect(root.textContent).toContain("Finish signing in to Anthropic in your browser.");
     expect(root.querySelector('[data-e2e="open-sign-in-again"]')?.textContent).toBe("Reopen sign-in window");
-    expect(root.textContent).not.toContain("malformed_certificate");
   });
 
-  it("names the claude.ai certificate fix only once the browser wait runs long", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    try {
-      state.lanes = [
-        lane({
-          methods: [
-            ...lane().methods,
-            {
-              id: "api_key",
-              label: "Use an API key",
-              description: "",
-              signup_url: "",
-              shape: "paste",
-              is_primary: false,
-            },
-          ],
-        }),
-      ];
-      state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
-      const root = await clickLane("anthropic");
-      expect(root.querySelector('[data-e2e="sign-in-another-way"]')?.textContent).toBe("Sign in another way");
+  it("offers reopening the page and another way in side by side while the browser is out", async () => {
+    state.lanes = [
+      lane({
+        methods: [
+          ...lane().methods,
+          {
+            id: "api_key",
+            label: "Use an API key",
+            description: "",
+            signup_url: "",
+            shape: "paste",
+            is_primary: false,
+          },
+        ],
+      }),
+    ];
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
 
-      vi.setSystemTime(Date.now() + 20_001);
-      m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    const root = await clickLane("anthropic");
 
-      expect(root.textContent).toContain("Seeing malformed_certificate? Sign out of claude.ai and sign in again.");
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(root.querySelector('[data-e2e="open-sign-in-again"]')?.textContent).toBe("Reopen sign-in window");
+    expect(root.querySelector('[data-e2e="sign-in-another-way"]')?.textContent).toBe("Sign in another way");
+    expect(root.textContent).not.toContain(PASTE_STEP_LABEL);
   });
 
   it("shows Claude's paste-the-code steps when nothing relays", async () => {
