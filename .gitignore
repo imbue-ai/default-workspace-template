@@ -383,7 +383,9 @@ system/apps/system_interface/frontend/permission-demo.html
 system/apps/system_interface/frontend/src/permission-demo.ts
 
 # Fetched at build time from the pinned mngr commit by system/scripts/fetch_mngr_assets.sh.
-system/vendor/mngr-assets/
+# No trailing slash: in a worker's worktree it is a symlink to the workspace's copy
+# (.mngr/settings.toml, work_dir_extra_paths), which a directory-only pattern misses.
+system/vendor/mngr-assets
 system/vendor/mngr-assets.tmp/
 
 # macOS Finder metadata -- never tracked
