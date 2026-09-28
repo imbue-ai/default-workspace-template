@@ -1,6 +1,6 @@
 Harden workers and update-self now run only the tests a change can reach, as `app-manifest select-tests` prints them, instead of a fixed set that ran the repo guards twice, fell back to the whole root suite whenever a change left the creation's footprint, and never collected the shell.
 
-- A worker's test gate is `select-tests --diff-base "$DIFF_BASE"`, run line by line. Every harden task now carries a `diff_base`, services and the shell included. The selector refuses to run while the worker has an uncommitted or untracked change, so no edit escapes the selection.
+- A worker's test gate is `select-tests --diff-base "$DIFF_BASE"`, run line by line. Every harden task now carries a `diff_base`, services and the shell included. The selector refuses to run while the worker has an uncommitted or untracked change, so no edit escapes the selection. A full root suite it prints for a path outside every package and skill is the gate working, not a gap to map.
 
 - A worker that has a concrete reason to think a suite the selector left out can observe its change runs that suite too, and, when the suite is an app's, declares the path in the app's `[[references]]`. A heal that fixes a regression checks whether the selector would have picked the catching test for the change that caused it, and declares the missing coupling when it would not. A built-in one goes in the worker's report under `Undeclared couplings:`, which the lead adds to its single report of built-in issues.
 
