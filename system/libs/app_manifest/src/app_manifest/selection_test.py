@@ -42,6 +42,15 @@ def _command_lines(selection: SuiteSelection) -> list[str]:
     return [render_command_line(command) for command in selection.commands]
 
 
+def _declare_root_dependency(repo_root: Path, name: str) -> None:
+    root_pyproject = repo_root / "pyproject.toml"
+    root_pyproject.write_text(
+        root_pyproject.read_text().replace(
+            'version = "0.1.0"\n', f'version = "0.1.0"\ndependencies = ["{name}"]\n', 1
+        )
+    )
+
+
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
     build_selection_workspace(tmp_path)
@@ -83,12 +92,7 @@ def test_a_shared_library_test_change_runs_only_the_librarys_own_suite(workspace
 def test_a_package_the_root_project_depends_on_runs_the_full_root_suite(
     workspace: Path, path: str
 ) -> None:
-    root_pyproject = workspace / "pyproject.toml"
-    root_pyproject.write_text(
-        root_pyproject.read_text().replace(
-            'version = "0.1.0"\n', 'version = "0.1.0"\ndependencies = ["midlib"]\n', 1
-        )
-    )
+    _declare_root_dependency(workspace, "midlib")
 
     selection = _select(workspace, [path])
 
@@ -410,6 +414,18 @@ def test_an_upgraded_lock_entry_runs_the_members_that_depend_on_it(workspace: Pa
         _CHAT_WHOLE_WITHOUT_BROWSER,
         _CHAT_TYPE_CHECK,
     ]
+
+
+def test_an_upgrade_reaching_a_package_the_root_project_depends_on_runs_the_full_root_suite(
+    workspace: Path,
+) -> None:
+    # requests reaches midlib through corelib.
+    _declare_root_dependency(workspace, "midlib")
+
+    selection = _select(workspace, ["uv.lock"], (selection_lock("2.0"), selection_lock("2.1")))
+
+    assert selection.is_full_root
+    assert _command_lines(selection) == [_FULL_ROOT, _CHAT_WHOLE_WITHOUT_BROWSER, _CHAT_TYPE_CHECK]
 
 
 def test_a_lock_that_only_adds_packages_runs_nothing_beyond_the_adder(workspace: Path) -> None:

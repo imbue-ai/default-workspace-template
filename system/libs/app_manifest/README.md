@@ -231,13 +231,13 @@ markdown under `.agents/` (agent prose, which only the always-run prose checks
 and the apps referencing it read), or other markdown those checks read, runs
 the full root suite (`uv run pytest` from the repo root), which replaces the
 other root-collected commands; so does a change to the root `pyproject.toml` or
-`conftest.py`, and a `uv.lock` change that cannot be compared or that the root
-project depends on directly. A `system/*.py` that is not a test file (a
-`system/conftest.py`, say) is no guard, so it runs the full root suite too. So
-does a path in a package the root project's `pyproject.toml` depends on, or
-that one of those packages depends on (other than a test file or a frontend
-path): the root project's own tests, in `system/scripts`, `.agents` and the
-skills, are its consumers.
+`conftest.py`, and a `uv.lock` change that cannot be compared. A `system/*.py`
+that is not a test file (a `system/conftest.py`, say) is no guard, so it runs
+the full root suite too. So does a path in a package the root project's
+`pyproject.toml` depends on, or that one of those packages depends on (other
+than a test file or a frontend path), and a `uv.lock` upgrade the root project
+depends on directly or through one of those packages: the root project's own
+tests, in `system/scripts`, `.agents` and the skills, are its consumers.
 
 Every change that is not entirely documentation (README and changelog files
 anywhere, and other markdown outside `.agents/` and

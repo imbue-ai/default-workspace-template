@@ -665,14 +665,16 @@ def _select_for_manifest_references(layout: RepoLayout, path: str) -> _PathOutco
 
 def _select_for_lockfile(context: _SelectionContext, path: str) -> _PathOutcome:
     """The members that depend on what the lock upgraded; the full root suite when the change
-    could not be read, or when the root project depends on an upgrade directly."""
+    could not be read, or when the root project depends on an upgrade directly or through one
+    of those members."""
     lockfile = context.lockfile
     if lockfile is None:
         return _PathOutcome(classes=(ChangedPathClass.LOCKFILE,), is_full_root=True)
+    layout = context.layout
     upgraded = ", ".join(change.name for change in lockfile.upgraded)
     requests = _present(
         _whole_request(
-            context.layout,
+            layout,
             member,
             is_browser_included=False,
             reason=_reason(path, ChangedPathClass.LOCKFILE, f"{member} depends on upgraded {upgraded}"),
@@ -682,7 +684,8 @@ def _select_for_lockfile(context: _SelectionContext, path: str) -> _PathOutcome:
     return _PathOutcome(
         classes=(ChangedPathClass.LOCKFILE,),
         pytest_requests=requests,
-        is_full_root=lockfile.is_root_dependent,
+        is_full_root=lockfile.is_root_dependent
+        or any(member in layout.root_dependent_members for member in lockfile.dependent_members),
     )
 
 
