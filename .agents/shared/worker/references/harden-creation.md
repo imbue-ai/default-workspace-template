@@ -263,11 +263,12 @@ frontend build the browser tests need, and passing two pytest roots to one
 invocation breaks collection. What it selects, and why, is in
 `system/libs/app_manifest/README.md` ("Selecting tests"): the repo guards, the
 changed packages' and skills' own suites with their ratchets, the suites of
-whatever declares a dependency on them, the browser tests of an app that
-itself changed, only the `browser` and `frontend` tests of an app whose
-frontend alone changed, and the frontend checks. A changed path outside every package
-and skill, or in a package the root project depends on, brings in the full
-root suite; that is the gate working, not a gap. Do not drop any line of it.
+whatever declares a dependency on them, the browser tests too of an app whose
+Python changed, only the `browser` and `frontend` tests of an app whose
+frontend alone changed, and the frontend checks. A changed path outside every
+package and skill, or in a package the root project depends on, brings in the
+full root suite; that is the gate working, not a gap. Do not drop any line of
+it.
 
 **A suite the selector left out.** The selector reads only declarations:
 `pyproject.toml` and `package.json` dependencies, `uv.lock`, the programs in
