@@ -21,6 +21,7 @@ import { SubagentView } from "./views/SubagentView";
 import { initShellPermissionResolutions } from "./views/permission-card";
 import { connectChatToShell, getShellHandshake, isFrameRendered } from "./shell";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
+import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { prependToComposer } from "./views/MessageInput";
 
@@ -80,6 +81,8 @@ async function bootstrap(): Promise<void> {
     isDraftAvailable: isChatPage ? () => true : undefined,
     open: createContextMenuOpener().open,
   });
+  // The pointer hides while text is typed into the composer.
+  installCursorHidingWhileTyping(document);
   void loadAccountsWithRetry();
   const rootElement = document.getElementById("app");
   if (rootElement) {
