@@ -316,6 +316,29 @@ def test_the_wake_budget_refuses_a_fourth_wake_in_the_window(
     assert manager.wake("docs") is ParkedPageKind.STARTING
 
 
+def test_a_wake_after_which_the_app_runs_spends_none_of_the_budget(
+    manager: AppLifecycleManager, supervisor: FakeSupervisor
+) -> None:
+    """An app opened, closed, and stopped by the no-window rule a few times in five minutes is woken every time: the
+    budget is for an app that cannot come up, and a pass that sees the app RUNNING forgets the wakes before it."""
+    clock = _clock_of(manager)
+    for _ in range(WAKE_BUDGET_COUNT + 2):
+        assert manager.wake("docs") is ParkedPageKind.STARTING
+        supervisor.statename_by_program["docs"] = "RUNNING"
+        clock.now += 1
+        manager.sweep_once()
+        supervisor.statename_by_program["docs"] = "STOPPED"
+        clock.now += 1
+    assert len(supervisor.started) == WAKE_BUDGET_COUNT + 2
+
+    # Wakes the app never came up from still count.
+    for _ in range(WAKE_BUDGET_COUNT):
+        assert manager.wake("docs") is ParkedPageKind.STARTING
+        supervisor.statename_by_program["docs"] = "STOPPED"
+        manager.sweep_once()
+    assert manager.wake("docs") is ParkedPageKind.FAILED
+
+
 def test_a_wake_that_ends_in_fatal_re_parks_with_the_failure_page(
     manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
 ) -> None:

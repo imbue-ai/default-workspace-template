@@ -162,6 +162,7 @@ The existing stop and start routes go through the manager too: a start releases 
 
 A woken app whose program reaches `FATAL` (supervisord gave up retrying it) is re-parked with the failure page.
 The manager allows at most 3 wake attempts per app in any 5 minutes; past that the parker answers the failure page without starting anything, so a broken app cannot be restarted by every reload.
+Only a wake the app did not come up from counts: a pass that sees the program `RUNNING` forgets the wakes before its reading, so an app opened, closed, and stopped by Part D a few times in five minutes (or used through `mngr forward` without the shell) is woken every time.
 The budget is per shell process and resets with it.
 
 ### 5.6 Launches of a stopped app
@@ -259,7 +260,7 @@ The shell still imports nothing from mngr and runs no `mngr` binary: the writer 
 
 - `app_manifest`: `manifest_test.py` for the field, its default, and the critical refusal; `registry_test.py` for the key; `forward_port_test.py` for the copied key and its clearing.
 - The shell, `port_parking_test.py`: a parked port accepts a connection, answers 503 with the loading body and `Connection: close`, releases the port, and reports the wake; a bind on a port something listens on parks nothing.
-- The shell, `app_lifecycle_test.py`, over the fake supervisor: a stopped parkable app is parked on a pass and released when its state turns `RUNNING`; a wake starts the program; a `FATAL` after a wake re-parks with the failure page; the wake budget refuses a fourth attempt; the no-window rule stops a `stop_when_no_windows` app only after the grace period, only once a client has arrived, and not while any desktop holds a window of it or a per-app share grant names it (and the clock starts once the grant goes); an app without the field is never stopped; a critical app is never parked or stopped.
+- The shell, `app_lifecycle_test.py`, over the fake supervisor: a stopped parkable app is parked on a pass and released when its state turns `RUNNING`; a wake starts the program; a `FATAL` after a wake re-parks with the failure page; the wake budget refuses a fourth attempt, and a wake after which the app runs spends none of it; the no-window rule stops a `stop_when_no_windows` app only after the grace period, only once a client has arrived, and not while any desktop holds a window of it or a per-app share grant names it (and the clock starts once the grant goes); an app without the field is never stopped; a critical app is never parked or stopped.
   `share_grants_test.py`: the per-app tables that name anyone, and nothing for a workspace-level grant alone, an empty table, an unshared workspace, a missing document, or one the gateway would refuse; `state_test.py`: the manager reads the grants under the workspace root.
 - The shell, `routes_test.py`: the quit route closes every window across desktops and stops the program, refuses a critical app and a preview, and answers `is_running` false.
 - The shell, `state_test.py`: the close hint is not posted to a stopped app.
