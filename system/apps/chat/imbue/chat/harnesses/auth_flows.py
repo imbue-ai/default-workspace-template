@@ -46,11 +46,16 @@ from loguru import logger as _loguru_logger
 
 from imbue.chat import accounts
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
+from imbue.chat.harnesses.claude.auth import ANTHROPIC_BASE_URL_ENV_VAR
 from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.claude.auth import parse_credential_lines
 from imbue.chat.harnesses.claude.auth import record_api_key_approval
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.key_check import CheckedProvider
+from imbue.chat.harnesses.key_check import KeyCheck
+from imbue.chat.harnesses.key_check import PROVIDER_DISPLAY
+from imbue.chat.harnesses.key_check import check_key
 from imbue.chat.harnesses.lanes import DrainUntil
 from imbue.chat.harnesses.lanes import EofPolicy
 from imbue.chat.harnesses.lanes import LANES
@@ -87,6 +92,7 @@ from imbue.chat.harnesses.sign_in_relay import read_sign_in_url
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.harnesses.signed_in import is_signed_in
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 
 logger = _loguru_logger
 
@@ -95,6 +101,8 @@ logger = _loguru_logger
 _CODE_ECHO_QUIET_SECONDS: Final = 0.3
 _CODE_ECHO_DEADLINE_SECONDS: Final = 3.0
 _READY_WAIT_SECONDS: Final = 20.0
+# Shown beside a saved key the provider could not be asked about.
+KEY_UNCHECKED_DETAIL: Final = "Couldn't check this key"
 # How long to keep asking whether a submitted code worked. The browser round trip is already
 # over by then, so this bounds only the CLI's own exchange with its provider -- long enough
 # for a slow network, short enough that a spinner cannot outlive the user's patience.
@@ -255,6 +263,7 @@ class AuthFlowService:
     _probe: Callable[[HarnessType, Path], SignedIn]
     _fetch_callback: CallbackFetcher
     _clock: Callable[[], float]
+    _check_key: Callable[[CheckedProvider, str, str | None], KeyCheck]
 
     @classmethod
     def create(
@@ -266,6 +275,7 @@ class AuthFlowService:
         restart_bound_agents: Callable[[str], None] | None = None,
         fetch_callback: CallbackFetcher | None = None,
         clock: Callable[[], float] | None = None,
+        key_checker: Callable[[CheckedProvider, str, str | None], KeyCheck] | None = None,
     ) -> "AuthFlowService":
         """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`.
 
@@ -284,6 +294,7 @@ class AuthFlowService:
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
         service._fetch_callback = fetch_callback or fetch_loopback_callback
         service._clock = clock or time.monotonic
+        service._check_key = key_checker or check_key
         return service
 
     # lifecycle
@@ -525,6 +536,13 @@ class AuthFlowService:
                 known = {k.provider_id for k in session.lane.key_providers}
                 if key_provider not in known:
                     raise FlowError(f"{session.lane.provider_name} has no key provider {key_provider!r}")
+            # Asked of the provider before anything is written: the harnesses' own probes only
+            # see that a key is there, so a mistyped one used to be saved and fail the first turn.
+            checked = _key_to_check(method.sink, session.lane, api_key, key_provider)
+            key_check = KeyCheck.UNCHECKED if checked is None else self._check_key(*checked)
+            if checked is not None and key_check is KeyCheck.REJECTED:
+                self._fail_locked(session, f"That key was rejected by {PROVIDER_DISPLAY[checked[0]]}.")
+                return FlowStatus(state=FlowState.FAILED, detail=session.detail)
             path = accounts.account_dir(session.account_id, self._home)
             # Write, ask, and put the old credential back if the answer is no. The probe needs
             # the file in place to answer at all, so the write has to happen first -- but on a
@@ -553,7 +571,10 @@ class AuthFlowService:
             # UNKNOWN means the check itself could not run (the CLI is missing, the network
             # blinked). That is not evidence against a key the user just pasted, and throwing
             # it away would be the worse mistake.
-            return self._commit_locked(session, display)
+            status = self._commit_locked(session, display)
+            if checked is not None and key_check is KeyCheck.UNCHECKED:
+                return status.model_copy_update(to_update(status.field_ref().detail, KEY_UNCHECKED_DETAIL))
+            return status
 
     def adopt_claude_credentials(self, pasted: str) -> accounts.Account:
         """Mint an account from a credential someone else obtained, with no flow involved.
@@ -963,6 +984,31 @@ def write_claude_env(account_path: Path, managed_env: Mapping[str, str]) -> None
     # arrives through a sign-in is ours to approve, in this account's own .claude.json.
     record_api_key_approval(managed_env, account_path / ".claude.json")
     settings.chmod(0o600)
+
+
+def _key_to_check(
+    sink: PasteSink, lane: Lane, api_key: str, key_provider: str | None
+) -> tuple[CheckedProvider, str, str | None] | None:
+    """The provider to ask about a pasted key, the key itself, and the proxy it belongs to, if any.
+
+    None for a key whose provider this build does not check.
+    """
+    match sink:
+        case PasteSink.CLAUDE_ENV:
+            managed_env = claude_env_from_paste(api_key)
+            key = managed_env.get(ANTHROPIC_API_KEY_ENV_VAR)
+            if key is None:
+                return None
+            return CheckedProvider.ANTHROPIC, key, managed_env.get(ANTHROPIC_BASE_URL_ENV_VAR)
+        case PasteSink.CODEX_AUTH_JSON:
+            return CheckedProvider.OPENAI, api_key, None
+        case PasteSink.PI_AUTH_JSON:
+            provider_id = key_provider or (lane.key_providers[0].provider_id if lane.key_providers else lane.id)
+            if provider_id not in {provider.value for provider in CheckedProvider}:
+                return None
+            return CheckedProvider(provider_id), api_key, None
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:

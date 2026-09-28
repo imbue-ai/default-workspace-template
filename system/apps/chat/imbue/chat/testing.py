@@ -65,6 +65,7 @@ from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
+from imbue.chat.harnesses.key_check import KeyCheck
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.models import ActiveAgentSnapshot
@@ -486,7 +487,9 @@ def build_test_state(
         # that cares about the verdict injects its own service.
         auth_flows=auth_flows
         if auth_flows is not None
-        else AuthFlowService.create(probe=lambda *_args: SignedIn.UNKNOWN),
+        else AuthFlowService.create(
+            probe=lambda *_args: SignedIn.UNKNOWN, key_checker=lambda *_args: KeyCheck.ACCEPTED
+        ),
         config=config if config is not None else Config(),
         provider_names=None,
         include_filters=(),
