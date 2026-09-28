@@ -121,9 +121,9 @@ create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_ac
 #
 # The mngr assets (docs/system/style_guide.md links into them, and the frontends bundle
 # them) are fetched, not tracked, so a worktree has none until something fetches them.
-# A copy of the workspace's gives a worker them at the workspace's pin. Copied, not
-# shared: vite resolves a symlink to its target, and vitest then refuses to load an
-# asset from outside the worktree it runs in.
+# Copying the workspace's assets into a worker's worktree gives it them at the
+# workspace's pin. Copied, not shared: vite resolves a symlink to its target, and
+# vitest then refuses to load an asset from outside the worktree it runs in.
 [work_dir_extra_paths]
 ".mngr/settings.local.toml" = "SHARE"
 "system/vendor/mngr-assets" = "COPY"
