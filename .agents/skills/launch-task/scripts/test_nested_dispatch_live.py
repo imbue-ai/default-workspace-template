@@ -692,6 +692,7 @@ def _name_a_default_create_type(clone: Path) -> None:
 # in full. Skipping unconditionally makes that asymmetry explicit; drop this marker
 # to run it deliberately.
 @pytest.mark.skip(reason="expensive live test; drop this marker to run it deliberately")
+@pytest.mark.real_claude
 @pytest.mark.timeout(_TEST_TIMEOUT_SECONDS, func_only=False)
 def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
