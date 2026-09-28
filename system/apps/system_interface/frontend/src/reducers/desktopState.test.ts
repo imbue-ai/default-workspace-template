@@ -391,7 +391,7 @@ describe("selectors", () => {
     ]);
   });
 
-  it("offers stop and start only for a supervised, non-critical app outside a critical program", () => {
+  it("counts as stoppable, Quit offered and woken by the parker, only a supervised, non-critical app outside a critical program", () => {
     const state = reduceDesktopState(initialDesktopState("c", MODES), {
       type: "apps_updated",
       apps: [
