@@ -244,11 +244,32 @@ def _launch_waking_manager(
         inventory=shell.inventory,
         is_enabled=is_enabled,
         count_windows_by_app=lambda: {},
+        granted_app_names=lambda: set(),
         program_states=lambda: {"docs": "STOPPED"},
         start_program=start_program,
         stop_program=lambda program: None,
         clock=clock,
     )
+
+
+def test_the_lifecycle_manager_reads_the_per_app_share_grants_under_the_workspace_root(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    secrets_directory = tmp_path / "repo" / "data" / ".secrets"
+    secrets_directory.mkdir(parents=True)
+    (secrets_directory / "share_grants.toml").write_text('[services.docs]\nemails = ["reviewer@example.com"]\n')
+    shell = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster),
+        repo_root=tmp_path / "repo",
+    )
+
+    assert shell.lifecycle.granted_app_names() == set()
+    (secrets_directory / "share.env").write_text("export SHARE_BROKER_URL=https://broker.example\n")
+    assert shell.lifecycle.granted_app_names() == {"docs"}
 
 
 def test_an_arrival_marks_the_workspace_visited(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:

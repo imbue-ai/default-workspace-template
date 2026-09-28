@@ -38,6 +38,10 @@ class SupervisorProgramActionError(ShellError, RuntimeError):
     """Supervisord refused, or could not be reached for, a stop or start."""
 
 
+class ShareGrantsError(ShellError, ValueError):
+    """The share grants document is one the gateway would refuse (it then admits nobody)."""
+
+
 class DesktopNotFoundError(ShellError, LookupError):
     """No desktop has the given id (or name)."""
 

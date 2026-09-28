@@ -30,6 +30,7 @@ from imbue.system_interface.avatar.catalog import DEFAULT_AVATAR_CATALOG_DIRECTO
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
+from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
 from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
@@ -108,6 +109,8 @@ from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
+from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
+from imbue.system_interface.shell.share_grants import ShareGrantsReader
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.update_notice import UpdateNoticeWatch
 from imbue.system_interface.shell.users import UserStore
@@ -752,8 +755,8 @@ def build_shell_state(
     ``on_registry_read``, what the built inventory tells every registry read, is the production shell's services
     event writer), and
     ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
-    environment names; ``repo_root`` (the workspace the update notice's record and script live under) is the
-    served tree by default; ``profiles`` (the resolver the composition root shares with presence) defaults to one
+    environment names; ``repo_root`` (the workspace the update notice's record and script, and the share materials
+    the lifecycle manager reads the per-app grants from, live under) is the served tree by default; ``profiles`` (the resolver the composition root shares with presence) defaults to one
     that can reach no connector, so a shell built without one names visitors by email; ``launch_poster`` (how a
     POST launch path is asked for its page) defaults to the loopback POST; ``is_lifecycle_enabled`` is whether the
     lifecycle manager owns the live workspace's apps, sweeping them and waking one for a POST launch (the
@@ -766,6 +769,10 @@ def build_shell_state(
         else AppInventory(registry_path=registry_path, broadcaster=broadcaster, on_registry_read=on_registry_read)
     )
     desktops = DesktopStore(state_directory=state_directory)
+    share_grants = ShareGrantsReader(
+        share_env_path=_under_repo_root(DEFAULT_SHARE_ENV_PATH, repo_root),
+        share_grants_path=_under_repo_root(DEFAULT_SHARE_GRANTS_PATH, repo_root),
+    )
     return ShellState(
         state_directory=state_directory,
         inventory=resolved_inventory,
@@ -773,6 +780,7 @@ def build_shell_state(
             resolved_inventory,
             is_lifecycle_enabled,
             lambda: _count_windows_by_app(desktops),
+            share_grants.granted_app_names,
             no_windows_grace_seconds=no_windows_grace_seconds,
             idle_sweep_interval_seconds=idle_sweep_interval_seconds,
         ),

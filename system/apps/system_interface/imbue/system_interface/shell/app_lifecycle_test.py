@@ -22,6 +22,7 @@ from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.liveness import probe_tcp_url
 from imbue.system_interface.shell.port_parking import ParkedPageKind
+from imbue.system_interface.shell.share_grants import GrantedAppsReader
 from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import registry_row_toml
@@ -83,20 +84,39 @@ def windows() -> FakeWindows:
     return FakeWindows()
 
 
+class FakeShareGrants:
+    """Which apps carry a per-app share grant, as the manager's rule reads it, counting the reads."""
+
+    def __init__(self) -> None:
+        self.granted: set[str] = set()
+        self.read_count = 0
+
+    def get_granted(self) -> set[str]:
+        self.read_count += 1
+        return set(self.granted)
+
+
+@pytest.fixture
+def share_grants() -> FakeShareGrants:
+    return FakeShareGrants()
+
+
 def _manager_over(
     inventory: AppInventory,
     supervisor: FakeSupervisor,
     count_windows_by_app: WindowCountsReader | None = None,
+    granted_app_names: GrantedAppsReader | None = None,
     program_states: ProgramStatesReader | None = None,
     start_program: ProgramAction | None = None,
     clock: Callable[[], float] | None = None,
 ) -> AppLifecycleManager:
     """A manager that is never enabled (each test sweeps it by hand) over the fake supervisor's verbs, no windows,
-    and a fresh fake clock, any of which a test replaces with its own."""
+    no share grants, and a fresh fake clock, any of which a test replaces with its own."""
     return AppLifecycleManager(
         inventory=inventory,
         is_enabled=False,
         count_windows_by_app=count_windows_by_app if count_windows_by_app is not None else lambda: {},
+        granted_app_names=granted_app_names if granted_app_names is not None else lambda: set(),
         program_states=program_states if program_states is not None else supervisor.states,
         start_program=start_program if start_program is not None else supervisor.start,
         stop_program=supervisor.stop,
@@ -111,6 +131,7 @@ def manager(
     closed_port: int,
     supervisor: FakeSupervisor,
     windows: FakeWindows,
+    share_grants: FakeShareGrants,
 ) -> Iterator[AppLifecycleManager]:
     """A manager over a stoppable ``docs`` app on the closed loopback port that stops when no window shows it, a
     critical ``shell``, and an unsupervised ``plain`` row, against a fake supervisord that starts with ``docs``
@@ -124,7 +145,10 @@ def manager(
         registry_row_toml("plain", "http://127.0.0.1:1"),
     )
     built = _manager_over(
-        build_inventory(registry_path, broadcaster, prober=prober), supervisor, count_windows_by_app=windows.get_counts
+        build_inventory(registry_path, broadcaster, prober=prober),
+        supervisor,
+        count_windows_by_app=windows.get_counts,
+        granted_app_names=share_grants.get_granted,
     )
     try:
         yield built
@@ -446,6 +470,66 @@ def test_a_window_opening_within_the_grace_period_keeps_the_app(
     clock.now += 2
     manager.sweep_once()
     assert supervisor.stopped == ["docs"]
+
+
+def test_an_app_with_a_per_app_share_grant_is_kept_running_until_the_grant_goes(
+    manager: AppLifecycleManager, supervisor: FakeSupervisor, share_grants: FakeShareGrants
+) -> None:
+    """A visitor admitted to one app's origin alone never loads the shell, so no window of theirs exists to count:
+    the grant stands in for one, and the clock starts only once the grant is gone."""
+    supervisor.statename_by_program["docs"] = "RUNNING"
+    clock = _clock_of(manager)
+    manager.mark_visited()
+    share_grants.granted = {"docs"}
+    manager.sweep_once()
+    clock.now += NO_WINDOWS_GRACE_SECONDS * 2
+    manager.sweep_once()
+    assert supervisor.stopped == []
+
+    share_grants.granted = set()
+    manager.sweep_once()
+    clock.now += NO_WINDOWS_GRACE_SECONDS - 1
+    manager.sweep_once()
+    assert supervisor.stopped == []
+    clock.now += 2
+    manager.sweep_once()
+    assert supervisor.stopped == ["docs"]
+
+
+def test_a_pass_reads_the_share_grants_at_most_once_and_only_for_an_app_with_no_window(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    closed_port: int,
+    supervisor: FakeSupervisor,
+    windows: FakeWindows,
+    share_grants: FakeShareGrants,
+) -> None:
+    notes_port = find_free_port()
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml("docs", f"http://127.0.0.1:{closed_port}", program="docs", stop_when_no_windows=True),
+        registry_row_toml("notes", f"http://127.0.0.1:{notes_port}", program="notes", stop_when_no_windows=True),
+    )
+    supervisor.statename_by_program.update({"docs": "RUNNING", "notes": "RUNNING"})
+    windows.count_by_app.update({"docs": 1, "notes": 1})
+    reading = _manager_over(
+        build_inventory(registry_path, broadcaster),
+        supervisor,
+        count_windows_by_app=windows.get_counts,
+        granted_app_names=share_grants.get_granted,
+    )
+    try:
+        reading.mark_visited()
+        # Every app has a window: the grants are never consulted.
+        reading.sweep_once()
+        assert share_grants.read_count == 0
+
+        # Two windowless apps in one pass share one read of the grants.
+        windows.count_by_app.update({"docs": 0, "notes": 0})
+        reading.sweep_once()
+        assert share_grants.read_count == 1
+    finally:
+        reading.stop()
 
 
 def test_an_app_that_does_not_declare_the_field_is_never_stopped(
