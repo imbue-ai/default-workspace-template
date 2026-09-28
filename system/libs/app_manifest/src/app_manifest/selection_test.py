@@ -181,6 +181,19 @@ def test_a_supervisord_block_no_app_owns_runs_the_band_check(workspace: Path) ->
     assert not selection.is_full_root
 
 
+def test_a_named_test_file_inside_a_selected_whole_suite_runs_only_there(workspace: Path) -> None:
+    write_supervisord_dropin(workspace, "fetcher", ("program:fetcher",))
+    write_repo_file(workspace, "system/services/oom_priority/bin/oom_tag_service.py", "BANDS = ()\n")
+    commit_everything(workspace, "wire a service")
+
+    selection = _select(
+        workspace,
+        ["system/supervisord.conf.d/fetcher.conf", "system/services/oom_priority/bin/oom_tag_service.py"],
+    )
+
+    assert _command_lines(selection) == [_ALWAYS_RUN, "uv run pytest system/services/oom_priority"]
+
+
 def test_documentation_alone_selects_nothing(workspace: Path) -> None:
     selection = _select(
         workspace,

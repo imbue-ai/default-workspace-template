@@ -737,6 +737,11 @@ def _pytest_commands(
         if request.root == ROOT_DIRECTORY and is_full_root:
             continue
         by_group[(request.root, request.group)].append(request)
+    whole_root_directories = [
+        group
+        for (root, group), group_requests in by_group.items()
+        if root == ROOT_DIRECTORY and any(request.test_files is None for request in group_requests)
+    ]
     root_commands: list[SuiteCommand] = []
     own_root_commands: list[SuiteCommand] = []
     for (root, group), group_requests in sorted(
@@ -746,7 +751,16 @@ def _pytest_commands(
         whole = [request for request in group_requests if request.test_files is None]
         files = sorted({file for request in group_requests for file in (request.test_files or ())})
         if root == ROOT_DIRECTORY:
-            targets = [group] if whole else [file for file in files if file not in always_run]
+            targets = (
+                [group]
+                if whole
+                else [
+                    file
+                    for file in files
+                    if file not in always_run
+                    and not any(is_path_covered_by(directory, file) for directory in whole_root_directories)
+                ]
+            )
             if targets:
                 root_commands.append(
                     _command(SuiteKind.PYTEST, root, ("uv", "run", "pytest", *targets), reasons)
