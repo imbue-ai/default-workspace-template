@@ -122,6 +122,7 @@ report with this body plus an "Approve and save? (yes / no with notes)" prompt:
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
 - Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
+- Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>
 ```
 
 Push it and stop. On approval, commit on your branch and emit a `name: done`
@@ -137,6 +138,7 @@ Committed on branch `<branch-name>`. Ready to merge.
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
 - Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
+- Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>
 ```
 
 ## If you need to give up

@@ -490,7 +490,8 @@ Valid `name:` values:
   - **Validation** -- **which branch of the 4b scope rule applied, with its
     evidence** (each item's condition and whether it held; on a clean pull
     with no footprint, that nothing ran and why), then the suites, boots and
-    Playwright that did run, all passing; **which branch of the 4c rule
+    Playwright that did run, all passing, and any test that failed and then
+    passed when rerun alone, as flaky; **which branch of the 4c rule
     applied, with its evidence** (the clean-pull skip's three conditions, or
     the gate run's kept/reverted fix commits -- or "gate ran clean" -- and the
     architecture-gate verdicts); any validation gap called out honestly. A

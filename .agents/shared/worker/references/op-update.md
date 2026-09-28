@@ -60,6 +60,7 @@ Hardened <app> on branch `<branch>`.
 - Bundles built: <the static/ path of every bundle you built, all three when the shared library changed>
 - Tests run: <the test gate's commands (select-tests) and Playwright -- all pass>
 - Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
+- Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>
 - Screenshots reviewed: <pages/states you eyeballed>
 ```
 
@@ -158,6 +159,7 @@ Write a `type: gate`, `name: final-creation` report plus "Approve and save? (yes
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
 - Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
+- Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>
 ```
 
 **App or service:**
@@ -170,6 +172,7 @@ Updated app or service `<name>`:
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
 - Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
+- Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>
 ```
 
 The `References registered` and `Outside footprint` lines come from the scope
