@@ -65,12 +65,11 @@ def get_status() -> Response:
 def submit_credentials() -> Response:
     """POST /api/claude-auth/submit-credentials -- adopt a pasted credential as an account.
 
-    Kept as its own endpoint because it is a cross-repo contract: the Electron chrome POSTs
-    here after the user visits the Imbue keys page, and mngr's deployment test drives it.
-    The paste mints an account of its own, so the account existing is the signed-in-with-
-    Imbue flag and no running agent has to be restarted to see it.
+    Kept as its own endpoint because it is a cross-repo contract: mngr's deployment test
+    drives it with a minted LiteLLM key. The paste mints an account of its own, so the
+    account existing is the signed-in flag and no running agent has to be restarted to see it.
 
-    The strict parse rejects unmanaged keys and mixed-mode pastes with a 400 before
+    The strict parse rejects unmanaged keys and Claude subscription tokens with a 400 before
     anything is written.
     """
     refusal = forbid_unless_owner()
