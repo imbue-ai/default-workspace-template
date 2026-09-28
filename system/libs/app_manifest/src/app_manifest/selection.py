@@ -4,10 +4,11 @@ Selection reads only what the workspace declares: a changed path inside a packag
 runs that unit's suite, plus the suites of the workspace members that depend on the package
 (``pyproject.toml``), the npm packages that depend on it (``package.json``), and the apps whose
 manifests reference it (``[[references]]``). A supervisord block runs the app whose program
-it holds and the check that every block names its OOM band. ``uv.lock`` selects the members that depend on what it upgraded. A small always-run
-set guards the repo-wide invariants any edit can break; agent prose outside every skill selects
-only that set and the apps whose manifests reference it. Any other path belongs to no declared
-unit, so it runs the full root suite.
+it holds and the check that every block names its OOM band. ``uv.lock`` selects the members
+that depend on what it upgraded. A small always-run set guards the repo-wide invariants any
+edit can break; agent prose outside every skill selects only that set and the apps whose
+manifests reference it. Any other path belongs to no declared unit, so it runs the full root
+suite.
 """
 
 import json
