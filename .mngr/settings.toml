@@ -503,6 +503,19 @@ host_log_dir = "/var/log/mngr"
 # stub executable a test writes under /tmp and puts on PATH is then skipped, so
 # the real binary it stands in for runs instead.
 default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec"]
+# The size of every new local workspace container: `docker run --cpus` and
+# `--memory` (with `--memory-swap` equal to the memory cap, so a workspace at its
+# limit is shed by the OOM killer rather than swapping the laptop to a halt).
+# Without a cap a runaway workspace can take the whole machine down; with one,
+# under runsc the container's /proc/meminfo reports the cap as MemTotal, so the
+# workspace's earlyoom (system/services/oom_priority) sheds relative to it.
+# Docker refuses a CPU cap above the daemon's CPU count, so mngr clamps
+# default_cpus to it (a 2-core laptop gets 2 CPUs, not a failed create). A
+# per-create `-s --cpus=N` / `-s --memory=Ng` overrides either, and `mngr docker
+# resize <host> --cpus N --memory Ng` changes a workspace's size afterwards;
+# `mngr list` reports the recorded size as host.resource.
+default_cpus = 4
+default_memory = "8g"
 
 [providers.lima]
 # is_enabled=false (mirrors [providers.docker]) is load-bearing: the lima backend

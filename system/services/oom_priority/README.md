@@ -20,6 +20,18 @@ whole priority scheme is just: set each process's `oom_score_adj` once, at
 startup, into one of a few bands; one band point is worth MemTotal/1000 of
 memory.
 
+What MemTotal *is* depends on the container runtime. A local docker workspace
+runs with the memory cap the template's `[providers.docker]` block sets
+(`default_memory`, changeable per workspace with `mngr docker resize`). Under
+gVisor (runsc, the default on Linux) the container's `/proc/meminfo` reports
+that cap as MemTotal, so earlyoom's thresholds and badness scores are relative
+to the workspace's own limit and shedding starts before the cgroup OOM killer
+does. Under runc (the macOS fallback) `/proc/meminfo` still reports the whole
+machine, so earlyoom only reacts once the machine itself runs short, and a
+workspace at its cgroup limit is shed by the kernel instead. A resize while the
+container runs changes the cgroup cap at once but a gVisor container's reported
+MemTotal only after a restart.
+
 - **`bands`** -- the `oom_score_adj` value per band and the helper that writes
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in
   services and apps (`SERVICE_BANDS`, 5-75, keyed by service name and by the
