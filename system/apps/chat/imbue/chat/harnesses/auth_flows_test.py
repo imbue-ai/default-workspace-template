@@ -20,6 +20,8 @@ from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.key_check import CheckedProvider
+from imbue.chat.harnesses.key_check import KeyCheck
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.sign_in_relay import RelayedResponse
@@ -27,11 +29,18 @@ from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
 
 
+def _accept_key(_provider: CheckedProvider, _api_key: str, _base_url: str | None) -> KeyCheck:
+    """Tests never ask a real provider about a key."""
+    return KeyCheck.ACCEPTED
+
+
 @pytest.fixture
 def service(tmp_path: Path) -> AuthFlowService:
     work_dir = tmp_path / "workspace"
     work_dir.mkdir()
-    return AuthFlowService.create(home=tmp_path, work_dir=work_dir, probe=lambda *_a: SignedIn.YES)
+    return AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=work_dir, probe=lambda *_a: SignedIn.YES
+    )
 
 
 # Full length on purpose: the agy scrape sets a min_length floor precisely so a wrapped
@@ -225,6 +234,7 @@ def test_a_value_the_key_pacing_already_read_is_not_waited_for_again(tmp_path: P
         drain_chunks=[f"Visit {_AGY_URL}\r\n"],
     )
     service = AuthFlowService.create(
+        key_checker=_accept_key,
         home=tmp_path,
         work_dir=tmp_path / "work",
         spawner=lambda *_a, **_k: process,
@@ -249,6 +259,7 @@ def test_a_cli_that_never_announces_success_is_decided_by_its_probe(tmp_path: Pa
         drain_chunks=[f"Visit {_AGY_URL}\r\n"],
     )
     service = AuthFlowService.create(
+        key_checker=_accept_key,
         home=tmp_path,
         work_dir=tmp_path / "work",
         spawner=lambda *_a, **_k: process,
@@ -274,6 +285,7 @@ def test_the_probe_is_not_run_before_the_code_is_handed_over(tmp_path: Path) -> 
         drain_chunks=[f"Visit {_AGY_URL}\r\n"],
     )
     service = AuthFlowService.create(
+        key_checker=_accept_key,
         home=tmp_path,
         work_dir=tmp_path / "work",
         spawner=lambda *_a, **_k: process,
@@ -293,7 +305,9 @@ def test_a_key_the_harness_will_not_accept_fails_at_the_field(tmp_path: Path) ->
     that silently could not take a turn. It now fails while the user is still looking at the
     field they typed into.
     """
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.NO)
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.NO
+    )
     started = service.start("api-key", "api_key")
 
     status = service.submit_key(started.flow_id, "sk-wrong", "groq")
@@ -304,7 +318,9 @@ def test_a_key_the_harness_will_not_accept_fails_at_the_field(tmp_path: Path) ->
 
 def test_a_probe_that_cannot_run_does_not_throw_the_key_away(tmp_path: Path) -> None:
     """UNKNOWN is "the check failed", not "the key is bad" -- and the user just pasted it."""
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.UNKNOWN)
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.UNKNOWN
+    )
     started = service.start("api-key", "api_key")
 
     status = service.submit_key(started.flow_id, "sk-probably-fine", "groq")
@@ -346,7 +362,9 @@ def test_a_rejected_re_auth_key_puts_the_working_one_back(
     folder is a live account, and a rejected key left there breaks every bound agent
     silently, at its next turn, with the row still saying the account is fine."""
     verdicts = [SignedIn.YES, SignedIn.NO]
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: verdicts.pop(0))
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: verdicts.pop(0)
+    )
     started = service.start(lane_id, "api_key")
     service.submit_key(started.flow_id, "good-key", key_provider)
     (account,) = read_index(tmp_path).accounts
@@ -366,7 +384,9 @@ def test_a_rejected_re_auth_key_puts_the_working_one_back(
 
 def test_a_rejected_first_key_leaves_no_folder_behind(tmp_path: Path) -> None:
     """The other half of the same rule: a folder this flow minted IS ours to remove."""
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.NO)
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.NO
+    )
     started = service.start("opencode-go", "api_key")
 
     assert service.submit_key(started.flow_id, "bad", "opencode-go").state is FlowState.FAILED
@@ -397,6 +417,7 @@ def test_a_minted_token_is_written_into_the_account(tmp_path: Path) -> None:
         drain_chunks=["Visit https://claude.ai/oauth/authorize?code=1\r\n", f"{_OAT}\r\n"],
     )
     service = AuthFlowService.create(
+        key_checker=_accept_key,
         home=tmp_path,
         work_dir=tmp_path / "work",
         spawner=lambda *_a, **_k: process,
@@ -420,6 +441,7 @@ def test_a_token_flow_that_prints_nothing_fails_rather_than_committing(tmp_path:
         drain_chunks=["Visit https://claude.ai/oauth/authorize?code=1\r\n"],
     )
     service = AuthFlowService.create(
+        key_checker=_accept_key,
         home=tmp_path,
         work_dir=tmp_path / "work",
         spawner=lambda *_a, **_k: process,
@@ -439,6 +461,7 @@ def test_a_token_flow_still_running_keeps_waiting(tmp_path: Path) -> None:
         drain_chunks=["Visit https://claude.ai/oauth/authorize?code=1\r\n"],
     )
     service = AuthFlowService.create(
+        key_checker=_accept_key,
         home=tmp_path,
         work_dir=tmp_path / "work",
         spawner=lambda *_a, **_k: process,
@@ -454,7 +477,9 @@ def test_a_bare_oauth_token_pasted_into_the_key_field_is_not_read_as_an_api_key(
 ) -> None:
     """They are different managed keys and claude reads them from different variables, so
     filing a token under ANTHROPIC_API_KEY leaves the account signed out."""
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
     started = service.start("anthropic", "api_key")
 
     service.submit_key(started.flow_id, _OAT)
@@ -468,7 +493,9 @@ def test_a_pasted_api_key_is_approved_so_claude_does_not_challenge_it(tmp_path: 
     """Interactive claude blocks on a "do you want to use this API key?" dialog for any key
     it has not been told about -- and blocks before signalling ready, so `mngr create`
     destroys the agent on its readiness timeout."""
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
     started = service.start("anthropic", "api_key")
 
     service.submit_key(started.flow_id, "sk-ant-api03-" + "B" * 40)
@@ -482,7 +509,9 @@ def test_re_keying_through_imbue_reuses_its_own_account(tmp_path: Path) -> None:
     """The keys page posts on every visit. A fresh account per visit leaves a row per
     re-key, all but the newest holding a dead credential -- and the newest silently becoming
     the account every new chat launches on."""
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
 
     first = service.adopt_claude_credentials("sk-ant-api03-" + "A" * 40)
     second = service.adopt_claude_credentials("sk-ant-api03-" + "B" * 40)
@@ -496,7 +525,9 @@ def test_re_keying_through_imbue_reuses_its_own_account(tmp_path: Path) -> None:
 def test_re_keying_does_not_overwrite_a_browser_sign_in(tmp_path: Path) -> None:
     """Both live on the anthropic lane, so matching on the lane alone would let the keys
     page silently replace the credential the user signed in with."""
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
     started = service.start("anthropic", "api_key")
     service.submit_key(started.flow_id, "sk-ant-api03-" + "C" * 40)
     (signed_in,) = read_index(tmp_path).accounts
@@ -512,7 +543,11 @@ def test_a_first_sign_in_clears_nothing(tmp_path: Path) -> None:
     """There is nothing to take away, and nothing to put back if it fails."""
     process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
     service = AuthFlowService.create(
-        home=tmp_path, work_dir=tmp_path / "work", spawner=lambda *_a, **_k: process, probe=lambda *_a: SignedIn.NO
+        key_checker=_accept_key,
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: process,
+        probe=lambda *_a: SignedIn.NO,
     )
     started = service.start("google", "oauth")
     service.abort(started.flow_id)
@@ -526,6 +561,7 @@ def test_a_successful_re_auth_restarts_the_chats_bound_to_that_account(tmp_path:
     daemon re-reads a swapped credential."""
     restarted: list[str] = []
     service = AuthFlowService.create(
+        key_checker=_accept_key,
         home=tmp_path,
         work_dir=tmp_path / "work",
         probe=lambda *_a: SignedIn.YES,
@@ -548,6 +584,7 @@ def test_a_failed_re_auth_restarts_nothing(tmp_path: Path) -> None:
     verdicts = [SignedIn.YES, SignedIn.NO]
     restarted: list[str] = []
     service = AuthFlowService.create(
+        key_checker=_accept_key,
         home=tmp_path,
         work_dir=tmp_path / "work",
         probe=lambda *_a: verdicts.pop(0),
@@ -586,7 +623,9 @@ def test_a_re_auth_is_judged_on_the_new_sign_in_not_the_old_credential(tmp_path:
     user whose account died, who hit re-auth and then declined in the browser, was told
     "signed in again" on the strength of the credential that was already there.
     """
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
     account_id, token = _agy_account(tmp_path, service)
 
     process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
@@ -599,7 +638,9 @@ def test_a_re_auth_is_judged_on_the_new_sign_in_not_the_old_credential(tmp_path:
 def test_an_abandoned_re_auth_puts_the_old_credential_back(tmp_path: Path) -> None:
     """Taking it away is only safe if every exit restores it: the credential the account had
     is more use than none, and the user asked to REPLACE it, not to lose it."""
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
     account_id, token = _agy_account(tmp_path, service)
 
     process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
@@ -647,6 +688,7 @@ def _claude_flow_service(
     work_dir = tmp_path / "work"
     work_dir.mkdir()
     return AuthFlowService.create(
+        key_checker=_accept_key,
         home=tmp_path,
         work_dir=work_dir,
         spawner=spawner,
@@ -753,7 +795,9 @@ def test_the_sign_in_url_file_goes_with_the_flow(tmp_path: Path) -> None:
 
     work_dir = tmp_path / "work"
     work_dir.mkdir()
-    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir, spawner=spawner, probe=lambda *_a: SignedIn.YES)
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=work_dir, spawner=spawner, probe=lambda *_a: SignedIn.YES
+    )
     started = service.start("anthropic", "subscription")
     assert url_files[0].exists()
 
@@ -771,8 +815,88 @@ def test_the_cli_is_given_the_browser_shim(tmp_path: Path) -> None:
 
     work_dir = tmp_path / "work"
     work_dir.mkdir()
-    service = AuthFlowService.create(home=tmp_path, work_dir=work_dir, spawner=spawner, probe=lambda *_a: SignedIn.YES)
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=work_dir, spawner=spawner, probe=lambda *_a: SignedIn.YES
+    )
 
     service.start("anthropic", "console")
 
     assert browsers == [str(work_dir / "system" / "scripts" / "minds_browser_shim")]
+
+
+def _key_checking_service(
+    tmp_path: Path, verdict: KeyCheck, asked: list[tuple[str, str, str | None]]
+) -> AuthFlowService:
+    def checker(provider: CheckedProvider, api_key: str, base_url: str | None) -> KeyCheck:
+        asked.append((provider.value, api_key, base_url))
+        return verdict
+
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    return AuthFlowService.create(
+        home=tmp_path, work_dir=work_dir, probe=lambda *_a: SignedIn.YES, key_checker=checker
+    )
+
+
+def test_a_key_its_provider_rejects_is_not_saved(tmp_path: Path) -> None:
+    service = _key_checking_service(tmp_path, KeyCheck.REJECTED, [])
+    started = service.start("anthropic", "api_key")
+
+    status = service.submit_key(started.flow_id, "sk-ant-api03-typo")
+
+    assert status.state is FlowState.FAILED
+    assert status.detail == "That key was rejected by Anthropic."
+    assert read_index(tmp_path).accounts == ()
+
+
+def test_a_key_that_could_not_be_checked_is_saved_and_says_so(tmp_path: Path) -> None:
+    service = _key_checking_service(tmp_path, KeyCheck.UNCHECKED, [])
+    started = service.start("openai", "api_key")
+
+    status = service.submit_key(started.flow_id, "sk-proj-offline")
+
+    assert status.state is FlowState.OK
+    assert status.detail == "Couldn't check this key"
+    assert len(read_index(tmp_path).accounts) == 1
+
+
+def test_an_accepted_key_is_saved_quietly(tmp_path: Path) -> None:
+    asked: list[tuple[str, str, str | None]] = []
+    service = _key_checking_service(tmp_path, KeyCheck.ACCEPTED, asked)
+    started = service.start("openai", "api_key")
+
+    status = service.submit_key(started.flow_id, "sk-proj-good")
+
+    assert (status.state, status.detail) == (FlowState.OK, None)
+    assert asked == [("openai", "sk-proj-good", None)]
+
+
+def test_a_proxied_claude_key_is_checked_against_its_proxy(tmp_path: Path) -> None:
+    asked: list[tuple[str, str, str | None]] = []
+    service = _key_checking_service(tmp_path, KeyCheck.ACCEPTED, asked)
+    started = service.start("anthropic", "api_key")
+
+    service.submit_key(started.flow_id, "ANTHROPIC_API_KEY=sk-litellm\nANTHROPIC_BASE_URL=https://proxy.example")
+
+    assert asked == [("anthropic", "sk-litellm", "https://proxy.example")]
+
+
+def test_a_pi_key_for_openai_is_checked_with_openai(tmp_path: Path) -> None:
+    asked: list[tuple[str, str, str | None]] = []
+    service = _key_checking_service(tmp_path, KeyCheck.ACCEPTED, asked)
+    started = service.start("api-key", "api_key")
+
+    service.submit_key(started.flow_id, "sk-proj-pi", "openai")
+
+    assert asked == [("openai", "sk-proj-pi", None)]
+
+
+def test_a_key_for_a_provider_this_build_does_not_check_is_saved_unasked(tmp_path: Path) -> None:
+    asked: list[tuple[str, str, str | None]] = []
+    service = _key_checking_service(tmp_path, KeyCheck.REJECTED, asked)
+    started = service.start("api-key", "api_key")
+
+    status = service.submit_key(started.flow_id, "gsk_groq", "groq")
+
+    assert (status.state, status.detail) == (FlowState.OK, None)
+    assert asked == []
