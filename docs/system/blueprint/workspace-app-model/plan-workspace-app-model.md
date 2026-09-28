@@ -99,7 +99,7 @@ Everything is a view like any other for arrangement purposes; its tab set is der
 | Fact or verb | Owner |
 |---|---|
 | Which apps exist, their display name, icon, actions, criticality, priority | Manifest, mirrored into the registry |
-| Whether an app is running; Stop and Start | Shell, via supervisord |
+| Whether an app is running; Stop, Start, and Quit | Shell, via supervisord |
 | Which instances exist, their URL, title, status, last-active | App |
 | Create, Delete, Rename an instance | App |
 | Where an instance's page currently is | App; the page reports it to the shell, which relays it to the app with the tab's key |
