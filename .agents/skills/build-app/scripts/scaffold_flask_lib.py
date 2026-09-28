@@ -571,7 +571,7 @@ copies = {{data = "data/.apps/{name}"}}
 # workspace: 46,939 restarts in one day).
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {entry_point}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && exec {entry_point}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true

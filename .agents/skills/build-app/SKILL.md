@@ -255,7 +255,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec <name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -269,8 +269,9 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   FATAL rather than restarting a broken app several times a second for the life
   of the workspace. Built-in services deliberately retry forever instead.
 
-  The command ends in the app's own name, not `uv run <name>`; supervisord
-  resolves that name on PATH. The copy it finds is the console script
+  The command ends in `exec` of the app's own name, not `uv run <name>`, so
+  the app is the process supervisord tagged rather than a child of a wrapper;
+  supervisord resolves that name on PATH. The copy it finds is the console script
   `uv sync --all-packages` writes into the workspace venv -- `uv tool install
   -e` puts the tool's own entry point under your HOME, which supervisord's
   children do not have on PATH. So always sync with `--all-packages`: a
@@ -296,7 +297,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   ```
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && python3 system/scripts/with_secrets.py data/.secrets/example.env -- <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec python3 system/scripts/with_secrets.py data/.secrets/example.env -- <name>"
   ```
 
   A preview (`update-app`'s `preview_app.py`) runs the app under the same
@@ -585,7 +586,7 @@ shed before any built-in service under memory pressure (see
 
 ```ini
 [program:<name>]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port> && <existing_start_command>"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port> && exec <existing_start_command>"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -599,7 +600,7 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8090 && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8090 && exec jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
   directory=/home/user/workspace
   autostart=true
   autorestart=true

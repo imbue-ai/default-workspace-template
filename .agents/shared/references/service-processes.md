@@ -43,7 +43,7 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml --url http://localhost:8090 && foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml --url http://localhost:8090 && exec foo"
   ```
 
   The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
