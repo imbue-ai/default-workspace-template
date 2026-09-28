@@ -97,9 +97,10 @@ class _UnexpectedWakeError(Exception):
     """An error outside the kinds the parker answers a request for."""
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 def test_a_wake_that_raises_unexpectedly_still_closes_the_connection(closed_port: int) -> None:
-    """The exception is the accept thread's to report; the requester sees its connection end (closed, or reset
-    since its request was never read) rather than waiting on an answer that never comes."""
+    """The exception is the accept thread's to report (the filtered warning); the requester sees its connection
+    end (closed, or reset since its request was never read) rather than waiting on an answer that never comes."""
 
     def explode() -> ParkedPageKind:
         raise _UnexpectedWakeError("the inventory refresh raised")
@@ -111,6 +112,8 @@ def test_a_wake_that_raises_unexpectedly_still_closes_the_connection(closed_port
         answer = send_raw_get_over_socket(parked_port.target.port)
     except ConnectionResetError:
         answer = b""
+    # The release joins the accept thread, so its report lands in this test rather than the next one's.
+    parked_port.release()
 
     assert answer == b""
 
