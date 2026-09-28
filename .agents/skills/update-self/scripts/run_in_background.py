@@ -179,6 +179,7 @@ def compose_report(
     body = "\n".join(
         [
             "A command you started with run_in_background.py has exited.",
+            "If this arrived while you were in the middle of something else, act on it before you end your turn.",
             f"Command: {shlex.join(command)}",
             f"Exit code: {returncode}",
             f"Output file: {output_path}",
