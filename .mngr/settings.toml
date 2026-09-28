@@ -1657,8 +1657,6 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 ## and a bare assign over a key an earlier template in the stack contributed to is
 ## rejected by the settings narrowing guard.
 
-## --- roles ---
-
 # Chat: a user-facing conversational agent, sharing the workspace's work
 # directory (`transfer = none`) rather than taking a worktree of its own -- one
 # workspace, one work_dir, all chats in it.
