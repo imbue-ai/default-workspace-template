@@ -99,6 +99,9 @@ class AppLifecycleManager(MutableModel):
     no_windows_grace_seconds: float = Field(
         default=NO_WINDOWS_GRACE_SECONDS, frozen=True, description="How long an app goes without a window before a stop"
     )
+    idle_sweep_interval_seconds: float = Field(
+        default=IDLE_SWEEP_INTERVAL_SECONDS, frozen=True, description="How often the sweep runs while nothing is in transition"
+    )
     program_states: ProgramStatesReader = Field(
         default=read_supervisor_program_statenames,
         frozen=True,
@@ -249,7 +252,7 @@ class AppLifecycleManager(MutableModel):
     def _sweep_interval_seconds(self) -> float:
         with self._lock:
             is_transitioning = bool(self._parked_by_app) or bool(self._woken_at_by_app)
-        return TRANSITION_SWEEP_INTERVAL_SECONDS if is_transitioning else IDLE_SWEEP_INTERVAL_SECONDS
+        return min(TRANSITION_SWEEP_INTERVAL_SECONDS, self.idle_sweep_interval_seconds) if is_transitioning else self.idle_sweep_interval_seconds
 
     def sweep_once(self) -> None:
         """One pass (spec sections 5.4 and 6.1): park every stoppable app that is down, release every parker whose
@@ -354,6 +357,16 @@ def _is_accepting(target: ParkingTarget) -> bool:
 
 
 def build_app_lifecycle_manager(
-    inventory: AppInventory, is_enabled: bool, count_windows_of_app: Callable[[str], int]
+    inventory: AppInventory,
+    is_enabled: bool,
+    count_windows_of_app: Callable[[str], int],
+    no_windows_grace_seconds: float = NO_WINDOWS_GRACE_SECONDS,
+    idle_sweep_interval_seconds: float = IDLE_SWEEP_INTERVAL_SECONDS,
 ) -> AppLifecycleManager:
-    return AppLifecycleManager(inventory=inventory, is_enabled=is_enabled, count_windows_of_app=count_windows_of_app)
+    return AppLifecycleManager(
+        inventory=inventory,
+        is_enabled=is_enabled,
+        count_windows_of_app=count_windows_of_app,
+        no_windows_grace_seconds=no_windows_grace_seconds,
+        idle_sweep_interval_seconds=idle_sweep_interval_seconds,
+    )

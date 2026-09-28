@@ -31,6 +31,8 @@ from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
+from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
+from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import build_app_lifecycle_manager
 from imbue.system_interface.shell.client_activity import ClientActivityLog
@@ -740,6 +742,8 @@ def build_shell_state(
     launch_poster: LaunchPoster | None = None,
     on_registry_read: Callable[[Sequence[RegistryRow]], None] | None = None,
     is_lifecycle_enabled: bool = False,
+    no_windows_grace_seconds: float = NO_WINDOWS_GRACE_SECONDS,
+    idle_sweep_interval_seconds: float = IDLE_SWEEP_INTERVAL_SECONDS,
 ) -> ShellState:
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests (and
     ``on_registry_read``, what the built inventory tells every registry read, is the production shell's services
@@ -750,7 +754,8 @@ def build_shell_state(
     that can reach no connector, so a shell built without one names visitors by email; ``launch_poster`` (how a
     POST launch path is asked for its page) defaults to the loopback POST; ``is_lifecycle_enabled`` is whether the
     lifecycle manager's sweep runs (the production shell's yes; a preview's and a test's no, so no test parks a
-    port by accident)."""
+    port by accident), and the two timings are the manager's grace period and idle sweep interval, which a test
+    shortens."""
     resolved_inventory = (
         inventory
         if inventory is not None
@@ -764,6 +769,8 @@ def build_shell_state(
             resolved_inventory,
             is_lifecycle_enabled,
             lambda app: sum(1 for desktop in desktops.list_desktops() for window in desktop.windows if window.app == app),
+            no_windows_grace_seconds=no_windows_grace_seconds,
+            idle_sweep_interval_seconds=idle_sweep_interval_seconds,
         ),
         desktops=desktops,
         placements=PlacementStore(state_directory=state_directory),
