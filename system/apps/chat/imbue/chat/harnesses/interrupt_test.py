@@ -8,6 +8,7 @@ from typing import Any
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
+from imbue.chat.harnesses.interrupt import restart_drain
 from imbue.chat.harnesses.interrupt import restart_drain_under_message_lock
 from imbue.chat.harnesses.interrupt import try_hold_message_lock
 
@@ -103,6 +104,21 @@ class _ParkingWatcher:
 
     def clear_queue(self) -> None:
         self.clear_calls += 1
+
+
+def test_restart_drain_clears_the_mirror_before_settling_activity(tmp_path: Path) -> None:
+    # The settle can read the agent as IDLE; were the returned messages still in the mirror then,
+    # the idle backstop would show them as being delivered.
+    watcher = _ParkingWatcher("queued message", "queued message")
+    clear_calls_seen_by_settle: list[int] = []
+    block = restart_drain(
+        _agent_info(tmp_path),
+        watcher,
+        lambda: (True, "ok"),
+        lambda: clear_calls_seen_by_settle.append(watcher.clear_calls),
+    )
+    assert block == "queued message"
+    assert clear_calls_seen_by_settle == [1]
 
 
 def test_restart_drain_under_message_lock_captures_a_late_parked_message(tmp_path: Path) -> None:

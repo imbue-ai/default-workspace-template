@@ -20,6 +20,7 @@ import os
 import queue
 import socket
 import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -77,6 +78,7 @@ from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
+from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.shell_client import DisconnectedShell
 from imbue.chat.shell_client import ShellLayoutClient
@@ -478,6 +480,14 @@ class RecordingLayoutOpShell:
         return self.body, self.status
 
 
+def build_temporary_secret_request_store() -> SecretRequestStore:
+    """A store rooted in a fresh temporary directory, laid out like the workspace's data/."""
+    root = Path(tempfile.mkdtemp(prefix="chat-secret-requests-"))
+    return SecretRequestStore(
+        requests_directory=root / "state" / "secret-requests", secrets_directory=root / "data" / ".secrets"
+    )
+
+
 def build_test_state(
     *,
     config: Config | None = None,
@@ -487,6 +497,7 @@ def build_test_state(
     latchkey_http_client: httpx.Client | None = None,
     is_secondary: bool = False,
     shell: ShellLayoutInterface | None = None,
+    secret_requests: SecretRequestStore | None = None,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -519,6 +530,10 @@ def build_test_state(
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
         is_secondary=is_secondary,
         shell=shell if shell is not None else DisconnectedShell(),
+        # Never the production directories: a test that files a request must not write
+        # under this package's own data/. A test that reads the files back injects a store
+        # rooted in its tmp_path.
+        secret_requests=secret_requests if secret_requests is not None else build_temporary_secret_request_store(),
     )
     # Match production: eviction drops a destroyed/stopped agent's watcher.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)

@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.claude.queue_tracker import DELIVERY_GRACE_SECONDS
 from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
 from imbue.chat.harnesses.claude.watcher import ClaudeTranscriptLoader
 from imbue.mngr_claude.claude_config import encode_claude_project_dir_name
@@ -1144,9 +1145,6 @@ def test_subagent_discovered_after_history_file_disappears(tmp_path: Path) -> No
     assert upgraded["subagent_metadata"]["session_id"] == "agent-rotsubid"
 
 
-# --- Queue replay scoped to the latest main session ---
-
-
 def _queue_enqueue_record(
     content: str, session_id: str, timestamp: str = "2026-01-01T00:00:05.000Z"
 ) -> dict[str, Any]:
@@ -1325,6 +1323,58 @@ def test_queued_to_delivered_emits_chip_removal_before_the_transcript_turn(tmp_p
     assert order_log == ["queue:[]", "turn:1"]
 
 
+def test_a_message_queued_through_the_reply_stays_shown_until_its_turn(tmp_path: Path) -> None:
+    """The agent reads as IDLE the moment its reply lands, before claude dequeues what was
+    queued behind it. The idle backstop keeps that message (as being sent) instead of blanking
+    it, and its own leave record removes it in the cycle its turn arrives."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    order_log: list[str] = []
+    watcher = ClaudeSessionWatcher(
+        agent_id="test-agent",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+        work_dir=None,
+        on_events=lambda _aid, evts: order_log.append(f"turn:{len(evts)}"),
+    )
+    watcher.set_queue_snapshot_callback(
+        lambda snapshot: order_log.append(f"queue:{[entry['content'] for entry in snapshot]}")
+    )
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_queue_enqueue_record("follow-up", "test-session")) + "\n").encode("utf-8"))
+    watcher._emit_cycle()
+
+    assert [(entry["content"], entry["is_sending"]) for entry in watcher.notify_idle()] == [("follow-up", True)]
+
+    order_log.clear()
+    watcher._emit_cycle()
+    assert order_log == []
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_queue_dequeue_record("test-session")) + "\n").encode("utf-8"))
+        f.write((json.dumps(_user_event(1, "follow-up")) + "\n").encode("utf-8"))
+    watcher._emit_cycle()
+    assert order_log == ["queue:[]", "turn:1"]
+
+
+def test_an_emit_cycle_drops_a_message_left_queued_past_the_idle_grace(tmp_path: Path) -> None:
+    """A message claude never dequeues (an interrupt from its own terminal, a crash) is dropped once
+    the delivery grace runs out, by an emit cycle that has no new ledger line to read."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    pushed: list[list[str]] = []
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher.set_queue_snapshot_callback(lambda snapshot: pushed.append([entry["content"] for entry in snapshot]))
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_queue_enqueue_record("stranded", "test-session")) + "\n").encode("utf-8"))
+    watcher._emit_cycle()
+    assert pushed == [["stranded"]]
+
+    # Seen idle with it still queued a full grace ago.
+    watcher._queue_tracker.on_idle(time.monotonic() - DELIVERY_GRACE_SECONDS)
+    watcher._emit_cycle()
+
+    assert pushed == [["stranded"], []]
+    assert _queued_contents(watcher) == []
+
+
 def test_reprime_after_backend_restart_excludes_dead_epoch_enqueues(tmp_path: Path) -> None:
     """claude --resume RE-APPENDS to the same session file, so a backend restart's
     priming replay walks a ledger that can still hold enqueues a killed claude
@@ -1393,9 +1443,6 @@ def test_truncation_reset_excludes_dead_epoch_enqueues(tmp_path: Path) -> None:
     )
     watcher._emit_cycle()
     assert _queued_contents(watcher) == []
-
-
-# --- Main-session discovery: no read-path stalls, history-ordered registration ---
 
 
 def test_discovery_miss_does_not_stall_the_read_path(tmp_path: Path) -> None:
@@ -1549,9 +1596,6 @@ def test_a_session_filed_under_the_work_dir_is_found_as_soon_as_it_lands_while_i
     (project_dir / f"{session_id}.jsonl").write_text(json.dumps(_user_event(7)) + "\n")
 
     assert [event["event_id"] for event in watcher.get_all_events()] == ["uuid-7-user"]
-
-
-# --- Bounded tail/backfill/offset paging over the resident store ---
 
 
 def _ts(index: int) -> str:
@@ -1794,9 +1838,6 @@ def test_get_latest_main_session_file_none_without_history(tmp_path: Path) -> No
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
 
     assert watcher.get_latest_main_session_file() is None
-
-
-# --- On-demand payload detail ---
 
 
 def _make_bash_result_line(uuid: str, timestamp: str, call_id: str, output: str) -> str:

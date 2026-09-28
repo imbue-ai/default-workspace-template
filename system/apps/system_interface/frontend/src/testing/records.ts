@@ -175,7 +175,14 @@ export function layoutRecord(placements: readonly Placement[], updatedAt: string
 
 /** A shown, normal placement at the first cascade frame. */
 export function placementRecord(windowId: string, overrides: Partial<Placement> = {}): Placement {
-  return { window_id: windowId, frame: cascadeFrame(0), state: "NORMAL", is_minimized: false, ...overrides };
+  return {
+    window_id: windowId,
+    frame: cascadeFrame(0),
+    state: "NORMAL",
+    is_minimized: false,
+    is_detached: false,
+    ...overrides,
+  };
 }
 
 /** A non-owner with one open tab, an email at example.com, and neither a display name nor a profile picture. */

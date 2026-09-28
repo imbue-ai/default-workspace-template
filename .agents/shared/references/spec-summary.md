@@ -103,6 +103,18 @@ metadata:
 Omit `allowed-tools`, `license`, and `compatibility` unless you have a
 specific reason to constrain or declare them -- the defaults are fine.
 
+A skill whose scripts run under a secret file (through
+`system/scripts/with_secrets.py`; see the `connect-external-service` skill)
+declares it, so a template that ships the skill asks its adopter for exactly
+those variables:
+
+```yaml
+secrets:
+  - file: example                  # data/.secrets/example.env
+    variables: [EXAMPLE_API_KEY]   # at least one; POSIX identifiers
+    note: an Example API key from the account's settings page
+```
+
 ## .agents/skills/<name>/scripts/run.py (optional)
 
 Include `run.py` when the skill has `[script]` or `[ai-script]` steps that

@@ -23,8 +23,8 @@
 #     incl. secrets). No upstream fetch/pull -- provenance link only.
 #   - Overlay via `rsync -a "$STAGE/" "$REPO/"` (root-to-root), NEVER
 #     `cp -a "$STAGE/apps" "$REPO/apps"` (nests into apps/apps).
-#   - Secret scan is a hard-failing (exit-non-zero, abort-before-commit) gate
-#     -- the authoritative blocker. It runs the sibling scan_secrets.sh, which
+#   - Secret scan is a hard-failing (exit-non-zero, abort-before-commit) gate,
+#     the authoritative blocker. It runs the sibling scan_secrets.sh, which
 #     requires BOTH scanners (betterleaks with the sibling betterleaks.toml
 #     config, kingfisher with --no-validate) and fails on any finding, any
 #     scanner error, or any missing scanner binary. There is NO fallback
@@ -185,7 +185,7 @@ MANIFEST_TOML="template.toml"
 THUMBNAIL="template.svg"
 
 # Substituted by the lead in publish-template §7 once the owner and repo name
-# are both known -- the README's "Open in Mind" button and its copyable
+# are both known -- the README's "Open in Imbue Studio" button and its copyable
 # fallback both need the repo URL, which does not exist when this script runs.
 # §8's pre-push gate greps for any leftover, exactly as it does for the
 # placeholder thumbnail.
@@ -472,6 +472,11 @@ if [ -n "$PREVIOUS_MANIFEST_TOML" ]; then
     manifest_toml_args+=(--previous-manifest "$PREVIOUS_MANIFEST_TOML")
 fi
 manifest_toml_args+=(--description "$manifest_description")
+# The secrets the included apps and skills declare are aggregated into the TOML
+# and checked against the live workspace's own data/.secrets/ files; the matching
+# requires_secret: lines land in template.md below, so the two agree from the start.
+REQUIRES_SECRET_LINES="$SCAN_TOOLS_DIR/requires-secret-lines.md"
+manifest_toml_args+=(--repo-root "$REPO" --workspace-dir "$data_source" --secret-lines-output "$REQUIRES_SECRET_LINES")
 
 # `uv run --no-project` (no workspace resolution, so none of the cold-base
 # fragility the smoke check warns about) rather than a bare python3: the writer
@@ -483,6 +488,10 @@ if ! uv run --no-project python "$SCAN_TOOLS_DIR/write_template_manifest.py" "${
     echo "build_template.sh: could not generate ${MANIFEST_TOML}" >&2
     exit 6
 fi
+
+# Read after the writer has run: the file holds the requires_secret: lines that
+# match the [[requirements.secret]] entries it just generated.
+requires_secret_lines="$(cat "$REQUIRES_SECRET_LINES")"
 
 cat > "$MANIFEST" <<MANIFEST_EOF
 ---
@@ -551,15 +560,22 @@ theirs. Two kinds of entry, handled at different times:
 - **Adaptation** -- what must be DECIDED or REWIRED, in prose. Worked through
   interactively with the user, after activation.
 
+${requires_secret_lines}
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
-with both kinds of entry.
+with both kinds of entry. Any \`requires_secret:\` lines already above this
+comment were generated from the included apps' and skills' declarations (and
+match the \`[[requirements.secret]]\` entries in ${MANIFEST_TOML}); leave them
+as they are and do not repeat them.
 
 ACTIVATION -- one line each, using exactly these forms (greppable by \`requires_\`):
 
 - requires_permission: <latchkey scope> / <permission schema> (user-approved;
   the adopting agent initiates this via a latchkey permission request during
   setup -- it must not merely mention it)
-- requires_secret: <ENV_VAR or config key> (what it is for and where to put it)
+- requires_secret: data/.secrets/<file>.env with <VAR_A, VAR_B> (what it is for
+  and where to get it) -- normally generated, see above; declare a new one in
+  the app's app.toml [[secrets]] or the skill's SKILL.md secrets: rather than
+  writing it here by hand
 - requires_llm: <how the code reaches Claude, and what an adopter needs>
   (include this line whenever the app calls an LLM: name the method it was
   built for -- keyed litellm via ANTHROPIC_API_KEY, or keyless subscription via
@@ -685,13 +701,14 @@ THUMB_EOF
 # That is wrong for a published template: the repo's landing page -- the
 # thing that decides whether a person boots this at all -- must sell THIS
 # project. The structure below is the house recipe: hero graphic, the "Open in
-# Mind" call-to-action, why you care, how to use it, ideas for making it
-# yours. Deterministic full-file write, regenerated on every publish.
+# Imbue Studio" call-to-action, why you care, how to use it, ideas for making
+# it yours. Deterministic full-file write, regenerated on every publish.
 #
-# The call-to-action points at the HTTPS trampoline rather than a bare
-# minds:// URL, which GitHub renders dead. Both it and the copyable fallback
-# need the repo URL, which does not exist yet (the repo name is confirmed in
-# §6 and the owner comes back from the create call in §8), so both carry
+# The call-to-action points at the Studio trampoline page (a connector route
+# on the web chrome origin) rather than a bare imbue-studio:// URL, which
+# GitHub renders dead. Both it and the copyable fallback need the repo URL,
+# which does not exist yet (the repo name is confirmed in §6 and the owner
+# comes back from the create call in §8), so both carry
 # ${REPO_URL_PLACEHOLDER} for the lead to substitute before the push.
 
 cat > README.md <<README_EOF
@@ -702,10 +719,10 @@ cat > README.md <<README_EOF
 # ${TITLE}
 
 <p align="center">
-  <a href="https://boweiliu.github.io/open-in-minds/?git_url=https://github.com/${REPO_URL_PLACEHOLDER}"><img alt="Open in Mind" height="64" src="https://img.shields.io/badge/Open%20in%20Mind-D8D1C0?style=for-the-badge"></a>
+  <a href="https://studio.imbue.com/open?git_url=https://github.com/${REPO_URL_PLACEHOLDER}"><img alt="Open in Imbue Studio" height="64" src="https://img.shields.io/badge/Open%20in%20Imbue%20Studio-D8D1C0?style=for-the-badge"></a>
 </p>
 
-Didn't work? Create a Mind workspace and paste this to your agent:
+Didn't work? Create a Studio workspace and paste this to your agent:
 \` /use-template https://github.com/${REPO_URL_PLACEHOLDER}\`
 
 ## Why you care

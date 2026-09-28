@@ -88,6 +88,18 @@ describe("a menu", () => {
     expect(menu.isOpen()).toBe(false);
   });
 
+  it("handles a right-click on its sheet and on its card, staying open for the latter", () => {
+    rows = [{ kind: "action", key: "go", label: "Go", onSelect: () => undefined }];
+    menu.open(ANCHOR);
+    const onCard = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    row("go").dispatchEvent(onCard);
+    expect(onCard.defaultPrevented).toBe(true);
+    expect(menu.isOpen()).toBe(true);
+    const onSheet = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    part("sheet")!.dispatchEvent(onSheet);
+    expect(onSheet.defaultPrevented).toBe(true);
+  });
+
   it("runs an action row and closes", () => {
     const picked = vi.fn();
     rows = [{ kind: "action", key: "go", label: "Go", onSelect: picked }];

@@ -7,8 +7,9 @@ import pytest
 # provisioned by env-converge before any agent starts. Playwright's browser-cache
 # lookup only auto-discovers builds Playwright downloaded itself, so a launch has
 # to name this binary explicitly. Every suite collected under the repo root
-# (each app's tests included) inherits this override, so pytest-playwright's
-# `page` fixture drives Fortress with no per-app setup.
+# inherits this override, so pytest-playwright's `page` fixture drives Fortress
+# with no per-app setup. The `chat` and `system_interface` apps are NOT under it:
+# the root pytest config ignores them and each runs from its own directory.
 FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
 
 

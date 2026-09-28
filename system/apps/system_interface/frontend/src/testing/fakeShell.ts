@@ -69,6 +69,18 @@ export class FakeDesktopApi implements DesktopApi {
     });
     return answer;
   }
+  /** While set, a placements save is recorded at once but answers only once this settles: a test holds a save
+   *  open to see what happens before it lands. */
+  writeGate: Promise<void> | null = null;
+
+  /** Hold the saves open until the answered function is called. */
+  holdWrites(): () => void {
+    let answer: () => void = () => undefined;
+    this.writeGate = new Promise((resolve) => {
+      answer = resolve;
+    });
+    return answer;
+  }
   avatars: AvatarCatalog = {
     designs: [
       { id: "gummy-seal", label: "Gummy seal", source_path: null },
@@ -118,6 +130,7 @@ export class FakeDesktopApi implements DesktopApi {
         frame: PINNED_WINDOW_FRAME,
         state: "NORMAL" as const,
         is_minimized: true,
+        is_detached: false,
       }));
     return { ...stored, placements: [...pinned, ...stored.placements], window_paths };
   }
@@ -338,6 +351,7 @@ export class FakeDesktopApi implements DesktopApi {
 
   async savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null> {
     this.calls.push(`savePlacements:${desktopId}:${request.saveId}`);
+    if (this.writeGate !== null) await this.writeGate;
     this.refuse();
     const stored = this.layouts.get(`${desktopId}/${request.clientId}`);
     if (

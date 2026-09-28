@@ -31,6 +31,9 @@ from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
+from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
+from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
+from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.shell_client import DisconnectedShell
 from imbue.chat.shell_client import ShellLayoutClient
@@ -162,6 +165,9 @@ def build_production_state(
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=httpx.Client(timeout=30.0),
         shell=shell,
+        secret_requests=SecretRequestStore(
+            requests_directory=data_dir / SECRET_REQUESTS_DIRNAME, secrets_directory=DEFAULT_SECRETS_DIRECTORY
+        ),
     )
     # Eviction wiring: when the manager sees an agent destroyed or its lifecycle
     # transition into a dead state, the state drops that agent's watcher -- the
@@ -233,7 +239,7 @@ def main() -> None:
     same observer and tracks the same agents, but withholds the writes a second instance
     must not make (the account reconcile, the memory scores, the registration, the
     automatic compaction, the switches, the window auto-opening, the client-activity
-    reports to the shell).
+    reports to the shell, the answers to secret cards).
     """
     args = _parse_args(None)
     config = load_config()

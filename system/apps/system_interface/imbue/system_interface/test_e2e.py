@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import threading
 import urllib.error
 import urllib.parse
@@ -280,11 +281,13 @@ def e2e_server(tmp_path: Path) -> Generator[E2EServer, None, None]:
 # It imports the shell's served contract module and connects: it reports its location (path and a title derived
 # from it) once greeted, and exposes the verbs the tests drive (navigate in place, ask for an open). A navigable
 # page declares the capability and shows a pushed path in place; a plain one declares nothing, so the shell reloads
-# its frame to move it. Its ``#held`` input is state no reload survives.
+# its frame to move it. Its ``#held`` input is state no reload survives. It installs the served element context
+# menu as a scaffolded app's page does, so a right-click in the frame drafts through the shell.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
 <div id="where"></div><input id="held" value="" />
 <script type="module">
 import { connectToShell } from "__BASE_URL__/_static/app_contract.js";
+import { installElementContextMenu } from "__BASE_URL__/_static/context_menu.js";
 const isNavigable = __NAVIGABLE__;
 const where = document.getElementById("where");
 const titleOf = (path) => "Stub " + path;
@@ -301,7 +304,7 @@ const handlers = {
   },
 };
 if (isNavigable) {
-  handlers.capabilities = { navigation: true };
+  handlers.capabilities = { navigation: true, closeChord: false };
   handlers.onNavigate = (path) => {
     history.replaceState(null, "", path);
     show(path);
@@ -309,6 +312,7 @@ if (isNavigable) {
   };
 }
 const connection = connectToShell(handlers);
+installElementContextMenu({ connection, handshake: () => window.__handshake ?? null });
 window.__navigateTo = (path) => {
   history.pushState(null, "", path);
   show(path);
@@ -538,6 +542,11 @@ def _box(locator: Locator) -> FloatRect:
     return box
 
 
+def _travel_duration(window: Locator) -> str:
+    """How long the window's chrome would take to travel to a new rectangle, as its computed style has it."""
+    return window.evaluate("(element) => getComputedStyle(element).transitionDuration.split(',')[0].trim()")
+
+
 def _center(box: FloatRect) -> tuple[float, float]:
     return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
 
@@ -619,6 +628,8 @@ def _second_context(page: Page, **context_args: Any) -> BrowserContext:
     """A second browser context: its own storage, so its own client id."""
     browser = page.context.browser
     assert browser is not None
+    # Nothing of ``browser_context_args`` reaches here, so the suite's reduced motion is asked for again.
+    context_args.setdefault("reduced_motion", "reduce")
     return browser.new_context(**context_args)
 
 
@@ -860,6 +871,66 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
 
 
 @pytest.mark.timeout(60, func_only=False)
+def test_a_pages_element_menu_drafts_the_reference_into_the_pinned_window(tmp_path: Path, page: Page) -> None:
+    """A right-click in a framed page opens the page's own element menu (the served module, as a scaffolded app's
+    page installs it); "Explain..." hands the shell a prompt over the element's reference through
+    ``shell:draft-text``, and the shell posts the pinned app's draft launch path with it (the element-reference-menu
+    plan sections 4.1 and 6), pointing this client's view of the pinned window at the page it answers. The reference
+    carries the page's scope from the handshake and the element as the page has it. A right-click on the desktop's
+    own backdrop opens the shell's element menu, whose rows are the reference rows."""
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        client_id = _client_id(page)
+        window_id = _open_via_shortcut(page, server)
+        frame = _page_frame(page, window_id)
+
+        frame.locator("#where").click(button="right")
+        card = frame.locator("[data-context-menu]")
+        expect(card).to_be_visible()
+        expect(card.locator("[data-context-menu-row]")).to_have_count(3)
+        card.locator('[data-context-menu-row="explain-element"]').click()
+        expect(card).to_be_hidden()
+
+        assert poll_until(lambda: len(_posted_launches(server.pinned_url)) == 1, timeout=15.0, poll_interval=0.1)
+        (posted,) = _posted_launches(server.pinned_url)
+        assert posted["path"] == f"/{_PINNED_DRAFT_LAUNCH_ID}"
+        assert posted["body"]["client_id"] == client_id
+        assert posted["body"]["desktop_id"] == _HOME_DESKTOP_ID
+        assert posted["body"]["window_path"] == _PINNED_HOME_PATH
+        text = posted["body"][_PINNED_TEXT_PARAM]
+        prompt, blank, block_open, block_json, block_close = text.split("\n")
+        reference = json.loads(block_json)["element_reference"]
+        assert re.fullmatch(r"REF-[0-9a-z]{11}", reference["reference_id"])
+        assert (prompt, blank) == (f"Explain what I attached in {reference['reference_id']}", "")
+        assert (block_open, block_close) == ("```json", "```")
+        assert reference["app"] == _STUB_APP_NAME
+        assert reference["window_id"] == window_id
+        assert reference["client_id"] == client_id
+        assert reference["desktop_id"] == _HOME_DESKTOP_ID
+        assert reference["tag"] == "div"
+        assert reference["id"] == "where"
+        assert reference["selector"] == "#where"
+        assert reference["page_path"] == _STUB_LAUNCH_PATH
+        assert "text" not in reference
+        assert "ancestors" not in reference
+        assert "outer_html" not in reference
+        assert reference["viewport"]["width"] > 0
+
+        draft_page_path = _launched_page_path(_PINNED_DRAFT_LAUNCH_ID, {_PINNED_TEXT_PARAM: text})
+        _wait_for_own_window_path(server.base_url, client_id, pinned["id"], draft_page_path)
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+
+        # The desktop's own chrome: a right-click on the empty backdrop opens the shell's element menu.
+        page.locator("[data-backdrop-area]").click(button="right", position={"x": 700, "y": 20})
+        shell_menu = page.locator(".element-menu")
+        expect(shell_menu).to_be_visible()
+        expect(shell_menu.locator('[data-menu-row="explain-element"]')).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(shell_menu).to_be_hidden()
+
+
+@pytest.mark.timeout(60, func_only=False)
 def test_the_launcher_field_grows_upward_out_of_its_row_and_lifts_the_menu(e2e_server: E2EServer, page: Page) -> None:
     """The field is one row in the taskbar until its text has lines (plan section 4.1): then it grows upward out of
     its one-row footprint over the backdrop, the taskbar and its entries hold their places, and the menu's foot
@@ -1013,6 +1084,22 @@ def test_move_and_resize_persist_across_reload(e2e_server: E2EServer, page: Page
     # The page is back too, laid over the restored window, whatever order the loads landed in.
     expect(page.locator(f'iframe[data-live-page="{window_id}"]')).to_be_visible(timeout=15000)
     assert _page_frame(page, window_id).url == f"{e2e_server.stub_url}{_STUB_LAUNCH_PATH}"
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_window_travels_only_where_the_platform_welcomes_motion(e2e_server: E2EServer, page: Page) -> None:
+    """The travel is asked for, not taken away: a context saying motion is welcome transitions a window's
+    rectangle, and one asking for less motion -- which every context of this suite does, so a box can be read
+    the moment a state lands -- puts the window at its new rectangle outright."""
+    _land(page, e2e_server)
+    window_id = _open_via_shortcut(page, e2e_server)
+    assert _travel_duration(_window(page, window_id)) == "0s"
+
+    with _second_client(page, e2e_server, reduced_motion="no-preference") as other_page:
+        # The window is shared but its placement is not, so it reaches a fresh client minimized.
+        _taskbar_entry(other_page, window_id).click()
+        expect(_window(other_page, window_id)).to_be_visible(timeout=15000)
+        assert _travel_duration(_window(other_page, window_id)) != "0s"
 
 
 @pytest.mark.timeout(90, func_only=False)

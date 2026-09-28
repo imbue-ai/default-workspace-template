@@ -1,10 +1,10 @@
 """The pure editor over the desktop model (desktop-interface plan section 5.3, contracts.md section 10).
 
 Pure functions over the frozen ``Desktop``, ``Window``, ``DesktopLayout``, and ``WindowPlacement`` records that
-both the routes and the agent ops use: open, close, focus, minimize, restore, maximize, snap, place, and
-the shortcut edits, plus the geometry rules (cascade, fit, snap zones, un-snap, the grid, the nearest free
-cell, reading order, and the render-time placement of shortcuts). Every rule the frontend also applies is
-written once here and once in TypeScript against the same constants and the shared vectors in
+both the routes and the agent ops use: open, close, focus, minimize, restore, maximize, snap, place, detach,
+reattach, and the shortcut edits, plus the geometry rules (cascade, fit, snap zones, un-snap, the grid, the
+nearest free cell, reading order, and the render-time placement of shortcuts). Every rule the frontend also
+applies is written once here and once in TypeScript against the same constants and the shared vectors in
 ``docs/system/blueprint/desktop-interface/geometry_vectors.json``, which ``desktop_document_test.py`` runs.
 """
 
@@ -68,6 +68,13 @@ PINNED_WINDOW_FRAME: Final[Frame] = Frame(x=0.46, y=0.05, width=0.5, height=0.9)
 SNAPPED_LEFT_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=0.5, height=1.0)
 SNAPPED_RIGHT_FRAME: Final[Frame] = Frame(x=0.5, y=0.0, width=0.5, height=1.0)
 MAXIMIZED_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=1.0, height=1.0)
+
+# How wide a window opened beside another is, and the width its anchor has to be under for the two to
+# fit side by side at all.
+PAIRED_WIDTH: Final[float] = 0.5
+# Fractions divided and added back rarely land on the figure they came from; a gap this much under the
+# width it has to hold is the width it has to hold.
+_PAIRING_TOLERANCE: Final[float] = 1e-6
 
 # The shell seeds a new desktop's shortcuts and places a shortcut added by an agent without knowing any
 # backdrop, so it lays them out in reading order over a grid this many columns wide: one column down the
@@ -164,6 +171,45 @@ def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame:
             return MAXIMIZED_FRAME
         case _ as unreachable:
             assert_never(unreachable)
+
+
+@pure
+def paired_frames(anchor: Frame) -> tuple[Frame, Frame]:
+    """Where a window opened beside ``anchor`` goes, and where that leaves the anchor.
+
+    The anchor keeps the shape its owner gave it wherever it can: it is only ever moved across, only
+    when neither side of it has ``PAIRED_WIDTH`` to spare, and then by the least that opens that much
+    on one side -- not to the edge, which is a long way to travel for room that was a nudge away. Its
+    height and where it sits down the backdrop are never touched, and the opened window takes both, so
+    the two read as a pair without the anchor having to become a shape nobody chose. An anchor wider
+    than ``PAIRED_WIDTH`` is the one that must give, since no moving opens that much beside it.
+
+    The opened window sits against the anchor rather than against the far edge: adjacent, the two read
+    as one arrangement, where a gap between them would read as two windows that happen to be up.
+    """
+    beside = PAIRED_WIDTH
+    if anchor.width > beside + _PAIRING_TOLERANCE:
+        return (
+            Frame(x=0.0, y=anchor.y, width=beside, height=anchor.height),
+            Frame(x=beside, y=anchor.y, width=beside, height=anchor.height),
+        )
+    room_to_the_right = 1.0 - (anchor.x + anchor.width)
+    if room_to_the_right >= beside - _PAIRING_TOLERANCE:
+        return anchor, Frame(x=anchor.x + anchor.width, y=anchor.y, width=beside, height=anchor.height)
+    if anchor.x >= beside - _PAIRING_TOLERANCE:
+        return anchor, Frame(x=anchor.x - beside, y=anchor.y, width=beside, height=anchor.height)
+    # Neither side has the room. Opening it on the right costs the anchor the ``beside - room_to_the_right``
+    # it is short by, and on the left the ``beside - anchor.x`` it is short by, so the nearer side to open
+    # is the one that already has more of the room. A tie goes right, where the pair reads in order.
+    if anchor.x <= room_to_the_right:
+        return (
+            Frame(x=beside - anchor.width, y=anchor.y, width=anchor.width, height=anchor.height),
+            Frame(x=beside, y=anchor.y, width=beside, height=anchor.height),
+        )
+    return (
+        Frame(x=beside, y=anchor.y, width=anchor.width, height=anchor.height),
+        Frame(x=0.0, y=anchor.y, width=beside, height=anchor.height),
+    )
 
 
 @pure
@@ -666,9 +712,15 @@ def effective_placements(layout: DesktopLayout, desktop: Desktop) -> tuple[Windo
 
 
 @pure
+def is_placement_shown(placement: WindowPlacement) -> bool:
+    """Whether a placement is on the desktop's screen: neither minimized nor pulled out."""
+    return not placement.is_minimized and not placement.is_detached
+
+
+@pure
 def focused_window_id(placements: Sequence[WindowPlacement]) -> WindowId | None:
-    """The last placement that is not minimized; None when the backdrop has focus."""
-    return next((placement.window_id for placement in reversed(placements) if not placement.is_minimized), None)
+    """The last placement that is shown (neither minimized nor pulled out); None when the backdrop has focus."""
+    return next((placement.window_id for placement in reversed(placements) if is_placement_shown(placement)), None)
 
 
 @pure
@@ -768,21 +820,31 @@ def with_window_placed_on_open(layout: DesktopLayout, window_id: WindowId, is_mi
     return _with_placement_on_top(layout, opened_placement(window_id, len(layout.placements), is_minimized))
 
 
+# Every verb that shows a window on the desktop brings a pulled-out one back: the desktop is where it is
+# being shown.
+
+
 @pure
 def with_window_raised(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
     """Focus: the window restored (un-minimized) and moved to the top of the stack."""
     current = placement_of(layout, window_id)
     return _with_placement_on_top(
-        layout, current.model_copy_update(to_update(current.field_ref().is_minimized, False))
+        layout,
+        current.model_copy_update(
+            to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, False),
+        ),
     )
 
 
 @pure
 def with_window_minimized(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
-    """Minimize: the window out of sight where it stands in the stack."""
+    """Minimize: the window out of sight where it stands in the stack. A pulled-out window stays out; what goes out
+    of sight is its ghost, which ``with_window_detached`` shows again."""
     current = placement_of(layout, window_id)
     return _with_placement_in_place(
-        layout, current.model_copy_update(to_update(current.field_ref().is_minimized, True))
+        layout,
+        current.model_copy_update(to_update(current.field_ref().is_minimized, True)),
     )
 
 
@@ -794,6 +856,7 @@ def with_window_restored(layout: DesktopLayout, window_id: WindowId) -> DesktopL
         layout,
         current.model_copy_update(
             to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, False),
             to_update(current.field_ref().state, WindowState.NORMAL),
         ),
     )
@@ -807,6 +870,7 @@ def with_window_state(layout: DesktopLayout, window_id: WindowId, state: WindowS
         layout,
         current.model_copy_update(
             to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, False),
             to_update(current.field_ref().state, state),
         ),
     )
@@ -820,8 +884,41 @@ def with_window_frame(layout: DesktopLayout, window_id: WindowId, frame: Frame) 
         layout,
         current.model_copy_update(
             to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, False),
             to_update(current.field_ref().state, WindowState.NORMAL),
             to_update(current.field_ref().frame, frame),
+        ),
+    )
+
+
+@pure
+def with_window_detached(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
+    """Pull out: the window shown in a desktop window of the chrome's own, where it stands in the stack, its frame
+    kept so the ghost and a later return land where the drag began. On a window already out, the ghost shown again
+    after a minimize hid it."""
+    current = placement_of(layout, window_id)
+    return _with_placement_in_place(
+        layout,
+        current.model_copy_update(
+            to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, True),
+        ),
+    )
+
+
+@pure
+def with_window_reattached(layout: DesktopLayout, window_id: WindowId, frame: Frame | None) -> DesktopLayout:
+    """Bring back: the window shown on the desktop again, normal, on top of the stack, at ``frame`` when a drop back
+    onto the desktop named one, else at its kept frame. A ``Frame`` lies inside the unit square by construction;
+    the frontend, which takes the drop as raw fractions, clamps it into the square first."""
+    current = placement_of(layout, window_id)
+    return _with_placement_on_top(
+        layout,
+        current.model_copy_update(
+            to_update(current.field_ref().is_minimized, False),
+            to_update(current.field_ref().is_detached, False),
+            to_update(current.field_ref().state, WindowState.NORMAL),
+            to_update(current.field_ref().frame, current.frame if frame is None else frame),
         ),
     )
 

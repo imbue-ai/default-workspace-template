@@ -7,11 +7,14 @@
  */
 
 import m from "mithril";
+import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { AvatarState, TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
 import { entryStyleParts } from "./AvatarImage";
 
 const ENTRY_GLYPH_SIZE = 16;
+const DETACHED_GLYPH_SIZE = 12;
 
 export interface TaskbarEntryAttrs {
   readonly entry: TaskbarEntryRecord;
@@ -19,13 +22,14 @@ export interface TaskbarEntryAttrs {
   readonly isCompact: boolean;
   readonly isMenuOpen: boolean;
   readonly onClick: () => void;
-  readonly onContextMenu: (x: number, y: number) => void;
+  readonly onContextMenu: (x: number, y: number, target: Element) => void;
 }
 
 export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
   view(vnode) {
     const { entry, avatar, isCompact, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
-    const isDimmed = entry.isMinimized;
+    // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
+    const isDimmed = entry.isMinimized || entry.isDetached;
     const look = entry.look;
     const { isAvatar, attrs, tooltip, image } = entryStyleParts(entry, avatar, ENTRY_GLYPH_SIZE, "size-7");
     return m(
@@ -39,6 +43,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         "data-entry-style": look === null ? undefined : look.style,
         ...attrs,
         "data-minimized": entry.isMinimized ? "true" : "false",
+        "data-detached": entry.isDetached ? "true" : "false",
         "data-focused": entry.isFocused ? "true" : "false",
         "aria-pressed": entry.isFocused ? "true" : "false",
         // Icon only in compact mode, so the title names the button there.
@@ -56,12 +61,20 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         onclick: onClick,
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
-          onContextMenu(event.clientX, event.clientY);
+          onContextMenu(event.clientX, event.clientY, targetElementOf(event));
         },
       },
       [
         m("span", { class: "flex shrink-0 items-center" + (isDimmed ? " opacity-60" : "") }, image),
         isCompact ? null : m("span", { class: "taskbar-entry-title min-w-0 truncate" }, entry.title),
+        // The mark of a window shown in its own desktop window, so the dimmed entry is not read as minimized.
+        entry.isDetached
+          ? m(
+              "span",
+              { class: "flex shrink-0 items-center text-faint", "aria-label": "In its own window" },
+              m.trust(icon("external-link", { size: DETACHED_GLYPH_SIZE })),
+            )
+          : null,
       ],
     );
   },

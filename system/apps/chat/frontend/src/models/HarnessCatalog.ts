@@ -38,9 +38,10 @@ export interface HarnessPopup {
   trigger: "composer_command" | "turn_check";
   commands: string[];
   action: "notice" | "open_auth" | "fast_mode_limit";
-  /** `notice` only: replaces the notice's default body. Absent for most declines,
-   *  which are declined for the same reason (the command takes over the terminal);
-   *  present where the harness has a more specific thing to say. */
+  /** `notice`: replaces the notice's default body. Absent for most declines, which are
+   *  declined for the same reason (the command takes over the terminal); present where
+   *  the harness has a more specific thing to say. `fast_mode_limit`: a line the
+   *  turn-limit notice adds after its default body. */
   notice_body?: string | null;
 }
 
@@ -124,9 +125,19 @@ export function findComposerPopup(
   return null;
 }
 
-/** Whether `harness` declared the fast-mode turn limit: it can launch fast, and the limit applies. */
-export function hasFastModeLimit(harness: string | undefined): boolean {
-  return (getHarnessCatalog(harness)?.popups ?? []).some(
+function findFastModeLimitPopup(harness: string | undefined): HarnessPopup | undefined {
+  return (getHarnessCatalog(harness)?.popups ?? []).find(
     (popup) => popup.trigger === "turn_check" && popup.action === "fast_mode_limit",
   );
+}
+
+/** Whether `harness` declared the fast-mode turn limit: it can launch fast, and the limit applies. */
+export function hasFastModeLimit(harness: string | undefined): boolean {
+  return findFastModeLimitPopup(harness) !== undefined;
+}
+
+/** The line `harness` declared for the fast-mode turn-limit notice to add after its default
+ *  body, or null when it declared none (or no turn limit at all). */
+export function getFastModeLimitNoticeBody(harness: string | undefined): string | null {
+  return findFastModeLimitPopup(harness)?.notice_body ?? null;
 }

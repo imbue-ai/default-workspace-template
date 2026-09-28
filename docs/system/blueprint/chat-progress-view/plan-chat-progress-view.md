@@ -81,8 +81,10 @@
   renders inline as ordinary chat at its position in the turn — never dropped.
 - Turns with no steps at all (chitchat, one-shots) render exactly as today's
   plain chat — no empty timeline, no forced ceremony.
-- Non-genuine user messages (skill expansions, `/welcome`, stop-hook feedback)
-  never split a turn; they are hidden or shown as inline chips.
+- Skill expansions and `/welcome` never split a turn; they are hidden. A system
+  chip or notice (stop-hook feedback, a browser-fleet nudge, a finished
+  background task) is not a turn the user took, but it shows where it arrived
+  and the timeline breaks there (see below).
 - Existing chat history renders correctly: historical transcripts still contain
   the tk lifecycle lines, so the timeline reconstructs from them.
 
@@ -117,9 +119,13 @@
   of ungrouped prose in the section, rendered below the timeline. It is not a
   separately computed concept — it falls out of the ejection rule plus
   "prose with no step open is ungrouped."
-- Chips render at their chronological position but are not reply boundaries.
 - This removes the three-way (leading / inter-step interjection / trailing)
   boundary computation and the chip-boundary interactions.
+- A system chip or notice breaks the timeline the way a permission verdict does:
+  the section closes, any open step carries over, and the chip heads the next
+  section. What the agent said before it stays above it (as that section's
+  reply), and the work it resumes renders below it. A chip landing inside an
+  open handoff node stays in the handoff's turn instead.
 - **The `claude_tk_close_reoutput_nudge.sh` hook is removed**, not kept. Its
   premise is the *old* backward-scan reply rule — that prose written before a
   `tk close` stays buried inside the step, so the agent should re-output it after
@@ -137,12 +143,19 @@
   keeps the state it had at that turn's end (active, static icon) and does not
   retroactively flip to done when the step later closes. The same id renders as
   two independent nodes across the two sections, each with its own state.
-- This is the existing behavior and is preserved unchanged. It is good UX: a user
+- This is the existing behavior and is kept. It is good UX: a user
   who sends a small clarification mid-task does not force the agent to restart or
   redeclare its steps; the work continues under the same step.
 - Carryover is transcript-native: a step carries over iff it is still on the
-  walk's open-stack when a user-message boundary is crossed. No timestamps, no
-  hook coordination, and no auto-close are involved.
+  walk's open-stack when a user-message boundary is crossed (a system chip or
+  notice counts as one). No timestamps, no hook coordination, and no auto-close
+  are involved.
+- Two boundaries back to back (two messages sent together, two notices, a
+  verdict followed by a message, a message followed by a fresh start on another
+  agent) leave a section the agent did nothing in. That section drops its
+  carried-over nodes, since the next section re-opens them, so the step shows
+  once, under the later boundary, rather than also as an empty node between
+  them.
 - This makes the design *simpler*, not just more capable: because steps carry
   over on their own, there is **no auto-close/redeclare mechanism** — no
   stop-hook auto-close, no runtime record file, no reminder rewrite. The existing

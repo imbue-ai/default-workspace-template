@@ -23,6 +23,8 @@ from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.secret_requests import SecretRequestChatBridge
+from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.shell_client import ShellLayoutInterface
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
@@ -61,7 +63,7 @@ class ChatAppState(MutableModel):
     is_secondary: bool = Field(
         default=False,
         description="A second chat beside the live one (a preview): it reports no client activity to the shell, "
-        "whose activity log is the live chat's",
+        "whose activity log is the live chat's, and answers no secret card, whose answer belongs to the live chat",
     )
     # The workspace-wide chat settings the settings routes read and write; the manager reads
     # the same store at create. In memory unless the composition root points it at the file.
@@ -78,6 +80,10 @@ class ChatAppState(MutableModel):
         description="The shell's layout, for the routes that put a window on a client's screen; the auto-open "
         "reactor is handed the same one"
     )
+    # The secret requests agents file and the env files their answers are written to, and
+    # the router's bridge the routes reach the chats through (attached by ``create_application``).
+    secret_requests: SecretRequestStore
+    secret_request_bridge: SecretRequestChatBridge | None = None
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``), so a chat that is not
@@ -133,14 +139,15 @@ class ChatAppState(MutableModel):
             # watcher, so nothing here knows which harness is running.
             watcher = build_watcher(agent_info, on_events)
             # Bridge the watcher's live queued-message snapshot onto the agents WS
-            # state, and register its working->IDLE queue backstop with the manager.
-            # Both are no-ops for a harness without a queue populator. The manager
-            # de-dupes/broadcasts, so pushing the full snapshot on each change is
-            # cheap.
+            # state, and register its working->IDLE queue backstop (and the IDLE->working
+            # undo of it) with the manager. All are no-ops for a harness without a queue
+            # populator. The manager de-dupes/broadcasts, so pushing the full snapshot on
+            # each change is cheap.
             watcher.set_queue_snapshot_callback(
                 lambda snapshot: self.agent_manager.update_queued_messages(agent_info.id, snapshot)
             )
             self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
+            self.agent_manager.register_queue_busy_handler(agent_info.id, watcher.notify_busy)
             # A harness that holds the queue on its agent's behalf (antigravity) also needs to
             # DELIVER it, which needs the manager's send path and a liveness check. No-op for
             # every other harness, whose queue its own harness consumes.

@@ -50,7 +50,7 @@ Built-in manifests:
 | `getting-started` | false | `getting-started` | 5 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Getting Started", `/`) |
 | `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("Terminal", POST `/new`, params `workdir` optional) |
 | `terminal-pty` | true | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
-| `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/`, params `path` optional) |
+| `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, params `path` optional) |
 | `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", POST `/new`, params `url` optional) |
 
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"` and `[[message_handlers]] type = "minds:focus-chat", path = "/api/focus-chat"`.
@@ -110,6 +110,7 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 
 - `placements` is back to front; last is on top.
 - `frame` values are floats in `0..1` with `x + width <= 1` and `y + height <= 1`; `state` is `NORMAL`, `SNAPPED_LEFT`, `SNAPPED_RIGHT`, or `MAXIMIZED`.
+- `is_detached` (default `false`) marks a window pulled out into a desktop window of the embedding chrome's own (mngr's `specs/pull-out-window/spec.md`): the desktop draws a ghost at its frame and its page is shown there; a file without the key reads as attached, and a writer without it drops the flag on its next save. Orthogonal to `state` and `is_minimized` (a detached placement that is also minimized is a pulled-out window whose ghost is hidden; the window stays out); a detached placement is never the focused one.
 - A placement naming a window the desktop no longer holds is dropped on read.
 - A window with no placement reads as `{frame: cascade(n), state: NORMAL, is_minimized: true}` at the start of the list (the bottom of the stack), where `n` is the count of stored placements. A pinned window with no placement is answered by the layout route as `{frame: {x: 0.46, y: 0.05, width: 0.5, height: 0.9}, state: NORMAL, is_minimized: true}` at the start of the list instead (pinned-taskbar-entries plan section 3.2), unwritten until the client saves or an op edits that client's layout.
 - The old `layouts/` directory is never read.
@@ -251,26 +252,28 @@ Outbound:
 ## 7. The app contract (`app_contract.js`)
 
 Built once, into the shell's static output, and served by every app at `/_static/app_contract.js` from its own origin (the shell serves it too, with `Access-Control-Allow-Origin: *`): a page imports it as a module, and a module import is a fetch without cookies, which the desktop client's forwarder and the share gateway refuse across origins.
-Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), startWithText(text), disconnect()}`.
-`openPath` sends `shell:open` below; `startWithText` sends `shell:start-with-text`.
-`capabilities` is `{navigation: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect.
+Exports `connectToShell({onHandshake, onShown, onHidden, onCloseRequest, onNavigate, capabilities})` returning `{isFramed, focused(), location(path, title), openPath(path, ifPresent), startWithText(text), draftText(text), disconnect()}`.
+`openPath` sends `shell:open` below; `startWithText` sends `shell:start-with-text`; `draftText` sends `shell:draft-text`.
+Beside it the shell builds and every app serves `/_static/context_menu.js`, the element context menu of the element-reference-menu plan (section 9 there), which drafts through `draftText`.
+`capabilities` is `{navigation: boolean, closeChord: boolean}` and must agree with the handlers: giving `onNavigate` without `navigation: true`, or `navigation: true` without `onNavigate`, is an error the module throws at connect, and so is `closeChord: true` without `onCloseRequest`. A page that declares `closeChord` owns the close chord: the shell sends `shell:close-request` and leaves the window open (the browser closes its current tab that way).
 
 | Direction | Type | Payload |
 |---|---|---|
-| shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "path"}`; after every `load` of the frame and when the window's desktop changes |
+| shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "app", "path"}`; after every `load` of the frame and when the window's desktop changes; `app` is the name of the app the window belongs to (element-reference-menu plan section 5) |
 | shell to page | `shell:shown`, `shell:hidden` | `{}` |
-| shell to page | `shell:close-request` | `{}` |
+| shell to page | `shell:close-request` | `{}`; a page that declared `closeChord: true` keeps its window, any other page's window closes right after |
 | shell to page | `shell:navigate` | `{"path"}`; only to a page that declared `navigation: true` |
-| page to shell | `shell:capabilities` | `{"navigation": bool}`; sent once by `connectToShell`; absent means `false` |
+| page to shell | `shell:capabilities` | `{"navigation": bool, "closeChord": bool}`; sent once by `connectToShell`; absent means `false` |
 | page to shell | `shell:location` | `{"path", "title"}`; the shell remembers the pair as the page's last report and posts it to the window's location route when it differs from the stored one |
-| page to shell | `shell:focused` | `{}`; the shell raises the page's window |
+| page to shell | `shell:focused` | `{}`; the shell raises the page's window. A report from a page that is not shown (minimized, pulled out, being pulled out) is ignored, since a raise would bring the window back onto the desktop and the user cannot have chosen a hidden page (the shell also takes the document's focus off a page as it hides it, so the browser does not restore focus there). It is ignored too while a move or resize of another window is in progress: the gestured window holds the top of the stack until its gesture ends, and a focus report meanwhile (the page's focus coming back with the embedder window's, mid-drag) is not the user choosing that window |
 | page to shell | `shell:open` | `{"path", "ifPresent"}`; opens a window of the posting frame's own app on the posting window's desktop, with `client_id` the hosting client |
 | page to shell | `shell:start-with-text` | `{"text"}`; the shell runs the launcher's primary free-text row with the text (launcher-and-getting-started plan section 3.7), so a page starts a chat without naming the chat app; with no free-text row on the machine the shell notifies and does nothing |
+| page to shell | `shell:draft-text` | `{"text"}`; the shell drafts the text, unsent, through the pinned app's launch path with a `draft_param` into this client's view of the pinned window (as the avatar dialog's "Design your own..." does, post-launch-paths plan section 4.3), else through the first draft row of the machine; with neither the shell notifies and does nothing (element-reference-menu plan section 5) |
 
 Following rule: after every `desktops_updated`, for every live page of a window whose stored `path` differs from that page's last reported path, the shell sends `shell:navigate` when the page declared navigation, else reassigns the iframe `src`, and records the stored path as that page's last report at once, so a second broadcast before the page lands does not navigate it again.
 A page's own report never navigates it.
 
-Nested frames: an app page that frames another page of its own origin (the chat root) forwards `minds:` messages from that frame to `window.parent` unchanged, re-posts the inner page's `shell:focused` as its own, and forwards the inner page's `shell:open` of a sub-agent view, from one module named in `test_embed_ratchets.py`'s allowlist.
+Nested frames: an app page that frames another page of its own origin (the chat root) forwards `minds:` messages from that frame to `window.parent` unchanged, re-posts the inner page's `shell:focused` as its own, and forwards the inner page's `shell:open` of a sub-agent view and its `shell:draft-text`, from one module named in `test_embed_ratchets.py`'s allowlist.
 A `shell:open` whose path is the root's own (`/` or `/?chat=<id>`) it answers itself, by selecting that chat in place, rather than asking the shell for a second root window.
 The shell and the minds chrome accept messages only from frames they created, so nothing else reaches them from an inner frame.
 
@@ -287,7 +290,7 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `desktops`, `list` | | read-only; the inventory document of section 5.5 (with `"ok"`) |
 | `load` | `desktop` | switch the client to the desktop |
 | `show` | `app`, `path`, `showing?`, `repoint?` | put the app's page at `path` on the client's screen, choosing the window (below); answers the window id and `shown` |
-| `open` | `app`, `path?`, `launch?`, `params?`, `if_present?`, `minimized?` | open a window at `path`, else at the page of the launch path (`launch`, else the app's `default_shortcut.launch`, else its first): a GET launch path with `params` as the query string, a POST launch path posted `params` for the page it answers (section 5.3, with the targeted client as `client_id`, or none when the open is unplaced); a window of the app at that page is focused unless `if_present` is `new`; with `minimized`, a window this open creates is placed minimized and one it finds is left as placed; answers the window id |
+| `open` | `app`, `path?`, `launch?`, `params?`, `if_present?`, `minimized?`, `beside?` | open a window at `path`, else at the page of the launch path (`launch`, else the app's `default_shortcut.launch`, else its first): a GET launch path with `params` as the query string, a POST launch path posted `params` for the page it answers (section 5.3, with the targeted client as `client_id`, or none when the open is unplaced); a window of the app at that page is focused unless `if_present` is `new`; with `minimized`, a window this open creates is placed minimized and one it finds is left as placed; with `beside` (a window argument, resolved as the window verbs resolve one), the two are framed as `paired_frames` gives, for the target client alone: the opened window `PAIRED_WIDTH` wide at the named window's `y` and `height`, against whichever side of it has that much room (the right first), and on top; the named window is untouched, down to its state, where a side has the room; where neither has, it moves (keeping its width and height) by the least that opens `PAIRED_WIDTH` on one side, which is the side that already has more of it, ties going right; and it is narrowed to `PAIRED_WIDTH` at `x = 0` only when it is wider than that. And a `beside` naming no window on the desktop (or naming `self` or `pinned` with no requester to resolve it against) leaves the opened window as placed rather than refusing the open, while a `beside` that is no window spelling at all, and `beside` with `minimized`, are refused before the window is opened; answers the window id |
 | `focus` | `window` | restore and raise |
 | `minimize`, `restore`, `maximize` | `window` | set the placement accordingly |
 | `place` | `window`, `zone` (`left`, `right`, `maximized`) or `frame` (`x,y,width,height`) | set the state, or the frame with state `NORMAL` |
@@ -316,6 +319,8 @@ Exit codes are `0`, `1`, `3`.
 Honoured by the shell on page load for the requesting client, then stripped: `?desktop=<id>` switches to it; `&open=<app>:<path>` opens (or focuses) a window there; `&launch=<app>:<launch_id>` runs a launch path through the launch route (section 5.3) with a `new` target.
 Unknown or stale targets are ignored silently.
 
+`?solo=<window-id>` (stripped the same way) is *solo mode* (the pull-out-window spec, section 7.5): the page shows that one window edge to edge and nothing else, which is what a pulled-out window's desktop window loads. A solo page lands on the desktop that holds the window without reporting `client_state` (the client's active desktop stays its main window's), ignores every layout verb but its own window's detach and reattach, and never follows an `active_desktop_changed`. A first layout load that does not yet say the window is out waits a moment for the desktop's word (the main window's shell writes the detach as the window leaves, and that save is on its way while the solo page boots) and detaches the window itself only when none comes; its own window's return is reported to the embedder (`minds:detached-windows`) only once saved, since the embedder closes the page's window on that report; a later load that says the window is back is the desktop's word.
+
 ## 10. Geometry rules and constants
 
 The constants below are theme metrics (section 11) unless marked as fixed.
@@ -328,11 +333,15 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 - **Snap zones**: a drag released with the pointer within the snap threshold of the left or right backdrop edge snaps to that half; within the threshold of the top edge maximizes; the top edge wins a corner.
 - **Un-snap**: a drag of a snapped or maximized window beyond the un-snap distance makes it `NORMAL` at its kept frame's width and height, positioned so the pointer sits at the same horizontal fraction of the title bar it was pressed at, then clamped.
 - **Drag threshold**: a press becomes a drag after the drag threshold; below it, it is a click.
+- **Press focus** (fixed): a press on a handle (a title bar, a resize edge, a shortcut, an entry) takes the document's focus back from any other window's page that holds it, as the browser would have on a press whose default the gesture source did not prevent; the pressed window's own page keeps it. A page left holding the document's focus would be raised again on every return of the embedder window's focus (section 7, `shell:focused`), over the window the user chose.
+- **Gestured window on top** (fixed): while a move or resize is in progress, a raise of any other window is dropped, whatever asks for it (a page's focus report, a notification); the gesture's end raises its own window again.
 - **Grid**: origin at the inset from the backdrop's top-left; `columns = max(1, floor((backdrop.width - inset) / cell.width))`, `rows = max(1, floor((backdrop.height - inset) / cell.height))`.
 - **Nearest free cell** (fixed): among free cells, the one at the least Euclidean distance in cell units from the clamped target cell, ties by lower column then lower row.
 - **Reading order** (fixed): `cell(i) = {column: i mod columns, row: floor(i / columns)}`.
 - **Placement of shortcuts** (render only): shortcuts whose stored cell is inside the grid and unclaimed take it, in shortcut order; every other shortcut takes the nearest free cell to its clamped stored cell, in shortcut order.
 - **Compact override** (render only): every window renders as `MAXIMIZED`.
+- **Tear-out** (the pull-out-window spec): when the embedder has said it can pull windows out, every title-bar drag is announced to it (`minds:window-drag-started`, with the window's rendered size and the grab offset) and the embedder watches the cursor from there, since the shell's own pointer events stop at the embedder window's edge on some platforms. On its word (`minds:tear-out`): `out`, the chrome is dragging a desktop window of its own under the cursor, so `is_detached` is set with the frame untouched and saved at once (the ghost stands where the drag began, and the chrome's window reads a placement that already says it is out, in this shell's stacking order), and this one hides, offering no snap zone; `in`, the chrome dropped that window and this one is brought back (raised, its state kept) and shows again where the drag has it, saved at once; `released`, the gesture is over and nothing more is written. The dragged window holds the top of the stack for the whole gesture, the return included (the embedder window's focus comes back with it, and a page reporting that focus does not displace it). The desktop's shell is the one writer during a drag; the chrome's window only reads. The shell's own gesture end (a release it sees, or Escape) tells the embedder how it ended (`minds:window-drag-ended`, `isDetached`).
+- **Detach and reattach** (fixed): `detach` sets `is_detached` and clears `is_minimized` where the placement stands; `reattach` clears `is_detached` and `is_minimized`, sets the state to `NORMAL`, moves the placement to the top, and takes the frame a drop back onto the desktop names (clamped into the unit square) or keeps the placement's own. Every verb that shows a window on the desktop (focus, restore, maximize, snap, and place) clears `is_detached`; `minimize` shows nothing, so on a detached placement it hides the ghost and leaves the window out, and `detach` on a placement already detached shows the ghost again.
 
 ## 11. Theme tokens and metrics
 
@@ -366,10 +375,13 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-resize-corner` | `16px` | | | no |
 | `--desk-resize-overhang` | `3px` | | | no |
 | `--desk-resize-edge-inset` | `calc(var(--desk-resize-corner) - var(--desk-resize-overhang))` | | | no |
+| `--desk-window-move` | `180ms` | | | no |
+| `--desk-window-move-ease` | `cubic-bezier(0.2, 0, 0, 1)` | | | no |
 | `--desk-launcher-menu-width` | `22rem` | `calc(100% - var(--spacing) * 4)` | | no |
 
 The compact breakpoint is `COMPACT_MAX_WIDTH_PX = 700` in `theme/metrics.ts`, applied as `matchMedia("(max-width: 700px)")`; touch is `matchMedia("(pointer: coarse)")`.
 The resize handles are strips of `--desk-resize-edge` overhanging the window's border by `--desk-resize-overhang` (so a press just outside the frame still grabs an edge), inset from the corners by `--desk-resize-edge-inset`; the corners are `--desk-resize-corner` squares over the same overhang.
+`--desk-window-move` and `--desk-window-move-ease` time a window's travel to a rectangle the pointer did not move it to (a snap, a `place`, an `open` with `beside`): the window's root transitions over them, a press turns the transition off for its whole length through `data-window-motion="off"` on the desktop's root, and and the transition is declared inside `prefers-reduced-motion: no-preference`, so a platform that does not say motion is welcome gets the arrangement without the travel.
 Colours, type roles, radii, and elevation come from `base.css` and are not repeated here.
 
 ## 12. Selectors shared with tests

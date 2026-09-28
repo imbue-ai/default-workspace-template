@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SHELL_CAPABILITIES,
   SHELL_CLOSE_REQUEST,
+  SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
@@ -23,7 +24,7 @@ import {
 } from "@imbue/workspace-ui/src/app_contract";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import type { Placement } from "../model/records";
-import { activeFocusedWindowId } from "../reducers/desktopState";
+import { activeFocusedWindowId, activePlacements } from "../reducers/desktopState";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
@@ -246,6 +247,30 @@ describe("creating and positioning", () => {
     expect(wrapper.style.left).toBe("250px");
   });
 
+  it("hides a page while its window is being pulled out, and while it is out, and shows it again when back", async () => {
+    const wrapper = wrapperOf("win-1");
+    expect(wrapper.style.display).toBe("");
+    // The drag past the viewport: the chrome draws the window under the cursor, so no page here meanwhile.
+    layer.setTornOutWindow("win-1");
+    expect(wrapper.style.display).toBe("none");
+    layer.setTornOutWindow(null);
+    expect(wrapper.style.display).toBe("");
+    // Pulled out: the page lives in the chrome's own desktop window, and this one keeps its frame for the return.
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    layer.reconcile();
+    expect(wrapper.style.display).toBe("none");
+    await store.reattachWindow("win-1", null);
+    renderChrome();
+    layer.reconcile();
+    expect(wrapperOf("win-1")).toBe(wrapper);
+    expect(wrapper.style.display).toBe("");
+  });
+
   it("makes every page but the focused one inert, and all of them during a gesture", () => {
     store.restoreWindow("win-2");
     layer.reconcile();
@@ -306,6 +331,7 @@ describe("the contract", () => {
         clientId: CLIENT,
         windowId: "win-1",
         desktopId: "home",
+        app: "docs",
         path: "/?doc=1",
       },
       { type: SHELL_SHOWN },
@@ -321,6 +347,7 @@ describe("the contract", () => {
         clientId: CLIENT,
         windowId: "win-1",
         desktopId: "home",
+        app: "docs",
         path: "/?doc=1",
       },
       { type: SHELL_HIDDEN },
@@ -582,6 +609,74 @@ describe("the contract", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");
   });
 
+  it("ignores a focus report from a hidden page, so a pulled-out or minimized window is not brought back by it", async () => {
+    // Minimized: its page is hidden, and the browser can still restore focus to it.
+    store.minimizeWindow("win-1");
+    layer.reconcile();
+    expect(frameOf("win-1").parentElement?.style.display).toBe("none");
+    messageFromPage("win-1", { type: SHELL_FOCUSED });
+    expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-1")).toMatchObject({
+      is_minimized: true,
+    });
+    // Pulled out: the same, and the window stays out.
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-2", { is_minimized: true }), placementRecord("win-1", { is_detached: true })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    layer.reconcile();
+    messageFromPage("win-1", { type: SHELL_FOCUSED });
+    expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-1")).toMatchObject({
+      is_detached: true,
+    });
+  });
+
+  it("takes the document's focus off a page as it hides it", () => {
+    frameOf("win-1").focus();
+    expect(document.activeElement).toBe(frameOf("win-1"));
+    store.minimizeWindow("win-1");
+    layer.reconcile();
+    expect(document.activeElement).toBe(host);
+    store.restoreWindow("win-1");
+    layer.reconcile();
+    expect(document.activeElement).toBe(host);
+  });
+
+  it("leaves the dragged window on top when another page says it took focus mid-drag", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    messageFromPage("win-2", { type: SHELL_FOCUSED });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    store.endWindowMove({ x: 150, y: 90 });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+  });
+
+  it("a press on a window's handle takes the document's focus back from another window's page, not its own", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    frameOf("win-2").focus();
+    expect(document.activeElement).toBe(frameOf("win-2"));
+    layer.takeFocusFromOtherPages("win-2");
+    expect(document.activeElement).toBe(frameOf("win-2"));
+    layer.takeFocusFromOtherPages("win-1");
+    expect(document.activeElement).toBe(host);
+    // A handle of no window (a shortcut, an entry) takes it from any page.
+    frameOf("win-2").focus();
+    layer.takeFocusFromOtherPages(null);
+    expect(document.activeElement).toBe(host);
+    // An iframe that is no page of the shell's is left alone.
+    const other = document.createElement("iframe");
+    other.tabIndex = 0;
+    document.body.appendChild(other);
+    other.focus();
+    layer.takeFocusFromOtherPages("win-1");
+    expect(document.activeElement).toBe(other);
+    other.remove();
+  });
+
   it("opens a page's shell:open on its own app, and warns about the address form", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     messageFromPage("win-1", { type: SHELL_OPEN, path: "/?doc=3", ifPresent: "new" });
@@ -613,6 +708,39 @@ describe("the contract", () => {
     warn.mockRestore();
   });
 
+  it("drafts a page's shell:draft-text into the pinned window that takes a draft, and warns when it carries no text", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const buddy = appRecord("buddy", {
+      url: "http://127.0.0.1:7003",
+      pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" },
+      launch_paths: [
+        launchPathRecord({
+          id: "draft",
+          path: "/api/intake",
+          method: "POST",
+          params: ["message"],
+          presets: { is_draft: "true" },
+          draft_param: "message",
+        }),
+      ],
+    });
+    offerApps(api, socket, [docs, notes, buddy]);
+    api.postLaunchAnswer = "/?chat=agent-1";
+    const [home, work] = api.desktops;
+    api.desktops = [
+      { ...home, windows: [...home.windows, windowRecord("win-9", "buddy", "/", { is_pinned: true })] },
+      work,
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    messageFromPage("win-1", { type: SHELL_DRAFT_TEXT, text: "Explain this element:" });
+    await settle();
+    expect(api.calls).toContain(`launch:home:buddy:draft:{"message":"Explain this element:"}:window:win-9`);
+    messageFromPage("win-1", { type: SHELL_DRAFT_TEXT });
+    await settle();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:draft-text ignored"));
+    warn.mockRestore();
+  });
+
   it("reloads pages for the agent's refresh op at their windows' stored paths", async () => {
     await navigateInPage("win-1", "/?doc=2");
     const reloads = spyOnSrc("win-1");
@@ -627,6 +755,21 @@ describe("the contract", () => {
     spy.mockClear();
     await store.closeFocusedWindow();
     expect(spy.mock.calls[0][0]).toEqual({ type: SHELL_CLOSE_REQUEST });
+    expect(api.calls).toContain("closeWindow:home:win-1");
+  });
+
+  it("only tells a page that owns the close chord, and forgets that on its next load", async () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false, closeChord: true });
+    spy.mockClear();
+    await store.closeFocusedWindow();
+    expect(spy.mock.calls[0][0]).toEqual({ type: SHELL_CLOSE_REQUEST });
+    expect(api.calls.filter((call) => call.startsWith("closeWindow"))).toEqual([]);
+
+    // A reload is a fresh page that has declared nothing yet.
+    load("win-1");
+    await store.closeFocusedWindow();
     expect(api.calls).toContain("closeWindow:home:win-1");
   });
 });

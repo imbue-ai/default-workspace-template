@@ -15,7 +15,7 @@ export interface SystemTrayAttrs {
   readonly isDesktopsMenuOpen: boolean;
   readonly onSwitchDesktop: (desktopId: string) => void;
   readonly onOpenDesktopsMenu: (event: MouseEvent) => void;
-  readonly onDesktopContextMenu: (desktopId: string, x: number, y: number) => void;
+  readonly onDesktopContextMenu: (desktopId: string, x: number, y: number, target: Element) => void;
 }
 
 export const SystemTray: m.Component<SystemTrayAttrs> = {
