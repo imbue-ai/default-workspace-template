@@ -87,6 +87,7 @@ from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.polling import wait_for
@@ -973,6 +974,25 @@ def test_drain_to_composer_hands_a_report_the_agent_refused_to_the_composer(tmp_
     with (
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/drain-to-composer")
+    assert response.status_code == 200
+    assert response.get_json()["block"] == f"{_QUEUED_REPORT}\nfix the header"
+
+
+def test_drain_to_composer_hands_a_report_to_an_agent_destroyed_meanwhile_to_the_composer(tmp_path: Path) -> None:
+    """An agent destroyed between the drain and the report's re-send still leaves the user their queued text."""
+    agent_id = "codex-agent-10"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    ledger = _FakeCodexLedger(interrupt_block=f"fix the header\n{_QUEUED_REPORT}")
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
+        patch(
+            "imbue.chat.server._deliver_message",
+            side_effect=AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}"),
+        ),
     ):
         response = client.post(f"/api/chats/{agent_id}/drain-to-composer")
     assert response.status_code == 200

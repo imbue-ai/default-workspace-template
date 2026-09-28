@@ -1147,6 +1147,9 @@ def _resend_background_task_report(agent_info: AgentInfo, report: str) -> bool:
     """Deliver a report taken off the queue by a Stop straight back to its agent; whether it landed."""
     try:
         outcome = _deliver_message(get_state(), agent_info, report, uuid4().hex)
+    except AgentNotFoundError as e:
+        logger.info("Could not re-send a background-task report to {}, which no longer exists: {}", agent_info.name, e)
+        return False
     except SendFailedError as send_failure:
         logger.warning("Could not re-send a background-task report to {}: {}", agent_info.name, send_failure.detail)
         return False
