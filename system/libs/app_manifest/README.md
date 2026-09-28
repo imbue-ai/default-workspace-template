@@ -264,12 +264,15 @@ apps' suites deselect their `browser` (and chat its `real_claude`) tests by
 default. Such an app runs everything (`-m ''`) when its Python changed, its
 default run when it was reached as a consumer, and only its tests marked
 `browser` or `frontend` (`-m 'browser or frontend'`) when only a frontend it
-builds changed. The selection reads the markers, never the test files. A run of
+builds changed; reached both ways, it runs its default run and then only its
+`browser` tests (`-m browser`), since the default run holds the `frontend` ones.
+The selection reads the markers, never the test files. A run of
 only some of such a suite's tests (by marker, or a changed test file) passes
 `--no-cov` when the suite measures coverage, since only a whole run can reach
-its coverage floor. The chat suite's `test_no_type_errors`
-is deselected and its `ty check` printed as a command of its own, so the two
-memory peaks do not stack.
+its coverage floor. When a run includes the chat suite's `test_no_type_errors`,
+the test is deselected and its `ty check` printed as a command of its own, so
+the two memory peaks do not stack; a run of only the marked tests includes
+neither.
 
 A coupling nothing declares (a script run as a subprocess, a service called
 over HTTP, a file one component writes and another reads) is invisible to the
