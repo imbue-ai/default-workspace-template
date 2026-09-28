@@ -8,7 +8,6 @@
  */
 
 import type {
-  AppLifecycleAction,
   LaunchOutcome,
   LaunchRequest,
   LaunchTarget,
@@ -141,7 +140,7 @@ export interface DesktopApi {
   savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null>;
   arriveClient(clientId: string): Promise<ClientArrival>;
   fetchClients(): Promise<ClientRecord[]>;
-  setAppLifecycle(appName: string, action: AppLifecycleAction): Promise<void>;
+  quitApp(appName: string): Promise<void>;
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
   fetchAvatars(): Promise<AvatarCatalog>;
   selectAvatar(design: string): Promise<void>;
@@ -1364,11 +1363,11 @@ export class DesktopStore {
     return true;
   }
 
-  async setAppLifecycle(appName: string, action: AppLifecycleAction): Promise<void> {
+  async quitApp(appName: string): Promise<void> {
     try {
-      await this.deps.api.setAppLifecycle(appName, action);
+      await this.deps.api.quitApp(appName);
     } catch (error) {
-      this.deps.notify(`Failed to ${action} ${appName}: ${(error as Error).message}`);
+      this.deps.notify(`Failed to quit ${appName}: ${(error as Error).message}`);
     }
   }
 

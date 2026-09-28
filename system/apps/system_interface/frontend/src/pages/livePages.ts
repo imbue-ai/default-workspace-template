@@ -48,6 +48,7 @@ import {
   findWindow,
 } from "../reducers/desktopState";
 import type { DesktopState } from "../reducers/desktopState";
+import { isAppShownStopped } from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import type { DesktopStore, PageDriver } from "../store/DesktopStore";
 
@@ -301,10 +302,11 @@ export class LivePagesLayer implements PageDriver {
     this.focusIfChanged(soloWindowId);
   }
 
-  /** Whether a page about to be shown can be: a stopped app's page is hidden and held (false), and a held page
-   *  is reloaded once its app runs again. */
+  /** Whether a page about to be shown can be: the page of an app that is stopped and that nothing brings back on
+   *  a request is hidden and held (false), and a held page is reloaded once its app runs again. A stoppable app's
+   *  page stays: the shell's parker answers it with a loading page until the app is up. */
   private prepareShownPage(page: LivePage, app: AppRecord): boolean {
-    if (!app.is_running) {
+    if (isAppShownStopped(this.store.getState(), app)) {
       page.isHeldForStop = true;
       this.hide(page);
       return false;

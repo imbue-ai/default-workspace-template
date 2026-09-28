@@ -2,8 +2,9 @@
  * The verbs a window's menu, and a taskbar entry's context menu, offer: only what the shell
  * itself can do (concepts.md section 2.2). Move and resize opens the grid of backdrop zones the
  * maximize control opens on hover, as a submenu; Share asks the minds chrome
- * to open its share settings for the app (never for a critical app); Stop and Start act on the
- * app's supervised program where the workspace can honestly do so; Close removes the window for
+ * to open its share settings for the app (never for a critical app); Quit closes every window of
+ * the app and stops its program where the workspace can honestly do so (the stop-when-no-windows
+ * spec, section 7); Close removes the window for
  * everyone, and minimizes a pinned window, which is never closed (pinned-taskbar-entries plan
  * section 4.4). Defined once so both menus render the identical list off the identical rule.
  */
@@ -21,8 +22,8 @@ export interface WindowMenuActions {
   readonly onSized: () => void;
   /** Null when there is no share surface for the app (a critical app). */
   readonly share: (() => void) | null;
-  /** Null when the workspace cannot stop or start the app. */
-  readonly setAppLifecycle: ((action: "stop" | "start") => void) | null;
+  /** Null when the workspace cannot stop the app (a critical one). */
+  readonly quit: (() => void) | null;
   /** Pull the window out into a desktop window of the embedding chrome's own (the pull-out-window spec); null
    *  where the chrome cannot (a plain browser, an older chrome, compact mode). */
   readonly popOut: (() => void) | null;
@@ -52,18 +53,16 @@ export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuAc
       onSelect: actions.share,
     });
   }
-  if (actions.setAppLifecycle !== null && app !== undefined) {
-    const action = app.is_running ? "stop" : "start";
-    const setAppLifecycle = actions.setAppLifecycle;
+  if (actions.quit !== null && app !== undefined) {
     rows.push({
       kind: "action",
-      key: action,
-      label: `${action === "stop" ? "Stop" : "Start"} ${app.display_name}`,
+      key: "quit",
+      label: `Quit ${app.display_name}`,
       icon: "power",
-      onSelect: () => setAppLifecycle(action),
+      onSelect: actions.quit,
     });
   }
-  // A rule, not a second one, and none at all above the first row: with neither Share nor Stop
+  // A rule, not a second one, and none at all above the first row: with neither Share nor Quit
   // between them, the divider under Move and resize is already the one Close needs.
   if (rows.length > 0 && rows[rows.length - 1]?.kind !== "divider") rows.push({ kind: "divider" });
   rows.push({ kind: "action", key: "close", label: "Close", icon: "close", onSelect: actions.close });

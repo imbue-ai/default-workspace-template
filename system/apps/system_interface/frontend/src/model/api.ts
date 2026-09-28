@@ -266,9 +266,8 @@ export function avatarSourceUrl(design: string): string {
   return apiUrl(`/api/avatars/${encodeURIComponent(design)}/source.svg`);
 }
 
-export type AppLifecycleAction = "stop" | "start";
-
-/** Stop or start an app's supervised program; the ``apps_updated`` push that follows carries the result. */
-export async function setAppLifecycle(appName: string, action: AppLifecycleAction): Promise<void> {
-  await postJson<void>(apiUrl(`/api/apps/${encodeURIComponent(appName)}/${action}`), {});
+/** Quit an app: the shell closes every window of it and stops its program; the ``desktops_updated`` and
+ *  ``apps_updated`` pushes that follow carry the result. */
+export async function quitApp(appName: string): Promise<void> {
+  await postJson<void>(apiUrl(`/api/apps/${encodeURIComponent(appName)}/quit`), {});
 }

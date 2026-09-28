@@ -11,7 +11,7 @@ import { cellRect, placeShortcuts } from "../geometry/grid";
 import type { PixelPoint, PixelRect } from "../geometry/frames";
 import type { AppRecord, Desktop, DesktopShortcut, Placement } from "../model/records";
 import { shortcutKey } from "../model/records";
-import { appByName, effectiveWindowTitle, renderedState } from "../reducers/desktopState";
+import { appByName, effectiveWindowTitle, isAppShownStopped, renderedState } from "../reducers/desktopState";
 import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
 import { DetachedWindowGhost } from "./DetachedWindowGhost";
@@ -91,6 +91,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                 cell,
                 rect: cellRect(cell, metrics),
                 app: appByName(state, shortcut.target.app),
+                isStopped: isAppShownStopped(state, appByName(state, shortcut.target.app)),
                 isAppsLoaded: state.isAppsLoaded,
                 isSelected: attrs.selectedShortcutKey === key,
                 isLifted: liftedKey === key,
@@ -151,10 +152,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   isMenuOpen: attrs.openMenuWindowId === window.id,
                   sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                   isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
-                  onStartApp:
-                    app !== undefined && !app.is_running && store.canStopApp(app)
-                      ? () => void store.setAppLifecycle(app.name, "start")
-                      : null,
+                  isStopped: isAppShownStopped(state, app),
                   onRaise: () => store.raiseWindow(window.id),
                   onControl: (control, event) => attrs.onWindowControl(window.id, control, event),
                   onToggleMaximize: () => store.toggleMaximized(window.id),

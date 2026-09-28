@@ -413,6 +413,13 @@ export function isAppStoppable(state: DesktopState, app: AppRecord): boolean {
   return !state.apps.some((other) => other.critical && other.program === app.program);
 }
 
+/** Whether an app is shown as stopped: not running, and nothing brings it back on a request. A stoppable app's
+ *  stopped state is the shell's parker answering for it (the stop-when-no-windows spec, decision 7), so its
+ *  windows and shortcuts draw as ready; a row with no supervised program, or a critical one, is honestly down. */
+export function isAppShownStopped(state: DesktopState, app: AppRecord | undefined): boolean {
+  return app !== undefined && !app.is_running && !isAppStoppable(state, app);
+}
+
 /** Whether a window reads as minimized in these placements; one the placements lack reads as minimized. */
 export function isWindowMinimized(placements: readonly Placement[], windowId: string): boolean {
   return placements.find((placement) => placement.window_id === windowId)?.is_minimized ?? true;

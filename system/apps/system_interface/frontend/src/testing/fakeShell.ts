@@ -385,8 +385,8 @@ export class FakeDesktopApi implements DesktopApi {
     return [...this.clients];
   }
 
-  async setAppLifecycle(appName: string, action: "stop" | "start"): Promise<void> {
-    this.calls.push(`setAppLifecycle:${appName}:${action}`);
+  async quitApp(appName: string): Promise<void> {
+    this.calls.push(`quitApp:${appName}`);
     this.refuse();
   }
 

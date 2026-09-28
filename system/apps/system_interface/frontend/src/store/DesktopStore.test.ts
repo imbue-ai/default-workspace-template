@@ -1203,8 +1203,9 @@ describe("desktops and shortcuts", () => {
     await store.reportLocation("win-1", "/?doc=2", "Plan");
     expect(api.calls).toContain("reportWindowLocation:home:win-1:client-1:/?doc=2:Plan");
     api.refusal = "critical";
-    await store.setAppLifecycle("docs", "stop");
-    expect(notices).toEqual(["Failed to stop docs: critical"]);
+    await store.quitApp("docs");
+    expect(api.calls).toContain("quitApp:docs");
+    expect(notices).toEqual(["Failed to quit docs: critical"]);
   });
 });
 

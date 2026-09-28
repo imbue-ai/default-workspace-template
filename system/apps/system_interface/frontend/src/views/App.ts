@@ -540,10 +540,7 @@ export function App(): m.Component<AppAttrs> {
         app === undefined || app.critical
           ? null
           : () => sendToEmbedder(OPEN_SHARE_SETTINGS, { serviceName: app.name }),
-      setAppLifecycle:
-        app !== undefined && current.canStopApp(app)
-          ? (action) => void current.setAppLifecycle(app.name, action)
-          : null,
+      quit: app !== undefined && current.canStopApp(app) ? () => void current.quitApp(app.name) : null,
       popOut: current.getCanPopOut() && !state.modes.isCompact ? () => void current.detachWindow(windowId) : null,
       close: () => void current.closeOrMinimizeWindow(windowId),
     });

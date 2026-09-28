@@ -483,6 +483,16 @@ class ShellState(MutableModel):
         )
         return self.desktops.open_window(desktop.id, window), window
 
+    def quit_app(self, app: str) -> None:
+        """Quit an app (the stop-when-no-windows spec, section 7): close every window of it on every desktop through
+        the ordinary close (a pinned window, never closed, stays), then stop its program at once. Raises what the
+        lifecycle manager's stop raises."""
+        for desktop in self.list_desktops():
+            for window in desktop.windows:
+                if window.app == app and not window.is_pinned:
+                    self.close_window(desktop.id, window.id)
+        self.lifecycle.stop_app(app)
+
     def count_windows_of_app(self, app: str) -> int:
         """How many windows across every desktop show the app (minimized, pinned, and pulled-out ones included);
         what the lifecycle manager's no-window rule counts."""

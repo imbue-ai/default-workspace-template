@@ -138,8 +138,12 @@ def test_a_preview_shell_refuses_only_the_verbs_that_reach_the_live_workspace(
     application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
     client = application.test_client()
 
-    refusals = [client.post("/api/apps/plain/stop"), client.post("/api/apps/plain/start")]
-    assert [refusal.status_code for refusal in refusals] == [403, 403]
+    refusals = [
+        client.post("/api/apps/plain/stop"),
+        client.post("/api/apps/plain/start"),
+        client.post("/api/apps/plain/quit"),
+    ]
+    assert [refusal.status_code for refusal in refusals] == [403, 403, 403]
     assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
     assert fake_supervisor.statename_by_program.get("plain") is None
     _register_client(application, "c1", "home")
@@ -187,6 +191,40 @@ def test_stop_and_start_drive_the_supervised_program(
     assert client.post("/api/apps/chat/stop").status_code == 400
     assert client.post("/api/apps/plain/stop").status_code == 400
     assert client.post("/api/apps/unknown/stop").status_code == 404
+
+
+def test_quit_closes_every_window_of_the_app_on_every_desktop_and_stops_it(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    fake_supervisor: FakeSupervisorServer,
+) -> None:
+    fake_supervisor.statename_by_program["files"] = "RUNNING"
+    fake_supervisor.statename_by_program["terminal"] = "RUNNING"
+    registry_path = write_two_app_registry(
+        tmp_path, registry_row_toml("chat", "http://localhost:8000", program="chat", is_critical=True)
+    )
+    inventory = build_inventory(registry_path, broadcaster, prober=probe_all_app_liveness)
+    application = shell_application(tmp_path, inventory, broadcaster)
+    client = application.test_client()
+    _register_client(application, "c1", "home")
+    assert client.post("/api/desktops", json={"name": "Work", "color": "#123456", "glyph": 1}).status_code == 201
+    assert _open_window(client, "files", "/a/").status_code == 201
+    assert _open_window(client, "files", "/b/").status_code == 201
+    assert client.post("/api/desktops/work/windows", json={"app": "files", "path": "/c/", "client_id": "c1"}).status_code == 201
+    assert _open_window(client, "terminal", "/?session=terminal-1").status_code == 201
+
+    quit_answer = client.post("/api/apps/files/quit")
+
+    assert quit_answer.status_code == 200 and quit_answer.get_json() == {"name": "files", "is_running": False}
+    assert fake_supervisor.statename_by_program["files"] == "STOPPED"
+    desktops = client.get("/api/desktops").get_json()["desktops"]
+    assert [[window["app"] for window in desktop["windows"]] for desktop in desktops] == [["terminal"], []]
+    # Quitting an app with no windows still stops it; a critical app is refused.
+    fake_supervisor.statename_by_program["files"] = "RUNNING"
+    assert client.post("/api/apps/files/quit").status_code == 200
+    assert fake_supervisor.statename_by_program["files"] == "STOPPED"
+    assert client.post("/api/apps/chat/quit").status_code == 400
+    assert client.post("/api/apps/unknown/quit").status_code == 404
 
 
 def test_an_unreachable_supervisord_is_a_502(

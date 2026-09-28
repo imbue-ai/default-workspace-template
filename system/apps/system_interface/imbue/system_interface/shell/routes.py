@@ -201,6 +201,22 @@ def stop_app(name: str) -> ResponseReturnValue:
     return _lifecycle(name, AppLifecycleAction.STOP)
 
 
+def quit_app(name: str) -> ResponseReturnValue:
+    """``POST /api/apps/<name>/quit``: close every window of the app, then stop it; refused as a stop is."""
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
+    shell = _shell()
+    entry = _entry_or_raise(name)
+    _stoppable_program_or_raise(shell, entry)
+    try:
+        shell.quit_app(name)
+    except SupervisorProgramActionError as e:
+        return detail_response(str(e), HTTP_BAD_GATEWAY)
+    refreshed = shell.inventory.entry(name)
+    return jsonify({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
+
+
 def start_app(name: str) -> ResponseReturnValue:
     return _lifecycle(name, AppLifecycleAction.START)
 
@@ -343,6 +359,12 @@ def register_shell_routes(application: Flask) -> None:
         view_func=start_app,
         methods=["POST"],
         endpoint="start_app",
+    )
+    application.add_url_rule(
+        "/api/apps/<name>/quit",
+        view_func=quit_app,
+        methods=["POST"],
+        endpoint="quit_app",
     )
     application.add_url_rule("/api/clients", view_func=list_clients, methods=["GET"], endpoint="list_clients")
     application.add_url_rule(

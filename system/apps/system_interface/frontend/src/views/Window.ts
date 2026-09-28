@@ -15,7 +15,6 @@
  */
 
 import m from "mithril";
-import { Button } from "@imbue/workspace-ui/src/components/Button";
 import type { PixelRect, ResizeEdge } from "../geometry/frames";
 import { RESIZE_EDGES } from "../geometry/frames";
 import { windowChromeZIndex } from "../geometry/stacking";
@@ -55,16 +54,18 @@ export interface WindowAttrs {
   /** Whether the shield covers the content: every unfocused window, and every window while a menu or the
    *  launcher is open. */
   readonly isShielded: boolean;
-  /** Offered when the app is stopped and the workspace can start it; null otherwise. */
-  readonly onStartApp: (() => void) | null;
+  /** Whether the app behind the window is stopped and nothing brings it back on a request (a row with no
+   *  supervised program, or a critical one): its page is replaced by the stopped placeholder. A stoppable app's
+   *  window keeps its page, which the shell's parker answers with a loading page until the app is up. */
+  readonly isStopped: boolean;
   readonly onRaise: () => void;
   readonly onControl: (control: WindowControl, event: MouseEvent) => void;
   readonly onToggleMaximize: () => void;
 }
 
-/** What a window shows in place of its page while the app behind it is stopped: that it is
- *  stopped, and a Start where the workspace can start it. */
-function stoppedPlaceholder(app: AppRecord | undefined, onStartApp: (() => void) | null): m.Vnode {
+/** What a window shows in place of its page while the app behind it is stopped and the workspace cannot bring
+ *  it back on a request. */
+function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
   const label = app?.display_name ?? "This app";
   const detail = app !== undefined && app.program !== "" ? "stopped" : "not running (managed outside the workspace)";
   return m(
@@ -73,7 +74,6 @@ function stoppedPlaceholder(app: AppRecord | undefined, onStartApp: (() => void)
     [
       m("div", { class: "type-label text-primary" }, label),
       m("div", { class: "text-(length:--font-size-row) text-faint" }, detail),
-      onStartApp === null ? null : m(Button, { extra: "mt-1", onclick: onStartApp }, `Start ${label}`),
     ],
   );
 }
@@ -82,8 +82,7 @@ export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const { window, app, title, rect, state, stackIndex, isFocused, isCompact, isTouch } = attrs;
-      const isStopped = app !== undefined && !app.is_running;
+      const { window, app, title, rect, state, stackIndex, isFocused, isCompact, isTouch, isStopped } = attrs;
       const isResizable = !isCompact && !isTouch;
       return m(
         "div",
@@ -135,7 +134,7 @@ export function Window(): m.Component<WindowAttrs> {
                   class: "window-content relative min-h-0 flex-1 [&>*]:pointer-events-auto",
                 },
                 [
-                  isStopped ? stoppedPlaceholder(app, attrs.onStartApp) : null,
+                  isStopped ? stoppedPlaceholder(app) : null,
                   // The shield: the press that raises the window (or closes an open menu or the launcher)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
                   // the document. A right-click here is that press and nothing more: handled, so the

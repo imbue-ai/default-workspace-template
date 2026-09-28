@@ -28,6 +28,9 @@ export interface ShortcutIconAttrs {
   readonly app: AppRecord | undefined;
   /** Whether an app list has landed: an unknown app before that is the page still connecting, not a missing app. */
   readonly isAppsLoaded: boolean;
+  /** Whether the app is stopped and nothing brings it back on a request (the shell's parker answers for a
+   *  stoppable one, which draws as ready): drawn faint, with a tooltip saying so. */
+  readonly isStopped: boolean;
   readonly isSelected: boolean;
   /** The icon is lifted by a drag: it draws faded in its cell while the ghost follows the pointer. */
   readonly isLifted: boolean;
@@ -97,6 +100,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
         isSelected,
         isLifted,
         isRunOnClick,
+        isStopped,
         onSelect,
         onRun,
         onContextMenu,
@@ -104,7 +108,6 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
       const key = shortcutKey(shortcut.target.app, shortcut.target.launch);
       const label = shortcutLabel(shortcut, app);
       const isConnecting = app === undefined && !isAppsLoaded;
-      const isStopped = app !== undefined && !app.is_running;
       return m(
         "button",
         {
