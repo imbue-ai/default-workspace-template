@@ -231,6 +231,7 @@ dependencies = [
     { name = "httpx" },
     { name = "imbue-common" },
     { name = "inotify-simple" },
+    { name = "loguru" },
 ]
 
 [package.metadata]
@@ -238,6 +239,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=85a3f7c3e8ea6a54721110cc3cefc800b270b1dd" },
     { name = "inotify-simple", specifier = ">=2.0.0" },
+    { name = "loguru", specifier = ">=0.7.0" },
 ]
 
 [[package]]

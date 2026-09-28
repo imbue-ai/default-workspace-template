@@ -6,11 +6,14 @@ events/services/events.jsonl so the desktop client can discover available servic
 A registration event goes out only for an app whose registered fields changed --
 the whole file is rewritten whenever any app registers, so a write says nothing
 about which apps moved. The first pass remembers nothing and so announces them all.
+A log over the archive threshold at startup is gzipped out of the replay first.
 
 Uses both inotify (when available) and mtime polling (5-second fallback).
 """
 
+import gzip
 import os
+import shutil
 import signal
 import sys
 import time
@@ -26,6 +29,7 @@ from imbue.imbue_common.event_envelope import (
     EventType,
     IsoTimestamp,
 )
+from loguru import logger
 
 try:
     import tomllib
@@ -38,6 +42,15 @@ APPS_FILE = Path("data/.state/apps.toml")
 # do not raise in-sandbox inotify events -- polling is then the only signal, so a
 # tighter interval bounds the worst-case service-discovery latency.
 POLL_INTERVAL_SECONDS = 5
+
+# Consumers replay the whole services log each time they attach, and an older watcher
+# that re-announced every app on each registry rewrite grew some logs past a gigabyte.
+# A log over this size is archived at startup, out of the replay.
+SERVICES_LOG_ARCHIVE_THRESHOLD_BYTES = 5 * 1024 * 1024
+_KEPT_SERVICES_LOG_ARCHIVE_COUNT = 3
+# Neither suffix fits mngr's replayed rotation name (``events.jsonl.<digits>``).
+_STAGED_SERVICES_LOG_SUFFIX = ".archiving"
+_SERVICES_LOG_ARCHIVE_SUFFIX = ".gz"
 
 _EVENT_SOURCE = EventSource("services")
 _EVENT_TYPE_REGISTERED = EventType("service_registered")
@@ -175,6 +188,48 @@ def _write_events(
             f.write(event.model_dump_json() + "\n")
 
 
+def _stage_oversized_services_log(events_dir: Path) -> bool:
+    """Move a log over the archive threshold aside, so the first pass starts a new one.
+
+    Only renames, so the new log exists as soon as the first pass writes it; the
+    compression waits for ``_compress_staged_services_logs``.
+    """
+    events_path = events_dir / "events.jsonl"
+    try:
+        log_size = events_path.stat().st_size
+    except FileNotFoundError:
+        return False
+    if log_size <= SERVICES_LOG_ARCHIVE_THRESHOLD_BYTES:
+        return False
+    rotation_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+    events_path.rename(
+        events_dir / f"events.jsonl.{rotation_timestamp}{_STAGED_SERVICES_LOG_SUFFIX}"
+    )
+    return True
+
+
+def _compress_staged_services_logs(events_dir: Path) -> None:
+    """Gzip every staged log into its archive, then keep only the newest archives."""
+    for staged_path in sorted(
+        events_dir.glob(f"events.jsonl.*{_STAGED_SERVICES_LOG_SUFFIX}")
+    ):
+        archive_path = staged_path.with_name(
+            staged_path.name.removesuffix(_STAGED_SERVICES_LOG_SUFFIX)
+            + _SERVICES_LOG_ARCHIVE_SUFFIX
+        )
+        partial_path = archive_path.with_name(archive_path.name + ".partial")
+        with open(staged_path, "rb") as source, gzip.open(partial_path, "wb") as target:
+            shutil.copyfileobj(source, target)
+        partial_path.rename(archive_path)
+        staged_path.unlink()
+
+    archive_paths = sorted(
+        events_dir.glob(f"events.jsonl.*{_SERVICES_LOG_ARCHIVE_SUFFIX}")
+    )
+    for expired_path in archive_paths[:-_KEPT_SERVICES_LOG_ARCHIVE_COUNT]:
+        expired_path.unlink()
+
+
 def _try_setup_inotify(path: Path) -> object | None:
     """Try to set up inotify on the apps file's parent directory.
 
@@ -237,6 +292,12 @@ def main() -> None:
             flush=True,
         )
 
+    if events_dir is not None and _stage_oversized_services_log(events_dir):
+        logger.info(
+            "Moved the oversized services log aside for archiving; starting a new one"
+        )
+    is_staged_log_compression_pending = events_dir is not None
+
     last_mtime: float = 0.0
     previous_rows: dict[str, _AppRow] = {}
 
@@ -248,9 +309,7 @@ def main() -> None:
 
     while True:
         try:
-            new_mtime = (
-                APPS_FILE.stat().st_mtime if APPS_FILE.exists() else 0.0
-            )
+            new_mtime = APPS_FILE.stat().st_mtime if APPS_FILE.exists() else 0.0
         except OSError:
             new_mtime = 0.0
 
@@ -272,6 +331,15 @@ def main() -> None:
 
             # Track current rows for next diff
             previous_rows = current_rows
+
+        # Compress only after the first pass, so the new log exists meanwhile
+        if is_staged_log_compression_pending and events_dir is not None:
+            is_staged_log_compression_pending = False
+            try:
+                _compress_staged_services_logs(events_dir)
+            except OSError as e:
+                # A crash would restart into the same failure, re-announcing every app
+                logger.warning("Failed to archive the staged services log: {}", e)
 
         # Wait for changes
         if inotify_fd is not None:

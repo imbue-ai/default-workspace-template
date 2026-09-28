@@ -1,5 +1,8 @@
+import gzip
 import json
 from pathlib import Path
+
+from imbue.imbue_common.logging import ROTATED_JSONL_PATTERN
 
 from app_watcher import watcher
 
@@ -112,3 +115,78 @@ def test_an_entry_without_a_url_is_neither_registered_nor_counted_present(
     )
 
     assert _events(tmp_path) == []
+
+
+def _legacy_log_over_the_archive_cap() -> bytes:
+    """A log shaped like one the old watcher grew: one app re-announced over and over."""
+    line = (
+        json.dumps(
+            {
+                "timestamp": "2026-09-01T00:00:00.000000000Z",
+                "type": "service_registered",
+                "event_id": "evt-legacy",
+                "source": "services",
+                "service": "relationships",
+                "url": "http://localhost:8083",
+            }
+        )
+        + "\n"
+    ).encode()
+    repeat_count = watcher.SERVICES_LOG_ARCHIVE_THRESHOLD_BYTES // len(line) + 1
+    return line * repeat_count
+
+
+def test_an_oversized_log_is_archived_out_of_the_replay_and_restarted_fresh(
+    tmp_path: Path,
+) -> None:
+    """Consumers replay the whole services log when they attach, so a log past the cap
+    is moved to a compressed archive they do not replay, and the first pass starts a
+    new log holding only the current apps."""
+    legacy = _legacy_log_over_the_archive_cap()
+    (tmp_path / "events.jsonl").write_bytes(legacy)
+
+    assert watcher._stage_oversized_services_log(tmp_path) is True
+    watcher._write_events(
+        tmp_path, _rows(_app("relationships", "http://localhost:8085")), {}
+    )
+    watcher._compress_staged_services_logs(tmp_path)
+
+    assert [(e["type"], e["service"], e["url"]) for e in _events(tmp_path)] == [
+        ("service_registered", "relationships", "http://localhost:8085")
+    ]
+    archives = list(tmp_path.glob("events.jsonl.*"))
+    assert len(archives) == 1
+    assert gzip.decompress(archives[0].read_bytes()) == legacy
+    # mngr replays rotated files named ``events.jsonl.<digits>``; the archive is not one.
+    assert ROTATED_JSONL_PATTERN.match(archives[0].name) is None
+
+
+def test_a_log_under_the_cap_is_left_in_place(tmp_path: Path) -> None:
+    watcher._write_events(tmp_path, _rows(_app("chat", "http://localhost:8010")), {})
+    before = (tmp_path / "events.jsonl").read_bytes()
+
+    assert watcher._stage_oversized_services_log(tmp_path) is False
+    watcher._compress_staged_services_logs(tmp_path)
+
+    assert (tmp_path / "events.jsonl").read_bytes() == before
+    assert list(tmp_path.glob("events.jsonl.*")) == []
+
+
+def test_an_interrupted_archive_is_finished_and_only_the_newest_archives_are_kept(
+    tmp_path: Path,
+) -> None:
+    older_timestamps = [f"20260{month}01000000000000" for month in range(1, 5)]
+    for timestamp in older_timestamps:
+        (tmp_path / f"events.jsonl.{timestamp}.gz").write_bytes(gzip.compress(b"old\n"))
+    # Left behind by a watcher stopped after staging a log but before compressing it.
+    (tmp_path / "events.jsonl.20260501000000000000.archiving").write_bytes(b"staged\n")
+
+    watcher._compress_staged_services_logs(tmp_path)
+
+    assert sorted(path.name for path in tmp_path.glob("events.jsonl.*")) == [
+        "events.jsonl.20260301000000000000.gz",
+        "events.jsonl.20260401000000000000.gz",
+        "events.jsonl.20260501000000000000.gz",
+    ]
+    finished = tmp_path / "events.jsonl.20260501000000000000.gz"
+    assert gzip.decompress(finished.read_bytes()) == b"staged\n"

@@ -10,6 +10,12 @@ changed, since the whole registry is rewritten whenever any app registers;
 the first pass after startup remembers nothing and announces every app, which
 is what a consumer reading the stream from its start needs.
 
+Consumers replay the whole log each time they attach, so at startup a log
+over 5 MiB is renamed aside before that first pass and then gzipped to
+`events.jsonl.<timestamp>.gz`, a name mngr does not replay. The newest three
+archives are kept. Logs that large were left by an older watcher that
+re-announced every app on each registry rewrite.
+
 Uses inotify when available on Linux, and falls back to mtime polling
 (5-second interval) otherwise -- under gVisor and on the lima/vps providers,
 changes made outside the sandbox raise no in-sandbox inotify events, so
