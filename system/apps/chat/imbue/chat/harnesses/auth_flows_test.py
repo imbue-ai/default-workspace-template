@@ -800,6 +800,19 @@ def test_a_callback_the_cli_does_not_take_is_answered_with_how_the_flow_stands(t
     assert status.state is FlowState.PENDING
 
 
+def test_a_relayed_callback_gives_the_flow_the_short_verdict_deadline(tmp_path: Path) -> None:
+    service = _claude_flow_service(tmp_path, _claude_process(), _CLAUDE_RELAY_URL, [])
+    started = service.start("anthropic", "subscription")
+
+    status = service.relay_callback(started.flow_id, "/callback?code=the-code&state=relay-state")
+
+    assert status.state is FlowState.PENDING
+    session = service._session
+    assert session is not None and session.timer is not None
+    assert session.timer.interval == 120.0
+    service.abort(started.flow_id)
+
+
 @pytest.mark.parametrize(
     "path_and_query",
     [

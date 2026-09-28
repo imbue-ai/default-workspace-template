@@ -699,6 +699,8 @@ class AuthFlowService:
                 raise FlowError("that callback does not belong to this sign-in")
             session.is_callback_relayed = True
             session.is_relay_in_flight = True
+            # As with a submitted code, nobody is away in a browser any more.
+            self._arm_deadline_locked(session, _VERDICT_DEADLINE_SECONDS)
         try:
             self._fetch_callback(target.port, path_and_query)
         except RelayCallbackError as e:
