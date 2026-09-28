@@ -91,22 +91,26 @@ def parked_refresh_seconds(kind: ParkedPageKind) -> int:
 def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> str:
     """The page the parker answers with: starting (reloading every few seconds) or could not start."""
     name = html.escape(display_name)
-    if kind is ParkedPageKind.STARTING:
-        return _PAGE_TEMPLATE.format(
-            refresh=parked_refresh_seconds(kind),
-            title=f"Starting {name}",
-            heading=f"Starting {name}&hellip;",
-            detail="The app was stopped while nothing showed it. This page opens it once it answers.",
-        )
-    return _PAGE_TEMPLATE.format(
-        refresh=parked_refresh_seconds(kind),
-        title=f"{name} could not start",
-        heading=f"{name} could not start",
-        detail=(
-            f"The app's program did not stay up. Its log says why: "
-            f"<code>supervisorctl tail {html.escape(program)} stderr</code>. This page tries again in a while."
-        ),
-    )
+    match kind:
+        case ParkedPageKind.STARTING:
+            return _PAGE_TEMPLATE.format(
+                refresh=parked_refresh_seconds(kind),
+                title=f"Starting {name}",
+                heading=f"Starting {name}&hellip;",
+                detail="The app was stopped while nothing showed it. This page opens it once it answers.",
+            )
+        case ParkedPageKind.FAILED:
+            return _PAGE_TEMPLATE.format(
+                refresh=parked_refresh_seconds(kind),
+                title=f"{name} could not start",
+                heading=f"{name} could not start",
+                detail=(
+                    f"The app's program did not stay up. Its log says why: "
+                    f"<code>supervisorctl tail {html.escape(program)} stderr</code>. This page tries again in a while."
+                ),
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 @pure
