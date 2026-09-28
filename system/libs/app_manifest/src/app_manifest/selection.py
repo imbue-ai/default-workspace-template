@@ -890,7 +890,7 @@ def select_tests(
     classified: list[ClassifiedPath] = []
     pytest_requests: list[_PytestRequest] = []
     frontend_requests: list[_FrontendRequest] = []
-    is_full_root = False
+    full_root_reasons: list[SelectionReason] = []
     for path in paths:
         if is_docs_path(path):
             classified.append(
@@ -901,7 +901,9 @@ def select_tests(
         classified.append(ClassifiedPath(path=RepoRelativePath(path), classes=outcome.classes))
         pytest_requests.extend(outcome.pytest_requests)
         frontend_requests.extend(outcome.frontend_requests)
-        is_full_root = is_full_root or outcome.is_full_root
+        if outcome.is_full_root:
+            full_root_reasons.append(_reason(path, outcome.classes[-1], "full root suite"))
+    is_full_root = bool(full_root_reasons)
 
     # Frontends first (the browser tests need their bundles), then the root-collected tests,
     # then the own-root suites
@@ -910,16 +912,10 @@ def select_tests(
         layout, frontend_requests, _browser_run_reasons(layout, pytest_requests)
     )
     if is_full_root:
-        full_root_reasons = tuple(
-            SelectionReason(
-                path=entry.path, path_class=entry.classes[-1], detail=NonEmptyStr("full root suite")
-            )
-            for entry in classified
-            if {ChangedPathClass.UNOWNED, ChangedPathClass.ROOT_CONFIG, ChangedPathClass.LOCKFILE}
-            & set(entry.classes)
-        )
         commands.append(
-            _command(SuiteKind.FULL_ROOT, ROOT_DIRECTORY, ("uv", "run", "pytest"), full_root_reasons)
+            _command(
+                SuiteKind.FULL_ROOT, ROOT_DIRECTORY, ("uv", "run", "pytest"), tuple(full_root_reasons)
+            )
         )
     else:
         root_reasons = tuple(

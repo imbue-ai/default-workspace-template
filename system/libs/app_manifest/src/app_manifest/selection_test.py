@@ -364,6 +364,17 @@ def test_a_lock_that_does_not_parse_brings_in_the_full_root_suite(workspace: Pat
     assert any("cannot parse the base uv.lock" in note for note in selection.notes)
 
 
+def test_the_full_root_suite_names_only_the_paths_that_brought_it_in(workspace: Path) -> None:
+    selection = _select(
+        workspace, ["uv.lock", "unknown.bin"], (selection_lock("2.0"), selection_lock("2.1"))
+    )
+
+    full_root = next(command for command in selection.commands if command.argv == ("uv", "run", "pytest"))
+    # The lock's upgrade reached only its dependents; the unknown file is why the full root runs.
+    assert [reason.path for reason in full_root.reasons] == ["unknown.bin"]
+    assert _CHAT_WHOLE_WITHOUT_BROWSER in _command_lines(selection)
+
+
 def test_a_lock_with_no_base_to_compare_brings_in_the_full_root_suite(workspace: Path) -> None:
     selection = _select(workspace, ["uv.lock"], None)
 
