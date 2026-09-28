@@ -87,7 +87,7 @@ class PtyMethod(FrozenModel):
     pty_columns: int = DEFAULT_PTY_COLUMNS
 
     scrape: Scrape
-    # Some CLIs print a success line; agy does not, and falls back to the probe.
+    # None for a CLI that prints no success line, which falls back to the probe.
     success: str | None = None
     # (pattern, user-facing copy). "{1}" interpolates the pattern's first group, so a CLI
     # that explains itself can have its own words shown.

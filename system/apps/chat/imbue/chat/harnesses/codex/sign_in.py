@@ -1,9 +1,9 @@
 """Signing in to ChatGPT through a short-lived `codex app-server`.
 
-The app-server's own login RPCs replace scraping `codex login --device-auth` off a terminal: a
-browser login hands back the page to open and listens for its loopback callback itself, which the
-minds desktop app can relay into it; a device login hands back the page and the one-time code; and
-either one reports completion as a notification rather than an exit status.
+The app-server's own login RPCs drive it, with no terminal to scrape: a browser login hands back
+the page to open and listens for its loopback callback itself, which the minds desktop app can
+relay into it; a device login hands back the page and the one-time code; and either one reports
+completion as a notification rather than an exit status.
 """
 
 from __future__ import annotations

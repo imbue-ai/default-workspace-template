@@ -18,10 +18,9 @@
  *   success    a sign-in that has something to say about itself, with a Done footer
  *
  * A browser sign-in first goes to the minds desktop app, which opens the page and relays the
- * provider's callback into this workspace. When no desktop app answers, the chooser falls back: to
- * pasting a code for Claude, and to the one-time-code login for ChatGPT, whose browser login cannot
- * finish without the relay. The same ways in stay one click away while the browser is out, and
- * after a sign-in fails, so a browser that never comes back is never a dead end.
+ * provider's callback into this workspace. When no desktop app answers, the chooser falls back to
+ * a way in that needs no relay. Those ways stay one click away while the browser is out, and after
+ * a sign-in fails, so a browser that never comes back is never a dead end.
  *
  * Two shapes worth knowing about:
  *
@@ -74,7 +73,8 @@ export interface ProviderChooserModalAttrs {
 
 type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
 
-/** The paste step's label: the code is needed only when the browser ends on one. */
+/** The paste step's label: a relayed sign-in finishes by itself, and neither side can tell in
+ *  advance whether the browser will end on a code instead. */
 export const PASTE_STEP_LABEL = "If the page shows a code, paste it here";
 
 /** What a share visitor sees instead of the ways to sign in: accounts are the owner's to change. */
@@ -114,7 +114,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   // so `busy` alone leaves a gap where the flow is still pending and nothing marks it. That
   // gap rendered the menu again, which read as being bounced back to the start.
   let awaitingVerdict = false;
-  // The page is being handed to the desktop app, which has a second to answer.
+  // The page is being handed to the desktop app, which has yet to answer.
   let isOpeningBrowser = false;
   // Set once no desktop app answered a relay, so this chooser stops offering sign-ins that need one.
   let isRelayUnavailable = false;
@@ -537,8 +537,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** stepsBlock, step 2. */
   function pasteCodeStep(): m.Vnode {
     return stepBlock(2, true, [
-      // Only a page that ends on a code needs this: a sign-in the desktop app relays finishes by
-      // itself, and neither side can tell in advance which one the browser will do.
       stepLabel("2", PASTE_STEP_LABEL),
       m("div", { class: css.FIELD_ROW }, [
         m("input", {

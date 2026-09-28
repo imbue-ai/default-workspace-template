@@ -14,9 +14,9 @@ Two properties the shapes forced:
   closed mid-flow would otherwise leave a CLI waiting forever -- codex's device flow polls
   for fifteen minutes. Every flow therefore arms a wall-clock timer that terminates the
   process and removes the folder.
-* Success is scraped only where the CLI announces it. agy prints no success line at all, so
-  the harness's own probe is what decides there. Failure IS scraped, so a rejected code fails
-  in seconds rather than waiting out a deadline.
+* Success is scraped only where the CLI announces it; where it prints no success line, the
+  harness's own probe decides. Failure IS scraped, so a rejected code fails in seconds rather
+  than waiting out a deadline.
 """
 
 from __future__ import annotations
@@ -371,8 +371,8 @@ class AuthFlowService:
                 self._arm_deadline_locked(session, method.flow_deadline_s)
                 return FlowStart(flow_id=session.flow_id, shape=FlowShape.PASTE)
             # A missing binary raises pexpect.ExceptionPexpect and a CLI that already exited
-            # raises OSError from send(); neither is a FlowError, so without this the session
-            # stayed PENDING with no teardown and no deadline. The exception propagates: a
+            # raises OSError from send(); neither is a FlowError, so this tears the session down
+            # rather than leaving it PENDING with no deadline. The exception propagates: a
             # FlowError is the CLI having said no, and anything else is a bug.
             is_torn_down = False
             try:
@@ -633,10 +633,9 @@ class AuthFlowService:
     def adopt_claude_credentials(self, pasted: str) -> accounts.Account:
         """Mint an account from a credential someone else obtained, with no flow involved.
 
-        A key from outside the chooser: the host env file's (`migrate_claude_auth.py`) or one
-        minted for the workspace (`/api/claude-auth/submit-credentials`). There is no terminal
-        to drive and nothing to poll, so this skips the flow machinery and goes straight to
-        seed, write, commit -- the account existing IS the signed-in flag.
+        A key obtained outside the chooser. There is no terminal to drive and nothing to poll,
+        so this skips the flow machinery and goes straight to seed, write, commit -- the account
+        existing IS the signed-in flag.
         """
         managed_env = claude_env_from_paste(pasted)
         lane = get_lane("anthropic")
