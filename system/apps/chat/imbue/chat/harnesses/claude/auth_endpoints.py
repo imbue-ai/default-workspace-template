@@ -22,6 +22,7 @@ from imbue.chat.accounts import AccountError
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import claude_env_from_paste
 from imbue.chat.harnesses.claude import auth
+from imbue.chat.identity import forbid_unless_owner
 from imbue.chat.models import ClaudeAuthCredentialsRequest
 from imbue.chat.models import ClaudeAuthStatusResponse
 from imbue.chat.models import ErrorResponse
@@ -72,6 +73,9 @@ def submit_credentials() -> Response:
     The strict parse rejects unmanaged keys and mixed-mode pastes with a 400 before
     anything is written.
     """
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
     try:
         body = ClaudeAuthCredentialsRequest.model_validate(request.get_json())
     except (ValueError, TypeError) as e:

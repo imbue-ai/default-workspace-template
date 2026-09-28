@@ -445,3 +445,32 @@ def test_a_relayed_callback_answers_with_what_the_cli_said(tmp_path: Path) -> No
     assert started["relay_url"] == relay_url
     assert response.status_code == 200
     assert response.get_json() == {"status": 200, "location": None, "content_type": "text/html", "body": "aGk="}
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        pytest.param("POST", "/api/accounts", {"lane_id": "anthropic", "method_id": "api_key"}, id="start"),
+        pytest.param("GET", "/api/accounts/flow/f", None, id="poll"),
+        pytest.param("POST", "/api/accounts/flow/f", {"api_key": "k"}, id="submit"),
+        pytest.param("DELETE", "/api/accounts/flow/f", None, id="abort"),
+        pytest.param("DELETE", "/api/accounts/a", None, id="delete"),
+        pytest.param("PATCH", "/api/accounts/a", {"name": "n"}, id="rename"),
+        pytest.param("POST", "/api/claude-auth/submit-credentials", {"credentials": "sk-ant-x"}, id="adopt"),
+    ],
+)
+def test_a_visitor_cannot_change_the_workspaces_ai_accounts(
+    tmp_path: Path, method: str, path: str, body: dict[str, str] | None
+) -> None:
+    with _client(_signed_in_service(tmp_path)) as client:
+        response = client.open(path, method=method, json=body, headers={"X-Imbue-Identity": _VISITOR})
+
+    assert response.status_code == 403
+    assert read_index().accounts == ()
+
+
+def test_a_visitor_still_sees_the_accounts_its_chats_run_on(tmp_path: Path) -> None:
+    with _client(_signed_in_service(tmp_path)) as client:
+        response = client.get("/api/accounts", headers={"X-Imbue-Identity": _VISITOR})
+
+    assert response.status_code == 200

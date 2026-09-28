@@ -153,6 +153,9 @@ def account_model_options(account_id: str) -> Response:
 
 
 def start_flow() -> Response:
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
     payload = parse_json_object_body()
     if isinstance(payload, Response):
         return payload
@@ -173,6 +176,9 @@ def start_flow() -> Response:
 
 
 def poll_flow(flow_id: str) -> Response:
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
     try:
         return _json_response(get_state().auth_flows.poll(flow_id).model_dump())
     except FlowError as e:
@@ -181,6 +187,9 @@ def poll_flow(flow_id: str) -> Response:
 
 def submit_flow(flow_id: str) -> Response:
     """Accept whatever the flow's shape asks the user for: a pasted code, or a key."""
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
     payload = parse_json_object_body()
     if isinstance(payload, Response):
         return payload
@@ -232,6 +241,9 @@ def relay_flow_callback(flow_id: str) -> Response:
 
 
 def abort_flow(flow_id: str) -> Response:
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
     # Abort is what a closed modal calls on its way out, so it has to succeed even when the
     # flow it is abandoning is in a bad state -- a folder deleted underneath it, an unreadable
     # index. A 500 here reaches a UI that has already gone, and the user sees a failed request
@@ -246,6 +258,9 @@ def abort_flow(flow_id: str) -> Response:
 def delete_account(account_id: str) -> Response:
     """Remove an account. Chats bound to it keep their transcripts; a harness already holding
     the credential keeps working until it restarts. The confirmation is the client's job."""
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
     try:
         accounts.delete_account(account_id)
     except accounts.AccountError as e:
@@ -256,6 +271,9 @@ def delete_account(account_id: str) -> Response:
 def update_account(account_id: str) -> Response:
     """Set or clear an account's user-chosen name (`name`), or pin or unpin it as the account a
     new chat launches on (`is_default`). Either key alone is a complete request."""
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
     payload = parse_json_object_body()
     if isinstance(payload, Response):
         return payload
