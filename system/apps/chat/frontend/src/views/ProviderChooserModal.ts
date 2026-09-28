@@ -179,7 +179,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   async function begin(
     chosen: Lane,
     chosenMethod: LaneMethod,
-    options: { fromChooser: boolean; accountId?: string; notice?: string },
+    options: { fromChooser: boolean; accountId?: string; notice?: string; isRelaySkipped?: boolean },
   ): Promise<void> {
     lane = chosen;
     method = chosenMethod;
@@ -214,7 +214,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       await startFlow(chosen.id, chosenMethod.id, options.accountId);
       if (attempt !== generation) return;
       const started = getFlow();
-      if (started !== null && started.relay_url !== null && !isRelayUnavailable) {
+      if (started !== null && started.relay_url !== null && !isRelayUnavailable && !options.isRelaySkipped) {
         isOpeningBrowser = true;
         m.redraw();
         const isRelaying = await relay(started.relay_url, started.flow_id);
@@ -277,7 +277,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   }
 
   /** Offer this lane's ways in that need no relay: the code steps for the live Claude sign-in,
-   *  whose pasted code the CLI still takes, or a fresh sign-in that needs no browser callback. */
+   *  whose pasted code the CLI still takes, or a fresh sign-in that is not handed to the desktop app. */
   function signInAnotherWay(current: Lane, why: string | null = null): void {
     const flow = getFlow();
     if (flow !== null && flow.status.state === "pending" && flow.shape === "url_then_code") {
@@ -291,6 +291,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       fromChooser: true,
       accountId: reauthAccountId ?? undefined,
       notice: why ?? undefined,
+      isRelaySkipped: true,
     });
   }
 
