@@ -354,7 +354,8 @@ in your report.
   every printed line, in order, plus `uv run ruff check` when a Python file is
   in the list, and handle a failing test and a shed command the way
   `.agents/shared/worker/references/harden-creation.md` ("The test gate")
-  says. mngr's own suite runs in its repo, not here.
+  says, naming a flaky test under your report's Validation. mngr's own suite
+  runs in its repo, not here.
 - **Isolated-service boots** for each service with a file in the merged set,
   and for each service 4a found impacted that carries local content of its
   own -- one the workspace created, or a built-in one it has modified (a
@@ -492,7 +493,8 @@ Valid `name:` values:
     evidence** (each item's condition and whether it held; on a clean pull
     with no footprint, that nothing ran and why), then the suites, boots and
     Playwright that did run, all passing, and any test that failed and then
-    passed when rerun alone, as flaky; **which branch of the 4c rule
+    passed when rerun alone, here or after a 4c commit, as flaky; **which
+    branch of the 4c rule
     applied, with its evidence** (the clean-pull skip's three conditions, or
     the gate run's kept/reverted fix commits -- or "gate ran clean" -- and the
     architecture-gate verdicts); any validation gap called out honestly. A
