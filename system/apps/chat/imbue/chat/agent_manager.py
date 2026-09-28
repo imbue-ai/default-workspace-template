@@ -1537,8 +1537,7 @@ class AgentManager:
                 chat_id, agent_state, target, message, message_id, origin, now, model_pick, is_fresh_start
             )
         self._broadcast_chats_updated()
-        # The successor launches on the target account, so it becomes the most recently used one, as it
-        # does for a rebind or a create.
+        # The successor launches on the target account, which makes it the most recently used one.
         try:
             set_mru(target.account.id)
         except AccountError as e:
