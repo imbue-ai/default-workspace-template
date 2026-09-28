@@ -180,15 +180,16 @@ class AppLifecycleManager(MutableModel):
         self._sweep_wake.set()
 
     def mark_visited(self) -> None:
-        """A client has arrived at the shell: the no-window rule applies from here on."""
+        """A client has arrived at the shell: the no-window rule applies from here on. The first arrival is the one
+        that changes what a pass reads, so it alone wakes the sweep."""
         with self._lock:
-            if not self._is_visited:
-                self._is_visited = True
-                logger.info(
-                    "Marked the workspace visited: apps without windows now stop after {}s",
-                    self.no_windows_grace_seconds,
-                )
-        self.wake_soon()
+            is_first_arrival = not self._is_visited
+            self._is_visited = True
+        if is_first_arrival:
+            logger.info(
+                "Marked the workspace visited: apps without windows now stop after {}s", self.no_windows_grace_seconds
+            )
+            self.wake_soon()
 
     # Reads
 
