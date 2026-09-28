@@ -299,19 +299,6 @@ def _build_restart_recording_service(
     return auth.ClaudeAuthService(command_runner=_runner)
 
 
-# submit_credentials
-
-
-# record_api_key_approval
-
-
-# setup-token flow
-
-
-# browser sign-in (claude auth login) flow
-# Oauth pump pattern order: success=0, failed=1, OAuth-error=2, EOF=3, TIMEOUT=4.
-
-
 # credentials-based mode folding
 
 
