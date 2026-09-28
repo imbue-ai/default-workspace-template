@@ -13,6 +13,7 @@ what the desktop app is told.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
@@ -115,13 +116,42 @@ def read_sign_in_url(url_file: Path) -> str | None:
     return url or None
 
 
+def _same_listener_redirect(response: httpx.Response, port: int) -> str | None:
+    """The path a redirect sends the browser to on the same loopback listener, or None for any other answer."""
+    if not response.is_redirect:
+        return None
+    target = urlsplit(str(response.url.join(response.headers.get("location", ""))))
+    try:
+        target_port = target.port
+    except ValueError:
+        return None
+    if target.scheme != "http" or target.hostname not in _LOOPBACK_HOSTS or target_port != port:
+        return None
+    path_and_query = f"{target.path}?{target.query}" if target.query else target.path
+    return path_and_query if is_relayable_path(path_and_query) else None
+
+
 def fetch_loopback_callback(port: int, path_and_query: str) -> None:
     """Deliver the callback to the sign-in CLI's listener, waiting for it to answer.
 
+    A redirect back to the same listener is followed, once: codex answers its callback by sending
+    the browser to its own `/success` page, and only finishes the login when that page is asked for.
+    A redirect anywhere else is not, since claude's goes off to the provider's own page.
+
     Raises RelayCallbackError when the listener cannot be reached or does not answer in time.
     """
+    deadline = time.monotonic() + CALLBACK_TIMEOUT_SECONDS
     try:
-        httpx.get(f"http://127.0.0.1:{port}{path_and_query}", timeout=CALLBACK_TIMEOUT_SECONDS, follow_redirects=False)
+        response = httpx.get(
+            f"http://127.0.0.1:{port}{path_and_query}", timeout=CALLBACK_TIMEOUT_SECONDS, follow_redirects=False
+        )
+        redirect_path = _same_listener_redirect(response, port)
+        if redirect_path is not None:
+            httpx.get(
+                f"http://127.0.0.1:{port}{redirect_path}",
+                timeout=max(0.1, deadline - time.monotonic()),
+                follow_redirects=False,
+            )
     except httpx.HTTPError as e:
         raise RelayCallbackError(f"the sign-in did not answer ({type(e).__name__})") from e
 
