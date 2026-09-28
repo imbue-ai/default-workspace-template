@@ -265,8 +265,7 @@ def test_recent_wake_times_keeps_only_the_window() -> None:
 def test_the_wake_budget_refuses_a_fourth_wake_in_the_window(
     manager: AppLifecycleManager, supervisor: FakeSupervisor
 ) -> None:
-    clock = manager.clock
-    assert isinstance(clock, FakeClock)
+    clock = _clock_of(manager)
     for _ in range(WAKE_BUDGET_COUNT):
         assert manager.wake("docs") is ParkedPageKind.STARTING
         supervisor.statename_by_program["docs"] = "STOPPED"
