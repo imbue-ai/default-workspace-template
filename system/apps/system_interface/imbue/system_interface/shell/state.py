@@ -477,6 +477,7 @@ class ShellState(MutableModel):
         _, window = self._append_window(desktop, app, path)
         self.broadcast_desktops_updated()
         logger.info("Opened window {} of {} at {} on desktop {} for no client", window.id, app, path, desktop.id)
+        self.lifecycle.wake_soon()
         return WindowOpenOutcome(window=window, is_new=True)
 
     def _append_window(self, desktop: Desktop, app: AppName, path: WindowPath) -> tuple[Desktop, Window]:
