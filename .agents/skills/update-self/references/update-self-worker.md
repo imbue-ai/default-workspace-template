@@ -352,7 +352,7 @@ in your report.
   `--diff-base` here only names what a merged `uv.lock` is compared against,
   so a lock that upgraded a package selects the suites that depend on it. Run
   every printed line, in order, plus `uv run ruff check` when a Python file is
-  in the list, and handle a shed command the way
+  in the list, and handle a failing test and a shed command the way
   `.agents/shared/worker/references/harden-creation.md` ("The test gate")
   says. mngr's own suite runs in its repo, not here.
 - **Isolated-service boots** for each service with a file in the merged set,
