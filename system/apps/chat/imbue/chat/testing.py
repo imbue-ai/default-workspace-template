@@ -552,8 +552,7 @@ class FakePexpectProcess:
         # What pexpect reports once the process has exited: its exit code, or None if a signal ended it.
         self.exitstatus = exitstatus
         self._script = list(expect_script)
-        # Scriptable so the "the CLI has exited" arms are reachable from tests: process exit
-        # is the only success signal codex's device flow has.
+        # Scriptable so the "the CLI has exited" arms are reachable from tests.
         self._is_alive = is_alive
         self._call_idx = 0
         self._drain_chunks = list(drain_chunks)

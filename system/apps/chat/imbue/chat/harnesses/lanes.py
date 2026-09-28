@@ -38,24 +38,6 @@ class LaneNotFoundError(LookupError):
     """
 
 
-class EofPolicy(StrEnum):
-    """What end-of-stream means for a flow.
-
-    Not a detail: for claude, EOF without a value is a failure, while for codex's device
-    flow the process exiting IS the success signal. Opposite readings of the same event.
-    """
-
-    SUCCESS = "success"
-    FAILURE = "failure"
-
-
-class Submit(StrEnum):
-    """What the user sends back after approving in the browser."""
-
-    CODE = "code"
-    NONE = "none"
-
-
 class PasteSink(StrEnum):
     """Where a pasted credential is written. Each is a different mechanism, not a format."""
 
@@ -107,17 +89,12 @@ class PtyMethod(FrozenModel):
     key_gap_s: float = 0.6
     pty_columns: int = DEFAULT_PTY_COLUMNS
 
-    # When the sign-in URL is fixed, there is nothing to scrape for it and `scrape` names
-    # the one-time CODE instead.
-    static_url: str | None = None
     scrape: Scrape
-    # Some CLIs print a success line; agy and codex do not, and fall back to the probe.
+    # Some CLIs print a success line; agy does not, and falls back to the probe.
     success: str | None = None
     # (pattern, user-facing copy). "{1}" interpolates the pattern's first group, so a CLI
     # that explains itself can have its own words shown.
     failures: tuple[tuple[str, str], ...] = ()
-    eof_policy: EofPolicy = EofPolicy.FAILURE
-    submit: Submit = Submit.CODE
 
     # Ink's synchronized-update marker. None means the CLI emits no frame boundaries, so
     # the replay collapses to a single final-screen snapshot -- a real loss of the
@@ -248,7 +225,6 @@ LANE_ANTHROPIC = Lane(
             scrape=_CLAUDE_URL_SCRAPE,
             success=r"Login successful",
             failures=_CLAUDE_FAILURES,
-            eof_policy=EofPolicy.FAILURE,
             relays_browser_sign_in=True,
         ),
         PasteMethod(
@@ -265,7 +241,6 @@ LANE_ANTHROPIC = Lane(
             scrape=_CLAUDE_URL_SCRAPE,
             success=r"Login successful",
             failures=_CLAUDE_FAILURES,
-            eof_policy=EofPolicy.FAILURE,
             relays_browser_sign_in=True,
         ),
     ),
