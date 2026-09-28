@@ -234,10 +234,10 @@ beforeEach(() => {
 });
 
 describe("the combo card", () => {
-  it("renders nothing for a chat the page knows nothing about yet", () => {
+  it("holds the row with a loading chip for a chat the page knows nothing about yet", () => {
     agentState.agent = null;
     render();
-    expect(ROOT().innerHTML).toBe("");
+    expect(ROOT().querySelector(".model-selector-loading")?.textContent).toBe("Loading…");
   });
 
   it("names the account a chat with no agent yet starts on, with no menu to open", () => {
@@ -264,11 +264,13 @@ describe("the combo card", () => {
     agentState.agent = null;
     agentState.provisional = { account_id: "" };
     render();
-    expect(ROOT().innerHTML).toBe("");
+    expect(screenText()).not.toContain("Not connected");
+    expect(ROOT().querySelector(".model-selector-loading")).not.toBeNull();
     agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "" } });
     settingsState.choice = null;
     render();
-    expect(ROOT().innerHTML).toBe("");
+    expect(screenText()).not.toContain("Not connected");
+    expect(ROOT().querySelector(".model-selector-loading")).not.toBeNull();
   });
 
   it("says a running chat with no provider signed in is not connected, and switches it onto the one signed in", () => {
@@ -281,11 +283,14 @@ describe("the combo card", () => {
     expect(chooserOpens).toEqual([{ hasOnSignedIn: true }]);
   });
 
-  it("stays blank for a running chat that names no account while providers are signed in", () => {
+  it("keeps a chip under a running chat that names no account while providers are signed in", () => {
+    // A chat whose agent is still connecting reads this way until its model arrives.
     agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "" } });
     settingsState.choice = null;
     render();
-    expect(ROOT().innerHTML).toBe("");
+    expect(ROOT().querySelector(".model-selector-trigger")?.textContent).toContain("Model");
+    click(".model-selector-trigger");
+    expect(screenText()).toContain("No account");
   });
 
   it("shows the model on the trigger, and opens the card on click", () => {

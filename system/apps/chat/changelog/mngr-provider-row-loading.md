@@ -1,0 +1,1 @@
+- The provider row under the composer no longer sits empty while a chat loads. Until the account list has arrived it shows a "Loading…" chip, and a chat whose agent is still connecting (no account or model to name yet) shows its model chip, reading "Model", instead of nothing, so the row does not pop in when the model arrives.
