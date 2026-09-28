@@ -276,10 +276,10 @@ line's run reported coverage (the chat app's, the shell's and Getting
 Started's do): a run of only some tests fails the coverage floor. In the chat
 app's or the shell's suite add `-m ''` too, or a browser test named in it is
 deselected (AGENTS.md). A test that passes on that rerun without any change of
-yours is flaky, not broken, unless the shed ledger shows its run was shed
-(below), which makes it a shed: name it on your report's `Flaky tests:` line
+yours is flaky, not broken: name it on your report's `Flaky tests:` line
 (your lead reports or tickets it) and move on, without rerunning its suite.
-Other than a shed command's rerun, a suite runs whole again only after you
+Check the shed ledger for its run first (below): a failure the ledger shows
+was shed is a shed, handled as one, not a flaky test. Other than a shed command's rerun, a suite runs whole again only after you
 commit a fix, and then as whatever the fix reaches:
 `select-tests --diff-base <the commit before the fix>`.
 
