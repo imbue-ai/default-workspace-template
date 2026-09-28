@@ -480,7 +480,8 @@ def _referenced_directory_requests(
 def _select_for_unit(context: _SelectionContext, path: str, unit: str) -> _PathOutcome:
     """A package's or skill's own suite; for a package's non-test file, also the suites of the
     members that depend on it and of the directories an app's manifest references, and the full
-    root suite when the root project depends on the package or on one of those members."""
+    root suite when the root project depends on the package or on one of those members. A
+    non-test file in an app's frontend selects nothing here."""
     layout = context.layout
     # An app's frontend is built into the app's own bundle, which no Python code of the app or
     # of a package that depends on it loads; its tests marked browser or frontend, and its npm

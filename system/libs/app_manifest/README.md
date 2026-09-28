@@ -203,14 +203,15 @@ Selection reads only what the workspace declares. A path selects:
 
 - its own tests: the package (`system/{libs,services,apps}/<name>`) or skill
   (`.agents/skills/<name>`) it sits in, or, for a collected test file outside
-  both, that file alone;
+  both, that file alone -- except for a path in an app's frontend, which
+  selects only what the npm package bullet below says;
 - its consumers: every workspace member that depends on its package, directly
   or transitively (`pyproject.toml` dependencies and dependency groups) -- not
   for a test file, which nothing that depends on the package runs, and not for
   a path in an app's frontend, which is built into the app's own bundle;
-- for a path in an app other than a test file, the tests beneath each
-  directory the app's manifest references (a referenced skill drives the
-  app's surface);
+- for a path in an app other than a test file or a frontend path, the tests
+  beneath each directory the app's manifest references (a referenced skill
+  drives the app's surface);
 - the app whose manifest references it (`[[references]]`), or whose program a
   supervisord block holds; a supervisord block also selects
   `oom_priority`'s `oom_tag_service_test.py`, which checks that every program
