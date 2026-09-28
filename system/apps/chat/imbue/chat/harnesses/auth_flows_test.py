@@ -580,6 +580,23 @@ def test_a_re_auth_leaves_the_live_credential_in_place(tmp_path: Path) -> None:
     assert token.read_text() == "live-token"
 
 
+def test_a_re_auth_is_not_decided_by_the_credential_it_replaces(tmp_path: Path) -> None:
+    """agy's probe only sees that a credential is there, so it says yes for the old one as well.
+    The re-auth stays pending until agy writes a new credential, and then the probe decides."""
+    service = AuthFlowService.create(
+        key_checker=_accept_key, home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES
+    )
+    account_id, token = _agy_account(tmp_path, service)
+    process = FakePexpectProcess([(0, f"Visit {_AGY_URL}")], drain_chunks=[f"Visit {_AGY_URL}\r\n"])
+    service._spawner = lambda *_a, **_k: process
+    again = service.start("google", "oauth", account_id=account_id)
+
+    assert service.submit_code(again.flow_id, "4/0Aexample").state is FlowState.PENDING
+
+    token.write_text("new-token")
+    assert service.poll(again.flow_id).state is FlowState.OK
+
+
 def _finished_claude(output: str, exitstatus: int | None) -> FakePexpectProcess:
     process = FakePexpectProcess(
         [(0, f"Browser didn't open? Use the url below\r\n{_CLAUDE_MANUAL_URL}")],
