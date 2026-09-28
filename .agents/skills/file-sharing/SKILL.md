@@ -42,7 +42,7 @@ no copy here.
   it: Mind moves folders in and out of it by name, and anything of yours
   sitting where a folder belongs is deleted when the user turns syncing off
   again. If you need somewhere to put your own files, use your working
-  directory or `/tmp`.
+  directory, or `/tmp` for small files (`/var/tmp` for anything large).
 
 ### Whether your writes reach the user
 

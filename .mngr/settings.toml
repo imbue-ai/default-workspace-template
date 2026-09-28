@@ -496,16 +496,17 @@ host_log_dir = "/var/log/mngr"
 # same way (gen-2 slices run under runsc from the bake).
 # /tmp is tmpfs here so it starts empty on every container start: the
 # container's root filesystem, /tmp included, otherwise survives a restart
-# (under runc, and under runsc with --overlay2=none). The cost is that /tmp
-# is memory: whatever is written there counts against the container's memory
-# limit and no process kill frees it, so a multi-GB write (a copy of a large
-# app's data, say) can take the workspace down. Cloud
-# workspaces avoid this by keeping /tmp on disk and emptying it from the
-# container's entrypoint (mngr_vps); the local docker provider's entrypoint
-# does not empty /tmp. It says `exec` because Docker mounts a bare `--tmpfs`
-# noexec, and a stub executable a test writes under /tmp and puts on PATH is
-# then skipped, so the real binary it stands in for runs instead.
-default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec"]
+# (under runc, and under runsc with --overlay2=none, which also mounts its own
+# unbounded tmpfs on an empty /tmp). A tmpfs is memory that counts against the
+# container's limit and no process kill frees, so it is capped: a write past
+# the cap fails with ENOSPC instead of OOM-killing the workspace. The cap is a
+# fixed 1 GiB because this file cannot see the host's RAM, and a `size=N%`
+# resolves against the host's RAM rather than the container's limit. Cloud
+# workspaces get the same mount from mngr_vps, sized at an eighth of the VM's
+# RAM. It says `exec` because Docker mounts a bare `--tmpfs` noexec, and a stub
+# executable a test writes under /tmp and puts on PATH is then skipped, so the
+# real binary it stands in for runs instead.
+default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec,size=1g"]
 
 [providers.lima]
 # is_enabled=false (mirrors [providers.docker]) is load-bearing: the lima backend
