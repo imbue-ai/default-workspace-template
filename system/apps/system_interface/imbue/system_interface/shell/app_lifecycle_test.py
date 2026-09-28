@@ -1,6 +1,8 @@
 """Tests for the app lifecycle manager: parking, waking, the wake budget, and the stop verb."""
 
 import socket
+import time
+from collections.abc import Callable
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -9,11 +11,15 @@ import pytest
 from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
+from imbue.system_interface.shell.app_lifecycle import ProgramAction
+from imbue.system_interface.shell.app_lifecycle import ProgramStatesReader
 from imbue.system_interface.shell.app_lifecycle import TRANSITION_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_WINDOW_SECONDS
+from imbue.system_interface.shell.app_lifecycle import WindowCountsReader
 from imbue.system_interface.shell.app_lifecycle import recent_wake_times
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
+from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.liveness import probe_tcp_url
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.testing import FakeLivenessProber
@@ -77,6 +83,27 @@ def windows() -> FakeWindows:
     return FakeWindows()
 
 
+def _manager_over(
+    inventory: AppInventory,
+    supervisor: FakeSupervisor,
+    count_windows_by_app: WindowCountsReader | None = None,
+    program_states: ProgramStatesReader | None = None,
+    start_program: ProgramAction | None = None,
+    clock: Callable[[], float] | None = None,
+) -> AppLifecycleManager:
+    """A manager that is never enabled (each test sweeps it by hand) over the fake supervisor's verbs, no windows,
+    and a fresh fake clock, any of which a test replaces with its own."""
+    return AppLifecycleManager(
+        inventory=inventory,
+        is_enabled=False,
+        count_windows_by_app=count_windows_by_app if count_windows_by_app is not None else lambda: {},
+        program_states=program_states if program_states is not None else supervisor.states,
+        start_program=start_program if start_program is not None else supervisor.start,
+        stop_program=supervisor.stop,
+        clock=clock if clock is not None else FakeClock(),
+    )
+
+
 @pytest.fixture
 def manager(
     tmp_path: Path,
@@ -96,16 +123,8 @@ def manager(
         registry_row_toml("shell", "http://127.0.0.1:1", program="shell", is_critical=True),
         registry_row_toml("plain", "http://127.0.0.1:1"),
     )
-    inventory = build_inventory(registry_path, broadcaster, prober=prober)
-    clock = FakeClock()
-    built = AppLifecycleManager(
-        inventory=inventory,
-        is_enabled=False,
-        count_windows_by_app=windows.get_counts,
-        program_states=supervisor.states,
-        start_program=supervisor.start,
-        stop_program=supervisor.stop,
-        clock=clock,
+    built = _manager_over(
+        build_inventory(registry_path, broadcaster, prober=prober), supervisor, count_windows_by_app=windows.get_counts
     )
     try:
         yield built
@@ -211,15 +230,7 @@ def test_a_pass_does_not_park_an_app_woken_after_its_state_was_read(
             racing.wake("docs")
         return states
 
-    racing = AppLifecycleManager(
-        inventory=manager.inventory,
-        is_enabled=False,
-        count_windows_by_app=lambda: {},
-        program_states=read_states_then_wake,
-        start_program=supervisor.start,
-        stop_program=supervisor.stop,
-        clock=clock,
-    )
+    racing = _manager_over(manager.inventory, supervisor, program_states=read_states_then_wake, clock=clock)
     try:
         racing.sweep_once()
         assert supervisor.started == ["docs"]
@@ -330,14 +341,7 @@ def test_wake_and_wait_answers_once_the_app_accepts(
             listener.listen(1)
             is_bound[0] = True
 
-    waiting = AppLifecycleManager(
-        inventory=manager.inventory,
-        is_enabled=False,
-        count_windows_by_app=lambda: {},
-        program_states=supervisor.states,
-        start_program=start,
-        stop_program=supervisor.stop,
-    )
+    waiting = _manager_over(manager.inventory, supervisor, start_program=start, clock=time.monotonic)
     try:
         assert waiting.wake_and_wait(entry, timeout_seconds=5.0) is True
     finally:
@@ -365,15 +369,7 @@ def test_wake_and_wait_gives_up_once_the_port_is_parked_again(
         clock.now += 1
         failing.sweep_once()
 
-    failing = AppLifecycleManager(
-        inventory=manager.inventory,
-        is_enabled=False,
-        count_windows_by_app=lambda: {},
-        program_states=supervisor.states,
-        start_program=start_then_fail_and_sweep,
-        stop_program=supervisor.stop,
-        clock=clock,
-    )
+    failing = _manager_over(manager.inventory, supervisor, start_program=start_then_fail_and_sweep, clock=clock)
     try:
         assert failing.wake_and_wait(entry, timeout_seconds=5.0) is False
         assert failing.is_app_parked("docs")
@@ -461,15 +457,7 @@ def test_an_app_that_does_not_declare_the_field_is_never_stopped(
     )
     supervisor.statename_by_program["docs"] = "RUNNING"
     clock = FakeClock()
-    keeping = AppLifecycleManager(
-        inventory=build_inventory(registry_path, broadcaster),
-        is_enabled=False,
-        count_windows_by_app=lambda: {},
-        program_states=supervisor.states,
-        start_program=supervisor.start,
-        stop_program=supervisor.stop,
-        clock=clock,
-    )
+    keeping = _manager_over(build_inventory(registry_path, broadcaster), supervisor, clock=clock)
     keeping.mark_visited()
     keeping.sweep_once()
     clock.now += NO_WINDOWS_GRACE_SECONDS * 2
@@ -540,14 +528,8 @@ def test_a_pass_reads_the_window_counts_at_most_once_and_only_when_an_app_needs_
     )
     supervisor.statename_by_program.update({"docs": "RUNNING", "notes": "RUNNING", "keeper": "RUNNING"})
     windows.count_by_app["notes"] = 1
-    counting = AppLifecycleManager(
-        inventory=build_inventory(registry_path, broadcaster),
-        is_enabled=False,
-        count_windows_by_app=windows.get_counts,
-        program_states=supervisor.states,
-        start_program=supervisor.start,
-        stop_program=supervisor.stop,
-        clock=FakeClock(),
+    counting = _manager_over(
+        build_inventory(registry_path, broadcaster), supervisor, count_windows_by_app=windows.get_counts
     )
     try:
         counting.mark_visited()
