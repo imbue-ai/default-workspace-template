@@ -490,13 +490,6 @@ def test_a_visitor_cannot_change_the_workspaces_ai_accounts(
     assert read_index().accounts == ()
 
 
-def test_a_visitor_still_sees_the_accounts_its_chats_run_on(tmp_path: Path) -> None:
-    with _client(_signed_in_service(tmp_path)) as client:
-        response = client.get("/api/accounts", headers={"X-Imbue-Identity": _VISITOR})
-
-    assert response.status_code == 200
-
-
 def test_an_account_on_a_pasted_subscription_token_is_flagged() -> None:
     token_id, token_dir = mint_account_dir()
     commit_account(token_id, "anthropic", "Anthropic")
@@ -531,9 +524,11 @@ def test_an_api_key_account_signs_in_again_with_a_key() -> None:
     }
 
 
-def test_the_account_list_tells_a_visitor_it_cannot_manage_accounts(tmp_path: Path) -> None:
+def test_a_visitor_sees_the_accounts_but_is_told_it_cannot_manage_them(tmp_path: Path) -> None:
     with _client(_signed_in_service(tmp_path)) as client:
-        owner = client.get("/api/accounts").get_json()
-        visitor = client.get("/api/accounts", headers={"X-Imbue-Identity": _VISITOR}).get_json()
+        owner = client.get("/api/accounts")
+        visitor = client.get("/api/accounts", headers={"X-Imbue-Identity": _VISITOR})
 
-    assert (owner["can_manage"], visitor["can_manage"]) == (True, False)
+    # Reading stays open to a visitor, since its chats render from the list.
+    assert (owner.status_code, visitor.status_code) == (200, 200)
+    assert (owner.get_json()["can_manage"], visitor.get_json()["can_manage"]) == (True, False)
