@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -366,6 +367,38 @@ def test_an_app_reached_through_a_library_and_its_frontend_adds_only_its_browser
     assert "(cd system/apps/chat && uv run pytest --no-cov -m browser)" in lines
     assert _CHAT_BROWSER_AND_FRONTEND not in lines
     assert lines[-1] == _CHAT_TYPE_CHECK
+
+
+def test_a_frontend_change_to_an_app_the_root_suite_runs_runs_its_browser_and_frontend_tests(
+    workspace: Path,
+) -> None:
+    write_repo_file(
+        workspace,
+        "system/package.json",
+        json.dumps({"name": "frontends", "workspaces": ["libs/ui", "apps/chat/frontend", "apps/notes/frontend"]}),
+    )
+    write_repo_file(
+        workspace,
+        "system/apps/notes/frontend/package.json",
+        json.dumps({"name": "notes-frontend", "scripts": {"build": "vite build", "test": "vitest run"}}),
+    )
+    write_repo_file(workspace, "system/apps/notes/frontend/src/main.ts", "export {};\n")
+    commit_everything(workspace, "notes gets a frontend")
+
+    frontend = _select(workspace, ["system/apps/notes/frontend/src/main.ts"])
+    both = _select(
+        workspace, ["system/apps/notes/frontend/src/main.ts", "system/apps/notes/src/notes/core.py"]
+    )
+
+    assert _command_lines(frontend) == [
+        *_FRONTEND_BUILD,
+        "(cd system && npm test --workspace=apps/notes/frontend)",
+        _ALWAYS_RUN,
+        "uv run pytest -m 'browser or frontend' system/apps/notes",
+    ]
+    # A Python change to the same app runs its whole suite, which already holds those tests.
+    assert "uv run pytest system/apps/notes" in _command_lines(both)
+    assert "uv run pytest -m 'browser or frontend' system/apps/notes" not in _command_lines(both)
 
 
 def test_a_frontend_change_does_not_reach_the_python_consumers_of_the_apps_package(

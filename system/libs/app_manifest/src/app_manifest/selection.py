@@ -437,7 +437,12 @@ def _whole_request(
         root=own_root,
         group=own_root if own_root != ROOT_DIRECTORY else directory,
         test_files=None,
-        marker_scope=marker_scope if own_root != ROOT_DIRECTORY else MarkerScope.DEFAULT,
+        # The root suite deselects nothing by default, so its default run is every test.
+        marker_scope=(
+            MarkerScope.DEFAULT
+            if own_root == ROOT_DIRECTORY and marker_scope == MarkerScope.EVERYTHING
+            else marker_scope
+        ),
         reason=reason,
     )
 
@@ -536,13 +541,17 @@ def _frontend_requests(
     frontend = [
         _FrontendRequest(package_directory=directory, reason=reason) for directory in selected
     ]
-    own_roots = sorted(
-        {_own_root_for(layout, directory) for directory in selected} - {ROOT_DIRECTORY}
+    units = sorted(
+        {
+            unit
+            for directory in selected
+            if (unit := find_owning_unit(f"{directory}/package.json")) is not None
+        }
     )
     marked = list(
         _present(
-            _whole_request(layout, own_root, marker_scope=MarkerScope.FRONTEND, reason=reason)
-            for own_root in own_roots
+            _whole_request(layout, unit, marker_scope=MarkerScope.FRONTEND, reason=reason)
+            for unit in units
         )
     )
     return frontend, marked
@@ -736,6 +745,16 @@ def _command(
     )
 
 
+@pure
+def _runs_root_group_whole(requests: Iterable[_PytestRequest]) -> bool:
+    """Whether a root-collected group runs every one of its tests, rather than only those
+    marked browser or frontend, or only named files."""
+    return any(
+        request.test_files is None and request.marker_scope != MarkerScope.FRONTEND
+        for request in requests
+    )
+
+
 def _pytest_commands(
     layout: RepoLayout,
     requests: Sequence[_PytestRequest],
@@ -752,7 +771,7 @@ def _pytest_commands(
     whole_root_directories = [
         group
         for (root, group), group_requests in by_group.items()
-        if root == ROOT_DIRECTORY and any(request.test_files is None for request in group_requests)
+        if root == ROOT_DIRECTORY and _runs_root_group_whole(group_requests)
     ]
     root_commands: list[SuiteCommand] = []
     own_root_commands: list[SuiteCommand] = []
@@ -763,9 +782,13 @@ def _pytest_commands(
         whole = [request for request in group_requests if request.test_files is None]
         files = sorted({file for request in group_requests for file in (request.test_files or ())})
         if root == ROOT_DIRECTORY:
+            is_whole_run = _runs_root_group_whole(whole)
+            if whole and not is_whole_run:
+                argv = ("uv", "run", "pytest", "-m", _FRONTEND_MARKERS_EXPRESSION, group)
+                root_commands.append(_command(SuiteKind.PYTEST, root, argv, reasons))
             targets = (
                 [group]
-                if whole
+                if is_whole_run
                 else [
                     file
                     for file in files
