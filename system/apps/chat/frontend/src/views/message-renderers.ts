@@ -8,7 +8,7 @@ import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
-import { openProviderChooser } from "../models/Providers";
+import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
 import { beginSwitchToAccountId } from "./SwitchDialog";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -419,9 +419,10 @@ export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning
 /** The two ways out under an auth failure: "Sign in again", and the switch link beside it.
  *
  * "Sign in again" resolves the chat's own account from its `account` label, so the chooser opens
- * ON that account and re-authenticates it in place -- every chat bound to it recovers. Without
- * the label (a chat from before accounts, say) it opens the chooser plainly, which is still the
- * right destination.
+ * ON that account and re-authenticates it in place -- every chat bound to it recovers. When the
+ * label names no signed-in account (a chat from before accounts, or one whose account was signed
+ * out and signed in again as a new one), there is nothing to re-authenticate: the account signed
+ * in, or picked, is what this chat moves to.
  */
 const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
 
@@ -435,7 +436,19 @@ function renderReauthAction(chatId: string): m.Children {
       {
         type: "button",
         class: REAUTH_ACTION_CLASS,
-        onclick: () => openProviderChooser(accountId ? { accountId } : {}),
+        onclick: () => {
+          // Before the account list has loaded no account reads as signed in, which says nothing
+          // about whether this chat's is gone.
+          const isOwnAccountSignedIn =
+            accountId !== "" && (!areAccountsLoaded() || accountForAgent(accountId) !== null);
+          openProviderChooser(
+            isOwnAccountSignedIn
+              ? { accountId }
+              : chat === undefined
+                ? {}
+                : { onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen) },
+          );
+        },
       },
       "Sign in again",
     ),

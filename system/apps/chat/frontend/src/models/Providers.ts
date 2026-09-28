@@ -104,6 +104,8 @@ let mru: string | null = null;
 // pinned and the most recently used one stands in.
 let defaultAccountId: string | null = null;
 let lanesLoaded = false;
+// Whether the account list has been fetched once, so an empty list can be told from one not read yet.
+let accountsLoaded = false;
 
 export function getLanes(): Lane[] {
   return lanes;
@@ -137,6 +139,10 @@ export async function setDefaultAccount(accountId: string, isDefault: boolean): 
   await loadAccounts();
 }
 
+export function areAccountsLoaded(): boolean {
+  return accountsLoaded;
+}
+
 export function areLanesLoaded(): boolean {
   return lanesLoaded;
 }
@@ -156,6 +162,7 @@ export async function loadAccounts(): Promise<void> {
   accounts = body.accounts;
   mru = body.mru;
   defaultAccountId = body.default;
+  accountsLoaded = true;
 }
 
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.
@@ -363,6 +370,12 @@ export function clearFlow(): void {
  * the server land on the same account.
  */
 let selectedAccountId: string | null = null;
+
+/** The account a chat with no agent yet starts on: the one it was minted for, else the selected
+ *  one. Null when neither exists, and its first send has to ask for a sign-in. */
+export function accountForFirstSend(accountId: string | undefined): ProviderAccount | null {
+  return accountForAgent(accountId) ?? getSelectedAccount();
+}
 
 export function getSelectedAccount(): ProviderAccount | null {
   const pinned = accounts.find((account) => account.id === defaultAccountId);
