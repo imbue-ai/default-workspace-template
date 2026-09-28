@@ -6,11 +6,12 @@ that is down (``shell/port_parking.py``), releases a parker whose app is up or a
 an app that failed to start with the failure page, and stops a running app that declares
 ``stop_when_no_windows`` once no window on any desktop has shown it for the grace period, provided a client has
 arrived at the shell since it started (spec section 6: before anyone has looked at the workspace, "no windows"
-says nothing about use, and the apps that deliver something on the first visit need to be running for it). A wake releases the parker before asking supervisord to start
-the program, so the app's first bind never collides with the shell's listener, and is budgeted so a broken app
-cannot be restarted by every reload. Supervisord access is injectable, and the sweep thread runs (and a POST
-launch wakes a stopped app) only when the manager is enabled: never in a preview shell, whose registry is a copy
-of the live one, and in tests only when a test says so.
+says nothing about use, and the apps that deliver something on the first visit need to be running for it). A
+wake releases the parker before asking supervisord to start the program, so the app's first bind never collides
+with the shell's listener, and is budgeted so a broken app cannot be restarted by every reload. Supervisord
+access is injectable, and the sweep thread runs (and a POST launch wakes a stopped app) only when the manager is
+enabled: never in a preview shell, whose registry is a copy of the live one, and in tests only when a test says
+so.
 """
 
 import socket
