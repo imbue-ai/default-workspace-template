@@ -468,7 +468,8 @@ def _revive_and_retry_send(
 def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
     """Deliver one message to an agent the way the message route does, revival included.
 
-    Raises ``SendFailedError`` with the harness's own words when it refused. Shared with the
+    Raises ``SendFailedError`` with the harness's own words when it refused, and can raise
+    mngr's ``AgentNotFoundError`` when mngr no longer lists the agent. Shared with the
     handoff (its summary request and the sends it held), so every message a chat's agent
     receives takes one path.
     """
