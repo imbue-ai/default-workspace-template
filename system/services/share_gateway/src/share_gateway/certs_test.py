@@ -13,6 +13,7 @@ from cryptography.x509.oid import NameOID
 from share_gateway.certs import build_share_csr
 from share_gateway.certs import cert_matches_share
 from share_gateway.certs import cert_needs_renewal
+from share_gateway.certs import classify_connector_refusal
 from share_gateway.certs import load_or_create_workspace_key
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
@@ -70,3 +71,16 @@ def test_cert_needs_renewal_by_threshold() -> None:
     expiring = _self_signed([_DOMAIN], days_valid=10)
     assert cert_needs_renewal(expiring) is True
     assert cert_needs_renewal("garbage") is True
+
+
+def test_connector_refusals_are_retryable_only_for_throttling_and_server_errors() -> None:
+    assert classify_connector_refusal(429, "900") == (True, 900)
+    assert classify_connector_refusal(503, " 120 ") == (True, 120)
+    assert classify_connector_refusal(502, None) == (True, None)
+    assert classify_connector_refusal(408, None) == (True, None)
+    assert classify_connector_refusal(400, None) == (False, None)
+    assert classify_connector_refusal(401, "60") == (False, 60)
+
+
+def test_http_date_retry_after_is_ignored() -> None:
+    assert classify_connector_refusal(429, "Sun, 13 Sep 2026 12:00:00 GMT") == (True, None)

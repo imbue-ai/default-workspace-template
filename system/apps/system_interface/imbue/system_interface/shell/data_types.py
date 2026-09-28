@@ -298,6 +298,13 @@ class WindowPlacement(FrozenModel):
     frame: Frame = Field(description="The frame, kept through every state so restore has somewhere to go")
     state: WindowState = Field(description="Normal, snapped to a half, or maximized")
     is_minimized: bool = Field(description="Whether the window is out of sight; orthogonal to the state")
+    is_detached: bool = Field(
+        default=False,
+        description=(
+            "Whether the window is pulled out into a desktop window of the embedding chrome's own (the "
+            "pull-out-window spec): a ghost at its frame here, its page shown there; orthogonal to the state"
+        ),
+    )
 
 
 class DesktopLayout(FrozenModel):

@@ -84,7 +84,7 @@ class DisplayKind(StrEnum):
 
     # No DOM at all (an older chat's /welcome, a model-bar command, a framework-injected line).
     HIDDEN = "hidden"
-    # A collapsed chip inside the current turn; ``display_label`` is its title.
+    # A collapsed chip at the point it arrived; ``display_label`` is its title.
     CHIP = "chip"
     # Relocated into the preceding Skill tool-call block; ``display_label`` is the skill name.
     SKILL_EXPANSION = "skill_expansion"

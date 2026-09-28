@@ -30,7 +30,8 @@ format. In brief:
   the whole of what the shell knows about what a window shows.
 - A **placement** is where one client keeps one window: its frame in fractions
   of the backdrop, whether it is snapped or maximized, whether it is
-  minimized; the order is the stack. A **client** is one browser context,
+  minimized, whether it is pulled out into a desktop window of the Mind app's
+  own; the order is the stack. A **client** is one browser context,
   identified by a stored id, with an active desktop. Truth is shared,
   arrangement is scoped.
 - A **shortcut** is an icon on a desktop's backdrop that runs one app's launch
@@ -97,7 +98,7 @@ and the profile cache.
   wallpaper, shortcuts, windows), a `Window` (an app, a path
   under its origin, and the title its page last reported; shared), and per
   client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
-  backdrop, state, minimized; the order is the stack).
+  backdrop, state, minimized, detached; the order is the stack).
 - **Pinned windows** (`docs/system/blueprint/pinned-taskbar-entries/`): an
   app whose manifest declares a `[pin]` has exactly one pinned window on
   every desktop, reconciled on every read after the registry is read and
@@ -116,7 +117,8 @@ and the profile cache.
   a while are pruned with their placement files. `users.json` holds the
   desktop made for each visiting user (see "Who is here").
 - **The pure editor** (`shell/desktop_document.py`): every verb (open, close,
-  focus, minimize, restore, maximize, snap, place, the shortcut edits) and
+  focus, minimize, restore, maximize, snap, place, detach, reattach, the
+  shortcut edits) and
   every geometry rule (cascade, fit, snap zones, un-snap, the grid, nearest
   free cell, reading order, shortcut placement) as pure functions over the
   records. The rules the frontend also applies pass the shared vectors in
@@ -340,12 +342,15 @@ clients listed otherwise); `--desktop` edits that desktop and switches the
 client to it; `open` opens a window at `--path` or at a launch path
 (`--launch`, `--param`; a bare URL is the browser's `new`; a POST launch path
 is posted the params for the page it answers), minimized with
-`--minimized`, and prints the window's id; an `open` with no client to target
-still writes the window, unplaced. A close is posted to the app's registered
-`window_closed_path`, when it has one, so an app whose resources live as long
-as their windows (the terminal, the browser) can collect at once
-(`docs/system/specs/window-bound-resources.md`). Only `refresh` and the
-interface reload reach the browser as messages. See the `manage-desktop` skill for end-to-end orientation.
+`--minimized` or beside a window (`--beside [window]`, bare the caller's own
+chat), which is moved across only where it has to be and never resized unless
+it is over half the backdrop wide, and prints the window's id;
+an `open` with no client to target still writes the window, unplaced. A close
+is posted to the app's registered `window_closed_path`, when it has one, so an
+app whose resources live as long as their windows (the terminal, the browser)
+can collect at once (`docs/system/specs/window-bound-resources.md`). Only
+`refresh` and the interface reload reach the browser as messages. See the
+`manage-desktop` skill for end-to-end orientation.
 
 ## Updating the running UI
 

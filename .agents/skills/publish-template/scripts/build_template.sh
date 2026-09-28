@@ -185,7 +185,7 @@ MANIFEST_TOML="template.toml"
 THUMBNAIL="template.svg"
 
 # Substituted by the lead in publish-template §7 once the owner and repo name
-# are both known -- the README's "Open in Mind" button and its copyable
+# are both known -- the README's "Open in Imbue Studio" button and its copyable
 # fallback both need the repo URL, which does not exist when this script runs.
 # §8's pre-push gate greps for any leftover, exactly as it does for the
 # placeholder thumbnail.
@@ -701,13 +701,14 @@ THUMB_EOF
 # That is wrong for a published template: the repo's landing page -- the
 # thing that decides whether a person boots this at all -- must sell THIS
 # project. The structure below is the house recipe: hero graphic, the "Open in
-# Mind" call-to-action, why you care, how to use it, ideas for making it
-# yours. Deterministic full-file write, regenerated on every publish.
+# Imbue Studio" call-to-action, why you care, how to use it, ideas for making
+# it yours. Deterministic full-file write, regenerated on every publish.
 #
-# The call-to-action points at the HTTPS trampoline rather than a bare
-# minds:// URL, which GitHub renders dead. Both it and the copyable fallback
-# need the repo URL, which does not exist yet (the repo name is confirmed in
-# §6 and the owner comes back from the create call in §8), so both carry
+# The call-to-action points at the Studio trampoline page (a connector route
+# on the web chrome origin) rather than a bare imbue-studio:// URL, which
+# GitHub renders dead. Both it and the copyable fallback need the repo URL,
+# which does not exist yet (the repo name is confirmed in §6 and the owner
+# comes back from the create call in §8), so both carry
 # ${REPO_URL_PLACEHOLDER} for the lead to substitute before the push.
 
 cat > README.md <<README_EOF
@@ -718,10 +719,10 @@ cat > README.md <<README_EOF
 # ${TITLE}
 
 <p align="center">
-  <a href="https://boweiliu.github.io/open-in-minds/?git_url=https://github.com/${REPO_URL_PLACEHOLDER}"><img alt="Open in Mind" height="64" src="https://img.shields.io/badge/Open%20in%20Mind-D8D1C0?style=for-the-badge"></a>
+  <a href="https://studio.imbue.com/open?git_url=https://github.com/${REPO_URL_PLACEHOLDER}"><img alt="Open in Imbue Studio" height="64" src="https://img.shields.io/badge/Open%20in%20Imbue%20Studio-D8D1C0?style=for-the-badge"></a>
 </p>
 
-Didn't work? Create a Mind workspace and paste this to your agent:
+Didn't work? Create a Studio workspace and paste this to your agent:
 \` /use-template https://github.com/${REPO_URL_PLACEHOLDER}\`
 
 ## Why you care
