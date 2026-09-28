@@ -309,6 +309,21 @@ the dialog, or at once for a chat with nothing to hand over -- see the switch
 above). `system/scripts/migrate_claude_auth.py` imports this package from
 the root venv.
 
+A Claude or ChatGPT sign-in finishes in the user's own browser. The CLI (`claude
+auth login`, or a short-lived `codex app-server` for ChatGPT) runs with
+`system/scripts/minds_browser_shim` as `$BROWSER`, which records the page it
+would open; the flow offers it as `relay_url`, and the chooser hands it to the
+minds desktop app (`minds:provider-sign-in` in the embed contract). The desktop
+app opens the page and listens on the loopback port it calls back to, posting
+each request to `POST /api/accounts/flow/<flow_id>/callback`, which replays the
+callback against the CLI here (`harnesses/sign_in_relay.py`). With no desktop
+app to relay, Claude falls back to pasting the code its page shows, and ChatGPT
+to its one-time-code login. Changing the accounts is the owner's alone: every
+route that starts, advances or removes a sign-in answers 403 to a request whose
+`X-Imbue-Identity` says `owner: false`. A pasted Anthropic or OpenAI key is
+checked with its provider before it is saved, and a Claude subscription token is
+never accepted or kept.
+
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare
 create the Minds app's chats fall back to on a template whose script has no

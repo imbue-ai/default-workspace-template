@@ -1,0 +1,1 @@
+- The embed module adds the provider sign-in pair from embed contract v7: `PROVIDER_SIGN_IN` (workspace to embedder, `{url, flowId}`) and `PROVIDER_SIGN_IN_ACK` (embedder to workspace, `{relay}`), probed so an older vendored contract still builds. It no longer registers the retired AI-key mint's ack.

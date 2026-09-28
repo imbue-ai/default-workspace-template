@@ -1,0 +1,1 @@
+- Host backups exclude `**/.minds/accounts/*/.credentials.json`, the credential a Claude subscription sign-in writes. Anthropic's terms do not let it be copied off the machine it was issued to; after a restore the owner signs in again.
