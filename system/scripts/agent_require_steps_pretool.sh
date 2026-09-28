@@ -29,6 +29,11 @@ input=$(cat)
 # Skip if subagent proxy child -- subagents manage their own steps.
 [[ -z "${MNGR_CLAUDE_SUBAGENT_PROXY_CHILD:-}" ]] || exit 0
 
+# Skip a build's plan-node worker. It keeps no progress records at all: the only timeline the
+# user sees belongs to the orchestrator that launched it, and it shows them stages of the build
+# rather than nodes. Nudging one to declare steps would contradict its own task file.
+[[ "${MNGR_AGENT_ROLE:-}" != "worktree_worker" ]] || exit 0
+
 tool_name=$(echo "$input" | jq -r '.tool_name // empty')
 
 # Tools that don't count as "substantive work" -- the agent should be free

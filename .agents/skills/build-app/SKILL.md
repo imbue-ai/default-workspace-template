@@ -83,8 +83,10 @@ review -- follows `.agents/shared/references/user-facing-language.md`. Plans,
 nodes, workers, folders, merges and commits are machinery the user never hears
 about.
 
-Show the user stages, not nodes. Create these steps up front, in order, and
-close each when its stage ends:
+Show the user stages, not nodes. Create these steps up front, in order -- that
+costs nothing, since no worker exists yet -- and close each when its stage ends.
+Once workers are running, a stage transition is bookkeeping like any other: do it
+*after* you have launched everything that is ready, never between two launches.
 
 1. "Understand what you want"
 2. "Plan the build"
@@ -97,6 +99,10 @@ close each when its stage ends:
 Workers keep running in the background across stage boundaries (a node that
 does not need the mock review runs while the user looks at the mock). That is
 expected; the stage reflects what the user is waiting on.
+
+This timeline is the only one there is. Workers keep no records of their own, so
+nothing they do appears here except through the stage you are in and the report
+you read when they finish.
 
 ## Step 1: Clarify (business terms only)
 
@@ -224,9 +230,10 @@ Repeat until every node is done.
    Launch every ready node before you wait for any of them -- that is what makes
    them run at once -- and put the bookkeeping after the launches, not between
    them. Updating `$RUN/progress.txt`, destroying a finished worker, reading a
-   report: every one of those is time no worker is being started. The order that
-   keeps the build busy is **launch, launch, launch, then tidy up while they
-   work**.
+   report, **closing one stage and starting the next with `tk`**: every one of
+   those is time no worker is being started, and every one of them runs just as
+   well once the workers are going. The order that keeps the build busy is
+   **launch, launch, launch, then tidy up while they work**.
 
    The one thing that cannot wait is the merge. When a report lands mid-wave,
    merge that node's branch (item 5) *before* you run `ready`, because a node
