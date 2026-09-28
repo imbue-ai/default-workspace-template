@@ -173,6 +173,10 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     # proves the resulting handler order against the real binary.
     assert "order request_header before forward_auth" in rendered
     assert "rewrite * /_auth/loading" in rendered
+    assert "auto_https off" in rendered
+    # h1/h2 only: h3 is UDP and cannot traverse the SNI-passthrough relay, so
+    # it must not be advertised via Alt-Svc.
+    assert "protocols h1 h2" in rendered
 
 
 def test_caddyfile_serves_the_loading_page_for_a_backend_it_cannot_reach() -> None:
@@ -182,7 +186,3 @@ def test_caddyfile_serves_the_loading_page_for_a_backend_it_cannot_reach() -> No
     # loading page an unknown origin does, rather than caddy's bare 502.
     assert "handle_errors 502 {" in rendered
     assert rendered.count("rewrite * /_auth/loading") == 2
-    assert "auto_https off" in rendered
-    # h1/h2 only: h3 is UDP and cannot traverse the SNI-passthrough relay, so
-    # it must not be advertised via Alt-Svc.
-    assert "protocols h1 h2" in rendered
