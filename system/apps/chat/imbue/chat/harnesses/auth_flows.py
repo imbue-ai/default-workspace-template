@@ -197,10 +197,6 @@ class _Session:
     # What the probe last said, or None if it has not run. Only UNKNOWN matters: it means
     # "the check failed", not "the credential is bad", so the folder is worth keeping.
     last_verdict: SignedIn | None
-    # A re-auth takes the account's existing credential AWAY before driving the CLI, so the
-    # promote probe answers about the NEW sign-in rather than the old file. These are the
-    # bytes it took, restored on every path that does not end in a fresh credential.
-    cleared_credentials: Mapping[Path, bytes | None]
     # Where the browser shim records the sign-in URL; removed with the session.
     scratch_dir: Path | None
     relay_url: str | None
@@ -238,7 +234,6 @@ def _new_session(lane: Lane, method: PtyMethod | PasteMethod, account_id: str, m
     session.timer = None
     session.code_submitted = False
     session.last_verdict = None
-    session.cleared_credentials = {}
     session.scratch_dir = None
     session.relay_url = None
     session.relay_target = None
@@ -330,64 +325,33 @@ class AuthFlowService:
             binding = build_account_binding(lane.harness)
             binding.seed_account(account_path, self._work_dir)
 
+            # A re-auth leaves the account's credential where it is: the CLI writes the new one
+            # over it, and the account keeps working meanwhile. What decides that a sign-in
+            # landed is the CLI saying so, never a probe that would also see the old credential.
             session = _new_session(lane, method, account_id, minted)
             self._session = session
-            # Take the old credential away first. Three of the four promote probes are
-            # presence checks, not validity checks -- `claude auth status --json` reports
-            # loggedIn for a bogus key, and so do codex and pi -- so a re-auth that the user
-            # abandons in the browser would otherwise be judged against the file that was
-            # already there and reported as a success. Nothing changed, and the UI says
-            # "signed in again".
-            if not minted:
-                session.cleared_credentials = _read_credentials(binding.credential_paths(account_path))
-                # Parked on DISK before anything is unlinked, so the only copy is never
-                # process memory alone. A stop, a snapshot or an OOM kill in this window used
-                # to destroy a working credential with no trace: the row still pointed at a
-                # folder that existed, so nothing noticed, and every chat bound there failed
-                # its next turn while the picker showed the account as healthy. `reconcile`
-                # puts it back at boot.
-                accounts.save_reauth_backup(account_id, session.cleared_credentials, self._home)
-                for path in session.cleared_credentials:
-                    path.unlink(missing_ok=True)
 
             if isinstance(method, PasteMethod):
                 # Nothing to drive; the caller supplies the credential on submit. It still
                 # gets a deadline: a closed browser tab would otherwise leave the session
                 # PENDING and its minted folder on disk until the next sign-in or the next
                 # boot, and the service is single-flight, so that session is in the way.
-                #
-                # Below the clearing block on purpose. Returning above it left a paste re-auth
-                # judged against the credential that was already there: paste a dead key over a
-                # working OAuth login and `claude auth status` still says logged-in, so the
-                # probe returned YES and the bad key was committed -- while at runtime the key
-                # OUTRANKS the OAuth credential, so the account was broken and the UI said
-                # "signed in again". Every failure path restores from the park, same as a PTY
-                # flow.
                 self._arm_deadline_locked(session, method.flow_deadline_s)
                 return FlowStart(flow_id=session.flow_id, shape=FlowShape.PASTE)
-            # A `finally` rather than a catch-all: the credential is already unlinked by here,
-            # so what matters is that the restore cannot be MISSED, which is what `finally`
-            # guarantees and a catch-all only approximates. A missing binary raises pexpect.ExceptionPexpect and a CLI that
-            # already exited raises OSError from send(); neither is a FlowError, so without this
-            # the credential stayed deleted with no restore, no teardown and no deadline -- the
-            # account still advertised, its chats failing, the session wedged PENDING with no
-            # timer to expire it.
-            #
-            # The exception propagates either way. A FlowError is the CLI having said no, and is
-            # already reported; anything else is a bug, and a 500 naming it is more use than a
-            # tidy message that hides it.
-            unwound = False
+            # A missing binary raises pexpect.ExceptionPexpect and a CLI that already exited
+            # raises OSError from send(); neither is a FlowError, so without this the session
+            # stayed PENDING with no teardown and no deadline. The exception propagates: a
+            # FlowError is the CLI having said no, and anything else is a bug.
+            is_torn_down = False
             try:
                 url, code = self._drive_locked(session, method, account_path)
-                unwound = True
+                is_torn_down = True
             except FlowError:
-                # Already unwound: `_drive_locked`'s own failure paths restore and tear down.
-                # Marked so the finally does not do it a second time.
-                unwound = True
+                # `_drive_locked`'s own failure paths already tore the session down.
+                is_torn_down = True
                 raise
             finally:
-                if not unwound:
-                    self._unwind_credentials_locked(session)
+                if not is_torn_down:
                     self._teardown_locked(session, keep_folder=not minted)
                     self._session = None
             self._arm_deadline_locked(session, method.flow_deadline_s)
@@ -550,14 +514,6 @@ class AuthFlowService:
             # quietly break every agent bound to it until each one's next turn.
             with _credentials_restored_on_error(_credential_paths(method.sink, path)) as before:
                 display = _write_paste(method.sink, path, api_key, key_provider, session.lane)
-                # The parked copy exists to cover the window where the account has NO
-                # credential on disk. That window closes the instant the new one lands, and
-                # keeping the park past it is its own bug: dying between here and the commit
-                # below -- the probe can take thirty seconds -- would have the next boot
-                # restore the OLD credential over the one the user just pasted. The rejection
-                # path below restores from `before`/`cleared_credentials` in memory, so it
-                # does not need the park either.
-                accounts.clear_reauth_backup(session.account_id, self._home)
                 # Writing the file is not the same as the harness accepting it. Ask before
                 # committing, so a key the harness cannot use fails here -- where the user is
                 # looking at the field they just typed into -- rather than later, as a chat that
@@ -666,15 +622,22 @@ class AuthFlowService:
                 return FlowStatus(state=FlowState.FAILED, detail=detail)
 
         alive = bool(session.process is not None and session.process.isalive())
-        said_success = method.success is not None and re.search(method.success, session.output) is not None
+        if method.success is not None:
+            # A CLI that announces its sign-in decides it: the line, then a clean exit. Its probe
+            # would also see an old credential, so on a re-auth it could not tell the two apart.
+            if alive:
+                return FlowStatus(state=FlowState.PENDING)
+            if re.search(method.success, session.output) is not None and session.process.exitstatus == 0:
+                return self._commit_locked(session, session.lane.provider_name)
+            self._fail_locked(session, "The sign-in did not complete.")
+            return FlowStatus(state=FlowState.FAILED, detail=session.detail)
         exited_meaning_success = not alive and method.eof_policy is EofPolicy.SUCCESS
         # A CLI that never announces success and never exits leaves the probe as the ONLY
         # thing that can say yes -- so it has to be allowed to run while the CLI is still
         # alive. agy is exactly that: it prints no success line and drops straight into its
         # chat TUI, so gating the probe on the CLI being "done talking" meant a completed
         # sign-in stayed PENDING forever and the flow could never finish.
-        probe_is_the_only_verdict = method.success is None and session.code_submitted
-        if not (said_success or exited_meaning_success or not alive or probe_is_the_only_verdict):
+        if not (exited_meaning_success or not alive or session.code_submitted):
             return FlowStatus(state=FlowState.PENDING)
 
         # The CLI is done talking.
@@ -695,11 +658,6 @@ class AuthFlowService:
                 return FlowStatus(state=FlowState.FAILED, detail=session.detail)
             with _credentials_restored_on_error(_credential_paths(method.result_sink, path)) as before:
                 _write_paste(method.result_sink, path, result, None, session.lane)
-                # Same rule as the paste lanes: the park covers "no credential on disk", and
-                # that is over. Left in place, a crash before the commit below would put the
-                # old credential back over a token the CLI just minted -- and a setup token is
-                # a year long, so the loss is not a small one.
-                accounts.clear_reauth_backup(session.account_id, self._home)
                 session.last_verdict = self._probe(session.lane.harness, path)
                 if session.last_verdict is SignedIn.NO:
                     _restore_credentials(before)
@@ -729,25 +687,7 @@ class AuthFlowService:
             return FlowStatus(state=FlowState.FAILED, detail=session.detail)
         return FlowStatus(state=FlowState.PENDING)
 
-    def _unwind_credentials_locked(self, session: _Session, restore: bool = True) -> None:
-        """Give the account back the credential this flow took away, and unpark the copy.
-
-        One method because these two must never happen apart: leaving a parked copy behind
-        means the next boot restores the OLD credential over whatever the user has by then,
-        and unparking without restoring loses it outright. `restore=False` is the expiry case
-        where a sign-in may genuinely have landed and the old file must NOT go back -- the
-        parked copy still has to go, for the same reason.
-        """
-        if restore:
-            _restore_credentials(session.cleared_credentials)
-        session.cleared_credentials = {}
-        accounts.clear_reauth_backup(session.account_id, self._home)
-
     def _commit_locked(self, session: _Session, display: str) -> FlowStatus:
-        # The sign-in wrote a new credential over the cleared one, so there is nothing to
-        # restore -- and restoring would undo what the user just did. The parked copy goes with
-        # it, or the next boot would put the OLD credential back over the new one.
-        self._unwind_credentials_locked(session, restore=False)
         # A RE-AUTH commits into a row that must still be there. Another tab can delete the
         # account while this flow is mid-probe, and both outcomes were wrong: for a harness
         # whose folder goes with it, `commit_account` raised AccountError -- which `poll_flow`
@@ -779,9 +719,6 @@ class AuthFlowService:
     def _fail_locked(self, session: _Session, detail: str) -> None:
         session.state = FlowState.FAILED
         session.detail = detail
-        # A failed re-auth leaves the account exactly as it was: the credential it had is
-        # more use than nothing, and the user asked to REPLACE it, not to lose it.
-        self._unwind_credentials_locked(session)
         self._teardown_locked(session, keep_folder=not session.minted)
 
     def _teardown_locked(self, session: _Session, keep_folder: bool) -> None:
@@ -805,8 +742,7 @@ class AuthFlowService:
         try:
             if self._session is not None and self._session.state is FlowState.PENDING:
                 # Abandoned rather than failed -- back button, closed modal, a second sign-in
-                # displacing this one. Same rule: the account keeps what it had.
-                self._unwind_credentials_locked(self._session)
+                # displacing this one.
                 self._teardown_locked(self._session, keep_folder=not self._session.minted)
         finally:
             self._session = None
@@ -827,10 +763,6 @@ class AuthFlowService:
                 # deliberately keeps it for that reason. Letting the deadline discard it
                 # anyway makes the two mechanisms contradict each other.
                 keep = not session.minted or session.last_verdict is SignedIn.UNKNOWN
-                # A re-auth that ran out of time leaves the account as it was. The exception
-                # is UNKNOWN: the check could not run, so a sign-in may genuinely have landed
-                # and putting the old credential back would throw it away.
-                self._unwind_credentials_locked(session, restore=session.last_verdict is not SignedIn.UNKNOWN)
                 self._teardown_locked(session, keep_folder=keep)
 
     def _require_locked(self, flow_id: str, must_be_pending: bool = False) -> _Session:
