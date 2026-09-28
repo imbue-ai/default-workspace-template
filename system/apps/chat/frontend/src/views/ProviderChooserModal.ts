@@ -832,7 +832,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         "p",
         { class: css.LEAD },
         isNothingBack
-          ? `${current.provider_name} authorization has not yet completed.`
+          ? `Nothing has come back from ${current.provider_name} yet. If you clicked Deny or closed the page, try again.`
           : `Finish signing in to ${current.provider_name} in your browser.`,
       ),
       m("div", { class: css.RELAY_ACTIONS }, [
