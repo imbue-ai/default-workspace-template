@@ -14,9 +14,9 @@ Two properties the shapes forced:
   closed mid-flow would otherwise leave a CLI waiting forever -- codex's device flow polls
   for fifteen minutes. Every flow therefore arms a wall-clock timer that terminates the
   process and removes the folder.
-* Success is not scraped. Two of the three PTY lanes print no success line at all, so the
-  harness's own probe is what decides. Failure IS scraped, so a rejected code fails in
-  seconds rather than waiting out a deadline.
+* Success is scraped only where the CLI announces it. agy prints no success line at all, so
+  the harness's own probe is what decides there. Failure IS scraped, so a rejected code fails
+  in seconds rather than waiting out a deadline.
 """
 
 from __future__ import annotations
@@ -64,7 +64,6 @@ from imbue.chat.harnesses.key_check import PROVIDER_DISPLAY
 from imbue.chat.harnesses.key_check import check_key
 from imbue.chat.harnesses.lanes import AppServerMethod
 from imbue.chat.harnesses.lanes import CodexLogin
-from imbue.chat.harnesses.lanes import EofPolicy
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.lanes import Lane
 from imbue.chat.harnesses.lanes import PasteMethod
@@ -72,7 +71,6 @@ from imbue.chat.harnesses.lanes import PasteSink
 from imbue.chat.harnesses.lanes import PtyMethod
 from imbue.chat.harnesses.lanes import Scrape
 from imbue.chat.harnesses.lanes import SignInMethod
-from imbue.chat.harnesses.lanes import Submit
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.pty_auth import PtyAuthError
@@ -178,7 +176,7 @@ def flow_shape(method: SignInMethod) -> FlowShape:
         return FlowShape.PASTE
     if isinstance(method, AppServerMethod):
         return FlowShape.BROWSER if method.login is CodexLogin.BROWSER else FlowShape.CODE_THEN_WAIT
-    return FlowShape.CODE_THEN_WAIT if method.submit is Submit.NONE else FlowShape.URL_THEN_CODE
+    return FlowShape.URL_THEN_CODE
 
 
 def _extract(raw: str, scrape: Scrape, frame_marker: str | None) -> str | None:
@@ -396,7 +394,7 @@ class AuthFlowService:
             return FlowStart(
                 flow_id=session.flow_id,
                 shape=flow_shape(method),
-                url=(method.static_url if isinstance(method, PtyMethod) else None) or url,
+                url=url,
                 code=code,
                 relay_url=session.relay_url,
             )
@@ -564,7 +562,7 @@ class AuthFlowService:
             if relay_target is not None:
                 session.relay_url = relay_url
                 session.relay_target = relay_target
-        return (None, value) if method.static_url else (value, None)
+        return value, None
 
     # advancing
 
@@ -572,7 +570,7 @@ class AuthFlowService:
         with self._lock:
             session = self._require_locked(flow_id, must_be_pending=True)
             method = session.method
-            if not isinstance(method, PtyMethod) or method.submit is Submit.NONE:
+            if not isinstance(method, PtyMethod):
                 raise FlowError("this sign-in does not take a code")
             # Two writes: the code, then Enter separately, or the paste heuristic swallows it.
             session.process.send(code)
@@ -772,13 +770,12 @@ class AuthFlowService:
                 return self._commit_locked(session, session.lane.provider_name)
             self._fail_locked(session, "The sign-in did not complete.")
             return FlowStatus(state=FlowState.FAILED, detail=session.detail)
-        exited_meaning_success = not alive and method.eof_policy is EofPolicy.SUCCESS
         # A CLI that never announces success and never exits leaves the probe as the ONLY
         # thing that can say yes -- so it has to be allowed to run while the CLI is still
         # alive. agy is exactly that: it prints no success line and drops straight into its
         # chat TUI, so gating the probe on the CLI being "done talking" meant a completed
         # sign-in stayed PENDING forever and the flow could never finish.
-        if not (exited_meaning_success or not alive or session.code_submitted):
+        if alive and not session.code_submitted:
             return FlowStatus(state=FlowState.PENDING)
 
         # The CLI is done talking. Its own probe, not the screen, decides.
@@ -789,14 +786,8 @@ class AuthFlowService:
             # Keep the folder: a network blink is not evidence the sign-in failed, and the
             # user may have just finished a browser round trip we would be throwing away.
             return FlowStatus(state=FlowState.PENDING)
-        # The CLI is gone and its own probe says no. Whatever the method's EOF policy means for
-        # a clean exit, there is nothing left that could still turn this into a success.
-        #
-        # Without this, a SUCCESS-policy method that exits non-zero -- codex's device auth when
-        # the user denies the request or lets the code expire -- fell through to PENDING and sat
-        # there for the full 900-second deadline, polling every two seconds and spawning a
-        # `codex login status` subprocess each time, roughly 450 of them, before finally saying
-        # it timed out. It knew within a second.
+        # The CLI is gone and its own probe says no: nothing left could still turn this into a
+        # success, so it fails now rather than polling the probe until the deadline.
         if not alive:
             self._fail_locked(session, "The sign-in did not complete.")
             return FlowStatus(state=FlowState.FAILED, detail=session.detail)
