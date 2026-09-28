@@ -1,7 +1,6 @@
 import threading
 from collections.abc import Callable
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
 from loguru import logger
@@ -12,15 +11,14 @@ from imbue.concurrency_group.subprocess_utils import run_local_command_modern_ve
 
 _DEFAULT_SWEEP_INTERVAL_SECONDS: Final[float] = 60.0
 _DEFAULT_COMMAND_TIMEOUT_SECONDS: Final[float] = 120.0
-_DEFAULT_CHECK_CONCURRENCY: Final[int] = 4
 _DEFAULT_MNGR_BINARY: Final[str] = "mngr"
 
 
 class ChatAutoCompactor:
     """Schedules periodic context compaction checks for active chat agents.
 
-    Runs `mngr autocompact run <agent name>` once every interval for each
-    chat agent that is currently running. All collaborators are injectable for
+    Runs `mngr autocompact run <agent names...>` once every interval for
+    all chat agents that are currently running. All collaborators are injectable for
     unit testing without subprocesses or real agents.
     """
 
@@ -29,7 +27,6 @@ class ChatAutoCompactor:
     _mngr_binary: str
     _interval_seconds: float
     _command_timeout_seconds: float
-    _max_concurrency: int
     _stop_event: threading.Event
     _thread: threading.Thread | None
 
@@ -41,7 +38,6 @@ class ChatAutoCompactor:
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
         interval_seconds: float = _DEFAULT_SWEEP_INTERVAL_SECONDS,
         command_timeout_seconds: float = _DEFAULT_COMMAND_TIMEOUT_SECONDS,
-        max_concurrency: int = _DEFAULT_CHECK_CONCURRENCY,
     ) -> "ChatAutoCompactor":
         instance = cls.__new__(cls)
         instance._list_running_chat_agent_names = list_running_chat_agent_names
@@ -49,7 +45,6 @@ class ChatAutoCompactor:
         instance._mngr_binary = mngr_binary
         instance._interval_seconds = interval_seconds
         instance._command_timeout_seconds = command_timeout_seconds
-        instance._max_concurrency = max_concurrency
         instance._stop_event = threading.Event()
         instance._thread = None
         return instance
@@ -74,31 +69,21 @@ class ChatAutoCompactor:
             self._thread.join(timeout=self._command_timeout_seconds + 5)
             self._thread = None
 
-    def sweep(self) -> list[FinishedProcess | None]:
+    def sweep(self) -> FinishedProcess | None:
         """Perform one pass of autocompact checks across all running chat agents."""
         if self._stop_event.is_set():
-            return []
+            return None
         names = self._list_running_chat_agent_names()
         if not names:
-            return []
+            return None
+        return self.check_agents(names)
 
-        results: list[FinishedProcess | None] = []
-        with ThreadPoolExecutor(max_workers=self._max_concurrency) as executor:
-            for ran, result in executor.map(self._check_agent_for_sweep, names):
-                if ran:
-                    results.append(result)
-        return results
-
-    def _check_agent_for_sweep(
-        self, agent_name: str
-    ) -> tuple[bool, FinishedProcess | None]:
-        if self._stop_event.is_set():
-            return (False, None)
-        return (True, self.check_agent(agent_name))
-
-    def check_agent(self, agent_name: str) -> FinishedProcess | None:
-        """Run `mngr autocompact run <agent_name>` for a single agent."""
-        command = [self._mngr_binary, "autocompact", "run", agent_name]
+    def check_agents(self, agent_names: Sequence[str]) -> FinishedProcess | None:
+        """Run `mngr autocompact run <agent_name> ...` for the given agents."""
+        if self._stop_event.is_set() or not agent_names:
+            return None
+        command = [self._mngr_binary, "autocompact", "run", *agent_names]
+        agents_display = ", ".join(agent_names)
         try:
             result = self._runner(
                 command=command,
@@ -107,20 +92,14 @@ class ChatAutoCompactor:
                 timeout=self._command_timeout_seconds,
             )
         except (ProcessError, OSError) as e:
-            logger.warning("Failed to run autocompact for {}: {}", agent_name, e)
+            logger.warning("Failed to run autocompact for {}: {}", agents_display, e)
             return None
 
         if result.returncode == 0:
             return result
-        if result.returncode == 1:
-            # `mngr autocompact run` returns exit code 1 if the agent does not support compaction.
-            logger.debug(
-                "Failed to run autocompact for {}: {}", agent_name, result.stderr
-            )
-            return None
         logger.warning(
             "Failed to run autocompact for {}: return code {}, stderr: {}",
-            agent_name,
+            agents_display,
             result.returncode,
             result.stderr,
         )
