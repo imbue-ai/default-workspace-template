@@ -541,7 +541,8 @@ def _write_lib(
 
 # The manifest (system/apps/<package>/app.toml; see system/libs/app_manifest).
 # ``priority = "user"`` is what puts a user-built app in the user band the
-# ``oom_tag_service.py user`` prefix below also names. No launch paths: the
+# ``oom_tag_service.py user`` prefix below also names. ``stop_when_no_windows``
+# is stated outright so the rule an app runs under is in its own manifest. No launch paths: the
 # shell offers ``open`` at the app's root. No ``default_shortcut``: an app
 # pins itself to a desktop's backdrop only when the user asks. The ``[preview]``
 # table is the library's default for the name spelled out, so an edit to the
@@ -552,6 +553,10 @@ display_name = "{display_name}"
 icon = "icon.svg"
 priority = "user"
 program = "{name}"
+# The shell stops the app once no window shows it (a minute after the last one
+# closes) and starts it again on the next request; false keeps it running for
+# the life of the workspace.
+stop_when_no_windows = true
 
 # How update-app boots a throwaway preview of this app: on a free port, over a
 # scratch copy of its data (see .agents/skills/update-app/scripts/preview_app.py).

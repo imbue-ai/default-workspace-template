@@ -199,7 +199,10 @@ What gets generated:
 - `system/apps/<package>/app.toml` -- the app's manifest: its registered
   `name`, `display_name`, `icon`,
   `priority = "user"` (shed before any built-in under memory pressure),
-  and `program` (its supervisord program). `forward_port.py --manifest`
+  `program` (its supervisord program), and `stop_when_no_windows = true` (the
+  shell stops the app a minute after its last window closes and starts it
+  again on the next request; `false` keeps it running for the life of the
+  workspace). `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
   editing it). Anything you build for this app outside `system/apps/<package>/`

@@ -740,6 +740,7 @@ name = "files"
 display_name = "File Viewer"
 icon = "icon.svg"
 critical = false
+stop_when_no_windows = true
 priority = "files"
 launcher_rank = 20
 window_closed_path = "/api/window-closed"
@@ -796,6 +797,7 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["display_name"] == "File Viewer"
     assert "instances" not in row and "instances_url" not in row
     assert row["critical"] is False
+    assert row["stop_when_no_windows"] is True
     assert row["priority"] == "files"
     assert row["program"] == "files"
     assert "internal" not in row
@@ -930,6 +932,7 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
     for stale_key in (
         "instances",
         "instances_url",
+        "stop_when_no_windows",
         "default_shortcut",
         "actions",
         "launch_paths",

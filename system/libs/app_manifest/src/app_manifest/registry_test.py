@@ -37,6 +37,7 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.program is None
     assert row.display_name is None
     assert row.critical is False
+    assert row.stop_when_no_windows is False
     assert row.priority == "user"
     assert row.default_shortcut is None
     assert row.launch_paths == ()
@@ -56,6 +57,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         'program = "files"\n'
         'display_name = "File Viewer"\n'
         "critical = false\n"
+        "stop_when_no_windows = true\n"
         'priority = "files"\n'
         'default_shortcut = {launch = "new", mode = "focus"}\n'
         'launch_paths = [{id = "new", label = "New File Viewer", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}]\n'
@@ -70,6 +72,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     row = rows[0]
     assert row.icon == APP_ICON_MARKUP
     assert row.window_closed_path == "/api/window-closed"
+    assert row.stop_when_no_windows is True
     assert row.display_name == "File Viewer"
     assert row.priority == "files"
     assert row.default_shortcut is not None

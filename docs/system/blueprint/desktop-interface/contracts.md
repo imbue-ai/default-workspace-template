@@ -25,7 +25,8 @@ Parsed by `app_manifest` with `extra = "forbid"`.
 | `name` | string | yes | | An app name; equals the `--name` at registration. |
 | `display_name` | string | yes | | Non-empty, at most 64 characters. |
 | `icon` | string | unless `internal` | | `.svg` beside the manifest. |
-| `critical` | bool | no | `false` | No Stop verb; snapshot-and-rollback target in the apply. |
+| `critical` | bool | no | `false` | No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the apply. |
+| `stop_when_no_windows` | bool | no | `false` | Whether the shell may stop the app's program once no window on any desktop shows it, a minute after the last one closes (`docs/system/specs/stop-when-no-windows.md`); `critical = true` forces it `false`, and a manifest declaring both fails to load. |
 | `priority` | string | no | `"user"` | A memory band name or `user`. |
 | `program` | string | no | `name` | The supervisord program. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
@@ -42,15 +43,15 @@ An app with no `launch_paths` has one synthesized launch path, `open`, labelled 
 
 Built-in manifests:
 
-| App | `critical` | `priority` | `launcher_rank` | `default_shortcut` | `launch_paths` |
-|---|---|---|---|---|---|
-| `system_interface` | true | `system_interface` | | none | none; `internal = true` |
-| `chat` | true | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`, no params); `new` ("New Chat", POST `/api/chats/intake`, params `account_id` optional, `message` optional, presets `target = "new_chat"`, `text_param = "message"`); `send` ("Send to chat...", POST `/api/chats/intake`, param `message` optional, presets `target = "chat_selector"`, `text_param = "message"`); `draft` ("Draft into chat", POST `/api/chats/intake`, param `message` optional, presets `target = "current_chat"`, `is_draft = "true"`, `draft_param = "message"`) |
-| `getting-started` | false | `getting-started` | 5 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Getting Started", `/`) |
-| `terminal` | true | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("Terminal", POST `/new`, params `workdir` optional) |
-| `terminal-pty` | true | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
-| `files` | false | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, params `path` optional) |
-| `browser` | false | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", POST `/new`, params `url` optional) |
+| App | `critical` | `stop_when_no_windows` | `priority` | `launcher_rank` | `default_shortcut` | `launch_paths` |
+|---|---|---|---|---|---|---|
+| `system_interface` | true | false | `system_interface` | | none | none; `internal = true` |
+| `chat` | true | false | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`, no params); `new` ("New Chat", POST `/api/chats/intake`, params `account_id` optional, `message` optional, presets `target = "new_chat"`, `text_param = "message"`); `send` ("Send to chat...", POST `/api/chats/intake`, param `message` optional, presets `target = "chat_selector"`, `text_param = "message"`); `draft` ("Draft into chat", POST `/api/chats/intake`, param `message` optional, presets `target = "current_chat"`, `is_draft = "true"`, `draft_param = "message"`) |
+| `getting-started` | false | true | `getting-started` | 5 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Getting Started", `/`) |
+| `terminal` | true | false | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("Terminal", POST `/new`, params `workdir` optional) |
+| `terminal-pty` | true | false | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
+| `files` | false | true | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, params `path` optional) |
+| `browser` | false | true | `browser` | 30 | `{launch = "new", mode = "focus"}` | `new` ("Browser", POST `/new`, params `url` optional) |
 
 The chat manifest also declares `[pin] path = "/", style = "avatar", scope = "independent", default_mode = "floating"`.
 The critical built-ins declare their `[preview]` tables (the workspace app model's contracts section 2 tabulates them): the shell boots `system-interface --preview --state-dir {copy:state}` over a copy of `data/.state/system_interface` with `MINDS_APPS_FILE = "{registry}"`; the chat `chat-app --secondary` over a copy of `data/.apps/chat` (`CHAT_DATA_DIR`), opening on `/?chat={key}`; the terminal `terminal-app --no-register` over a copy of `data/.apps/terminal` and a `{scratch}` state dir with `MINDS_APPS_FILE = "{registry}"`, booted `--with terminal-pty`; and the pty `terminal-pty --no-register` over a `{scratch}` state dir, probed at `/`. Getting Started, though not critical, declares one too, since its entry point registers itself: `getting-started --no-register --state-dir {scratch}/state`, which registers nothing and opens no first-visit window.
@@ -58,7 +59,7 @@ The critical built-ins declare their `[preview]` tables (the workspace app model
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `forward_port.py`.
-Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, method?, params?, presets?, text_param?, draft_param?}` with `params` as the array of names, `method` written when the manifest gives it, and `presets` only when non-empty), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), and `window_closed_path` from the manifest.
+Each `[[apps]]` row carries `name`, `url`, `label`, `icon`, `internal`, `program` from the registration and `display_name`, `critical`, `stop_when_no_windows`, `priority`, `default_shortcut` (inline table `{launch, mode}`), `launch_paths` (array of inline tables `{id, label, path, method?, params?, presets?, text_param?, draft_param?}` with `params` as the array of names, `method` written when the manifest gives it, and `presets` only when non-empty), `launcher_rank`, `pin` (inline table `{path, style?, scope?, default_mode?}`, each absent key reading as the manifest's default), and `window_closed_path` from the manifest.
 `instances`, `instances_url`, and `actions` are no longer written; a row that still carries them (an app not yet re-registered) is read with those keys ignored.
 The shell validates every row on read and skips one that fails, with a warning.
 
@@ -210,7 +211,7 @@ A save whose placements name windows the desktop does not hold is accepted with 
 | `GET /api/wallpapers` | `{"wallpapers": [{"kind", "name", "url"}]}`, bundled first |
 | `GET /wallpapers/<kind>/<name>` | the image; `404` otherwise |
 
-`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "launch_paths": [{"id", "label", "path", "method", "params": [name, ...], "presets": {name: value, ...}, "text_param", "draft_param"}], "default_shortcut", "launcher_rank", "pin", "is_running"}`, `pin` the manifest table or `null`, and each launch path's `text_param` and `draft_param` the declared param name or `null`.
+`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "stop_when_no_windows", "launch_paths": [{"id", "label", "path", "method", "params": [name, ...], "presets": {name: value, ...}, "text_param", "draft_param"}], "default_shortcut", "launcher_rank", "pin", "is_running"}`, `pin` the manifest table or `null`, and each launch path's `text_param` and `draft_param` the declared param name or `null`.
 
 The arrival is what a shell page posts first, with its client id; it reads the requester's `X-Imbue-Identity` header (the share identity spec, section 4.2). The page then reads `GET /api/inventory` once, taking the desktops (the seeded one among them), the apps, and its own client record from that one answer, so it knows every app before it draws a shortcut and needs nothing from the socket to show a complete desktop; the socket's `apps_updated` and `desktops_updated` (section 6) carry every change from then on. Until the inventory answers, a shortcut whose app the page cannot look up draws as connecting (`data-connecting="true"`) and running it says the page is still connecting, rather than that the app is not registered.
 `desktop_id` is where the client lands (`null` while the workspace has no desktop): for the owner and for a request with no `user_id`, the client's stored desktop when it exists, else the first desktop (section 4.3); for a visiting user (`owner` false with a `user_id`), the desktop made for them.

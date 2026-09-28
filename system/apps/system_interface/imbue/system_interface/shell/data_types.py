@@ -121,6 +121,7 @@ def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
         "internal": row.internal,
         "program": row.program or "",
         "critical": row.critical,
+        "stop_when_no_windows": row.stop_when_no_windows,
         "launch_paths": [launch_path_wire_json(launch_path) for launch_path in effective_launch_paths(row)],
         "default_shortcut": default_shortcut_wire_json(row.default_shortcut),
         "launcher_rank": row.launcher_rank,

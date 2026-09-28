@@ -332,6 +332,11 @@ class AppManifest(FrozenModel):
     display_name: DisplayName = Field(description="What users see")
     icon: IconPath | None = Field(default=None, description="The icon file, relative to the manifest; required unless internal")
     critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
+    stop_when_no_windows: bool = Field(
+        default=False,
+        description="Whether the shell may stop the app's program once no window on any desktop shows it "
+        "(docs/system/specs/stop-when-no-windows.md); a critical app never is",
+    )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     program: ProgramName = Field(description="The supervisord program that runs the app (defaults to the name)")
     internal: bool = Field(default=False, description="Hidden from every open surface")
@@ -388,6 +393,8 @@ class AppManifest(FrozenModel):
     def _check_cross_field_rules(self) -> Self:
         if self.icon is None and not self.internal:
             raise InvalidManifestValueError("icon is required unless internal = true")
+        if self.critical and self.stop_when_no_windows:
+            raise InvalidManifestValueError("a critical app cannot declare stop_when_no_windows = true")
         if self.handles:
             raise InvalidManifestValueError("handles must be absent or empty in this release")
         reference_paths = [reference.path for reference in self.references]

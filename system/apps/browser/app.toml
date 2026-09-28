@@ -2,6 +2,8 @@ name = "browser"
 display_name = "Browser"
 icon = "icon.svg"
 critical = false
+# Chromium already stops on the close hint below; the coordinator follows once no window shows it.
+stop_when_no_windows = true
 priority = "browser"
 launcher_rank = 30
 # The one browser lives as long as a window shows it: the shell posts every closed window

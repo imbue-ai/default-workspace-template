@@ -63,6 +63,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
         "internal",
         "program",
         "critical",
+        "stop_when_no_windows",
         "launch_paths",
         "default_shortcut",
         "launcher_rank",

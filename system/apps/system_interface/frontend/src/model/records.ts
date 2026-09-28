@@ -159,6 +159,8 @@ export interface AppRecord {
   readonly internal: boolean;
   readonly program: string;
   readonly critical: boolean;
+  /** Whether the shell stops the app's program once no window shows it (the stop-when-no-windows spec). */
+  readonly stop_when_no_windows: boolean;
   /** The app's launch paths; the shell synthesizes ``open`` at ``/`` for an app declaring none. */
   readonly launch_paths: readonly LaunchPath[];
   readonly default_shortcut: DefaultShortcut | null;
@@ -460,6 +462,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     internal: record.internal === true,
     program: typeof record.program === "string" ? record.program : "",
     critical: record.critical === true,
+    stop_when_no_windows: record.stop_when_no_windows === true,
     launch_paths: asArray(record.launch_paths ?? [], "app.launch_paths").map(parseLaunchPath),
     default_shortcut: parseDefaultShortcut(record.default_shortcut),
     launcher_rank: typeof rank === "number" && Number.isFinite(rank) ? rank : null,

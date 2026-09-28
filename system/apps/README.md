@@ -40,7 +40,8 @@ Built-in apps:
 
 Every app describes itself in an `app.toml` manifest beside its code: its
 registered name, the display name users see, its icon, the launch paths the
-desktop opens windows at, its memory-shedding `priority`, whether it is `critical`, and the
+desktop opens windows at, its memory-shedding `priority`, whether it is `critical`, whether it
+stops once no window shows it (`stop_when_no_windows`), and the
 supervisord `program` that runs it (the schema is the `app_manifest` library
 in `system/libs/`). An app runs as a supervised program (a `[program:*]` entry
 in its own `system/supervisord.conf.d/<name>.conf`) that registers the manifest

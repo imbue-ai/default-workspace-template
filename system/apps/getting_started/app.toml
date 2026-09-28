@@ -7,6 +7,8 @@ name = "getting-started"
 display_name = "Getting Started"
 icon = "icon.svg"
 critical = false
+# One static page: the shell stops it once no window shows it (and never before the first visit).
+stop_when_no_windows = true
 priority = "getting-started"
 launcher_rank = 5
 
