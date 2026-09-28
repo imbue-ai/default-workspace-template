@@ -74,6 +74,9 @@ export interface ProviderChooserModalAttrs {
 
 type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
 
+/** The paste step's label: the code is needed only when the browser ends on one. */
+export const PASTE_STEP_LABEL = "If the page shows a code, paste it here";
+
 /** What a share visitor sees instead of the ways to sign in: accounts are the owner's to change. */
 const OWNER_ONLY_NOTICE = "Only the owner of this workspace can connect an AI account.";
 
@@ -537,7 +540,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** stepsBlock, step 2. */
   function pasteCodeStep(): m.Vnode {
     return stepBlock(2, true, [
-      stepLabel("2", "Approve, then paste the code shown"),
+      // Only a page that ends on a code needs this: a sign-in the desktop app relays finishes by
+      // itself, and neither side can tell in advance which one the browser will do.
+      stepLabel("2", PASTE_STEP_LABEL),
       m("div", { class: css.FIELD_ROW }, [
         m("input", {
           class: inputClass({ mono: true, extra: "flex-1" }),
@@ -571,6 +576,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           "Verify code",
         ),
       ]),
+      m("p", { class: css.HINT }, "Signed in without a code? This closes by itself."),
     ]);
   }
 
@@ -602,7 +608,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     const lead =
       flow.shape === "code_then_wait"
         ? `Use your ${current.provider_name} account. Open the page below and enter the code we show you.`
-        : `Use your ${current.provider_name} account. Approve access in your browser, copy the code it gives you, then paste it below.`;
+        : `Use your ${current.provider_name} account. Approve access in your browser, and if it gives you a code, paste it below.`;
     return [
       m("p", { class: css.LEAD }, currentMethod.description || lead),
       flow.url !== null ? openLinkStep(flow.url, `Open ${current.provider_name} sign-in page`) : null,

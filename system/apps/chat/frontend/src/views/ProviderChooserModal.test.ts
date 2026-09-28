@@ -58,7 +58,7 @@ import m from "mithril";
 
 import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from "../models/Providers";
 import type { UnpickableReason } from "../models/Providers";
-import { ProviderChooserModal } from "./ProviderChooserModal";
+import { PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
 import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
@@ -426,7 +426,7 @@ describe("a sign-in finished in the browser", () => {
 
     const root = await clickLane("anthropic");
 
-    expect(root.textContent).toContain("Approve, then paste the code shown");
+    expect(root.textContent).toContain(PASTE_STEP_LABEL);
     expect(root.textContent).not.toContain("We opened the Anthropic sign-in page.");
   });
 
@@ -473,7 +473,7 @@ describe("a sign-in finished in the browser", () => {
     (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();
     m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
 
-    expect(root.textContent).toContain("Approve, then paste the code shown");
+    expect(root.textContent).toContain(PASTE_STEP_LABEL);
     expect(root.textContent).toContain("Use an API key");
     expect(startFlow).toHaveBeenCalledOnce();
   });
@@ -499,7 +499,7 @@ describe("a sign-in finished in the browser", () => {
     m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
 
     expect(root.textContent).toContain("Imbue Studio couldn't open the sign-in page.");
-    expect(root.textContent).toContain("Approve, then paste the code shown");
+    expect(root.textContent).toContain(PASTE_STEP_LABEL);
   });
 
   it("stops offering ChatGPT's browser sign-in once the desktop app can no longer open the page", async () => {
@@ -560,7 +560,7 @@ describe("a sign-in finished in the browser", () => {
 
     expect(startFlow).toHaveBeenLastCalledWith("anthropic", "subscription", undefined);
     expect(requestProviderRelay).not.toHaveBeenCalled();
-    expect(root.textContent).toContain("Approve, then paste the code shown");
+    expect(root.textContent).toContain(PASTE_STEP_LABEL);
   });
 
   it("signs an API-key account in again with a key, not a browser sign-in", () => {
