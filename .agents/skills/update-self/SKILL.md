@@ -447,7 +447,9 @@ as `update-app/references/critical-app.md` does (`<name>` is the app's
 `app.toml` name, so `system/apps/terminal_pty/` is `terminal-pty`; the Getting
 Started frontend, `workspace_ui`, and the npm files count as both
 `system_interface` and `chat`). Take them all or none, as that reference says:
-check each one in `tk ready`, take them in name order (`tk create "editing
+check each one in `tk ready` (`grep -E -- "- editing critical app <name>$"`,
+anchored so `terminal` does not match `terminal-pty`'s lease), take them in
+name order (`tk create "editing
 critical app <name>" -t chore`, then `tk start` it, each as its own command),
 and if any is held by another agent, release the ones you took and surface it
 instead of proceeding. Release them afterwards.
