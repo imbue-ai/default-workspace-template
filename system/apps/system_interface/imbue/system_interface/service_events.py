@@ -10,6 +10,7 @@ start needs. The stream is plumbing the shell writes; it imports nothing from mn
 """
 
 import os
+import threading
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
@@ -117,10 +118,17 @@ class ServiceEventWriter(MutableModel):
     )
 
     _announced: dict[str, AnnouncedRow] = PrivateAttr(default_factory=dict)
+    # The inventory announces from its watch thread, its sweep thread, and the thread that starts the shell.
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def announce(self, rows: Sequence[RegistryRow]) -> None:
         """Write a registration per row whose fields changed and a deregistration per row that left, then remember
-        the rows as announced. A write that fails leaves the memory untouched, so the next read announces again."""
+        the rows as announced, one read at a time. A write that fails leaves the memory untouched, so the next read
+        announces again."""
+        with self._lock:
+            self._announce_locked(rows)
+
+    def _announce_locked(self, rows: Sequence[RegistryRow]) -> None:
         current = announced_rows_of(rows)
         diff = diff_announced_rows(current, self._announced)
         if not diff.changed and not diff.gone:
