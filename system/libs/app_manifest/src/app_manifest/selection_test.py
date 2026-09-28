@@ -166,12 +166,22 @@ def test_every_non_documentation_change_runs_the_always_run_set(workspace: Path)
     assert selection.paths[0].classes == (ChangedPathClass.GUARD,)
 
 
-def test_an_always_run_guard_git_does_not_track_fails_the_selection(workspace: Path) -> None:
-    (workspace / "system/scripts/provision_guard_test.py").unlink()
+@pytest.mark.parametrize(
+    ("guard", "changed_path"),
+    [
+        ("system/scripts/provision_guard_test.py", "system/test_layout.py"),
+        ("system/services/oom_priority/bin/oom_tag_service_test.py", "system/supervisord.conf.d/fetcher.conf"),
+    ],
+    ids=["always-run", "wiring"],
+)
+def test_a_listed_guard_git_does_not_track_fails_the_selection(
+    workspace: Path, guard: str, changed_path: str
+) -> None:
+    (workspace / guard).unlink()
     commit_everything(workspace, "drop a guard")
 
-    with pytest.raises(SuiteSelectionError, match="system/scripts/provision_guard_test.py"):
-        _select(workspace, ["system/test_layout.py"])
+    with pytest.raises(SuiteSelectionError, match=guard):
+        _select(workspace, [changed_path])
 
 
 def test_agent_prose_outside_every_skill_runs_only_the_always_run_set(workspace: Path) -> None:

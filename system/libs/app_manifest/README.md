@@ -237,7 +237,8 @@ Every change that is not entirely documentation (README and changelog files
 anywhere, and other markdown outside `.agents/` and `system/{scripts,libs,services,apps}/`,
 where markdown is prose an agent runs) also runs the always-run set:
 `system/*.py`, the cross-cutting `system/scripts` guards, and the checks that
-read every skill's prose. A listed guard git does not track fails the selection
+read every skill's prose. A listed guard git does not track (an always-run
+one, or the OOM band check a supervisord block selects) fails the selection
 rather than dropping out of it. A change made only of documentation selects
 nothing.
 

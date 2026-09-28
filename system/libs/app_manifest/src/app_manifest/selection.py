@@ -539,6 +539,9 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
         # The always-run set checks the layout, and the wiring guards every block's OOM band;
         # the apps whose blocks the file holds run too.
         classes.append(ChangedPathClass.WIRING)
+        for guard in _WIRING_GUARDS:
+            if guard not in layout.tracked_files:
+                raise SuiteSelectionError(f"the wiring guard {guard!r} is not tracked by git")
         pytest_requests.extend(
             _present(
                 _file_request(
