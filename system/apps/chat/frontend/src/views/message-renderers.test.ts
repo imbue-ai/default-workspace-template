@@ -17,6 +17,7 @@ import {
   isPickingAccount,
   isProviderChooserOpen,
   pickAccount,
+  takeChooserAccountId,
 } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
 
@@ -35,9 +36,19 @@ const switching = vi.hoisted(() => {
   return {
     chat: undefined as unknown,
     beginSwitchToAccountId: vi.fn(),
+    // The account ids the page lists as signed in, and whether it has read that list yet; the rest
+    // of the providers module is real.
+    signedInAccountIds: new Set<string>(),
+    areAccountsLoaded: true,
   };
 });
 vi.mock("./SwitchDialog", () => ({ beginSwitchToAccountId: switching.beginSwitchToAccountId }));
+vi.mock("../models/Providers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Providers")>()),
+  accountForAgent: (accountId?: string) =>
+    accountId !== undefined && switching.signedInAccountIds.has(accountId) ? { id: accountId } : null,
+  areAccountsLoaded: () => switching.areAccountsLoaded,
+}));
 vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
   getChatById: () => switching.chat,
@@ -662,6 +673,43 @@ describe("the auth-error note's switch link", () => {
     switching.beginSwitchToAccountId.mockClear();
     vi.mocked(startChatOnAccount).mockClear();
     switching.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: OPENAI_ID } });
+    switching.signedInAccountIds = new Set([OPENAI_ID, ANTHROPIC_ID]);
+    switching.areAccountsLoaded = true;
+  });
+
+  it("signs the chat's own account in again in place while that account is still signed in", () => {
+    const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+    findButton(children, "Sign in again")!.attrs.onclick();
+
+    expect(isProviderChooserOpen()).toBe(true);
+    expect(isPickingAccount()).toBe(false);
+    expect(takeChooserAccountId()).toBe(OPENAI_ID);
+    closeProviderChooser();
+  });
+
+  it("moves a chat whose account is gone onto the account signed in again, rather than leaving it unbound", () => {
+    // Signed out and signed in again: the new sign-in is a new account, and the chat's label still
+    // names the old one.
+    switching.signedInAccountIds = new Set([ANTHROPIC_ID]);
+    const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+    findButton(children, "Sign in again")!.attrs.onclick();
+
+    expect(isPickingAccount()).toBe(true);
+    expect(takeChooserAccountId()).toBeNull();
+    pickAccount(ANTHROPIC_ID);
+
+    expect(switching.beginSwitchToAccountId).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC_ID);
+  });
+
+  it("signs the chat's own account in again in place while the account list has not loaded", () => {
+    switching.areAccountsLoaded = false;
+    switching.signedInAccountIds = new Set();
+    const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+    findButton(children, "Sign in again")!.attrs.onclick();
+
+    expect(isPickingAccount()).toBe(false);
+    expect(takeChooserAccountId()).toBe(OPENAI_ID);
+    closeProviderChooser();
   });
 
   it("switches the failed chat to the account picked, rather than starting a new chat", () => {

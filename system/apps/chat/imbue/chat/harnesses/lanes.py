@@ -444,13 +444,13 @@ _PI_KEY_PROVIDERS: Final = tuple(
 LANE_OPENCODE_GO = Lane(
     id="opencode-go",
     provider_name="Opencode Go",
-    subtitle="Generous usage on the latest and greatest open models for $10/mo.",
+    subtitle="A subscription to a selection of open models.",
     harness=HarnessType.PI_CODING,
     methods=(
         PasteMethod(
             id="api_key",
             label="Paste your Opencode Go key",
-            description="A $10/mo subscription, then one key for every model on it.",
+            description="One key for every model on your Opencode Go subscription.",
             sink=PasteSink.PI_AUTH_JSON,
             signup_url="https://opencode.ai/go",
         ),
@@ -467,7 +467,7 @@ LANE_OPENCODE_GO = Lane(
 LANE_OPENROUTER = Lane(
     id="openrouter",
     provider_name="OpenRouter",
-    subtitle="One account, any model. Pay for only what you use, not subscription.",
+    subtitle="Models from many providers on one key.",
     harness=HarnessType.PI_CODING,
     methods=(
         PasteMethod(

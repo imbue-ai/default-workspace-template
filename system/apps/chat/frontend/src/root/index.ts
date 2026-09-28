@@ -39,7 +39,7 @@ import {
 } from "../models/Chats";
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
-  accountForAgent,
+  accountForFirstSend,
   closeProviderChooser,
   getSelectedAccount,
   isProviderChooserOpen,
@@ -165,7 +165,7 @@ function launchWithFirstMessage(chatId: string, text: string): void {
     });
   };
   const minted = getProvisionalChats().find((chat) => chat.chat_id === chatId);
-  const account = accountForAgent(minted?.account_id) ?? getSelectedAccount();
+  const account = accountForFirstSend(minted?.account_id);
   if (account !== null) {
     launchOrDraft(account.id);
     return;

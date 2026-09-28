@@ -117,8 +117,9 @@ export interface QueuedMessage {
   queued_id: string;
   content: string;
   timestamp: string;
-  // True while the backend is actively re-sending this chip (a codex shoulder-tap's
-  // interrupt+resend): it renders as an ordinary send's bubble rather than as a plain queued chip.
+  // True while the backend is actively delivering this chip (a codex shoulder-tap's
+  // interrupt+resend, or a Claude message still queued when the reply landed): it renders as an
+  // ordinary send's bubble rather than as a plain queued chip.
   is_sending?: boolean;
 }
 

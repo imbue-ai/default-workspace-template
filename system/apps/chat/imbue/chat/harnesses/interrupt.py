@@ -163,21 +163,22 @@ def restart_drain(
     restart_process: RestartProcess,
     settle_activity: SettleActivity,
 ) -> str:
-    """The shared restart-drain: capture the block, restart, settle activity, clear the mirror.
+    """The shared restart-drain: capture the block, restart, clear the mirror, settle activity.
 
     The block is captured BEFORE the restart (which drops the harness queue); the restart is then
-    run, the transcript-derived activity settled (the caller's own next send re-drives it), and
-    the tracked queued set the SIGKILL invalidated cleared -- which also pushes the now-empty
-    group. No empty-queue short-circuit: a stop with nothing queued still interrupts the turn
-    (callers wanting a no-op on an empty queue, e.g. the flush, check first). Raises
-    :class:`AgentRestartError` if the restart fails.
+    run, the tracked queued set the SIGKILL invalidated cleared -- which also pushes the now-empty
+    group -- and the transcript-derived activity settled (the caller's own next send re-drives it).
+    Clearing first means the settle's IDLE never meets the returned messages still queued, which
+    the idle backstop would otherwise show as being delivered. No empty-queue short-circuit: a
+    stop with nothing queued still interrupts the turn (callers wanting a no-op on an empty
+    queue, e.g. the flush, check first). Raises :class:`AgentRestartError` if the restart fails.
     """
     block = watcher.get_queued_block()
     is_restarted, output = restart_process()
     if not is_restarted:
         raise AgentRestartError(f"Failed to restart agent '{agent_info.name}': {output}")
-    settle_activity()
     watcher.clear_queue()
+    settle_activity()
     return block
 
 
