@@ -3,13 +3,13 @@ from pathlib import Path
 import pytest
 
 from app_manifest.errors import SuiteSelectionError
+from app_manifest.selection import ALWAYS_RUN_GUARDS
 from app_manifest.selection import ChangedPathClass
 from app_manifest.selection import SuiteSelection
 from app_manifest.selection import load_repo_layout
 from app_manifest.selection import render_command_line
 from app_manifest.selection import render_selection
 from app_manifest.selection import select_tests
-from app_manifest.testing import SELECTION_ALWAYS_RUN_GUARDS
 from app_manifest.testing import build_selection_workspace
 from app_manifest.testing import commit_everything
 from app_manifest.testing import selection_lock
@@ -18,7 +18,7 @@ from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_dropin
 
 _ALWAYS_RUN = " ".join(
-    ("uv", "run", "pytest", *sorted({*SELECTION_ALWAYS_RUN_GUARDS, "system/test_layout.py"}))
+    ("uv", "run", "pytest", *sorted({*ALWAYS_RUN_GUARDS, "system/test_layout.py"}))
 )
 _FULL_ROOT = "uv run pytest"
 _CHAT_WHOLE_WITHOUT_BROWSER = (

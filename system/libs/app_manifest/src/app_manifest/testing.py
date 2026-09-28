@@ -11,6 +11,8 @@ from imbue.imbue_common.mutable_model import MutableModel
 from pydantic import Field
 from pydantic import PrivateAttr
 
+from app_manifest.selection import ALWAYS_RUN_GUARDS
+
 APP_ICON_MARKUP: Final[str] = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 )
@@ -125,18 +127,6 @@ exclude = ["system/libs/ui"]
 addopts = ["--ignore=system/apps/chat"]
 """
 
-# The cross-cutting guards the selection runs for every change, which it requires git to track.
-SELECTION_ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
-    ".agents/shared/scripts/test_skill_mngr_references.py",
-    ".agents/skills/launch-task/scripts/dispatch_contract_test.py",
-    "system/scripts/agent_hook_wiring_test.py",
-    "system/scripts/agent_guard_tool_scope_test.py",
-    "system/scripts/provision_guard_test.py",
-    "system/scripts/stdlib_only_scripts_test.py",
-    "system/scripts/tool_env_sync_test.py",
-    "system/scripts/claude_memory_settings_test.py",
-)
-
 _NOTES_MANIFEST: Final[str] = """
 name = "notes"
 display_name = "Notes"
@@ -231,7 +221,7 @@ def build_selection_workspace(repo_root: Path) -> None:
     # Flat scripts, a skill, and the repo guards
     write_repo_file(repo_root, "system/scripts/forward_port.py", "PORT = 1\n")
     write_repo_file(repo_root, "system/scripts/forward_port_test.py", "def test_port() -> None:\n    pass\n")
-    for guard in SELECTION_ALWAYS_RUN_GUARDS:
+    for guard in ALWAYS_RUN_GUARDS:
         write_repo_file(repo_root, guard, "def test_guard() -> None:\n    pass\n")
     write_repo_file(repo_root, "system/test_layout.py", "def test_layout() -> None:\n    pass\n")
     write_repo_file(repo_root, ".agents/skills/refresh/SKILL.md", "# refresh\n")

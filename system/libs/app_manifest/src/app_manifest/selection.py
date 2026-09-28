@@ -76,7 +76,7 @@ _SUPERVISORD_CONF: Final[str] = "system/supervisord.conf"
 _SUPERVISORD_DROPIN_DIRECTORY: Final[str] = "system/supervisord.conf.d"
 # The cross-cutting checks run beside system/*.py for every change: the system/scripts guards,
 # and the checks that read every skill's prose, which a change to any one skill can break.
-_ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
+ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
     ".agents/shared/scripts/test_skill_mngr_references.py",
     ".agents/skills/launch-task/scripts/dispatch_contract_test.py",
     "system/scripts/agent_hook_wiring_test.py",
@@ -512,7 +512,7 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
     if path == _LOCKFILE:
         return _select_for_lockfile(context, path)
     if (
-        path in _ALWAYS_RUN_GUARDS
+        path in ALWAYS_RUN_GUARDS
         or (PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY and path.endswith(".py"))
         or (
             path.startswith(f"{_AGENT_PROSE_DIRECTORY}/")
@@ -640,10 +640,10 @@ def _always_run_files(layout: RepoLayout) -> tuple[str, ...]:
         for path in layout.test_files
         if PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY
     ]
-    for guard in _ALWAYS_RUN_GUARDS:
+    for guard in ALWAYS_RUN_GUARDS:
         if guard not in layout.tracked_files:
             raise SuiteSelectionError(f"the always-run guard {guard!r} is not tracked by git")
-    return tuple(sorted({*guards, *_ALWAYS_RUN_GUARDS}))
+    return tuple(sorted({*guards, *ALWAYS_RUN_GUARDS}))
 
 
 @pure
