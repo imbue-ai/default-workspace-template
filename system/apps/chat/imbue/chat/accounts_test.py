@@ -461,7 +461,7 @@ def test_an_index_from_the_previous_version_reads_and_is_rewritten_at_the_curren
     assert rewritten["default_account"] == account.id
 
 
-# --- The workspace's create defaults, derived from the index ---
+# The workspace's create defaults, derived from the index
 
 
 def _written_type() -> str | None:

@@ -22,7 +22,7 @@ from host_backup.config import (
     write_default_restic_env_template,
 )
 
-# --- parse_restic_env_file ---
+# parse_restic_env_file
 
 
 def test_parse_restic_env_file_handles_plain_keys() -> None:
@@ -48,7 +48,7 @@ def test_parse_restic_env_file_ignores_keyless_lines() -> None:
     assert parse_restic_env_file("=novalue\nGOOD=value\n") == {"GOOD": "value"}
 
 
-# --- load_restic_env ---
+# load_restic_env
 
 
 def test_load_restic_env_returns_empty_when_absent(tmp_path: Path) -> None:
@@ -64,7 +64,7 @@ def test_load_restic_env_reads_existing(tmp_path: Path) -> None:
     }
 
 
-# --- missing_required_restic_keys ---
+# missing_required_restic_keys
 
 
 def test_missing_required_restic_keys_reports_repo_and_password_when_empty() -> None:
@@ -96,7 +96,7 @@ def test_missing_required_restic_keys_treats_empty_value_as_missing() -> None:
     assert missing_required_restic_keys(env) == ["RESTIC_REPOSITORY"]
 
 
-# --- load_backup_config (tolerant loading) ---
+# load_backup_config (tolerant loading)
 
 
 def test_load_backup_config_returns_defaults_when_absent(tmp_path: Path) -> None:
@@ -185,7 +185,7 @@ def test_load_backup_config_skips_invalid_retention_but_applies_valid_fields(
     assert config.retention.keep_hourly == 24
 
 
-# --- backwards-compatibility shims for pre-refactor bootstraps ---
+# backwards-compatibility shims for pre-refactor bootstraps
 
 
 def _shim_snapshot_settings() -> SnapshotSettings:
@@ -225,7 +225,7 @@ def test_shim_render_default_backup_toml_is_comment_only(tmp_path: Path) -> None
     assert load_backup_config(path) == BackupConfig()
 
 
-# --- service events-dir publish / resolve (host-backup-now discovery) ---
+# service events-dir publish / resolve (host-backup-now discovery)
 
 
 def test_resolve_service_events_dir_prefers_published_pointer(

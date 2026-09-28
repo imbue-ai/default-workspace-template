@@ -34,7 +34,7 @@ def isolated_claude_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     return config_dir
 
 
-# ----- status parsing -----
+# status parsing
 
 
 def test_parse_status_payload_full() -> None:
@@ -133,7 +133,7 @@ def test_get_auth_status_overlays_managed_settings_env_onto_subprocess(isolated_
     assert seen_envs[0]["ANTHROPIC_API_KEY"] == "sk-ant-managed-key"
 
 
-# ----- credential-lines parsing -----
+# credential-lines parsing
 
 
 def test_parse_credential_lines_accepts_api_key_alone() -> None:
@@ -181,7 +181,7 @@ def test_parse_credential_lines_strips_quotes_and_whitespace() -> None:
     assert parsed == {"ANTHROPIC_API_KEY": "sk-ant-quoted"}
 
 
-# ----- mode derivation -----
+# mode derivation
 
 
 def test_derive_auth_mode_covers_all_shapes() -> None:
@@ -203,7 +203,7 @@ def test_masked_credential_suffix_prefers_key_and_handles_absence() -> None:
     assert auth.masked_credential_suffix({"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-wxyz"}) == "wxyz"
 
 
-# ----- settings-env reader/writer -----
+# settings-env reader/writer
 
 
 def test_read_managed_auth_env_returns_only_managed_keys(isolated_claude_config: Path) -> None:
@@ -219,7 +219,7 @@ def test_read_managed_auth_env_tolerates_missing_and_corrupt_files(isolated_clau
     assert auth.read_managed_auth_env() == {}
 
 
-# ----- config dir / .claude.json resolution -----
+# config dir / .claude.json resolution
 
 
 def test_resolution_defaults_to_home_claude_when_config_dir_env_unset(
@@ -242,7 +242,7 @@ def test_resolution_honors_explicit_config_dir_env(isolated_claude_config: Path)
     assert auth._resolve_claude_json_path() == isolated_claude_config / ".claude.json"
 
 
-# ----- workspace id -----
+# workspace id
 
 
 def test_read_workspace_id_prefers_the_services_agents_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -272,7 +272,7 @@ def test_read_workspace_id_tolerates_missing_env_and_file(tmp_path: Path, monkey
     assert auth.read_workspace_id() is None
 
 
-# ----- agent snapshot / restart -----
+# agent snapshot / restart
 
 _LIST_PAYLOAD = json.dumps(
     {
@@ -299,20 +299,20 @@ def _build_restart_recording_service(
     return auth.ClaudeAuthService(command_runner=_runner)
 
 
-# ----- submit_credentials -----
+# submit_credentials
 
 
-# ----- record_api_key_approval -----
+# record_api_key_approval
 
 
-# ----- setup-token flow -----
+# setup-token flow
 
 
-# ----- browser sign-in (claude auth login) flow -----
+# browser sign-in (claude auth login) flow
 # Oauth pump pattern order: success=0, failed=1, OAuth-error=2, EOF=3, TIMEOUT=4.
 
 
-# ----- credentials-based mode folding -----
+# credentials-based mode folding
 
 
 def test_status_folds_subscription_mode_from_credentials_when_env_empty(isolated_claude_config: Path) -> None:
@@ -345,7 +345,7 @@ def test_status_managed_env_outranks_credentials_fold(isolated_claude_config: Pa
     assert service.get_auth_status().auth_mode is auth.AuthMode.API_KEY
 
 
-# ----- repo<->mngr CLI contract -----
+# repo<->mngr CLI contract
 # These assert the argv shapes we hand to subprocesses are accepted by the
 # LIVE mngr CLI (parse-only), so a CLI flag rename breaks these tests
 # instead of runtime behavior in a deployed mind.

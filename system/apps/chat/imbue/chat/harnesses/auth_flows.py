@@ -436,8 +436,8 @@ class AuthFlowService:
                 login_id, url, code = device_login.login_id, device_login.verification_url, device_login.user_code
         except (CodexAppServerError, OSError) as e:
             logger.warning("Codex sign-in could not begin: {}", e)
-            # A code sign-in is refused when the ChatGPT account has device codes turned off,
-            # which is the default for some accounts; the setting is the user's to change.
+            # A code sign-in is refused when the ChatGPT account has device codes turned off, a
+            # setting the user can change.
             self._fail_locked(
                 session,
                 _DEVICE_LOGIN_REFUSED_DETAIL
