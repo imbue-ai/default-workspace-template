@@ -638,8 +638,10 @@ def _always_run_files(layout: RepoLayout) -> tuple[str, ...]:
         for path in layout.test_files
         if PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY
     ]
-    present = [guard for guard in _ALWAYS_RUN_GUARDS if guard in layout.tracked_files]
-    return tuple(sorted({*guards, *present}))
+    for guard in _ALWAYS_RUN_GUARDS:
+        if guard not in layout.tracked_files:
+            raise SuiteSelectionError(f"the always-run guard {guard!r} is not tracked by git")
+    return tuple(sorted({*guards, *_ALWAYS_RUN_GUARDS}))
 
 
 @pure

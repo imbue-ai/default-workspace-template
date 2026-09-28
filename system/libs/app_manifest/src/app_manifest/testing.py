@@ -125,6 +125,18 @@ exclude = ["system/libs/ui"]
 addopts = ["--ignore=system/apps/chat"]
 """
 
+# The cross-cutting guards the selection runs for every change, which it requires git to track.
+SELECTION_ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
+    ".agents/shared/scripts/test_skill_mngr_references.py",
+    ".agents/skills/launch-task/scripts/dispatch_contract_test.py",
+    "system/scripts/agent_hook_wiring_test.py",
+    "system/scripts/agent_guard_tool_scope_test.py",
+    "system/scripts/provision_guard_test.py",
+    "system/scripts/stdlib_only_scripts_test.py",
+    "system/scripts/tool_env_sync_test.py",
+    "system/scripts/claude_memory_settings_test.py",
+)
+
 _NOTES_MANIFEST: Final[str] = """
 name = "notes"
 display_name = "Notes"
@@ -223,7 +235,8 @@ def build_selection_workspace(repo_root: Path) -> None:
     write_repo_file(repo_root, "system/scripts/agy_shim/agy_shim_test.py", "def test_shim() -> None:\n    pass\n")
     write_repo_file(repo_root, "system/scripts/create_gate.py", "GATE = 1\n")
     write_repo_file(repo_root, "system/scripts/test_create_gate.py", "def test_gate() -> None:\n    pass\n")
-    write_repo_file(repo_root, "system/scripts/agent_hook_wiring_test.py", "def test_wiring() -> None:\n    pass\n")
+    for guard in SELECTION_ALWAYS_RUN_GUARDS:
+        write_repo_file(repo_root, guard, "def test_guard() -> None:\n    pass\n")
     write_repo_file(
         repo_root,
         "system/scripts/banner_test.py",
