@@ -30,8 +30,8 @@ mod = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = mod
 _spec.loader.exec_module(mod)
 
-# The shared script gives each boot up to 60s to pass its health check, and this test boots
-# twice (``up``, then ``refresh``) before tearing down.
+# The shared script gives each health wait up to 60 one-second attempts, and this test
+# waits three times: the instance and its wrapper page at ``up``, the instance at ``refresh``.
 _BOOT_TIMEOUT_SECONDS = 180
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
