@@ -116,14 +116,8 @@ def test_a_wake_that_raises_unexpectedly_still_closes_the_connection(closed_port
 
 
 def test_a_port_something_listens_on_is_not_parked(listening_port: int) -> None:
-    port = ParkedPort(
-        app="docs",
-        target=ParkingTarget(host="127.0.0.1", port=listening_port),
-        on_first_connection=lambda: ParkedPageKind.STARTING,
-        page_for=lambda kind: "",
-    )
     with pytest.raises(PortInUseError):
-        port.start()
+        _parked_port(listening_port, lambda: ParkedPageKind.STARTING).start()
 
 
 def test_release_before_any_connection_frees_the_port(parked_port: ParkedPort) -> None:
