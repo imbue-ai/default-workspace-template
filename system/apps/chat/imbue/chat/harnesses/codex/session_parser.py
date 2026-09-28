@@ -92,9 +92,9 @@ _UNKNOWN_MODEL = "unknown"
 SETTINGS_CHANGED_SINCE_TURN_KEY: Final[str] = "settings_changed_since_turn"
 
 # codex's own `codex_error_info.type` tags, mapped to the shared kind vocabulary. Preferred over
-# reading the prose: the tag is the part that survives codex rewording its messages. Quota
-# exhaustion is deliberately absent -- `usage_limit_exceeded` belongs to the auth family, whose
-# recovery is different credentials, and `auth_errors` claims it before this table is consulted.
+# reading the prose: the tag is the part that survives codex rewording its messages. A spent quota
+# is its own kind (`usage_limit`, `billing`), not an auth failure: the credential works, so the way
+# forward is time or credit rather than a sign-in.
 _CODEX_ERROR_KINDS: Final[dict[str, str]] = {
     "server_error": "api_error",
     "internal_server_error": "api_error",
