@@ -331,7 +331,7 @@ in your report.
             && jq -r '.diff.inside_footprint[]' "$update"
     done
     cat data/.tasks/update-self/impacted-paths.txt 2>/dev/null
-    git diff --name-only "$MERGE" HEAD; } | sed '/^[[:space:]]*$/d' | sort -u \
+    git diff --name-only --no-renames "$MERGE" HEAD; } | sed '/^[[:space:]]*$/d' | sort -u \
       > data/.tasks/update-self/validate-paths.txt
   [ -s data/.tasks/update-self/validate-paths.txt ] \
       && uv run --frozen --package app-manifest app-manifest select-tests \
