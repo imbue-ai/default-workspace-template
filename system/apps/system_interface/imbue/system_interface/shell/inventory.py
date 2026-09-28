@@ -121,8 +121,9 @@ class AppInventory(MutableModel):
     def reload_registry(self) -> None:
         """Re-read the registry, keeping each known app's liveness across the read.
 
-        A file that cannot be read or parsed keeps the last good read (logged): a hand-edited
-        registry must degrade to a stale inventory, not crash the shell or end the watch.
+        A file that cannot be read or parsed keeps the last good read (logged once, and read again only when
+        the file changes): a hand-edited registry must degrade to a stale inventory, not crash the shell or end
+        the watch.
         """
         # The mtime is taken before the read: a write that lands between the two makes the next sweep read
         # again, which is the safe direction.
@@ -131,6 +132,8 @@ class AppInventory(MutableModel):
             rows = read_registry(self.registry_path)
         except RegistryReadError as e:
             logger.opt(exception=e).error("Kept the last app registry read: {} is unreadable", self.registry_path)
+            with self._lock:
+                self._read_registry_mtime_ns = mtime_ns
             return
         is_changed = False
         with self._lock:

@@ -198,3 +198,27 @@ def test_the_sweep_re_reads_a_registry_whose_mtime_moved(tmp_path: Path, broadca
     inventory_with_hook.sweep_once()
     inventory_with_hook.sweep_once()
     assert handed == [1]
+
+
+def test_a_broken_registry_is_read_again_only_once_it_changes(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A read that fails still records the file's mtime, so the sweep's backstop does not parse (and log) the
+    same broken file on every pass; the next change to the file is what brings a re-read."""
+    registry_path = write_two_app_registry(tmp_path)
+    inventory = build_inventory(registry_path, broadcaster)
+
+    registry_path.write_text("[[apps]\nname = ")
+    os.utime(registry_path, ns=(1, 1))
+    inventory.sweep_once()
+    assert [str(entry.row.name) for entry in inventory.entries()] == ["terminal", "files"]
+
+    # A good registry written at the same mtime is not read: the failed read was recorded against that mtime.
+    write_registry(registry_path, registry_row_toml("files", TEST_FILES_URL, program="files"))
+    os.utime(registry_path, ns=(1, 1))
+    inventory.sweep_once()
+    assert [str(entry.row.name) for entry in inventory.entries()] == ["terminal", "files"]
+
+    os.utime(registry_path, ns=(2, 2))
+    inventory.sweep_once()
+    assert [str(entry.row.name) for entry in inventory.entries()] == ["files"]
