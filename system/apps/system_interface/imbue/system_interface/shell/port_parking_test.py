@@ -83,7 +83,7 @@ def test_a_wake_that_fails_is_told_so(closed_port: int) -> None:
     assert f"Retry-After: {FAILED_REFRESH_SECONDS}".encode() in answer
 
 
-def test_a_wake_that_raises_still_answers_thesend_raw_get_over_socket(closed_port: int) -> None:
+def test_a_wake_that_raises_still_answers_the_request(closed_port: int) -> None:
     def explode() -> ParkedPageKind:
         raise AppLifecycleRefusedError("supervisord went away")
 
