@@ -85,13 +85,14 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             },
             placed.map(({ shortcut, cell }) => {
               const key = shortcutKey(shortcut.target.app, shortcut.target.launch);
+              const app = appByName(state, shortcut.target.app);
               return m(ShortcutIcon, {
                 key,
                 shortcut,
                 cell,
                 rect: cellRect(cell, metrics),
-                app: appByName(state, shortcut.target.app),
-                isStopped: isAppShownStopped(state, appByName(state, shortcut.target.app)),
+                app,
+                isStopped: isAppShownStopped(state, app),
                 isAppsLoaded: state.isAppsLoaded,
                 isSelected: attrs.selectedShortcutKey === key,
                 isLifted: liftedKey === key,

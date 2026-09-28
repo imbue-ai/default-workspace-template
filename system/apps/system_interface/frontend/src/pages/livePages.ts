@@ -46,9 +46,9 @@ import {
   effectiveWindow,
   effectiveWindowTitle,
   findWindow,
+  isAppShownStopped,
 } from "../reducers/desktopState";
 import type { DesktopState } from "../reducers/desktopState";
-import { isAppShownStopped } from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import type { DesktopStore, PageDriver } from "../store/DesktopStore";
 
