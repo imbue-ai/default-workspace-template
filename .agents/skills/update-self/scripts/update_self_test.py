@@ -1107,6 +1107,11 @@ def test_footprint_ranges_on_a_same_target_retry_after_several_rollbacks(
     ranges = history.ranges("v2", capsys)
 
     assert ranges["local_ref"] == ranges["update_base"] == newer
+    # v2 was merged directly on v1's rollback, so the fork point comes from the
+    # commit that rollback restored, not from the rollback, whose ancestry carries v1.
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
     assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
         "upstream_v1.txt",
         "upstream_v2.txt",

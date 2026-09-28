@@ -274,6 +274,14 @@ _ROLLBACK_SUBJECT = re.compile(
     rf"^{re.escape(_ROLLBACK_SUBJECT_PREFIX)} \(restore to (?P<restore_to>[0-9a-f]+)\)"
 )
 
+
+def rolled_back_to(subject: str) -> str | None:
+    """The commit a rollback, by its ``subject``, restored the tree to; None for any
+    other commit's subject."""
+    match = _ROLLBACK_SUBJECT.match(subject)
+    return None if match is None else match.group("restore_to")
+
+
 # The line `git revert` puts in every revert commit's body.
 _REVERTS_COMMIT = re.compile(
     r"^This reverts commit (?P<sha>[0-9a-f]{40})\b", re.MULTILINE
@@ -293,10 +301,10 @@ def _log_records(
     ]
 
 
-# CLEANUP: remove this function, its call in pending_update_rollbacks,
-# _UPDATE_SELF_SUBJECT_PREFIX, and the restore_to group of _ROLLBACK_SUBJECT once every
-# workspace runs a release whose apply writes the _ROLLED_BACK_UPDATE_TRAILER: landing
-# that release reverted every older update's rollback, and each later one records it.
+# CLEANUP: remove this function, its call in pending_update_rollbacks, and
+# _UPDATE_SELF_SUBJECT_PREFIX once every workspace runs a release whose apply writes the
+# _ROLLED_BACK_UPDATE_TRAILER: landing that release reverted every older update's
+# rollback, and each later one records it.
 def _undid_update_content(
     rollback: str,
     restore_to: str,

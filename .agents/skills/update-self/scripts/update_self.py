@@ -155,6 +155,7 @@ from update_apply import (
     pending_update_rollbacks,
     recover,
     rollback_last,
+    rolled_back_to,
 )
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
@@ -362,11 +363,20 @@ def _first_attempt_first_parent(merge: str, repo_root: Path) -> str:
     """The first parent of the first merge in ``merge``'s chain of retries.
 
     A merge whose first parent reverts a rollback was a retry on top of an
-    earlier landed-and-rolled-back merge; the chain ends at a merge made on the
-    workspace's own line, whose first parent carries none of those releases.
+    earlier landed-and-rolled-back merge. So was one made directly on a
+    rollback, by a pass whose guide predates reverting it; that chain goes on
+    from the commit the rollback restored. The chain ends at a merge made on
+    the workspace's own line, whose first parent carries none of those releases.
     """
     first_parent = _commit_sha(f"{merge}^1", repo_root)
-    while _is_rollback_revert(first_parent, repo_root):
+    while True:
+        subject = _git(["log", "-1", "--format=%s", first_parent], repo_root)
+        restored = rolled_back_to(subject)
+        if restored is not None:
+            first_parent = _commit_sha(restored, repo_root)
+            continue
+        if not subject.startswith(ROLLBACK_REVERT_SUBJECT_PREFIX):
+            return first_parent
         earlier = _latest_commit_with_subject(
             UPDATE_SELF_MERGE_SUBJECT, f"{first_parent}^", repo_root
         )
@@ -376,7 +386,6 @@ def _first_attempt_first_parent(merge: str, repo_root: Path) -> str:
                 f"'{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
             )
         first_parent = _commit_sha(f"{earlier}^1", repo_root)
-    return first_parent
 
 
 def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
