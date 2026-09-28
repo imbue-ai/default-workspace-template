@@ -6,4 +6,4 @@
 
 - The override file, the scans for test files that name or import a changed path, flat-script filename pairing, and the test requiring every tracked path to map are gone.
 
-- The always-run set gains `test_skill_mngr_references.py` and `dispatch_contract_test.py`, which read every skill's prose, so a change to any one skill's prose runs them.
+- The always-run set gains `test_skill_mngr_references.py` and `dispatch_contract_test.py`, which read every skill's prose, so a change to any one skill's prose runs them. Agent prose outside every skill (`.agents/**/*.md`) selects only the always-run set.

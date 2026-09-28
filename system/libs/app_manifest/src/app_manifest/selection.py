@@ -62,6 +62,8 @@ _PACKAGE_PARENT_DIRECTORIES: Final[tuple[str, ...]] = (
     "system/apps",
 )
 _SKILLS_DIRECTORY: Final[str] = ".agents/skills"
+# Agent prose, which only the always-run prose checks read.
+_AGENT_PROSE_DIRECTORY: Final[str] = ".agents"
 
 # Root files every root-collected test reads: the pytest and workspace configuration.
 _ROOT_CONFIG_FILES: Final[frozenset[str]] = frozenset({"pyproject.toml", "conftest.py"})
@@ -505,6 +507,12 @@ def _select_for_path(context: _SelectionContext, path: str) -> _PathOutcome:
         return _select_for_lockfile(context, path)
     if path in _ALWAYS_RUN_GUARDS or (
         PurePosixPath(path).parent.as_posix() == _GUARD_DIRECTORY and path.endswith(".py")
+    ):
+        return _PathOutcome(classes=(ChangedPathClass.GUARD,))
+    if (
+        path.startswith(f"{_AGENT_PROSE_DIRECTORY}/")
+        and path.endswith(_MARKDOWN_SUFFIX)
+        and find_owning_unit(path) is None
     ):
         return _PathOutcome(classes=(ChangedPathClass.GUARD,))
 

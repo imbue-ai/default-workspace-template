@@ -222,7 +222,8 @@ Selection reads only what the workspace declares. A path selects:
   frontend is among them.
 
 A path in no package, skill or npm package, that is not a supervisord block,
-`uv.lock`, or a guard, runs the full root suite (`uv run pytest` from the repo
+`uv.lock`, a guard, or markdown under `.agents/` (agent prose, which only the
+always-run prose checks read), runs the full root suite (`uv run pytest` from the repo
 root), which replaces the other root-collected commands; so does a change to
 the root `pyproject.toml` or `conftest.py`, and a `uv.lock` change that cannot
 be compared or that the root project depends on directly.

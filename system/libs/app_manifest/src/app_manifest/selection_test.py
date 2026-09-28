@@ -146,6 +146,18 @@ def test_every_non_documentation_change_runs_the_always_run_set(workspace: Path)
     assert selection.paths[0].classes == (ChangedPathClass.GUARD,)
 
 
+def test_agent_prose_outside_every_skill_runs_only_the_always_run_set(workspace: Path) -> None:
+    write_repo_file(workspace, ".agents/shared/references/dispatch.md", "# dispatch\n")
+    write_repo_file(workspace, ".agents/shared/scripts/dispatch.py", "X = 1\n")
+    commit_everything(workspace, "shared agent prose and a shared script")
+
+    prose = _select(workspace, [".agents/shared/references/dispatch.md"])
+    script = _select(workspace, [".agents/shared/scripts/dispatch.py"])
+
+    assert _command_lines(prose) == [_ALWAYS_RUN]
+    assert _command_lines(script) == [_FULL_ROOT]
+
+
 def test_a_shared_frontend_library_change_builds_then_runs_consumer_checks_and_browser_tests(
     workspace: Path,
 ) -> None:
