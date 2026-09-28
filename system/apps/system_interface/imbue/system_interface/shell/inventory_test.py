@@ -222,3 +222,22 @@ def test_a_broken_registry_is_read_again_only_once_it_changes(
     os.utime(registry_path, ns=(2, 2))
     inventory.sweep_once()
     assert [str(entry.row.name) for entry in inventory.entries()] == ["files"]
+
+
+def test_a_registry_that_cannot_be_stat_ed_is_warned_about_and_does_not_end_the_sweep(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, loguru_records: list[str]
+) -> None:
+    """A missing registry is the quiet, expected case; any other stat failure (here, a parent that is a file) is
+    logged, so the mtime backstop failing to see a write does not pass in silence."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file where the registry's directory should be")
+    inventory = build_inventory(blocker / "apps.toml", broadcaster)
+
+    inventory.sweep_once()
+
+    assert inventory.entries() == []
+    warnings = [record for record in loguru_records if record.startswith("WARNING")]
+    assert warnings and all("Could not stat the app registry" in record for record in warnings)
+    absent = build_inventory(tmp_path / "absent" / "apps.toml", broadcaster)
+    absent.sweep_once()
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == len(warnings)

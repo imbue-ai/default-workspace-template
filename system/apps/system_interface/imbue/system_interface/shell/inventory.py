@@ -169,9 +169,14 @@ class AppInventory(MutableModel):
             self.on_registry_read(rows)
 
     def _registry_mtime_ns(self) -> int | None:
+        """The registry file's mtime, or None for a registry that does not exist yet (no app has registered) or
+        cannot be stat-ed (logged, so the sweep's backstop failing to notice a write is not silent)."""
         try:
             return self.registry_path.stat().st_mtime_ns
-        except OSError:
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            logger.warning("Could not stat the app registry at {}: {}", self.registry_path, e)
             return None
 
     def _start_registry_watch(self) -> None:
