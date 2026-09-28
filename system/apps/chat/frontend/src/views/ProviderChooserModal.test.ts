@@ -29,7 +29,10 @@ const state: {
   flow: unknown;
 } = { lanes: [], accounts: [], loaded: true, flow: null };
 
-const startFlow = vi.hoisted(() => vi.fn(async () => undefined));
+const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
+
+vi.mock("../models/providerRelay", () => ({ requestProviderRelay }));
 
 // The real module under the view's data sources, so the chooser's open/pick/close state is the
 // production code rather than a stand-in for it.
@@ -109,12 +112,24 @@ const PI_KEY_LANE = lane({
 });
 
 function account(id: string, laneId: string, label: string): ProviderAccount {
-  return { id, lane: laneId, harness: "claude", provider: label, harness_label: "", seq: 1, name: "", label };
+  return {
+    id,
+    lane: laneId,
+    harness: "claude",
+    provider: label,
+    harness_label: "",
+    seq: 1,
+    name: "",
+    label,
+    holds_subscription_token: false,
+  };
 }
 
 beforeEach(() => {
   closeProviderChooser();
   startFlow.mockClear();
+  requestProviderRelay.mockReset();
+  requestProviderRelay.mockResolvedValue(true);
   state.lanes = [lane()];
   state.accounts = [];
   state.loaded = true;
@@ -142,6 +157,7 @@ describe("the provider chooser", () => {
         seq: 1,
         name: "",
         label: "Anthropic (Claude Code)",
+        holds_subscription_token: false,
       },
       {
         id: "a2",
@@ -154,6 +170,7 @@ describe("the provider chooser", () => {
         seq: 2,
         name: "",
         label: "Anthropic 2 (Claude Code)",
+        holds_subscription_token: false,
       },
     ];
     const text = render();
@@ -183,6 +200,7 @@ describe("the provider chooser", () => {
         seq: 1,
         name: "",
         label: "Anthropic (Claude Code)",
+        holds_subscription_token: false,
       },
     ];
     const root = document.createElement("div");
@@ -326,5 +344,112 @@ describe("picking a signed-in account", () => {
 
     expect(root.textContent).toContain("Anthropic (Claude Code)");
     expect(root.querySelector('[data-e2e^="pick-account-"]')).toBeNull();
+  });
+});
+
+describe("a sign-in finished in the browser", () => {
+  const CLAUDE_RELAY_URL = "https://claude.ai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A54871%2Fcallback";
+  const CHATGPT = lane({
+    id: "openai",
+    provider_name: "OpenAI",
+    harness: "codex",
+    methods: [
+      {
+        id: "chatgpt",
+        label: "Use your ChatGPT plan (runs on Codex)",
+        description: "",
+        signup_url: "",
+        shape: "browser",
+        is_primary: true,
+      },
+      {
+        id: "device",
+        label: "ChatGPT with a code",
+        description: "",
+        signup_url: "",
+        shape: "code_then_wait",
+        is_primary: false,
+      },
+    ],
+  });
+
+  async function settled(): Promise<void> {
+    for (let index = 0; index < 5; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  async function clickLane(laneId: string): Promise<HTMLElement> {
+    const root = document.createElement("div");
+    const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    draw();
+    (root.querySelector(`[data-e2e="lane-${laneId}"]`) as HTMLElement).click();
+    await settled();
+    draw();
+    return root;
+  }
+
+  function startedFlow(shape: string, relayUrl: string | null): unknown {
+    return {
+      flow_id: "flow-1",
+      shape,
+      url: "https://claude.ai/manual",
+      code: null,
+      relay_url: relayUrl,
+      laneId: "anthropic",
+      methodId: "subscription",
+      accountId: null,
+      status: { state: "pending", detail: null, account_id: null },
+    };
+  }
+
+  it("hands the page to the desktop app and waits on the browser", async () => {
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+
+    const root = await clickLane("anthropic");
+
+    expect(requestProviderRelay).toHaveBeenCalledExactlyOnceWith(CLAUDE_RELAY_URL, "flow-1");
+    expect(root.textContent).toContain("We opened the Anthropic sign-in page.");
+    expect(root.textContent).toContain("Seeing malformed_certificate? Sign out of claude.ai and sign in again.");
+    expect(root.querySelector('[data-e2e="open-sign-in-again"]')).not.toBeNull();
+    expect(root.querySelector('[data-e2e="cancel-sign-in"]')).not.toBeNull();
+  });
+
+  it("shows Claude's paste-the-code steps when nothing relays", async () => {
+    requestProviderRelay.mockResolvedValue(false);
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+
+    const root = await clickLane("anthropic");
+
+    expect(root.textContent).toContain("Approve, then paste the code shown");
+    expect(root.textContent).not.toContain("We opened the Anthropic sign-in page.");
+  });
+
+  it("falls back to ChatGPT's one-time code when nothing relays", async () => {
+    requestProviderRelay.mockResolvedValue(false);
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+
+    await clickLane("openai");
+
+    expect(startFlow).toHaveBeenCalledWith("openai", "chatgpt", undefined);
+    expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
+  });
+
+  it("starts the top row's sign-in as the chooser opens", async () => {
+    openProviderChooser();
+    const root = document.createElement("div");
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    await settled();
+
+    expect(startFlow).toHaveBeenCalledExactlyOnceWith("anthropic", "subscription");
+  });
+
+  it("offers an account on a pasted subscription token a normal sign-in instead", () => {
+    state.accounts = [{ ...account("a1", "anthropic", "Anthropic (Claude Code)"), holds_subscription_token: true }];
+
+    const text = render();
+
+    expect(text).toContain("Switch to a normal sign-in");
+    expect(text).not.toContain("Sign in again");
   });
 });

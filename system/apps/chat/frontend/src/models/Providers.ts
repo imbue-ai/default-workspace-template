@@ -5,12 +5,16 @@
  * provider. Several lanes can share a harness (Opencode Go and a raw API key both run on
  * Pi), so the chooser lists lanes, not harnesses.
  *
- * A sign-in has three possible shapes and the server tells us which, per method, so nothing
+ * A sign-in has four possible shapes and the server tells us which, per method, so nothing
  * here has to know what a harness is:
  *
  *   url_then_code   here is a link; approve in the browser and paste the code back
  *   code_then_wait  here is a link and a one-time code; type it there and we wait
  *   paste           paste a key; no terminal involved
+ *   browser         here is a link; finish in the browser and it completes by itself
+ *
+ * A browser sign-in whose page the server offers as `relay_url` can be handed to the minds
+ * desktop app, which opens it and relays its callback (see `providerRelay.ts`).
  *
  * Flows are single-flight on the server -- it holds one live sign-in at a time -- so this
  * keeps one flow's state and starting another abandons the first.
@@ -20,7 +24,7 @@ import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 
-export type FlowShape = "url_then_code" | "code_then_wait" | "paste";
+export type FlowShape = "url_then_code" | "code_then_wait" | "paste" | "browser";
 export type FlowState = "pending" | "ok" | "failed";
 
 export interface LaneMethod {
@@ -67,6 +71,8 @@ export interface ProviderAccount {
   name: string;
   /** Already composed server-side ("Anthropic 2 (Claude Code)") -- see accounts_endpoints. */
   label: string;
+  /** The account runs on a pasted Claude subscription token, which signing in again drops. */
+  holds_subscription_token: boolean;
 }
 
 interface FlowStart {
@@ -74,6 +80,15 @@ interface FlowStart {
   shape: FlowShape;
   url: string | null;
   code: string | null;
+  /** The page the desktop app can open for this sign-in and relay the callback of. */
+  relay_url: string | null;
+}
+
+/** Which lane and method a live flow runs, and the account it re-authenticates, if any. */
+export interface FlowTarget {
+  laneId: string;
+  methodId: string;
+  accountId: string | null;
 }
 
 interface FlowStatus {
@@ -178,11 +193,22 @@ export async function deleteAccount(accountId: string): Promise<void> {
 /**
  * The live sign-in, if any. One at a time, matching the server.
  */
-let flow: (FlowStart & { status: FlowStatus }) | null = null;
+let flow: (FlowStart & FlowTarget & { status: FlowStatus }) | null = null;
 let pollTimer: number | null = null;
 
-export function getFlow(): (FlowStart & { status: FlowStatus }) | null {
+export function getFlow(): (FlowStart & FlowTarget & { status: FlowStatus }) | null {
   return flow;
+}
+
+/** Whether the live flow is still waiting on exactly this sign-in, so it can be used as is. */
+export function isPendingFlowFor(target: FlowTarget): boolean {
+  return (
+    flow !== null &&
+    flow.status.state === "pending" &&
+    flow.laneId === target.laneId &&
+    flow.methodId === target.methodId &&
+    flow.accountId === target.accountId
+  );
 }
 
 /**
@@ -208,7 +234,13 @@ export async function startFlow(laneId: string, methodId: string, accountId?: st
     body: { lane_id: laneId, method_id: methodId, account_id: accountId ?? null },
   });
   if (attempt !== startGeneration) return;
-  flow = { ...started, status: { state: "pending", detail: null, account_id: null } };
+  flow = {
+    ...started,
+    laneId,
+    methodId,
+    accountId: accountId ?? null,
+    status: { state: "pending", detail: null, account_id: null },
+  };
   // Stopped HERE rather than before the await: two overlapping sign-ins both reached the await
   // with nothing yet to stop, and both then started a poller. The first interval was left with
   // no reference to it, GETting a flow id the server had already forgotten every two seconds
@@ -265,6 +297,8 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
       chooserOnDismissed = null;
       run(status.account_id);
     }
+    // Nothing left to say, so the chooser goes by itself; a note about the key stays up.
+    if (status.detail === null) closeProviderChooser();
   } else if (status.state === "failed") {
     stopPolling();
   }
