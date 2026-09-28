@@ -148,15 +148,15 @@ Each pass:
 
 1. reads every supervised program's state in one RPC (none when supervisord cannot be reached: the pass does nothing, logged at debug);
 2. for each parkable app whose state is not `RUNNING` or `STARTING` and that is not parked, parks it (a bind refused with address-in-use leaves it unparked);
-3. for each parked app whose state is `RUNNING` or `STARTING`, releases the parker (someone started it behind the shell's back, `supervisorctl start` say; its first bind may have failed, and supervisord's retry lands once the port is free, within a few seconds);
-4. for each app that was woken and whose state is `FATAL` or `BACKOFF`, re-parks it as failed (section 5.5);
+3. for each parked app whose state is `RUNNING`, `STARTING`, or `BACKOFF`, releases the parker (someone started it behind the shell's back, `supervisorctl start` say; its first bind may have failed, and supervisord's retry lands once the port is free, within a few seconds, which is why a program in `BACKOFF` needs the port too);
+4. for each app that was woken and whose state is `FATAL`, re-parks it as failed (section 5.5);
 5. applies Part D (section 6).
 
 The existing stop and start routes go through the manager too: a start releases the parker before `startProcess`, so the app's first bind never collides with the shell's listener, and a stop is followed by a liveness refresh so the next pass parks the port.
 
 ### 5.5 A wake that fails
 
-A woken app whose program reaches `BACKOFF` or `FATAL` is re-parked with the failure page.
+A woken app whose program reaches `FATAL` (supervisord gave up retrying it) is re-parked with the failure page.
 The manager allows at most 3 wake attempts per app in any 5 minutes; past that the parker answers the failure page without starting anything, so a broken app cannot be restarted by every reload.
 The budget is per shell process and resets with it.
 
