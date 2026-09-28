@@ -44,9 +44,9 @@ read every path in this scope (the merged set, your own edits, a regenerated
 lockfile) and more, so do not select again with another base. Never run
 `select-tests --diff-base "$TARGET_REF"`: that diff is everything the workspace
 ever changed, not what this update reconciled, and it repeats suites 4b already
-ran. A fix you commit after 4b's run is tested by what it reaches:
-`select-tests --diff-base <the commit before your first fix>`, every line of
-it.
+ran. What you commit after 4b's suites run (a customization re-fit, a gate
+fix) is tested by what it reaches: `select-tests --diff-base <the commit
+before the first of them>`, every line of it.
 
 The gate's scope is **every file whose merged content differs from the target
 release**: the conflicts you resolved with any hand-written content, your own
