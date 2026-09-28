@@ -638,8 +638,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   describe("when nothing comes back from the browser", () => {
-    const NOTHING_BACK =
-      "Nothing has come back from Anthropic yet. If you clicked Deny or closed the page, try again.";
+    const NOTHING_BACK = "Anthropic authorization has not yet completed.";
 
     async function waitingOnBrowser(): Promise<{ root: HTMLElement; redraw: () => void }> {
       vi.useFakeTimers({ shouldAdvanceTime: true });
