@@ -349,7 +349,8 @@ uv run chat-app --no-register
 cd system/apps/chat
 uv run pytest           # skips the release tests (browser, real claude)
 uv run pytest -m ''     # everything, as CI runs it
-uv run pytest --no-cov -m release imbue/chat/test_e2e.py   # just the browser tests
+# just the browser tests
+uv run pytest --no-cov -m release imbue/chat/test_e2e.py imbue/chat/test_chat_creation_recovery_e2e.py
 ```
 
 The suite fails any run that covers less than 75% of the app, so a run of only
