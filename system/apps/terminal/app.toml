@@ -21,10 +21,6 @@ path = "/new"
 method = "POST"
 params = [{name = "workdir", label = "Working directory", required = false}]
 
-[[references]]
-path = "system/services/oom_priority/bin/oom_tag_service.py"
-note = "Every terminal session runs under it, which tags the session for the OOM daemon"
-
 # A terminal preview serves the wrapper pages on a free port, unregistered, over a copy of
 # the terminal's store and a scratch state directory; the sessions it creates are real tmux
 # sessions. Its pages frame the pty the registry names, so a preview boots --with terminal-pty
