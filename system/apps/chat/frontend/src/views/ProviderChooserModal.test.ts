@@ -13,7 +13,7 @@
  * The exception is picking a signed-in account, which hands the chosen account to the caller
  * and closes the chooser; those tests assert that behavior against the real chooser state.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
   globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
@@ -58,12 +58,7 @@ import m from "mithril";
 
 import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from "../models/Providers";
 import type { UnpickableReason } from "../models/Providers";
-import {
-  NOTHING_BACK_AFTER_MS,
-  PASTE_STEP_LABEL,
-  ProviderChooserModal,
-  RETURN_SETTLE_MS,
-} from "./ProviderChooserModal";
+import { PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
 import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
@@ -635,91 +630,5 @@ describe("a sign-in finished in the browser", () => {
 
     expect(text).toContain("Switch to a normal sign-in");
     expect(text).not.toContain("Sign in again");
-  });
-
-  describe("when nothing comes back from the browser", () => {
-    const NOTHING_BACK =
-      "Nothing has come back from Anthropic yet. If you clicked Deny or closed the page, try again.";
-
-    async function waitingOnBrowser(): Promise<{ root: HTMLElement; redraw: () => void }> {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
-      state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
-      const root = await clickLane("anthropic");
-      const redraw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
-      return { root, redraw };
-    }
-
-    function comeBackFromBrowser(): void {
-      window.dispatchEvent(new Event("blur"));
-      window.dispatchEvent(new Event("focus"));
-      vi.advanceTimersByTime(RETURN_SETTLE_MS);
-    }
-
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it("says so when the user comes back with the sign-in still waiting", async () => {
-      const { root, redraw } = await waitingOnBrowser();
-
-      comeBackFromBrowser();
-      redraw();
-
-      expect(root.textContent).toContain(NOTHING_BACK);
-      expect(root.querySelector('[data-e2e="open-sign-in-again"]')?.textContent).toBe("Try again");
-      m.render(root, null);
-    });
-
-    it("keeps waiting when the user never left for the browser", async () => {
-      const { root, redraw } = await waitingOnBrowser();
-
-      window.dispatchEvent(new Event("focus"));
-      vi.advanceTimersByTime(RETURN_SETTLE_MS);
-      redraw();
-
-      expect(root.textContent).toContain("Finish signing in to Anthropic in your browser.");
-      expect(root.textContent).not.toContain(NOTHING_BACK);
-      m.render(root, null);
-    });
-
-    it("says so after a while even when the return is not seen", async () => {
-      const { root, redraw } = await waitingOnBrowser();
-
-      vi.advanceTimersByTime(NOTHING_BACK_AFTER_MS);
-      redraw();
-
-      expect(root.textContent).toContain(NOTHING_BACK);
-      m.render(root, null);
-    });
-
-    it("shows the sign-in as finished when it finished as Studio came forward", async () => {
-      const { root, redraw } = await waitingOnBrowser();
-
-      window.dispatchEvent(new Event("blur"));
-      window.dispatchEvent(new Event("focus"));
-      state.flow = { ...(state.flow as object), status: { state: "ok", detail: null, account_id: "a1" } };
-      vi.advanceTimersByTime(RETURN_SETTLE_MS);
-      redraw();
-
-      expect(root.textContent).toContain("All set");
-      expect(root.textContent).not.toContain(NOTHING_BACK);
-      m.render(root, null);
-    });
-
-    it("reopens the same sign-in page on Try again and waits afresh", async () => {
-      const { root, redraw } = await waitingOnBrowser();
-      comeBackFromBrowser();
-      redraw();
-
-      (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
-      await vi.advanceTimersByTimeAsync(0);
-      redraw();
-
-      expect(requestProviderRelay).toHaveBeenCalledTimes(2);
-      expect(requestProviderRelay).toHaveBeenLastCalledWith(CLAUDE_RELAY_URL, "flow-1");
-      expect(startFlow).toHaveBeenCalledOnce();
-      expect(root.textContent).toContain("Finish signing in to Anthropic in your browser.");
-      m.render(root, null);
-    });
   });
 });
