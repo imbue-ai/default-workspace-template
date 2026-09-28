@@ -219,7 +219,11 @@ def _compress_staged_services_logs(events_dir: Path) -> None:
             + _SERVICES_LOG_ARCHIVE_SUFFIX
         )
         partial_path = archive_path.with_name(archive_path.name + ".partial")
-        with open(staged_path, "rb") as source, gzip.open(partial_path, "wb") as target:
+        # The fastest level: the loop announces no registry change until this returns.
+        with (
+            open(staged_path, "rb") as source,
+            gzip.open(partial_path, "wb", compresslevel=1) as target,
+        ):
             shutil.copyfileobj(source, target)
         partial_path.rename(archive_path)
         staged_path.unlink()
