@@ -8,6 +8,7 @@ starting apps: they see a backend that answers. It reads the request only far en
 proxies anything, and answers every method and path the same way.
 """
 
+import errno
 import html
 import socket
 import threading
@@ -149,7 +150,7 @@ class ParkedPort(MutableModel):
             listener.listen(_LISTEN_BACKLOG)
         except OSError as e:
             listener.close()
-            if e.errno in (98, 48):
+            if e.errno == errno.EADDRINUSE:
                 raise PortInUseError(f"{self.target.host}:{self.target.port} is in use") from e
             raise PortParkingError(f"could not park {self.target.host}:{self.target.port}: {e}") from e
         self._listener = listener
