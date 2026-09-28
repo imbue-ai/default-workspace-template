@@ -538,7 +538,11 @@ is_host_data_volume_exposed = false
 is_run_as_root = true
 # The user-data layout (matching the docker provider): /home/user symlinks to
 # the btrfs data disk with mngr's data dir inside it; plain-text mngr service
-# logs go to /var/log/mngr.
+# logs go to /var/log/mngr. That data disk (mngr's default 100 GiB, sparse) is
+# the one disk that grows: the lima create template also moves the regenerable
+# caches onto it (system/scripts/lima_cache_on_data_disk.sh), mngr caps the
+# VM's journal, and `mngr lima resize --disk` grows it. The VM's boot disk is
+# the pre-baked image's fixed size (see [create_templates.lima]).
 host_dir = "/home/user/.mngr"
 volume_home_path = "/home/user"
 host_log_dir = "/var/log/mngr"
@@ -706,6 +710,12 @@ setting__extend = ["providers.docker.docker_runtime=runsc"]
 provider = "lima"
 target_path = "/home/user/workspace/"
 idle_mode = "disabled"
+# The VM's size. --cpus / --memory are what the VM boots with; --disk is its
+# boot disk, which holds the OS and toolchain and is the pre-baked image's
+# size (build-lima-image.sh bakes 20 GiB, and lima cannot shrink a disk below
+# its image). The workspace's data lives on the separate btrfs data disk
+# [providers.lima] sizes. `mngr lima resize <host> --cpus/--memory/--disk`
+# changes a host's size afterwards (--disk there grows the data disk).
 start_arg__extend = ["--cpus=2", "--memory=4", "--disk=20"]
 # Mirror the docker template: flip the (default-disabled) lima provider on for
 # this create. Redundant in practice -- `@<name>.lima` resolves the provider by
@@ -732,11 +742,14 @@ setting__extend = ["providers.lima.is_enabled=true"]
 extra_provision_command__extend = [
     # Move root's home to the persistent /home/user tree (the Dockerfile does
     # this for container images; VM/sandbox provisioning does it here) so
-    # $HOME, passwd, and sshd agree. /var/cache/user is the off-volume cache
-    # target the host env points XDG_CACHE_HOME / npm_config_cache at.
-    # (Direct passwd edit rather than `usermod -d`: usermod refuses to modify
-    # a user with running processes, and root always has one here.)
-    "sed -i 's|^root:\\([^:]*:[^:]*:[^:]*:[^:]*\\):/root:|root:\\1:/home/user:|' /etc/passwd && grep -q '^root:.*:/home/user:' /etc/passwd && mkdir -p /home/user /var/cache/user",
+    # $HOME, passwd, and sshd agree. (Direct passwd edit rather than
+    # `usermod -d`: usermod refuses to modify a user with running processes,
+    # and root always has one here.)
+    "sed -i 's|^root:\\([^:]*:[^:]*:[^:]*:[^:]*\\):/root:|root:\\1:/home/user:|' /etc/passwd && grep -q '^root:.*:/home/user:' /etc/passwd && mkdir -p /home/user",
+    # Put the caches the host env points XDG_CACHE_HOME / npm_config_cache at
+    # (/var/cache/user) on the resizable btrfs data disk rather than the VM's
+    # fixed boot disk, before install_dependencies.sh fills them.
+    "sh /home/user/workspace/system/scripts/lima_cache_on_data_disk.sh",
     "bash /home/user/workspace/system/scripts/setup_system.sh",
     "bash /home/user/workspace/system/scripts/install_dependencies.sh",
     "bash /home/user/workspace/system/scripts/build_workspace.sh",
