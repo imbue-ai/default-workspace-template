@@ -148,7 +148,7 @@ Each pass:
 
 1. reads every supervised program's state in one RPC (none when supervisord cannot be reached: the pass does nothing, logged at debug);
 2. for each parkable app whose state is not `RUNNING` or `STARTING` and that is not parked, parks it (a bind refused with address-in-use leaves it unparked);
-3. for each parked app whose state is `RUNNING`, `STARTING`, or `BACKOFF`, releases the parker (someone started it behind the shell's back, `supervisorctl start` say; its first bind may have failed, and supervisord's retry lands once the port is free, within a few seconds, which is why a program in `BACKOFF` needs the port too);
+3. for each parked app whose state is `RUNNING`, `STARTING`, or `BACKOFF`, releases the parker (someone started it behind the shell's back, `supervisorctl start` say; its first bind may have failed, and supervisord's retry lands once the port is free, within a few seconds, which is why a program in `BACKOFF` needs the port too), and likewise releases a parker the pass no longer reaches (its row left the registry, or its program is unknown to supervisord) or one on a port the row no longer names (the app re-registered elsewhere; the current port is parked instead), so the shell never holds a port it cannot start an app behind;
 4. for each app that was woken and whose state is `FATAL`, re-parks it as failed (section 5.5);
 5. applies Part D (section 6).
 

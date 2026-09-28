@@ -18,6 +18,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from typing import Final
 
 from loguru import logger
@@ -284,13 +285,15 @@ class AppLifecycleManager(MutableModel):
 
     def sweep_once(self) -> None:
         """One pass (spec sections 5.4 and 6.1): park every stoppable app that is down, release every parker whose
-        app is up or retrying, note an app whose wake ended in FATAL, and stop a running app that has had no window
-        for the grace period."""
+        app is up or retrying (or that the pass no longer reaches: the row left the registry, or its program is
+        unknown to supervisord), note an app whose wake ended in FATAL, and stop a running app that has had no
+        window for the grace period."""
         statename_by_program = self.program_states()
         if statename_by_program is None:
             logger.debug("Skipped an app lifecycle pass: supervisord did not answer")
             return
         entries = self.inventory.entries()
+        reconciled_apps: set[str] = set()
         for entry in entries:
             program = stoppable_program_of(entry, entries)
             if program is None:
@@ -298,7 +301,20 @@ class AppLifecycleManager(MutableModel):
             statename = statename_by_program.get(program)
             if statename is None:
                 continue
+            reconciled_apps.add(str(entry.row.name))
             self._reconcile_app(entry, program, statename)
+        self._release_parked_except(reconciled_apps)
+
+    def _release_parked_except(self, apps: AbstractSet[str]) -> None:
+        """Let go of every parked port whose app the pass did not reconcile: the shell can no longer start the app,
+        so holding its port would only strand whatever binds it next."""
+        with self._lock:
+            unreachable = [(app, parked) for app, parked in self._parked_by_app.items() if app not in apps]
+            for app, _parked in unreachable:
+                del self._parked_by_app[app]
+        for app, parked in unreachable:
+            parked.release()
+            logger.info("Released the parked port of {}: the app is no longer one the shell can start", app)
 
     def _reconcile_app(self, entry: AppInventoryEntry, program: str, statename: str) -> None:
         app = str(entry.row.name)
@@ -319,13 +335,23 @@ class AppLifecycleManager(MutableModel):
         if statename not in SUPERVISOR_DOWN_STATENAMES:
             # STOPPING: the port is still the app's until it exits.
             return
+        target = parking_target_of(str(entry.row.url))
         with self._lock:
             if statename == SUPERVISOR_FATAL_STATENAME and app in self._apps_awaiting_wake_outcome:
                 self._failed_apps.add(app)
                 self._apps_awaiting_wake_outcome.discard(app)
-            if app in self._parked_by_app:
+            parked = self._parked_by_app.get(app)
+            if parked is not None and parked.target == target:
                 return
-        self._park(entry, program)
+            # A parker on a port the row no longer names (the app re-registered elsewhere) is let go first.
+            stale = self._parked_by_app.pop(app, None)
+        if stale is not None:
+            stale.release()
+            logger.info(
+                "Released the parked port {}:{} of {}: its row moved", stale.target.host, stale.target.port, app
+            )
+        if target is not None:
+            self._park(entry, program, target)
 
     def _apply_no_window_rule(self, entry: AppInventoryEntry, program: str) -> None:
         """Stop a running app that declares ``stop_when_no_windows`` once no window has shown it for the grace
@@ -353,11 +379,8 @@ class AppLifecycleManager(MutableModel):
         )
         self.inventory.refresh_liveness()
 
-    def _park(self, entry: AppInventoryEntry, program: str) -> None:
+    def _park(self, entry: AppInventoryEntry, program: str, target: ParkingTarget) -> None:
         app = str(entry.row.name)
-        target = parking_target_of(str(entry.row.url))
-        if target is None:
-            return
         display_name = str(entry.row.display_name) if entry.row.display_name is not None else app
         parked = ParkedPort(
             app=app,

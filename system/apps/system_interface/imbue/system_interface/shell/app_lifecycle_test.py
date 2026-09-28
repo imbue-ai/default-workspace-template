@@ -120,6 +120,20 @@ def _is_refused(port: int) -> bool:
         return True
 
 
+def _is_held(port: int) -> bool:
+    """Whether something listens on the port, probed by a bind rather than a connection: a connection to a parked
+    port is itself the wake."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        probe.bind(("127.0.0.1", port))
+        return False
+    except OSError:
+        return True
+    finally:
+        probe.close()
+
+
 def test_a_pass_parks_a_stopped_stoppable_app_and_nothing_else(
     manager: AppLifecycleManager, docs_port: int, supervisor: FakeSupervisor
 ) -> None:
@@ -165,6 +179,36 @@ def test_a_connection_to_a_parked_port_wakes_the_app(
     # The port is free for the app; a pass while supervisord says STARTING parks nothing.
     manager.sweep_once()
     assert not manager.is_app_parked("docs")
+
+
+def test_a_parked_port_follows_its_row_and_is_released_once_the_row_is_gone(
+    manager: AppLifecycleManager, docs_port: int, supervisor: FakeSupervisor, tmp_path: Path
+) -> None:
+    """A parker outlives neither the port its row names nor the row itself: an app re-registered on another port
+    moves the shell's hold there, and one that left the registry gets its port back at once, so whatever binds it
+    next is not stranded behind a loading page the shell can never resolve."""
+    manager.sweep_once()
+    assert manager.is_app_parked("docs")
+    registry_path = manager.inventory.registry_path
+    moved_port = find_free_port()
+
+    write_registry(
+        registry_path,
+        registry_row_toml("docs", f"http://127.0.0.1:{moved_port}", program="docs", stop_when_no_windows=True),
+    )
+    manager.inventory.reload_registry()
+    manager.sweep_once()
+
+    assert manager.parked_app_names() == ["docs"]
+    assert _is_refused(docs_port) and _is_held(moved_port)
+
+    write_registry(registry_path, registry_row_toml("plain", "http://127.0.0.1:1"))
+    manager.inventory.reload_registry()
+    manager.sweep_once()
+
+    assert manager.parked_app_names() == []
+    assert not _is_held(moved_port)
+    assert supervisor.started == []
 
 
 def test_a_pass_does_nothing_when_supervisord_does_not_answer(
