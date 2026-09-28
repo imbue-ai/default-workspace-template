@@ -1,0 +1,1 @@
+The mouse pointer hides while you type into the composer (and the chat root's own fields) and comes back the moment the mouse moves, is pressed, or scrolls, so it never sits over the words being entered. Shortcuts such as Cmd+C leave it alone.
