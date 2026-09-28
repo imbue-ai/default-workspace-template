@@ -38,7 +38,9 @@ SUPERVISOR_FATAL_STATENAME: Final[str] = "FATAL"
 # STOPPED / STOPPING / EXITED / BACKOFF / FATAL / UNKNOWN all render as stopped.
 _RUNNING_STATE_NAMES: Final[frozenset[str]] = frozenset({SUPERVISOR_RUNNING_STATENAME, SUPERVISOR_STARTING_STATENAME})
 # The states in which a program is neither up nor about to bind its port again on its own: what the shell parks.
-SUPERVISOR_DOWN_STATENAMES: Final[frozenset[str]] = frozenset({"STOPPED", "EXITED", "FATAL", "UNKNOWN"})
+SUPERVISOR_DOWN_STATENAMES: Final[frozenset[str]] = frozenset(
+    {"STOPPED", "EXITED", SUPERVISOR_FATAL_STATENAME, "UNKNOWN"}
+)
 
 
 def supervisor_socket_path() -> Path:
