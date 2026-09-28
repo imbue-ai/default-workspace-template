@@ -201,6 +201,22 @@ def _is_already_merged(ref: str, repo_root: Path) -> bool:
     return result.returncode == 0
 
 
+def _names_commit(ref: str, repo_root: Path) -> bool:
+    """Whether ``ref`` resolves to a commit in ``repo_root``.
+
+    Exit 1 from ``rev-parse --verify --quiet`` is the ordinary "no such commit"
+    answer; any other non-zero code is a real git error and is raised.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+    )
+    if result.returncode not in (0, 1):
+        result.check_returncode()
+    return result.returncode == 0
+
+
 def _repo_root(args: argparse.Namespace) -> Path:
     """The ``--repo-root`` value, whether given before or after the subcommand.
 
@@ -434,14 +450,7 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     # Checked before the skill-dir probe below, which cannot tell a ref that
     # names nothing from one that predates the skill: staging the local copy for
     # the former would hand the lead its own flow for a target it never read.
-    resolved = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", f"{args.ref}^{{commit}}"],
-        cwd=repo_root,
-        capture_output=True,
-    )
-    if resolved.returncode not in (0, 1):
-        resolved.check_returncode()
-    if resolved.returncode == 1:
+    if not _names_commit(args.ref, repo_root):
         print(
             f"error: {args.ref} does not name a commit in this workspace, so there "
             "is no target to update to. It is not a release, remote branch or "
