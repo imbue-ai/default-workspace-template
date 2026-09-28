@@ -52,8 +52,6 @@ from imbue.system_interface.shell.port_parking import ParkingTarget
 from imbue.system_interface.shell.port_parking import parked_page_html
 from imbue.system_interface.shell.port_parking import parking_target_of
 
-# The sweep runs often while any stoppable app is between states (a parked port, a wake awaiting its outcome, a
-# program starting, retrying, or stopping), and at the inventory's own pace otherwise.
 TRANSITION_SWEEP_INTERVAL_SECONDS: Final[float] = 2.0
 IDLE_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 # How many wakes an app gets in a window before its page stops asking for more (spec section 5.5).
@@ -138,7 +136,6 @@ class AppLifecycleManager(MutableModel):
     _apps_awaiting_wake_outcome: set[str] = PrivateAttr(default_factory=set)
     _failed_apps: set[str] = PrivateAttr(default_factory=set)
     _idle_since_by_app: dict[str, float] = PrivateAttr(default_factory=dict)
-    # Whether the last pass found a stoppable app between states (see ``_reconcile_app``).
     _is_any_app_between_states: bool = PrivateAttr(default=False)
     _is_visited: bool = PrivateAttr(default=False)
     _sweep_stop: threading.Event = PrivateAttr(default_factory=threading.Event)

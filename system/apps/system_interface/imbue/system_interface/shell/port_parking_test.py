@@ -67,7 +67,6 @@ def test_a_parked_port_answers_its_first_connection_with_the_loading_page_and_le
     assert b"Starting Docs" in body and f'content="{STARTING_REFRESH_SECONDS}"'.encode() in body
     assert woken == ["docs"]
     assert parked_port.is_woken is True
-    # The port is the app's to bind now.
     wait_for(lambda: can_bind_loopback_port(parked_port.target.port), timeout=5.0, poll_interval=0.02)
 
 
@@ -137,5 +136,4 @@ def test_the_response_bytes_carry_the_page_length() -> None:
     head, _, body = response.partition(b"\r\n\r\n")
     assert f"Content-Length: {len(page.encode())}".encode() in head
     assert body == page.encode()
-    # Display names are escaped into the page.
     assert "&lt;b&gt;" in page

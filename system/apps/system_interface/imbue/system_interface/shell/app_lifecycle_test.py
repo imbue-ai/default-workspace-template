@@ -418,7 +418,6 @@ def test_a_running_app_with_no_window_is_stopped_after_the_grace_period_once_vis
     clock.now += 2
     manager.sweep_once()
     assert supervisor.stopped == ["docs"]
-    # The stopped program is parked on the next pass.
     manager.sweep_once()
     assert manager.is_app_parked("docs")
 

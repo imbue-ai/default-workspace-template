@@ -189,8 +189,8 @@ def chat_agent_oom_score_adj(
 # hurts: the two authority paths into the workspace (owner-exec, then the
 # terminal) come first, then the UI and the chat app, then the sharing stack,
 # then the runtime-state sync (github-sync, opt-in) and the host backup, then
-# the job scheduler, then the browser stack (its X display,
-# then the coordinator), and last the file viewer.
+# the job scheduler, then the browser stack (its X display, then the
+# coordinator), and last the file viewer.
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.

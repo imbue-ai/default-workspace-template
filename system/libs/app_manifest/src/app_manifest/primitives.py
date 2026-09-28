@@ -20,10 +20,10 @@ MAX_APP_NAME_LENGTH: Final[int] = 32
 # standalone supervisord program with a hyphen in its name (``share-gateway``,
 # ``owner-exec``, ``vm-exec-register``, ``host-backup``, ``env-converge``,
 # ``agent-observer``; ``app`` stays reserved from the retired ``app-watcher``): an app
-# named after one would claim that
-# program as its ``<name>-<role>`` sidecar. ``system/test_app_manifests.py`` keeps this
-# set in step with ``system/supervisord.conf``. ``github`` is the one it cannot see:
-# ``github-sync`` is only written once GitHub sync is enabled.
+# named after one would claim that program as its ``<name>-<role>`` sidecar.
+# ``system/test_app_manifests.py`` keeps this set in step with
+# ``system/supervisord.conf``. ``github`` is the one it cannot see: ``github-sync`` is
+# only written once GitHub sync is enabled.
 RESERVED_APP_NAMES: Final[frozenset[str]] = frozenset(
     {"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"}
 )

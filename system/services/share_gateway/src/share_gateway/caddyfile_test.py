@@ -182,7 +182,5 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
 def test_caddyfile_serves_the_loading_page_for_a_backend_it_cannot_reach() -> None:
     rendered = _render()
 
-    # A registered service whose backend refuses the connection shows the same auto-retrying
-    # loading page an unknown origin does, rather than caddy's bare 502.
     assert "handle_errors 502 {" in rendered
     assert rendered.count("rewrite * /_auth/loading") == 2

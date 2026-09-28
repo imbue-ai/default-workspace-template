@@ -118,7 +118,7 @@ class ServiceEventWriter(MutableModel):
     )
 
     _announced: dict[str, AnnouncedRow] = PrivateAttr(default_factory=dict)
-    # The inventory announces from its watch thread, its sweep thread, and the thread that starts the shell.
+    # The inventory announces from more than one thread.
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def announce(self, rows: Sequence[RegistryRow]) -> None:
