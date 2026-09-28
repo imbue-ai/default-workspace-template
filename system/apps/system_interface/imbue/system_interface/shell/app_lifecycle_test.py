@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
@@ -110,12 +111,13 @@ def _manager_over(
     program_states: ProgramStatesReader | None = None,
     start_program: ProgramAction | None = None,
     clock: Callable[[], float] | None = None,
+    is_enabled: bool = False,
 ) -> AppLifecycleManager:
-    """A manager that is never enabled (each test sweeps it by hand) over the fake supervisor's verbs, no windows,
-    no share grants, and a fresh fake clock, any of which a test replaces with its own."""
+    """A manager over the fake supervisor's verbs, no windows, no share grants, and a fresh fake clock, any of
+    which a test replaces with its own; not enabled unless a test says so, so each test sweeps it by hand."""
     return AppLifecycleManager(
         inventory=inventory,
-        is_enabled=False,
+        is_enabled=is_enabled,
         count_windows_by_app=count_windows_by_app if count_windows_by_app is not None else lambda: {},
         granted_app_names=granted_app_names if granted_app_names is not None else lambda: set(),
         program_states=program_states if program_states is not None else supervisor.states,
@@ -605,6 +607,20 @@ def test_stop_releases_every_parked_port(manager: AppLifecycleManager, closed_po
 
     assert manager.parked_app_names() == []
     assert _is_refused(closed_port)
+
+
+def test_a_started_manager_parks_a_stopped_app_at_once(
+    manager: AppLifecycleManager, supervisor: FakeSupervisor, closed_port: int
+) -> None:
+    """The sweep's first pass does not wait out the idle interval (longer than this wait): a stopped app's port is
+    held the moment the shell is up, since supervisord and the stopped app outlive a shell restart."""
+    started = _manager_over(manager.inventory, supervisor, clock=time.monotonic, is_enabled=True)
+    try:
+        started.start()
+        wait_for(lambda: started.is_app_parked("docs"), timeout=5.0, poll_interval=0.02)
+        assert not can_bind_loopback_port(closed_port)
+    finally:
+        started.stop()
 
 
 def test_the_sweep_runs_at_its_transition_pace_while_a_program_is_between_states(

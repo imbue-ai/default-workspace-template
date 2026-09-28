@@ -156,6 +156,9 @@ class AppLifecycleManager(MutableModel):
     def start(self) -> None:
         if not self.is_enabled:
             return
+        # The first pass runs at once: supervisord and its programs outlive the shell, so after a restart a stopped
+        # app's port must be held before the idle interval elapses.
+        self._sweep_wake.set()
         thread = threading.Thread(target=self._run_sweep, daemon=True, name="app-lifecycle-sweep")
         self._sweep_thread = thread
         thread.start()
