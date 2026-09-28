@@ -118,7 +118,8 @@ REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.jso
 `--local-tags` reads the tags the fetch just landed. To honor a user override,
 append `--override main` or `--override minds-v0.3.6`. The `|| exit 1` leaves a
 refusal's `error:` line as the last thing printed. The output carries `ref`,
-`kind`, `ceiling` and `exceeds_ceiling`; `main` resolves to `upstream/main`.
+`kind`, `ceiling` and `exceeds_ceiling`; an upstream branch name such as `main`
+resolves to `upstream/main`.
 Tell the user which version you are updating to, and never mention a release
 above `ceiling` that they did not ask for by name: the Mind app announces its
 own updates.
@@ -154,12 +155,16 @@ Stage the skill as it exists at `$REF` (from the fetched objects; no network,
 no working-tree mutation) and learn whether it differs from your local copy:
 
 ```bash
-DIFFERS=$(python3 .agents/skills/update-self/scripts/update_self.py bootstrap-skill --ref "$REF" \
-    | python3 -c 'import sys, json; print(json.load(sys.stdin)["differs"])')
+python3 .agents/skills/update-self/scripts/update_self.py bootstrap-skill --ref "$REF" \
+    > /tmp/update-self-bootstrap.json || exit 1
+DIFFERS=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-bootstrap.json"))["differs"])')
 echo "differs=$DIFFERS"
 ```
 
-`bootstrap-skill` always leaves a runnable flow at the staging path (the
+**If it exits non-zero, stop.** Its `error:` line says `$REF` names no commit
+here; handle it as a Step 2 error.
+
+Otherwise `bootstrap-skill` has left a runnable flow at the staging path (the
 target's copy, or the local copy when the ref predates the skill), so the
 worker runs from there regardless. `differs` decides only which prose *you*
 follow next:

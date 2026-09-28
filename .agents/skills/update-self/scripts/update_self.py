@@ -12,9 +12,9 @@ belong in tested code rather than agent prose:
 ``resolve-target``
     Resolve the ref to update to. Default is the release the minds app driving
     this workspace was built against -- the ``minds-v*`` tag it names, and only
-    that one; an explicit override may name a specific tag, ``main``, or any
-    other ref, and is reported back as exceeding the ceiling when it cannot be
-    proven to sit at or below it.
+    that one; an explicit override may name a specific tag, an upstream branch
+    (qualified to ``upstream/<branch>``), or any other ref, and is reported back
+    as exceeding the ceiling when it cannot be proven to sit at or below it.
 
     The ceiling exists because a workspace's template ships the code the outer
     app talks to (the system interface, ``mngr``), so updating past
@@ -68,7 +68,8 @@ belong in tested code rather than agent prose:
     the rest of the pass runs, at a single fixed path, and report whether it
     differs from the local copy. Normally that staged copy is the target ref's
     *own* copy (extracted from the already-fetched object); when the ref predates
-    the skill it is the local copy instead. Either way the fixed path is left
+    the skill it is the local copy instead. A ref that names no commit is refused
+    with nothing staged. Otherwise the fixed path is left
     populated with a runnable flow, so the lead and worker can dispatch against it
     by literal path without carrying any value across shell invocations. This is
     what lets the flow, after resolving the target, hand off to the update-self
@@ -220,7 +221,25 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
         # ``ls-remote`` lines are ``<sha>\trefs/tags/<tag>``; take the tag.
         tags = [line.rsplit("/", 1)[-1] for line in tags]
     app_version = args.app_version if args.app_version is not None else fetch_app_template_ref()
-    target = resolve_target(args.override, tags, remote=args.remote, app_version=app_version)
+    # A symref (``<remote>/HEAD``) prints as an empty line and drops out: it is
+    # not a branch, and qualifying an override of ``HEAD`` would retarget it.
+    remote_branches = _list_names(
+        _git(
+            [
+                "for-each-ref",
+                "--format=%(if)%(symref)%(then)%(else)%(refname:lstrip=3)%(end)",
+                f"refs/remotes/{args.remote}/",
+            ],
+            repo_root,
+        )
+    )
+    target = resolve_target(
+        args.override,
+        tags,
+        remote=args.remote,
+        app_version=app_version,
+        remote_branches=remote_branches,
+    )
     # Only the default path: an override was asked for by name, and the rule that
     # it is never silently blocked outranks saving a no-op merge.
     if args.override is None and _is_already_merged(target.ref, repo_root):
@@ -411,6 +430,23 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     dest = Path(args.dest)
     dest_root = (dest if dest.is_absolute() else repo_root / dest).resolve()
     staged_skill = dest_root / SKILL_DIR_REL
+
+    # Checked before the skill-dir probe below, which cannot tell a ref that
+    # names nothing from one that predates the skill: staging the local copy for
+    # the former would hand the lead its own flow for a target it never read.
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{args.ref}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+    )
+    if resolved.returncode != 0:
+        print(
+            f"error: {args.ref} does not name a commit in this workspace, so there "
+            "is no target to update to. It is not a release, remote branch or "
+            "commit that has been fetched.",
+            file=sys.stderr,
+        )
+        return 1
 
     # Always stage into a clean dir. The flow runs the skill from ``staged_skill``
     # unconditionally (a single fixed path the lead and worker both reference by

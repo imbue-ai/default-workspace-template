@@ -443,6 +443,153 @@ def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
     assert "Traceback" not in captured.err
 
 
+def _git_out(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _clone_workspace_with_upstream_branch(
+    tmp_path: Path, branch: str
+) -> tuple[Path, Path]:
+    """An upstream template carrying ``branch``, and a workspace cloned from it.
+
+    The workspace fetched ``branch`` (so ``upstream/<branch>`` exists) but never
+    checked it out, as on a real workspace: there is no local branch of that name.
+    ``branch`` carries its own update-self skill, unlike ``main``.
+    """
+    upstream = tmp_path / "upstream"
+    _init_repo_with_skill(upstream, skill_body="MAIN FLOW\n")
+    _git_out(upstream, "branch", "-M", "main")
+    _git_out(upstream, "checkout", "-q", "-b", branch)
+    (upstream / update_self.SKILL_DIR_REL / "SKILL.md").write_text(
+        "BRANCH FLOW\n", encoding="utf-8"
+    )
+    _git_out(upstream, "commit", "-q", "-am", "fix the flow on the branch")
+    _git_out(upstream, "checkout", "-q", "main")
+    workspace = tmp_path / "workspace"
+    subprocess.run(
+        ["git", "clone", "-q", "-o", "upstream", str(upstream), str(workspace)],
+        check=True,
+        capture_output=True,
+    )
+    _git_out(workspace, "config", "user.email", "test@example.com")
+    _git_out(workspace, "config", "user.name", "test")
+    return upstream, workspace
+
+
+def _resolve_override(workspace: Path, override: str, capsys) -> dict:
+    # ``--ceiling`` stands in for the app, so no gateway is reached.
+    assert (
+        update_self.main(
+            [
+                "resolve-target",
+                "--local-tags",
+                "--ceiling",
+                "minds-v1.0.0",
+                "--override",
+                override,
+                "--repo-root",
+                str(workspace),
+            ]
+        )
+        == 0
+    )
+    return json.loads(capsys.readouterr().out)
+
+
+def test_a_branch_override_the_workspace_only_has_upstream_resolves_and_hands_off(
+    tmp_path, capsys
+) -> None:
+    """The branch the user picked resolves everywhere the pass uses ``$REF``.
+
+    A bare name with no local branch behind it used to come back verbatim, which
+    resolves nowhere: the hand-off then quietly kept the workspace's own copy of
+    the flow instead of the branch's.
+    """
+    upstream, workspace = _clone_workspace_with_upstream_branch(
+        tmp_path, "electric-husky"
+    )
+
+    target = _resolve_override(workspace, "electric-husky", capsys)
+
+    ref = target["ref"]
+    assert ref == "upstream/electric-husky"
+    assert target["exceeds_ceiling"] is True
+    assert _git_out(workspace, "rev-parse", f"{ref}^{{commit}}") == _git_out(
+        upstream, "rev-parse", "electric-husky"
+    )
+
+    # Step 2a stages the branch's own flow.
+    staging = tmp_path / "staging"
+    assert (
+        update_self.main(
+            [
+                "bootstrap-skill",
+                "--ref",
+                ref,
+                "--dest",
+                str(staging),
+                "--repo-root",
+                str(workspace),
+            ]
+        )
+        == 0
+    )
+    staged = json.loads(capsys.readouterr().out)
+    assert staged["differs"] is True
+    assert Path(staged["skill_dir"], "SKILL.md").read_text() == "BRANCH FLOW\n"
+
+    # Step 3a's re-check hands the qualified ref back unchanged.
+    assert _resolve_override(workspace, ref, capsys)["ref"] == ref
+
+    # The worker merges it from its own worktree of the same repo.
+    worker = tmp_path / "worker"
+    _git_out(workspace, "worktree", "add", "-q", "-b", "mngr/update-self", str(worker))
+    _git_out(worker, "merge", "-q", "--no-edit", ref)
+    assert (worker / update_self.SKILL_DIR_REL / "SKILL.md").read_text() == (
+        "BRANCH FLOW\n"
+    )
+
+
+def test_a_bare_branch_override_takes_the_remote_over_a_stale_local_branch(
+    tmp_path, capsys
+) -> None:
+    # A local branch of the same name is a copy the fetch never advances -- one
+    # a previous pass may have made by hand -- so the remote is what was picked.
+    upstream, workspace = _clone_workspace_with_upstream_branch(
+        tmp_path, "electric-husky"
+    )
+    _git_out(workspace, "branch", "electric-husky", "upstream/electric-husky")
+    _git_out(upstream, "checkout", "-q", "electric-husky")
+    _git_out(upstream, "commit", "-q", "--allow-empty", "-m", "a later fix")
+    _git_out(workspace, "fetch", "-q", "upstream")
+
+    ref = _resolve_override(workspace, "electric-husky", capsys)["ref"]
+
+    assert _git_out(workspace, "rev-parse", ref) == _git_out(
+        upstream, "rev-parse", "electric-husky"
+    )
+
+
+def test_an_override_the_remote_has_no_branch_for_is_kept_as_given(
+    tmp_path, capsys
+) -> None:
+    _, workspace = _clone_workspace_with_upstream_branch(tmp_path, "electric-husky")
+    _git_out(workspace, "branch", "my-local-work")
+    sha = _git_out(workspace, "rev-parse", "HEAD")
+
+    # The clone's ``upstream/HEAD`` is a symref, not a branch to qualify onto.
+    for override in (
+        sha,
+        "upstream/electric-husky",
+        "my-local-work",
+        "HEAD",
+        "no-such-ref",
+    ):
+        assert _resolve_override(workspace, override, capsys)["ref"] == override
+
+
 # classify_path
 
 
@@ -1042,6 +1189,32 @@ def test_bootstrap_skill_stages_local_copy_when_ref_predates_skill(
     # The staged copy is the local working-tree flow, present and runnable.
     assert staged_skill.joinpath("SKILL.md").read_text() == "LOCAL FLOW\n"
     assert staged_skill.joinpath("scripts", "update_self.py").exists()
+
+
+def test_bootstrap_skill_refuses_a_ref_that_does_not_resolve(tmp_path, capsys) -> None:
+    # Staging the local copy here would report ``differs: false`` and the lead
+    # would follow its own, older flow for a target it never looked at.
+    repo = tmp_path / "repo"
+    _init_repo_with_skill(repo, skill_body="LOCAL FLOW\n")
+
+    code = update_self.main(
+        [
+            "bootstrap-skill",
+            "--ref",
+            "electric-husky",
+            "--dest",
+            str(tmp_path / "staging"),
+            "--repo-root",
+            str(repo),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert captured.err.startswith("error: ")
+    assert "electric-husky" in captured.err
+    assert "Traceback" not in captured.err
 
 
 # a prerelease ceiling

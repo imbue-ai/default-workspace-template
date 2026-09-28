@@ -9,7 +9,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import NamedTuple, Sequence
+from typing import Collection, NamedTuple, Sequence
 
 # A released minds version tag, e.g. ``minds-v0.3.7`` (stable) or
 # ``minds-v0.3.7-rc1`` (a release candidate -- a prerelease we never default to).
@@ -39,8 +39,9 @@ class NoUpdateTargetError(ValueError):
 class ResolvedTarget(NamedTuple):
     """The ref the update merges in, plus a coarse ``kind`` for the caller's log.
 
-    ``kind`` is ``tag`` (a resolved ``minds-v*`` release), ``branch`` (``main``),
-    or ``ref`` (any other override passed straight through for git to validate).
+    ``kind`` is ``tag`` (a resolved ``minds-v*`` release), ``branch`` (a branch of
+    the remote, qualified), or ``ref`` (any other override passed straight
+    through for git to validate).
 
     ``app_version`` is the template ref the app reported, passed through as
     given. ``None`` means none was supplied, which only a direct caller does.
@@ -143,6 +144,7 @@ def resolve_target(
     tags: Sequence[str],
     remote: str = "upstream",
     app_version: str | None = None,
+    remote_branches: Collection[str] = (),
 ) -> ResolvedTarget:
     """Resolve the update target ref.
 
@@ -150,15 +152,19 @@ def resolve_target(
     named by ``app_version``, which must exist upstream. Anything else is a fault
     for the skill to judge, not a thing to work around here -- picking some
     other release would hand the workspace a template that no one verified
-    against this app. An override of ``main``
-    selects the template's default branch, **remote-qualified** to
-    ``<remote>/main`` -- a bare ``main`` would resolve to the *local* branch, which
-    ``git fetch upstream`` never advances, so the pull would merge stale local
-    code. A tag, by contrast, lands in the local tag namespace on fetch and
-    resolves by its bare name, so a known-tag override is returned as-is. Any
-    other override is passed through verbatim as a ``ref`` for git to validate at
-    fetch time (so a user can pin an arbitrary commit or a ref they've already
-    qualified themselves).
+    against this app.
+
+    An override naming a branch of ``remote`` (``main`` always does; the rest are
+    ``remote_branches``, the names under ``refs/remotes/<remote>/``) is
+    **remote-qualified** to ``<remote>/<branch>``. A bare branch name resolves only
+    through a *local* branch: a workspace usually has none for anything but its
+    own, and one it does have is a copy ``git fetch upstream`` never advances --
+    so the remote branch wins even over a local branch of the same name, or the
+    pull would merge stale local code. A tag, by contrast, lands in the local tag
+    namespace on fetch and resolves by its bare name, so a known-tag override is
+    returned as-is. Any other override is passed through verbatim as a ``ref``
+    for git to validate (so a user can pin an arbitrary commit or a ref they've
+    already qualified themselves).
 
     An override is never silently blocked -- the user asked for it by name -- but
     one that is not provably at or below the app's version comes back with
@@ -182,10 +188,10 @@ def resolve_target(
             )
         return ResolvedTarget(app_version, "tag", app_version, False)
     exceeds = not _is_at_or_below_app_version(override, app_version)
-    if override == "main":
-        return ResolvedTarget(f"{remote}/{override}", "branch", app_version, exceeds)
     if override in set(tags):
         return ResolvedTarget(override, "tag", app_version, exceeds)
+    if override == "main" or override in set(remote_branches):
+        return ResolvedTarget(f"{remote}/{override}", "branch", app_version, exceeds)
     return ResolvedTarget(override, "ref", app_version, exceeds)
 
 
