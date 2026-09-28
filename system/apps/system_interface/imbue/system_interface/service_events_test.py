@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
 
 from imbue.system_interface.service_events import SERVICE_EVENTS_REL
@@ -14,7 +15,7 @@ from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 
 
-def _rows(tmp_path: Path, *row_toml: str) -> list[Any]:
+def _rows(tmp_path: Path, *row_toml: str) -> list[RegistryRow]:
     return read_registry(write_registry(tmp_path / "apps.toml", *row_toml))
 
 
