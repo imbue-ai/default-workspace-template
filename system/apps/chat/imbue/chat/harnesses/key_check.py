@@ -17,7 +17,8 @@ _CHECK_TIMEOUT_SECONDS: Final = 10.0
 _ANTHROPIC_BASE_URL: Final = "https://api.anthropic.com"
 _ANTHROPIC_VERSION: Final = "2023-06-01"
 _OPENAI_MODELS_URL: Final = "https://api.openai.com/v1/models"
-_REJECTING_STATUSES: Final = frozenset({401, 403})
+# A 403 is a key that authenticated but may not list models, which says nothing about its use for chat.
+_REJECTING_STATUS: Final = 401
 
 
 class CheckedProvider(StrEnum):
@@ -57,6 +58,6 @@ def check_key(provider: CheckedProvider, api_key: str, base_url: str | None = No
         return KeyCheck.UNCHECKED
     if response.status_code == 200:
         return KeyCheck.ACCEPTED
-    if response.status_code in _REJECTING_STATUSES:
+    if response.status_code == _REJECTING_STATUS:
         return KeyCheck.REJECTED
     return KeyCheck.UNCHECKED

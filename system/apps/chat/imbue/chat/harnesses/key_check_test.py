@@ -41,7 +41,7 @@ def proxy_url() -> Iterator[str]:
     [
         ("good", KeyCheck.ACCEPTED),
         ("bad", KeyCheck.REJECTED),
-        ("no-access", KeyCheck.REJECTED),
+        ("no-access", KeyCheck.UNCHECKED),
         ("overloaded", KeyCheck.UNCHECKED),
     ],
 )
