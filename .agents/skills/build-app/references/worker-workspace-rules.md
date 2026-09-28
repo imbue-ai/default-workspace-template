@@ -35,6 +35,15 @@ IF YOU FAIL TO FOLLOW ONE, SAY SO EXPLICITLY IN YOUR REPORT.
 - NEVER amend commits or rebase--always create new commits.
 - All relative paths in this repo assume cwd = the root of the checkout you are working in -- for you that is the build folder you were started in, not `/home/user/workspace`. Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (visible folders are the user's to organize; e.g. `data/.apps/<name>/` holds an app's stored data, including its instance records at `data/.apps/<name>/instances.json`, and `data/.skills/<name>/` a skill's own state); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state (what a program keeps about this machine and can rebuild: the registry, dispatch scripts, pty records, the shell's client layouts) under `data/.state/`. The rule is `docs/system/blueprint/workspace-app-model/contracts.md` section 17.
 
+# Where the data is
+
+`data/` is gitignored, so your worktree carries almost none of it. Two paths are
+the exception: `data/uploads` and `data/.tasks/fetch-process-show` are symlinks
+to the workspace's own copies. Everything else under `data/` is in the workspace,
+at `/home/user/workspace/data/`.
+
+Read it as much as you need. Never modify it.
+
 # Progress tracking is not yours
 
 You do not use `tk`. The orchestrating agent that launched you keeps the one progress timeline
