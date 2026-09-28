@@ -118,8 +118,14 @@ create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_ac
 # git-ignored), so a create run from inside one -- a worker launching a worker --
 # would name no type and no account. Sharing the workspace's copy by symlink keeps
 # every checkout of the workspace on the same default account.
+#
+# The mngr assets (docs/system/style_guide.md links into them, and the frontends bundle
+# them) are fetched, not tracked, so a worktree has none until something fetches them.
+# Sharing the workspace's copy gives a worker them at the workspace's pin; a branch that
+# moves the pin fetches its own, which replaces the link rather than writing through it.
 [work_dir_extra_paths]
 ".mngr/settings.local.toml" = "SHARE"
+"system/vendor/mngr-assets" = "SHARE"
 
 # Agent types
 
