@@ -57,6 +57,7 @@ from imbue.chat.harnesses.codex.sign_in import CodexLoginClient
 from imbue.chat.harnesses.codex.sign_in import SIGN_IN_FLOW_ENV_VAR
 from imbue.chat.harnesses.codex.sign_in import app_server_argv
 from imbue.chat.harnesses.codex.sign_in import connect_login_client
+from imbue.chat.harnesses.codex.sign_in import describe_login_failure
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.key_check import CheckedProvider
 from imbue.chat.harnesses.key_check import KeyCheck
@@ -124,8 +125,6 @@ _DEVICE_LOGIN_REFUSED_DETAIL: Final = (
     "ChatGPT couldn't start a sign-in with a code. Turn on device code sign-in for Codex in "
     "ChatGPT's security settings, or use an OpenAI API key instead."
 )
-# How much of a provider's own reason for a failed sign-in is shown.
-_MAX_PROVIDER_REASON_CHARS: Final = 200
 # How still a screen has to be before we call it drawn, when the method names no anchor to
 # expect. Short enough that a fast CLI is not held up; `settle_s` is the overall budget.
 _SETTLE_QUIET_SECONDS: Final = 0.2
@@ -733,12 +732,8 @@ class AuthFlowService:
         if isinstance(outcome, LoginCompleted) and outcome.success:
             return self._commit_locked(session, session.lane.provider_name)
         logger.info("Codex sign-in {} did not complete: {}", session.flow_id, outcome)
-        reason = outcome.error if isinstance(outcome, LoginCompleted) else None
         self._fail_locked(
-            session,
-            f"ChatGPT didn't finish the sign-in: {reason.strip()[:_MAX_PROVIDER_REASON_CHARS]}"
-            if reason and reason.strip()
-            else "The sign-in did not complete.",
+            session, describe_login_failure(outcome.error if isinstance(outcome, LoginCompleted) else None)
         )
         return FlowStatus(state=FlowState.FAILED, detail=session.detail)
 

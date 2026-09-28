@@ -8,6 +8,7 @@ either one reports completion as a notification rather than an exit status.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Final
 from typing import Protocol
@@ -23,6 +24,17 @@ from imbue.mngr_codex.app_server_client import connect_app_server_transport
 SIGN_IN_FLOW_ENV_VAR: Final = "MINDS_SIGN_IN_FLOW"
 APP_SERVER_SOCKET_FILENAME: Final = "codex.sock"
 _CLIENT_NAME: Final = "minds-chat-sign-in"
+# What a failed ChatGPT login's error means for the user, first match wins. codex's own text is a
+# chain of internal messages ending in a request id ("Login server error: Token exchange failed: ...
+# (request id: ...)"), so it is logged rather than shown.
+_LOGIN_FAILURE_COPY: Final = (
+    (re.compile(r"access_denied"), "Access wasn't approved on ChatGPT's page."),
+    (
+        re.compile(r"Token exchange failed", re.IGNORECASE),
+        "ChatGPT didn't accept that sign-in. Start over to get a fresh link.",
+    ),
+)
+_LOGIN_FAILED_DETAIL: Final = "ChatGPT didn't finish the sign-in."
 _CLIENT_VERSION: Final = "1"
 
 
@@ -54,3 +66,11 @@ def connect_login_client(socket_path: Path) -> CodexLoginClient:
         if not is_ready:
             client.close()
     return client
+
+
+def describe_login_failure(error: str | None) -> str:
+    """The sentence a failed ChatGPT login shows, from the error codex reported for it."""
+    for pattern, copy in _LOGIN_FAILURE_COPY:
+        if error is not None and pattern.search(error):
+            return copy
+    return _LOGIN_FAILED_DETAIL

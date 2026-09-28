@@ -12,6 +12,7 @@ from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.codex.sign_in import app_server_argv
+from imbue.chat.harnesses.codex.sign_in import describe_login_failure
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.testing import FakePexpectProcess
 from imbue.chat.testing import wait_until_true
@@ -115,7 +116,7 @@ def test_codex_saying_the_login_failed_fails_the_flow(tmp_path: Path) -> None:
 
     status = service.poll(started.flow_id)
     assert status.state is FlowState.FAILED
-    assert status.detail == "ChatGPT didn't finish the sign-in: access_denied"
+    assert status.detail == "Access wasn't approved on ChatGPT's page."
     assert read_index(tmp_path).accounts == ()
 
 
@@ -163,3 +164,25 @@ def test_a_device_login_takes_no_pasted_code(tmp_path: Path) -> None:
 
 def test_the_app_server_listens_on_the_socket_it_is_given() -> None:
     assert app_server_argv(Path("/tmp/x/codex.sock")) == ["app-server", "--listen", "unix:///tmp/x/codex.sock"]
+
+
+@pytest.mark.parametrize(
+    ("error", "detail"),
+    [
+        pytest.param(
+            "Login server error: Sign-in failed: access_denied",
+            "Access wasn't approved on ChatGPT's page.",
+            id="denied",
+        ),
+        pytest.param(
+            "Login server error: Token exchange failed: token endpoint returned status 401 Unauthorized (request id: 9f3c)",
+            "ChatGPT didn't accept that sign-in. Start over to get a fresh link.",
+            id="code-refused",
+        ),
+        pytest.param("something codex has not said before", "ChatGPT didn't finish the sign-in.", id="unknown"),
+        pytest.param(None, "ChatGPT didn't finish the sign-in.", id="no-error"),
+    ],
+)
+def test_a_failed_chatgpt_login_is_described_in_plain_words(error: str | None, detail: str) -> None:
+    """The errors are what codex 0.157.0 reported for a denial and a refused code, relayed for real."""
+    assert describe_login_failure(error) == detail

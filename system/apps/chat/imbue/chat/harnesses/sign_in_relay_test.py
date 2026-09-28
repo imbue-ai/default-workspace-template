@@ -99,6 +99,7 @@ class _CliListener(BaseHTTPRequestHandler):
     `location` is where the callback redirects to, with `{port}` standing for the listener's own port.
     """
 
+    server: ThreadingHTTPServer
     received: list[str] = []
     location: str = ""
 
@@ -108,7 +109,7 @@ class _CliListener(BaseHTTPRequestHandler):
             self.send_response(200)
         else:
             self.send_response(302)
-            self.send_header("Location", self.location.format(port=self.server.server_address[1]))
+            self.send_header("Location", self.location.format(port=self.server.server_port))
         self.end_headers()
 
     def log_message(self, format: str, *args: object) -> None:

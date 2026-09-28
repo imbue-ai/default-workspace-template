@@ -10,6 +10,7 @@ provider beyond the CLI fetching its own configuration.
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import tempfile
 from collections.abc import Iterator
@@ -30,6 +31,9 @@ from imbue.chat.harnesses.sign_in_relay import read_sign_in_url
 
 _SHIM = Path(__file__).resolve().parents[5] / "system" / "scripts" / "minds_browser_shim"
 _START_SECONDS = 60.0
+# The pinned CLIs are in the workspace image, not on a plain CI runner or a laptop.
+_NEEDS_CLAUDE = pytest.mark.skipif(shutil.which("claude") is None, reason="needs the pinned claude CLI on PATH")
+_NEEDS_CODEX = pytest.mark.skipif(shutil.which("codex") is None, reason="needs the pinned codex CLI on PATH")
 
 
 def _is_listening(port: int) -> bool:
@@ -49,6 +53,7 @@ def _running(binary: str, args: list[str], env: dict[str, str]) -> Iterator[obje
 
 
 @pytest.mark.release
+@_NEEDS_CLAUDE
 @pytest.mark.parametrize("mode", ["--claudeai", "--console"])
 def test_claude_hands_its_browser_a_page_that_calls_back_to_a_live_loopback_listener(
     tmp_path: Path, mode: str
@@ -71,6 +76,7 @@ def test_claude_hands_its_browser_a_page_that_calls_back_to_a_live_loopback_list
 
 
 @pytest.mark.release
+@_NEEDS_CODEX
 def test_codexs_browser_login_calls_back_to_a_live_loopback_listener(tmp_path: Path) -> None:
     # A unix socket path must stay short, which a pytest tmp_path does not.
     with tempfile.TemporaryDirectory(prefix="cx-") as short_dir:
