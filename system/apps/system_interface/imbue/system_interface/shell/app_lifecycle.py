@@ -80,9 +80,14 @@ def stop_supervisor_program_by_name(program: str) -> None:
 
 
 @pure
+def recent_wake_times(wake_times: Sequence[float], now: float) -> list[float]:
+    """The wake times still inside the budget window at ``now``, in their order."""
+    return [wake_time for wake_time in wake_times if now - wake_time < WAKE_BUDGET_WINDOW_SECONDS]
+
+
+@pure
 def is_wake_budget_spent(wake_times: Sequence[float], now: float) -> bool:
-    recent = [wake_time for wake_time in wake_times if now - wake_time < WAKE_BUDGET_WINDOW_SECONDS]
-    return len(recent) >= WAKE_BUDGET_COUNT
+    return len(recent_wake_times(wake_times, now)) >= WAKE_BUDGET_COUNT
 
 
 class AppLifecycleManager(MutableModel):
@@ -194,15 +199,17 @@ class AppLifecycleManager(MutableModel):
         now = self.clock()
         with self._lock:
             parked = self._parked_by_app.pop(app, None)
-            wake_times = self._wake_times_by_app.setdefault(app, [])
-            if is_wake_budget_spent(wake_times, now):
+            # Only the window's worth of wake times is kept, so an app woken on every reload does not grow the list.
+            recent = recent_wake_times(self._wake_times_by_app.get(app, ()), now)
+            if is_wake_budget_spent(recent, now):
                 logger.warning(
                     "Refused to wake {} again: {} wakes within {}s", app, WAKE_BUDGET_COUNT, WAKE_BUDGET_WINDOW_SECONDS
                 )
+                self._wake_times_by_app[app] = recent
                 self._failed_apps.add(app)
                 kind = ParkedPageKind.FAILED
             else:
-                wake_times.append(now)
+                self._wake_times_by_app[app] = recent + [now]
                 self._apps_awaiting_wake_outcome.add(app)
                 self._failed_apps.discard(app)
                 kind = ParkedPageKind.STARTING

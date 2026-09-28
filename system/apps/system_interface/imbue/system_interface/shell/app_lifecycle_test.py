@@ -10,6 +10,7 @@ from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_WINDOW_SECONDS
+from imbue.system_interface.shell.app_lifecycle import recent_wake_times
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.liveness import probe_tcp_url
 from imbue.system_interface.shell.port_parking import ParkedPageKind
@@ -250,6 +251,15 @@ def test_a_wake_releases_the_parker_before_starting(
         manager.wake("shell")
     with pytest.raises(AppLifecycleRefusedError):
         manager.wake("plain")
+
+
+def test_recent_wake_times_keeps_only_the_window() -> None:
+    now = 1000.0
+    inside = now - WAKE_BUDGET_WINDOW_SECONDS + 1
+    on_the_edge = now - WAKE_BUDGET_WINDOW_SECONDS
+    past = now - WAKE_BUDGET_WINDOW_SECONDS - 1
+    assert recent_wake_times([], now) == []
+    assert recent_wake_times([past, on_the_edge, inside, now], now) == [inside, now]
 
 
 def test_the_wake_budget_refuses_a_fourth_wake_in_the_window(
