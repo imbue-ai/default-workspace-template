@@ -176,6 +176,7 @@ vi.mock("../models/Providers", () => ({
   openProviderChooser: mocks.openProviderChooser,
   // The seeded chats these tests launch name no account of their own, so the selected one decides.
   accountForFirstSend: () => mocks.selectedAccount,
+  whenAccountsLoaded: () => Promise.resolve(),
 }));
 
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";

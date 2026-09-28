@@ -45,6 +45,7 @@ import {
   isProviderChooserOpen,
   loadAccountsWithRetry,
   openProviderChooser,
+  whenAccountsLoaded,
 } from "../models/Providers";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { ChatRail } from "./ChatRail";
@@ -126,10 +127,11 @@ async function createAndSelect(accountId: string): Promise<void> {
 }
 
 /** The New chat button: a chat on the selected account, or after a sign-in when nothing is signed in. */
-function startNewChat(): void {
+async function startNewChat(): Promise<void> {
+  await whenAccountsLoaded();
   const account = getSelectedAccount();
   if (account !== null) {
-    void createAndSelect(account.id);
+    await createAndSelect(account.id);
     return;
   }
   openProviderChooser({ onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId) });
@@ -334,7 +336,7 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     selectedChatId,
     isCompact,
     onPick: (chatId: string) => select(chatId),
-    onNew: () => startNewChat(),
+    onNew: () => void startNewChat(),
     referenceScope: scopeOfHandshake(handshake),
     onDraftReference: draftReference,
     isReferenceDraftAvailable: isReferenceDraftAvailable(),

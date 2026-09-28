@@ -72,6 +72,32 @@ describe("loadAccountsWithRetry", () => {
   });
 });
 
+describe("whenAccountsLoaded", () => {
+  beforeEach(() => {
+    mockRequest.mockReset();
+  });
+
+  it("settles only once the account list has been read, so a new chat never decides on the empty list", async () => {
+    vi.resetModules();
+    const providers = await import("./Providers");
+    let answer: (body: typeof ACCOUNTS_BODY) => void = () => {};
+    mockRequest.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const settled = vi.fn();
+    void providers.whenAccountsLoaded().then(settled);
+
+    const loading = providers.loadAccounts();
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(providers.getSelectedAccount()).toBeNull();
+
+    answer(ACCOUNTS_BODY);
+    await loading;
+    await providers.whenAccountsLoaded();
+    expect(settled).toHaveBeenCalledOnce();
+    expect(providers.getSelectedAccount()?.id).toBe("acct-1");
+  });
+});
+
 describe("startFlow", () => {
   beforeEach(() => {
     vi.useFakeTimers();

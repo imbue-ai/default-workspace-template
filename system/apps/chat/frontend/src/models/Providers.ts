@@ -91,6 +91,10 @@ let defaultAccountId: string | null = null;
 let lanesLoaded = false;
 // Whether the account list has been fetched once, so an empty list can be told from one not read yet.
 let accountsLoaded = false;
+let markAccountsLoaded: () => void = () => {};
+const firstAccountsLoad = new Promise<void>((resolve) => {
+  markAccountsLoaded = resolve;
+});
 
 export function getLanes(): Lane[] {
   return lanes;
@@ -128,6 +132,12 @@ export function areAccountsLoaded(): boolean {
   return accountsLoaded;
 }
 
+/** Settles once the account list has been read, so a choice of account made before then waits for it instead of
+ *  taking the empty list for "nothing signed in". */
+export function whenAccountsLoaded(): Promise<void> {
+  return firstAccountsLoad;
+}
+
 export function areLanesLoaded(): boolean {
   return lanesLoaded;
 }
@@ -148,6 +158,7 @@ export async function loadAccounts(): Promise<void> {
   mru = body.mru;
   defaultAccountId = body.default;
   accountsLoaded = true;
+  markAccountsLoaded();
 }
 
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.
