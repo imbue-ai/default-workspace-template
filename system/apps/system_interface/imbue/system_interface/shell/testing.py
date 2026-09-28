@@ -247,10 +247,15 @@ def window_record(
 
 
 def placement_record(
-    window_id: WindowId, is_minimized: bool = False, state: WindowState = WindowState.NORMAL
+    window_id: WindowId,
+    is_minimized: bool = False,
+    state: WindowState = WindowState.NORMAL,
+    is_detached: bool = False,
 ) -> WindowPlacement:
-    """A placement at the first cascade frame; shown and normal unless told otherwise."""
-    return WindowPlacement(window_id=window_id, frame=cascade_frame(0), state=state, is_minimized=is_minimized)
+    """A placement at the first cascade frame; shown, normal, and on the desktop unless told otherwise."""
+    return WindowPlacement(
+        window_id=window_id, frame=cascade_frame(0), state=state, is_minimized=is_minimized, is_detached=is_detached
+    )
 
 
 def desktop_with_windows(*windows: Window) -> Desktop:
