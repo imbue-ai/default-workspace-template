@@ -221,8 +221,10 @@ Selection reads only what the workspace declares. A path selects:
 - for an npm package, its and its consumers' `npm test`, `npm run lint` and
   `npm run format:check` (and `npm run typecheck` for a package with no build),
   after `npm ci && npm run build`, plus the tests marked `browser` or
-  `frontend` of every app whose frontend is among them (and nothing else of
-  that app, since no Python code loads its frontend); the npm root's configuration and its prebuild script
+  `frontend` of every app with its own pytest root whose frontend is among
+  them (and nothing else of that app, since no Python code loads its
+  frontend; an app the root suite runs has none of its tests selected); the
+  npm root's configuration and its prebuild script
   (`system/scripts/fetch_mngr_assets.sh`, with the `_mngr_git_auth.sh` it
   sources) select every npm package.
 
