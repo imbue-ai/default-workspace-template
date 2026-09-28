@@ -34,7 +34,8 @@ test gate selects its suites from what changed since it, and a footprint's diff
 is taken from it (`harden-creation.md` has both commands). When `TYPE` is
 `skill`, or `app` and the app has an `app.toml`, also fail loudly if
 `SCOPE_FILE` is unset: it is where you write the creation's footprint. A
-pre-manifest app, a `service`, or a `system-interface` run carries none.
+pre-manifest app, a `service`, or a `system-interface` run carries no scope
+file.
 
 - `OPERATION` is one of `crystallize`, `update`, `heal`.
 - `TYPE` is one of `skill`, `app`, `service`, `system-interface`.
