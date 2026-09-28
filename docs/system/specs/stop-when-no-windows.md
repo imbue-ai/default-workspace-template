@@ -225,7 +225,7 @@ The stopped placeholder loses its Start button: a stoppable app's window never s
 
 ## 8. Part F: the app watcher moves into the shell
 
-`imbue/system_interface/service_events.py` holds `ServiceEventWriter`: given the rows of a registry read, it writes one `service_registered` event per row whose registered fields (URL, label, icon) differ from the last announced, and one `service_deregistered` per row that left, to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`, in the event envelope the watcher wrote (`EventEnvelope` from `imbue_common`, source `services`, nanosecond ISO timestamps, `evt-<uuid>` ids).
+`imbue/system_interface/app_announcements.py` holds `AppAnnouncementWriter`: given the rows of a registry read, it writes one `service_registered` event per row whose registered fields (URL, label, icon) differ from the last announced, and one `service_deregistered` per row that left, to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`, in the event envelope the watcher wrote (`EventEnvelope` from `imbue_common`, source `services`, nanosecond ISO timestamps, `evt-<uuid>` ids).
 The first read after the shell starts remembers nothing and announces every row, which is what a consumer reading the stream from its start needs.
 With `MNGR_AGENT_STATE_DIR` unset it logs one warning at start and writes nothing.
 
@@ -256,7 +256,7 @@ The shell still imports nothing from mngr and runs no `mngr` binary: the writer 
 - The shell, `routes_test.py`: the quit route closes every window across desktops and stops the program, refuses a critical app and a preview, and answers `is_running` false.
 - The shell, `state_test.py`: the close hint is not posted to a stopped app.
 - The shell, `launches_test.py` or `state_test.py`: a POST launch to a stopped stoppable app wakes it first.
-- The shell, `service_events_test.py`: the diff rules the watcher's tests pinned (every row on the first read, nothing on an unchanged read, only the changed row, a relabel, a row without a URL), now over `RegistryRow`s; `inventory_test.py`: the hook is called with the rows, and the mtime backstop re-reads.
+- The shell, `app_announcements_test.py`: the diff rules the watcher's tests pinned (every row on the first read, nothing on an unchanged read, only the changed row, a relabel, a row without a URL), now over `RegistryRow`s; `inventory_test.py`: the hook is called with the rows, and the mtime backstop re-reads.
 - The share gateway, `caddyfile_test.py`: the `handle_errors 502` block routes to the loading page.
 - The frontend: `WindowMenu.test.ts` (Quit for a stoppable app, running or not; nothing for a critical one), `Window.test.ts` (no placeholder for a stopped stoppable app; the placeholder without a button for an unmanaged one), `livePages.test.ts` (a stoppable app's page is neither held nor reloaded), `records.test.ts` (the parsed field).
 - `system/test_app_manifests.py`: the built-in table; `oom_priority`'s band tests without the watcher.

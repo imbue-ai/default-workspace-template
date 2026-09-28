@@ -23,7 +23,7 @@ needing to open them.
   ledger, and the earlyoom integration.
 
 The app registry (`data/.state/apps.toml`) is announced to the minds desktop by
-the shell itself (`system/apps/system_interface`, its `service_events` module),
+the shell itself (`system/apps/system_interface`, its `app_announcements` module),
 which already watches the registry; there is no separate watcher service.
 
 Each is a uv workspace member (the `system/services/*` glob) with its own

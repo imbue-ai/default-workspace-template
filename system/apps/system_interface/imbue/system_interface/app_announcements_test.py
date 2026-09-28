@@ -8,9 +8,9 @@ import pytest
 from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
 
-from imbue.system_interface.service_events import SERVICE_EVENTS_REL
-from imbue.system_interface.service_events import ServiceEventWriter
-from imbue.system_interface.service_events import service_events_path_from_environment
+from imbue.system_interface.app_announcements import ANNOUNCEMENTS_REL
+from imbue.system_interface.app_announcements import AppAnnouncementWriter
+from imbue.system_interface.app_announcements import announcements_path_from_environment
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 
@@ -33,7 +33,7 @@ def test_the_first_announcement_registers_every_app(tmp_path: Path) -> None:
     """A consumer reading from the start of the stream needs the whole set, so the first read (nothing
     remembered) announces every app."""
     events_path = tmp_path / "events.jsonl"
-    writer = ServiceEventWriter(events_path=events_path)
+    writer = AppAnnouncementWriter(events_path=events_path)
 
     writer.announce(
         _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:8300"))
@@ -52,7 +52,7 @@ def test_an_unchanged_registry_announces_nothing(tmp_path: Path) -> None:
     """The guard against the event flood: ``forward_port.py`` rewrites the whole registry whenever any app
     registers, so a restarting app must not re-announce every app in the file."""
     events_path = tmp_path / "events.jsonl"
-    writer = ServiceEventWriter(events_path=events_path)
+    writer = AppAnnouncementWriter(events_path=events_path)
     rows = _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:8300"))
     writer.announce(rows)
 
@@ -64,7 +64,7 @@ def test_an_unchanged_registry_announces_nothing(tmp_path: Path) -> None:
 
 def test_only_the_app_whose_row_changed_is_re_announced(tmp_path: Path) -> None:
     events_path = tmp_path / "events.jsonl"
-    writer = ServiceEventWriter(events_path=events_path)
+    writer = AppAnnouncementWriter(events_path=events_path)
     writer.announce(
         _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("files", "http://localhost:8300"))
     )
@@ -80,7 +80,7 @@ def test_only_the_app_whose_row_changed_is_re_announced(tmp_path: Path) -> None:
 
 def test_a_new_app_registers_and_a_removed_one_deregisters(tmp_path: Path) -> None:
     events_path = tmp_path / "events.jsonl"
-    writer = ServiceEventWriter(events_path=events_path)
+    writer = AppAnnouncementWriter(events_path=events_path)
     writer.announce(
         _rows(tmp_path, _registered("chat", "http://localhost:8010"), _registered("old", "http://localhost:8200"))
     )
@@ -99,7 +99,7 @@ def test_a_relabelled_app_is_re_announced(tmp_path: Path) -> None:
     """The label is the origin consumers route on, so a change to it must reach them even though the app's
     name and URL are untouched."""
     events_path = tmp_path / "events.jsonl"
-    writer = ServiceEventWriter(events_path=events_path)
+    writer = AppAnnouncementWriter(events_path=events_path)
     writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010", label="chat-aaaa1111")))
 
     writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010", label="chat-bbbb2222")))
@@ -113,7 +113,7 @@ def test_an_unwritable_stream_is_announced_again_on_the_next_read(tmp_path: Path
     """A write that fails leaves nothing remembered, so the rows are not lost to the consumer."""
     blocked = tmp_path / "events"
     blocked.write_text("a file where the directory should be")
-    writer = ServiceEventWriter(events_path=blocked / "services" / "events.jsonl")
+    writer = AppAnnouncementWriter(events_path=blocked / "services" / "events.jsonl")
     rows = _rows(tmp_path, _registered("chat", "http://localhost:8010"))
 
     writer.announce(rows)
@@ -125,6 +125,6 @@ def test_an_unwritable_stream_is_announced_again_on_the_next_read(tmp_path: Path
 
 def test_the_stream_path_comes_from_the_agent_state_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
-    assert service_events_path_from_environment() == tmp_path / SERVICE_EVENTS_REL
+    assert announcements_path_from_environment() == tmp_path / ANNOUNCEMENTS_REL
     monkeypatch.delenv("MNGR_AGENT_STATE_DIR")
-    assert service_events_path_from_environment() is None
+    assert announcements_path_from_environment() is None

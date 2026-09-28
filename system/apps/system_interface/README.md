@@ -172,7 +172,7 @@ read's and re-reads on a change, the backstop for a write no watch event
 reported (under gVisor and on lima, a change made outside the sandbox raises no
 inotify event in it).
 
-Every registry read is also announced to the minds desktop (`service_events.py`):
+Every registry read is also announced to the minds desktop (`app_announcements.py`):
 one `service_registered` event per app whose URL, label, or icon differs from
 the last announced, and one `service_deregistered` per app that left, appended
 to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
