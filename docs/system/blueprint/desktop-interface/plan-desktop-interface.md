@@ -119,7 +119,7 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 | Fact or verb | Owner |
 |---|---|
 | Which apps exist, their display name, icon, launch paths, criticality, priority | Manifest, mirrored into the registry |
-| Whether an app is running; Stop and Start | Shell, via supervisord |
+| Whether an app is running; Stop, Start, and Quit | Shell, via supervisord |
 | What is inside an app, and its own verbs on those things | The app, in its pages |
 | Desktops: name, colour, glyph, wallpaper, shortcuts and cells | Shell, shared |
 | Which desktop was made for which user | Shell, in `users.json` |
@@ -280,7 +280,7 @@ Exact shapes: contracts.md section 4.
 ### 5.2 Routes and the WebSocket
 
 The full tables are contracts.md sections 5 and 6.
-In brief: desktops (list, create, settings, delete, shortcuts, wallpaper), windows (open, close, location), placements (read, save), clients, inventory, wallpapers, the app-level Stop and Start, the templates catalog, client activity, health, the contract module, the op route, and the socket carrying `apps_updated`, `desktops_updated`, `placements_updated`, `active_desktop_changed`, and `layout_op`.
+In brief: desktops (list, create, settings, delete, shortcuts, wallpaper), windows (open, close, location), placements (read, save), clients, inventory, wallpapers, the app-level Stop, Start, and Quit, the templates catalog, client activity, health, the contract module, the op route, and the socket carrying `apps_updated`, `desktops_updated`, `placements_updated`, `active_desktop_changed`, and `layout_op`.
 Gone: every `/_instances` relay route, `/api/tabs/<id>/instance`, `/api/apps/<name>/changed`, `/api/projects/*`, `/api/layouts/*`.
 
 ### 5.3 The pure document editor

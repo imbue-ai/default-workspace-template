@@ -63,8 +63,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
   placements (`/api/placements/<desktop>`), wallpapers (`/api/wallpapers`,
-  `/wallpapers/<kind>/<name>`), the per-app Stop and Start
-  (`/api/apps/<name>/stop|start`), clients (`/api/clients`, and the arrival
+  `/wallpapers/<kind>/<name>`), the per-app Stop, Start, and Quit
+  (`/api/apps/<name>/stop|start|quit`), clients (`/api/clients`, and the arrival
   `/api/clients/<client>/arrive` a page posts first), client activity
   (`/api/client-activity`), the inventory (`/api/inventory`), each client's
   pinned-entry presentation
