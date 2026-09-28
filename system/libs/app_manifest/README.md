@@ -226,18 +226,19 @@ Selection reads only what the workspace declares. A path selects:
   sources) select every npm package.
 
 A path in no package, skill or npm package, that is not npm root
-configuration, a supervisord block, `uv.lock`, a guard, a collected test file, or markdown under
-`.agents/` (agent prose, which only the always-run prose checks and the apps
-referencing it read), runs the full root suite (`uv run pytest` from the repo
-root), which replaces the other root-collected commands; so does a change to
-the root `pyproject.toml` or `conftest.py`, and a `uv.lock` change that cannot
-be compared or that the root project depends on directly.
+configuration, a supervisord block, `uv.lock`, a guard, a collected test file,
+or markdown under `.agents/` (agent prose, which only the always-run prose
+checks and the apps referencing it read), runs the full root suite
+(`uv run pytest` from the repo root), which replaces the other root-collected
+commands; so does a change to the root `pyproject.toml` or `conftest.py`, and a
+`uv.lock` change that cannot be compared or that the root project depends on
+directly.
 
 Every change that is not entirely documentation (README and changelog files
-anywhere, and other markdown outside `.agents/` and `system/{scripts,libs,services,apps}/`,
-where markdown is prose an agent runs) also runs the always-run set:
-`system/*.py`, the cross-cutting `system/scripts` guards, and the checks that
-read every skill's prose. A listed guard git does not track (an always-run
+anywhere, and other markdown outside `.agents/` and
+`system/{scripts,libs,services,apps}/`, where markdown is prose an agent runs)
+also runs the always-run set: `system/*.py`, the cross-cutting `system/scripts`
+guards, and the checks that read every skill's prose. A listed guard git does not track (an always-run
 one, or the OOM band check a supervisord block selects) fails the selection
 rather than dropping out of it. A change made only of documentation selects
 nothing.
