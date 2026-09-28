@@ -4698,6 +4698,7 @@ def test_a_failed_rebind_retries_on_its_lane_even_after_the_failed_target_was_si
         )
         manager.refresh_chat_records()
         delete_account(second_account)
+        set_mru(first_account)
 
         assert manager.retry_handoff(chat_id, third_account) is HandoffPhase.RESTARTING
         wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
@@ -4705,6 +4706,8 @@ def test_a_failed_rebind_retries_on_its_lane_even_after_the_failed_target_was_si
         snapshot = manager.get_chat_snapshot(agent_id)
         assert snapshot is not None and snapshot.active_agent.account_id == third_account
         assert sent == [(agent_id, "Carry on on the other account", "trigger-1")]
+        # The retry launched on the account it named, which made that the most recently used one.
+        assert read_index().mru == third_account
     finally:
         manager.stop()
 
