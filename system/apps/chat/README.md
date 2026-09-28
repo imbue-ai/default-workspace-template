@@ -341,8 +341,10 @@ Changing the accounts is the owner's alone: every route that starts, advances
 or removes a sign-in answers 403 to a request whose `X-Imbue-Identity` says
 `owner: false`, and `GET /api/accounts` carries `can_manage`, so the chooser
 shows a visitor the accounts without the actions that would be refused. A
-pasted Anthropic or OpenAI key is checked with its provider before it is saved,
-and a Claude subscription token is never accepted or kept.
+pasted Anthropic or OpenAI key is checked with its provider before it is saved.
+A pasted Claude subscription token is refused, and an account still running on
+one offers "Switch to a normal sign-in" (`holds_subscription_token` on its
+row), which signs it in again and drops the token.
 
 A failed turn from an account that has run out is not a sign-in problem: a spent
 balance or spending limit is an API error of kind `billing`, and a reached usage
