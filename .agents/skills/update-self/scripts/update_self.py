@@ -439,7 +439,9 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
         cwd=repo_root,
         capture_output=True,
     )
-    if resolved.returncode != 0:
+    if resolved.returncode not in (0, 1):
+        resolved.check_returncode()
+    if resolved.returncode == 1:
         print(
             f"error: {args.ref} does not name a commit in this workspace, so there "
             "is no target to update to. It is not a release, remote branch or "
