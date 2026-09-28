@@ -408,8 +408,9 @@ even though `classify-merge` cannot see it; Step 1's rollback reverts are not,
 as git made them or with a `both added` file taken at the target's version,
 when `git diff <merge-sha> HEAD` is empty). **Otherwise run
 the real gates**,
-scoped to every file whose merged content differs from the target release. The
-full rule, its scope, and the keep/revert disposition for fix commits are in
+scoped to every file whose merged content differs from the target release; 4b's
+suites run is their test gate, so do not select tests again. The full rule, its
+scope, and the keep/revert disposition for fix commits are in
 `references/worker-review-gates.md`. If you believe the gates should not run,
 or should run at another scope, in a situation the rule does not cover, that is
 a `question` gate for the lead -- never a silent adaptation.
