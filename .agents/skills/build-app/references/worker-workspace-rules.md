@@ -35,16 +35,13 @@ IF YOU FAIL TO FOLLOW ONE, SAY SO EXPLICITLY IN YOUR REPORT.
 - NEVER amend commits or rebase--always create new commits.
 - All relative paths in this repo assume cwd = the root of the checkout you are working in -- for you that is the build folder you were started in, not `/home/user/workspace`. Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (visible folders are the user's to organize; e.g. `data/.apps/<name>/` holds an app's stored data, including its instance records at `data/.apps/<name>/instances.json`, and `data/.skills/<name>/` a skill's own state); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state (what a program keeps about this machine and can rebuild: the registry, dispatch scripts, pty records, the shell's client layouts) under `data/.state/`. The rule is `docs/system/blueprint/workspace-app-model/contracts.md` section 17.
 
-# You keep no progress records
+# Progress tracking is not yours
 
-You record nothing and track nothing. **Do not run `tk` at all**: not `create`, not `start`,
-not `close`, and not for a regular ticket. The workspace's `AGENTS.md` gives the tracker a long
-section and calls it mandatory; that section is written for the agent talking to the user, it is
-not loaded for you, and none of it is yours to follow.
+You do not use `tk`. The orchestrating agent that launched you keeps the one progress timeline
+the user sees, and it records the build's stages there on your behalf.
 
-The orchestrator holds the one progress timeline the user sees, and it shows them stages of the
-build, never nodes. A record you filed would reach nobody. Your report file is how your work is
-seen -- write it as your task file says, and let that be the whole account of what you did.
+Your report file is how your work is seen. Write it as your task file says, and let that be the
+whole account of what you did.
 
 # Important commands and conventions:
 
