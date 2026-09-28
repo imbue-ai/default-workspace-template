@@ -12,6 +12,7 @@ from typing import Final
 from typing import assert_never
 
 import httpx
+from loguru import logger
 
 _CHECK_TIMEOUT_SECONDS: Final = 10.0
 _ANTHROPIC_BASE_URL: Final = "https://api.anthropic.com"
@@ -54,10 +55,12 @@ def check_key(provider: CheckedProvider, api_key: str, base_url: str | None = No
             assert_never(unreachable)
     try:
         response = httpx.get(url, headers=headers, timeout=_CHECK_TIMEOUT_SECONDS)
-    except httpx.HTTPError:
+    except httpx.HTTPError as e:
+        logger.warning("Could not ask {} about a pasted key: {}", provider.value, type(e).__name__)
         return KeyCheck.UNCHECKED
     if response.status_code == 200:
         return KeyCheck.ACCEPTED
     if response.status_code == _REJECTING_STATUS:
         return KeyCheck.REJECTED
+    logger.warning("{} answered {} when asked about a pasted key", provider.value, response.status_code)
     return KeyCheck.UNCHECKED
