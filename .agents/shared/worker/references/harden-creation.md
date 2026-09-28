@@ -263,19 +263,24 @@ frontend build the browser tests need, and passing two pytest roots to one
 invocation breaks collection. What it selects, and why, is in
 `system/libs/app_manifest/README.md` ("Selecting tests"): the repo guards, the
 changed packages' and skills' own suites with their ratchets, the suites of
-whatever consumes them, the tests paired with a changed script, the browser
-tests of an app that itself changed, and the frontend checks. Do not drop any
-line of it.
+whatever declares a dependency on them, the browser tests of an app that
+itself changed, and the frontend checks. A changed path outside every package
+and skill brings in the full root suite; that is the gate working, not a gap.
+Do not drop any line of it.
 
-**A suite the selector left out.** The selector sees declared dependencies,
-imports, and test files that name a path; a coupling none of those shows is
-invisible to it. When you have a concrete reason to think a suite it left out
-can observe your change (it runs your script as a subprocess, calls your
-service over HTTP, reads a file your change writes), run that suite too, and
-add a `[[consumer]]` entry for it to
-`system/config/test_selection_overrides.toml` as part of your change, so the
-next change to that path selects it without anyone having to notice. When the
-path is built-in, name the entry under `Selector gaps:` (below).
+**A suite the selector left out.** The selector reads only declarations:
+`pyproject.toml` and `package.json` dependencies, `uv.lock`, the programs in
+supervisord blocks, and app manifests' `[[references]]`. A coupling none of
+those shows is invisible to it. When you have a concrete reason to think a
+suite it left out can observe your change (it runs your script as a
+subprocess, calls your service over HTTP, reads a file your change writes),
+run that suite too. When that suite is an app's and the path lies outside the
+app, declare the coupling as part of your change: add the path to the app's
+`app.toml` as a `[[references]]` entry, so the next change to it selects the
+app without anyone having to notice. A coupling between built-in pieces is a
+built-in defect (AGENTS.md, "Updates"): name it in your `done` report under
+`Undeclared couplings:`, and your lead includes it in its report of built-in
+issues for the pass.
 
 **A regression the gate let through.** When your task fixes something an
 earlier change broke, and a test catches the break (one that already existed,
@@ -286,24 +291,8 @@ earlier change:
 uv run app-manifest select-tests --diff-base <breaking commit>^ --diff-ref <breaking commit>
 ```
 
-If the test's suite is not among the lines, add the `[[consumer]]` entry that
-would have selected it, the same way.
-
-**An unclassified path.** When the output ends with an `# unclassified` block,
-each listed path is one the selector could not map, and the full root suite is
-among the lines in its place: run the lines as printed. For a listed path the
-tree still holds, that run fails `test_every_tracked_path_is_classified`, which
-lists every tracked path the mapping misses (these, and any the tree already
-carried), and a mapping for each is the fix. Decide which suites can actually
-observe a change to that path, record it in
-`system/config/test_selection_overrides.toml` (a `[[consumer]]` entry; an empty
-`suites` when no suite beyond the always-run set can observe it) as part of
-your change, commit it, and re-run `select-tests` to confirm the path is
-classified, so the next change to it selects those suites instead of the full
-root suite. When the path is built-in (AGENTS.md, "Updates", has the test),
-name it in your `done` report under `Selector gaps:`, one line each with the
-mapping you added (a consumer entry from the paragraphs above goes there too):
-your lead includes it in its report of built-in issues for the pass.
+If the test's suite is not among the lines, declare the coupling that would
+have selected it, the same way.
 
 **A command that dies from a signal.** Exit status 137 or 143, or `Killed`
 with no failure output, is not a test failure until the shed ledger says it is

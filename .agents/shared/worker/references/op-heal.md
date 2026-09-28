@@ -26,7 +26,7 @@ Fixed <app> on branch `<branch>`. Ready to preview.
 - Change: <one-sentence (root cause + fix)>
 - Frontend / backend: <which, and the files touched>
 - Tests run: <the test gate's commands (select-tests) and Playwright -- all pass>
-- Selector gaps: <none, or each built-in path select-tests left unclassified or missed a suite for, with the mapping you added>
+- Undeclared couplings: <none, or each built-in suite select-tests missed, with the reference you added or why none fits>
 - Screenshots reviewed: <pages/states you eyeballed>
 ```
 
@@ -87,7 +87,7 @@ Fixed `<name>`:
 - Scenarios run: <list, all pass>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
-- Selector gaps: <none, or each built-in path select-tests left unclassified or missed a suite for, with the mapping you added>
+- Undeclared couplings: <none, or each built-in suite select-tests missed, with the reference you added or why none fits>
 ```
 
 **App or service:**
@@ -99,7 +99,7 @@ Fixed app or service `<name>`:
 - Scenarios / tests run: <list, all pass>
 - References registered: <none, or one path per line>
 - Outside footprint: <none, or one path per line with why it changed>
-- Selector gaps: <none, or each built-in path select-tests left unclassified or missed a suite for, with the mapping you added>
+- Undeclared couplings: <none, or each built-in suite select-tests missed, with the reference you added or why none fits>
 ```
 
 The last two lines come from the scope file (`harden-creation.md`); a

@@ -9,5 +9,3 @@ Lint and formatting checks leave the frontend test runs, browser tests leave the
 - AGENTS.md says how to pick a change's tests (`app-manifest select-tests`, which refuses to run while an edit is uncommitted) and how to run the chat and shell browser tests, and that a shed test command of a harden gate follows the gate's shed handling and is never skipped.
 
 - `.mngr/settings.toml` shares `system/vendor/mngr-assets` into every worker's worktree, as it shares `settings.local.toml`. The assets are fetched rather than tracked, so a fresh worktree had none, and the repo guards failed on the missing `docs/system/style_guide.md` until something ran an npm build. `.gitignore` now ignores the path whether it is the fetched directory or the shared symlink, since a directory-only pattern left the symlink untracked and `select-tests` refused to run.
-
-- New `system/config/test_selection_overrides.toml` holds the test mappings `app-manifest select-tests` cannot derive from the workspace's declarations. A change that leaves a tracked path mapped to no suite fails CI until the file gains a mapping for it.

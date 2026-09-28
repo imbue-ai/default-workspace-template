@@ -237,9 +237,9 @@ or supersede the pass per `.agents/shared/references/harden-contention.md`.
 
 On `type: status`:
 
-- `name: done` -- if the body lists `Selector gaps:`, they are built-in
-  defects (the test selector could not map a built-in path, or missed a suite
-  that observes one): add them to the pass's single report per
+- `name: done` -- if the body lists `Undeclared couplings:`, they are built-in
+  defects (a built-in suite observes a path nothing declares, so the test
+  selector missed it): add them to the pass's single report per
   `.agents/shared/references/report-built-in-issues.md`.
   Then merge the worker's branch:
   ```bash

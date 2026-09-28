@@ -67,6 +67,12 @@ params = [{name = "message", label = "Draft message", required = false}]
 presets = {target = "current_chat", is_draft = "true"}
 draft_param = "message"
 
+# A chat's launch stacks on the ``chat`` create template the committed mngr settings hold, and the
+# chat's create defaults resolve beside that file, so a change to it can break chat creation.
+[[references]]
+path = ".mngr/settings.toml"
+note = "Holds the chat create template every chat launch stacks on"
+
 # A chat preview is a secondary chat: it follows the live observer and reads the
 # live accounts, but writes nothing the live chat owns. It opens on the chat list
 # with the conversation the user is in selected ({key} is a chat id).

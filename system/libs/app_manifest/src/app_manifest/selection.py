@@ -70,8 +70,11 @@ _LOCKFILE: Final[RepoRelativePath] = RepoRelativePath("uv.lock")
 _GUARD_DIRECTORY: Final[str] = "system"
 _SUPERVISORD_CONF: Final[str] = "system/supervisord.conf"
 _SUPERVISORD_DROPIN_DIRECTORY: Final[str] = "system/supervisord.conf.d"
-# The cross-cutting system/scripts guards, run beside system/*.py for every change.
+# The cross-cutting checks run beside system/*.py for every change: the system/scripts guards,
+# and the checks that read every skill's prose, which a change to any one skill can break.
 _ALWAYS_RUN_GUARDS: Final[tuple[str, ...]] = (
+    ".agents/shared/scripts/test_skill_mngr_references.py",
+    ".agents/skills/launch-task/scripts/dispatch_contract_test.py",
     "system/scripts/agent_hook_wiring_test.py",
     "system/scripts/agent_guard_tool_scope_test.py",
     "system/scripts/provision_guard_test.py",
