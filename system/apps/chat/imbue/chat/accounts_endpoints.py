@@ -66,7 +66,7 @@ def _error_response(detail: str, status_code: int = 400) -> Response:
 def list_lanes() -> Response:
     """The chooser's rows, and what each one offers as a way in.
 
-    `shape` rides on every method so the modal knows which of the three screens to render
+    `shape` rides on every method so the modal knows which screen to render
     without having to know anything about harnesses.
     """
     payload = [
