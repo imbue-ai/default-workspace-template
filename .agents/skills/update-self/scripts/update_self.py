@@ -718,11 +718,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     resolve_parser.add_argument(
         "--override",
         default=None,
-        help="A tag, 'main', or any ref to update to (default: latest stable "
-        "minds-v* tag).",
+        help="A tag, a branch of --remote (qualified to <remote>/<branch>), or "
+        "any other ref to update to (default: the release the minds app names).",
     )
     resolve_parser.add_argument(
-        "--remote", default="upstream", help="Remote to read tags from."
+        "--remote", default="upstream", help="Remote to read tags and branches from."
     )
     resolve_parser.add_argument(
         "--local-tags",
