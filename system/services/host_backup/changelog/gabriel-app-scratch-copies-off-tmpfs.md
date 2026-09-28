@@ -1,1 +1,3 @@
 The backup's default excludes now cover a throwaway instance's copies of an app's data and its scratch directory (`data/.state/isolated-instances/*/copies` and `*/scratch`). The data they copy is backed up where it lives, and one app's store can run to many GB, so without this every hourly snapshot taken while a preview or test instance was up swept a second copy of it. The instance's own state (`instance.json`, its logs) is still backed up.
+
+The README's manual restore now targets `/var/tmp/restored` instead of `/tmp`, which is a RAM disk capped at about 1 GiB that a full restore would overflow.
