@@ -69,8 +69,8 @@ paths = [
     ".dockerignore",
     ".pre-commit-config.yaml",
     "system/Dockerfile",
-    "apps",
-    "skills",
+    "/apps",
+    "/skills",
     "data/**",
     "docs/**",
     "dev/**",
@@ -108,6 +108,14 @@ paths = [
 ]
 suites = []
 note = "the stop hook and build-app's plan recorder, which no test runs; the always-run wiring guard checks the hook's wiring"
+
+[[consumer]]
+paths = ["system/scripts/forward_port.py"]
+suites = [
+    "system/libs/app_manifest/src/app_manifest/registry_test.py",
+    "system/apps/terminal/test_terminal_app.py",
+]
+note = "run as a subprocess by app_manifest's register_app, which every app's startup calls"
 
 [[consumer]]
 paths = [".agents/shared/scripts/preview_wrapper_server.py"]
