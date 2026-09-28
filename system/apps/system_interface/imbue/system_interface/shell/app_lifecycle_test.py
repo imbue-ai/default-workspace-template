@@ -349,6 +349,39 @@ def test_wake_and_wait_answers_once_the_app_accepts(
     assert running is not None and waiting.wake_and_wait(running, timeout_seconds=0.1) is True
 
 
+def test_wake_and_wait_gives_up_once_the_port_is_parked_again(
+    manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
+) -> None:
+    """A wake that ends in FATAL has the sweep park the port again with the failure page; the wait must give up
+    then rather than poll the port, since a connect on a parked port is itself a wake (of a program that just
+    failed) and would read the parker as the app."""
+    entry = manager.inventory.entry("docs")
+    assert entry is not None and entry.is_running is False
+    clock = _clock_of(manager)
+
+    def start_then_fail_and_sweep(program: str) -> None:
+        supervisor.start(program)
+        supervisor.statename_by_program[program] = "FATAL"
+        clock.now += 1
+        failing.sweep_once()
+
+    failing = AppLifecycleManager(
+        inventory=manager.inventory,
+        is_enabled=False,
+        count_windows_by_app=lambda: {},
+        program_states=supervisor.states,
+        start_program=start_then_fail_and_sweep,
+        stop_program=supervisor.stop,
+        clock=clock,
+    )
+    try:
+        assert failing.wake_and_wait(entry, timeout_seconds=5.0) is False
+        assert failing.is_app_parked("docs")
+    finally:
+        failing.stop()
+    assert supervisor.started == ["docs"]
+
+
 def test_wake_and_wait_gives_up_once_the_manager_is_stopped(
     manager: AppLifecycleManager, supervisor: FakeSupervisor
 ) -> None:

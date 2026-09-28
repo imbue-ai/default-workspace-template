@@ -262,16 +262,21 @@ class AppLifecycleManager(MutableModel):
 
     def wake_and_wait(self, entry: AppInventoryEntry, timeout_seconds: float = WAKE_WAIT_SECONDS) -> bool:
         """Wake a stoppable app that is not running and wait until its port accepts a connection; True when it does
-        within the timeout, False when it does not or the manager is stopped meanwhile. An app that is running, or
-        that cannot be parked, is answered True at once."""
+        within the timeout, False when it does not, when the sweep parks the port again meanwhile (the wake ended in
+        FATAL), or when the manager is stopped. An app that is running, or that cannot be parked, is answered True
+        at once."""
         target = parking_target_of(str(entry.row.url))
         if entry.is_running or target is None:
             return True
-        kind = self.wake(str(entry.row.name))
+        app = str(entry.row.name)
+        kind = self.wake(app)
         if kind is not ParkedPageKind.STARTING:
             return False
         deadline = self.clock() + timeout_seconds
         while self.clock() < deadline:
+            # A connect on a parked port is itself a wake, so a port parked again is checked for before every poll.
+            if self.is_app_parked(app):
+                return False
             if _is_accepting(target):
                 return True
             if self._sweep_stop.wait(_WAKE_WAIT_POLL_SECONDS):
