@@ -883,7 +883,7 @@ def test_classify_merge_refuses_a_local_that_already_contains_the_target(
 
 
 @dataclass
-class _UpdateHistory:
+class _FootprintHistory:
     """A workspace repo whose local line forked from an upstream release line."""
 
     root: Path
@@ -942,8 +942,8 @@ class _UpdateHistory:
         return json.loads(capsys.readouterr().out)
 
 
-def _update_history(root: Path) -> _UpdateHistory:
-    history = _UpdateHistory(root)
+def _footprint_history(root: Path) -> _FootprintHistory:
+    history = _FootprintHistory(root)
     history.git("init", "-q", "-b", "main")
     history.git("config", "user.email", "test@example.com")
     history.git("config", "user.name", "test")
@@ -958,7 +958,7 @@ def test_footprint_ranges_hold_after_a_commit_on_top_of_the_merge(
     # The worker may commit a fix after its merge and rerun the footprint
     # block; the ranges must still split the workspace's own change from the
     # update's, where HEAD^1 would then name the merge itself.
-    history = _update_history(tmp_path)
+    history = _footprint_history(tmp_path)
     history.release("v1", "upstream_v1.txt")
     history.commit_file("system/apps/mine/app.py", "local work")
     merge = history.merge_update("v1")
@@ -980,7 +980,7 @@ def test_footprint_ranges_on_a_retry_whose_target_moved(tmp_path, capsys) -> Non
     # merge's first parent already carries v1. The live workspace runs the
     # rolled-back tree, so the update is v1 and v2 together, and the local side
     # is still only the workspace's own file.
-    history = _update_history(tmp_path)
+    history = _footprint_history(tmp_path)
     history.release("v1", "upstream_v1.txt")
     local = history.commit_file("system/apps/mine/app.py", "local work")
     history.merge_update("v1")
@@ -1005,7 +1005,7 @@ def test_footprint_ranges_on_a_retry_of_the_same_target(tmp_path, capsys) -> Non
     # Reverting the rollback already brings v1 back, so there is no new merge:
     # the landed attempt's merge is the anchor, the revert is the update, and
     # a local commit made after the rollback counts as the workspace's own.
-    history = _update_history(tmp_path)
+    history = _footprint_history(tmp_path)
     history.release("v1", "upstream_v1.txt")
     local = history.commit_file("system/apps/mine/app.py", "local work")
     history.merge_update("v1")
@@ -1034,7 +1034,7 @@ def test_footprint_ranges_on_a_same_target_retry_after_a_moved_target_retry(
     # the v1 rollback, so its ancestry carries v1, but the live tree was put
     # back to the workspace's own tree from before both attempts: v1 is update,
     # not the workspace's own change.
-    history = _update_history(tmp_path)
+    history = _footprint_history(tmp_path)
     history.release("v1", "upstream_v1.txt")
     local = history.commit_file("system/apps/mine/app.py", "local work")
     history.merge_update("v1")
@@ -1058,7 +1058,7 @@ def test_footprint_ranges_on_a_same_target_retry_after_a_moved_target_retry(
 def test_footprint_ranges_refuses_an_earlier_updates_merge(tmp_path, capsys) -> None:
     # A workspace updated before carries older merges under the same subject;
     # without this pass's merge the ranges would silently describe that one.
-    history = _update_history(tmp_path)
+    history = _footprint_history(tmp_path)
     history.release("v1", "upstream_v1.txt")
     history.merge_update("v1")
     history.release("v2", "upstream_v2.txt")
