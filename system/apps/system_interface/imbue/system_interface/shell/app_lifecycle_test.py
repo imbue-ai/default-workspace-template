@@ -22,7 +22,6 @@ from imbue.system_interface.shell.app_lifecycle import recent_wake_times
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import SupervisorProgramActionError
 from imbue.system_interface.shell.inventory import AppInventory
-from imbue.system_interface.shell.liveness import probe_tcp_url
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.share_grants import GrantedAppsReader
 from imbue.system_interface.shell.testing import FakeLivenessProber
@@ -159,10 +158,6 @@ def manager(
         built.stop()
 
 
-def _is_refused(port: int) -> bool:
-    return not probe_tcp_url(f"http://127.0.0.1:{port}")
-
-
 def test_a_pass_parks_a_stopped_stoppable_app_and_nothing_else(
     manager: AppLifecycleManager, supervisor: FakeSupervisor
 ) -> None:
@@ -185,7 +180,7 @@ def test_a_pass_releases_a_parked_app_that_came_up_on_its_own(
     manager.sweep_once()
 
     assert not manager.is_app_parked("docs")
-    assert _is_refused(closed_port)
+    assert can_bind_loopback_port(closed_port)
     # A program supervisord is retrying (BACKOFF) needs the port too.
     supervisor.statename_by_program["docs"] = "STOPPED"
     manager.sweep_once()
@@ -229,7 +224,7 @@ def test_a_parked_port_follows_its_row_and_is_released_once_the_row_is_gone(
     manager.sweep_once()
 
     assert manager.parked_app_names() == ["docs"]
-    assert _is_refused(closed_port) and not can_bind_loopback_port(moved_port)
+    assert can_bind_loopback_port(closed_port) and not can_bind_loopback_port(moved_port)
 
     write_registry(registry_path, registry_row_toml("plain", "http://127.0.0.1:1"))
     manager.inventory.reload_registry()
@@ -326,7 +321,7 @@ def test_a_wake_releases_the_parker_before_starting(
 
     assert manager.wake("docs") is ParkedPageKind.STARTING
     assert supervisor.started == ["docs"]
-    assert _is_refused(closed_port)
+    assert can_bind_loopback_port(closed_port)
     with pytest.raises(AppLifecycleRefusedError):
         manager.wake("shell")
     with pytest.raises(AppLifecycleRefusedError):
@@ -644,7 +639,7 @@ def test_stop_releases_every_parked_port(manager: AppLifecycleManager, closed_po
     manager.stop()
 
     assert manager.parked_app_names() == []
-    assert _is_refused(closed_port)
+    assert can_bind_loopback_port(closed_port)
 
 
 def test_a_started_manager_parks_a_stopped_app_at_once(
