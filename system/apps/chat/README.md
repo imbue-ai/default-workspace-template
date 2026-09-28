@@ -304,9 +304,9 @@ binds to an account when it is created and moves to another only through a
 switch (a handoff or a rebind, above). A launch that names no account (the
 launcher, a desktop shortcut, `layout.py open chat`) goes to the account the user
 pinned as the default in a chat's provider menu, else to the most recently used
-one; pressing another account in that menu switches the chat to it (through
-the dialog, or at once for a chat with nothing to hand over -- see the switch
-above). `system/scripts/migrate_claude_auth.py` imports this package from
+one (the account of the latest sign-in, chat create, or switch); pressing another
+account in that menu switches the chat to it (through the dialog, or at once for a
+chat with nothing to hand over -- see the switch above). `system/scripts/migrate_claude_auth.py` imports this package from
 the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no
