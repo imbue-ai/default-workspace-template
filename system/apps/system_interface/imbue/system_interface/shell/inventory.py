@@ -59,10 +59,14 @@ class AppInventory(MutableModel):
     on_registry_read: Callable[[Sequence[RegistryRow]], None] | None = Field(
         default=None,
         frozen=True,
-        description="Told the validated rows of every successful registry read, outside the inventory's lock",
+        description="Told the validated rows of every successful registry read, one read at a time and outside "
+        "the entry lock",
     )
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    # Held across one whole reload (read, install, announce): the watch thread and the sweep both reload, and
+    # two reads finishing in the other order would install and announce the older registry last.
+    _reload_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     # Held across serialize, compare, and broadcast, so two threads that snapshot the inventory
     # in one order cannot broadcast in the other and leave the clients on the older one.
     _broadcast_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
@@ -125,6 +129,10 @@ class AppInventory(MutableModel):
         the file changes): a hand-edited registry must degrade to a stale inventory, not crash the shell or end
         the watch.
         """
+        with self._reload_lock:
+            self._reload_registry_serially()
+
+    def _reload_registry_serially(self) -> None:
         # The mtime is taken before the read: a write that lands between the two makes the next sweep read
         # again, which is the safe direction.
         mtime_ns = self._registry_mtime_ns()
