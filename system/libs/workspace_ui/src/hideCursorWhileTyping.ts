@@ -12,7 +12,22 @@
 /** The class on <html> while the pointer is hidden. */
 export const CURSOR_HIDDEN_CLASS = "typing-hides-cursor";
 
-const TEXT_EDITING_NAMED_KEYS = new Set(["Backspace", "Delete", "Enter"]);
+// "Process" is what Chromium reports for every key an input method editor is composing with (CJK
+// input), in place of the character.
+const TEXT_EDITING_NAMED_KEYS = new Set(["Backspace", "Delete", "Enter", "Process"]);
+
+const NON_TEXT_INPUT_TYPES = new Set([
+  "button",
+  "checkbox",
+  "color",
+  "file",
+  "hidden",
+  "image",
+  "radio",
+  "range",
+  "reset",
+  "submit",
+]);
 
 /** Whether a keystroke inserts or deletes text: a printable character or one of the editing keys,
  *  with no command modifier held (shift is fine). A shortcut like Cmd+C or a bare modifier press
@@ -22,10 +37,14 @@ export function isTextEditingKeystroke(event: Pick<KeyboardEvent, "key" | "metaK
   return event.key.length === 1 || TEXT_EDITING_NAMED_KEYS.has(event.key);
 }
 
-/** Whether typing into the focused element edits text there: a writable input or textarea, or an
- *  editable region. */
+/** Whether typing into the focused element edits text there: a writable text-taking input or textarea,
+ *  or an editable region. A checkbox or radio is an input too, but Space toggles it rather than typing
+ *  into it. */
 export function isTextEditingTarget(element: Element | null): boolean {
-  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+  if (element instanceof HTMLInputElement) {
+    return !NON_TEXT_INPUT_TYPES.has(element.type) && !element.readOnly && !element.disabled;
+  }
+  if (element instanceof HTMLTextAreaElement) {
     return !element.readOnly && !element.disabled;
   }
   return element instanceof HTMLElement && element.isContentEditable === true;

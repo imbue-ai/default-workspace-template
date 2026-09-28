@@ -26,6 +26,7 @@ describe("isTextEditingKeystroke", () => {
     expect(isTextEditingKeystroke(keystroke("Backspace"))).toBe(true);
     expect(isTextEditingKeystroke(keystroke("Delete"))).toBe(true);
     expect(isTextEditingKeystroke(keystroke("Enter"))).toBe(true);
+    expect(isTextEditingKeystroke(keystroke("Process"))).toBe(true);
   });
 
   it("leaves shortcuts, bare modifiers, and navigation keys alone", () => {
@@ -40,11 +41,17 @@ describe("isTextEditingKeystroke", () => {
 });
 
 describe("isTextEditingTarget", () => {
-  it("accepts writable inputs and textareas and refuses read-only, disabled, and plain elements", () => {
+  it("accepts writable text inputs and textareas and refuses toggles, read-only, disabled, and plain elements", () => {
     const input = document.createElement("input");
     const textarea = document.createElement("textarea");
     expect(isTextEditingTarget(input)).toBe(true);
     expect(isTextEditingTarget(textarea)).toBe(true);
+    input.type = "password";
+    expect(isTextEditingTarget(input)).toBe(true);
+
+    input.type = "checkbox";
+    expect(isTextEditingTarget(input)).toBe(false);
+    input.type = "text";
 
     input.readOnly = true;
     expect(isTextEditingTarget(input)).toBe(false);
