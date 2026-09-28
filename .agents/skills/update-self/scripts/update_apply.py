@@ -91,6 +91,9 @@ from update_layout import (
     FRONTEND_DIR,
     FRONTEND_LIB_DIR,
     MANIFEST_FILENAME,
+    MNGR_ASSETS_DIR,
+    MNGR_ASSETS_SCRIPT,
+    MNGR_ASSETS_STAGING_DIR,
     NPM_LOCKFILE,
     NPM_ROOT_DIR,
     PROVISIONER_SCRIPT,
@@ -507,25 +510,25 @@ class _RestoredFrontend(NamedTuple):
     is_npm_workspace: bool
 
 
-# CLEANUP: drop the non-workspace branch below, ``_remove_unserved_bundles``, and the
-# always-True arm of ``_is_recovery_npm_ci_needed`` once every workspace has updated
-# past the release that introduced the ``system/`` npm workspace: a rollback can then
-# only land on a tree that has it.
+# CLEANUP: drop the non-workspace branch below and the always-True arm of
+# ``_is_recovery_npm_ci_needed`` once every workspace has updated past the release that
+# introduced the ``system/`` npm workspace: a rollback can then only land on a tree
+# that has it.
 def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
     """The frontend layout of the tree the rollback restored.
 
     A tree with no npm workspace at ``system/`` and no chat frontend builds its one
     bundle from the shell's own frontend directory, with the node_modules there. The
     forward apply never asks this (the merged tree always has the workspace), but a
-    rollback lands on whatever tree the workspace ran before.
+    rollback lands on whatever tree the workspace ran before -- which, workspace or not,
+    serves only the bundles whose frontends it carries: one from before an app's
+    frontend existed (getting_started's, say) cannot build that app's bundle.
 
     A frontend is told by its tracked manifest, not its directory: the rollback removes the
     tracked files, but the forward build leaves ignored files under a frontend's
     ``node_modules`` (vite's own temp files), and git cannot remove a directory that still
-    holds them, so the chat frontend's directory outlives its removal.
+    holds them, so a frontend's directory outlives its removal.
     """
-    if (repo_root / NPM_ROOT_DIR / "package.json").is_file():
-        return _RestoredFrontend(repo_root / NPM_ROOT_DIR, FRONTEND_BUNDLES, True)
     # The shell's bundle is served by every tree the workspace ever ran, manifest or not;
     # every other bundle depends on the restored tree carrying its app's frontend.
     served = tuple(
@@ -534,21 +537,31 @@ def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
         if bundle.frontend_dir == FRONTEND_DIR
         or (repo_root / bundle.frontend_dir / "package.json").is_file()
     )
+    if (repo_root / NPM_ROOT_DIR / "package.json").is_file():
+        return _RestoredFrontend(repo_root / NPM_ROOT_DIR, served, True)
     return _RestoredFrontend(repo_root / FRONTEND_DIR, served, False)
 
 
-def _remove_unserved_bundles(repo_root: Path, frontend: _RestoredFrontend) -> None:
-    """Remove a bundle the forward build wrote that the restored tree does not serve.
+def _remove_outputs_the_restored_tree_does_not_produce(
+    repo_root: Path, frontend: _RestoredFrontend
+) -> None:
+    """Remove what the forward apply generated that the restored tree has no producer for.
 
-    The chat's, on a rollback into a tree with no chat frontend: it has no copy to put
-    back and nothing that tracks or ignores it there, so left standing it keeps the tree
-    dirty and every later apply refused. Both rollback paths (the live one and the boot
-    path's ``recover --no-restart``) land on such a tree the same way.
+    A bundle the restored tree does not serve (the chat's on a tree with no chat
+    frontend, getting_started's on one from before that app), and the mngr assets on a
+    tree from before their fetch script. None was there before the apply, so none has
+    a copy to put back, the tree restore only touches tracked paths, and the restored
+    tree neither tracks nor ignores them -- left standing they keep the tree dirty and
+    every later apply refused. Every rollback path lands on such a tree the same way.
     """
     for bundle in FRONTEND_BUNDLES:
         unserved_static = repo_root / bundle.static_dir
         if bundle not in frontend.bundles and unserved_static.exists():
             shutil.rmtree(unserved_static)
+    if not (repo_root / MNGR_ASSETS_SCRIPT).is_file():
+        for assets in (MNGR_ASSETS_DIR, MNGR_ASSETS_STAGING_DIR):
+            if (repo_root / assets).exists():
+                shutil.rmtree(repo_root / assets)
 
 
 def _are_npm_dependencies_missing(npm_root: Path) -> bool:
@@ -622,7 +635,7 @@ def _recover_running_state(
         # has: a rollback into a tree without the npm workspace has neither a chat
         # bundle to restore nor a workspace to build it from.
         frontend = _restored_frontend_layout(repo_root)
-        _remove_unserved_bundles(repo_root, frontend)
+        _remove_outputs_the_restored_tree_does_not_produce(repo_root, frontend)
         if plan.frontend and any(
             bundle.snapshot_name not in restored for bundle in frontend.bundles
         ):
@@ -1687,6 +1700,14 @@ def _run_rollback(
 
     _record_rollback_progress(record, repo_root, _ROLLBACK_PROGRESS_RESTORING)
     failed = restore_snapshots(record.snapshots)
+    try:
+        _remove_outputs_the_restored_tree_does_not_produce(
+            repo_root, _restored_frontend_layout(repo_root)
+        )
+    except OSError as exc:
+        failed.append(
+            f"files the update left that the previous version does not use ({exc})"
+        )
     if failed:
         reason = (
             f"The source was reverted, but recovery could not restore: {', '.join(sorted(failed))}. "
@@ -1940,7 +1961,9 @@ def recover(
 
     if no_restart:
         failed = restore_snapshots(marker.snapshots)
-        _remove_unserved_bundles(repo_root, _restored_frontend_layout(repo_root))
+        _remove_outputs_the_restored_tree_does_not_produce(
+            repo_root, _restored_frontend_layout(repo_root)
+        )
         if marker.provisioner_ran:
             provisioner_failure = run_provisioner(runner, repo_root)
             if provisioner_failure is not None:

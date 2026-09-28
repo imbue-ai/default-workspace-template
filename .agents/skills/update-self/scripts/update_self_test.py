@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -1247,10 +1248,11 @@ def _finish_npm_install(node_modules: Path) -> None:
 
 
 def _make_apply_repo(tmp_path: Path) -> Path:
-    """A repo root shaped like the live tree: the npm workspace at ``system/`` over the shell's frontend."""
+    """A repo root shaped like the live tree: the npm workspace at ``system/`` over every app's frontend."""
     repo_root = tmp_path / "repo"
-    (repo_root / update_layout.FRONTEND_DIR).mkdir(parents=True)
-    (repo_root / update_layout.FRONTEND_DIR / "package.json").write_text("{}")
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        (repo_root / bundle.frontend_dir).mkdir(parents=True)
+        (repo_root / bundle.frontend_dir / "package.json").write_text("{}")
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").write_text("{}")
     # A live workspace has its dependencies installed; a tree without them is the
     # exception, and the tests that want it remove this.
@@ -5464,10 +5466,11 @@ def test_a_rollback_rebuild_into_a_tree_with_no_node_modules_installs_first(
 
 def _make_pre_split_tree(repo_root: Path) -> None:
     """Shape the tree like one without the npm workspace: no ``system/package.json`` and no
-    chat bundle, just the shell's frontend directory."""
+    other app's frontend or bundle, just the shell's frontend directory."""
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").unlink()
     for bundle in update_layout.FRONTEND_BUNDLES:
         if bundle.frontend_dir != update_layout.FRONTEND_DIR:
+            shutil.rmtree(repo_root / bundle.frontend_dir)
             shutil.rmtree(repo_root / bundle.static_dir, ignore_errors=True)
 
 
@@ -5553,6 +5556,95 @@ def test_a_rollback_into_a_pre_split_tree_removes_the_chat_bundle_the_forward_bu
     assert code == 2
     assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
     assert not (apply_repo / update_layout.CHAT_STATIC_DIR).exists()
+
+
+def test_a_rollback_into_a_tree_from_before_an_apps_frontend_does_not_rebuild_its_bundle(
+    apply_repo: Path,
+) -> None:
+    # testtest, 2026-09-27: the restored tree has the npm workspace but predates the
+    # getting_started app, so its bundle was never built and had no copy to put back.
+    # Counting it as one of the restored tree's bundles sent recovery into a rebuild
+    # that cannot write it, and the rollback ended in an emergency over a bundle that
+    # tree never had -- where restoring the shell's and chat's copies was the whole job.
+    getting_started = next(
+        bundle
+        for bundle in update_layout.FRONTEND_BUNDLES
+        if bundle.app == "getting_started"
+    )
+    shutil.rmtree(apply_repo / getting_started.static_dir)
+    runner = _apply_runner(
+        _FRONTEND_DIFF + f"A\t{getting_started.frontend_dir}/package.json\n", apply_repo
+    )
+    runner.respond(
+        ("npm", "run", "build"), [_Result(returncode=1, stderr="boom"), _Result()]
+    )
+
+    def remove_on_restore(argv: list[str]) -> None:
+        if argv[:2] == ["git", "rm"] and argv[-1].startswith(
+            getting_started.frontend_dir
+        ):
+            shutil.rmtree(apply_repo / getting_started.frontend_dir)
+            runner.unwritten_bundle_apps = frozenset({getting_started.app})
+
+    runner.on_command = remove_on_restore
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert (
+        len(runner.argvs_starting("npm", "run", "build")) == 1
+    )  # the forward build only
+    assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
+    assert (apply_repo / update_layout.CHAT_FRONTEND_BUILD_INDEX).exists()
+    assert not (apply_repo / getting_started.static_dir).exists()
+
+
+@pytest.mark.parametrize(
+    "is_script_in_restored_tree",
+    [
+        pytest.param(False, id="tree-from-before-the-fetch"),
+        pytest.param(True, id="tree-that-fetches-them-too"),
+    ],
+)
+def test_a_rollback_removes_the_mngr_assets_only_from_a_tree_that_does_not_fetch_them(
+    apply_repo: Path, is_script_in_restored_tree: bool
+) -> None:
+    # The forward refresh fetches the mngr assets into a directory the merged tree
+    # ignores. A restored tree from before the fetch script neither tracks nor ignores
+    # it, so left standing it is an untracked file that refuses every later apply. A
+    # restored tree that fetches them too keeps them: they are its own ignored output.
+    (apply_repo / ".venv").mkdir()
+    script = apply_repo / update_layout.MNGR_ASSETS_SCRIPT
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("")
+    assets = apply_repo / update_layout.MNGR_ASSETS_DIR
+    script_status = "M" if is_script_in_restored_tree else "A"
+    runner = _apply_runner(
+        _BACKEND_MANIFEST_DIFF
+        + f"{script_status}\t{update_layout.MNGR_ASSETS_SCRIPT}\n",
+        apply_repo,
+    )
+
+    def fetch_and_restore(argv: list[str]) -> None:
+        if argv == ["bash", str(script)]:
+            (assets / "apps").mkdir(parents=True, exist_ok=True)
+            (assets / ".commit").write_text(f"{_MNGR_REV} 0123456789ab\n")
+        if argv[:2] == ["git", "rm"] and argv[-1] == update_layout.MNGR_ASSETS_SCRIPT:
+            script.unlink()
+
+    runner.on_command = fetch_and_restore
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    assert runner.ran("bash", str(script))
+    assert assets.exists() == is_script_in_restored_tree
 
 
 def test_a_rollback_into_a_pre_split_tree_rebuilds_at_the_shell_frontend(
@@ -5669,6 +5761,169 @@ def test_a_rollback_restores_the_tool_env_the_last_resort_reinstalled(
     # Put back by copy, so recovery needed no reinstall of its own: the untagged
     # calls (recovery's) hold no mngr install.
     assert [c for c in runner.raw_calls if c[: len(mngr_install)] == mngr_install] == []
+
+
+@dataclass
+class _FakeUvToolInstall:
+    """What ``uv tool install -e <app> --reinstall`` does to the disk for one tool, as
+    uv's ``finalize_tool_install`` does it: unlink the entrypoints the existing receipt
+    lists, rebuild the environment, then refuse -- removing the new environment -- when
+    any entrypoint's path already exists (following the link, so one that dangled into
+    the old environment exists again once the new one has its script); otherwise link
+    each ``[project.scripts]`` entry into the bin directory and write the receipt.
+
+    Installed as the runner's ``on_command``; ``is_failing_next`` makes the next install
+    die after the old one is gone, as a failed resolve does.
+    """
+
+    runner: _RecordingRunner
+    repo_root: Path
+    tool_name: str
+    home: Path
+    is_failing_next: bool = False
+
+    @property
+    def environment(self) -> Path:
+        return tool_env.tools_dir(self.home) / self.tool_name
+
+    @property
+    def bin_dir(self) -> Path:
+        return tool_env.bin_dir(self.home)
+
+    def install(self, scripts: Sequence[str]) -> None:
+        """Lay the tool down with ``scripts`` as its entrypoints, as a clean install does."""
+        shutil.rmtree(self.environment, ignore_errors=True)
+        (self.environment / "bin").mkdir(parents=True)
+        self.bin_dir.mkdir(parents=True, exist_ok=True)
+        for script in scripts:
+            (self.environment / "bin" / script).write_text(
+                f"#!{self.environment}/bin/python3\nimport sys\n"
+            )
+            (self.bin_dir / script).symlink_to(self.environment / "bin" / script)
+        entrypoints = "".join(
+            f'    {{ name = "{script}", install-path = "{self.bin_dir / script}", '
+            f'from = "{self.tool_name}" }},\n'
+            for script in scripts
+        )
+        (self.environment / update_layout.RECEIPT).write_text(
+            f"[tool]\nrequirements = []\nentrypoints = [\n{entrypoints}]\n"
+        )
+
+    def __call__(self, argv: list[str]) -> None:
+        if argv[:3] != ["uv", "tool", "install"]:
+            return
+        self.runner.respond(("uv", "tool", "install"), _Result())
+        if "-e" not in argv:
+            return
+        project = self.repo_root / argv[argv.index("-e") + 1]
+        pyproject = tomllib.loads((project / "pyproject.toml").read_text())["project"]
+        if pyproject["name"] != self.tool_name:
+            return
+        receipt = self.environment / update_layout.RECEIPT
+        if receipt.is_file():
+            for entrypoint in tomllib.loads(receipt.read_text())["tool"]["entrypoints"]:
+                Path(entrypoint["install-path"]).unlink(missing_ok=True)
+        shutil.rmtree(self.environment, ignore_errors=True)
+        scripts = sorted(pyproject.get("scripts", {}))
+        if self.is_failing_next:
+            self.is_failing_next = False
+            self._refuse("error: Failed to resolve")
+            return
+        (self.environment / "bin").mkdir(parents=True)
+        for script in scripts:
+            (self.environment / "bin" / script).write_text("")
+        existing = [script for script in scripts if (self.bin_dir / script).exists()]
+        if existing:
+            self._refuse(f"error: Executable already exists: {', '.join(existing)}")
+            return
+        self.install(scripts)
+
+    def _refuse(self, stderr: str) -> None:
+        shutil.rmtree(self.environment, ignore_errors=True)
+        self.runner.respond(
+            ("uv", "tool", "install"), _Result(returncode=2, stderr=stderr)
+        )
+
+    def entrypoints_into_environment(self) -> dict[str, bool]:
+        """Every bin-directory link into the tool's environment, by name: whether it
+        reaches a script."""
+        return {
+            link.name: link.exists()
+            for link in sorted(self.bin_dir.iterdir())
+            if link.is_symlink()
+            and Path(os.readlink(link)).parent.parent == self.environment
+        }
+
+
+_PTY_SCRIPT = "system-interface-pty"
+
+
+def _shell_tool_with_scripts(
+    apply_repo: Path, tmp_path: Path, runner: _RecordingRunner
+) -> _FakeUvToolInstall:
+    """The shell's tool installed with its one entrypoint, under a merged tree whose
+    pyproject declares a second one -- the terminal's ``terminal-pty`` on testtest."""
+    (apply_repo / update_layout.SYSTEM_INTERFACE_DIR / "pyproject.toml").write_text(
+        '[project]\nname = "system-interface"\nversion = "0.1.0"\n\n[project.scripts]\n'
+        'system-interface = "system_interface.main:main"\n'
+        f'{_PTY_SCRIPT} = "system_interface.pty_main:main"\n'
+    )
+    uv = _FakeUvToolInstall(runner, apply_repo, "system-interface", tmp_path / "root")
+    uv.install(["system-interface"])
+    runner.executables[update_layout.TOOL_NAME] = str(uv.bin_dir / "system-interface")
+    runner.on_command = uv
+    return uv
+
+
+@pytest.mark.parametrize(
+    "is_install_failing",
+    [
+        # The 2026-09-26 apply: the reinstall linked the new entrypoint, the apply failed later.
+        pytest.param(False, id="install-landed"),
+        # The 2026-09-27 apply: uv unlinked the old entrypoints, then the install died.
+        pytest.param(True, id="install-died"),
+    ],
+)
+def test_a_rollback_puts_a_restored_tools_entrypoints_back_to_the_pre_apply_set(
+    apply_repo: Path, tmp_path: Path, is_install_failing: bool
+) -> None:
+    # The tool's environment is copied aside and restored, but its entrypoints live in
+    # the bin directory beside every other tool's. Restoring the directory alone leaves
+    # the entrypoint the apply added dangling into it (and every later reinstall refused
+    # over it), and after an install that died, none of the old ones at all.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    uv = _shell_tool_with_scripts(apply_repo, tmp_path, runner)
+    uv.is_failing_next = is_install_failing
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    assert uv.entrypoints_into_environment() == {"system-interface": True}
+
+
+def test_a_reinstall_clears_an_entrypoint_an_earlier_rollback_left_dangling(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # A workspace an older rollback already left with a link into the tool that its
+    # receipt does not list: uv refuses to overwrite it once the rebuilt environment
+    # has its script again, so every apply failed until the link was deleted by hand.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    uv = _shell_tool_with_scripts(apply_repo, tmp_path, runner)
+    (uv.bin_dir / _PTY_SCRIPT).symlink_to(uv.environment / "bin" / _PTY_SCRIPT)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert uv.entrypoints_into_environment() == {
+        "system-interface": True,
+        _PTY_SCRIPT: True,
+    }
 
 
 def test_a_rollback_leaves_the_tool_of_an_app_the_merge_added_alone(
@@ -7282,6 +7537,47 @@ def test_rolling_back_restores_the_copies_and_restarts_exactly_the_recorded_prog
     assert _rollback(_rollback_runner(apply_repo), apply_repo) == 1
     assert update_apply.confirm_last(apply_repo) == 0
     assert _rollback_point(apply_repo) is None
+
+
+def test_rolling_back_removes_what_the_update_generated_that_the_previous_version_does_not(
+    apply_repo: Path,
+) -> None:
+    """The revert takes back the update's tracked files, but not the getting_started
+    bundle its build wrote nor the mngr assets its refresh fetched. A previous version
+    with neither the app nor the fetch script tracks or ignores neither, so left
+    standing they keep the tree dirty and refuse the next apply."""
+    getting_started = next(
+        bundle
+        for bundle in update_layout.FRONTEND_BUNDLES
+        if bundle.app == "getting_started"
+    )
+    script = apply_repo / update_layout.MNGR_ASSETS_SCRIPT
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("")
+    assets = apply_repo / update_layout.MNGR_ASSETS_DIR
+    apply_runner = _apply_runner(_FRONTEND_DIFF + _BACKEND_MANIFEST_DIFF, apply_repo)
+
+    def fetch(argv: list[str]) -> None:
+        if argv == ["bash", str(script)]:
+            (assets / "apps").mkdir(parents=True, exist_ok=True)
+
+    apply_runner.on_command = fetch
+    assert _apply_keeping_the_rollback_point(apply_runner, apply_repo) == 0
+    assert assets.exists() and (apply_repo / getting_started.index_path).exists()
+    runner = _rollback_runner(apply_repo)
+
+    def revert(argv: list[str]) -> None:
+        if argv[:2] == ["git", "revert"]:
+            script.unlink()
+            (apply_repo / getting_started.frontend_dir / "package.json").unlink()
+
+    runner.on_command = revert
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert not assets.exists()
+    assert not (apply_repo / getting_started.static_dir).exists()
+    assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
 
 
 @pytest.mark.parametrize(

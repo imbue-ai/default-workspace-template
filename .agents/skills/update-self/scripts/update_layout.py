@@ -83,6 +83,10 @@ PYPROJECT_PATH = "pyproject.toml"
 # gitignored system/vendor/mngr-assets the frontends and docs/system/style_guide.md read.
 MNGR_ASSETS_SCRIPT = "system/scripts/fetch_mngr_assets.sh"
 
+# Where that script writes, and the staging directory it swaps in from.
+MNGR_ASSETS_DIR = "system/vendor/mngr-assets"
+MNGR_ASSETS_STAGING_DIR = f"{MNGR_ASSETS_DIR}.tmp"
+
 MNGR_TOOL_NAME = "imbue-mngr"
 
 MNGR_EXECUTABLE = "mngr"
