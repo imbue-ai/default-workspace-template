@@ -5158,6 +5158,8 @@ def test_a_new_chat_claims_a_spare_still_starting_and_becomes_it_once_its_harnes
         provisional = manager.get_provisional_chat(created.chat_id)
         assert provisional is not None and provisional.phase is ProvisionalChatPhase.CREATING
         assert manager.get_chat_snapshots() == []
+        # Past a few of the harness polls, the claimed chat is still waiting for its harness.
+        assert not manager._creation_settled_by_chat[created.chat_id].wait(timeout=1.0)
         assert sent == []
 
         _mark_harness_ready(tmp_path, booting.chat_id)

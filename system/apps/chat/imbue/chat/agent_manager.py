@@ -3306,20 +3306,17 @@ class AgentManager:
         threading.Thread(target=self.ensure_spare_chat, daemon=True, name="ensure-spare-chat").start()
 
     def _wait_for_spare_harness(self, spare: SpareChatAgent, harness: HarnessType) -> bool:
-        """Wait until a created spare's harness accepts input, or a chat claims it; False when neither
-        happens within ``SPARE_CHAT_BOOT_TIMEOUT_SECONDS`` or the app is stopping.
+        """Wait until a created spare's harness accepts input; False when it does not within
+        ``SPARE_CHAT_BOOT_TIMEOUT_SECONDS`` or the app is stopping.
 
         ``mngr create`` with no message returns before the harness is up, and a spare handed over
-        then takes its chat's first message into a harness still booting.
+        then takes its chat's first message into a harness still booting. A spare a chat claimed
+        waits the same way: its chat is settled only once the harness is up.
         """
         spec = get_harness_spec(harness)
         state_dir = self._get_agent_state_dir(str(spare.chat_id))
         deadline = time.monotonic() + SPARE_CHAT_BOOT_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
-            with self._lock:
-                current = self._spare_locked(spare.chat_id)
-            if current is None or current.phase is not SpareChatPhase.CREATING:
-                return True
             if not is_harness_starting_up(state_dir, spec.startup_ready_marker, spec.process_started_marker_filename):
                 return True
             if self._shutdown_event.wait(timeout=SPARE_CHAT_BOOT_POLL_SECONDS):
