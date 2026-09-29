@@ -322,6 +322,37 @@ another account in that menu switches the chat to it (through the dialog, or at
 once for a chat with nothing to hand over -- see the switch above).
 `system/scripts/migrate_claude_auth.py` imports this package from the root venv.
 
+A Claude or ChatGPT sign-in finishes in the user's own browser. The CLI (`claude
+auth login`, or a short-lived `codex app-server` for ChatGPT) runs with
+`system/scripts/minds_browser_shim` as `$BROWSER`, which records the page it
+would open; the flow offers it as `relay_url`, and the chooser hands it to the
+minds desktop app (`minds:provider-sign-in` in the embed contract; the chat root passes the desktop app's answer, `minds:provider-sign-in-ack`, down to the chat page that asked, since the shell frames the root and not the page). The desktop
+app opens the page and listens on the loopback port it calls back to, posting
+the callback to `POST /api/accounts/flow/<flow_id>/callback`. That route takes
+the flow's own callback once, replays it against the CLI here
+(`harnesses/sign_in_relay.py`), waits briefly for the flow to settle, and
+answers with the flow's status and provider name; the desktop app turns that
+into the page the browser ends on. The CLI's own answer is not passed back,
+since claude sends the browser to its success page before its token exchange
+has succeeded. When a flow ends the chooser sends `minds:provider-sign-in-end`,
+so the desktop app frees the port.
+
+Every way in stays reachable. With no desktop app to relay, Claude falls back to
+pasting the code its page shows, and ChatGPT to its one-time-code login. While
+the browser is out ("Finish signing in to <provider> in your browser", with
+"Try again", which reopens the same sign-in page, and "Try another way"), "Try another way" shows Claude's code steps for the same
+sign-in (the CLI takes whichever code arrives first) or starts ChatGPT's code
+login, alongside the lane's other methods; a failed sign-in offers the same. A
+Claude sign-in succeeds on the CLI's clean exit with its success line, or, if
+the line was reworded, on its own probe; a denial the browser reports says
+access wasn't approved (claude.ai's own Deny reports nothing, so the chooser
+keeps waiting with Try again). A ChatGPT code login that ChatGPT refuses says to turn on device code
+sign-in for Codex in ChatGPT's security settings. "Sign in again" uses the kind
+of credential the account already holds (`reauth_method` on each account row).
+
+Only the workspace's owner can deliver a relayed callback: the callback route
+answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
+
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare
 create the Imbue Studio app's chats fall back to on a template whose script has no

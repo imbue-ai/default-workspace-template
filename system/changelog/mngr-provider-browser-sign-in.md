@@ -1,0 +1,1 @@
+- New `system/scripts/minds_browser_shim`, the `$BROWSER` a provider sign-in CLI runs in the workspace: it records the page to open for the chat app to hand to the minds desktop app.
