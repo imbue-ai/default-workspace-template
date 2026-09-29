@@ -1,10 +1,11 @@
-"""The spare chat agent: one agent kept started on the account a new chat would get, so a new chat starts at once.
+"""The spare chat agents: a small pool kept started on the account a new chat would get, so a new chat starts at once.
 
 Starting a chat's agent (``mngr create``: provisioning, the harness booting, its readiness
 signal) takes seconds, and a first message sent into a chat that is still starting waits behind
-it ("Connecting..."). So the chat app keeps one agent already started on the terms the next
-new chat would get (``SpareChatTerms``), hidden from every listing, and hands it to the next
-``create_chat`` those terms fit; a new spare is started as soon as one is taken. The spare's id
+it ("Connecting..."). So the chat app keeps a pool of agents already started on the terms the
+next new chat would get (``SpareChatTerms``), hidden from every listing, and hands one to each
+``create_chat`` those terms fit: a booted one when there is one, else one still booting, which
+is still ahead of a create of its own. The pool is topped up as spares are taken. A spare's id
 is minted as the id of the chat it will become (a chat's id is its first agent's), so
 ``MINDS_CHAT_ID`` and every label baked in at its create are already right when it is handed
 over, and the hand-over itself runs no mngr command.
@@ -42,10 +43,12 @@ _SPARES_KEY: Final[str] = "spares"
 class SpareChatPhase(UpperCaseStrEnum):
     """Where a spare agent is in its life."""
 
-    # Its ``mngr create`` is running.
+    # Its ``mngr create`` is running, or its harness has not said it accepts input yet.
     CREATING = auto()
-    # Started and waiting for a new chat to take it.
+    # Its harness accepts input; waiting for a new chat to take it.
     READY = auto()
+    # Taken by a new chat while still being created: it becomes that chat once its harness is up.
+    CLAIMED = auto()
     # No longer wanted (its terms went stale, its process died, or its create failed); its
     # ``mngr destroy`` is due or running.
     DISCARDING = auto()
@@ -110,14 +113,17 @@ class SpareChatStore(MutableModel):
 @pure
 def spares_after_restart(spares: Sequence[SpareChatAgent]) -> tuple[SpareChatAgent, ...]:
     """The spares a build starts from: a create that was running when this app stopped did not finish
-    here, so its agent (made or half-made) is discarded rather than trusted."""
+    here, so its agent (made or half-made) is discarded rather than trusted, and so is one a chat had
+    claimed, whose chat went with the provisional record this app held in memory."""
     return tuple(
-        spare.with_phase(SpareChatPhase.DISCARDING) if spare.phase is SpareChatPhase.CREATING else spare
+        spare.with_phase(SpareChatPhase.DISCARDING)
+        if spare.phase in (SpareChatPhase.CREATING, SpareChatPhase.CLAIMED)
+        else spare
         for spare in spares
     )
 
 
 @pure
-def current_spare(spares: Sequence[SpareChatAgent]) -> SpareChatAgent | None:
-    """The spare being created or waiting to be taken; spares being discarded do not count."""
-    return next((spare for spare in spares if spare.phase is not SpareChatPhase.DISCARDING), None)
+def pooled_spares(spares: Sequence[SpareChatAgent]) -> tuple[SpareChatAgent, ...]:
+    """The spares that count toward the pool: being created or waiting to be taken."""
+    return tuple(spare for spare in spares if spare.phase in (SpareChatPhase.CREATING, SpareChatPhase.READY))

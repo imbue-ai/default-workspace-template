@@ -215,6 +215,9 @@ class AuthFlowService:
     # Returns nothing: the restart runs on its own thread, because it is serial subprocesses
     # with a 60s timeout each and this service holds one lock across every route.
     _restart_bound_agents: Callable[[str], None]
+    # Told the id of every account a sign-in commits, so the chat app can start its spare agents
+    # (``spare_chat.py``) at once rather than at its next sweep. Must return at once, like the restart.
+    _on_account_committed: Callable[[str], None]
     _lock: threading.Lock
     _session: _Session | None
     _spawner: Callable[..., Any]
@@ -228,6 +231,7 @@ class AuthFlowService:
         spawner: Callable[..., Any] | None = None,
         probe: Callable[[HarnessType, Path], SignedIn] | None = None,
         restart_bound_agents: Callable[[str], None] | None = None,
+        on_account_committed: Callable[[str], None] | None = None,
     ) -> "AuthFlowService":
         """`spawner` stands in for `spawn_pty`, `probe` for `is_signed_in`.
 
@@ -244,6 +248,7 @@ class AuthFlowService:
         service._spawner = spawner or spawn_pty
         service._probe = probe or is_signed_in
         service._restart_bound_agents = restart_bound_agents or (lambda _account_id: None)
+        service._on_account_committed = on_account_committed or (lambda _account_id: None)
         return service
 
     # lifecycle
@@ -514,7 +519,9 @@ class AuthFlowService:
             account_id, path = accounts.mint_account_dir(self._home)
             build_account_binding(lane.harness).seed_account(path, self._work_dir)
             write_claude_env(path, managed_env)
-            return accounts.commit_account(account_id, lane.id, ADOPTED_DISPLAY, self._home)
+            account = accounts.commit_account(account_id, lane.id, ADOPTED_DISPLAY, self._home)
+            self._on_account_committed(account.id)
+            return account
 
     def poll(self, flow_id: str) -> FlowStatus:
         with self._lock:
@@ -653,6 +660,7 @@ class AuthFlowService:
             # poll, submit and abort for eight minutes. The user could not even close the modal,
             # because the abort needs the same lock.
             self._restart_bound_agents(account.id)
+        self._on_account_committed(account.id)
         session.state = FlowState.OK
         self._teardown_locked(session, keep_folder=True)
         return FlowStatus(state=FlowState.OK, account_id=account.id)

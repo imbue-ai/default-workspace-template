@@ -541,6 +541,30 @@ def test_a_successful_re_auth_restarts_the_chats_bound_to_that_account(tmp_path:
     assert restarted == [account.id]
 
 
+def test_every_committed_sign_in_is_reported_and_a_failed_one_is_not(tmp_path: Path) -> None:
+    """The chat app starts its spare agents for new chats the moment an account is committed."""
+    verdicts = [SignedIn.YES, SignedIn.YES, SignedIn.NO]
+    committed: list[str] = []
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: verdicts.pop(0),
+        on_account_committed=committed.append,
+    )
+    started = service.start("opencode-go", "api_key")
+    service.submit_key(started.flow_id, "first-key-6621", "opencode-go")
+    (account,) = read_index(tmp_path).accounts
+    assert committed == [account.id]
+
+    again = service.start("opencode-go", "api_key", account_id=account.id)
+    service.submit_key(again.flow_id, "second-key-6621", "opencode-go")
+    assert committed == [account.id, account.id]
+
+    failing = service.start("opencode-go", "api_key", account_id=account.id)
+    assert service.submit_key(failing.flow_id, "bad-key-6621", "opencode-go").state is FlowState.FAILED
+    assert committed == [account.id, account.id]
+
+
 def test_a_failed_re_auth_restarts_nothing(tmp_path: Path) -> None:
     """The account still holds the credential it had, so its chats are working. Restarting
     them would interrupt turns for no reason."""
