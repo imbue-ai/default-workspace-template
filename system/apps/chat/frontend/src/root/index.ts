@@ -145,7 +145,7 @@ function select(chatId: string | null): void {
 /** Fill an empty slot now that something it depends on changed (the chat list arrived, the root came on screen, the
  *  layout left the phone width). */
 function fillSlot(): void {
-  if (selectedChatId === null) select(null);
+  if (selectedChatId === null && slotFillFor(null).kind !== "keep") select(null);
 }
 
 function openChatForEmptyList(): void {
@@ -313,8 +313,12 @@ function onChatsUpdated(): void {
       if (!isKept(heldId)) pool.destroy(heldId);
     }
   }
-  if (selectedChatId === null || !isKept(selectedChatId)) select(null);
-  else reportLocation();
+  if (selectedChatId !== null && !isKept(selectedChatId)) {
+    select(null);
+    return;
+  }
+  fillSlot();
+  reportLocation();
 }
 
 const ChatRoot: m.Component = {
