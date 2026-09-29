@@ -300,44 +300,49 @@ a `question` gate for the lead -- never a silent adaptation.
 
 ### 4d. Decide whether running agents need a restart
 
-The apply restarts the services, never the agents: every chat and worker keeps the harness
-process it had, which loaded its binary and some of its config once, when it started. After a
-successful apply the lead restarts them all (itself last) when the update changes what those
-processes loaded. **Whether that happens is decided by this rule, from the files the update
-changed** (`git diff --name-only "$BASE" "$TARGET_REF"`); record the verdict and its evidence in
-your report.
+The apply restarts the services, never the agents: every chat and worker keeps
+the harness process it had, which loaded its binary and some of its config
+once, when it started. After a successful apply the lead restarts them all
+(itself last) when the update changes what those processes loaded. **Whether
+that happens is decided by this rule, from the files the update changed**
+(`git diff --name-only "$BASE" "$TARGET_REF"`); record the verdict and its
+evidence in your report.
 
 A restart is **needed** when the update changes any of:
 
-- **A harness version pin**: `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `PI_VERSION`,
-  `PI_SUBAGENTS_VERSION`, `PI_WEB_ACCESS_VERSION` or `OPENCODE_VERSION` in
-  `system/scripts/setup_system.sh`, the versioned Antigravity installer it runs
-  (`system/scripts/agy_install-<version>.sh`, agy's only version pin), or an `[agent_types.*]`
-  `version` in `.mngr/settings.toml`. The apply's provisioner installs the new binary, but a
-  running agent keeps executing the old one.
-- **Code a harness loads into its process at start**: `.pi/extensions/**` (pi loads every
-  extension when it starts), and a harness extension or plugin tree like it that the update
-  adds.
+- **A harness version pin**: `CLAUDE_CODE_VERSION`, `CODEX_VERSION`,
+  `PI_VERSION`, `PI_SUBAGENTS_VERSION`, `PI_WEB_ACCESS_VERSION` or
+  `OPENCODE_VERSION` in `system/scripts/setup_system.sh`, the versioned
+  Antigravity installer it runs (`system/scripts/agy_install-<version>.sh`,
+  agy's only version pin), or an `[agent_types.*]` `version` in
+  `.mngr/settings.toml`. The apply's provisioner installs the new binary, but
+  a running agent keeps executing the old one.
+- **Code a harness loads into its process at start**: `.pi/extensions/**` (pi
+  loads every extension when it starts), and a harness extension or plugin
+  tree like it that the update adds.
 - **Other harness config whose live reload you cannot establish** (for example
-  `.codex/hooks.json`): a harness that re-reads it on its own needs no restart, but only its
-  documentation can tell you that, and when it does not say, count it as loaded at start. A
-  restart of an idle agent is cheap; an agent left on half-applied config is not.
+  `.codex/hooks.json`): a harness that re-reads it on its own needs no
+  restart, but only its documentation can tell you that, and when it does not
+  say, count it as loaded at start. A restart of an idle agent is cheap; an
+  agent left on half-applied config is not.
 
 A restart is **not needed** for:
 
-- **`.claude/settings.json`**: Claude Code's file watcher picks up edits to it, hooks
-  included, in a running session.
-- **A script a hook or tool runs** (`system/scripts/agent_*.sh`, a guard's checker): each call
-  runs the file as it is on disk.
-- **An agent's launch command, arguments or environment** (`[agent_types.*]` in
-  `.mngr/settings.toml` other than `version`), and files mngr writes into an agent's state
-  directory when it creates the agent (a move of the mngr pin can change these): mngr records
-  both at create, and a restart replays them unchanged. They reach only agents created after
-  the update. When that matters to the user, say so under **Agent restarts** so the results
-  message can offer a fresh chat.
+- **`.claude/settings.json`**: Claude Code's file watcher picks up edits to
+  it, hooks included, in a running session.
+- **A script a hook or tool runs** (`system/scripts/agent_*.sh`, a guard's
+  checker): each call runs the file as it is on disk.
+- **An agent's launch command, arguments or environment** (`[agent_types.*]`
+  in `.mngr/settings.toml` other than `version`), and files mngr writes into
+  an agent's state directory when it creates the agent (a move of the mngr pin
+  can change these): mngr records both at create, and a restart replays them
+  unchanged. They reach only agents created after the update. When that
+  matters to the user, say so under **Agent restarts** so the results message
+  can offer a fresh chat.
 
-When the rule is unclear for a file (a new harness, a config file whose loading you cannot
-place), that is a `question` gate (Step 6), and the fallback is a restart.
+When the rule is unclear for a file (a new harness, a config file whose
+loading you cannot place), that is a `question` gate (Step 6), and the
+fallback is a restart.
 
 ## 5. Gather the "what's new" inputs
 
@@ -409,10 +414,11 @@ Valid `name:` values:
     rebuild-only, with the version delta (and, for a user-created dependent,
     what your research turned up); a genuinely breaking, unapplyable change
     is a `stuck` report, not a `done`.
-  - **Agent restarts** -- the 4d verdict, `needed` or `not needed`, with the changed files
-    that decided it and, when needed, one plain line naming what the restart picks up (for
-    example "Claude Code 2.1.300" or "new pi command guards"); the lead passes that line
-    to the restart. Add any change that reaches only newly created agents.
+  - **Agent restarts** -- the 4d verdict, `needed` or `not needed`, with the
+    changed files that decided it and, when needed, one plain line naming what
+    the restart picks up (for example "Claude Code 2.1.300" or "new pi command
+    guards"); the lead passes that line to the restart. Add any change that
+    reaches only newly created agents.
   - **Validation** -- **which branch of the 4b scope rule applied, with its
     evidence** (each item's condition and whether it held; on a clean pull
     with no footprint, that nothing ran and why), then the suites, boots and
