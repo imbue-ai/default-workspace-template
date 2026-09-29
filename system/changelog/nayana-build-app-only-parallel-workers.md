@@ -16,3 +16,10 @@ nothing overlapped -- setup the orchestrator pays nothing for.
 Off is the flow exactly as it ran before, so the two are comparable on a real build. The
 flag is a `parse` argument rather than an environment variable, which keeps the choice a
 property of the commit a build ran on.
+
+One known inaccuracy, documented on `schedule_waves`: the wave schedule treats the
+5-worker cap as a batch boundary, while the live loop treats it as a concurrency limit and
+starts a held-back node as soon as a slot frees. Where six or more nodes are unblocked at
+once, a node the schedule shows alone in a trailing wave can lose its worker even though
+the build would have run it beside others. Accepted: it takes six simultaneously unblocked
+nodes to reach, and a node running with four others already has every slot the cap allows.

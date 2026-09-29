@@ -586,7 +586,13 @@ def test_waves_replay_the_order_the_ready_loop_would_take() -> None:
 
 
 def test_a_wave_is_capped_at_the_parallelism_limit() -> None:
-    """Six nodes with nothing to wait for run five then one, not six at once."""
+    """Six nodes with nothing to wait for are reported as five then one.
+
+    This pins the known inaccuracy `schedule_waves` documents rather than endorsing it:
+    the live loop starts the sixth as soon as a slot frees, so it really does run beside
+    the others, and `--only-parallel-workers` takes its worker away anyway. Accepted
+    because it needs six nodes unblocked at once, and because a node running with four
+    others already has every slot the cap allows."""
     access = {idx: [] for idx in range(6)}
     waves = plan_orchestration.schedule_waves(access)
     assert waves == [[0, 1, 2, 3, 4], [5]]
