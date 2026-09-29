@@ -3435,10 +3435,17 @@ class AgentManager:
         It stays hidden until then: it is untracked before it leaves the spares. A destroy mngr
         refuses while the agent is still tracked is retried by a later sweep, after the backoff.
         """
-        result = self._run_mngr_destroy((str(chat_id),))
+        try:
+            result = self._run_mngr_destroy((str(chat_id),))
+        except (OSError, ConcurrencyGroupError) as e:
+            is_destroyed = False
+            failure = str(e)
+        else:
+            is_destroyed = result.returncode == 0
+            failure = f"exit {result.returncode}: {result.stderr.strip()}"
         with self._lock:
-            is_gone = result.returncode == 0 or str(chat_id) not in self._agents
-        if result.returncode == 0:
+            is_gone = is_destroyed or str(chat_id) not in self._agents
+        if is_destroyed:
             self.remove_agent(str(chat_id))
         with self._lock:
             self._spare_ids_being_discarded.discard(chat_id)
@@ -3447,9 +3454,7 @@ class AgentManager:
             else:
                 self._spare_retry_not_before = time.monotonic() + SPARE_CHAT_RETRY_BACKOFF_SECONDS
         if not is_gone:
-            _loguru_logger.warning(
-                "Could not destroy spare agent {} (exit {}): {}", chat_id, result.returncode, result.stderr.strip()
-            )
+            _loguru_logger.warning("Could not destroy spare agent {} ({})", chat_id, failure)
 
     def wait_for_chat_creation(self, chat_id: ChatId, timeout: float) -> ChatCreationOutcome | None:
         """Wait for the ``mngr create`` behind ``create_chat`` to finish and say how it ended.

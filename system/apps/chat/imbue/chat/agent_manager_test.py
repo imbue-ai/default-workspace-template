@@ -5290,6 +5290,31 @@ def test_a_spare_whose_create_a_restart_cut_short_is_destroyed_and_replaced(
         manager.stop()
 
 
+def test_a_spare_whose_destroy_cannot_run_is_kept_for_a_later_sweep(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, _ = write_recording_mngr_binary(tmp_path)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        (stale,) = _wait_for_ready_spares(manager, 1)
+        Path(mngr_binary).unlink()
+        set_default_account(_openai_account(), is_default=True)
+
+        manager.ensure_spare_chat()
+
+        wait_until_true(
+            lambda: manager._spares == (stale.with_phase(SpareChatPhase.DISCARDING),)
+            and not manager._spare_ids_being_discarded,
+            timeout_seconds=15.0,
+            what="the undestroyed spare left for a later sweep",
+        )
+        assert manager._spare_retry_not_before > time.monotonic()
+        assert manager.get_agent_by_id(stale.chat_id) is not None
+    finally:
+        manager.stop()
+
+
 def test_a_spare_whose_create_fails_is_destroyed_and_the_next_waits_out_the_backoff(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
