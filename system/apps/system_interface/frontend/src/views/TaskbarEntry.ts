@@ -1,14 +1,13 @@
 /**
- * One taskbar entry (plan section 4.10): a window of the active desktop, drawn as the app's own
- * icon tile at the launcher field's height, dimmed while minimized, the focused one marked. A
- * click restores and raises, minimizes the focused window, or raises; a right click or long press
- * opens the entry's menu. A pinned entry in the ``avatar`` style draws the workspace's avatar in
- * place of the icon, wearing the current mood.
+ * One taskbar entry (plan section 4.10): a window of the active desktop, drawn as the app's own icon
+ * tile with the window's title beside it, dimmed while minimized, the focused one marked. A click
+ * restores and raises, minimizes the focused window, or raises; a right click or long press opens
+ * the entry's menu. A pinned entry in the ``avatar`` style draws the workspace's avatar in place of
+ * the icon, wearing the current mood.
  *
- * The title is the hover tooltip rather than a label beside the icon, and it is the one tooltip in
- * the workspace that skips the hover-intent pause: nothing is written on the entry, so the bubble
- * is not an aside about a control that already names itself -- it IS the name, and a pause before
- * it is the name arriving late.
+ * The icon says which app and the title says which window, so neither has to do both: the icon is
+ * smaller than the entry, and the title takes the room that leaves, truncated where the bar runs
+ * out. The hover bubble carries the whole of a truncated one.
  */
 
 import m from "mithril";
@@ -55,18 +54,25 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         "data-detached": entry.isDetached ? "true" : "false",
         "data-focused": entry.isFocused ? "true" : "false",
         "aria-pressed": entry.isFocused ? "true" : "false",
-        // The entry carries no text, so the title is its accessible name as well as its tooltip.
+        // The visible title names it; this is the same string, with the avatar's staleness note when
+        // there is one, so a reader is told what a looker can see.
         "aria-label": tooltip,
         class:
-          // The box is the hit area, not the drawing: it keeps the touch target the rest of the
-          // chrome uses while the tile inside stays square, which ``size-full`` on the art needs.
-          "taskbar-entry relative flex h-(--desk-taskbar-entry-size) min-w-(--desk-touch-target) shrink-0 " +
-          "items-center justify-center rounded-[32%] border-0 bg-transparent p-0 " +
+          // A labelled chip rather than a bare tile: the icon and the name sit in it, and the chip is
+          // what carries the states, since a tint behind an icon that no longer fills the entry has
+          // somewhere to show. Body text -- this is a name being read, not a dense list.
+          "taskbar-entry relative flex h-(--desk-taskbar-entry-size) min-w-(--desk-touch-target) max-w-48 " +
+          "shrink-0 items-center gap-2 rounded-md border px-2 text-(length:--font-size-body) " +
           "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-accent " +
-          (isMenuOpen ? "ring-2 ring-accent " : ""),
+          (entry.isFocused
+            ? "border-default bg-surface text-primary shadow-raised "
+            : "border-transparent hover:bg-fill-hover ") +
+          (isDimmed ? "text-faint " : entry.isFocused ? "" : "text-secondary ") +
+          (isMenuOpen ? "bg-fill-active " : ""),
         // The peek stands in the bubble's place and says more than it does, so the two never show at
-        // once. The accessible name is unaffected: that is the entry's, whatever is drawn above it.
-        ...hoverTooltipAttrs(isPeeked ? null : tooltip, "above", "instant"),
+        // once. The pause is the shared one again: the entry names itself now, so the bubble is an
+        // aside (the whole of a truncated title) rather than the only thing saying what this is.
+        ...hoverTooltipAttrs(isPeeked ? null : tooltip, "above"),
         // Only a minimized window peeks: a window already on the desktop is its own preview. Entering
         // any other entry ends the peek the one beside it started, so a sweep along the bar is clean.
         onmouseenter: () => onPeek(entry.isMinimized),
@@ -89,37 +95,23 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           "span",
           {
             // The icon brings its own tile (`docs/system/app-icons.md`), so this box paints nothing
-            // and pads nothing: a surface behind it would frame the tile in a second one. The
-            // corner is the tile's own 32 per cent, and depth says which window is focused, since a
-            // tint behind an opaque tile cannot be seen. The text colour still matters: the
-            // built-in glyph for a window whose app the registry no longer has is the one drawing
-            // here that takes it. Nothing answers the hover: the tooltip does that, at once.
+            // and pads nothing: a surface behind it would frame the tile in a second one, and the
+            // corner is the tile's own 32 per cent. The chip around it carries the states now; what
+            // is left here is the fade for a window that is out of sight.
             class:
-              "taskbar-entry-tile flex size-(--desk-taskbar-entry-size) items-center justify-center " +
-              (isAvatar
-                ? "rounded-2xl [&>img]:size-full "
-                : "rounded-[32%] [&>svg]:size-full " +
-                  // One step of elevation, not two. The bar leaves 6px around a tile, and the
-                  // --shadow-overlay a floating entry wears reaches 13px below itself: on the
-                  // wallpaper it has the whole backdrop to fall on, here it would be cut off by
-                  // the strip that scrolls. So the focused one is raised and the rest lie flat,
-                  // which is the same relation inside the room there is.
-                  (entry.isFocused ? "text-primary shadow-raised " : "text-secondary ")) +
+              "taskbar-entry-tile flex size-(--desk-taskbar-entry-icon) shrink-0 items-center justify-center " +
+              (isAvatar ? "rounded-2xl [&>img]:size-full " : "rounded-[32%] [&>svg]:size-full ") +
               (isDimmed ? "opacity-70" : ""),
           },
           image,
         ),
+        m("span", { class: "taskbar-entry-title min-w-0 truncate" }, entry.title),
         // The mark of a window shown in its own desktop window, so the dimmed entry is not read as
-        // minimized. A badge on the tile's corner rather than a glyph beside it: there is no room
-        // beside it any more.
+        // minimized. Beside the name, where there is room for it again.
         entry.isDetached
           ? m(
               "span",
-              {
-                class:
-                  "absolute right-0 bottom-0 flex items-center rounded-full bg-surface p-px text-faint shadow-raised",
-                "aria-label": "In its own window",
-              },
+              { class: "flex shrink-0 items-center text-faint", "aria-label": "In its own window" },
               m.trust(icon("external-link", { size: DETACHED_GLYPH_SIZE })),
             )
           : null,

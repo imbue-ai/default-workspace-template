@@ -10,9 +10,12 @@
 :root {
   --desk-title-bar-height: 36px;
   --desk-taskbar-height: 48px;
-  /* A taskbar entry's icon tile. The launcher field's height, so the field and the entries beside
-     it read as one row of controls rather than two sizes of thing. */
+  /* A taskbar entry's height. The launcher field's, so the field and the entries beside it read as
+     one row of controls rather than two sizes of thing. */
   --desk-taskbar-entry-size: 36px;
+  /* The app's icon inside an entry, which carries its window's name beside it: the icon says which
+     app, the name says which window, and neither has to be big enough to do both. */
+  --desk-taskbar-entry-icon: 24px;
   --desk-cell-width: 96px;
   --desk-cell-height: 112px;
   --desk-grid-inset: 16px;

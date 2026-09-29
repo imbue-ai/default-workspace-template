@@ -19,7 +19,9 @@ import type { LauncherMenuRows, LauncherRow, TextRow } from "../reducers/launche
 import { isRowEnabled } from "../reducers/launcherRows";
 import { appGlyph, glyph } from "./glyphs";
 
-const GLYPH_SIZE = 15;
+/** The size every glyph in a row is drawn at: the app's icon, and the built-in glyphs beside it. It
+ *  fills the cell that holds it, so an app's tile reads as the tile it wears everywhere else. */
+const GLYPH_SIZE = 24;
 const NO_MATCH_MESSAGE = "No apps or windows match";
 /** How many words of the typed text a free-text row's caption repeats. */
 const PREVIEW_WORD_COUNT = 4;
@@ -51,11 +53,11 @@ export function textPreview(text: string): string {
 }
 
 const ROW_CLASS =
-  "launcher-row flex h-9 w-full items-center gap-2 px-3 text-left text-(length:--font-size-row) " +
+  "launcher-row flex h-10 w-full items-center gap-2 px-3 text-left text-(length:--font-size-body) " +
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ";
 const CAPTION_CLASS = "type-helper shrink-0 truncate text-faint";
 const ENTER_KEY_LABEL = "Enter";
-const NO_MATCH_CLASS = "launcher-no-matches m-0 px-3 py-1 text-(length:--font-size-row) text-faint";
+const NO_MATCH_CLASS = "launcher-no-matches m-0 px-3 py-1 text-(length:--font-size-body) text-faint";
 
 function rowAttrs(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.Attributes {
   const isEnabled = isRowEnabled(row);
@@ -77,7 +79,7 @@ function rowAttrs(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.
 }
 
 function glyphCell(markup: string): m.Vnode {
-  return m("span", { class: "flex w-5 shrink-0 items-center justify-center text-faint" }, m.trust(markup));
+  return m("span", { class: "flex size-6 shrink-0 items-center justify-center text-faint" }, m.trust(markup));
 }
 
 /** The key captions a row wears: the secondary text row's chord, and ``Enter`` on the highlighted row. */
