@@ -155,11 +155,11 @@ def test_submit_credentials_rejects_empty_body() -> None:
 def test_submit_credentials_mints_an_account_rather_than_overwriting_the_shared_login(
     tmp_path: Path,
 ) -> None:
-    """A credential obtained outside the chooser becomes an account of its own.
+    """The Imbue path: a credential someone else obtained becomes an account of its own.
 
     It used to overwrite the workspace's shared settings.json and restart every claude
     agent to make them see it. Now the paste lands in a fresh account folder, so nothing
-    running is disturbed and the account's existence is the signed-in flag.
+    running is disturbed and the account's existence is the signed-in-with-Imbue flag.
     """
     flows = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work")
 
