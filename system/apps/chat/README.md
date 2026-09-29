@@ -207,8 +207,9 @@ chat app keeps a pool of spare agents (one by default, `SPARE_CHAT_POOL_SIZE` in
 new chat starts in), each created silent under the id and "Chat N" name of the
 chat it will become, and hidden from every chat listing, send, and route. A
 spare is ready once its harness says it accepts input, not when `mngr create`
-returns. A create that fits those terms and names no chat id, name, labels, or
-templates of its own is handed a ready spare instead of running `mngr create`:
+returns. A create that fits those terms and names no chat id, name, labels,
+templates, or installation-check waiver of its own is handed a ready spare
+instead of running `mngr create`:
 the chat is listed at once, running, so its first message never waits on
 "Connecting...". With none ready it claims one still starting, and is
 provisional until that one is up, which is sooner than a create of its own that

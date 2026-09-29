@@ -5176,7 +5176,7 @@ def test_a_new_chat_claims_a_spare_still_starting_and_becomes_it_once_its_harnes
         manager.stop()
 
 
-@pytest.mark.parametrize("kind", ["another account", "an explicit name", "caller labels"])
+@pytest.mark.parametrize("kind", ["another account", "an explicit name", "caller labels", "a check waiver"])
 def test_a_new_chat_the_spares_do_not_fit_is_created_and_the_spares_are_kept(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str
 ) -> None:
@@ -5192,6 +5192,8 @@ def test_a_new_chat_the_spares_do_not_fit_is_created_and_the_spares_are_kept(
             created = manager.create_chat("Budget review 3308")
         elif kind == "caller labels":
             created = manager.create_chat("", labels={"auto_open": "true"})
+        elif kind == "a check waiver":
+            created = manager.create_chat("", is_installation_check_skipped=True)
         else:
             raise AssertionError(kind)
 
