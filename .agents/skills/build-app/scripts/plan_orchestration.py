@@ -259,10 +259,22 @@ def reduce_access_lists(
 def schedule_waves(access_by_node: dict[int, list[int]]) -> list[list[int]]:
     """The groups of nodes that run at the same time, in the order they start.
 
-    This is what the orchestrator's own ``ready`` loop does, replayed ahead of time:
-    take every node whose access list is already done, up to the parallelism cap, run
-    them, then repeat. The cap is why a wave can be smaller than the set of unblocked
-    nodes, and why the leftovers form a wave of their own.
+    The access lists fix these groups: take every node whose access list is already
+    done, up to ``MAX_RUNNING_NODE_COUNT``, then repeat with those counted as done.
+
+    KNOWN INACCURACY, where more than ``MAX_RUNNING_NODE_COUNT`` nodes are unblocked at
+    once. This treats the cap as a batch boundary -- the wave runs, finishes, and the
+    leftovers start after it -- while the live ``ready`` loop treats it as a concurrency
+    limit and starts a leftover the moment any slot frees. So seven unblocked nodes are
+    reported as a wave of five and a wave of two, when in the build the sixth and
+    seventh start alongside whichever of the first five are still going.
+
+    The consequence for ``find_nodes_worth_a_worker`` is that a leftover wave of exactly
+    one is called solo and loses its worker, though in the build it would have had
+    company. A plan holds at most ``MAX_NODE_COUNT`` nodes, so this needs six or more
+    nodes unblocked at the same time to bite. Accepted rather than fixed: the cap is
+    worth having, and a node that runs with four others already has all the parallelism
+    the cap allows.
     """
     waves: list[list[int]] = []
     done: set[int] = set()
