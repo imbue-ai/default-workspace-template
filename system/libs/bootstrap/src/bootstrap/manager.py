@@ -198,7 +198,7 @@ def _initialize_workspace_main_branch() -> None:
     with the desktop client's `_rsync_worktree_over_clone` content sitting
     as uncommitted changes on top of the shallow clone's tip.
 
-    We want every new minds workspace to start out on a single clean
+    We want every new Imbue Studio workspace to start out on a single clean
     `main` branch the user can git-log / push from without having to
     reason about the per-host mngr/* branch. So before the chat agent
     is created, we:
@@ -338,7 +338,7 @@ def _request_timezone(request: urllib.request.Request) -> str:
 
 
 def _fetch_user_timezone() -> str:
-    """Fetch the user's IANA timezone name from the minds desktop client.
+    """Fetch the user's IANA timezone name from the Imbue Studio desktop client.
 
     GETs /api/v1/timezone through the latchkey gateway's minds-api-proxy using
     the gateway env vars mngr injects into the agent environment. Timezone-at-
@@ -385,7 +385,7 @@ def _apply_container_timezone(
     """Point /etc/localtime and /etc/timezone at the named IANA zone.
 
     The name is validated by loading it with ``ZoneInfo`` -- the same check the
-    minds desktop client applies before serving the value -- which by spec
+    Imbue Studio desktop client applies before serving the value -- which by spec
     rejects absolute paths and ``..`` components (so a malicious response
     cannot traverse out of the zoneinfo dir) and proves the zone is real. The
     ``is_file`` check below still matters: ZoneInfo may resolve a zone from

@@ -8,7 +8,7 @@ carries the encrypted bytes to the region's relay.
 ## How it works
 
 The supervisord program `share-gateway` runs `share_gateway.runner`, which
-watches `data/.secrets/share.env` (written by the minds desktop app at
+watches `data/.secrets/share.env` (written by the Imbue Studio desktop app at
 share-enable, removed at unshare). While the materials are present it keeps
 three things running:
 
@@ -107,7 +107,7 @@ written to `data/.state/share_gateway/status.json`:
  "next_retry_at": "2026-09-13T12:01:00+00:00", "updated_at": "..."}
 ```
 
-`state` is `up`, `retrying`, or `halted`. The minds desktop client reads this
+`state` is `up`, `retrying`, or `halted`. The Imbue Studio desktop client reads this
 file to explain a share that is not live yet; it is removed at unshare.
 
 ## Grants
@@ -143,7 +143,7 @@ entry is an invitation: once a visitor with that verified email is admitted
 (at the login callback or on any later request), the gateway rewrites the
 document to hold their user id instead -- the email leaves every scope's
 `emails` and the user id joins that scope's `users` -- so a later email change
-on their account never revokes what the owner granted. The minds desktop's
+on their account never revokes what the owner granted. The Imbue Studio desktop's
 grants editor writes `users` entries directly when it can resolve an address
 to an account.
 

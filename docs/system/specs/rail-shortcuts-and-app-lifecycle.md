@@ -191,7 +191,7 @@ Verb changes:
 - The app's destructive-slot verb in `objectMenu.ts` becomes **"Stop <name>"** (power icon, reversible), wired to the stop endpoint; a stopped app's menus offer **"Start <name>"** instead.
   Stop needs no confirmation dialog: it is reversible in one click, and the current Quit confirmation existed to explain irreversibility that no longer applies.
 - **Deregister leaves the UI entirely.**
-  Real removal (delete the supervisord block, the package, the registry row) is the mind's job via the `update-app` skill, matching the product stance that the agent maintains `system/`.
+  Real removal (delete the supervisord block, the package, the registry row) is the agent's job via the `update-app` skill, matching the product stance that the agent maintains `system/`.
   The `/api/apps/<name>/deregister` endpoint remains available for agent tooling, though nothing currently depends on it: its only caller today is the UI verb this change removes, and `serve_isolated_instance.py down` deregisters through `forward_port.py --remove` directly.
 
 Open app tabs of a stopped app show a dead iframe today; render a lightweight "stopped" placeholder with a Start button instead of the raw connection error (implementation may reuse the existing friendly-error page shape).
@@ -223,7 +223,7 @@ Each phase is independently shippable, in order:
 - Custom shortcut kinds (specific chat, skill, URL): schema accommodates them; nothing is built.
 - Uninstall UI: deliberately excluded (see Part B).
 - Multi-pane addressing improvements (per-pane member refs for apps): accepted as a known ambiguity.
-- minds desktop client changes: none needed; stopped rows keep their labels so local and shared origins stay stable across stop/start.
+- Imbue Studio desktop client changes: none needed; stopped rows keep their labels so local and shared origins stay stable across stop/start.
 
 ## Implementation notes (verification owed, not open design)
 

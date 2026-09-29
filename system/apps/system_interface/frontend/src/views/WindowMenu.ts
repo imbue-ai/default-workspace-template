@@ -1,7 +1,7 @@
 /**
  * The verbs a window's menu, and a taskbar entry's context menu, offer: only what the shell
  * itself can do (concepts.md section 2.2). Move and resize opens the grid of backdrop zones the
- * maximize control opens on hover, as a submenu; Share asks the minds chrome
+ * maximize control opens on hover, as a submenu; Share asks the Imbue Studio chrome
  * to open its share settings for the app (never for a critical app); Quit closes every window of
  * the app and stops its program where the workspace can honestly do so (the stop-when-no-windows
  * spec, section 7); Close removes the window for

@@ -190,7 +190,7 @@ Closing a file viewer window destroys nothing.
 The manifest gains an optional `window_closed_path` (a launch-path-shaped value: rooted, no query string).
 `forward_port.py` copies it onto the registry row and `RegistryRow` reads it; a row without it means the app wants no hint.
 
-Whenever a window of an app closes, for any reason (the close control, the window and taskbar menus, the minds close chord, `layout.py close`, a desktop's deletion), the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's registered URL plus its `window_closed_path`, from a daemon thread, with a 2 second timeout, after the close has been written and broadcast.
+Whenever a window of an app closes, for any reason (the close control, the window and taskbar menus, the Imbue Studio close chord, `layout.py close`, a desktop's deletion), the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's registered URL plus its `window_closed_path`, from a daemon thread, with a 2 second timeout, after the close has been written and broadcast.
 A failed post is a debug log; the shell never waits for, retries, or acts on the answer, and the close is complete whether or not the app is up.
 The post goes only to an app that is running: a stopped app's port is the shell's own parker, which would wake the app to tell it a window closed ([stop-when-no-windows.md](stop-when-no-windows.md), decision 9); the app's next start sweeps the shell's windows anyway.
 The app's handler marks the resource the body's `path` names window-seen (the post is proof a window showed it), runs a sweep, and answers 204; what is shown now is read from the shell's desktops, never inferred from the body.

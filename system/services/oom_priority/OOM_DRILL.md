@@ -67,8 +67,11 @@ Watch earlyoom act:
 ```bash
 supervisorctl tail -f earlyoom stderr
 # expect: sending SIGTERM to process <pid> ... "python3": oom_score 0, oom_score_adj 900,
-#         badness ... KiB, VmRSS ... MiB, ordering kernel_badness, ...
-# (gVisor serves every oom_score as 0; earlyoom ranks by the badness instead.)
+#         badness ... KiB, VmRSS ... MiB, counted RSS ... MiB (smaps_anonymous),
+#         ordering kernel_badness, ...
+# (gVisor serves every oom_score as 0; earlyoom ranks by the badness instead,
+# counting the smaps Anonymous total because gVisor's VmRSS counts whole
+# mapped ranges.)
 ```
 
 ## 3. Confirm the kill was recorded

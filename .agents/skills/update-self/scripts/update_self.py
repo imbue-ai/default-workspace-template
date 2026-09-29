@@ -10,11 +10,11 @@ analysis). This script owns the parts that are *deterministic* and therefore
 belong in tested code rather than agent prose:
 
 ``resolve-target``
-    Resolve the ref to update to. Default is the release the minds app driving
+    Resolve the ref to update to. Default is the release the Imbue Studio app driving
     this workspace was built against -- the ``minds-v*`` tag it names, and only
-    that one; an explicit override may name a specific tag, ``main``, or any
-    other ref, and is reported back as exceeding the ceiling when it cannot be
-    proven to sit at or below it.
+    that one; an explicit override may name a specific tag, an upstream branch
+    (qualified to ``upstream/<branch>``), or any other ref, and is reported back
+    as exceeding the ceiling when it cannot be proven to sit at or below it.
 
     The ceiling exists because a workspace's template ships the code the outer
     app talks to (the system interface, ``mngr``), so updating past
@@ -63,7 +63,7 @@ belong in tested code rather than agent prose:
 
 ``surface-chat-tab``
     Open this run's own chat window in the workspace UI, so a user sent into the
-    workspace by the minds app lands on the conversation performing the update.
+    workspace by the Imbue Studio app lands on the conversation performing the update.
     The interface can only place a window in front of a client that is connected,
     and the user may still be on their way in, so the command detaches a helper
     that retries ``layout.py open`` until one takes it (or a deadline passes)
@@ -74,7 +74,8 @@ belong in tested code rather than agent prose:
     the rest of the pass runs, at a single fixed path, and report whether it
     differs from the local copy. Normally that staged copy is the target ref's
     *own* copy (extracted from the already-fetched object); when the ref predates
-    the skill it is the local copy instead. Either way the fixed path is left
+    the skill it is the local copy instead. A ref that names no commit is refused
+    with nothing staged. Otherwise the fixed path is left
     populated with a runnable flow, so the lead and worker can dispatch against it
     by literal path without carrying any value across shell invocations. This is
     what lets the flow, after resolving the target, hand off to the update-self
@@ -82,6 +83,14 @@ belong in tested code rather than agent prose:
     update flow itself are applied live rather than being gated on the
     possibly-stale local copy. ``differs`` gates only which SKILL.md prose the
     lead follows, not the path.
+
+``bridge-history``
+    Give ``HEAD`` a merge base with the target when the workspace predates the
+    template's history rewrite: a ``git replace`` graft names the workspace's
+    fork point as a parent of its rewritten twin, for as long as the two
+    histories share no commit. A no-op for every other workspace, and the call
+    that drops the graft once a merge has landed. ``--drop`` removes the
+    recorded graft whatever the histories: the pass's teardown.
 
 ``apply``
     Land a prepared merge and make the live workspace consistent with it, as
@@ -120,11 +129,12 @@ The logic lives in the sibling modules, imported by name from this directory
 (the whole ``scripts/`` directory is staged and run as one unit):
 ``update_target`` (which ref to update to), ``update_classification`` (change
 classes and the apply plan), ``update_apply_contract`` (every path, phase,
-verdict and record the Mind app, bootstrap and the system interface read),
+verdict and record the Imbue Studio app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
-``update_environment``, ``update_probes``, ``update_ledger``, and
-``update_apply`` (the apply and recover orchestration). All of it is covered
-by ``update_self_test.py``.
+``update_environment``, ``update_probes``, ``update_ledger``,
+``update_history_bridge``, and ``update_apply`` (the apply and recover
+orchestration). All of it is covered by ``update_self_test.py`` and
+``test_update_history_bridge.py``.
 """
 
 from __future__ import annotations
@@ -160,6 +170,12 @@ from update_apply_contract import (
 from update_banding import protect_from_memory_shed
 from update_classification import classify_merge
 from update_environment import default_sweep_homes
+from update_history_bridge import (
+    DEFAULT_STATE_PATH,
+    HistoryBridgeError,
+    bridge_history,
+    drop_history_bridge,
+)
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
@@ -212,6 +228,22 @@ def _is_already_merged(ref: str, repo_root: Path) -> bool:
     return result.returncode == 0
 
 
+def _names_commit(ref: str, repo_root: Path) -> bool:
+    """Whether ``ref`` resolves to a commit in ``repo_root``.
+
+    Exit 1 from ``rev-parse --verify --quiet`` is the ordinary "no such commit"
+    answer; any other non-zero code is a real git error and is raised.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+    )
+    if result.returncode not in (0, 1):
+        result.check_returncode()
+    return result.returncode == 0
+
+
 def _repo_root(args: argparse.Namespace) -> Path:
     """The ``--repo-root`` value, whether given before or after the subcommand.
 
@@ -231,8 +263,28 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     if not args.local_tags:
         # ``ls-remote`` lines are ``<sha>\trefs/tags/<tag>``; take the tag.
         tags = [line.rsplit("/", 1)[-1] for line in tags]
-    app_version = args.app_version if args.app_version is not None else fetch_app_template_ref()
-    target = resolve_target(args.override, tags, remote=args.remote, app_version=app_version)
+    app_version = (
+        args.app_version if args.app_version is not None else fetch_app_template_ref()
+    )
+    # A symref (``<remote>/HEAD``) prints as an empty line and drops out: it is
+    # not a branch, and qualifying an override of ``HEAD`` would retarget it.
+    remote_branches = _list_names(
+        _git(
+            [
+                "for-each-ref",
+                "--format=%(if)%(symref)%(then)%(else)%(refname:lstrip=3)%(end)",
+                f"refs/remotes/{args.remote}/",
+            ],
+            repo_root,
+        )
+    )
+    target = resolve_target(
+        args.override,
+        tags,
+        remote=args.remote,
+        app_version=app_version,
+        remote_branches=remote_branches,
+    )
     # Only the default path: an override was asked for by name, and the rule that
     # it is never silently blocked outranks saving a no-op merge.
     if args.override is None and _is_already_merged(target.ref, repo_root):
@@ -432,6 +484,17 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     dest_root = (dest if dest.is_absolute() else repo_root / dest).resolve()
     staged_skill = dest_root / SKILL_DIR_REL
 
+    # Checked first: the skill-dir probe below cannot tell a ref that names
+    # nothing from one that predates the skill.
+    if not _names_commit(args.ref, repo_root):
+        print(
+            f"error: {args.ref} does not name a commit in this workspace, so there "
+            "is no target to update to. It is not a release, remote branch or "
+            "commit that has been fetched.",
+            file=sys.stderr,
+        )
+        return 1
+
     # Always stage into a clean dir. The flow runs the skill from ``staged_skill``
     # unconditionally (a single fixed path the lead and worker both reference by
     # literal -- no state carried across shell invocations), so this command must
@@ -494,6 +557,17 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
             {"skill_dir": str(staged_skill), "differs": differs, "ref": args.ref}
         )
     )
+    return 0
+
+
+def _cmd_bridge_history(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    state = Path(args.state)
+    state = state if state.is_absolute() else repo_root / state
+    if args.drop:
+        print(drop_history_bridge(repo_root, state).to_json())
+        return 0
+    print(bridge_history(repo_root, args.ref, state).to_json())
     return 0
 
 
@@ -702,11 +776,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     resolve_parser.add_argument(
         "--override",
         default=None,
-        help="A tag, 'main', or any ref to update to (default: latest stable "
-        "minds-v* tag).",
+        help="A tag, a branch of --remote (qualified to <remote>/<branch>), or "
+        "any other ref to update to (default: the release the Imbue Studio app names).",
     )
     resolve_parser.add_argument(
-        "--remote", default="upstream", help="Remote to read tags from."
+        "--remote", default="upstream", help="Remote to read tags and branches from."
     )
     resolve_parser.add_argument(
         "--local-tags",
@@ -718,7 +792,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--ceiling",
         dest="app_version",
         default=None,
-        help="The release to update to, standing in for the running minds app's "
+        help="The release to update to, standing in for the running Imbue Studio app's "
         "own (default: ask the app). A ref that is not a release tag is a fault: "
         "pass --override to say what to take instead.",
     )
@@ -800,6 +874,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         "data/.tasks/update-self/skill-at-target).",
     )
     bootstrap_parser.set_defaults(func=_cmd_bootstrap_skill)
+
+    bridge_parser = sub.add_parser(
+        "bridge-history",
+        help="Graft a workspace that predates the template's history rewrite onto "
+        "the target's history while they share no commit; drop the graft after.",
+        parents=[common],
+    )
+    bridge_mode = bridge_parser.add_mutually_exclusive_group(required=True)
+    bridge_mode.add_argument("--ref", help="The resolved target ref.")
+    bridge_mode.add_argument(
+        "--drop",
+        action="store_true",
+        help="Only remove a graft this subcommand recorded, whatever the histories.",
+    )
+    bridge_parser.add_argument(
+        "--state",
+        default=DEFAULT_STATE_PATH,
+        help=f"Where the graft is recorded (default: {DEFAULT_STATE_PATH}).",
+    )
+    bridge_parser.set_defaults(func=_cmd_bridge_history)
 
     apply_parser = sub.add_parser(
         "apply",
@@ -897,7 +991,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     run_status_parser = sub.add_parser(
         "run-status",
-        help="Record this run for the Mind app (data/.state/update-apply/run.json).",
+        help="Record this run for the Imbue Studio app (data/.state/update-apply/run.json).",
         parents=[common],
     )
     run_status_sub = run_status_parser.add_subparsers(
@@ -932,7 +1026,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     verdict_parser.add_argument(
         "--detail",
         default="",
-        help="One plain-language line for the Mind app's modal.",
+        help="One plain-language line for the Imbue Studio app's modal.",
     )
     verdict_parser.add_argument(
         "--resulting-ref",
@@ -998,6 +1092,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         AppVersionUnavailableError,
         NoUpdateTargetError,
         ApplyPreconditionError,
+        HistoryBridgeError,
     ) as e:
         # These carry the "why you cannot update right now" explanation the lead
         # relays to the user, so print the message alone: a traceback would bury it

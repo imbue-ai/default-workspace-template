@@ -1,0 +1,1 @@
+- Pinned mngr to public commit `d90339cba2` (the mirror of mngr `1b632f1f19`) for the minds 0.8.0 release (`minds-v0.8.0`).

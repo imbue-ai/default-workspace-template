@@ -96,6 +96,20 @@ describe("FloatingEntries", () => {
     expect(image.getAttribute("src")).toBe("/api/avatars/gummy-seal/image.svg?mood=working");
   });
 
+  it("paints nothing behind the icon in the plain style: no surface, no border, no padding", () => {
+    // The icon carries its own tile, so a surface and 8px of padding here framed it in a second
+    // one -- the pale edge around the drawing. What the box still owns is the shadow and the
+    // corner it is cast around.
+    const layer = render({ entries: [pinnedEntry({ isMinimized: false })] });
+    const entry = layer.querySelector('[data-pinned-entry="buddy"]') as HTMLElement;
+    for (const painted of ["border", "p-2", "bg-surface", "bg-surface/90", "rounded-2xl"]) {
+      expect(entry.classList.contains(painted)).toBe(false);
+    }
+    for (const kept of ["border-0", "bg-transparent", "p-0", "rounded-[32%]", "shadow-raised"]) {
+      expect(entry.classList.contains(kept)).toBe(true);
+    }
+  });
+
   it("draws nothing with no floating entries", () => {
     expect(render({ entries: [] }).querySelectorAll("[data-pinned-entry]")).toHaveLength(0);
   });
