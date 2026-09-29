@@ -715,8 +715,8 @@ Flags:
   the width breathing, ends round and lifting, with its interior detail
   cut through to the background colour at one weight the whole set
   shares. Drawn in one pass and never revised. That doc carries the
-  full look, and says how a glyph gets from Figma into the repo without
-  losing its hand-placed points.
+  full look, and says how an icon that already exists is changed
+  without losing its hand-placed points.
 - `--no-icon`: skip the icon requirement for a brand-new entry. Uses
   the generic letter monogram. Use this only when the user explicitly
   declines an icon, or for short-lived preview windows.
