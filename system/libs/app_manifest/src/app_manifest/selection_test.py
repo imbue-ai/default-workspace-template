@@ -59,6 +59,19 @@ def workspace(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def test_the_real_repository_selects_without_a_missing_guard() -> None:
+    # The guard lists name real files by hand, and a rename elsewhere in the repository makes
+    # every selection fail, which no synthetic workspace can show.
+    repo_root = Path(__file__).resolve().parents[5]
+
+    selection = _select(
+        repo_root,
+        ["system/libs/workspace_ui/src/base.css", "system/supervisord.conf.d/chat.conf"],
+    )
+
+    assert set(ALWAYS_RUN_GUARDS) <= {arg for command in selection.commands for arg in command.argv}
+
+
 def test_a_shared_library_change_runs_its_suite_and_every_transitive_consumer(
     workspace: Path,
 ) -> None:
