@@ -72,14 +72,13 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           "span",
           {
             // The icon brings its own tile (`docs/system/app-icons.md`), so this box paints nothing
-            // and pads nothing: a surface behind it would frame the tile in a second one. Same
-            // vocabulary as a floating entry -- the corner is the tile's own 32 per cent, the hover
-            // is the tile growing, and depth says which window is focused, since a tint behind an
-            // opaque tile cannot be seen. The text colour still matters: the built-in glyph for a
-            // window whose app the registry no longer has is the one drawing here that takes it.
+            // and pads nothing: a surface behind it would frame the tile in a second one. The
+            // corner is the tile's own 32 per cent, and depth says which window is focused, since a
+            // tint behind an opaque tile cannot be seen. The text colour still matters: the
+            // built-in glyph for a window whose app the registry no longer has is the one drawing
+            // here that takes it. Nothing answers the hover: the tooltip does that, at once.
             class:
               "taskbar-entry-tile flex size-(--desk-taskbar-entry-size) items-center justify-center " +
-              "transition-transform hover:scale-110 " +
               (isAvatar
                 ? "rounded-2xl [&>img]:size-full "
                 : "rounded-[32%] [&>svg]:size-full " +
