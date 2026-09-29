@@ -63,12 +63,17 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-accent " +
           (isMenuOpen ? "ring-2 ring-accent " : ""),
         ...hoverTooltipAttrs(tooltip, "above", "instant"),
-        // Only a minimized window peeks: a window already on the desktop is its own preview.
-        onmouseenter: entry.isMinimized ? () => onPeek(true) : undefined,
-        onmouseleave: entry.isMinimized ? () => onPeek(false) : undefined,
+        // Only a minimized window peeks: a window already on the desktop is its own preview. Entering
+        // any other entry ends the peek the one beside it started, so a sweep along the bar is clean.
+        onmouseenter: () => onPeek(entry.isMinimized),
+        onmouseleave: () => onPeek(false),
         onclick: () => {
-          if (entry.isMinimized) onPeek(false);
+          // The pointer is already resting here, so no enter or leave will fire for what the click
+          // changes: a click that puts the window away has to start the peek itself, and one that
+          // brings it back has to end it.
+          const willMinimize = !entry.isDetached && !entry.isMinimized && entry.isFocused;
           onClick();
+          onPeek(willMinimize);
         },
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
