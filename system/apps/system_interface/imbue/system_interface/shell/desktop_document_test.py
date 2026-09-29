@@ -14,7 +14,6 @@ from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
-from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
 
 from imbue.imbue_common.model_update import to_update
@@ -83,7 +82,7 @@ from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import builtin_chat_row_toml
-from imbue.system_interface.shell.testing import builtin_rows_toml_before_chat
+from imbue.system_interface.shell.testing import builtin_registry_rows
 from imbue.system_interface.shell.testing import desktop_with_windows
 from imbue.system_interface.shell.testing import placement_record
 from imbue.system_interface.shell.testing import registry_row_toml
@@ -498,15 +497,6 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
     }
 
 
-def _builtin_rows(tmp_path: Path) -> tuple[list[RegistryRow], list[RegistryRow]]:
-    """The built-in apps' rows without the chat, and with it registered last."""
-    before_chat = read_registry(write_registry(tmp_path / "before.toml", *builtin_rows_toml_before_chat()))
-    with_chat = read_registry(
-        write_registry(tmp_path / "with_chat.toml", *builtin_rows_toml_before_chat(), builtin_chat_row_toml())
-    )
-    return before_chat, with_chat
-
-
 def _targets_and_cells(desktop: Desktop) -> list[tuple[str, str, int, int]]:
     return [
         (str(shortcut.target.app), str(shortcut.target.launch), shortcut.cell.column, shortcut.cell.row)
@@ -517,7 +507,7 @@ def _targets_and_cells(desktop: Desktop) -> list[tuple[str, str, int, int]]:
 def test_an_untouched_desktop_seeded_before_a_late_app_registered_is_seeded_again_in_launcher_order(
     tmp_path: Path,
 ) -> None:
-    before_chat, with_chat = _builtin_rows(tmp_path)
+    before_chat, with_chat = builtin_registry_rows(tmp_path)
     home = _desktop_with_shortcuts(*seed_desktop_shortcuts(before_chat))
     offered = apps_with_a_default_shortcut(before_chat)
     assert offered == {"getting-started", "files", "browser", "terminal"}
@@ -538,7 +528,7 @@ def test_an_untouched_desktop_seeded_before_a_late_app_registered_is_seeded_agai
 def test_a_touched_desktop_gets_a_late_apps_shortcut_at_the_next_free_cell_with_nothing_else_moved(
     tmp_path: Path,
 ) -> None:
-    before_chat, with_chat = _builtin_rows(tmp_path)
+    before_chat, with_chat = builtin_registry_rows(tmp_path)
     seeded = _desktop_with_shortcuts(*seed_desktop_shortcuts(before_chat))
     touched = with_shortcut_moved(seeded, AppName("getting-started"), LaunchPathId("open"), GridCell(column=0, row=2))
 
@@ -552,7 +542,7 @@ def test_a_touched_desktop_gets_a_late_apps_shortcut_at_the_next_free_cell_with_
 
 
 def test_a_late_apps_shortcut_is_not_added_where_its_target_already_is(tmp_path: Path) -> None:
-    before_chat, with_chat = _builtin_rows(tmp_path)
+    before_chat, with_chat = builtin_registry_rows(tmp_path)
     placed_by_hand = _desktop_with_shortcuts(
         *seed_desktop_shortcuts(before_chat), _shortcut("chat", "root", 6, 3, ShortcutMode.FOCUS)
     )
@@ -584,7 +574,7 @@ def test_an_offered_app_an_internal_app_and_an_app_without_a_usable_default_shor
 def test_the_apps_on_a_desktop_are_every_app_with_a_shortcut_or_only_those_holding_their_default_one(
     tmp_path: Path,
 ) -> None:
-    _, with_chat = _builtin_rows(tmp_path)
+    _, with_chat = builtin_registry_rows(tmp_path)
     desktop = _desktop_with_shortcuts(
         _shortcut("chat", "new", 0, 0), _shortcut("files", "new", 1, 0), _shortcut("unregistered", "open", 2, 0)
     )

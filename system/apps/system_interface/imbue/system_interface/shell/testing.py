@@ -13,14 +13,19 @@ from typing import Final
 
 from app_manifest.manifest import LocationScope
 from app_manifest.primitives import AppName
+from app_manifest.registry import RegistryRow
+from app_manifest.registry import read_registry
 from flask import Flask
 from flask import request
 
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import Desktop
+from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowPlacement
+from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import cascade_frame
+from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
@@ -201,6 +206,45 @@ def builtin_chat_row_toml() -> str:
         launch_methods={"new": "POST"},
         pin=("/", "avatar", "independent", "floating"),
     )
+
+
+def builtin_registry_rows(directory: Path) -> tuple[list[RegistryRow], list[RegistryRow]]:
+    """The built-in apps' rows, read from registries written under ``directory``: without the chat, and with it
+    registered last."""
+    before_chat = read_registry(write_registry(directory / "before_chat.toml", *builtin_rows_toml_before_chat()))
+    with_chat = read_registry(
+        write_registry(directory / "with_chat.toml", *builtin_rows_toml_before_chat(), builtin_chat_row_toml())
+    )
+    return before_chat, with_chat
+
+
+def shortcut_apps_on(desktop: Desktop) -> list[str]:
+    return [str(shortcut.target.app) for shortcut in desktop.shortcuts]
+
+
+def write_desktops_file(state_directory: Path, *desktops: Desktop) -> None:
+    write_json_atomic(
+        state_directory / DESKTOPS_FILENAME,
+        DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=desktops).model_dump(mode="json"),
+    )
+
+
+# The ``desktops.json`` a released shell reads: its version, and its keys at the top and per desktop.
+RELEASED_DESKTOPS_FILE_VERSION: Final[int] = 1
+RELEASED_DESKTOPS_FILE_KEYS: Final[frozenset[str]] = frozenset({"version", "desktops"})
+RELEASED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset(
+    {"id", "name", "color", "glyph", "wallpaper", "shortcuts", "windows"}
+)
+
+
+def read_desktops_file_in_its_released_shape(state_directory: Path) -> tuple[Desktop, ...]:
+    """The desktops ``desktops.json`` holds, after checking it is the version and has exactly the keys a released
+    shell reads."""
+    raw = json.loads((state_directory / DESKTOPS_FILENAME).read_text())
+    assert set(raw) == RELEASED_DESKTOPS_FILE_KEYS and raw["version"] == RELEASED_DESKTOPS_FILE_VERSION
+    for desktop in raw["desktops"]:
+        assert set(desktop) == RELEASED_DESKTOP_KEYS
+    return DesktopsDocument.model_validate(raw).desktops
 
 
 def shell_application(

@@ -16,7 +16,6 @@ import httpx
 import pytest
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
-from app_manifest.registry import read_registry
 from pydantic import ValidationError
 
 from imbue.imbue_common.model_update import to_update
@@ -28,7 +27,6 @@ from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import Desktop
-from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.data_types import StoredWindowPath
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
@@ -53,10 +51,14 @@ from imbue.system_interface.shell.testing import TEST_TERMINAL_URL
 from imbue.system_interface.shell.testing import TEST_TERMINAL_WINDOW_CLOSED_PATH
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import builtin_chat_row_toml
+from imbue.system_interface.shell.testing import builtin_registry_rows
 from imbue.system_interface.shell.testing import builtin_rows_toml_before_chat
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import placement_record
+from imbue.system_interface.shell.testing import read_desktops_file_in_its_released_shape
 from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import shortcut_apps_on
+from imbue.system_interface.shell.testing import write_desktops_file
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
@@ -441,10 +443,6 @@ _APPS_BEFORE_CHAT = ["getting-started", "files", "browser", "terminal"]
 _APPS_WITH_CHAT = ["chat", "getting-started", "files", "browser", "terminal"]
 
 
-def _apps_on(desktop: Desktop) -> list[str]:
-    return [str(shortcut.target.app) for shortcut in desktop.shortcuts]
-
-
 def _pinned_apps_on(desktop: Desktop) -> list[str]:
     return [str(window.app) for window in desktop.windows if window.is_pinned]
 
@@ -473,7 +471,7 @@ def test_an_app_registering_after_home_was_seeded_reaches_it_through_the_registr
     inventory = build_inventory(registry_path, broadcaster)
     shell = build_shell_state(tmp_path / "state", registry_path, broadcaster, inventory=inventory)
     (home,) = shell.list_desktops()
-    assert _apps_on(home) == _APPS_BEFORE_CHAT and _pinned_apps_on(home) == []
+    assert shortcut_apps_on(home) == _APPS_BEFORE_CHAT and _pinned_apps_on(home) == []
     client_queue = broadcaster.register()
 
     _register_chat(registry_path)
@@ -481,7 +479,7 @@ def test_an_app_registering_after_home_was_seeded_reaches_it_through_the_registr
 
     # Read straight from the store, so nothing but the registry change can have added the chat.
     (stored,) = shell.desktops.list_desktops()
-    assert _apps_on(stored) == _APPS_WITH_CHAT
+    assert shortcut_apps_on(stored) == _APPS_WITH_CHAT
     assert stored.shortcuts == seed_desktop_shortcuts([entry.row for entry in inventory.entries()])
     assert _pinned_apps_on(stored) == ["chat"]
     assert _desktops_updates(client_queue) == [_APPS_WITH_CHAT]
@@ -496,17 +494,17 @@ def test_an_app_registering_after_home_was_seeded_reaches_it_through_a_later_rea
         tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
     )
     (home,) = seeding.list_desktops()
-    assert _apps_on(home) == _APPS_BEFORE_CHAT
+    assert shortcut_apps_on(home) == _APPS_BEFORE_CHAT
     _register_chat(registry_path)
     reading = build_shell_state(
         tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
     )
-    assert _apps_on(reading.desktops.list_desktops()[0]) == _APPS_BEFORE_CHAT
+    assert shortcut_apps_on(reading.desktops.list_desktops()[0]) == _APPS_BEFORE_CHAT
     client_queue = broadcaster.register()
 
     (read,) = reading.list_desktops()
 
-    assert _apps_on(read) == _APPS_WITH_CHAT and _pinned_apps_on(read) == ["chat"]
+    assert shortcut_apps_on(read) == _APPS_WITH_CHAT and _pinned_apps_on(read) == ["chat"]
     assert _desktops_updates(client_queue) == [_APPS_WITH_CHAT]
     # The next read finds nothing to add and announces nothing.
     assert reading.list_desktops() == [read]
@@ -523,7 +521,7 @@ def test_a_desktop_created_before_a_late_app_was_reconciled_leaves_it_offered_on
         tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
     )
     (home,) = seeding.list_desktops()
-    assert _apps_on(home) == _APPS_BEFORE_CHAT
+    assert shortcut_apps_on(home) == _APPS_BEFORE_CHAT
     _register_chat(registry_path)
     reading = build_shell_state(
         tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
@@ -532,8 +530,8 @@ def test_a_desktop_created_before_a_late_app_was_reconciled_leaves_it_offered_on
     work = reading.create_desktop("Work", "#123456", 1)
 
     stored_home, stored_work = reading.desktops.list_desktops()
-    assert _apps_on(stored_home) == _APPS_WITH_CHAT and _pinned_apps_on(stored_home) == ["chat"]
-    assert stored_work == work and _apps_on(work) == _APPS_WITH_CHAT
+    assert shortcut_apps_on(stored_home) == _APPS_WITH_CHAT and _pinned_apps_on(stored_home) == ["chat"]
+    assert stored_work == work and shortcut_apps_on(work) == _APPS_WITH_CHAT
     assert "chat" in json.loads((tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME).read_text())["apps"]
 
 
@@ -546,7 +544,7 @@ def test_a_removed_default_shortcut_stays_removed_across_registrations_and_a_new
     shell.list_desktops()
     _register_chat(registry_path)
     inventory.reload_registry()
-    assert _apps_on(shell.desktops.list_desktops()[0]) == _APPS_WITH_CHAT
+    assert shortcut_apps_on(shell.desktops.list_desktops()[0]) == _APPS_WITH_CHAT
     shell.desktops.remove_shortcut("home", AppName("chat"), LaunchPathId("root"))
 
     # The chat deregisters and registers again; each change reached the desktops (its pinned window was released and
@@ -557,7 +555,7 @@ def test_a_removed_default_shortcut_stays_removed_across_registrations_and_a_new
     _register_chat(registry_path)
     inventory.reload_registry()
     assert _pinned_apps_on(shell.desktops.list_desktops()[0]) == ["chat"]
-    assert _apps_on(shell.list_desktops()[0]) == _APPS_BEFORE_CHAT
+    assert shortcut_apps_on(shell.list_desktops()[0]) == _APPS_BEFORE_CHAT
 
     restarted = build_shell_state(
         tmp_path / "state",
@@ -565,7 +563,7 @@ def test_a_removed_default_shortcut_stays_removed_across_registrations_and_a_new
         WebSocketBroadcaster(),
         inventory=build_inventory(registry_path, broadcaster),
     )
-    assert _apps_on(restarted.list_desktops()[0]) == _APPS_BEFORE_CHAT
+    assert shortcut_apps_on(restarted.list_desktops()[0]) == _APPS_BEFORE_CHAT
 
 
 def test_a_state_directory_from_before_the_offered_record_gets_a_late_apps_shortcut_once(
@@ -573,11 +571,9 @@ def test_a_state_directory_from_before_the_offered_record_gets_a_late_apps_short
 ) -> None:
     """A workspace seeded by a shell that kept no record of what it offered: its first read adds the chat, creates the
     record, and writes a desktops.json every release reads."""
-    before_chat = read_registry(write_registry(tmp_path / "before.toml", *builtin_rows_toml_before_chat()))
+    before_chat, _ = builtin_registry_rows(tmp_path / "registry")
     state_directory = tmp_path / "state"
-    state_directory.mkdir()
-    legacy = DesktopsDocument(version=1, desktops=(default_desktop(seed_desktop_shortcuts(before_chat)),))
-    (state_directory / "desktops.json").write_text(json.dumps(legacy.model_dump(mode="json")))
+    write_desktops_file(state_directory, default_desktop(seed_desktop_shortcuts(before_chat)))
     registry_path = write_registry(tmp_path / "apps.toml", *builtin_rows_toml_before_chat(), builtin_chat_row_toml())
     shell = build_shell_state(
         state_directory, registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
@@ -585,16 +581,13 @@ def test_a_state_directory_from_before_the_offered_record_gets_a_late_apps_short
 
     (home,) = shell.list_desktops()
 
-    assert _apps_on(home) == _APPS_WITH_CHAT
+    assert shortcut_apps_on(home) == _APPS_WITH_CHAT
     record = json.loads((state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME).read_text())
     assert record == {"version": 1, "apps": sorted(_APPS_WITH_CHAT)}
-    raw = json.loads((state_directory / "desktops.json").read_text())
-    assert set(raw) == {"version", "desktops"} and raw["version"] == 1
-    assert set(raw["desktops"][0]) == {"id", "name", "color", "glyph", "wallpaper", "shortcuts", "windows"}
-    assert DesktopsDocument.model_validate(raw).desktops == (home,)
+    assert read_desktops_file_in_its_released_shape(state_directory) == (home,)
     # Removed once added, it stays removed: the record now names it.
     shell.desktops.remove_shortcut("home", AppName("chat"), LaunchPathId("root"))
-    assert _apps_on(shell.list_desktops()[0]) == _APPS_BEFORE_CHAT
+    assert shortcut_apps_on(shell.list_desktops()[0]) == _APPS_BEFORE_CHAT
 
 
 def test_a_late_registration_reaches_the_desktops_through_the_registry_watch(
@@ -611,12 +604,12 @@ def test_a_late_registration_reaches_the_desktops_through_the_registry_watch(
     inventory.start()
     try:
         (home,) = shell.list_desktops()
-        assert _apps_on(home) == _APPS_BEFORE_CHAT
+        assert shortcut_apps_on(home) == _APPS_BEFORE_CHAT
 
         _register_chat(registry_path)
 
         wait_for(
-            lambda: _apps_on(shell.desktops.list_desktops()[0]) == _APPS_WITH_CHAT,
+            lambda: shortcut_apps_on(shell.desktops.list_desktops()[0]) == _APPS_WITH_CHAT,
             timeout=5.0,
             poll_interval=0.02,
             error_message="the registry watch never brought the chat's shortcut to the default desktop",
