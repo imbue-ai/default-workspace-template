@@ -5,8 +5,8 @@ shortcut, the rail's shortcut and tab rows, the "All apps" popover, the launcher
 and a dock tab's leading glyph. The file sits beside the app's manifest as
 `system/apps/<package>/icon.svg`, and `app.toml`'s `icon` names it. `forward_port.py`
 reads the file at registration and stores the *markup* on the registry row, so an icon
-changes on the app's next registration -- normally its next restart -- and never needs a
-rebuild of the shell.
+changes whenever the app registers -- on its next restart, or at once if you run that
+script yourself. The shell watches the registry and redraws; it never needs rebuilding.
 
 What follows is this workspace's default look, not a law of nature: the user can have a
 different one whenever they want it, and this doc is where that change starts. Rewrite the
