@@ -1,4 +1,4 @@
-"""Claude's one-shot completion: ``claude -p`` on a small model, under the chat's own config dir."""
+"""Claude's one-shot completion: ``claude -p`` on the cheapest model the account answers on, under its config dir."""
 
 import json
 import os
@@ -23,9 +23,10 @@ from imbue.imbue_common.pure import pure
 
 logger = _loguru_logger
 
-# An alias the pinned Claude Code resolves (``baked_model_catalog_v2_1_280.json``), so the
-# call follows the CLI's own idea of the current small model.
-_ONE_SHOT_MODEL: Final = "haiku"
+# Cheapest first, as aliases the pinned Claude Code resolves (``baked_model_catalog_v2_1_280.json``)
+# rather than dated ids, so each follows the CLI's own idea of the current model of its family. None
+# is the account's default model, for an account that answers on neither.
+ONE_SHOT_MODEL_PREFERENCE: Final[tuple[str | None, ...]] = ("haiku", "sonnet", None)
 _TIMEOUT_SECONDS: Final = 60.0
 _SLOW_WARNING_SECONDS: Final = 15.0
 
@@ -47,15 +48,17 @@ class _ClaudePrintResult(BaseModel):
 
 
 @pure
-def claude_one_shot_argv(system_prompt: str) -> list[str]:
-    """The ``claude -p`` argv. The prompt goes on stdin, so a message starting with ``-`` is never read as a flag."""
+def claude_one_shot_argv(system_prompt: str, model: str | None) -> list[str]:
+    """The ``claude -p`` argv, on ``model`` or the account's default when None.
+
+    The prompt goes on stdin, so a message starting with ``-`` is never read as a flag.
+    """
     return [
         "claude",
         "-p",
         "--output-format",
         "json",
-        "--model",
-        _ONE_SHOT_MODEL,
+        *(["--model", model] if model is not None else []),
         "--system-prompt",
         system_prompt,
         "--tools",
@@ -96,16 +99,32 @@ def parse_claude_print_result(stdout: str) -> str:
     return parsed.result
 
 
+class _OneShotTimeoutError(OneShotCompletionError):
+    """``claude -p`` did not answer in time; another model would wait as long, so none is tried."""
+
+
 class ClaudeOneShotCompletion(OneShotCompletion):
     """Runs ``claude -p`` from an empty directory, so no project instructions or hooks reach the answer."""
 
     def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
+        """The answer on the first model in ``ONE_SHOT_MODEL_PREFERENCE`` that gives one."""
+        failures: list[str] = []
+        for model in ONE_SHOT_MODEL_PREFERENCE:
+            try:
+                return self._complete_on(model, account_dir, system_prompt, prompt)
+            except _OneShotTimeoutError:
+                raise
+            except OneShotCompletionError as e:
+                failures.append(f"{model or 'default model'}: {e}")
+        raise OneShotCompletionError("; ".join(failures))
+
+    def _complete_on(self, model: str | None, account_dir: Path, system_prompt: str, prompt: str) -> str:
         env = claude_one_shot_env(os.environ, account_dir)
         started_at = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="chat_one_shot_") as isolated_dir:
             try:
                 finished = run_local_command_modern_version(
-                    command=claude_one_shot_argv(system_prompt),
+                    command=claude_one_shot_argv(system_prompt, model),
                     is_checked=False,
                     timeout=_TIMEOUT_SECONDS,
                     cwd=Path(isolated_dir),
@@ -117,7 +136,7 @@ class ClaudeOneShotCompletion(OneShotCompletion):
                 raise OneShotCompletionError(f"claude -p could not run: {e}") from e
         elapsed_seconds = time.monotonic() - started_at
         if finished.is_timed_out:
-            raise OneShotCompletionError(f"claude -p did not answer within {_TIMEOUT_SECONDS:.0f}s")
+            raise _OneShotTimeoutError(f"claude -p did not answer within {_TIMEOUT_SECONDS:.0f}s")
         if finished.returncode != 0:
             raise OneShotCompletionError(f"claude -p exited {finished.returncode}: {finished.stderr.strip()[:300]}")
         if elapsed_seconds > _SLOW_WARNING_SECONDS:

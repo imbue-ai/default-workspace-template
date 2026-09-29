@@ -298,24 +298,34 @@ over the model bar explains it.
 ## Chat names
 
 A new chat is minted as "Chat N". Its first message is sent, in the background
-and outside the chat, to a small model on the account the chat runs on
-(`chat_naming.py`, through the harness's `OneShotCompletion`: `claude -p` on
-Haiku with thinking off, from an empty directory, with no tools and no session
-kept), and the answer, in the form "Short name: brief description", renames the
-chat the way the rail's rename does. The question goes out alongside the send,
-not after it: the account is known from the moment a create starts
-(`resolve_chat_account_binding`), so a chat still coming up is asked about too.
-The answer is shown in the chat list as soon as it arrives
-(`show_automatic_title`), ahead of the slower `mngr rename` that makes it the
-chat's own name; a rename that does not land takes the shown name back. The name is set once and does not follow the chat as its
-topic drifts. An opening with no clear subject ("hi") leaves "Chat N" and the
-next message is tried, up to three messages. Only a chat still wearing a name
-nobody chose is renamed: exactly "Chat N", or a seeded chat's seed title (the
-Mind app's "Welcome"), named from the first message the user sends in it. A name
-the user or an agent chose is left alone. What has been tried is kept in `naming.json` in the chat's
-folder, so a restart neither renames a named chat nor retries past the limit.
-A harness with no `OneShotCompletion` (every one but Claude, for now) keeps
-the minted name, and a secondary chat names nothing.
+and outside the chat, to the cheapest model the chat's account offers
+(`chat_naming.py`, through the harness's `OneShotCompletion`, from an empty
+directory with no session kept), and the answer, in the form "Short name: brief
+description", renames the chat the way the rail's rename does. Models are named
+by family rather than by id, so a change to a provider's model list moves the
+call to the new model instead of breaking it:
+
+- Claude: `claude -p` with no tools and thinking off, trying the `haiku` alias,
+  then `sonnet`, then the account's default model.
+- Codex: `codex exec`, read-only and ignoring the account's config, on the newest
+  "luna" model in the account's own model list (the sidecar a model probe keeps
+  in the account folder, probed once when there is none) at its lowest reasoning
+  effort; the account's default model when it offers no luna, or refuses it.
+
+The question goes out alongside the send, not after it: the account is known
+from the moment a create starts (`resolve_chat_account_binding`), so a chat still
+coming up is asked about too. The answer is shown in the chat list as soon as it
+arrives (`show_automatic_title`), ahead of the slower `mngr rename` that makes it
+the chat's own name; a rename that does not land takes the shown name back. The
+name is set once and does not follow the chat as its topic drifts. An opening
+with no clear subject ("hi") leaves "Chat N" and the next message is tried, up to
+three messages. Only a chat still wearing a name nobody chose is renamed: exactly
+"Chat N", or a seeded chat's seed title (the Mind app's "Welcome"), named from
+the first message the user sends in it. A name the user or an agent chose is left
+alone. What has been tried is kept in `naming.json` in the chat's folder, so a
+restart neither renames a named chat nor retries past the limit. A harness with
+no `OneShotCompletion` (Pi, Antigravity, OpenCode) keeps the minted name, and a
+secondary chat names nothing.
 
 ## Provider accounts
 

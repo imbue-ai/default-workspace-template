@@ -42,6 +42,7 @@ from unittest.mock import patch
 
 import httpx
 import pexpect
+import pytest
 import simple_websocket
 from flask import Flask
 from flask import request
@@ -363,6 +364,21 @@ def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
     script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" >> \"{log_path}\"\n")
     script.chmod(0o755)
     return str(script), log_path
+
+
+def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Put a shell script named ``name`` first on PATH that logs its argv, then runs ``body``; returns the log.
+
+    One line per invocation, the arguments space-joined.
+    """
+    bin_dir = tmp_path / "stand-in-bin"
+    bin_dir.mkdir(exist_ok=True)
+    log_path = tmp_path / f"{name}-argv.log"
+    script = bin_dir / name
+    script.write_text(f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "{log_path}"\n{body}\n')
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return log_path
 
 
 class RecordingMngrMessenger(MngrMessenger):
