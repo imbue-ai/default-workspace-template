@@ -132,9 +132,6 @@ class BackupConfig(FrozenModel):
             # -- so without this every hourly tick would sweep a full venv
             # plus several tool environments.
             "**/data/.state/update-apply/snapshots",
-            # A Claude subscription sign-in's credential. Anthropic's terms do not let it be
-            # copied off the machine it was issued to; after a restore the owner signs in again.
-            "**/.minds/accounts/*/.credentials.json",
             # A throwaway instance's writable copies of an app's data (a preview,
             # or a test run against a copy) and its scratch directory. The data
             # they copy is backed up where it lives, and one app's store can run
