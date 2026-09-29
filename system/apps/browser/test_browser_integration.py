@@ -251,7 +251,7 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
     # A viewer joining an already-running browser must NOT receive the fleet-level
     # `initializing` banner, even while the whole fleet is still restoring (finding
     # [3-runner]) -- its seed already says lifecycle=running and the live page is there.
-    fake = _install_fake_browser(monkeypatch)  # lifecycle=running
+    _install_fake_browser(monkeypatch)  # lifecycle=running
     runner._init_done.clear()  # the fleet is still restoring
     try:
         with _BootedServer() as server:
@@ -326,7 +326,7 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
     # forgets its persistent profile and drops it from the manifest.
     profile = bsession._profile_dir("riley-jones")
     profile.mkdir(parents=True)
-    fake = _install_fake_browser(monkeypatch, browser_id="riley-jones")
+    _install_fake_browser(monkeypatch, browser_id="riley-jones")
 
     async def fake_close(self: bsession.LiveBrowser) -> None:  # avoid real Chromium teardown
         return None
