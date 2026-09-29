@@ -31,7 +31,7 @@ const PRIMARY_BUTTON = 0;
 export type GestureBinding =
   | { readonly kind: "window-move"; readonly windowId: string }
   | { readonly kind: "window-resize"; readonly windowId: string; readonly edge: ResizeEdge }
-  | { readonly kind: "shortcut"; readonly app: string; readonly launch: string; readonly element: HTMLElement }
+  | { readonly kind: "shortcut"; readonly app: string; readonly launch: string }
   /** A taskbar entry never drags, but a long press on it asks for its menu. */
   | { readonly kind: "taskbar-entry"; readonly windowId: string }
   /** A floating pinned entry: a drag moves it, a long press asks for its menu. */
@@ -81,12 +81,7 @@ export function bindingForTarget(target: Element): GestureBinding | null {
     const key = shortcut.getAttribute(SHORTCUT_ATTRIBUTE) ?? "";
     const separator = key.indexOf(":");
     if (separator <= 0) return null;
-    return {
-      kind: "shortcut",
-      app: key.substring(0, separator),
-      launch: key.substring(separator + 1),
-      element: shortcut,
-    };
+    return { kind: "shortcut", app: key.substring(0, separator), launch: key.substring(separator + 1) };
   }
   const edge = target.closest<HTMLElement>(`[${RESIZE_EDGE_ATTRIBUTE}]`);
   const windowElement = target.closest<HTMLElement>(`[${WINDOW_ID_ATTRIBUTE}]`);

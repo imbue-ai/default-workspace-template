@@ -203,7 +203,9 @@ from the agent's terminal.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
-wake-ups, a lead's replies to a worker, the automation runner) and falls back
+wake-ups, a lead's replies to a worker, the automation runner, and the
+`<background-task-report>` that `system/scripts/run_in_background.py` sends when
+a command it ran exits, which the page shows as a one-line notice) and falls back
 to `mngr message` only when the chat app cannot be reached or does not know the
 chat. A send that names no client (no `client_id` or `desktop_id`) posts no
 client-activity report. The route answers 503 until
@@ -315,10 +317,10 @@ binds to an account when it is created and moves to another only through a
 switch (a handoff or a rebind, above). A launch that names no account (the
 launcher, a desktop shortcut, `layout.py open chat`) goes to the account the user
 pinned as the default in a chat's provider menu, else to the most recently used
-one; pressing another account in that menu switches the chat to it (through
-the dialog, or at once for a chat with nothing to hand over -- see the switch
-above). `system/scripts/migrate_claude_auth.py` imports this package from
-the root venv.
+one (the account of the latest sign-in, chat create, or switch); pressing
+another account in that menu switches the chat to it (through the dialog, or at
+once for a chat with nothing to hand over -- see the switch above).
+`system/scripts/migrate_claude_auth.py` imports this package from the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare

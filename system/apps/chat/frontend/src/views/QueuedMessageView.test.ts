@@ -27,6 +27,7 @@ vi.mock("../models/Response", () => ({
 vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 
 import { renderQueuedMessages } from "./QueuedMessageView";
+import { USER_BUBBLE_CLASS } from "./user-message-display";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -98,6 +99,50 @@ describe("renderQueuedMessages", () => {
     expect(text).toContain("first");
     expect(text).toContain("second");
     expect(allByClass(nodes, "queued-message")).toHaveLength(2);
+  });
+
+  it("shows a queued background-task report as its one-line notice, not the raw report", () => {
+    const report =
+      "<background-task-report>\n<summary>Wait for the worker (finished)</summary>\nExit code: 0\n</background-task-report>";
+    mocks.queued = [
+      {
+        ...queuedMessage("q1", report),
+        display: "notice",
+        display_label: "Background task",
+        display_body: "Wait for the worker (finished)",
+      },
+      { ...queuedMessage("q2", "my own words"), display: null, display_label: null, display_body: null },
+    ];
+
+    const nodes = renderQueuedMessages("agent-1");
+
+    const notice = findByClass(nodes, "queued-notice");
+    expect(renderedText(notice)).toContain("Background task:");
+    expect(renderedText(notice)).toContain("Wait for the worker (finished)");
+    expect(renderedText(nodes)).not.toContain("<background-task-report>");
+    // The user's own queued message is still a verbatim bubble beside it.
+    expect(renderedText(findByClass(nodes, USER_BUBBLE_CLASS))).toContain("my own words");
+  });
+
+  it("draws a report the backend is sending like the transcript notice it becomes, and a parked one muted", () => {
+    const report =
+      "<background-task-report>\n<summary>Wait for the worker (finished)</summary>\nExit code: 0\n</background-task-report>";
+    const reportEntry = (queued_id: string, is_sending: boolean): QueuedMessage => ({
+      ...queuedMessage(queued_id, report, is_sending),
+      display: "notice",
+      display_label: "Background task",
+      display_body: "Wait for the worker (finished)",
+    });
+
+    mocks.queued = [reportEntry("q1", true)];
+    const sendingClass = String(findByClass(renderQueuedMessages("agent-1"), "queued-notice")?.attrs?.className);
+    expect(sendingClass).not.toContain("opacity-85");
+    expect(sendingClass).toContain("mb-2");
+
+    mocks.queued = [reportEntry("q1", false), queuedMessage("q2", "boop")];
+    const parkedClass = String(findByClass(renderQueuedMessages("agent-1"), "queued-notice")?.attrs?.className);
+    expect(parkedClass).toContain("opacity-85");
+    expect(parkedClass).not.toContain("mb-2");
   });
 
   it("gives the shoulder-tap button the exact hover tooltip text", () => {

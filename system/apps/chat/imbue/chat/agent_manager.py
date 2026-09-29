@@ -85,6 +85,7 @@ from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
+from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.model import InvalidModelPickError
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelChoice
@@ -466,6 +467,19 @@ def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str
     ]
 
 
+def _queued_message_state(entry: Mapping[str, Any]) -> QueuedMessageState:
+    """One harness's queued entry on the wire, carrying the render decision its content would get in the transcript."""
+    queued = QueuedMessageState.model_validate(entry)
+    decision = classify_user_message(queued.content)
+    if decision is None:
+        return queued
+    return queued.model_copy_update(
+        to_update(queued.field_ref().display, decision.display),
+        to_update(queued.field_ref().display_label, decision.display_label),
+        to_update(queued.field_ref().display_body, decision.display_body),
+    )
+
+
 # AgentMatch requires a host_name, but the send path never reads it -- it groups
 # and resolves hosts by host_id + provider_name (see mngr's group_agents_by_host /
 # send_message_to_agents). So we don't track real host names: the cached match
@@ -542,6 +556,17 @@ def _lane_of_account_label(account_label: str) -> str:
     except AccountError as e:
         _loguru_logger.debug("Recorded no lane for account {}: {}", account_label, e)
         return ""
+
+
+def _record_mru(account_id: str) -> None:
+    """Record ``account_id``, the account a chat was just created on or is switching to, as the most recently
+    used account: the one the next launch that names no account picks when no default is pinned. A switch the
+    user later cancels leaves it recorded. Best-effort: the mru is a convenience, so a store that refuses is
+    logged, not raised."""
+    try:
+        set_mru(account_id)
+    except AccountError as e:
+        _loguru_logger.warning("Could not record {} as most-recently-used: {}", account_id, e)
 
 
 class _SwitchTarget(FrozenModel):
@@ -1524,6 +1549,7 @@ class AgentManager:
                 chat_id, agent_state, target, message, message_id, origin, now, model_pick, is_fresh_start
             )
         self._broadcast_chats_updated()
+        _record_mru(target.account.id)
         _loguru_logger.info(
             "Chat {} is moving from {} to {} (account {})",
             chat_id,
@@ -1575,12 +1601,7 @@ class AgentManager:
                 chat_id, agent_state, target, message, message_id, origin, now, model_pick
             )
         self._broadcast_chats_updated()
-        # Launching on an account makes it the most recently used one, as a create does; a
-        # convenience, so a store that refuses is logged rather than failing the switch.
-        try:
-            set_mru(target.account.id)
-        except AccountError as e:
-            _loguru_logger.warning("Could not record {} as most-recently-used: {}", target.account.id, e)
+        _record_mru(target.account.id)
         _loguru_logger.info(
             "Chat {} is moving agent {} from account {} to account {}",
             chat_id,
@@ -1837,6 +1858,7 @@ class AgentManager:
                 )
                 self._write_record_locked(record.with_converging(retried_handoff))
         self._broadcast_chats_updated()
+        _record_mru(target.account.id)
         if discarded_successor_id is not None:
             self._discard_successor(chat_id, discarded_successor_id)
         _loguru_logger.info("Retrying the switch of chat {} on account {}", chat_id, target.account.id)
@@ -2952,10 +2974,7 @@ class AgentManager:
         # otherwise escape as a 500 before the creation thread starts -- leaving a provisional
         # record nothing ever pops, its name burned forever and every new socket replaying a
         # chat stuck at "creating".
-        try:
-            set_mru(account.id)
-        except AccountError as e:
-            _loguru_logger.warning("Could not record {} as most-recently-used: {}", account.id, e)
+        _record_mru(account.id)
         account_args = _account_binding_args(harness, account.id, self._get_agent_state_dir(agent_id))
         role_templates = (*extra_role_templates, *launch_role_templates(fast_mode.launches_fast))
 
@@ -3797,7 +3816,7 @@ class AgentManager:
         post-sweep state. A live mid-turn agent derives non-IDLE (its transcript
         signals are seeded before the watcher starts) and the snapshot stands.
         """
-        queued = tuple(QueuedMessageState.model_validate(entry) for entry in snapshot)
+        queued = tuple(_queued_message_state(entry) for entry in snapshot)
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
@@ -4047,7 +4066,7 @@ class AgentManager:
         # mutation); only the broadcast itself is gated.
         handled_snapshot = queue_handler() if queue_handler is not None else None
         if handled_snapshot is not None:
-            handled_queue = tuple(QueuedMessageState.model_validate(entry) for entry in handled_snapshot)
+            handled_queue = tuple(_queued_message_state(entry) for entry in handled_snapshot)
             with self._lock:
                 handled_agent_state = self._agents.get(agent_id)
                 if handled_agent_state is not None and handled_agent_state.queued_messages != handled_queue:
