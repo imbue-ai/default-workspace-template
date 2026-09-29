@@ -311,3 +311,7 @@ jobs:
           name: workspace-image-test-results
           path: test-results/
           if-no-files-found: ignore
+          # The sandboxes' .coverage* files and .test_output/ trees (download_globs)
+          # are hidden paths, which upload-artifact drops by default.
+          include-hidden-files: true
+          retention-days: 30
