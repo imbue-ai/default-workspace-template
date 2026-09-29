@@ -503,8 +503,9 @@ host_log_dir = "/var/log/mngr"
 # unbounded tmpfs on an empty /tmp). A tmpfs is memory that counts against the
 # container's limit and no process kill frees, so it is capped: a write past
 # the cap fails with ENOSPC instead of OOM-killing the workspace. The cap is a
-# fixed 1 GiB because this file cannot see the host's RAM, and a `size=N%`
-# resolves against the host's RAM rather than the container's limit. It says
+# fixed 1 GiB, an eighth of the default_memory below (the ratio the cloud
+# providers use), because a `size=N%` resolves against the host's RAM rather
+# than the container's limit. It says
 # `exec` because Docker mounts a bare `--tmpfs` noexec, and a stub executable a
 # test writes under /tmp and puts on PATH is then skipped, so the real binary
 # it stands in for runs instead.
