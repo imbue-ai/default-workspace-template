@@ -4,7 +4,9 @@ The list is written by hand, once per config, so this holds it to the
 Dockerfile: every file the Dockerfile copies in is a build input (or is
 exempted here for a stated reason), the three configs agree, and no entry
 names a file that no longer exists (a rename would otherwise silently stop
-invalidating the image).
+invalidating the image). The offload the CI job installs on the runner and
+the one the sandbox init script builds into the image apply each run's diff
+together, so their pins are held equal here too.
 """
 
 from __future__ import annotations
@@ -15,6 +17,14 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parents[1]
 _DOCKERFILE_PATH = _REPO_ROOT / "system" / "Dockerfile"
+_CI_WORKFLOW_PATH = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
+_SANDBOX_INIT_PATH = _REPO_ROOT / "system" / "scripts" / "offload_sandbox_init.sh"
+_CI_OFFLOAD_VERSION_PATTERN = re.compile(
+    r'^\s+OFFLOAD_VERSION: "([^"]+)"$', re.MULTILINE
+)
+_SANDBOX_OFFLOAD_VERSION_PATTERN = re.compile(
+    r'^readonly OFFLOAD_VERSION="([^"]+)"$', re.MULTILINE
+)
 _OFFLOAD_CONFIG_PATHS = (
     _REPO_ROOT / "offload-modal.toml",
     _REPO_ROOT / "offload-modal-chat.toml",
@@ -45,6 +55,14 @@ def _dockerfile_copy_sources() -> list[str]:
         # Every argument but the last is a source.
         sources.extend(line.split()[1:-1])
     return sources
+
+
+def _pinned_offload_version(path: Path, pattern: re.Pattern[str]) -> str:
+    matches = pattern.findall(path.read_text())
+    assert len(matches) == 1, (
+        f"{path} should pin the offload version exactly once, found {matches}"
+    )
+    return matches[0]
 
 
 def _is_exempt(copy_source: str) -> bool:
@@ -79,3 +97,13 @@ def test_every_build_input_exists() -> None:
         if not (_REPO_ROOT / entry).is_file()
     ]
     assert missing == []
+
+
+def test_the_runner_and_the_image_pin_the_same_offload_version() -> None:
+    runner_version = _pinned_offload_version(
+        _CI_WORKFLOW_PATH, _CI_OFFLOAD_VERSION_PATTERN
+    )
+    image_version = _pinned_offload_version(
+        _SANDBOX_INIT_PATH, _SANDBOX_OFFLOAD_VERSION_PATTERN
+    )
+    assert runner_version == image_version

@@ -196,6 +196,11 @@ jobs:
       # offload pushes its image-cache notes (refs/notes/offload-images).
       contents: write
       id-token: write
+    env:
+      # The runner's offload and the one built into the image (OFFLOAD_VERSION in
+      # system/scripts/offload_sandbox_init.sh) talk to each other, so they stay
+      # in lockstep; system/test_offload_configs.py checks that.
+      OFFLOAD_VERSION: "0.9.14"
     steps:
       - name: Fetch the Modal token from Vault
         uses: imbue-ai/use-vault-secrets@main
@@ -233,7 +238,6 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --all-packages
 
-      # Keep in lockstep with OFFLOAD_VERSION in system/scripts/offload_sandbox_init.sh.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -244,12 +248,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin/offload
-          key: cargo-offload-0.9.14-${{ runner.os }}
+          key: cargo-offload-${{ env.OFFLOAD_VERSION }}-${{ runner.os }}
 
       - name: Install offload
         run: |
-          if ! command -v offload &> /dev/null || ! offload --version | grep -q '0.9.14'; then
-            cargo install offload@0.9.14 --force
+          if ! command -v offload &> /dev/null || ! offload --version | grep -q "$OFFLOAD_VERSION"; then
+            cargo install "offload@$OFFLOAD_VERSION" --force
           fi
 
       - name: Restore offload test durations from previous run
