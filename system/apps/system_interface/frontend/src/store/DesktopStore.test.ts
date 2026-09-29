@@ -15,7 +15,6 @@ import {
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
-import type { AppRecord } from "../model/records";
 import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
 import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
 
@@ -1208,93 +1207,54 @@ describe("desktops and shortcuts", () => {
   });
 });
 
-describe("focus-chat", () => {
-  /** An app that holds chats: it declares a launch path taking typed text as its ``message``, and pins a window. */
-  function chatAppRecord(overrides: Partial<AppRecord> = {}): AppRecord {
-    return appRecord("buddy", {
-      pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
-      launch_paths: [
-        launchPathRecord({ id: "root", path: "/" }),
-        launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
-      ],
-      ...overrides,
-    });
-  }
+describe("embedder messages", () => {
+  /** An app registered for ``minds:focus-chat``, as its manifest's ``[[message_handlers]]`` declares. */
+  const HANDLING_APP = appRecord("buddy", {
+    message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat" }],
+  });
 
-  async function chatStore(apps: readonly AppRecord[] = [appRecord("docs"), chatAppRecord()]): Promise<DesktopStore> {
-    const store = makeStore();
+  it("relays a message an app registered for once, with this client and the message's own fields", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), HANDLING_APP]);
+
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(true);
+
+    expect(api.relayedMessages).toEqual([
+      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-7" } },
+    ]);
+  });
+
+  it("relays nothing from a solo shell, whose client is the main window's", async () => {
+    api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
     await store.start(NO_LINK);
-    socket.deliver().onAppsUpdated([...apps]);
-    return store;
-  }
 
-  it("raises the window already showing the chat, switching to the desktop that holds it", async () => {
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" })],
-      }),
-      desktopRecord("work", { windows: [windowRecord("win-4", "buddy", "/chat-7")] }),
-    ];
-    const store = await chatStore();
-    expect(store.getState().activeDesktopId).toBe("home");
-    expect(await store.focusChat("chat-7")).toBe(true);
-    // The chat is already on screen somewhere: it is switched to, and nothing is opened or moved.
-    expect(store.getState().activeDesktopId).toBe("work");
-    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
-    expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([]);
-    expect(placementOf(store.getState().layout, "win-4").is_minimized).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(false);
+
+    expect(api.relayedMessages).toEqual([]);
   });
 
-  it("reads a subagent view of the chat as showing it", async () => {
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [
-          windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
-          windowRecord("win-4", "buddy", "/chat-7.agent-2.sess-3"),
-        ],
-      }),
-    ];
-    const store = await chatStore();
-    expect(await store.focusChat("chat-7")).toBe(true);
-    expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([]);
+  it("relays nothing for a type no app registered for", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), HANDLING_APP]);
+
+    expect(await store.relayEmbedderMessage({ type: "minds:close-active-tab" })).toBe(false);
+
+    expect(api.relayedMessages).toEqual([]);
   });
 
-  it("points this client's pinned chat window at a chat nothing is showing", async () => {
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [
-          windowRecord("win-1", "docs", "/a"),
-          windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
-        ],
-      }),
-    ];
-    const store = await chatStore();
-    expect(await store.focusChat("chat-7")).toBe(true);
-    expect(last(api.calls.filter((call) => call.startsWith("reportWindowLocation")))).toBe(
-      `reportWindowLocation:home:win-9:${CLIENT}:/chat-7:Buddy`,
-    );
-    // The chat lands where this viewer reads chats, shown, and as this client's own navigation for the follow.
-    expect(store.getState().layout.window_paths["win-9"]?.path).toBe("/chat-7");
-    expect(placementOf(store.getState().layout, "win-9").is_minimized).toBe(false);
-    expect(store.takeOwnNavigation()).toEqual({ windowId: "win-9", path: "/chat-7" });
-    // And a second ask for the chat it now shows moves nothing.
-    const callsBefore = api.calls.length;
-    expect(await store.focusChat("chat-7")).toBe(true);
-    expect(api.calls.length).toBe(callsBefore);
-  });
+  it("answers false and says why when the shell could not pass the message on", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([HANDLING_APP]);
+    api.refusal = "buddy did not take it";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-  it("opens the chat in a window of its own when no pinned window takes it", async () => {
-    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
-    const store = await chatStore([appRecord("docs"), chatAppRecord({ pin: null })]);
-    expect(await store.focusChat("chat-7")).toBe(true);
-    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual(["openWindow:home:buddy:/chat-7:focus"]);
-  });
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(false);
 
-  it("answers false when no app on this machine holds chats", async () => {
-    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
-    const store = await chatStore([appRecord("docs")]);
-    expect(await store.focusChat("chat-7")).toBe(false);
-    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+    expect(warn.mock.calls.map((call) => String(call[0]))).toEqual([
+      "[si] could not relay minds:focus-chat from the embedder",
+    ]);
+    warn.mockRestore();
   });
 });
 
@@ -1519,6 +1479,34 @@ describe("pulled-out windows", () => {
     expect(savedCalls()).toHaveLength(2);
   });
 
+  it("shows a pulled-out window's own desktop window when a show op lands on it, leaving it out", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    const { store, calls } = makePopOutStore();
+    await store.start(NO_LINK);
+
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1" }, requester: "buddy" });
+
+    expect(calls).toEqual([["request", expect.objectContaining({ windowId: "win-1", title: "Docs" })]]);
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
+    expect(savedCalls()).toHaveLength(0);
+  });
+
+  it("leaves a show op on a pulled-out window to the main window's page when it is a solo shell", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    const { store, calls } = makePopOutStore("win-1");
+    await store.start(NO_LINK);
+
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1" }, requester: "buddy" });
+
+    expect(calls).toEqual([]);
+  });
+
   it("hides a pulled-out window's ghost and shows it again from its taskbar entry, the window staying out", async () => {
     const { store, calls, reports } = makePopOutStore();
     await store.start(NO_LINK);
@@ -1581,11 +1569,10 @@ describe("pulled-out windows", () => {
     // The client's own desktop is never reported from here: it belongs to the main window.
     expect(socket.reports).toEqual([]);
     expect(reports).toEqual([[{ windowId: "win-5", title: "Notes" }]]);
-    // The page's own focus report, a chat ask, the close chord: none of them rearrange anything.
+    // The page's own focus report and the close chord rearrange nothing.
     store.raiseWindow("win-5");
     expect(placementOf(store.getState().layout, "win-5").is_detached).toBe(true);
     expect(isLayoutDirty(store.getState())).toBe(false);
-    expect(await store.focusChat("chat-1")).toBe(false);
     await store.closeFocusedWindow();
     expect(api.calls.filter((call) => call.startsWith("closeWindow"))).toEqual([]);
     // A push moving the client to another desktop is the main window's business.
