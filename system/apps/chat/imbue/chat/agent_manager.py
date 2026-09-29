@@ -3310,7 +3310,7 @@ class AgentManager:
 
     def ensure_spare_chat_in_background(self) -> None:
         """``ensure_spare_chat`` on a thread of its own, for a caller holding a lock of its own (a sign-in)."""
-        threading.Thread(target=self.ensure_spare_chat, daemon=True, name="ensure-spare-chat").start()
+        self._creation_cg.start_new_thread(target=self.ensure_spare_chat, name="ensure-spare-chat", is_checked=False)
 
     def _wait_for_spare_harness(self, spare: SpareChatAgent, harness: HarnessType) -> bool:
         """Wait until a created spare's harness accepts input; False when it does not within
@@ -3427,9 +3427,7 @@ class AgentManager:
         finally:
             if settled is not None:
                 settled.set()
-            self._broadcaster.broadcast_provisional_chat_completed(
-                chat_id=chat_id, success=error is None, error=error
-            )
+            self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=error is None, error=error)
 
     def _discard_spare(self, chat_id: ChatId) -> None:
         """``mngr destroy`` a spare no longer wanted, and forget it once it is gone.
