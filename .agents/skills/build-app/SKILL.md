@@ -261,11 +261,10 @@ Repeat until every node is done.
    - The `-S` pair sets the model for this one worker, and the value is the node's
      `model` in `plan.json` -- chosen by the capability the planner gave it, so a
      `high` node runs on Opus, a `medium` one on Sonnet and a `low` one on Haiku
-     rather than every node costing Opus. To put a whole build on one model instead,
-     export `BUILD_APP_WORKER_MODEL=opus[1m]` before the `parse` above: the models
-     are resolved when `plan.json` is written, which is also what makes that file a
-     record of what each node actually ran on. Write each `--create-arg` joined with
-     `=`, or an argument starting with `-` is read as an option of `launch` itself.
+     rather than every node costing Opus. `MODEL_BY_CAPABILITY` in
+     `scripts/plan_orchestration.py` is the one place that mapping lives; edit it to
+     put a whole build on one model. Write each `--create-arg` joined with `=`, or an
+     argument starting with `-` is read as an option of `launch` itself.
 
 3. **Start each interactive node it printed** with Step 5. Add it to `running`.
 

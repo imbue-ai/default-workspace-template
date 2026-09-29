@@ -14,6 +14,7 @@ a settings override outranks the repo's own `.claude/settings.json` -- so every 
 had been running without the 1M context window the workspace provisions, invisibly,
 since the bare alias is accepted and reports the same display name.
 
-`BUILD_APP_WORKER_MODEL=opus[1m]` puts every worker back on one model, which is the
-arm any comparison of the tiering has to run against. It is read when `plan.json` is
-written, so `plan.json` stays a record of what each node actually ran on.
+To put every worker back on one model -- the arm any comparison of the tiering has to run
+against -- set every value in `MODEL_BY_CAPABILITY` to that alias. Editing the table is the
+only way to do it: the model a build used is then a property of the commit it ran on, which
+is what lets two eval arms differ by nothing else.

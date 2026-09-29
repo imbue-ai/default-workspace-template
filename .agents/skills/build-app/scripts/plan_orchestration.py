@@ -46,7 +46,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -71,16 +70,16 @@ INTERACTIVE_CAPABILITY: Final[str] = "interactive"
 # name, and silently hands back a smaller window, which is why it must not be dropped
 # (the same reasoning as ``system/apps/chat/imbue/chat/harnesses/claude/model.py``).
 # Haiku has no ``[1m]`` variant.
-TIERED_MODEL_BY_CAPABILITY: Final[dict[str, str]] = {
+#
+# To run a whole build on one model -- the uniform-Opus arm a comparison of the tiering
+# has to run against -- set every value here to that alias. Editing the table is the
+# only way to do it, on purpose: the value a build used is then a property of the commit
+# it ran, which is what lets two eval arms differ by nothing else.
+MODEL_BY_CAPABILITY: Final[dict[str, str]] = {
     "low": "haiku",
     "medium": "sonnet[1m]",
     "high": "opus[1m]",
 }
-
-# Set this to one model alias to run every worker on it, ignoring the tiers.
-# ``BUILD_APP_WORKER_MODEL=opus[1m]`` is the uniform-Opus build the tiers replaced,
-# which is the arm a comparison of the tiering has to run against.
-UNIFORM_MODEL_VARIABLE: Final[str] = "BUILD_APP_WORKER_MODEL"
 
 MIN_NODE_COUNT: Final[int] = 3
 MAX_NODE_COUNT: Final[int] = 15
@@ -107,13 +106,9 @@ def model_for_capability(capability: str) -> str | None:
     """The model alias a worker of this capability runs on.
 
     ``None`` for an interactive node: that is a conversation the orchestrating agent
-    holds itself, so it has no worker and no model of its own. Read per call rather
-    than frozen at import so the uniform override can be set for one build.
+    holds itself, so it has no worker and no model of its own.
     """
-    if capability not in TIERED_MODEL_BY_CAPABILITY:
-        return None
-    uniform_model = os.environ.get(UNIFORM_MODEL_VARIABLE, "").strip()
-    return uniform_model or TIERED_MODEL_BY_CAPABILITY[capability]
+    return MODEL_BY_CAPABILITY.get(capability)
 
 
 def node_folder(run_dir: Path, node_idx: int) -> Path:
