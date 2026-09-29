@@ -665,3 +665,57 @@ def test_a_plan_written_before_the_flag_still_schedules() -> None:
     for node in plan["nodes"]:
         del node["has_worker"]
     assert plan_orchestration.find_ready_nodes(plan, [0], []) == [1, 2, 3]
+
+
+def test_consecutive_orchestrator_nodes_become_one_piece_of_work() -> None:
+    """Nodes 4 and 5 run back to back with nobody else involved, so splitting them
+    divides work between one agent and itself."""
+    plan = plan_orchestration.parse_plan(_FAN_OUT_PLAN, only_parallel_workers=True)
+    assert plan["own_groups"] == [[0], [4, 5]]
+    assert [node["own_group"] for node in plan["nodes"]] == [0, None, None, None, 1, 1]
+
+
+def test_an_interactive_node_splits_the_work_around_it() -> None:
+    """The nodes after a question are meant to be written against its answer, so work
+    cannot be folded across one."""
+    plan = plan_orchestration.parse_plan(
+        _plan_text(
+            '["high", "medium", "medium", "interactive", "high", "low"]',
+            '["open", "a", "b", "ask the user", "join", "finish"]',
+            "[[], [0], [0], [1, 2], [3], [4]]",
+        ),
+        only_parallel_workers=True,
+    )
+    # 1 and 2 run together so they keep their workers; 3 is the question; 4 and 5 follow.
+    assert plan["own_groups"] == [[0], [3], [4, 5]]
+
+
+def test_a_worker_node_ends_a_run_of_the_orchestrators_own() -> None:
+    """The orchestrator has to wait for a worker and merge its branch, so its own work
+    cannot continue across one."""
+    waves = [[0], [1, 2], [3]]
+    groups = plan_orchestration.group_orchestrator_nodes(
+        waves, {1, 2}, ["high", "medium", "medium", "low"]
+    )
+    assert groups == [[0], [3]]
+
+
+def test_with_the_flag_off_the_orchestrator_owns_only_interactive_nodes() -> None:
+    plan = plan_orchestration.parse_plan(
+        _plan_text(
+            '["high", "interactive", "medium"]',
+            '["build", "ask", "finish"]',
+            "[[], [], [0, 1]]",
+        )
+    )
+    assert plan["own_groups"] == [[1]]
+
+
+def test_every_orchestrator_node_lands_in_exactly_one_group() -> None:
+    """A node the orchestrator owns but no group names would silently never be done."""
+    plan = plan_orchestration.parse_plan(_FAN_OUT_PLAN, only_parallel_workers=True)
+    grouped = [idx for group in plan["own_groups"] for idx in group]
+    assert sorted(grouped) == sorted(
+        node["index"] for node in plan["nodes"] if not node["has_worker"]
+    )
+    assert len(grouped) == len(set(grouped))

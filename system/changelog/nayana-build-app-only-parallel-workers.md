@@ -23,3 +23,11 @@ starts a held-back node as soon as a slot frees. Where six or more nodes are unb
 once, a node the schedule shows alone in a trailing wave can lose its worker even though
 the build would have run it beside others. Accepted: it takes six simultaneously unblocked
 nodes to reach, and a node running with four others already has every slot the cap allows.
+
+`plan.json` also carries `own_groups`: the orchestrator's own nodes grouped into the runs it
+should do as one piece of work, with each node's `own_group` naming its run. For the DAG
+above that is `[[0], [4, 5]]` -- node 0 alone, then nodes 4 and 5 together, because they are
+consecutive and both the orchestrator's, so keeping them apart divides the work between one
+agent and itself and invites a second pass over the same files. A run stops at a node with a
+worker, which has to be waited for and merged first, and at an interactive node, since the
+nodes after a question are written against its answer.
