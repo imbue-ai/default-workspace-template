@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -56,13 +57,30 @@ from typing import Final, Sequence
 CAPABILITIES: Final[tuple[str, ...]] = ("low", "medium", "high", "interactive")
 INTERACTIVE_CAPABILITY: Final[str] = "interactive"
 
-# The model a worker runs on, by capability. Every capability starts on Opus;
-# this table is the one place to change that.
-MODEL_BY_CAPABILITY: Final[dict[str, str]] = {
-    "low": "opus",
-    "medium": "opus",
-    "high": "opus",
+# The model a worker runs on, by the capability the planner assigned its node: the
+# strongest model where the planner judged the work hard, the cheapest where it judged
+# it easy. This table is the one place that mapping lives.
+#
+# Each value is a Claude Code model ALIAS, never a dated id. An alias resolves through
+# the pinned binary's own table to the current best model in that family, so a version
+# bump carries the tiers forward with no edit here: on the pinned 2.1.280, ``sonnet``
+# is Sonnet 5, and it becomes Sonnet 5.5 as soon as a pin carries that model.
+#
+# The ``[1m]`` suffix is Claude Code's explicit opt-in for the 1M-token context window
+# this workspace provisions -- the bare alias is accepted, reports the same display
+# name, and silently hands back a smaller window, which is why it must not be dropped
+# (the same reasoning as ``system/apps/chat/imbue/chat/harnesses/claude/model.py``).
+# Haiku has no ``[1m]`` variant.
+TIERED_MODEL_BY_CAPABILITY: Final[dict[str, str]] = {
+    "low": "haiku",
+    "medium": "sonnet[1m]",
+    "high": "opus[1m]",
 }
+
+# Set this to one model alias to run every worker on it, ignoring the tiers.
+# ``BUILD_APP_WORKER_MODEL=opus[1m]`` is the uniform-Opus build the tiers replaced,
+# which is the arm a comparison of the tiering has to run against.
+UNIFORM_MODEL_VARIABLE: Final[str] = "BUILD_APP_WORKER_MODEL"
 
 MIN_NODE_COUNT: Final[int] = 3
 MAX_NODE_COUNT: Final[int] = 15
@@ -83,6 +101,19 @@ WORKER_RULES_REFERENCE: Final[str] = (
 )
 PLAN_MARKDOWN_FILE_NAME: Final[str] = "plan.md"
 PLAN_JSON_FILE_NAME: Final[str] = "plan.json"
+
+
+def model_for_capability(capability: str) -> str | None:
+    """The model alias a worker of this capability runs on.
+
+    ``None`` for an interactive node: that is a conversation the orchestrating agent
+    holds itself, so it has no worker and no model of its own. Read per call rather
+    than frozen at import so the uniform override can be set for one build.
+    """
+    if capability not in TIERED_MODEL_BY_CAPABILITY:
+        return None
+    uniform_model = os.environ.get(UNIFORM_MODEL_VARIABLE, "").strip()
+    return uniform_model or TIERED_MODEL_BY_CAPABILITY[capability]
 
 
 def node_folder(run_dir: Path, node_idx: int) -> Path:
@@ -277,7 +308,7 @@ def parse_plan(plan_text: str, *, reduce_access: bool = False) -> dict[str, obje
             # plan.json shows the reduction rather than hiding it; plan.md holds
             # the planner's own words either way.
             "access_dropped": dropped_access[idx],
-            "model": MODEL_BY_CAPABILITY.get(capabilities[idx]),
+            "model": model_for_capability(capabilities[idx]),
         }
         for idx in range(node_count)
     ]
