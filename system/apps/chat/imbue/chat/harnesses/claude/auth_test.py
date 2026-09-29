@@ -30,6 +30,7 @@ def isolated_claude_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     config_dir = tmp_path / "claude-config"
     config_dir.mkdir()
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
     return config_dir
 
 
@@ -239,6 +240,36 @@ def test_resolution_honors_explicit_config_dir_env(isolated_claude_config: Path)
     the .claude.json inside it (claude's set-var layout)."""
     assert auth._resolve_claude_config_dir() == isolated_claude_config
     assert auth._resolve_claude_json_path() == isolated_claude_config / ".claude.json"
+
+
+# workspace id
+
+
+def test_read_workspace_id_prefers_the_services_agents_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    (tmp_path / "data.json").write_text(json.dumps({"host_id": "host-123"}))
+    services_dir = tmp_path / "agents" / "agent-abc"
+    services_dir.mkdir(parents=True)
+    (services_dir / "data.json").write_text(
+        json.dumps({"id": "agent-abc", "name": "system-services", "labels": {"is_primary": "true"}})
+    )
+    chat_dir = tmp_path / "agents" / "agent-chat"
+    chat_dir.mkdir(parents=True)
+    (chat_dir / "data.json").write_text(json.dumps({"id": "agent-chat", "labels": {}}))
+    assert auth.read_workspace_id() == "agent-abc"
+
+
+def test_read_workspace_id_falls_back_to_the_machines_host_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    (tmp_path / "data.json").write_text(json.dumps({"host_id": "host-123"}))
+    assert auth.read_workspace_id() == "host-123"
+
+
+def test_read_workspace_id_tolerates_missing_env_and_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
+    assert auth.read_workspace_id() is None
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    assert auth.read_workspace_id() is None
 
 
 # agent snapshot / restart
