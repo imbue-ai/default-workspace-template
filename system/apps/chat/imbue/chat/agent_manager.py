@@ -2553,12 +2553,22 @@ class AgentManager:
                 )
         self._broadcast_chats_updated()
 
-    def rename_minted_chat(self, chat_id: ChatId, display_name: str) -> bool:
-        """Rename a chat that still wears its minted "Chat N" name, as ``rename_chat`` would; False, running
-        nothing, when it has any other name, so an automatic name never replaces one a person or agent chose.
-        Raises what ``rename_chat`` raises."""
+    def has_placeholder_name(self, chat_id: ChatId) -> bool:
+        """Whether a chat still wears a name nobody chose for it: a minted "Chat N", or the title it was seeded with
+        (the Mind app's "Welcome")."""
         snapshot = self.get_chat_snapshot(chat_id)
-        if snapshot is None or not is_minted_chat_name(snapshot.title):
+        if snapshot is None:
+            return False
+        with self._lock:
+            record = self._chat_record_by_id.get(chat_id)
+        is_seed_title = record is not None and record.seed_title == snapshot.title
+        return is_minted_chat_name(snapshot.title) or is_seed_title
+
+    def rename_placeholder_named_chat(self, chat_id: ChatId, display_name: str) -> bool:
+        """Rename a chat that still wears a placeholder name, as ``rename_chat`` would; False, running nothing,
+        when it has any other name, so an automatic name never replaces one a person or agent chose.
+        Raises what ``rename_chat`` raises."""
+        if not self.has_placeholder_name(chat_id):
             return False
         self.rename_chat(chat_id, display_name)
         return True

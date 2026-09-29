@@ -159,7 +159,8 @@ def build_production_state(
         else ChatNamer(
             chat_files_root=chat_records_root,
             get_active_agent_info=agent_manager.get_active_agent_info,
-            rename_minted_chat=agent_manager.rename_minted_chat,
+            has_placeholder_name=agent_manager.has_placeholder_name,
+            rename_placeholder_named_chat=agent_manager.rename_placeholder_named_chat,
             build_one_shot_completion=build_one_shot_completion,
         ),
         # One long-lived service per app: it holds the in-flight sign-in PTY between the

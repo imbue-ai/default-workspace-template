@@ -10,8 +10,8 @@ For chat agents the display name lives on the mngr agent itself, as its
 ``display_name`` label, with the canonical form as the agent's mngr name.
 Display names are minted here, server-side, as the first free "Chat N", so two
 clients creating at the same time cannot both mint "Chat 1". A chat still wearing
-its minted name is given a descriptive one from its first message
-(``chat_naming.py``).
+its minted name (or a seeded chat still wearing its seed title) is given a
+descriptive one from its first message (``chat_naming.py``).
 """
 
 import re

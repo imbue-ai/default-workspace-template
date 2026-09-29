@@ -1899,7 +1899,7 @@ def test_rename_chat_rejects_a_name_with_no_usable_characters(
         manager.stop()
 
 
-def test_rename_minted_chat_renames_a_chat_still_called_chat_n(
+def test_rename_placeholder_named_chat_renames_a_chat_still_called_chat_n(
     broadcaster: WebSocketBroadcaster,
     true_binary: str,
 ) -> None:
@@ -1907,7 +1907,7 @@ def test_rename_minted_chat_renames_a_chat_still_called_chat_n(
     try:
         _tracked_chat(manager, "agent-7", "Chat-2", display_name="Chat 2")
 
-        is_renamed = manager.rename_minted_chat(ChatId("agent-7"), "Rome trip: plan five days")
+        is_renamed = manager.rename_placeholder_named_chat(ChatId("agent-7"), "Rome trip: plan five days")
 
         assert is_renamed
         renamed = manager.get_agent_by_id("agent-7")
@@ -1918,7 +1918,7 @@ def test_rename_minted_chat_renames_a_chat_still_called_chat_n(
         manager.stop()
 
 
-def test_rename_minted_chat_leaves_a_chosen_name_alone_without_running_mngr(
+def test_rename_placeholder_named_chat_leaves_a_chosen_name_alone_without_running_mngr(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
@@ -1927,8 +1927,37 @@ def test_rename_minted_chat_leaves_a_chosen_name_alone_without_running_mngr(
     try:
         _tracked_chat(manager, "agent-7", "Planning-notes", display_name="Planning notes")
 
-        assert not manager.rename_minted_chat(ChatId("agent-7"), "Rome trip: plan five days")
-        assert not manager.rename_minted_chat(ChatId("agent-nowhere"), "Rome trip: plan five days")
+        assert not manager.rename_placeholder_named_chat(ChatId("agent-7"), "Rome trip: plan five days")
+        assert not manager.rename_placeholder_named_chat(ChatId("agent-nowhere"), "Rome trip: plan five days")
+    finally:
+        manager.stop()
+
+
+def test_a_seeded_chat_still_wearing_its_seed_title_is_renamed_like_a_minted_one(
+    broadcaster: WebSocketBroadcaster,
+    true_binary: str,
+) -> None:
+    """The Mind app seeds its "Welcome" chat; until someone names it, its seed title is a placeholder too."""
+    manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
+    try:
+        chat_id = ChatId("agent-" + "5" * 32)
+        agent_id = "agent-" + "6" * 32
+        seed = make_chat_agent_entry(1, str(chat_id), is_archived=True, harness=HarnessType.SEED)
+        record = ChatRecord(
+            chat_id=chat_id, agents=(seed, make_chat_agent_entry(2, agent_id, is_archived=False)), seed_title="Welcome"
+        )
+        with manager._lock:
+            manager._chat_record_by_id[chat_id] = record
+        _tracked_chat(manager, agent_id, "Welcome", display_name="Welcome")
+        assert manager.has_placeholder_name(chat_id)
+
+        is_renamed = manager.rename_placeholder_named_chat(chat_id, "Sales report: summarize last quarter")
+
+        assert is_renamed
+        renamed = manager.get_agent_by_id(agent_id)
+        assert renamed is not None
+        assert renamed.labels["display_name"] == "Sales report: summarize last quarter"
+        assert not manager.has_placeholder_name(chat_id)
     finally:
         manager.stop()
 

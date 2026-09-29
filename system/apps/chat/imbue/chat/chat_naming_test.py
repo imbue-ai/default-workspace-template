@@ -52,11 +52,14 @@ class _NamingHarness:
         self.completion = ScriptedOneShotCompletion(answers)
         self.renames: list[str] = []
         self.rename_error: Exception | None = None
+        # Whether the chat still wears a name nobody chose, as the manager would answer.
+        self.is_placeholder_named = True
         self.chat_files_root = tmp_path / "chats"
         self.namer = ChatNamer(
             chat_files_root=self.chat_files_root,
             get_active_agent_info=lambda _chat_id: self.agent_info,
-            rename_minted_chat=self._rename,
+            has_placeholder_name=lambda _chat_id: self.is_placeholder_named,
+            rename_placeholder_named_chat=self._rename,
             build_one_shot_completion=self._build_completion,
             agent_wait_seconds=0.0,
             executor=_InlineExecutor(),
@@ -141,7 +144,8 @@ def test_naming_stops_trying_after_the_attempt_limit(tmp_path: Path) -> None:
 
 
 def test_a_chat_named_any_other_way_is_left_alone_without_asking_the_model(tmp_path: Path) -> None:
-    harness = _NamingHarness(tmp_path, "Welcome", ["Greeting: say hello"])
+    harness = _NamingHarness(tmp_path, "Planning notes", ["Greeting: say hello"])
+    harness.is_placeholder_named = False
 
     harness.namer.consider_message(_CHAT_ID, "Hi, what can you do?")
 

@@ -5,8 +5,9 @@ chat runs on (the harness's ``OneShotCompletion``), outside the chat's transcrip
 answer replaces the minted name through the ordinary rename. The name is set once and never
 follows the chat as its topic drifts, so it stays where the user learned it. A chat whose
 opening message has no clear subject ("hi") keeps its minted name and is tried again on its
-next message, up to ``MAX_NAMING_ATTEMPTS`` messages; a chat named any other way (by the
-user, by an agent, a seeded "Welcome") is never touched.
+next message, up to ``MAX_NAMING_ATTEMPTS`` messages. A seeded chat (the Mind app's
+"Welcome") is named the same way from the first message the user sends in it; a chat named any
+other way (by the user, by an agent) is never touched.
 
 What has been tried is kept in the chat's own folder, beside its fast mode, so a restart of
 the app neither renames a named chat nor retries past the limit.
@@ -33,7 +34,6 @@ from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.naming import canonical_agent_name
-from imbue.chat.naming import is_minted_chat_name
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -122,8 +122,11 @@ class ChatNamer(MutableModel):
     get_active_agent_info: Callable[[ChatId], AgentInfo | None] = Field(
         frozen=True, description="The agent a chat runs on, once it is listed"
     )
-    rename_minted_chat: Callable[[ChatId, str], bool] = Field(
-        frozen=True, description="Renames a chat still wearing its minted name; False when it has another"
+    has_placeholder_name: Callable[[ChatId], bool] = Field(
+        frozen=True, description='Whether a chat still wears a name nobody chose ("Chat N", or its seed title)'
+    )
+    rename_placeholder_named_chat: Callable[[ChatId, str], bool] = Field(
+        frozen=True, description="Renames a chat still wearing a placeholder name; False when it has another"
     )
     build_one_shot_completion: Callable[[HarnessType], OneShotCompletion | None] = Field(
         frozen=True, description="The harness's way to ask one question outside the chat, if it has one"
@@ -171,7 +174,7 @@ class ChatNamer(MutableModel):
             logger.debug("Skipped naming chat {}: it did not come up", chat_id)
             return
         chat_dir = self.chat_files_root / chat_id
-        if not is_minted_chat_name(agent_info.labels.get("display_name") or agent_info.name):
+        if not self.has_placeholder_name(chat_id):
             write_chat_naming_state(chat_dir, ChatNamingState(is_settled=True))
             return
         completion = self.build_one_shot_completion(agent_info.harness)
@@ -193,7 +196,7 @@ class ChatNamer(MutableModel):
 
         # Apply it, unless the chat was named some other way meanwhile
         try:
-            is_renamed = self.rename_minted_chat(chat_id, name)
+            is_renamed = self.rename_placeholder_named_chat(chat_id, name)
         except (AgentRenameError, ChatConvergingError) as e:
             logger.warning("Failed to name chat {} {!r}: {}", chat_id, name, e)
             self._record_attempt(chat_dir)
