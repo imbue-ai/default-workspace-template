@@ -1756,7 +1756,11 @@ append_system_prompt__extend = ["You were launched by another agent. List any qu
 #   merges, so uncommitted work is work that never reaches the build.
 # - It keeps `worker`'s provisioning. A fresh worktree carries no .venv, so
 #   without the sync the worker cold-builds one mid-task, lazily and at
-#   root-closure scope, racing whatever it is doing.
+#   root-closure scope, racing whatever it is doing. Because provisioning already
+#   syncs the worktree it is about to run in, the SessionStart hooks in
+#   .claude/settings.json skip their own `uv sync --all-packages` and
+#   claude_update_plugin.sh for this role -- otherwise both run twice per worker,
+#   inside the 40-50 seconds a worker spends between its launch and its first action.
 # - Messaged with `mngr message` rather than through the chat app (the
 #   orchestrator passes `--message-with-mngr`). Nobody opens one of these in the
 #   chat UI, and the chat app's route knows an agent only once it has re-read
