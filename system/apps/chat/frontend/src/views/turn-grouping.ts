@@ -86,6 +86,7 @@ import {
   isNonBoundaryUserMessage,
   isNoticeUserMessage,
   isPromptWithContext,
+  isStatusUserMessage,
   isSystemChipUserMessage,
   resolutionOf,
   resolutionRequestIdOf,
@@ -168,6 +169,8 @@ export type TimelineItem =
   /** A system chip or notice that landed inside an open handoff node, shown inline after it.
    *  Anywhere else a chip heads a section of its own (SectionView.user_event). */
   | { kind: "chip"; event: UserMessageEvent }
+  /** An inline status line (e.g. context compaction that happened mid-turn). */
+  | { kind: "status"; event: UserMessageEvent }
   /** The chat's handoff to another agent, at the point its summary was asked for (or, with no
    *  request in the window, at the switch itself, when its prompt reached it). */
   | { kind: "handoff"; node: HandoffNode };
@@ -184,6 +187,9 @@ export interface SectionView {
   /** The final run of ungrouped prose: the user-facing reply, rendered below
    *  the timeline. */
   trailing_reply: AssistantMessageEvent[];
+  /** Status messages that arrived after the trailing reply (or after the reply boundary),
+   *  rendered below the timeline and reply. */
+  trailing_status: UserMessageEvent[];
 }
 
 /** A status transition line printed by tk on every state change:
@@ -434,6 +440,8 @@ type SectionEntry =
   | { kind: "permission"; event: AssistantMessageEvent }
   /** A system chip or notice that landed inside an open handoff node. */
   | { kind: "chip"; event: UserMessageEvent }
+  /** A status message (e.g. context compaction). */
+  | { kind: "status"; event: UserMessageEvent }
   /** The handoff node, at the summary request that opened it or at a switch with no request. */
   | { kind: "handoff"; node: HandoffNode }
   | { kind: "event"; event: AssistantMessageEvent; step_id: string | null };
@@ -652,13 +660,18 @@ export function buildSections(
         current.entries.push({ kind: "chip", event: e });
         continue;
       }
+      if (isStatusUserMessage(e)) {
+        if (current === null) current = ensureSection(null, "section-pre");
+        current.entries.push({ kind: "status", event: e });
+        continue;
+      }
       if (isNonBoundaryUserMessage(e)) {
         // Skill expansions and hidden framework injections (/welcome, image notes, resume
         // markers) render nowhere on the user rail, so they are dropped here.
         continue;
       }
 
-      // A boundary -- a real user turn, a status line, or a system chip or notice (see the
+      // A boundary -- a real user turn, or a system chip or notice (see the
       // module docstring): close the prior section (carrying open steps) and open a new one
       // headed by the message.
       lastSwitched = null;
@@ -880,10 +893,25 @@ function finalizeSection(
     else if (en.kind === "event" && isWork(en.event)) lastWorkEntryIdx = i;
     // A handoff node bounds the reply too: what the agent said before the switch stays above it.
     else if (en.kind === "step" || en.kind === "handoff") lastStepEntryIdx = i;
+    else if (en.kind === "status") {
+      const hasLaterContent = section.entries
+        .slice(i + 1)
+        .some(
+          (later) =>
+            later.kind === "step" ||
+            later.kind === "permission" ||
+            later.kind === "handoff" ||
+            (later.kind === "event" && (isWork(later.event) || isProse(later.event))),
+        );
+      if (hasLaterContent) {
+        lastWorkEntryIdx = i;
+      }
+    }
   }
   const replyBoundary = Math.max(lastWorkEntryIdx, lastStepEntryIdx);
   const trailingIds = new Set<string>();
   const trailing_reply: AssistantMessageEvent[] = [];
+  let lastTrailingReplyEntryIdx = replyBoundary;
   for (let i = replyBoundary + 1; i < section.entries.length; i++) {
     const en = section.entries[i];
     if (en.kind !== "event" || !isProse(en.event)) continue;
@@ -893,6 +921,17 @@ function finalizeSection(
     if (en.step_id !== null && en.step_id === frontierId) continue;
     trailing_reply.push(en.event);
     trailingIds.add(en.event.event_id);
+    lastTrailingReplyEntryIdx = i;
+  }
+
+  const trailing_status: UserMessageEvent[] = [];
+  const trailingStatusIndices = new Set<number>();
+  for (let i = lastTrailingReplyEntryIdx + 1; i < section.entries.length; i++) {
+    const en = section.entries[i];
+    if (en.kind === "status") {
+      trailing_status.push(en.event);
+      trailingStatusIndices.add(i);
+    }
   }
 
   // 3. Narration: the latest in-step prose -- the live caption under the step.
@@ -939,7 +978,8 @@ function finalizeSection(
     }
   };
 
-  for (const entry of section.entries) {
+  for (let i = 0; i < section.entries.length; i++) {
+    const entry = section.entries[i];
     if (entry.kind === "step") {
       flushUngrouped();
       if (!emittedSteps.has(entry.id)) {
@@ -957,6 +997,11 @@ function finalizeSection(
       // own transcript position.
       flushUngrouped();
       items.push({ kind: "chip", event: entry.event });
+    } else if (entry.kind === "status") {
+      if (!trailingStatusIndices.has(i)) {
+        flushUngrouped();
+        items.push({ kind: "status", event: entry.event });
+      }
     } else if (entry.kind === "handoff") {
       flushUngrouped();
       items.push({ kind: "handoff", node: entry.node });
@@ -990,5 +1035,5 @@ function finalizeSection(
     }
   }
 
-  return { user_event: section.user_event, key: section.key, items, trailing_reply };
+  return { user_event: section.user_event, key: section.key, items, trailing_reply, trailing_status };
 }

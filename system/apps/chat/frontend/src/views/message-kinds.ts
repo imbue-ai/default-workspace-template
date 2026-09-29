@@ -188,11 +188,11 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
   },
   [UserMessageKind.StatusMessage]: {
     rail: Rail.User,
-    boundary: true,
-    isTurn: true,
+    boundary: false,
+    isTurn: false,
     netVisual:
       "A subtle centered status pill (e.g. 'Context was compacted') rendered as " +
-      "its own row between turns or at the start/end of a turn.",
+      "its own row between turns or inline during a turn.",
   },
   [UserMessageKind.Notice]: {
     rail: Rail.Assistant,
