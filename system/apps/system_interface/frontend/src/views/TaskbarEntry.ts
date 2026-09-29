@@ -59,19 +59,20 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         "aria-label": tooltip,
         class:
           // A labelled chip rather than a bare tile: the icon and the name sit in it, and the chip is
-          // what carries the states, since a tint behind an icon that no longer fills the entry has
-          // somewhere to show. Body text -- this is a name being read, not a dense list.
+          // what carries the states. Body text -- this is a name being read, not a dense list.
           "taskbar-entry relative flex h-(--desk-taskbar-entry-size) min-w-(--desk-touch-target) max-w-48 " +
           // 4px all round, but 8 on the right: the name ends where the chip does otherwise, and a
           // title cut off mid-word wants somewhere to stop.
-          "shrink-0 items-center gap-1.5 rounded-xl border p-1 pr-2 text-(length:--font-size-body) " +
+          "shrink-0 items-center gap-1.5 rounded-xl p-1 pr-2 text-(length:--font-size-body) " +
           "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-accent " +
-          (entry.isFocused ? "border-default bg-surface shadow-raised " : "border-transparent hover:bg-fill-hover ") +
-          // A window's name is a name whichever window you are in: the chip's surface and its
-          // elevation say which one is focused, and the text stays out of it. Faint is a different
-          // thing -- the window is out of sight, not merely not in front.
-          (isDimmed ? "text-faint " : "text-primary ") +
-          (isMenuOpen ? "bg-fill-active " : ""),
+          // The chrome's own two control tints and nothing else: the hover one under the pointer, the
+          // active one for the window you are in (and for the entry whose menu is open, which is the
+          // same statement about the same chip). No border, no elevation -- a tint is the whole of it.
+          (entry.isFocused || isMenuOpen ? "bg-fill-active " : "hover:bg-fill-hover ") +
+          // A window's name is a name whichever window you are in: the tint says which is focused and
+          // the text stays out of it. Faint is a different thing -- the window is out of sight, not
+          // merely not in front.
+          (isDimmed ? "text-faint " : "text-primary "),
         // The peek stands in the bubble's place and says more than it does, so the two never show at
         // once. The pause is the shared one again: the entry names itself now, so the bubble is an
         // aside (the whole of a truncated title) rather than the only thing saying what this is.
@@ -103,6 +104,9 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
             // is left here is the fade for a window that is out of sight.
             class:
               "taskbar-entry-tile flex size-(--desk-taskbar-entry-icon) shrink-0 items-center justify-center " +
+              // The same shadow a shortcut casts on the desktop: it is the same tile, and on a solid
+              // bar it wants the same lift off it.
+              "shadow-(--desk-icon-shadow) " +
               (isAvatar ? "rounded-2xl [&>img]:size-full " : "rounded-[32%] [&>svg]:size-full ") +
               (isDimmed ? "opacity-70" : ""),
           },

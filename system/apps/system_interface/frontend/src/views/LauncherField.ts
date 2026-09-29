@@ -103,7 +103,9 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
         {
           "data-launcher-field": "",
           class:
-            "launcher-field absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-lg border bg-surface " +
+            // The same corner the menu card above it takes (``menuCardClass``): the two are one thing
+            // with a seam in it, not a box and a card that happen to be stacked.
+            "launcher-field absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-xl border bg-surface " +
             "px-2.5 " +
             (isOpen ? "border-accent" : "border-default"),
         },

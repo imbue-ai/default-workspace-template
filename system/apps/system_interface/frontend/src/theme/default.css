@@ -33,7 +33,8 @@
   --desk-window-control-inset: 4px;
   --desk-window-control-size: calc(var(--desk-title-bar-height) - 2 * var(--desk-window-control-inset));
   --desk-window-shadow: var(--shadow-overlay);
-  --desk-taskbar-surface: color-mix(in srgb, var(--c-surface) 70%, transparent);
+  /* Solid, not a pane you can see the desktop through: the bar is a surface the entries sit on. */
+  --desk-taskbar-surface: var(--c-surface);
   --desk-backdrop: var(--c-bg);
   --desk-default-wallpaper: url(/wallpapers/bundled/arcs);
   --desk-icon-size: 48px;
