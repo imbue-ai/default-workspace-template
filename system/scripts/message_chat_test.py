@@ -32,6 +32,13 @@ class _FakeClock:
         return self.now
 
 
+class _Tty(io.StringIO):
+    """A stdin that reads as a terminal, so no message was piped in."""
+
+    def isatty(self) -> bool:
+        return True
+
+
 def _run(
     *args: str,
     stdin: str = "",
@@ -418,10 +425,6 @@ def test_the_chat_app_url_comes_from_the_registry_row_else_the_fixed_port(
 def test_no_message_on_a_terminal_is_a_usage_error(
     fake_chat_app: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    class _Tty(io.StringIO):
-        def isatty(self) -> bool:
-            return True
-
     with pytest.raises(SystemExit) as raised:
         message_chat.main([_CHAT_ID], stdin=_Tty())
 
@@ -466,10 +469,6 @@ def test_a_create_asks_the_chat_app_to_wait_and_prints_the_chat_it_made(
 def test_a_create_with_no_message_on_a_terminal_sends_an_empty_first_message(
     fake_chat_app: Any,
 ) -> None:
-    class _Tty(io.StringIO):
-        def isatty(self) -> bool:
-            return True
-
     fake_chat_app.answers = [_CREATED_ANSWER]
 
     rc = message_chat.main(
@@ -684,11 +683,6 @@ def test_the_two_modes_refuse_each_others_arguments(
     assert fake_chat_app.posted == []
 
 
-class _Terminal(io.StringIO):
-    def isatty(self) -> bool:
-        return True
-
-
 # What ``mngr start --format jsonl`` ends with when it matched and restarted the agent.
 _START_RESULT_LINE = (
     json.dumps(
@@ -721,7 +715,7 @@ def test_an_interrupt_with_no_message_only_restarts_the_chat(
 ) -> None:
     rc = message_chat.main(
         [_CHAT_ID, "--interrupt"],
-        stdin=_Terminal(),
+        stdin=_Tty(),
         clock=_FakeClock(0.0),
         sleep=lambda _: None,
     )
