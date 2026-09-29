@@ -235,9 +235,9 @@ describe("a window drag", () => {
     listener.onPressStart(binding);
     expect(document.activeElement).toBe(frame);
     listener.onPressEnd(binding);
-    listener.onPressStart({ kind: "shortcut", app: "docs", launch: "open", element: content });
+    listener.onPressStart({ kind: "shortcut", app: "docs", launch: "open" });
     expect(document.activeElement).toBe(document.querySelector(".live-pages"));
-    listener.onPressEnd({ kind: "shortcut", app: "docs", launch: "open", element: content });
+    listener.onPressEnd({ kind: "shortcut", app: "docs", launch: "open" });
   });
 
   // The chrome's release ends the gesture with no release the pointer source sees (its events stop at the chrome

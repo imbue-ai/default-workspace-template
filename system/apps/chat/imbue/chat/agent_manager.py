@@ -39,7 +39,6 @@ from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
-from imbue.chat.auto_open import DisconnectedShell
 from imbue.chat.autocompact import ChatAutoCompactor
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
@@ -145,6 +144,7 @@ from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import parse_chat_ref
+from imbue.chat.shell_client import DisconnectedShell
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ConcurrencyGroupError
@@ -544,6 +544,17 @@ def _lane_of_account_label(account_label: str) -> str:
         return ""
 
 
+def _record_mru(account_id: str) -> None:
+    """Record ``account_id``, the account a chat was just created on or is switching to, as the most recently
+    used account: the one the next launch that names no account picks when no default is pinned. A switch the
+    user later cancels leaves it recorded. Best-effort: the mru is a convenience, so a store that refuses is
+    logged, not raised."""
+    try:
+        set_mru(account_id)
+    except AccountError as e:
+        _loguru_logger.warning("Could not record {} as most-recently-used: {}", account_id, e)
+
+
 class _SwitchTarget(FrozenModel):
     """The account a switch moves a chat to, with the harness its lane runs and the label the picker shows."""
 
@@ -868,8 +879,8 @@ class AgentManager:
     _oom_prioritizer: ChatOomPrioritizer
     # Runs periodic context compaction checks (mngr autocompact run) for active chats.
     _autocompactor: ChatAutoCompactor
-    # Surfaces the window of a chat created from outside with an auto-open label (the Mind
-    # app's update and help chats): fed the agents that appear and go, seeded once with the
+    # Surfaces the window of a chat created from outside with an auto-open label (the Imbue
+    # Studio app's update and help chats): fed the agents that appear and go, seeded once with the
     # agents found at startup. Delivers through the shell, so ``main`` installs one that can
     # reach it; the default reaches nobody, so a manager a test builds opens no windows.
     _auto_open: AutoOpenReactor
@@ -1377,7 +1388,7 @@ class AgentManager:
         nothing on screen to say why.
 
         Every agent bound to the account carries the label, not only the chats this app
-        created: a worker, an automation, or a chat the Mind app started on the workspace's
+        created: a worker, an automation, or a chat the Imbue Studio app started on the workspace's
         default account gets it from the create defaults (`create_defaults`), so they restart too.
 
         `--no-resume` for the same reason the queue actions use it: the agent's transcript is
@@ -1524,6 +1535,7 @@ class AgentManager:
                 chat_id, agent_state, target, message, message_id, origin, now, model_pick, is_fresh_start
             )
         self._broadcast_chats_updated()
+        _record_mru(target.account.id)
         _loguru_logger.info(
             "Chat {} is moving from {} to {} (account {})",
             chat_id,
@@ -1575,12 +1587,7 @@ class AgentManager:
                 chat_id, agent_state, target, message, message_id, origin, now, model_pick
             )
         self._broadcast_chats_updated()
-        # Launching on an account makes it the most recently used one, as a create does; a
-        # convenience, so a store that refuses is logged rather than failing the switch.
-        try:
-            set_mru(target.account.id)
-        except AccountError as e:
-            _loguru_logger.warning("Could not record {} as most-recently-used: {}", target.account.id, e)
+        _record_mru(target.account.id)
         _loguru_logger.info(
             "Chat {} is moving agent {} from account {} to account {}",
             chat_id,
@@ -1837,6 +1844,7 @@ class AgentManager:
                 )
                 self._write_record_locked(record.with_converging(retried_handoff))
         self._broadcast_chats_updated()
+        _record_mru(target.account.id)
         if discarded_successor_id is not None:
             self._discard_successor(chat_id, discarded_successor_id)
         _loguru_logger.info("Retrying the switch of chat {} on account {}", chat_id, target.account.id)
@@ -2512,7 +2520,7 @@ class AgentManager:
                 _loguru_logger.warning("No tracked agent for chat ref {}; leaving mngr alone", chat_ref)
             return
 
-        # The services agent runs the workspace itself; its name is the minds
+        # The services agent runs the workspace itself; its name is the Imbue Studio
         # app's to manage (alongside the host's), not a chat's.
         if agent_state.labels.get("is_primary") == "true":
             raise AgentRenameError("The workspace's services agent cannot be renamed from a chat")
@@ -2668,7 +2676,7 @@ class AgentManager:
     def seed_chat(self, title: str, turns: tuple[SeedTurn, ...]) -> CreatedChat:
         """Open a chat on a conversation that happened before the workspace existed (``chat_seed.py``).
 
-        The Mind app's onboarding continues here as the workspace's first chat: the turns become
+        The Imbue Studio app's onboarding continues here as the workspace's first chat: the turns become
         the chat's seed segment on disk, its record names the seed as its first member, and the
         chat is listed as a provisional chat awaiting the user's first message, with the
         transcript on its page and a composer under it. That first send picks the account (the
@@ -2952,10 +2960,7 @@ class AgentManager:
         # otherwise escape as a 500 before the creation thread starts -- leaving a provisional
         # record nothing ever pops, its name burned forever and every new socket replaying a
         # chat stuck at "creating".
-        try:
-            set_mru(account.id)
-        except AccountError as e:
-            _loguru_logger.warning("Could not record {} as most-recently-used: {}", account.id, e)
+        _record_mru(account.id)
         account_args = _account_binding_args(harness, account.id, self._get_agent_state_dir(agent_id))
         role_templates = (*extra_role_templates, *launch_role_templates(fast_mode.launches_fast))
 

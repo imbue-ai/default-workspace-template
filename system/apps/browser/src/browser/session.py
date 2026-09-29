@@ -232,12 +232,15 @@ def _ensure_pulse_daemon() -> bool:
         # above; only a stop that overruns stopwaitsecs reaps it with the group.
         # --daemonize=yes double-forks and trips over a stale PID file in this container; a
         # plain Popen does not.
-        subprocess.Popen(
+        daemon = subprocess.Popen(
             ["pulseaudio", "--system", "--daemonize=no", "--disallow-exit",
              "--exit-idle-time=-1", "--log-target=stderr", "-n",
              "-L", "module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        # Reap it the moment it exits (shed under memory pressure, or crashed). Left
+        # unwaited it stays a zombie of this process, which earlyoom cannot free.
+        threading.Thread(target=daemon.wait, name="pulseaudio-reaper", daemon=True).start()
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
@@ -359,7 +362,7 @@ _CLAIM_WINDOW = float(os.environ.get("BROWSER_CLAIM_WINDOW", "12"))
 
 # Chromium's in-process sandbox cannot run as root: it exits with "Running as root
 # without --no-sandbox is not supported" (crbug 638180), and browser-use swallows that
-# into a ~30s launch hang. Every minds workspace runs this daemon as ROOT inside an OUTER
+# into a ~30s launch hang. Every Imbue Studio workspace runs this daemon as ROOT inside an OUTER
 # boundary -- gVisor (runsc) under docker/cloud/AWS, the VM under Lima/Vultr -- so the
 # inner sandbox is both unusable-as-root and redundant. We therefore disable it whenever
 # we're root (the reliable signal; browser-use's own IN_DOCKER check misses the bare-VM
@@ -1912,7 +1915,7 @@ def closed_window_browser(hint_body: object) -> str | None:
 class BrowserSessionManager(MutableModel):
     """Owns the whole fleet (all live browsers).
 
-    The fleet is shared per workspace: every agent in a mind reaches this one
+    The fleet is shared per workspace: every agent in the workspace reaches this one
     manager, so ``ls`` shows one fleet and ownership arbitrates between agents.
     Every browser is created on demand -- there is no default browser and the
     fleet starts EMPTY. A daemon-minted NAME is the first free ``browser-<N>``

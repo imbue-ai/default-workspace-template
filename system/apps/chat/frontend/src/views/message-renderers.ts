@@ -507,7 +507,7 @@ function renderSpentAccountNote(kind: string | null, chatId: string): m.Children
 function providerFaultNote(kind: string | null): string {
   const cause =
     kind === "api_error" ? "the model provider's servers hit an error" : "the model provider's servers are overloaded";
-  return `This isn't Mind's fault -- ${cause}. Try again in a moment.`;
+  return `This isn't Imbue Studio's fault -- ${cause}. Try again in a moment.`;
 }
 
 /** The tiny muted "thinking" toggle atop an assistant message whose harness recorded
@@ -653,7 +653,7 @@ function appendEventParts(
     flushChips();
     if (event.is_api_error || event.is_auth_error) {
       // A model API error: render the failure text in light red, and for a
-      // provider-side fault (5xx / overloaded) add a grey "not Mind's fault" note.
+      // provider-side fault (5xx / overloaded) add a grey "not Imbue Studio's fault" note.
       //
       // An auth error gets a button as well. It is the one failure the user can actually
       // fix, and the fix is not obvious from the provider's wording -- which is usually a

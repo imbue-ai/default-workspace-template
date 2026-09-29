@@ -210,7 +210,7 @@ def _resolve_claude_config_dir() -> Path:
     """Resolve the shared Claude config dir the way claude itself does.
 
     ``$CLAUDE_CONFIG_DIR`` when set, else ``~/.claude`` (delegated to
-    mngr_claude's ``get_claude_config_dir``). In a minds workspace the env
+    mngr_claude's ``get_claude_config_dir``). In an Imbue Studio workspace the env
     var is deliberately unset everywhere (no agent or host env exports it),
     so this resolves to the same ``~/.claude`` a bare ``claude`` in a
     workspace terminal uses.
@@ -231,7 +231,7 @@ def _resolve_claude_json_path() -> Path:
 
 
 def _resolve_claude_settings_path() -> Path:
-    """Locate the shared `settings.json` (inside the config dir) for the mind."""
+    """Locate the shared `settings.json` (inside the config dir) for the workspace."""
     return _resolve_claude_config_dir() / "settings.json"
 
 
@@ -329,7 +329,7 @@ class ClaudeAuthService(MutableModel):
         the settings env applies to *new claude processes*, and the status
         subprocess IS one, but the fresh values may not have reached this
         long-lived system-interface process -- the overlay makes the check
-        reflect the mind's actual auth source of truth. The settings-derived
+        reflect the workspace's actual auth source of truth. The settings-derived
         `auth_mode` / `masked_key_suffix` are folded into the returned
         status for the modal's header.
         """

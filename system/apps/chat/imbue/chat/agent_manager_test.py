@@ -23,6 +23,7 @@ from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
+from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
@@ -57,6 +58,7 @@ from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.chat_settings import FastModeMode
+from imbue.chat.create_defaults import create_defaults_path
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
@@ -103,6 +105,7 @@ from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import observer_holding_the_lock
+from imbue.chat.testing import read_create_defaults_type
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import wait_until_true
@@ -394,14 +397,14 @@ def test_a_chat_created_with_a_message_starts_on_it(
     """A chat created with its own first message carries it on its provisional record."""
     q = broadcaster.register()
 
-    seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Mind")
+    seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Imbue Studio")
     agent_manager.stop()
 
     raw = q.get_nowait()
     assert raw is not None
     proto_msg = json.loads(raw)
     assert proto_msg["chat_id"] == seeded.chat_id
-    assert proto_msg["message"] == "Teach me about Mind"
+    assert proto_msg["message"] == "Teach me about Imbue Studio"
 
 
 @pytest.mark.parametrize(("is_fast", "expected"), [(True, ("fast",)), (False, ())])
@@ -519,7 +522,7 @@ def _seed_manager(
 def test_seed_chat_opens_a_provisional_chat_awaiting_its_first_send_on_the_seeded_turns(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """The Mind app's conversation becomes the chat's first segment: the record names the seed
+    """The Imbue Studio app's conversation becomes the chat's first segment: the record names the seed
     as its only member, the seed file holds the turns, and the chat is listed awaiting the user."""
     manager, store = _seed_manager(broadcaster, tmp_path)
     q = broadcaster.register()
@@ -1685,7 +1688,7 @@ def test_chat_create_argv_carries_no_launch_settings() -> None:
 
 
 def test_chat_create_argv_carries_a_callers_labels_and_the_version_check_waiver() -> None:
-    """A create from outside the workspace (the Minds app's assist and update chats, through
+    """A create from outside the workspace (the Imbue Studio app's assist and update chats, through
     ``message_chat.py --create``) rides its labels and the claude version-check waiver on the
     same argv the app's own creates use."""
     argv = _chat_create_argv(
@@ -1873,7 +1876,7 @@ def test_rename_chat_refuses_the_primary_agent(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
-    """The services agent's name belongs to the minds app, not to a chat."""
+    """The services agent's name belongs to the Imbue Studio app, not to a chat."""
     manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
     try:
         with manager._lock:
@@ -3611,13 +3614,13 @@ def test_observe_events_feed_the_auto_open_reactor(
     manager._handle_observe_event(make_full_agent_state_event([at_start, plain]))
     reactor.flush()
 
-    assert shell.opens == [(str(at_start.id), "c1")]
+    assert [(request.path, request.client_id) for request in shell.shows] == [(f"/?chat={at_start.id}", "c1")]
     assert not reactor.ledger.is_delivered(ChatId(plain.id))
 
     appeared = _agent_details("assist-new", labels={"assist": "true", "auto_open": "true"})
     manager._handle_observe_event(make_agent_state_event(appeared))
     reactor.flush()
-    assert shell.opens[-1] == (str(appeared.id), "c1")
+    assert (shell.shows[-1].path, shell.shows[-1].client_id) == (f"/?chat={appeared.id}", "c1")
     assert reactor.ledger.is_delivered(ChatId(appeared.id))
 
     manager._handle_observe_event(make_agent_removed_event(appeared.id, appeared.name, appeared.host.id))
@@ -4026,6 +4029,33 @@ def test_a_handoff_off_an_agent_with_no_user_turn_is_a_fresh_start(
         assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
         # The snapshot never listed a confirming message, since none was typed.
         assert manager.get_handoff_state(ChatId(first)) is None
+    finally:
+        manager.stop()
+
+
+def test_a_handoff_moves_the_workspaces_create_defaults_to_the_target_account(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """Workers and automations launch on the most recently used account, so a chat moved off an account
+    must not leave them on it."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    source, _ = mint_account_dir()
+    commit_account(source, "anthropic", "Anthropic")
+    target = _openai_account()
+    # The chat was created on the source account, which made it the most recently used one.
+    set_mru(source)
+    assert read_create_defaults_type(create_defaults_path()) == "claude"
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": source})
+    try:
+        manager.begin_handoff(ChatId(first), target, "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+        _wait_until_settled(store, ChatId(first))
+
+        assert read_index().mru == target
+        assert read_create_defaults_type(create_defaults_path()) == "codex"
+        create = tomllib.loads(create_defaults_path().read_text())["commands"]["create"]
+        assert create["label__extend"] == [f"account={target}"]
     finally:
         manager.stop()
 
@@ -4671,6 +4701,7 @@ def test_a_failed_rebind_retries_on_its_lane_even_after_the_failed_target_was_si
         )
         manager.refresh_chat_records()
         delete_account(second_account)
+        set_mru(first_account)
 
         assert manager.retry_handoff(chat_id, third_account) is HandoffPhase.RESTARTING
         wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
@@ -4678,6 +4709,8 @@ def test_a_failed_rebind_retries_on_its_lane_even_after_the_failed_target_was_si
         snapshot = manager.get_chat_snapshot(agent_id)
         assert snapshot is not None and snapshot.active_agent.account_id == third_account
         assert sent == [(agent_id, "Carry on on the other account", "trigger-1")]
+        # The retry launched on the account it named, which made that the most recently used one.
+        assert read_index().mru == third_account
     finally:
         manager.stop()
 

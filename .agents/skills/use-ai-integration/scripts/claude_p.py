@@ -13,7 +13,7 @@ key, ``claude -p`` runs on the local Claude subscription's programmatic pool.
 
 Workspace credentials live in the ``env`` block of the shared
 ``~/.claude/settings.json`` (claude's default config dir -- resolved via
-``$CLAUDE_CONFIG_DIR`` only when that var is explicitly set, which a minds
+``$CLAUDE_CONFIG_DIR`` only when that var is explicitly set, which an Imbue Studio
 workspace never does; written by the in-UI Claude sign-in
 modal), NOT in the process environment -- long-lived services inherit a
 frozen env from supervisord, so an env-var check would go stale the moment

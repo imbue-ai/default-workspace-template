@@ -12,10 +12,11 @@ import {
   launchPathRecord,
   placementRecord,
   presentUserRecord,
+  shortcutRecord,
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
-import type { AppRecord } from "../model/records";
+import type { GridCell } from "../model/records";
 import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
 import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
 
@@ -853,19 +854,104 @@ describe("gestures", () => {
     expect(store.getGesture()).toBeNull();
   });
 
-  it("a shortcut drag moves the shortcut to the cell under the pointer", async () => {
-    const store = await startedStore();
-    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 }, { x: 10, y: 10 });
-    store.updateShortcutDrag({ x: 230, y: 260 });
+  /** A store whose home desktop carries two shortcuts: docs at (0,0) and notes beside it at (1,0), or at
+   *  ``notesCell`` when one is given. */
+  async function shortcutStore(options: { notesCell?: GridCell; redraw?: () => void } = {}): Promise<DesktopStore> {
+    api.desktops = [
+      desktopRecord("home", {
+        shortcuts: [
+          shortcutRecord("docs", { column: 0, row: 0 }),
+          shortcutRecord("notes", options.notesCell ?? { column: 1, row: 0 }),
+        ],
+      }),
+      desktopRecord("work"),
+    ];
+    return startedStore(options.redraw);
+  }
+
+  /** Where each shortcut is drawn right now, as ``"<column>,<row>"`` by app name. */
+  function cellsByApp(store: DesktopStore): Record<string, string> {
+    return Object.fromEntries(
+      store.placedShortcuts().map((entry) => [entry.shortcut.target.app, `${entry.cell.column},${entry.cell.row}`]),
+    );
+  }
+
+  it("a shortcut drag lifts the icon out of its own cell and lands it in the cell under the pointer", async () => {
+    const store = await shortcutStore();
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.updateShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
     expect(store.getGesture()).toMatchObject({
       kind: "shortcut",
+      originCell: { column: 0, row: 0 },
       targetCell: { column: 2, row: 2 },
-      iconPosition: { x: 220, y: 250 },
+      lift: { x: 200, y: 220 },
     });
-    store.endShortcutDrag({ x: 230, y: 260 });
+    // An empty cell needs no room made: nothing else moves.
+    expect(cellsByApp(store)).toEqual({ docs: "2,2", notes: "1,0" });
+    store.endShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
     await settle();
     expect(api.calls).toContain("moveDesktopShortcut:home:docs:new:2,2");
     expect(store.getGesture()).toBeNull();
+    expect(store.shortcutRect("docs", "new")).toMatchObject({ x: 208, y: 240 });
+  });
+
+  it("a shortcut held over an occupied cell sends the occupant aside, and the drop draws that at once", async () => {
+    const store = await shortcutStore();
+    // The nearest free cell to notes is the one docs is leaving, so the two swap.
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.updateShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
+    expect(cellsByApp(store)).toEqual({ docs: "1,0", notes: "0,0" });
+    store.endShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
+    // Both cells are drawn before the round trip rather than after it, so the drop shows no jump back.
+    expect(cellsByApp(store)).toEqual({ docs: "1,0", notes: "0,0" });
+    // One request, naming the shortcut that was dragged: the shell displaces the occupant itself.
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("moveDesktopShortcut"))).toEqual([
+      "moveDesktopShortcut:home:docs:new:1,0",
+    ]);
+  });
+
+  it("only a new cell under the pointer redraws during a shortcut drag: the lift itself is painted", async () => {
+    let redraws = 0;
+    const store = await shortcutStore({ redraw: () => void (redraws += 1) });
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    const afterBegin = redraws;
+    store.updateShortcutDrag({ x: 40, y: 45 }, { x: 10, y: 5 });
+    expect(redraws).toBe(afterBegin);
+    store.updateShortcutDrag({ x: 230, y: 260 }, { x: 200, y: 220 });
+    expect(redraws).toBeGreaterThan(afterBegin);
+  });
+
+  it("a drop back into the cell it came from asks the shell for nothing", async () => {
+    const store = await shortcutStore();
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.endShortcutDrag({ x: 30, y: 40 }, { x: 0, y: 0 });
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("moveDesktopShortcut"))).toEqual([]);
+  });
+
+  it("a drop commits what the room made moved, not a cell the placement had re-fitted", async () => {
+    const store = await shortcutStore({ notesCell: { column: 20, row: 0 } });
+    // notes is stored off the ten columns this backdrop gives, so the placement has always drawn it at (9,0).
+    expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "9,0" });
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.endShortcutDrag({ x: 30, y: 40 }, { x: 0, y: 0 });
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("moveDesktopShortcut"))).toEqual([]);
+    expect(store.getState().desktops[0].shortcuts.map((shortcut) => shortcut.cell)).toEqual([
+      { column: 0, row: 0 },
+      { column: 20, row: 0 },
+    ]);
+  });
+
+  it("puts the cells back and says so when the shell refuses an arrangement", async () => {
+    const store = await shortcutStore();
+    api.refusal = "down";
+    store.beginShortcutDrag("docs", "new", { x: 30, y: 40 });
+    store.endShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
+    await settle();
+    expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
+    expect(notices).toEqual(["Could not move the shortcut: down"]);
   });
 });
 
@@ -1208,93 +1294,54 @@ describe("desktops and shortcuts", () => {
   });
 });
 
-describe("focus-chat", () => {
-  /** An app that holds chats: it declares a launch path taking typed text as its ``message``, and pins a window. */
-  function chatAppRecord(overrides: Partial<AppRecord> = {}): AppRecord {
-    return appRecord("buddy", {
-      pin: { path: "/", style: "avatar", scope: "independent", default_mode: "floating" },
-      launch_paths: [
-        launchPathRecord({ id: "root", path: "/" }),
-        launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" }),
-      ],
-      ...overrides,
-    });
-  }
+describe("embedder messages", () => {
+  /** An app registered for ``minds:focus-chat``, as its manifest's ``[[message_handlers]]`` declares. */
+  const HANDLING_APP = appRecord("buddy", {
+    message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat" }],
+  });
 
-  async function chatStore(apps: readonly AppRecord[] = [appRecord("docs"), chatAppRecord()]): Promise<DesktopStore> {
-    const store = makeStore();
+  it("relays a message an app registered for once, with this client and the message's own fields", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), HANDLING_APP]);
+
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(true);
+
+    expect(api.relayedMessages).toEqual([
+      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-7" } },
+    ]);
+  });
+
+  it("relays nothing from a solo shell, whose client is the main window's", async () => {
+    api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
     await store.start(NO_LINK);
-    socket.deliver().onAppsUpdated([...apps]);
-    return store;
-  }
 
-  it("raises the window already showing the chat, switching to the desktop that holds it", async () => {
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" })],
-      }),
-      desktopRecord("work", { windows: [windowRecord("win-4", "buddy", "/chat-7")] }),
-    ];
-    const store = await chatStore();
-    expect(store.getState().activeDesktopId).toBe("home");
-    expect(await store.focusChat("chat-7")).toBe(true);
-    // The chat is already on screen somewhere: it is switched to, and nothing is opened or moved.
-    expect(store.getState().activeDesktopId).toBe("work");
-    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
-    expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([]);
-    expect(placementOf(store.getState().layout, "win-4").is_minimized).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(false);
+
+    expect(api.relayedMessages).toEqual([]);
   });
 
-  it("reads a subagent view of the chat as showing it", async () => {
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [
-          windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
-          windowRecord("win-4", "buddy", "/chat-7.agent-2.sess-3"),
-        ],
-      }),
-    ];
-    const store = await chatStore();
-    expect(await store.focusChat("chat-7")).toBe(true);
-    expect(api.calls.filter((call) => call.startsWith("reportWindowLocation"))).toEqual([]);
+  it("relays nothing for a type no app registered for", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), HANDLING_APP]);
+
+    expect(await store.relayEmbedderMessage({ type: "minds:close-active-tab" })).toBe(false);
+
+    expect(api.relayedMessages).toEqual([]);
   });
 
-  it("points this client's pinned chat window at a chat nothing is showing", async () => {
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [
-          windowRecord("win-1", "docs", "/a"),
-          windowRecord("win-9", "buddy", "/", { is_pinned: true, scope: "independent" }),
-        ],
-      }),
-    ];
-    const store = await chatStore();
-    expect(await store.focusChat("chat-7")).toBe(true);
-    expect(last(api.calls.filter((call) => call.startsWith("reportWindowLocation")))).toBe(
-      `reportWindowLocation:home:win-9:${CLIENT}:/chat-7:Buddy`,
-    );
-    // The chat lands where this viewer reads chats, shown, and as this client's own navigation for the follow.
-    expect(store.getState().layout.window_paths["win-9"]?.path).toBe("/chat-7");
-    expect(placementOf(store.getState().layout, "win-9").is_minimized).toBe(false);
-    expect(store.takeOwnNavigation()).toEqual({ windowId: "win-9", path: "/chat-7" });
-    // And a second ask for the chat it now shows moves nothing.
-    const callsBefore = api.calls.length;
-    expect(await store.focusChat("chat-7")).toBe(true);
-    expect(api.calls.length).toBe(callsBefore);
-  });
+  it("answers false and says why when the shell could not pass the message on", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([HANDLING_APP]);
+    api.refusal = "buddy did not take it";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-  it("opens the chat in a window of its own when no pinned window takes it", async () => {
-    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
-    const store = await chatStore([appRecord("docs"), chatAppRecord({ pin: null })]);
-    expect(await store.focusChat("chat-7")).toBe(true);
-    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual(["openWindow:home:buddy:/chat-7:focus"]);
-  });
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(false);
 
-  it("answers false when no app on this machine holds chats", async () => {
-    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
-    const store = await chatStore([appRecord("docs")]);
-    expect(await store.focusChat("chat-7")).toBe(false);
-    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+    expect(warn.mock.calls.map((call) => String(call[0]))).toEqual([
+      "[si] could not relay minds:focus-chat from the embedder",
+    ]);
+    warn.mockRestore();
   });
 });
 
@@ -1519,6 +1566,34 @@ describe("pulled-out windows", () => {
     expect(savedCalls()).toHaveLength(2);
   });
 
+  it("shows a pulled-out window's own desktop window when a show op lands on it, leaving it out", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    const { store, calls } = makePopOutStore();
+    await store.start(NO_LINK);
+
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1" }, requester: "buddy" });
+
+    expect(calls).toEqual([["request", expect.objectContaining({ windowId: "win-1", title: "Docs" })]]);
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
+    expect(savedCalls()).toHaveLength(0);
+  });
+
+  it("leaves a show op on a pulled-out window to the main window's page when it is a solo shell", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    const { store, calls } = makePopOutStore("win-1");
+    await store.start(NO_LINK);
+
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1" }, requester: "buddy" });
+
+    expect(calls).toEqual([]);
+  });
+
   it("hides a pulled-out window's ghost and shows it again from its taskbar entry, the window staying out", async () => {
     const { store, calls, reports } = makePopOutStore();
     await store.start(NO_LINK);
@@ -1581,11 +1656,10 @@ describe("pulled-out windows", () => {
     // The client's own desktop is never reported from here: it belongs to the main window.
     expect(socket.reports).toEqual([]);
     expect(reports).toEqual([[{ windowId: "win-5", title: "Notes" }]]);
-    // The page's own focus report, a chat ask, the close chord: none of them rearrange anything.
+    // The page's own focus report and the close chord rearrange nothing.
     store.raiseWindow("win-5");
     expect(placementOf(store.getState().layout, "win-5").is_detached).toBe(true);
     expect(isLayoutDirty(store.getState())).toBe(false);
-    expect(await store.focusChat("chat-1")).toBe(false);
     await store.closeFocusedWindow();
     expect(api.calls.filter((call) => call.startsWith("closeWindow"))).toEqual([]);
     // A push moving the client to another desktop is the main window's business.

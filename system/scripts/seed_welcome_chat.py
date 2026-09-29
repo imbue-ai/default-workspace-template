@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open the workspace's welcome chat on the conversation the Mind app had before the workspace existed.
+"""Open the workspace's welcome chat on the conversation the Imbue Studio app had before the workspace existed.
 
 Usage, from the repo root (the cwd ``mngr exec`` gives every command there)::
 
@@ -7,7 +7,7 @@ Usage, from the repo root (the cwd ``mngr exec`` gives every command there)::
     python3 system/scripts/seed_welcome_chat.py --transcript-file path/to/body.json
 
 The body is what the chat app's ``POST /api/chats/seed`` takes: ``{"title": "...", "turns":
-[{"role": "user" | "assistant", "text": "..."}, ...]}``. The Mind app runs this through ``mngr
+[{"role": "user" | "assistant", "text": "..."}, ...]}``. The Imbue Studio app runs this through ``mngr
 exec`` the moment a workspace is ready, so the onboarding conversation continues inside the
 workspace as its first chat; the transcript rides the command line (base64, since it holds
 newlines and quotes) because ``mngr exec`` carries no stdin.
@@ -42,7 +42,7 @@ EXIT_SEEDED = 0
 EXIT_FAILED = 1
 
 # How long the chat app is retried while it is not listening yet or not ready (503): it starts
-# beside the shell the Mind app's readiness probe waits for, and reads its agent list a few
+# beside the shell the Imbue Studio app's readiness probe waits for, and reads its agent list a few
 # seconds after that.
 RETRY_WINDOW_SECONDS = 120.0
 RETRY_INTERVAL_SECONDS = 1.0
@@ -104,7 +104,7 @@ def _read_body(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Open the workspace's welcome chat on a conversation the Mind app had before the workspace existed.",
+        description="Open the workspace's welcome chat on a conversation the Imbue Studio app had before the workspace existed.",
     )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
