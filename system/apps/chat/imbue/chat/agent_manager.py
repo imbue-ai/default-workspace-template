@@ -3176,9 +3176,10 @@ class AgentManager:
         thread of their own. With none ready, a spare still being created is claimed: the chat
         is provisional, as for a create of its own, and becomes that spare once its harness is
         up (``_run_spare_creation``), which is sooner than a create started now, queued behind
-        the spare's on mngr's host lock, would be. The pool is topped up after either; while
-        another spare is ready, only once ``SPARE_CHAT_REPLENISH_DELAY_SECONDS`` have passed, so
-        the next spare's boot does not compete with this chat's first turn.
+        the spare's on mngr's host lock, would be. The pool is topped up after either, on a
+        thread of its own; while another spare is ready, only once
+        ``SPARE_CHAT_REPLENISH_DELAY_SECONDS`` have passed, so the next spare's boot does not
+        compete with this chat's first turn.
         """
         if self._spare_chat_store is None:
             return None
@@ -3231,7 +3232,7 @@ class AgentManager:
         else:
             _loguru_logger.info("Claimed spare agent {} for a new chat while it starts", spare.chat_id)
             self._broadcaster.broadcast_provisional_chat_created(provisional)
-        self.ensure_spare_chat()
+        self.ensure_spare_chat_in_background()
         return CreatedChat(
             chat_id=spare.chat_id, name=canonical_agent_name(spare.display_name), display_name=spare.display_name
         )
@@ -3309,7 +3310,7 @@ class AgentManager:
             )
 
     def ensure_spare_chat_in_background(self) -> None:
-        """``ensure_spare_chat`` on a thread of its own, for a caller holding a lock of its own (a sign-in)."""
+        """``ensure_spare_chat`` on a thread of its own, for a caller that must not wait on or fail by it (a sign-in, a hand-over)."""
         self._creation_cg.start_new_thread(target=self.ensure_spare_chat, name="ensure-spare-chat", is_checked=False)
 
     def _wait_for_spare_harness(self, spare: SpareChatAgent, harness: HarnessType) -> bool:
