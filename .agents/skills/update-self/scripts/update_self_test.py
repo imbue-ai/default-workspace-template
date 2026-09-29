@@ -1048,12 +1048,14 @@ def test_footprint_ranges_on_a_same_target_retry_that_reverted_several_rollbacks
     ]
 
 
+@pytest.mark.parametrize("is_retry", [False, True], ids=["first-pass", "retry"])
 def test_footprint_ranges_count_a_restored_app_change_as_the_workspaces_own(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], is_retry: bool
 ) -> None:
     # The user took an app change back and then restored it. The restoring revert
     # carries the same subject as a revert of an update's rollback, but what it put
-    # back is the workspace's own change, not the update's.
+    # back is the workspace's own change, not the update's; on a retry of v2 it is
+    # also where the chain of attempts starts, not a step back to v1's merge.
     history = _UpdateHistory(tmp_path)
     history.release("minds-v1")
     history.commit("system/apps/mine/app.py", "local work")
@@ -1062,6 +1064,8 @@ def test_footprint_ranges_count_a_restored_app_change_as_the_workspaces_own(
     history.revert(history.roll_back(None))
     history.release("minds-v2")
     history.land("minds-v2")
+    if is_retry:
+        history.revert(history.roll_back("minds-v2"))
 
     ranges = history.footprint_ranges("minds-v2", capsys)
 
