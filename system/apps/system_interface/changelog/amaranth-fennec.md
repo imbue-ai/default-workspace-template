@@ -1,6 +1,6 @@
 A new bundled wallpaper, an app's icon drawn as the tile it now is, and a title bar that recedes behind the window you are in.
 
-- A new bundled wallpaper, arcs, in a warm taupe colourway, and the default every desktop wears until it picks one of its own. Added beside dawn rather than over it, so a desktop that chose dawn keeps it and the picker offers both.
+- A new bundled wallpaper, arcs, in a warm taupe colourway, and the default every desktop wears until it picks one of its own. It is the only one the shell bundles: dawn, the wallpaper it replaces, is no longer shipped, so a desktop that never chose one moves to arcs and a desktop that had chosen dawn draws arcs too, by the rule below.
 
 - A desktop's chosen wallpaper is painted *over* the default rather than instead of it. A reference outlives the file it names -- a bundled wallpaper the shell stops shipping, a file taken back out of `data/.apps/system_interface/wallpapers/` -- and the desktop goes on holding it, since the choice is still the choice and the file may come back. A background layer whose image does not load is simply not painted, so what shows in the meantime is the default, which is what a desktop with no wallpaper of its own already wears. Before, such a desktop fell all the way to the flat page colour and read as a broken shell rather than as a wallpaper that had gone missing.
 
