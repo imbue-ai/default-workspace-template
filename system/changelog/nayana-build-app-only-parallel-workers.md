@@ -32,3 +32,9 @@ agent and itself and invites a second pass over the same files. A run stops only
 with a worker, which has to be waited for and merged first. An interactive node stays inside
 a run -- it is the same agent asking a question it then acts on -- but fixes an order within
 it, since the nodes after the question are written against its answer.
+
+A node the orchestrator does itself still has to write `$RUN/nodes/N/reports/report.md`, the same as
+an interactive node does. A later node's task file quotes the report of every node in its access
+list and `write-task` fails without it, so a node done but left unreported blocks everything
+depending on it -- which under this flag is the common shape, since the node that opens a build is
+usually the one nothing runs beside.

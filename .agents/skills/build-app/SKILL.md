@@ -215,11 +215,16 @@ Repeat until every node is done.
    a node nothing else runs beside, where a worker would cost a worktree, a sync, a
    cold start and a merge on a wait nobody overlaps.
 
+   **Write a report for each node you do**, at `$RUN/nodes/N/reports/report.md`, exactly
+   as an interactive node does (Step 5, item 3). A later node's task file quotes the report
+   of every node in its access list, and `write-task` **fails** when one is missing -- so a
+   node you did yourself and left unreported blocks every node that depends on it.
+
    **Do a whole run of your own nodes at once.** `plan.json`'s `own_groups` lists them
    already grouped: `[[0], [4, 5]]` means node 0 stands alone, and nodes 4 and 5 are one
    piece of work. When `ready` prints the first node of such a group, write all of it in
-   one go -- one design, one set of files, one commit -- then count every node in the
-   group done. Those nodes are consecutive and all yours, so keeping them apart divides
+   one go -- one design, one set of files, one commit -- then write each node's report and
+   count every node in the group done. Those nodes are consecutive and all yours, so keeping them apart divides
    the work between you and yourself, and each split invites another pass over the same
    files. A group ends only at a node that has a worker, because you must wait for it and
    merge its branch before building on it.

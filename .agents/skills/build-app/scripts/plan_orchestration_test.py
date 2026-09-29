@@ -717,3 +717,25 @@ def test_every_orchestrator_node_lands_in_exactly_one_group() -> None:
         node["index"] for node in plan["nodes"] if not node["has_worker"]
     )
     assert len(grouped) == len(set(grouped))
+
+
+def test_a_worker_after_an_orchestrator_node_needs_that_node_reported(
+    tmp_path: Path,
+) -> None:
+    """The flag's own DAG, end to end. Nodes 1-3 wait on node 0, which the orchestrator does
+    itself -- so their task files quote node 0's report, and `write-task` fails until the
+    orchestrator has written one. That failure is the flag's sharpest edge: a node done but
+    left unreported blocks every node depending on it."""
+    plan = plan_orchestration.parse_plan(_FAN_OUT_PLAN, only_parallel_workers=True)
+    assert not plan["nodes"][0]["has_worker"]
+
+    report_path = tmp_path / "nodes" / "1" / "reports" / "report.md"
+    with pytest.raises(plan_orchestration.PlanError, match="has_worker false"):
+        plan_orchestration.render_node_task(plan, 1, report_path, {})
+
+    # Once the orchestrator reports its own node, the dependent worker's task renders.
+    task = plan_orchestration.render_node_task(
+        plan, 1, report_path, {0: "Set up the package and the data loader."}
+    )
+    assert "Set up the package and the data loader." in task
+    assert "### Node 0" in task
