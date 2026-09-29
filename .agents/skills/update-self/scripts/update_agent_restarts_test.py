@@ -46,7 +46,7 @@ def _chat(
 
 def _install_message_chat_recorder(workspace: Path) -> Path:
     """A ``message_chat.py`` that records its argv, the note it was given, and whether it ran
-    with an agent id, and fails for the chat ids listed in ``$FAKE_INTERRUPT_FAILS``."""
+    with an agent id, and fails an ``--interrupt`` of the chat ids in ``$FAKE_INTERRUPT_FAILS``."""
     record = workspace / "message-chat-calls.jsonl"
     script = workspace / "system" / "scripts" / "message_chat.py"
     script.parent.mkdir(parents=True, exist_ok=True)
@@ -57,7 +57,7 @@ def _install_message_chat_recorder(workspace: Path) -> Path:
         "note = open(argv[argv.index('--message-file') + 1]).read() if '--message-file' in argv else None\n"
         f"with open({str(record)!r}, 'a') as handle:\n"
         "    handle.write(json.dumps({'argv': argv, 'note': note, 'agent_id': os.environ.get('MNGR_AGENT_ID')}) + '\\n')\n"
-        "if argv[0] in os.environ.get('FAKE_INTERRUPT_FAILS', '').split(','):\n"
+        "if '--interrupt' in argv and argv[0] in os.environ.get('FAKE_INTERRUPT_FAILS', '').split(','):\n"
         "    sys.stderr.write('the chat is converging')\n"
         "    raise SystemExit(1)\n"
     )
@@ -312,8 +312,36 @@ def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
     while not _calls(record):
         assert time.monotonic() < deadline, "the helper never restarted the chat"
         time.sleep(0.1)
-    [call] = _calls(record)
-    assert call["argv"][:2] == [_OWN_CHAT, "--interrupt"]
-    assert call["agent_id"] is None
-    assert "Claude Code 2.1.300" in call["note"]
-    assert '"Research"' in call["note"]
+    while len(_calls(record)) < 2:
+        assert time.monotonic() < deadline, "the helper never sent the note"
+        time.sleep(0.1)
+    restart_call, note_call = _calls(record)
+    assert restart_call["argv"] == [_OWN_CHAT, "--interrupt"]
+    assert note_call["argv"][:2] == [_OWN_CHAT, "--message-file"]
+    assert restart_call["agent_id"] is None and note_call["agent_id"] is None
+    assert "Claude Code 2.1.300" in note_call["note"]
+    assert '"Research"' in note_call["note"]
+
+
+def test_a_self_restart_that_is_refused_tells_the_chat_it_did_not_happen(
+    fake_chat_list: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The results message has told the user this chat restarts; when it does not, the chat
+    is told so instead of the success note."""
+    workspace = fake_chat_list.workspace
+    record = _install_message_chat_recorder(workspace)
+    monkeypatch.setenv("FAKE_INTERRUPT_FAILS", _OWN_CHAT)
+    fake_chat_list.answers = [
+        (200, {"chats": [_chat(_OWN_CHAT, "Update", "idle", "WAITING")]})
+    ]
+
+    rc = update_agent_restarts.restart_self_when_idle(
+        workspace, _OWN_CHAT, update_runtime.HttpClient(), update_runtime.Runner()
+    )
+
+    assert rc == 1
+    restart_call, failure_call = _calls(record)
+    assert restart_call["argv"] == [_OWN_CHAT, "--interrupt"]
+    assert failure_call["argv"][:2] == [_OWN_CHAT, "--message-file"]
+    assert "not restarted" in failure_call["note"]
+    assert "the chat is converging" in failure_call["note"]

@@ -7,7 +7,8 @@ is restarted. A restart keeps the conversation: each harness resumes its own ses
 ``restart_idle_agents`` restarts every agent the chat app lists that has ended its turn, other
 than the pass's own chat and its worker, and reports the ones it left running because they
 were mid-turn. ``start_self_restart`` restarts the pass's own chat once its last turn ends,
-from a detached helper, and sends it a note to confirm the restart to the user.
+from a detached helper, and sends it a note to confirm the restart to the user (or, when
+the restart does not happen, a note saying so).
 
 Every restart goes through ``system/scripts/message_chat.py --interrupt``, the chat app's
 interrupt route: the chat app knows which agent a chat runs on and refuses a restart during
@@ -41,6 +42,7 @@ AGENT_RESTARTS_REPORT_REL = (
 )
 SELF_RESTART_DIR_REL = Path("data") / ".tasks" / "update-self" / "self-restart"
 SELF_RESTART_NOTE_NAME = "note.md"
+SELF_RESTART_FAILURE_NOTE_NAME = "failure-note.md"
 SELF_RESTART_LOG_NAME = "helper.log"
 
 # The variable mngr tags an agent's processes with and kills them by on a stop.
@@ -190,21 +192,29 @@ def fetch_chat_list(
         sleep(CHAT_LIST_RETRY_INTERVAL_SECONDS)
 
 
-def interrupt_argv(repo_root: Path, chat_id: str, note_path: Path | None) -> list[str]:
-    """The ``message_chat.py --interrupt`` call that restarts a chat, then sends it the note if given."""
-    argv = [sys.executable, str(repo_root / MESSAGE_CHAT_REL), chat_id, "--interrupt"]
-    if note_path is not None:
-        argv += ["--message-file", str(note_path)]
-    return argv
+def interrupt_argv(repo_root: Path, chat_id: str) -> list[str]:
+    """The ``message_chat.py --interrupt`` call that restarts a chat."""
+    return [sys.executable, str(repo_root / MESSAGE_CHAT_REL), chat_id, "--interrupt"]
 
 
-def _run_interrupt(
-    repo_root: Path, chat_id: str, note_path: Path | None, runner: Runner
+def send_note_argv(repo_root: Path, chat_id: str, note_path: Path) -> list[str]:
+    """The ``message_chat.py`` call that sends a chat the note at ``note_path``."""
+    return [
+        sys.executable,
+        str(repo_root / MESSAGE_CHAT_REL),
+        chat_id,
+        "--message-file",
+        str(note_path),
+    ]
+
+
+def _run_message_chat(
+    argv: Sequence[str], repo_root: Path, runner: Runner
 ) -> str | None:
-    """Restart one chat; None when it worked, else what went wrong."""
+    """Run one ``message_chat.py`` call; None when it worked, else what went wrong."""
     try:
         result = runner.run(
-            interrupt_argv(repo_root, chat_id, note_path),
+            argv,
             cwd=str(repo_root),
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -213,9 +223,9 @@ def _run_interrupt(
             timeout=RESTART_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        return f"the restart did not finish within {RESTART_TIMEOUT_SECONDS:g}s"
+        return f"it did not finish within {RESTART_TIMEOUT_SECONDS:g}s"
     except OSError as exc:
-        return f"the restart could not be run: {exc}"
+        return f"it could not be run: {exc}"
     if result.returncode != 0:
         return (result.stderr or "").strip() or f"exit code {result.returncode}"
     return None
@@ -248,7 +258,9 @@ def restart_idle_agents(
         "failed": [],
     }
     for chat in plan.to_restart:
-        problem = _run_interrupt(repo_root, chat.chat_id, None, runner)
+        problem = _run_message_chat(
+            interrupt_argv(repo_root, chat.chat_id), repo_root, runner
+        )
         if problem is None:
             report["restarted"].append({"chat_id": chat.chat_id, "title": chat.title})
         else:
@@ -287,6 +299,22 @@ def compose_self_restart_note(
         )
     return wrap_background_task_report(
         "Restarted to finish the update", "\n\n".join(lines)
+    )
+
+
+def compose_self_restart_failure_note(problem: str) -> str:
+    """The note the pass's own chat gets when its restart did not happen, so the user is not
+    left believing the results message's promise that it would."""
+    body = "\n\n".join(
+        [
+            f"This chat was to restart after the update of this workspace, but it was not restarted: {problem}.",
+            "Tell the user in one or two plain sentences that the update is complete but this chat "
+            "is still running the previous version, and that pressing its stop button restarts it "
+            "onto the new one (its conversation carries over).",
+        ]
+    )
+    return wrap_background_task_report(
+        "The restart after the update did not happen", body
     )
 
 
@@ -379,8 +407,12 @@ def restart_self_when_idle(
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    """The detached helper's work: wait for the chat's turn to end, then restart it with the note."""
+    """The detached helper's work: wait for the chat's turn to end, restart it, then send it the note.
+
+    A restart that does not happen is told to the chat instead, in a note of its own.
+    """
     _log(f"Waiting for chat {chat_id} to end its turn")
+    work_dir = repo_root / SELF_RESTART_DIR_REL
     if not wait_for_idle_chat(
         lambda: read_listed_chat(repo_root, chat_id, http),
         deadline_seconds=SELF_RESTART_DEADLINE_SECONDS,
@@ -388,22 +420,37 @@ def restart_self_when_idle(
         monotonic=monotonic,
         sleep=sleep,
     ):
-        _log(
-            f"Chat {chat_id} did not end its turn within {SELF_RESTART_DEADLINE_SECONDS:g}s; "
-            "it was not restarted"
+        problem = f"its turn did not end within {SELF_RESTART_DEADLINE_SECONDS / 60:g} minutes"
+    else:
+        restart_problem = _run_message_chat(
+            interrupt_argv(repo_root, chat_id), repo_root, runner
         )
-        return 1
-    problem = _run_interrupt(
-        repo_root,
-        chat_id,
-        repo_root / SELF_RESTART_DIR_REL / SELF_RESTART_NOTE_NAME,
-        runner,
+        if restart_problem is None:
+            note_problem = _run_message_chat(
+                send_note_argv(repo_root, chat_id, work_dir / SELF_RESTART_NOTE_NAME),
+                repo_root,
+                runner,
+            )
+            if note_problem is not None:
+                _log(
+                    f"Restarted chat {chat_id}, but sending it the note failed: {note_problem}"
+                )
+                return 1
+            _log(f"Restarted chat {chat_id} and sent it the note")
+            return 0
+        problem = f"the restart failed ({restart_problem})"
+    _log(f"Chat {chat_id} was not restarted: {problem}")
+    failure_note_path = work_dir / SELF_RESTART_FAILURE_NOTE_NAME
+    work_dir.mkdir(parents=True, exist_ok=True)
+    failure_note_path.write_text(compose_self_restart_failure_note(problem))
+    send_problem = _run_message_chat(
+        send_note_argv(repo_root, chat_id, failure_note_path), repo_root, runner
     )
-    if problem is not None:
-        _log(f"Restarting chat {chat_id} failed: {problem}")
-        return 1
-    _log(f"Restarted chat {chat_id} and sent it the note")
-    return 0
+    if send_problem is not None:
+        _log(
+            f"Telling chat {chat_id} its restart did not happen failed too: {send_problem}"
+        )
+    return 1
 
 
 def _log(message: str) -> None:
