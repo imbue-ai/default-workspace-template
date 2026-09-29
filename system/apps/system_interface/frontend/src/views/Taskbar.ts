@@ -16,6 +16,8 @@ export interface TaskbarAttrs {
   readonly entries: readonly TaskbarEntryRecord[];
   readonly avatar: AvatarState;
   readonly openEntryMenuWindowId: string | null;
+  /** The minimized window drawn above its entry right now, or null. */
+  readonly peekedWindowId: string | null;
   readonly launcher: LauncherFieldAttrs;
   readonly tray: SystemTrayAttrs;
   readonly onEntryClick: (windowId: string) => void;
@@ -58,6 +60,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
               entry,
               avatar: attrs.avatar,
               isMenuOpen: attrs.openEntryMenuWindowId === entry.window.id,
+              isPeeked: attrs.peekedWindowId === entry.window.id,
               onClick: () => attrs.onEntryClick(entry.window.id),
               onContextMenu: (x, y, target) => attrs.onEntryContextMenu(entry.window.id, x, y, target),
               onPeek: (isPeeking) => attrs.onEntryPeek(isPeeking ? entry.window.id : null),

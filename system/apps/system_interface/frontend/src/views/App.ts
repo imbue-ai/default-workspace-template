@@ -146,6 +146,8 @@ function isApplePlatform(): boolean {
 
 export function App(): m.Component<AppAttrs> {
   let openMenu: OpenMenu | null = null;
+  /** The minimized window whose page is drawn above its taskbar entry, while the pointer rests there. */
+  let peekedWindowId: string | null = null;
   let settingsDialog: SettingsDialogState | null = null;
   let avatarChooser: AvatarChooserState | null = null;
   let wallpapers: WallpaperListing[] | null = null;
@@ -1055,7 +1057,11 @@ export function App(): m.Component<AppAttrs> {
             entries: barEntries(state),
             avatar: state.avatar,
             openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
-            onEntryPeek: (windowId) => current.peekWindow(windowId),
+            peekedWindowId,
+            onEntryPeek: (windowId) => {
+              peekedWindowId = windowId;
+              current.peekWindow(windowId);
+            },
             launcher: {
               query: launcherQuery,
               isOpen: isLauncherOpen,

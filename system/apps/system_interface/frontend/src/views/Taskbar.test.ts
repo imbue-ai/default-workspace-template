@@ -50,6 +50,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
       },
     ],
     openEntryMenuWindowId: null,
+    peekedWindowId: null,
     launcher: {
       query: "",
       isOpen: false,

@@ -26,6 +26,8 @@ export interface TaskbarEntryAttrs {
   readonly entry: TaskbarEntryRecord;
   readonly avatar: AvatarState;
   readonly isMenuOpen: boolean;
+  /** Whether this entry's window is being peeked at right now: its picture stands where the bubble would. */
+  readonly isPeeked: boolean;
   readonly onClick: () => void;
   readonly onContextMenu: (x: number, y: number, target: Element) => void;
   /** The pointer arriving on (true) or leaving (false) a MINIMIZED entry, which peeks at its window. */
@@ -34,7 +36,7 @@ export interface TaskbarEntryAttrs {
 
 export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
   view(vnode) {
-    const { entry, avatar, isMenuOpen, onClick, onContextMenu, onPeek } = vnode.attrs;
+    const { entry, avatar, isMenuOpen, isPeeked, onClick, onContextMenu, onPeek } = vnode.attrs;
     // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
     const isDimmed = entry.isMinimized || entry.isDetached;
     const look = entry.look;
@@ -62,7 +64,9 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           "items-center justify-center rounded-[32%] border-0 bg-transparent p-0 " +
           "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-accent " +
           (isMenuOpen ? "ring-2 ring-accent " : ""),
-        ...hoverTooltipAttrs(tooltip, "above", "instant"),
+        // The peek stands in the bubble's place and says more than it does, so the two never show at
+        // once. The accessible name is unaffected: that is the entry's, whatever is drawn above it.
+        ...hoverTooltipAttrs(isPeeked ? null : tooltip, "above", "instant"),
         // Only a minimized window peeks: a window already on the desktop is its own preview. Entering
         // any other entry ends the peek the one beside it started, so a sweep along the bar is clean.
         onmouseenter: () => onPeek(entry.isMinimized),
