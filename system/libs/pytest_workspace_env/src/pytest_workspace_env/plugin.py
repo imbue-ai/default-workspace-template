@@ -1,5 +1,5 @@
 import os
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from typing import Final
 
 import pytest
@@ -12,7 +12,7 @@ WORKSPACE_ONLY_MARKERS: Final[tuple[str, ...]] = ("browser", "real_claude")
 _IS_REQUIRED_KEY: Final[pytest.StashKey[bool]] = pytest.StashKey[bool]()
 
 
-def is_workspace_env_required(environ: dict[str, str]) -> bool:
+def is_workspace_env_required(environ: Mapping[str, str]) -> bool:
     return environ.get(REQUIRE_WORKSPACE_ENV_VAR) == "1"
 
 
@@ -38,7 +38,7 @@ def _skip_reason_of(longrepr: object) -> str:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config.stash[_IS_REQUIRED_KEY] = is_workspace_env_required(dict(os.environ))
+    config.stash[_IS_REQUIRED_KEY] = is_workspace_env_required(os.environ)
 
 
 def pytest_report_header(config: pytest.Config) -> str | None:
