@@ -232,12 +232,15 @@ def _ensure_pulse_daemon() -> bool:
         # above; only a stop that overruns stopwaitsecs reaps it with the group.
         # --daemonize=yes double-forks and trips over a stale PID file in this container; a
         # plain Popen does not.
-        subprocess.Popen(
+        daemon = subprocess.Popen(
             ["pulseaudio", "--system", "--daemonize=no", "--disallow-exit",
              "--exit-idle-time=-1", "--log-target=stderr", "-n",
              "-L", "module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        # Reap it the moment it exits (shed under memory pressure, or crashed). Left
+        # unwaited it stays a zombie of this process, which earlyoom cannot free.
+        threading.Thread(target=daemon.wait, name="pulseaudio-reaper", daemon=True).start()
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
@@ -388,8 +391,8 @@ def _repo_root() -> Path:
 # The in-workspace chat messenger (see `_message_agent`): the owner recorded on a browser is
 # a chat id, and the chat app knows which agent is taking that chat's messages; the script
 # falls back to `mngr message` itself when the chat app cannot take the message. Its
-# `--system` flag wraps the fleet's nudges in the sentinel the chat transcript renders as a
-# collapsed system chip instead of a bare user bubble.
+# `--browser-fleet` flag wraps the fleet's nudges in the sentinel the chat transcript renders
+# as a collapsed "Browser fleet" chip instead of a bare user bubble.
 _MESSAGE_CHAT_SCRIPT = Path("system") / "scripts" / "message_chat.py"
 
 # Per-browser persistent Chromium profiles (cookies/logins/history) live here, on the
@@ -1356,16 +1359,17 @@ class LiveBrowser(MutableModel):
         delivered but the agent's input is blocked) both leave a warning; the claim window /
         lifecycle handling is the backstop if a message never lands.
 
-        These are automated, non-human nudges, so they go with ``--system``: the transcript
-        UI renders them as a collapsed system chip instead of a bare user bubble. This is
-        display-only -- the agent still receives the message and resumes its turn exactly
-        as before. The chat is addressed by its chat id, never by an agent's name."""
+        These are automated, non-human nudges, so they go with ``--browser-fleet``: the
+        transcript UI renders them as a collapsed "Browser fleet" chip instead of a bare user
+        bubble. This is display-only -- the agent still receives the message and resumes its
+        turn exactly as before. The chat is addressed by its chat id, never by an agent's
+        name."""
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 str(_MESSAGE_CHAT_SCRIPT),
                 agent_id,
-                "--system",
+                "--browser-fleet",
                 "--message",
                 text,
                 # Run from the repo root: the script path is repo-relative and the `mngr`

@@ -54,7 +54,6 @@ _BUILTIN_SERVICE_ORDER = (
     "github-sync",
     "host-backup",
     "cron",
-    "app-watcher",
     "xvfb",
     "browser",
     "files",

@@ -118,7 +118,8 @@ REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.jso
 `--local-tags` reads the tags the fetch just landed. To honor a user override,
 append `--override main` or `--override minds-v0.3.6`. The `|| exit 1` leaves a
 refusal's `error:` line as the last thing printed. The output carries `ref`,
-`kind`, `ceiling` and `exceeds_ceiling`; `main` resolves to `upstream/main`.
+`kind`, `ceiling` and `exceeds_ceiling`; an upstream branch name such as `main`
+resolves to `upstream/main`.
 Tell the user which version you are updating to, and never mention a release
 above `ceiling` that they did not ask for by name: the Imbue Studio app announces its
 own updates.
@@ -156,12 +157,16 @@ Stage the skill as it exists at `$REF` (from the fetched objects; no network,
 no working-tree mutation) and learn whether it differs from your local copy:
 
 ```bash
-DIFFERS=$(python3 .agents/skills/update-self/scripts/update_self.py bootstrap-skill --ref "$REF" \
-    | python3 -c 'import sys, json; print(json.load(sys.stdin)["differs"])')
+python3 .agents/skills/update-self/scripts/update_self.py bootstrap-skill --ref "$REF" \
+    > /tmp/update-self-bootstrap.json || exit 1
+DIFFERS=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-bootstrap.json"))["differs"])')
 echo "differs=$DIFFERS"
 ```
 
-`bootstrap-skill` always leaves a runnable flow at the staging path (the
+**If it exits non-zero, stop.** Its `error:` line says `$REF` names no commit
+here; handle it as a Step 2 error.
+
+Otherwise `bootstrap-skill` has left a runnable flow at the staging path (the
 target's copy, or the local copy when the ref predates the skill), so the
 worker runs from there regardless. `differs` decides only which prose *you*
 follow next:
@@ -334,7 +339,10 @@ git branch -m mngr/update-self "$ARCHIVE" && echo "$ARCHIVE"
 
 Launch with the plain `worker` template, record the hand-off (from here until
 the worker reports this chat is idle, and naming the worker lets the Imbue Studio app
-read the worker's liveness instead of "waiting for you"), then background-poll:
+read the worker's liveness instead of "waiting for you"), then background-poll
+through `run_in_background.py`, which delivers `await`'s result to this chat as
+a message that starts your next turn, whatever your harness. Run the staged
+skill's copy of it: this workspace's own tree may predate the script.
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
@@ -348,15 +356,16 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 ```bash
-# Run with Bash run_in_background: true
-uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
+    --description "Wait for the update's background agent" -- \
+    uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```
 
-Once the poll is armed, **end your turn**; its completion wakes you with the
-report. Never wait on the worker any other way -- no `sleep`, no polling its
-reports directory or its pane -- see "Never sleep on a worker" in
-`.agents/shared/references/lead-proxy.md`.
+Once the poll is armed, **end your turn**; its message wakes you with the
+report. Re-arm with the same command. Never wait on the worker any other way
+-- no `sleep`, no polling its reports directory or its pane -- see "Never sleep
+on a worker" in `.agents/shared/references/lead-proxy.md`.
 
 ## 4. Proxy the `question` gate
 
@@ -547,6 +556,20 @@ resumes), and how to honor a rollback request are in
   image-level hunk needs a manual workspace rebuild -- say so.
 - **Rebuild-only flags** -- surface as needing a workspace recreate; never
   imply they are live.
+- **User apps without `stop_when_no_windows`** -- the shell stops an app
+  whose manifest declares `stop_when_no_windows = true` a minute after its
+  last window closes and starts it again on the next request (the build-app
+  skill says which apps should carry it). A manifest without the field reads
+  as `false`, so an app built before the field existed keeps running for the
+  life of the workspace, as it always did. Do not add the field
+  mechanically. For each `system/apps/*/app.toml` that is the user's and
+  lacks it, read the app: if it only answers requests, add
+  `stop_when_no_windows = true` and restart its program so the registration
+  carries it; if it does work between requests (a background thread, a
+  poller or scheduled refresh, a subscription to an outside service, a job
+  that outlives the window, an API another agent drives with no window),
+  add `stop_when_no_windows = false` with a comment saying why, so the next
+  pass does not ask again. Name each decision in the results message.
 
 ### 5d. Escalate the built-in defects this pass found
 

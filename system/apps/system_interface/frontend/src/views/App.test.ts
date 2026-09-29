@@ -235,9 +235,9 @@ describe("a window drag", () => {
     listener.onPressStart(binding);
     expect(document.activeElement).toBe(frame);
     listener.onPressEnd(binding);
-    listener.onPressStart({ kind: "shortcut", app: "docs", launch: "open", element: content });
+    listener.onPressStart({ kind: "shortcut", app: "docs", launch: "open" });
     expect(document.activeElement).toBe(document.querySelector(".live-pages"));
-    listener.onPressEnd({ kind: "shortcut", app: "docs", launch: "open", element: content });
+    listener.onPressEnd({ kind: "shortcut", app: "docs", launch: "open" });
   });
 
   // The chrome's release ends the gesture with no release the pointer source sees (its events stop at the chrome
@@ -677,5 +677,31 @@ describe("a solo shell", () => {
     m.redraw.sync();
     expect(document.querySelector("[data-solo-window-gone]")).not.toBeNull();
     expect(document.querySelector('iframe[data-live-page="win-1"]')).toBeNull();
+  });
+});
+
+describe("the desktop's wallpaper", () => {
+  function layoutStyle(): string {
+    return (document.querySelector(".app-layout") as HTMLElement).getAttribute("style") ?? "";
+  }
+
+  function chooseWallpaper(name: string): void {
+    socket.deliver().onDesktopsUpdated([
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a")],
+        wallpaper: { kind: "bundled", name },
+      }),
+    ]);
+    m.redraw.sync();
+  }
+
+  it("paints nothing of its own when the desktop has chosen none, leaving the default the class carries", () => {
+    expect(layoutStyle()).not.toContain("background-image");
+  });
+
+  it("paints a chosen wallpaper over the default, so a reference whose file is gone shows the default", () => {
+    chooseWallpaper("arcs");
+    expect(layoutStyle()).toContain('url("/wallpapers/bundled/arcs")');
+    expect(layoutStyle()).toContain("var(--desk-default-wallpaper)");
   });
 });

@@ -194,7 +194,7 @@ The pinned entry's context menu is the taskbar entry menu with the presentation 
 7. divider
 8. Close, which minimizes the pinned window
 
-The pinned window's own menu is the V1 window menu: Refresh, Share, Stop or Start, Close; its Close minimizes.
+The pinned window's own menu is the V1 window menu: Refresh, Share, Quit, Close; its Close minimizes.
 Its title bar has minimize, maximize, and close; the close control minimizes too.
 Taking the control away was tried and confused people, who reached for maximize by habit instead.
 There are no keyboard shortcuts for any of this in this version.

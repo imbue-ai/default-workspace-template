@@ -12,9 +12,9 @@ belong in tested code rather than agent prose:
 ``resolve-target``
     Resolve the ref to update to. Default is the release the Imbue Studio app driving
     this workspace was built against -- the ``minds-v*`` tag it names, and only
-    that one; an explicit override may name a specific tag, ``main``, or any
-    other ref, and is reported back as exceeding the ceiling when it cannot be
-    proven to sit at or below it.
+    that one; an explicit override may name a specific tag, an upstream branch
+    (qualified to ``upstream/<branch>``), or any other ref, and is reported back
+    as exceeding the ceiling when it cannot be proven to sit at or below it.
 
     The ceiling exists because a workspace's template ships the code the outer
     app talks to (the system interface, ``mngr``), so updating past
@@ -82,7 +82,8 @@ belong in tested code rather than agent prose:
     the rest of the pass runs, at a single fixed path, and report whether it
     differs from the local copy. Normally that staged copy is the target ref's
     *own* copy (extracted from the already-fetched object); when the ref predates
-    the skill it is the local copy instead. Either way the fixed path is left
+    the skill it is the local copy instead. A ref that names no commit is refused
+    with nothing staged. Otherwise the fixed path is left
     populated with a runnable flow, so the lead and worker can dispatch against it
     by literal path without carrying any value across shell invocations. This is
     what lets the flow, after resolving the target, hand off to the update-self
@@ -237,6 +238,22 @@ def _is_already_merged(ref: str, repo_root: Path) -> bool:
     return result.returncode == 0
 
 
+def _names_commit(ref: str, repo_root: Path) -> bool:
+    """Whether ``ref`` resolves to a commit in ``repo_root``.
+
+    Exit 1 from ``rev-parse --verify --quiet`` is the ordinary "no such commit"
+    answer; any other non-zero code is a real git error and is raised.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+    )
+    if result.returncode not in (0, 1):
+        result.check_returncode()
+    return result.returncode == 0
+
+
 def _repo_root(args: argparse.Namespace) -> Path:
     """The ``--repo-root`` value, whether given before or after the subcommand.
 
@@ -259,8 +276,24 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     app_version = (
         args.app_version if args.app_version is not None else fetch_app_template_ref()
     )
+    # A symref (``<remote>/HEAD``) prints as an empty line and drops out: it is
+    # not a branch, and qualifying an override of ``HEAD`` would retarget it.
+    remote_branches = _list_names(
+        _git(
+            [
+                "for-each-ref",
+                "--format=%(if)%(symref)%(then)%(else)%(refname:lstrip=3)%(end)",
+                f"refs/remotes/{args.remote}/",
+            ],
+            repo_root,
+        )
+    )
     target = resolve_target(
-        args.override, tags, remote=args.remote, app_version=app_version
+        args.override,
+        tags,
+        remote=args.remote,
+        app_version=app_version,
+        remote_branches=remote_branches,
     )
     # Only the default path: an override was asked for by name, and the rule that
     # it is never silently blocked outranks saving a no-op merge.
@@ -611,6 +644,17 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     dest_root = (dest if dest.is_absolute() else repo_root / dest).resolve()
     staged_skill = dest_root / SKILL_DIR_REL
 
+    # Checked first: the skill-dir probe below cannot tell a ref that names
+    # nothing from one that predates the skill.
+    if not _names_commit(args.ref, repo_root):
+        print(
+            f"error: {args.ref} does not name a commit in this workspace, so there "
+            "is no target to update to. It is not a release, remote branch or "
+            "commit that has been fetched.",
+            file=sys.stderr,
+        )
+        return 1
+
     # Always stage into a clean dir. The flow runs the skill from ``staged_skill``
     # unconditionally (a single fixed path the lead and worker both reference by
     # literal -- no state carried across shell invocations), so this command must
@@ -892,11 +936,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     resolve_parser.add_argument(
         "--override",
         default=None,
-        help="A tag, 'main', or any ref to update to (default: latest stable "
-        "minds-v* tag).",
+        help="A tag, a branch of --remote (qualified to <remote>/<branch>), or "
+        "any other ref to update to (default: the release the Imbue Studio app names).",
     )
     resolve_parser.add_argument(
-        "--remote", default="upstream", help="Remote to read tags from."
+        "--remote", default="upstream", help="Remote to read tags and branches from."
     )
     resolve_parser.add_argument(
         "--local-tags",

@@ -16,9 +16,11 @@ import importlib.util
 import json
 import shutil
 import sys
+import tempfile
 import tomllib
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -33,6 +35,11 @@ _spec.loader.exec_module(mod)
 # The shared script gives each health wait up to 60 one-second attempts, and this test
 # waits three times: the instance and its wrapper page at ``up``, the instance at ``refresh``.
 _LIFECYCLE_TIMEOUT_SECONDS = 180
+
+# The preview's --copy refuses a copy that would leave the disk under its reserve, and
+# in a workspace pytest's temp root is the small RAM-backed /tmp, so the live repo whose
+# data gets copied sits on disk, where a real workspace's copies land.
+_DISK_TEMP_ROOT = Path("/var/tmp")
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
@@ -93,11 +100,19 @@ def _registered_rows(registry: Path) -> dict[str, dict[str, object]]:
     }
 
 
+@pytest.fixture
+def repo_root_on_disk() -> Iterator[Path]:
+    with tempfile.TemporaryDirectory(
+        prefix="preview-lifecycle-", dir=_DISK_TEMP_ROOT
+    ) as directory:
+        yield Path(directory) / "live"
+
+
 @pytest.mark.timeout(_LIFECYCLE_TIMEOUT_SECONDS)
 def test_a_preview_boots_from_its_manifest_refreshes_a_rebuild_in_place_and_tears_down(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, repo_root_on_disk: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    repo_root = tmp_path / "live"
+    repo_root = repo_root_on_disk
     (repo_root / "system" / "scripts").mkdir(parents=True)
     shutil.copy(
         mod._FORWARD_PORT_SCRIPT, repo_root / "system" / "scripts" / "forward_port.py"

@@ -24,6 +24,7 @@ from app_manifest.primitives import IconPath
 from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
+from app_manifest.primitives import MessageType
 from app_manifest.primitives import PreviewName
 from app_manifest.primitives import PriorityName
 from app_manifest.primitives import ProgramName
@@ -181,6 +182,14 @@ class LaunchPath(FrozenModel):
         return self
 
 
+class MessageHandler(FrozenModel):
+    """A message an app takes, and the route under its own origin the shell posts each one to
+    (desktop-interface contracts.md section 2)."""
+
+    type: MessageType = Field(description="The message type the app handles")
+    path: LaunchPathValue = Field(description="The route under the app origin the shell POSTs the message to")
+
+
 class AppReference(FrozenModel):
     """An artifact outside the app's own directory that belongs to the app."""
 
@@ -331,7 +340,16 @@ class AppManifest(FrozenModel):
     name: AppName = Field(description="The registered app name")
     display_name: DisplayName = Field(description="What users see")
     icon: IconPath | None = Field(default=None, description="The icon file, relative to the manifest; required unless internal")
-    critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
+    critical: bool = Field(
+        default=False,
+        description="No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the "
+        "update apply",
+    )
+    stop_when_no_windows: bool = Field(
+        default=False,
+        description="Whether the shell may stop the app's program once no window on any desktop shows it "
+        "(docs/system/specs/stop-when-no-windows.md); a critical app never is",
+    )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     program: ProgramName = Field(description="The supervisord program that runs the app (defaults to the name)")
     internal: bool = Field(default=False, description="Hidden from every open surface")
@@ -350,6 +368,10 @@ class AppManifest(FrozenModel):
         default=None,
         description="The path under the app's origin the shell posts to when a window of the app closes; "
         "an app whose resources live as long as their windows sweeps on it",
+    )
+    message_handlers: tuple[MessageHandler, ...] = Field(
+        default=(),
+        description="The messages the app takes, each posted by the shell to a route under the app's origin",
     )
     references: tuple[AppReference, ...] = Field(
         default=(), description="The artifacts outside the app's directory that belong to it"
@@ -388,6 +410,8 @@ class AppManifest(FrozenModel):
     def _check_cross_field_rules(self) -> Self:
         if self.icon is None and not self.internal:
             raise InvalidManifestValueError("icon is required unless internal = true")
+        if self.critical and self.stop_when_no_windows:
+            raise InvalidManifestValueError("a critical app cannot declare stop_when_no_windows = true")
         if self.handles:
             raise InvalidManifestValueError("handles must be absent or empty in this release")
         reference_paths = [reference.path for reference in self.references]
@@ -402,6 +426,9 @@ class AppManifest(FrozenModel):
             raise InvalidManifestValueError(
                 f"wiring programs must not repeat the app's own program {str(self.program)!r}"
             )
+        message_types = [handler.type for handler in self.message_handlers]
+        if len(set(message_types)) != len(message_types):
+            raise InvalidManifestValueError(f"message handler types must be unique, got {message_types}")
         launch_path_ids = [launch_path.id for launch_path in self.launch_paths]
         if len(set(launch_path_ids)) != len(launch_path_ids):
             raise InvalidManifestValueError(f"launch path ids must be unique, got {launch_path_ids}")
