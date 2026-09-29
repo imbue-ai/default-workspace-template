@@ -41,12 +41,14 @@ Write it for a non-technical reader skimming top to bottom, in this order:
    unrelated. When the worker's rule ran none of them (the update touched
    nothing of theirs), say that the release arrived exactly as it was shipped
    and tested -- never that checks ran and passed.
-6. **Your chats** -- only when the §4d verdict was `needed`. Say which chats and background
-   agents were restarted to pick up the new version (if any), that their conversations carry
-   over, and that this chat restarts itself right after this message. Name each one that was busy and left
-   running, say it is still on the previous version, and ask whether to interrupt and
-   restart it now; name any restart that failed the same way. A change that reaches only
-   newly created chats is one line with the offer of a fresh chat.
+6. **Your chats** -- only when the §4d verdict was `needed`, or the report's **Agent
+   restarts** names a change that reaches only newly created chats. On `needed`, say which
+   chats and background agents were restarted to pick up the new version (if any), that their
+   conversations carry over, and that this chat restarts itself right after this message. Name
+   each one that was busy and left running, say it is still on the previous version, and ask
+   whether to interrupt and restart it now; name any restart that failed the same way. A
+   change that reaches only newly created chats, whatever the verdict, is one line with the
+   offer of a fresh chat.
 7. **Caveats** -- only if any: rebuild-only items, incomplete provisioning, a
    missing backup, unfinished work from an earlier update attempt that Step 3b
    set aside, a deviation the worker disclosed that could not be closed.
