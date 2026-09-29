@@ -3795,7 +3795,7 @@ class AgentManager:
                 labels_by_chat_id = {
                     self._chat_id_of_agent_locked(agent_info.id): agent_info.labels
                     for agent_info in agents
-                    if not self._is_archived_member_locked(agent_info.id)
+                    if not self._is_archived_member_locked(agent_info.id) and not self._is_spare_locked(agent_info.id)
                 }
             self._auto_open.seed_at_startup(labels_by_chat_id)
 
