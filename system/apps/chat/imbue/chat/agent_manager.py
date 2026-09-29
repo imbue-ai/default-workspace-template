@@ -3269,13 +3269,12 @@ class AgentManager:
 
         A ready spare whose terms went stale (the default account, the project, or the fast
         mode a new chat starts in changed) or whose process died is destroyed, and a spare is
-        started while the pool holds fewer than its size, one at a time (mngr's
-        host lock runs creates one at a time anyway). Nothing happens without a spares store,
-        before the agent list is known, once the app is stopping, or during the backoff after a
-        spare's create or destroy failed; with no account to start one on, the ready spares are destroyed and none is
-        started. The mngr commands run on threads of their
-        own; the sweep calls this every few seconds, and so do a sign-in, a hand-over, and a
-        spare coming up.
+        started while the pool holds fewer than its size, one at a time (mngr's host lock runs
+        creates one at a time anyway). Nothing happens without a spares store, before the agent
+        list is known, once the app is stopping, or during the backoff after a spare's create or
+        destroy failed; with no account to start one on, the ready spares are destroyed and none
+        is started. The mngr commands run on threads of their own; the sweep calls this every
+        few seconds, and so do a sign-in, a hand-over, and a spare coming up.
         """
         if self._spare_chat_store is None or self._shutdown_event.is_set():
             return
