@@ -325,6 +325,15 @@ the dialog, or at once for a chat with nothing to hand over -- see the switch
 above). `system/scripts/migrate_claude_auth.py` imports this package from
 the root venv.
 
+Removing (signing out of) an account deletes its credential files and its index
+row; its chats keep running, since their harness already holds the credential,
+but take no more of the user's messages. The message route and the intake answer
+409 with `kind: account_signed_out` for a chat whose `account` label names an
+account the index no longer has (a send held for a chat already switching is
+still held), and the composer shows "Choose a provider" in place of the input
+until a switch to another account is armed. A notice the chat app delivers for
+the agent's own secret request still goes through.
+
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare
 create the Minds app's chats fall back to on a template whose script has no

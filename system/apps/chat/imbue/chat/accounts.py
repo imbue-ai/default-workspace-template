@@ -393,14 +393,15 @@ def delete_account(account_id: str, home: Path | None = None) -> None:
     """Drop the row, remove the folder, and clear the mru and the default if they pointed here.
 
     This takes the credential off DISK. It does not reach into a process that already read it:
-    a running agent holds what it loaded at startup, so a chat bound to this account can keep
+    a running agent holds what it loaded at startup, so a chat bound to this account could keep
     answering until it next restarts -- observed, not assumed. What stops immediately is
-    anything that reads the folder afresh, which includes starting a new chat on it.
+    anything that reads the folder afresh, which includes starting a new chat on it, and the
+    chat app's send path, which refuses the user's messages to a chat whose account is gone.
 
     Agents bound here keep their transcripts (see `KEPT_ON_DISCARD`) and nothing rebinds them:
     their `account` label becomes a dangling reference, which is the cost of delete-and-re-add
-    over re-authenticating in place. Killing them instead would be worse -- it destroys a chat
-    the user may still be reading, to enforce a rule they can simply be told.
+    over re-authenticating in place. They keep running rather than being stopped, so a turn in
+    progress finishes and a later switch can still ask the old agent for its handoff summary.
     """
     with _index_lock(home):
         index = read_index(home)

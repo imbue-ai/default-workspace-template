@@ -37,6 +37,7 @@ from imbue.chat import accounts_endpoints
 from imbue.chat import latchkey_endpoints
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.accounts import AccountError
+from imbue.chat.accounts import account_exists
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
@@ -517,7 +518,13 @@ class _ServerSecretRequestBridge(SecretRequestChatBridge):
     def deliver_notice(self, chat_id: str, text: str) -> None:
         message_id = uuid4().hex
         accepted = _send_to_chat(
-            get_state(), ChatId(chat_id), SendMessageRequest(message=text, message_id=message_id), message_id
+            get_state(),
+            ChatId(chat_id),
+            SendMessageRequest(message=text, message_id=message_id),
+            message_id,
+            # The notice answers a request the agent itself filed, so it reaches the agent whatever
+            # account it runs on.
+            is_refused_on_signed_out_account=False,
         )
         if isinstance(accepted, Response):
             raise NoticeDeliveryError(accepted.get_json()["detail"])
@@ -546,8 +553,25 @@ def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) ->
         state.chat_namer.consider_message(chat_id, message)
 
 
+# The send-failure kind a chat whose account was signed out answers with; the composer shows its
+# own "choose a provider" state for it rather than a failed send.
+ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND: Final[str] = "account_signed_out"
+
+
+def _is_account_signed_out(agent_info: AgentInfo) -> bool:
+    """Whether the agent's ``account`` label names an account no longer signed in (a chat from before accounts has none)."""
+    account_id = agent_info.labels.get("account", "")
+    return account_id != "" and not account_exists(account_id)
+
+
 def _send_to_chat(
-    state: ChatAppState, chat_id: ChatId, send_message_request: SendMessageRequest, message_id: str
+    state: ChatAppState,
+    chat_id: ChatId,
+    send_message_request: SendMessageRequest,
+    message_id: str,
+    # A chat whose account was signed out takes no more of the user's messages until it moves to
+    # another provider: its agent still holds the credential it loaded, and would keep using it.
+    is_refused_on_signed_out_account: bool,
 ) -> _SendAccepted | Response:
     """The ordinary send path, shared by the message route, the intake, and the secret-request notice: hold the send
     while the chat converges, else deliver it to the active agent; either way record the client's activity and the
@@ -565,6 +589,9 @@ def _send_to_chat(
         agent_info = _find_active_agent(str(chat_id))
         if agent_info is None:
             return _chat_not_found_response(str(chat_id))
+        if is_refused_on_signed_out_account and _is_account_signed_out(agent_info):
+            detail = "You signed out of the account this chat runs on. Choose a provider to continue it on."
+            return json_response({"detail": detail, "kind": ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND}, status_code=409)
         try:
             outcome = _deliver_message(state, agent_info, send_message_request.message, message_id)
         except SendFailedError as send_failure:
@@ -606,7 +633,9 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
     message_id = send_message_request.message_id or uuid4().hex
-    accepted = _send_to_chat(state, ChatId(chat_id), send_message_request, message_id)
+    accepted = _send_to_chat(
+        state, ChatId(chat_id), send_message_request, message_id, is_refused_on_signed_out_account=True
+    )
     if isinstance(accepted, Response):
         return accepted
     _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
@@ -1485,7 +1514,7 @@ def _deliver_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeReq
     send_message_request = SendMessageRequest(
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
     )
-    accepted = _send_to_chat(state, chat_id, send_message_request, message_id)
+    accepted = _send_to_chat(state, chat_id, send_message_request, message_id, is_refused_on_signed_out_account=True)
     if isinstance(accepted, Response):
         return accepted
     _consider_naming_chat(state, chat_id, intake.message)

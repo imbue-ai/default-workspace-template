@@ -18,10 +18,10 @@ import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendM
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import { getPendingPick, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
-import { openSwitchDialog } from "./SwitchDialog";
+import { beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
-import { accountForFirstSend, openProviderChooser } from "../models/Providers";
+import { accountForFirstSend, isAccountSignedOut, openProviderChooser } from "../models/Providers";
 import type { ProvisionalChat } from "../models/Chats";
 import {
   ensureHarnessCatalogs,
@@ -1096,6 +1096,32 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         });
       }
 
+      /** In place of the composer while the chat's account is signed out: nothing more goes to it. */
+      function renderSignedOutAccountNotice(signedOutChatId: string): m.Children {
+        return m(
+          "div",
+          {
+            class:
+              "message-input-signed-out flex flex-row items-center justify-between gap-3 rounded-xl border " +
+              "border-default bg-surface-secondary py-3 pr-3 pl-5 text-(length:--font-size-body) text-secondary",
+          },
+          [
+            m("span", "You signed out of the account this chat runs on. Choose a provider to continue it on."),
+            m(
+              Button,
+              {
+                variant: "primary",
+                sm: true,
+                extra: "message-input-choose-provider shrink-0",
+                onclick: () =>
+                  openProviderChooser({ onSignedIn: (chosen) => beginSwitchToAccountId(signedOutChatId, chosen) }),
+              },
+              "Choose a provider",
+            ),
+          ],
+        );
+      }
+
       const attachments = getComposerAttachments(chatId);
       const hasMessageText = messageText.trim().length > 0;
       const canSend = hasMessageText || hasReadyAttachments(chatId);
@@ -1105,6 +1131,10 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       // Nothing is pending once a switch is running: the lane was applied by confirming it.
       const handoff = chat?.handoff ?? null;
       const switchTarget = handoff === null ? pendingSwitchTarget(chatId) : null;
+      // A chosen provider arms a switch, and the next send carries the chat to it, so the composer
+      // comes back as soon as one is armed.
+      const isBlockedBySignedOutAccount =
+        handoff === null && switchTarget === null && isAccountSignedOut(chat?.active_agent.account_id);
 
       // The stop button is only meaningful while the agent has an interruptible
       // turn in progress -- the same condition that drives the activity indicator
@@ -1128,6 +1158,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
           actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
           switchTarget !== null ? renderSwitchStrip(switchTarget) : null,
+          isBlockedBySignedOutAccount && chatId !== null ? renderSignedOutAccountNotice(chatId) : null,
           m("input", {
             type: "file",
             multiple: true,
@@ -1144,141 +1175,143 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
               input.value = "";
             },
           }),
-          m("div", { class: INPUT_BOX_CLASS }, [
-            attachments.length > 0
-              ? m(
-                  "div",
-                  { class: "message-input-attachments flex flex-wrap gap-2 pt-3 pr-3 pl-4" },
-                  attachments.map((attachment) => renderComposerAttachment(chatId, attachment)),
-                )
-              : null,
-            m("div", { class: "message-input-row flex flex-row items-center" }, [
-              m("textarea", {
-                class:
-                  "message-input-textbox flex-1 resize-none border-none bg-transparent pt-3.5 pr-2 pb-3.5 pl-5 " +
-                  "font-sans text-(length:--font-size-body) leading-normal text-primary focus:outline-none " +
-                  "placeholder:text-faint",
-                placeholder:
-                  handoff !== null
-                    ? handoffComposerPlaceholder(handoff)
-                    : isAgentWorking
-                      ? "Type to queue more messages..."
-                      : "Type a message...",
-                rows: 1,
-                value: messageText,
-                oncreate: (textareaVnode: m.VnodeDOM) => {
-                  messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
-                  autoResizeTextarea(messageTextareaElement);
-                  focusMessageTextarea();
-                },
-                onupdate: (textareaVnode: m.VnodeDOM) => {
-                  messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
-                  autoResizeTextarea(messageTextareaElement);
-                },
-                onremove: () => {
-                  messageTextareaElement = null;
-                },
-                oninput: (event: Event) => {
-                  const textarea = event.target as HTMLTextAreaElement;
-                  messageText = textarea.value;
-                  localStorage.setItem(messageTextKey(chatId), messageText);
-                  autoResizeTextarea(textarea);
-                },
-                onkeydown: handleKeydown,
-                onpaste: handlePaste,
-              }),
-              m("div", { class: "message-input-toolbar flex shrink-0 items-center gap-2 pr-3" }, [
-                m(
-                  Button,
-                  {
-                    variant: "ghost",
-                    icon: true,
-                    round: true,
-                    extra: "message-input-attach-button shrink-0",
-                    ...hoverTooltipAttrs("Attach files", "above"),
-                    "aria-label": "Attach files",
-                    onclick: openFilePicker,
-                  },
-                  m.trust(icon("attach", { size: 18 })),
-                ),
-                isCancelSwitchVisible
+          isBlockedBySignedOutAccount
+            ? null
+            : m("div", { class: INPUT_BOX_CLASS }, [
+                attachments.length > 0
                   ? m(
-                      Button,
-                      {
-                        variant: "secondary",
-                        sm: true,
-                        extra: "message-input-cancel-switch-button shrink-0",
-                        readonly: isCancelSwitchInFlight,
-                        ...hoverTooltipAttrs(
-                          "Keep this chat on its current agent; your message comes back here",
-                          "above",
-                        ),
-                        "aria-label": "Cancel switch",
-                        onclick: () => void handleCancelSwitch(),
-                      },
-                      isCancelSwitchInFlight ? "Cancelling…" : "Cancel switch",
+                      "div",
+                      { class: "message-input-attachments flex flex-wrap gap-2 pt-3 pr-3 pl-4" },
+                      attachments.map((attachment) => renderComposerAttachment(chatId, attachment)),
                     )
                   : null,
-                isStopButtonVisible
-                  ? m(
+                m("div", { class: "message-input-row flex flex-row items-center" }, [
+                  m("textarea", {
+                    class:
+                      "message-input-textbox flex-1 resize-none border-none bg-transparent pt-3.5 pr-2 pb-3.5 pl-5 " +
+                      "font-sans text-(length:--font-size-body) leading-normal text-primary focus:outline-none " +
+                      "placeholder:text-faint",
+                    placeholder:
+                      handoff !== null
+                        ? handoffComposerPlaceholder(handoff)
+                        : isAgentWorking
+                          ? "Type to queue more messages..."
+                          : "Type a message...",
+                    rows: 1,
+                    value: messageText,
+                    oncreate: (textareaVnode: m.VnodeDOM) => {
+                      messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                      autoResizeTextarea(messageTextareaElement);
+                      focusMessageTextarea();
+                    },
+                    onupdate: (textareaVnode: m.VnodeDOM) => {
+                      messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                      autoResizeTextarea(messageTextareaElement);
+                    },
+                    onremove: () => {
+                      messageTextareaElement = null;
+                    },
+                    oninput: (event: Event) => {
+                      const textarea = event.target as HTMLTextAreaElement;
+                      messageText = textarea.value;
+                      localStorage.setItem(messageTextKey(chatId), messageText);
+                      autoResizeTextarea(textarea);
+                    },
+                    onkeydown: handleKeydown,
+                    onpaste: handlePaste,
+                  }),
+                  m("div", { class: "message-input-toolbar flex shrink-0 items-center gap-2 pr-3" }, [
+                    m(
                       Button,
                       {
-                        variant: "stop",
+                        variant: "ghost",
                         icon: true,
                         round: true,
-                        sm: true,
-                        extra: "message-input-stop-button shrink-0",
-                        // The label states what THIS press will do. The button always interrupts;
-                        // it only hands messages back when there are some parked in the harness,
-                        // so promising that unconditionally described a case that usually is not
-                        // the one in front of the user.
-                        ...hoverTooltipAttrs(stopButtonLabel, "above"),
-                        "aria-label": stopButtonLabel,
-                        onclick: handleStopToComposer,
+                        extra: "message-input-attach-button shrink-0",
+                        ...hoverTooltipAttrs("Attach files", "above"),
+                        "aria-label": "Attach files",
+                        onclick: openFilePicker,
                       },
-                      m.trust(stopIcon(14)),
-                    )
-                  : null,
-                // The send button reads "Switch and send" while a pending lane differs from the
-                // chat's harness (spec 5.1): the next send moves the chat, so the button says so.
-                canSend && switchTarget !== null
-                  ? m(
-                      Button,
-                      {
-                        variant: "primary",
-                        sm: true,
-                        extra: "message-input-send-button message-input-send-button--switch shrink-0",
-                        ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`, "above"),
-                        "aria-label": "Switch and send",
-                        onclick: handleSubmit,
-                      },
-                      [
-                        m("span", "Switch and send"),
-                        m(
-                          "span",
-                          { class: "ml-1.5 inline-flex items-center" },
-                          m.trust(icon("send", { size: 14, strokeWidth: 2.5 })),
-                        ),
-                      ],
-                    )
-                  : canSend
-                    ? m(
-                        Button,
-                        {
-                          variant: "primary",
-                          icon: true,
-                          round: true,
-                          extra: "message-input-send-button shrink-0",
-                          ...hoverTooltipAttrs("Send message", "above"),
-                          "aria-label": "Send message",
-                          onclick: handleSubmit,
-                        },
-                        m.trust(icon("send", { size: 16, strokeWidth: 2.5 })),
-                      )
-                    : null,
+                      m.trust(icon("attach", { size: 18 })),
+                    ),
+                    isCancelSwitchVisible
+                      ? m(
+                          Button,
+                          {
+                            variant: "secondary",
+                            sm: true,
+                            extra: "message-input-cancel-switch-button shrink-0",
+                            readonly: isCancelSwitchInFlight,
+                            ...hoverTooltipAttrs(
+                              "Keep this chat on its current agent; your message comes back here",
+                              "above",
+                            ),
+                            "aria-label": "Cancel switch",
+                            onclick: () => void handleCancelSwitch(),
+                          },
+                          isCancelSwitchInFlight ? "Cancelling…" : "Cancel switch",
+                        )
+                      : null,
+                    isStopButtonVisible
+                      ? m(
+                          Button,
+                          {
+                            variant: "stop",
+                            icon: true,
+                            round: true,
+                            sm: true,
+                            extra: "message-input-stop-button shrink-0",
+                            // The label states what THIS press will do. The button always interrupts;
+                            // it only hands messages back when there are some parked in the harness,
+                            // so promising that unconditionally described a case that usually is not
+                            // the one in front of the user.
+                            ...hoverTooltipAttrs(stopButtonLabel, "above"),
+                            "aria-label": stopButtonLabel,
+                            onclick: handleStopToComposer,
+                          },
+                          m.trust(stopIcon(14)),
+                        )
+                      : null,
+                    // The send button reads "Switch and send" while a pending lane differs from the
+                    // chat's harness (spec 5.1): the next send moves the chat, so the button says so.
+                    canSend && switchTarget !== null
+                      ? m(
+                          Button,
+                          {
+                            variant: "primary",
+                            sm: true,
+                            extra: "message-input-send-button message-input-send-button--switch shrink-0",
+                            ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`, "above"),
+                            "aria-label": "Switch and send",
+                            onclick: handleSubmit,
+                          },
+                          [
+                            m("span", "Switch and send"),
+                            m(
+                              "span",
+                              { class: "ml-1.5 inline-flex items-center" },
+                              m.trust(icon("send", { size: 14, strokeWidth: 2.5 })),
+                            ),
+                          ],
+                        )
+                      : canSend
+                        ? m(
+                            Button,
+                            {
+                              variant: "primary",
+                              icon: true,
+                              round: true,
+                              extra: "message-input-send-button shrink-0",
+                              ...hoverTooltipAttrs("Send message", "above"),
+                              "aria-label": "Send message",
+                              onclick: handleSubmit,
+                            },
+                            m.trust(icon("send", { size: 16, strokeWidth: 2.5 })),
+                          )
+                        : null,
+                  ]),
+                ]),
               ]),
-            ]),
-          ]),
         ],
       );
     },

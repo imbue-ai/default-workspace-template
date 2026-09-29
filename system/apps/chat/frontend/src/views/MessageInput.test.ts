@@ -30,9 +30,10 @@ const mocks = vi.hoisted(() => {
   // working/idle branch (stop button, placeholder) on the agent's activity state --
   // both driven through this mutable holder (reset in beforeEach; an undefined
   // activity_state means "not working").
-  const agent: { harness: string | undefined; activity_state: string | undefined } = {
+  const agent: { harness: string | undefined; activity_state: string | undefined; account_id: string | null } = {
     harness: "claude",
     activity_state: undefined,
+    account_id: null,
   };
   // The chat's in-progress switch, the account its next send switches it to, and the model
   // picked for it, all null at rest.
@@ -52,6 +53,9 @@ const mocks = vi.hoisted(() => {
     switchChat: vi.fn(async () => ({ kind: "handoff", phase: "summarizing", returned_block: "" })),
     setPendingAccount: vi.fn(),
     openSwitchDialog: vi.fn(),
+    beginSwitchToAccountId: vi.fn(),
+    // The account ids that read as signed out; empty at rest.
+    signedOutAccountIds: new Set<string>(),
     cancelHandoff: vi.fn(async () => ({ returned_block: "" })),
     switching,
     drainToComposer: vi.fn(async () => ({ block: "" })),
@@ -88,7 +92,10 @@ vi.mock("../models/PendingLane", () => ({
   setPendingAccount: mocks.setPendingAccount,
   switchKind: () => mocks.switching.kind,
 }));
-vi.mock("./SwitchDialog", () => ({ openSwitchDialog: mocks.openSwitchDialog }));
+vi.mock("./SwitchDialog", () => ({
+  openSwitchDialog: mocks.openSwitchDialog,
+  beginSwitchToAccountId: mocks.beginSwitchToAccountId,
+}));
 vi.mock("./fast-mode-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./fast-mode-limit")>()),
   chooseFastMode: mocks.chooseFastMode,
@@ -176,6 +183,8 @@ vi.mock("../models/Providers", () => ({
   openProviderChooser: mocks.openProviderChooser,
   // The seeded chats these tests launch name no account of their own, so the selected one decides.
   accountForFirstSend: () => mocks.selectedAccount,
+  isAccountSignedOut: (accountId: string | null | undefined) =>
+    !!accountId && mocks.signedOutAccountIds.has(accountId),
 }));
 
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
@@ -1074,5 +1083,51 @@ describe("prependToComposer with an element reference", () => {
     prependToComposer("agent-1", BLOCK);
     expect(localStorage.getItem("message-text:agent-1")).toBe("my draft");
     expect(stagedFile().file.name).toBe(`${REFERENCE_ID}.json`);
+  });
+});
+
+describe("MessageInput on a chat whose account was signed out", () => {
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.openProviderChooser.mockClear();
+    mocks.beginSwitchToAccountId.mockClear();
+    mocks.agent.harness = "codex";
+    mocks.agent.activity_state = undefined;
+    mocks.agent.account_id = "account-signed-out-5521";
+    mocks.signedOutAccountIds.clear();
+    mocks.signedOutAccountIds.add("account-signed-out-5521");
+    mocks.switching.target = null;
+    mocks.switching.handoff = null;
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.agent.account_id = null;
+    mocks.signedOutAccountIds.clear();
+  });
+
+  it("replaces the composer with the reason and a way to choose another provider", () => {
+    const component = MessageInput();
+    const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
+
+    expect(renderedText(tree)).toContain("You signed out of the account this chat runs on.");
+    expect(findByTag(tree, "textarea")).toBeUndefined();
+    const chooseButton = findButton(tree, "Choose a provider");
+    expect(chooseButton).toBeDefined();
+
+    (chooseButton!.attrs!.onclick as () => void)();
+    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onSignedIn: (accountId: string) => void };
+    intent.onSignedIn("account-chosen-5522");
+    expect(mocks.beginSwitchToAccountId).toHaveBeenCalledWith("agent-signed-out", "account-chosen-5522");
+  });
+
+  it("gives the composer back once a switch to another provider is armed", () => {
+    mocks.switching.target = { id: "account-chosen-5522", harness: "claude", label: "Claude" };
+    const component = MessageInput();
+    const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
+
+    expect(findByTag(tree, "textarea")).toBeDefined();
+    expect(renderedText(tree)).not.toContain("You signed out of the account this chat runs on.");
   });
 });

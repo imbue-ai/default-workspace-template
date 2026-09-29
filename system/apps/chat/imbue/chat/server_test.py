@@ -594,6 +594,46 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
     assert renames == [(ChatId(agent_id), "Rome trip: plan five days in May")]
 
 
+def _client_with_account_labeled_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_id: str, account_id: str
+) -> tuple[FlaskClient, RecordingMngrMessenger]:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id, name="Chat-7", state="RUNNING", labels={"account": account_id}, work_dir=None
+        )
+    return create_application(build_test_state(agent_manager=manager)).test_client(), messenger
+
+
+def test_a_chat_whose_account_was_signed_out_takes_no_more_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000732"
+    # The agent's label names an account the index no longer has: it was signed out.
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8812")
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "are you still there?"})
+
+    assert response.status_code == 409
+    assert response.get_json()["kind"] == "account_signed_out"
+    assert messenger.sent == []
+
+
+def test_a_chat_on_a_signed_in_account_still_takes_messages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    account_id, _account_path = mint_account_dir()
+    commit_account(account_id, "openai", "OpenAI")
+    agent_id = "agent-00000000000000000000000000000733"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, account_id)
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "hello")]
+
+
 def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     """mngr's send auto-starts a stopped claude/pi agent, and the observe stream sees the revival
     only on its full snapshot; a delivered send flips the tracked lifecycle at once, so the UI
