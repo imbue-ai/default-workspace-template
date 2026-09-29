@@ -12,7 +12,7 @@ Two on-disk inputs, both optional from the service's point of view:
 - `data/.secrets/restic.env` -- restic's repository address + all secrets
   (`RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, and any backend credentials restic
   reads from the environment, e.g. `AWS_ACCESS_KEY_ID` /
-  `AWS_SECRET_ACCESS_KEY` for an S3/R2 backend). Written only by minds
+  `AWS_SECRET_ACCESS_KEY` for an S3/R2 backend). Written only by Imbue Studio
   (injected whole); a missing file simply means backups are not configured.
   Gitignored.
 
@@ -71,7 +71,7 @@ class RetentionSettings(FrozenModel):
     restore_marker_max_age_days: float = Field(
         default=7.0,
         description=(
-            "How long to keep the minds restore-marker snapshots (`pre-restore` / "
+            "How long to keep the Imbue Studio restore-marker snapshots (`pre-restore` / "
             "`restored`) that the retention forget protects from thinning. Older "
             "ones are forgotten so they don't accumulate without bound. Set to 0 "
             "to keep them forever."
@@ -241,7 +241,7 @@ def missing_required_restic_keys(env: dict[str, str]) -> list[str]:
     """Return the restic.env keys that must be present before a backup can run.
 
     `RESTIC_REPOSITORY` (the only source of the repository address) and
-    `RESTIC_PASSWORD` are both required -- minds always provisions a
+    `RESTIC_PASSWORD` are both required -- Imbue Studio always provisions a
     per-workspace password, so the repo is never empty-password here. Backend
     credentials (e.g. `AWS_*`) are intentionally not required: which ones are
     needed depends on the `RESTIC_REPOSITORY` backend, so restic itself
@@ -313,7 +313,7 @@ def resolve_service_events_dir() -> Path | None:
 
 # Backwards-compatibility shims for pre-refactor bootstraps.
 #
-# Old workspaces keep their old `system/libs/bootstrap` forever (the minds backup
+# Old workspaces keep their old `system/libs/bootstrap` forever (the Imbue Studio backup
 # update mechanism replaces only `system/services/host_backup/**`), and that old
 # bootstrap imports the names below from this module at container boot --
 # a missing name would crash boot before supervisord starts. Each shim is a
@@ -344,5 +344,5 @@ def render_default_backup_toml(snapshot: BackupCapabilities) -> str:
 
 
 def write_default_restic_env_template(path: Path = RESTIC_ENV_PATH) -> bool:
-    """Compat no-op: restic.env templates are no longer written (minds injects the file)."""
+    """Compat no-op: restic.env templates are no longer written (Imbue Studio injects the file)."""
     return False

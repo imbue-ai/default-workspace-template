@@ -28,7 +28,7 @@ Users make "creations". There are conventions for the common kinds:
   traffic, so registered app names must be DNS-safe hostname labels
   (lowercase letters/digits with single hyphens, not `localhost`, not
   starting with `host-` or `agent-`).
-- a **skill**: teaches the mind how to do work the user cares about (including
+- a **skill**: teaches the agent how to do work the user cares about (including
   scripts and CLI tools, which ship inside the skill that knows how to use
   them). A skill that is automatically run on a schedule is called an
   "automation" -- the machinery that runs automations lives in

@@ -23,7 +23,7 @@ def _isolate_agent_identity(monkeypatch: pytest.MonkeyPatch):
     """Hide the ambient agent identity from every test in this app.
 
     ``fleet.py`` reads ``MINDS_CHAT_ID`` and ``MNGR_AGENT_ID`` to decide whose
-    browser and whose chat a command belongs to. Every Minds chat agent runs
+    browser and whose chat a command belongs to. Every Imbue Studio chat agent runs
     with both set, so a test that sets only one of them reads the runner's real
     identity for the other and passes in CI (where neither is set) while failing
     for every agent. Clearing both here makes a test that needs an identity say

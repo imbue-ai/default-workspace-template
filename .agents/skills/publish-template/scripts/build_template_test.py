@@ -216,7 +216,7 @@ def test_assembly_refuses_to_run_outside_a_throwaway_worktree(tmp_path: Path) ->
     """The guard that exists because this once wiped a live workspace.
 
     Assembly resets the tree and runs `git clean -fdxq`, which deletes
-    untracked AND gitignored files -- in a live mind that is `data/`, `.mngr/`,
+    untracked AND gitignored files -- in a live agent that is `data/`, `.mngr/`,
     and the secrets. Run from a main worktree it must refuse before touching
     anything, rather than succeed and report a publish.
     """
@@ -282,7 +282,7 @@ def test_the_readme_is_regenerated_to_describe_this_template(
 @_needs_scanners
 def test_the_version_history_never_ships(built_snapshot: Path) -> None:
     # docs/VERSION_HISTORY.md is the SOURCE workspace's ledger -- it records
-    # what that mind published, which is nobody else's business and wrong in an
+    # what that agent published, which is nobody else's business and wrong in an
     # adopter's tree.
     assert not (built_snapshot / "docs/VERSION_HISTORY.md").exists()
 
@@ -325,8 +325,8 @@ def test_an_updated_workspace_publishes_only_the_selected_app(tmp_path: Path) ->
 
 @_needs_scanners
 @pytest.mark.timeout(_REAL_ASSEMBLY_TIMEOUT_SECONDS)
-def test_a_mind_created_from_a_published_template_can_publish(tmp_path: Path) -> None:
-    """Its history carries the source mind's Initial workspace commit too.
+def test_an_agent_created_from_a_published_template_can_publish(tmp_path: Path) -> None:
+    """Its history carries the source agent's Initial workspace commit too.
 
     The published snapshot is parented on the source's marker and the adopter
     clones it with full history, so only the adopter's own, newest marker may

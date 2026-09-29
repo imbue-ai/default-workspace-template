@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Post one notification from this chat into the Mind app's notification feed.
+"""Post one notification from this chat into the Imbue Studio app's notification feed.
 
 The message goes to the app's per-agent notifications route through the
 latchkey gateway's ``minds-api-proxy`` (the gateway injects the app's API key;
@@ -86,7 +86,7 @@ def notify(
     password = environ.get(ENV_GATEWAY_PASSWORD, "")
     if not gateway or not password:
         sys.stderr.write(
-            "notify-user: the latchkey gateway env is not set, so the Mind app cannot be reached; "
+            "notify-user: the latchkey gateway env is not set, so the Imbue Studio app cannot be reached; "
             "the notification did not go out.\n"
         )
         return False
@@ -120,18 +120,18 @@ def notify(
         return True
     if status is None:
         sys.stderr.write(
-            f"notify-user: the Mind app was unreachable ({text}); the notification did not go out.\n"
+            f"notify-user: the Imbue Studio app was unreachable ({text}); the notification did not go out.\n"
         )
     else:
         sys.stderr.write(
-            f"notify-user: the Mind app answered {status} ({text.strip()[:200]}); the notification "
+            f"notify-user: the Imbue Studio app answered {status} ({text.strip()[:200]}); the notification "
             "did not go out.\n"
         )
     return False
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Notify the user from this chat through the Mind app.")
+    parser = argparse.ArgumentParser(description="Notify the user from this chat through the Imbue Studio app.")
     parser.add_argument("--title", default=None, help="Optional title, shown as a prefix on the message")
     parser.add_argument("message", help="One sentence summarizing what was done")
     args = parser.parse_args(argv)

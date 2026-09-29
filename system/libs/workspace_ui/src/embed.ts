@@ -1,14 +1,14 @@
 /**
- * The workspace's single connection to the embedding minds chrome.
+ * The workspace's single connection to the embedding Imbue Studio chrome.
  *
- * All postMessage traffic with the embedder flows through the vendored minds
- * embed contract (see `@minds/embed-contract` and minds'
+ * All postMessage traffic with the embedder flows through the vendored Imbue
+ * Studio embed contract (see `@minds/embed-contract` and Imbue Studio's
  * `docs/embed-contract.md`); this module owns the one workspace-side endpoint
  * and hands out narrow send/subscribe helpers. Raw `postMessage` /
  * `message`-listener usage anywhere else is forbidden by each frontend's embed
  * ratchets, so the whole boundary stays auditable here.
  *
- * The page behaves identically embedded (iframe under the minds chrome) and
+ * The page behaves identically embedded (iframe under the Imbue Studio chrome) and
  * top-level (a direct share visit): with no embedder, outbound sends simply
  * have no listener and no embedder message ever arrives.
  */
@@ -29,12 +29,12 @@ import * as embedContract from "@minds/embed-contract";
 // not know at its validator.
 export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
   "PERMISSION_RESOLUTIONS" in embedContract ? embedContract.PERMISSION_RESOLUTIONS : "minds:permission-resolutions";
-// Workspace -> embedder: open the minds shell's Share tab focused on one app.
+// Workspace -> embedder: open the Imbue Studio shell's Share tab focused on one app.
 // Payload: { serviceName }.
 export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
   "OPEN_SHARE_SETTINGS" in embedContract ? embedContract.OPEN_SHARE_SETTINGS : "minds:open-share-settings";
-// Embedder -> workspace: the user opened a chat's notification in the minds
-// shell; show that chat. Payload: { chatId } (the chat's id, which is its
+// Embedder -> workspace: the user opened a chat's notification in the Imbue
+// Studio shell; show that chat. Payload: { chatId } (the chat's id, which is its
 // first agent's id).
 export const FOCUS_CHAT: "minds:focus-chat" =
   "FOCUS_CHAT" in embedContract ? embedContract.FOCUS_CHAT : "minds:focus-chat";

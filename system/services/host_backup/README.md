@@ -13,8 +13,8 @@ an encrypted restic repo on cheaper object storage.
 - Single long-running tick loop run as the `host-backup` supervisord program
   (defined in `system/supervisord.conf.d/host-backup.conf`, started by supervisord after `bootstrap`).
   Restart policy: `autorestart=true`.
-- The repository is created (and keyed) by the minds app, not by
-  host_backup: minds runs `restic init` from outside the workspace -- the
+- The repository is created (and keyed) by Imbue Studio, not by
+  host_backup: Imbue Studio runs `restic init` from outside the workspace -- the
   workspace's own random password is the repository's single key -- and
   injects the resulting `restic.env`. host_backup just backs up to the
   existing repository -- it does not probe-then-init.
@@ -29,8 +29,8 @@ an encrypted restic repo on cheaper object storage.
     `RESTIC_REPOSITORY` (the only source of the repo URL), `RESTIC_PASSWORD`
     (this workspace's repository password), and any backend credentials
     restic reads from the environment (e.g. `AWS_ACCESS_KEY_ID` /
-    `AWS_SECRET_ACCESS_KEY` for an S3/R2 backend). Written only by the minds
-    app (injected whole); a missing file means backups are not configured.
+    `AWS_SECRET_ACCESS_KEY` for an S3/R2 backend). Written only by the Imbue
+    Studio app (injected whole); a missing file means backups are not configured.
     `restic.env` is gitignored (rides nothing). `backup.toml` is *not*
     gitignored (everything under data/ is), so it survives via these restic
     backups themselves when
@@ -193,8 +193,8 @@ log stays bounded. Rotating only there keeps each tick's events in one file.
 
 ## First-run setup
 
-In the minds app the whole `data/.secrets/restic.env` is written for you
-when you pick a backup provider on the create form -- minds initializes the
+In the Imbue Studio app the whole `data/.secrets/restic.env` is written for you
+when you pick a backup provider on the create form -- Imbue Studio initializes the
 repository (`restic init`, keyed solely by the workspace's own random
 password) from outside the workspace and injects the file. To configure
 backups by hand instead, populate
@@ -204,19 +204,19 @@ credentials (e.g. R2 access keys), and a `RESTIC_PASSWORD`, and initialize
 the repository yourself (`restic init`) before the first tick -- host_backup
 does not create the repository.
 
-## Stable contract (minds backup-service updates)
+## Stable contract (Imbue Studio backup-service updates)
 
-The minds desktop app can inject a newer version of this service into a
+The Imbue Studio desktop app can inject a newer version of this service into a
 running workspace by checking out `system/services/host_backup/**` at the `minds-v<X>`
 tag matching the app version, committing it with the subject
 `backup-update: minds-v<X>` (a convention like `update-self:` -- tools that
 classify built-in vs. user code match on it), running `uv sync`, and
-restarting the `host-backup` supervisord program. Tags are fetched from a
-minds-owned `official` git remote that always points at the canonical
+restarting the `host-backup` supervisord program. Tags are fetched from an
+`official` git remote owned by Imbue Studio that always points at the canonical
 template repository (`https://github.com/imbue-ai/default-workspace-template.git`);
-minds creates or repoints that remote idempotently, and the `upstream` remote
+Imbue Studio creates or repoints that remote idempotently, and the `upstream` remote
 name stays reserved for the update-self machinery. Drift *detection* compares
-against a fixed minimum required tag (bumped by minds only when a newer
+against a fixed minimum required tag (bumped by Imbue Studio only when a newer
 service is actually required), so a workspace at or above the minimum is
 never flagged even when the app is newer. For that mechanism to stay sound,
 the following are stable contracts that must NOT be changed by edits to this

@@ -125,7 +125,7 @@ def build_production_state(
     agent_manager = AgentManager.build(
         broadcaster,
         message_stamps=MessageStampStore(path=data_dir / STAMPS_FILENAME),
-        # The window of a chat the Mind app starts is opened through the shell, and which chats
+        # The window of a chat the Imbue Studio app starts is opened through the shell, and which chats
         # have had theirs is remembered beside the stamps so a restart never re-pops one.
         auto_open=None
         if is_secondary
