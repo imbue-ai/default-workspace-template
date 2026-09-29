@@ -709,11 +709,14 @@ Flags:
   `--desk-icon-radius` also uses; and a root `fill="none"`, so the shell
   does not ink the tile with `currentColor` the way it inks a line
   glyph. The colours are a pair from the palette in that doc, and the
-  glyph is one iconic mark for what the app is *for*: a blobby,
-  lopsided silhouette with its interior detail cut through to the
-  background colour, drawn in one pass and never revised. That doc
-  carries the full look, and says how a glyph gets from Figma into the
-  repo without losing its hand-placed points.
+  glyph is one iconic *object* for what the app is *for* -- an
+  envelope, a clipboard, a bell -- drawn true to that object's own
+  geometry and then inked: the edge drifting a unit or two off true,
+  the width breathing, ends round and lifting, with its interior detail
+  cut through to the background colour at one weight the whole set
+  shares. Drawn in one pass and never revised. That doc carries the
+  full look, and says how a glyph gets from Figma into the repo without
+  losing its hand-placed points.
 - `--no-icon`: skip the icon requirement for a brand-new entry. Uses
   the generic letter monogram. Use this only when the user explicitly
   declines an icon, or for short-lived preview windows.

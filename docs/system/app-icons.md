@@ -35,8 +35,9 @@ These hold for every icon: the built-in ones and any new app's alike.
   the other way, or `fill-rule="evenodd"`) that lets the background show through. A shape
   in the background's colour laid over the glyph would be a third layer, and would stop
   being background the moment either colour changed.
-- The mark is a **single iconic glyph that carries the poetic idea of the app**, not a
-  picture of its interface.
+- The mark is **one iconic object**, named as a noun -- an envelope, a clipboard, a
+  funnel, a bell -- that carries the poetic idea of the app. Not a picture of its
+  interface, and not an abstraction: the reader should be able to say what the thing is.
 - The two colours are **a pair from the palette below**.
 
 Sizing inside the 144 box is optical, not maximal: scale a set of icons together so their
@@ -45,22 +46,54 @@ sparse one smaller.
 
 ## The look
 
-The hand is the whole point. Every rule here is about keeping the mark from looking laid
-out:
+The mark is a real, everyday object drawn true, and then inked. Those are the two halves
+of it, and the second one is small: the hand shows as a slight deviation laid over correct
+geometry, never as a different way of building the shape. The reference is the inked
+column on Gleb's Copyboard ("Clean vs hand-drawn"), where the inked icon and the clean one
+are the same drawing and you have to look to tell them apart.
 
-- **Blobby, lopsided silhouettes.** Off balance, but not deformed -- one side a little
-  heavier than the other, a corner sitting lower than the one across from it, a curve that
-  bulges where no rule would put a bulge. Not symmetric, and not obviously an ellipse, a
-  rounded rect, or two of anything the same. The shapes look pinched from clay rather than
-  constructed from primitives.
-- **Interior detail reads as a marker stroke** cut through to the background colour: ends
-  that are rounded, a thickness that swells and pinches along the run, a path that wanders
-  off the line it started on, edges that are slightly ragged.
-- **An outline, where one is used, is an uneven ring** -- thick in places, thin in others,
-  never even-width. A ring of constant thickness is the surest sign a machine drew it.
-- **Big, heavy, simple marks.** The glyph fills most of its 144 box and carries one or two
-  kinds of detail at most -- a cut-through stroke *or* a ragged rim, rarely both, never
-  three. When a mark is not reading, make it bigger and simpler, not busier.
+**Draw it true.**
+
+- **The object keeps its own geometry.** An envelope is a rectangle with a crease; a
+  clipboard has two dead-vertical sides; a checkbox is a square. What is straight in the
+  object stays straight, what is square stays square, what is symmetric stays symmetric.
+  Lopsidedness is not the goal and never was -- a silhouette that bows on every edge stops
+  reading as the object and starts reading as a cushion.
+- **Corners are generous and consistent.** A hand-drawn rectangle has four corners of
+  roughly one radius, not four different ones. Rounding varying corner to corner is the
+  thing that reads as sloppy rather than as hand-made.
+- **One nominal weight, and the set shares it.** Every cut-through stroke in one icon is
+  the same nominal width, and that width carries across the whole set. Different weights
+  inside one mark, or from one icon to the next, is what makes a set look assembled by
+  different people.
+- **A stroke is thin against the thing it crosses** -- roughly a sixth to an eighth of it.
+  The object has to stay the thing you read first; a cut wide enough to halve the body
+  turns the object into two shapes.
+- **A cut lands where it is aimed.** If the crease runs to the envelope's top corners, it
+  reaches them. Stopping a few units short leaves a gap that reads as a mistake rather
+  than as a hand.
+
+**Then ink it.**
+
+- **The edge drifts off true and comes back.** One to three units in 216 -- about one per
+  cent of the tile. It is a wobble around the line, not a departure from it. Visible at
+  216, gone by 48, and that is the right amount.
+- **The width breathes.** A few per cent either side of the nominal along the run. Not a
+  taper, not a swell-and-pinch: a stroke that visibly fattens and thins is a brush mark,
+  and these are not brush marks.
+- **Ends are round, and they lift** -- the cap sits a few degrees off square to the path,
+  as a pen leaving the paper does.
+- **Nothing is ragged.** No fray, no chatter, no noise along an edge. Ragged is the single
+  fastest way to make the set look rough, and there is none of it anywhere on the board.
+- **An outline is a ring of one weight, breathing** -- a tenth either way, not a half. A
+  ring that is visibly thick in one place and thin in another reads as a mistake.
+
+**Big, simple marks.** The glyph carries one or two kinds of detail at most -- a cut
+stroke *or* a rim, rarely both, never three. When a mark is not reading, make it bigger
+and simpler, not busier.
+
+You do not draw it true and then edit it: you place the inked points directly, knowing
+what true was. That is what keeps this compatible with drawing in one pass.
 
 ## The palette
 
@@ -107,11 +140,15 @@ way round, so either of the two can be the background.
 
 The mark is drawn, not assembled:
 
-1. Pick the pair, and decide which of the two is the background.
-2. Draw the glyph inside a 144 by 144 box and place that box in the middle of the tile.
-   Size it by eye against the icons already drawn, not by filling the box.
-3. Let the line stay hand-made -- points placed by eye, edges that are not ruler-straight,
-   curves that are not machine-perfect -- without adding noise to fake it.
+1. Name the object, and pick the pair -- which of the two is the background.
+2. Fix the object's true geometry inside a 144 by 144 box, and place that box in the
+   middle of the tile. Size it by eye against the icons already drawn, not by filling the
+   box.
+3. Fix the nominal weight for the cuts before drawing any of them, and hold it for every
+   cut in the icon.
+4. Place the points inked: on the true line, a unit or two either side of it. Edges that
+   are meant to be straight stay straight to within that; a curve that is meant to be a
+   curve stays one.
 
 **Draw it in one pass.** Place the points as you go, and stop when the mark is there. Do
 not emit a path and then revise it: nudging it, re-balancing it, regularising it, or
