@@ -78,7 +78,8 @@ belong in tested code rather than agent prose:
 ``restart-self``
     Detach a helper that restarts the pass's own chat once its last turn ends, then sends
     it a note (a ``<background-task-report>``, one line to the user) asking it to confirm
-    the restart, or, when the restart does not happen, a note saying so. The helper drops ``MNGR_AGENT_ID`` so the restart's stop does not kill it.
+    the restart, or, when the restart does not happen, a note saying so. The helper
+    drops ``MNGR_AGENT_ID`` so the restart's stop does not kill it.
 
 ``bootstrap-skill``
     Stage the copy of the update-self skill (SKILL.md, references, scripts) that
