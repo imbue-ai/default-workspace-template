@@ -10,8 +10,8 @@ turns.
 takes directly and which a rename of the lead's chat does not change. To
 explore:
 
-1. Run `mngr transcript $LEAD_AGENT --role user --role assistant` to read
-   the conversation with tool-call noise stripped, and search it for the
+1. Run `mngr transcript $LEAD_AGENT --role user --role agent` to read
+   the conversation with tool output stripped, and search it for the
    anchor quotes.
 2. Once you have located the relevant region, re-read it in full detail
    (default format, scoped with `--tail N`) to see exactly which tools
