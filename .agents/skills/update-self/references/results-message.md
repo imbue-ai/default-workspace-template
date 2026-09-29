@@ -75,9 +75,10 @@ made differently, always makes the cut.
 Detail in the informational sections (2-5); plain language at the decision
 points -- the headline, the question about chats still on the previous version
 (6), any caveat that needs the user's action, and the closing offer. Those
-carry no jargon: never "merge", "land" or "fast-forward" there. Frame the close around *what changed in their workspace and how to undo
-it*: "Your workspace is updated -- if anything looks or behaves differently
-than you'd like, tell me and I can put it back."
+carry no jargon: never "merge", "land" or "fast-forward" there. Frame the
+close around *what changed in their workspace and how to undo it*: "Your
+workspace is updated -- if anything looks or behaves differently than you'd
+like, tell me and I can put it back."
 
 Drop dependency and lockfile mechanics unless the user must act. Never print a
 command *you* will run; describe it ("I'll refresh it automatically if it comes
