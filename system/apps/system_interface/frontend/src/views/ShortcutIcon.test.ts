@@ -47,6 +47,7 @@ function render(overrides: Partial<ShortcutIconAttrs> = {}): HTMLElement {
     rect: { x: 112, y: 240, width: 96, height: 112 },
     app: docs,
     isAppsLoaded: true,
+    isStopped: false,
     isSelected: false,
     lift: null,
     isSliding: false,

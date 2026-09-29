@@ -625,14 +625,10 @@ host_log_dir = "/var/log/mngr"
 # the template that is shared across all agent types
 [create_templates.main]
 type = "main"
-# bootstrap is the only extra_window now. It runs first-boot setup (git config)
-# and then launches
-# supervisord, which runs every background service (system_interface, web,
-# share-gateway, app-watcher, host-backup, terminal, and the one-shot
-# deferred-install -- see system/supervisord.conf; the opt-in github-sync service is
-# added by its skill). The old git_auth_setup window is gone (the git config
-# it performed now runs inside bootstrap), and terminal is a supervisord
-# service rather than its own window.
+# bootstrap is the only extra_window. It runs first-boot setup (git config) and
+# then launches supervisord, which runs every background service (see
+# system/supervisord.conf; the opt-in github-sync service is added by its skill).
+# terminal is a supervisord service rather than its own window.
 extra_window = ["bootstrap='uv run bootstrap'"]
 # Write a sane default tmux config on every Imbue Studio host. tuple-typed
 # `extra_provision_command` stacks across templates (see

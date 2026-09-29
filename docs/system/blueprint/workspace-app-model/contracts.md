@@ -32,7 +32,7 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `icon` | string | unless `internal` | | Path relative to the manifest, `.svg`, validated by `forward_port.py`'s `validate_icon` at registration. |
 | `instances` | bool | no | `false` | `true` exposes the instances API. |
 | `instances_url` | string | no | the app URL | `http://127.0.0.1:<port>` or `http://localhost:<port>`; where the shell reaches the instances API. Only allowed with `instances = true`. |
-| `critical` | bool | no | `false` | No Stop verb; snapshot-and-rollback target in the apply. |
+| `critical` | bool | no | `false` | No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the apply. |
 | `priority` | string | no | `"user"` | A key of `SERVICE_BANDS` in `oom_priority.bands`, or `user`. |
 | `program` | string | no | `name` | The supervisord program that runs the app. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
@@ -90,7 +90,7 @@ Each `[[apps]]` row:
 `--remove` deletes the row.
 The script validates only what it copies from files; the shell validates every row against the `RegistryRow` model on read and logs and skips a row that fails, so a hand-edited registry degrades to a missing app rather than a crashed shell.
 
-The app watcher and the minds side read `name`, `url`, `label`, and `icon` and ignore the manifest keys.
+The shell's services event writer and the minds side read `name`, `url`, `label`, and `icon` and ignore the manifest keys.
 
 ## 4. The instances API
 
@@ -176,7 +176,7 @@ An app whose fetch fails keeps its last known list with every instance's status 
 
 ## 6. Shell routes the browser calls
 
-Page and app routes: `GET /` and the SPA catch-all, `/assets/<path>`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start` (the app-level verbs, supervisord via the shell; the tab menu offers them only on a single-instance app's tab, and the rail's per-app row menu offers them for every stoppable app), `/api/ws`.
+Page and app routes: `GET /` and the SPA catch-all, `/assets/<path>`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start`, `POST /api/apps/<name>/quit` (the app-level verbs, supervisord via the shell; the menus offer Quit alone, on a single-instance app's tab and on the rail's per-app row menu for every stoppable app, and stop and start stay for agents), `/api/ws`.
 `/plugins/<basename>` is the chat app's route, served from the chat's own origin; the shell has none.
 `POST /api/layout/broadcast` is the agent-facing op route of section 12 (loopback only).
 
@@ -195,7 +195,7 @@ After any successful relay the shell refetches that app's list immediately rathe
 A successful delete also drops the address from every project tab set and every client layout (seeds included) and broadcasts the writes; it is the only thing that removes an address from them.
 An address its app merely does not list keeps its tabs: a window shows it as unavailable, loads no page for it, and loads the page again once the app lists it.
 
-A preview shell (`system-interface --preview`, booted by `preview_app.py` over a seeded copy of the live state directory and a copied registry whose rows for previewed sibling apps point at their previews) is the real desktop with one app swapped. Everything that edits its own copy of the state or reaches only its own windows stays live -- opening, placing, and closing windows, a refresh, the interface reload, the avatar -- and a window it opens frames whatever app the copied registry names: a sibling booted with `--with` gets its preview, an app that was not previewed the live one. The verbs whose effect would land on the live workspace are refused: `POST /api/apps/<name>/stop` and `POST /api/apps/<name>/start` (supervisord is the live workspace's), the update notice's confirm and rollback (section 5), and the embedder-message relay `POST /api/embedder-messages` (the copied registry names the live app of every sibling not previewed), each with `403 {"detail": "This is a preview of a proposed change; it cannot change the live workspace."}`. Its page carries the meta tag `system-interface-preview` (content `true`) and never the staleness tag; the frontend reads the tag and offers no Stop or Start (the store's `canStopApp` answers no in a preview) and relays no message from the minds chrome.
+A preview shell (`system-interface --preview`, booted by `preview_app.py` over a seeded copy of the live state directory and a copied registry whose rows for previewed sibling apps point at their previews) is the real desktop with one app swapped. Everything that edits its own copy of the state or reaches only its own windows stays live -- opening, placing, and closing windows, a refresh, the interface reload, the avatar -- and a window it opens frames whatever app the copied registry names: a sibling booted with `--with` gets its preview, an app that was not previewed the live one. The verbs whose effect would land on the live workspace are refused: `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start`, and `POST /api/apps/<name>/quit` (supervisord is the live workspace's), the update notice's confirm and rollback (section 5), and the embedder-message relay `POST /api/embedder-messages` (the copied registry names the live app of every sibling not previewed), each with `403 {"detail": "This is a preview of a proposed change; it cannot change the live workspace."}`. Its page carries the meta tag `system-interface-preview` (content `true`) and never the staleness tag; the frontend reads the tag and offers no Quit (the store's `canStopApp` answers no in a preview) and relays no message from the Imbue Studio chrome.
 
 Projects and views:
 

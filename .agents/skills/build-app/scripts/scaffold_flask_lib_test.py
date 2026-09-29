@@ -150,7 +150,7 @@ def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
     `uv sync` regenerates it -- skipped here, as it is derived rather than authored.
     """
     root = _make_workspace(
-        tmp_path / "workspace", {"browser": 8081, "app-watcher": None}
+        tmp_path / "workspace", {"browser": 8081, "host-backup": None}
     )
     before_conf = (root / "system/supervisord.conf").read_text()
     before_pyproject = (root / "pyproject.toml").read_text()
@@ -397,13 +397,13 @@ def test_a_declared_secrets_file_wraps_the_entry_point_in_with_secrets(
     scaffold_flask_lib._write_supervisord_program(
         plain, "widget-app", "widget_app", 8090, None
     )
-    assert '&& widget-app"' in plain.read_text()
+    assert '&& exec widget-app"' in plain.read_text()
     wrapped = tmp_path / "wrapped.conf"
     scaffold_flask_lib._write_supervisord_program(
         wrapped, "widget-app", "widget_app", 8090, "widget"
     )
     assert (
-        '&& python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget-app"'
+        '&& exec python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget-app"'
         in wrapped.read_text()
     )
 

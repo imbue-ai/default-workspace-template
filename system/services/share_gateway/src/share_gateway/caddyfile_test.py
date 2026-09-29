@@ -177,3 +177,10 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     # h1/h2 only: h3 is UDP and cannot traverse the SNI-passthrough relay, so
     # it must not be advertised via Alt-Svc.
     assert "protocols h1 h2" in rendered
+
+
+def test_caddyfile_serves_the_loading_page_for_a_backend_it_cannot_reach() -> None:
+    rendered = _render()
+
+    assert "handle_errors 502 {" in rendered
+    assert rendered.count("rewrite * /_auth/loading") == 2

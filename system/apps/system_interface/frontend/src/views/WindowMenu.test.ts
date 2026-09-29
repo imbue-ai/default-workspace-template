@@ -18,25 +18,25 @@ function rowOf(rows: MenuRow[], key: string): ActionRow {
 const size = { setState: vi.fn(), setFrame: vi.fn() };
 
 describe("windowMenuRows", () => {
-  it("offers Move and resize, Share, Stop or Start, and Close for an ordinary running app", () => {
+  it("offers Move and resize, Share, Quit, and Close for an ordinary running app", () => {
     const app = appRecord("docs");
-    const setAppLifecycle = vi.fn();
+    const quit = vi.fn();
     const rows = windowMenuRows(app, {
       size,
       onSized: vi.fn(),
       share: vi.fn(),
-      setAppLifecycle,
+      quit,
       popOut: null,
       close: vi.fn(),
     });
-    expect(keysOf(rows)).toEqual(["size", "|", "share", "stop", "|", "close"]);
-    const stop = rowOf(rows, "stop");
-    expect(stop.label).toBe("Stop Docs");
-    stop.onSelect();
-    expect(setAppLifecycle).toHaveBeenCalledWith("stop");
+    expect(keysOf(rows)).toEqual(["size", "|", "share", "quit", "|", "close"]);
+    const quitRow = rowOf(rows, "quit");
+    expect(quitRow.label).toBe("Quit Docs");
+    quitRow.onSelect();
+    expect(quit).toHaveBeenCalledTimes(1);
   });
 
-  it("offers Start instead of Stop for a stopped app", () => {
+  it("offers Quit for a stopped app too: it still closes the app's windows", () => {
     const stopped = appRecord("docs", { is_running: false });
     expect(
       keysOf(
@@ -44,22 +44,22 @@ describe("windowMenuRows", () => {
           size,
           onSized: vi.fn(),
           share: null,
-          setAppLifecycle: vi.fn(),
+          quit: vi.fn(),
           popOut: null,
           close: vi.fn(),
         }),
       ),
-    ).toEqual(["size", "|", "start", "|", "close"]);
+    ).toEqual(["size", "|", "quit", "|", "close"]);
   });
 
-  it("offers neither Share nor Stop where the caller gives none (a critical app, one the workspace cannot stop)", () => {
+  it("offers neither Share nor Quit where the caller gives none (a critical app, one the workspace cannot stop)", () => {
     expect(
       keysOf(
         windowMenuRows(appRecord("docs"), {
           size,
           onSized: vi.fn(),
           share: null,
-          setAppLifecycle: null,
+          quit: null,
           popOut: null,
           close: vi.fn(),
         }),
@@ -74,7 +74,7 @@ describe("windowMenuRows", () => {
           size: null,
           onSized: vi.fn(),
           share: null,
-          setAppLifecycle: null,
+          quit: null,
           popOut: null,
           close: vi.fn(),
         }),
@@ -88,7 +88,7 @@ describe("windowMenuRows", () => {
       size,
       onSized: vi.fn(),
       share: null,
-      setAppLifecycle: null,
+      quit: null,
       popOut: null,
       close,
     });
@@ -104,7 +104,7 @@ describe("windowMenuRows", () => {
           size,
           onSized: vi.fn(),
           share: vi.fn(),
-          setAppLifecycle: vi.fn(),
+          quit: vi.fn(),
           popOut: null,
           close: vi.fn(),
         }),
@@ -236,11 +236,11 @@ describe("the pull-out row", () => {
       size,
       onSized: vi.fn(),
       share: vi.fn(),
-      setAppLifecycle: vi.fn(),
+      quit: vi.fn(),
       popOut,
       close: vi.fn(),
     });
-    expect(keysOf(rows)).toEqual(["size", "|", "pop-out", "share", "stop", "|", "close"]);
+    expect(keysOf(rows)).toEqual(["size", "|", "pop-out", "share", "quit", "|", "close"]);
     expect(rowOf(rows, "pop-out").label).toBe("Open in its own window");
     rowOf(rows, "pop-out").onSelect();
     expect(popOut).toHaveBeenCalledTimes(1);
@@ -248,7 +248,7 @@ describe("the pull-out row", () => {
       size,
       onSized: vi.fn(),
       share: null,
-      setAppLifecycle: null,
+      quit: null,
       popOut: null,
       close: vi.fn(),
     });
