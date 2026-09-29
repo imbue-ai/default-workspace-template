@@ -592,11 +592,13 @@ class FakePexpectProcess:
         expect_script: Sequence[tuple[int, str]],
         drain_chunks: Sequence[str] = (),
         is_alive: bool = True,
+        exitstatus: int | None = 0,
     ) -> None:
         assert expect_script, "expect_script must have at least one entry"
+        # What pexpect reports once the process has exited: its exit code, or None if a signal ended it.
+        self.exitstatus = exitstatus
         self._script = list(expect_script)
-        # Scriptable so the "the CLI has exited" arms are reachable from tests: process exit
-        # is the only success signal codex's device flow has.
+        # Scriptable so the "the CLI has exited" arms are reachable from tests.
         self._is_alive = is_alive
         self._call_idx = 0
         self._drain_chunks = list(drain_chunks)
@@ -634,10 +636,16 @@ class FakePexpectProcess:
     def isalive(self) -> bool:
         return self._is_alive
 
-    def exit(self) -> None:
+    def print_output(self, chunk: str) -> None:
+        """Have the scripted CLI print ``chunk``, for the next drain to read."""
+        self._drain_chunks.append(chunk)
+
+    def exit(self, exitstatus: int | None = None) -> None:
         """Let the scripted CLI finish. `terminate` does not: the production teardown calls
         it on paths where the process was already gone, so it cannot mean "now exited"."""
         self._is_alive = False
+        if exitstatus is not None:
+            self.exitstatus = exitstatus
 
     def terminate(self, force: bool = False) -> None:
         self.terminate_calls += 1

@@ -11,6 +11,7 @@ starts a flow and the polls that advance it.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Final
 
 from flask import Flask
@@ -20,15 +21,20 @@ from loguru import logger as _loguru_logger
 from imbue.chat import accounts
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import flow_shape
+from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import ClaudeAuthError
+from imbue.chat.harnesses.claude.auth import read_managed_auth_env
+from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.lanes import LaneNotFoundError
 from imbue.chat.harnesses.lanes import PasteMethod
+from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import numbered_provider
 from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.registry import get_catalog
 from imbue.chat.harnesses.registry import list_account_options
+from imbue.chat.identity import forbid_unless_owner
 from imbue.chat.models import ErrorResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.request_helpers import parse_json_object_body
@@ -56,7 +62,7 @@ def _error_response(detail: str, status_code: int = 400) -> Response:
 def list_lanes() -> Response:
     """The chooser's rows, and what each one offers as a way in.
 
-    `shape` rides on every method so the modal knows which of the three screens to render
+    `shape` rides on every method so the modal knows which screen to render
     without having to know anything about harnesses.
     """
     payload = [
@@ -118,10 +124,47 @@ def list_accounts() -> Response:
             "seq": numbered.number,
             "name": numbered.account.name,
             "label": numbered.label,
+            "reauth_method": _reauth_method_id(numbered.account, numbered.harness),
         }
         for numbered in accounts.number_accounts(index.accounts)
     ]
     return _json_response({"accounts": rows, "mru": index.mru, "default": index.default_account})
+
+
+def _reauth_method_id(account: accounts.Account, harness: HarnessType) -> str:
+    """The method "Sign in again" runs for an account: the kind of credential it already holds.
+
+    An API-key account is given a key again, not sent to a browser sign-in it never used.
+    """
+    lane = get_lane(account.lane)
+    folder = accounts.account_dir(account.id)
+    match harness:
+        case HarnessType.CLAUDE:
+            is_key = ANTHROPIC_API_KEY_ENV_VAR in read_managed_auth_env(
+                settings_path_override=folder / "settings.json"
+            )
+        case HarnessType.CODEX:
+            is_key = _codex_auth_mode(folder) == "apikey"
+        case _:
+            is_key = False
+    if is_key:
+        paste = next((method for method in lane.methods if isinstance(method, PasteMethod)), None)
+        if paste is not None:
+            return paste.id
+    return lane.methods[0].id
+
+
+def _codex_auth_mode(account_folder: Path) -> str | None:
+    path = account_folder / "auth.json"
+    try:
+        auth = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Could not read codex's {}: {}", path, e)
+        return None
+    mode = auth.get("auth_mode") if isinstance(auth, dict) else None
+    return mode if isinstance(mode, str) else None
 
 
 def account_model_options(account_id: str) -> Response:
@@ -205,6 +248,31 @@ def submit_flow(flow_id: str) -> Response:
     return _json_response(status.model_dump())
 
 
+def relay_flow_callback(flow_id: str) -> Response:
+    """Deliver the callback the minds desktop app received on this flow's loopback callback port.
+
+    The desktop app listens where the user's browser runs and posts the callback here as
+    `{path_and_query}`; the answer is the flow's status once the CLI has it, plus the provider's
+    name, which the desktop app turns into the page the browser ends on.
+    """
+    refusal = forbid_unless_owner()
+    if refusal is not None:
+        return refusal
+    payload = parse_json_object_body()
+    if isinstance(payload, Response):
+        return payload
+    path_and_query = payload.get("path_and_query")
+    if not isinstance(path_and_query, str):
+        return _error_response("path_and_query must be a string")
+    service = get_state().auth_flows
+    try:
+        provider_name = service.provider_name(flow_id)
+        status = service.relay_callback(flow_id, path_and_query)
+    except FlowError as e:
+        return _error_response(str(e), status_code=409)
+    return _json_response({**status.model_dump(), "provider_name": provider_name})
+
+
 def abort_flow(flow_id: str) -> Response:
     # Abort is what a closed modal calls on its way out, so it has to succeed even when the
     # flow it is abandoning is in a bad state -- a folder deleted underneath it, an unreadable
@@ -268,6 +336,7 @@ def register_routes(application: Flask) -> None:
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=poll_flow, methods=["GET"])
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=submit_flow, methods=["POST"])
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=abort_flow, methods=["DELETE"])
+    application.add_url_rule("/api/accounts/flow/<flow_id>/callback", view_func=relay_flow_callback, methods=["POST"])
     application.add_url_rule("/api/accounts/<account_id>", view_func=delete_account, methods=["DELETE"])
     application.add_url_rule("/api/accounts/<account_id>", view_func=update_account, methods=["PATCH"])
     application.add_url_rule(
