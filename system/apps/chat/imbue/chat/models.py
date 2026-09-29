@@ -795,6 +795,13 @@ class ClaudeAuthStatusResponse(FrozenModel):
     masked_key_suffix: str | None = Field(
         default=None, description="Last few characters of the managed key/token, for display"
     )
+    workspace_id: str | None = Field(
+        default=None,
+        description=(
+            "This workspace's id (its services agent id; the machine's host id as a fallback), "
+            "for the desktop app's key-mint page link"
+        ),
+    )
 
 
 class ClaudeAuthCredentialsRequest(FrozenModel):
