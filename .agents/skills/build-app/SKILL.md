@@ -204,7 +204,16 @@ What gets generated:
   `program` (its supervisord program), and `stop_when_no_windows = true` (the
   shell stops the app a minute after its last window closes and starts it
   again on the next request; `false` keeps it running for the life of the
-  workspace). `forward_port.py --manifest`
+  workspace). Leave it `true` for an app that only answers requests: the stop
+  frees the whole process while nobody looks at it, its data on disk is
+  untouched, and the next request wakes it. Set it to `false` when the app
+  does work between requests that a stop would lose or interrupt: a
+  background thread or scheduler that refreshes data, a poller or file
+  watcher, a websocket or subscription to an outside service, a job that
+  must finish after the user closes the window, or an API another agent
+  drives with no window open. A stopped app runs nothing until its next
+  request, and the wake serves that request, not the work that was in
+  flight. `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
   editing it). Anything you build for this app outside `system/apps/<package>/`

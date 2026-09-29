@@ -556,7 +556,9 @@ priority = "user"
 program = "{name}"
 # The shell stops the app once no window shows it (a minute after the last one
 # closes) and starts it again on the next request; false keeps it running for
-# the life of the workspace.
+# the life of the workspace. Set false if the app does work between requests
+# (a background thread, a poller, a scheduled refresh, a subscription to an
+# outside service, a job that outlives the window): a stop loses that work.
 stop_when_no_windows = true
 
 # How update-app boots a throwaway preview of this app: on a free port, over a
