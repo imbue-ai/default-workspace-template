@@ -317,6 +317,47 @@ def find_nodes_worth_a_worker(
     return worth_it
 
 
+def group_orchestrator_nodes(
+    waves: Sequence[Sequence[int]],
+    node_indices_with_worker: set[int],
+    capabilities: Sequence[str],
+) -> list[list[int]]:
+    """Runs of consecutive nodes the orchestrator does, each run to be done in one go.
+
+    Where the orchestrator holds several nodes in a row, the split between them buys
+    nothing: it is one agent working through them in order, so a node boundary there is
+    a plan artefact rather than a handoff. Reporting them as one run lets it write the
+    code once instead of dividing work it is not dividing between anyone.
+
+    A run ends at a node that has a worker, because the orchestrator must wait for that
+    worker and merge its branch before going on. A run also ends at an interactive node:
+    that one is a conversation with the user, and its answer is what the nodes after it
+    are supposed to be written against, so folding it into surrounding work would put
+    that work before the answer it depends on. An interactive node is therefore always a
+    run of its own.
+    """
+    is_interactive = [c == INTERACTIVE_CAPABILITY for c in capabilities]
+    groups: list[list[int]] = []
+    current: list[int] = []
+    for wave in waves:
+        for idx in wave:
+            if idx in node_indices_with_worker:
+                # A worker to wait on and a branch to merge: whatever came before ends.
+                if current:
+                    groups.append(current)
+                    current = []
+            elif is_interactive[idx]:
+                if current:
+                    groups.append(current)
+                groups.append([idx])
+                current = []
+            else:
+                current.append(idx)
+    if current:
+        groups.append(current)
+    return groups
+
+
 def parse_plan(
     plan_text: str,
     *,
@@ -376,6 +417,16 @@ def parse_plan(
             if capabilities[idx] != INTERACTIVE_CAPABILITY
         }
 
+    # The runs of nodes the orchestrator does itself, each to be done in one go.
+    own_groups = group_orchestrator_nodes(
+        schedule_waves(access), with_worker, capabilities
+    )
+    group_by_node = {
+        idx: group_number
+        for group_number, group in enumerate(own_groups)
+        for idx in group
+    }
+
     nodes = [
         {
             "index": idx,
@@ -389,11 +440,14 @@ def parse_plan(
             # False means the orchestrator does this node itself: an interactive node
             # always, and under `only_parallel_workers` a node nothing runs beside.
             "has_worker": idx in with_worker,
+            # Nodes sharing this number are consecutive work for the orchestrator, to be
+            # done as one piece rather than one at a time. None when a worker does it.
+            "own_group": group_by_node.get(idx),
             "model": model_for_capability(capabilities[idx]) if idx in with_worker else None,
         }
         for idx in range(node_count)
     ]
-    return {"nodes": nodes}
+    return {"nodes": nodes, "own_groups": own_groups}
 
 
 def find_ready_nodes(
@@ -535,16 +589,22 @@ def _run_parse(run_dir: Path, reduce_access: bool, only_parallel_workers: bool) 
     print(f"plan_orchestration: wrote {len(plan['nodes'])} nodes to {plan_json_path}")
     nodes = plan["nodes"]
     assert isinstance(nodes, list)
-    on_lead = [
-        node["index"]
-        for node in nodes
-        if not node["has_worker"] and node["capability"] != INTERACTIVE_CAPABILITY
-    ]
-    if on_lead:
-        print(
-            f"plan_orchestration: nodes {on_lead} get no worker -- nothing runs "
-            f"beside them, so do them yourself"
-        )
+    own_groups = plan["own_groups"]
+    assert isinstance(own_groups, list)
+    for group in own_groups:
+        if len(group) == 1:
+            idx = group[0]
+            if nodes[idx]["capability"] == INTERACTIVE_CAPABILITY:
+                continue
+            print(
+                f"plan_orchestration: node {idx} gets no worker -- nothing runs "
+                f"beside it, so do it yourself"
+            )
+        else:
+            print(
+                f"plan_orchestration: nodes {group} are yours and run one after "
+                f"another -- do them as one piece of work, not {len(group)}"
+            )
     for node in nodes:
         if node["access_dropped"]:
             print(

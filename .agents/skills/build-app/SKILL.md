@@ -215,6 +215,16 @@ Repeat until every node is done.
    a node nothing else runs beside, where a worker would cost a worktree, a sync, a
    cold start and a merge on a wait nobody overlaps.
 
+   **Do a whole run of your own nodes at once.** `plan.json`'s `own_groups` lists them
+   already grouped: `[[0], [4, 5]]` means node 0 stands alone, and nodes 4 and 5 are one
+   piece of work. When `ready` prints the first node of such a group, write all of it in
+   one go -- one design, one set of files, one commit -- then count every node in the
+   group done. Those nodes are consecutive and all yours, so keeping them apart divides
+   the work between you and yourself, and each split invites another pass over the same
+   files. A group never spans a node that has a worker, because you must wait for it and
+   merge its branch first, and never spans an interactive node, because the nodes after
+   a question are meant to be written against its answer.
+
 3. **Launch each node whose `has_worker` is true, one node per command.** Never put
    two launches in one shell command: they run one after the other anyway, and a
    batched launch hides every worker after the first from the evidence an eval
