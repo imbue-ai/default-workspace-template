@@ -38,12 +38,24 @@
  * rows below the pointer are what a bubble would cover. ``placeTooltip`` takes
  * an optional ``placement`` for those, defaulting to the shared centered-below
  * behavior everywhere else.
+ *
+ * The delay has one exception of the same shape. The 250ms pause is hover
+ * intent: it stops a bubble chasing a pointer that is only crossing controls
+ * which already name themselves. A trigger carrying no text at all -- the
+ * taskbar's entries, which are bare app icons -- is not in that case, since
+ * there the bubble IS the name, so it asks for ``"instant"`` and goes up on the
+ * next tick. Ask for that only where the trigger is genuinely unlabelled.
  */
 
 import type m from "mithril";
 
 /** Hover-intent delay before a tooltip appears. */
 const TOOLTIP_DELAY_MS = 250;
+/** The delay for a trigger that carries no text of its own. The pause exists so a bubble does not
+ *  chase a pointer crossing controls that already name themselves; where the bubble IS the name --
+ *  a taskbar entry drawn as a bare icon -- waiting is the name arriving late, so it goes up on the
+ *  next tick instead. */
+const INSTANT_TOOLTIP_DELAY_MS = 0;
 /** Gap between the trigger and the bubble. */
 const TOOLTIP_GAP = 6;
 /** Minimum gap from the window edges. */
@@ -84,6 +96,13 @@ export interface TooltipPosition {
  * underneath.
  */
 export type TooltipPlacement = "below" | "above" | "right";
+
+/**
+ * How long the pointer must rest on a trigger before its bubble goes up.
+ * ``"default"`` is the shared hover-intent pause; ``"instant"`` is for a trigger whose bubble is
+ * the only thing naming it (see ``INSTANT_TOOLTIP_DELAY_MS``).
+ */
+export type TooltipDelay = "default" | "instant";
 
 /**
  * Where the bubble goes for the default ``"below"`` placement: centered under
@@ -161,10 +180,11 @@ export function placeTooltip(
   }
 }
 
-/** The attribute a trigger carries its text in, and the one it names a
- *  non-default placement in. */
+/** The attribute a trigger carries its text in, and the ones it names a
+ *  non-default placement and a non-default delay in. */
 const TOOLTIP_ATTR = "data-hover-tooltip";
 const PLACEMENT_ATTR = "data-hover-tooltip-placement";
+const DELAY_ATTR = "data-hover-tooltip-delay";
 
 // One bubble is enough: only one tooltip is ever visible, so every trigger
 // shares it. ``pendingFor`` and ``shownFor`` name the trigger a scheduled or
@@ -250,7 +270,12 @@ function tooltipTextOf(element: Element): string | null {
 }
 
 function placementOf(element: Element): TooltipPlacement {
-  return element.getAttribute(PLACEMENT_ATTR) === "right" ? "right" : "below";
+  const named = element.getAttribute(PLACEMENT_ATTR);
+  return named === "right" || named === "above" ? named : "below";
+}
+
+function delayOf(element: Element): number {
+  return element.getAttribute(DELAY_ATTR) === "instant" ? INSTANT_TOOLTIP_DELAY_MS : TOOLTIP_DELAY_MS;
 }
 
 /** Keep a shown bubble honest: its trigger can lose its text or be torn out of
@@ -312,7 +337,7 @@ function onPointerOver(event: Event): void {
   cancelPending();
   hideBubble();
   pendingFor = target;
-  pendingTimer = window.setTimeout(() => showNow(target), TOOLTIP_DELAY_MS);
+  pendingTimer = window.setTimeout(() => showNow(target), delayOf(target));
 }
 
 function onPointerOut(event: Event): void {
@@ -382,7 +407,12 @@ function wireListeners(): void {
  * spread ``hoverTooltipAttrs`` instead. Removing the element needs no cleanup:
  * nothing is attached to it.
  */
-export function setHoverTooltip(element: Element, text: string | null, placement: TooltipPlacement = "below"): void {
+export function setHoverTooltip(
+  element: Element,
+  text: string | null,
+  placement: TooltipPlacement = "below",
+  delay: TooltipDelay = "default",
+): void {
   wireListeners();
   if (text === null) {
     element.removeAttribute(TOOLTIP_ATTR);
@@ -393,6 +423,11 @@ export function setHoverTooltip(element: Element, text: string | null, placement
     element.removeAttribute(PLACEMENT_ATTR);
   } else {
     element.setAttribute(PLACEMENT_ATTR, placement);
+  }
+  if (delay === "default") {
+    element.removeAttribute(DELAY_ATTR);
+  } else {
+    element.setAttribute(DELAY_ATTR, delay);
   }
 }
 
@@ -411,7 +446,11 @@ export function setHoverTooltip(element: Element, text: string | null, placement
  * redraws and runs only the current vnode's hooks, so anything a vanished
  * spread left behind would have nothing to clean it up.
  */
-export function hoverTooltipAttrs(text: string | null, placement: TooltipPlacement = "below"): m.Attributes {
+export function hoverTooltipAttrs(
+  text: string | null,
+  placement: TooltipPlacement = "below",
+  delay: TooltipDelay = "default",
+): m.Attributes {
   wireListeners();
   // Null values are what mithril removes an attribute for, on the update where
   // they appear -- so a caller passing null, and a caller dropping the spread,
@@ -419,5 +458,6 @@ export function hoverTooltipAttrs(text: string | null, placement: TooltipPlaceme
   return {
     [TOOLTIP_ATTR]: text,
     [PLACEMENT_ATTR]: placement === "below" ? null : placement,
+    [DELAY_ATTR]: delay === "default" ? null : delay,
   };
 }

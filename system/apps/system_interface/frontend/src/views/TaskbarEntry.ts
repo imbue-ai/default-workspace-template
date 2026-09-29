@@ -1,9 +1,14 @@
 /**
- * One taskbar entry (plan section 4.10): a window of the active desktop, the app's icon and the
- * title (icon only in compact mode), dimmed while minimized, the focused one marked. A click
- * restores and raises, minimizes the focused window, or raises; a right click or long press opens
- * the entry's menu. A pinned entry in the ``avatar`` style draws the workspace's avatar in place of
- * the icon, wearing the current mood.
+ * One taskbar entry (plan section 4.10): a window of the active desktop, drawn as the app's own
+ * icon tile at the launcher field's height, dimmed while minimized, the focused one marked. A
+ * click restores and raises, minimizes the focused window, or raises; a right click or long press
+ * opens the entry's menu. A pinned entry in the ``avatar`` style draws the workspace's avatar in
+ * place of the icon, wearing the current mood.
+ *
+ * The title is the hover tooltip rather than a label beside the icon, and it is the one tooltip in
+ * the workspace that skips the hover-intent pause: nothing is written on the entry, so the bubble
+ * is not an aside about a control that already names itself -- it IS the name, and a pause before
+ * it is the name arriving late.
  */
 
 import m from "mithril";
@@ -13,13 +18,13 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { AvatarState, TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
 import { entryStyleParts } from "./AvatarImage";
 
-const ENTRY_GLYPH_SIZE = 16;
+/** The intrinsic size the glyph markup carries; the drawing fills the tile (``[&>svg]:size-full``). */
+const ENTRY_GLYPH_MARKUP_SIZE = 48;
 const DETACHED_GLYPH_SIZE = 12;
 
 export interface TaskbarEntryAttrs {
   readonly entry: TaskbarEntryRecord;
   readonly avatar: AvatarState;
-  readonly isCompact: boolean;
   readonly isMenuOpen: boolean;
   readonly onClick: () => void;
   readonly onContextMenu: (x: number, y: number, target: Element) => void;
@@ -27,11 +32,11 @@ export interface TaskbarEntryAttrs {
 
 export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
   view(vnode) {
-    const { entry, avatar, isCompact, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
+    const { entry, avatar, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
     // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
     const isDimmed = entry.isMinimized || entry.isDetached;
     const look = entry.look;
-    const { isAvatar, attrs, tooltip, image } = entryStyleParts(entry, avatar, ENTRY_GLYPH_SIZE, "size-7");
+    const { isAvatar, attrs, tooltip, image } = entryStyleParts(entry, avatar, ENTRY_GLYPH_MARKUP_SIZE, "size-full");
     return m(
       "button",
       {
@@ -46,18 +51,16 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         "data-detached": entry.isDetached ? "true" : "false",
         "data-focused": entry.isFocused ? "true" : "false",
         "aria-pressed": entry.isFocused ? "true" : "false",
-        // Icon only in compact mode, so the title names the button there.
-        "aria-label": isCompact ? entry.title : undefined,
+        // The entry carries no text, so the title is its accessible name as well as its tooltip.
+        "aria-label": tooltip,
         class:
-          "taskbar-entry flex h-9 min-w-(--desk-touch-target) shrink-0 items-center gap-2 rounded-md border px-2 " +
-          "text-(length:--font-size-row) select-none touch-pan-x " +
-          (isCompact ? "max-w-11 " : "max-w-48 ") +
-          (entry.isFocused
-            ? "border-default bg-surface text-primary shadow-raised "
-            : "border-transparent hover:bg-fill-hover ") +
-          (isDimmed ? "text-faint " : entry.isFocused ? "" : "text-secondary ") +
-          (isMenuOpen ? "bg-fill-active" : ""),
-        ...hoverTooltipAttrs(isCompact || (isAvatar && avatar.status.is_stale) ? tooltip : null),
+          // The box is the hit area, not the drawing: it keeps the touch target the rest of the
+          // chrome uses while the tile inside stays square, which ``size-full`` on the art needs.
+          "taskbar-entry relative flex h-(--desk-taskbar-entry-size) min-w-(--desk-touch-target) shrink-0 " +
+          "items-center justify-center rounded-[32%] border-0 bg-transparent p-0 " +
+          "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-accent " +
+          (isMenuOpen ? "ring-2 ring-accent " : ""),
+        ...hoverTooltipAttrs(tooltip, "above", "instant"),
         onclick: onClick,
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
@@ -65,13 +68,37 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         },
       },
       [
-        m("span", { class: "flex shrink-0 items-center" + (isDimmed ? " opacity-60" : "") }, image),
-        isCompact ? null : m("span", { class: "taskbar-entry-title min-w-0 truncate" }, entry.title),
-        // The mark of a window shown in its own desktop window, so the dimmed entry is not read as minimized.
+        m(
+          "span",
+          {
+            // The icon brings its own tile (`docs/system/app-icons.md`), so this box paints nothing
+            // and pads nothing: a surface behind it would frame the tile in a second one. Same
+            // vocabulary as a floating entry -- the corner is the tile's own 32 per cent, the hover
+            // is the tile growing, and depth says which window is focused, since a tint behind an
+            // opaque tile cannot be seen. The text colour still matters: the built-in glyph for a
+            // window whose app the registry no longer has is the one drawing here that takes it.
+            class:
+              "taskbar-entry-tile flex size-(--desk-taskbar-entry-size) items-center justify-center " +
+              "transition-transform hover:scale-110 " +
+              (isAvatar
+                ? "rounded-2xl [&>img]:size-full "
+                : "rounded-[32%] [&>svg]:size-full " +
+                  (entry.isFocused ? "text-primary shadow-overlay " : "text-secondary shadow-raised ")) +
+              (isDimmed ? "opacity-70" : ""),
+          },
+          image,
+        ),
+        // The mark of a window shown in its own desktop window, so the dimmed entry is not read as
+        // minimized. A badge on the tile's corner rather than a glyph beside it: there is no room
+        // beside it any more.
         entry.isDetached
           ? m(
               "span",
-              { class: "flex shrink-0 items-center text-faint", "aria-label": "In its own window" },
+              {
+                class:
+                  "absolute right-0 bottom-0 flex items-center rounded-full bg-surface p-px text-faint shadow-raised",
+                "aria-label": "In its own window",
+              },
               m.trust(icon("external-link", { size: DETACHED_GLYPH_SIZE })),
             )
           : null,

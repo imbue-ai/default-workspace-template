@@ -1,7 +1,7 @@
 /**
  * The taskbar (plan section 4.10), left to right: the launcher field, one entry per window of
  * the active desktop in opening order, the system tray. Always visible in V1; in compact mode
- * it takes the compact height and shows icons only.
+ * it takes the compact height.
  */
 
 import m from "mithril";
@@ -15,7 +15,6 @@ import { TaskbarEntry } from "./TaskbarEntry";
 export interface TaskbarAttrs {
   readonly entries: readonly TaskbarEntryRecord[];
   readonly avatar: AvatarState;
-  readonly isCompact: boolean;
   readonly openEntryMenuWindowId: string | null;
   readonly launcher: LauncherFieldAttrs;
   readonly tray: SystemTrayAttrs;
@@ -40,14 +39,15 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
           "div",
           {
             "data-taskbar-entries": "",
-            class: "taskbar-entries flex min-w-0 flex-1 items-center gap-1 overflow-x-auto",
+            // Wider than the chrome's usual gap: the entries are full-bleed tiles of their own
+            // colour, and at 4px two bright ones beside each other read as one block.
+            class: "taskbar-entries flex min-w-0 flex-1 items-center gap-2 overflow-x-auto",
           },
           attrs.entries.map((entry) =>
             m(TaskbarEntry, {
               key: entry.window.id,
               entry,
               avatar: attrs.avatar,
-              isCompact: attrs.isCompact,
               isMenuOpen: attrs.openEntryMenuWindowId === entry.window.id,
               onClick: () => attrs.onEntryClick(entry.window.id),
               onContextMenu: (x, y, target) => attrs.onEntryContextMenu(entry.window.id, x, y, target),

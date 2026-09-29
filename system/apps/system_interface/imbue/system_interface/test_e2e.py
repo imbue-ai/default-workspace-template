@@ -114,6 +114,8 @@ _CELL_WIDTH = 96
 _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
+# --desk-touch-target under [data-touch], which a taskbar entry's tile takes there.
+_TOUCH_TARGET = 44
 _GEOMETRY_TOLERANCE_PX = 4
 
 
@@ -1886,9 +1888,10 @@ _MOBILE_CONTEXT_ARGS: dict[str, Any] = {
 @pytest.mark.timeout(90, func_only=False)
 def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server: E2EServer, page: Page) -> None:
     """On a phone the shell is compact and touch: a tap on the shortcut opens the window, every window fills the
-    backdrop with no resize edges or maximize controls, the taskbar shows icons only, the launcher field is a
-    button that opens the overlay, and the stored placement is the client's own (still a normal frame, since
-    compactness is how this client renders, not what it saves)."""
+    backdrop with no resize edges or maximize controls, the taskbar's entries grow to the finger's touch target
+    (they are bare icon tiles on every client, and this is the client where that size has to be reachable), the
+    launcher field is a button that opens the overlay, and the stored placement is the client's own (still a
+    normal frame, since compactness is how this client renders, not what it saves)."""
     with _second_client(page, e2e_server, **_MOBILE_CONTEXT_ARGS) as phone_page:
         expect(phone_page.locator("html")).to_have_attribute("data-compact", "")
         expect(phone_page.locator("html")).to_have_attribute("data-touch", "")
@@ -1902,7 +1905,10 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         backdrop = _box(phone_page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
         _assert_same_box(_box(window), backdrop, "phone window")
         expect(_taskbar_entry(phone_page, window_id)).to_be_visible()
-        expect(phone_page.locator(".taskbar-entry-title")).to_have_count(0)
+        # A square tile at the touch target: --desk-taskbar-entry-size takes --desk-touch-target here.
+        entry_box = _box(_taskbar_entry(phone_page, window_id))
+        assert abs(entry_box["width"] - entry_box["height"]) <= 1, entry_box
+        assert entry_box["height"] >= _TOUCH_TARGET - 1, entry_box
         assert _placements(e2e_server.base_url, _client_id(phone_page))[window_id]["state"] == "NORMAL"
         frame = _page_frame(phone_page, window_id)
         assert frame.url == f"{e2e_server.stub_url}{_STUB_LAUNCH_PATH}"

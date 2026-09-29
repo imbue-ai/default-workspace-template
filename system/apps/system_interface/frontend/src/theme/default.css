@@ -10,6 +10,9 @@
 :root {
   --desk-title-bar-height: 36px;
   --desk-taskbar-height: 48px;
+  /* A taskbar entry's icon tile. The launcher field's height, so the field and the entries beside
+     it read as one row of controls rather than two sizes of thing. */
+  --desk-taskbar-entry-size: 36px;
   --desk-cell-width: 96px;
   --desk-cell-height: 112px;
   --desk-grid-inset: 16px;
@@ -83,4 +86,7 @@
   --desk-taskbar-height: 56px;
   --desk-drag-threshold: 8px;
   --desk-touch-target: 44px;
+  /* A finger needs the whole touch target, and the entry is the drawing as well as the target, so
+     the tile grows to it rather than sitting in a box larger than itself. */
+  --desk-taskbar-entry-size: var(--desk-touch-target);
 }
