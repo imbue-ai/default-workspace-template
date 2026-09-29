@@ -2,4 +2,6 @@
 
 - The shell records the apps whose default shortcut it has offered in `data/.state/system_interface/default_shortcuts_offered.json`, so a shortcut the user removed stays removed when its app registers again, on every boot and across restarts. `desktops.json` keeps its shape. When `Home` is seeded again over a missing or unusable `desktops.json`, the record starts over from the apps `Home` is seeded with, so a late app still reaches it.
 
+- An app with a pinned window that registers late (the chat's avatar window) now gets that window on every desktop as soon as the registry changes, rather than on the next read of the desktops.
+
 - Existing workspaces get the Chat shortcut back once: with no record yet, the apps with a shortcut on any desktop count as offered, so the chat, missing from every desktop of a workspace seeded before it registered, is added once. A built-in shortcut the user had removed from every desktop comes back once too.

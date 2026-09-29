@@ -103,11 +103,12 @@ and the profile cache.
   backdrop, state, minimized, detached; the order is the stack).
 - **Pinned windows** (`docs/system/blueprint/pinned-taskbar-entries/`): an
   app whose manifest declares a `[pin]` has exactly one pinned window on
-  every desktop, reconciled on every read after the registry is read and
-  never closed. With the `independent` scope the window's shared path stays
-  its home path and each client's own path and title live in
-  `shell/window_paths.py`'s per-client file. How a client shows the entry
-  (in the bar or floating, plain or as the avatar) is on its client record.
+  every desktop, reconciled on every read after the registry is read and on
+  every change of the registry's rows, and never closed. With the
+  `independent` scope the window's shared path stays its home path and each
+  client's own path and title live in `shell/window_paths.py`'s per-client
+  file. How a client shows the entry (in the bar or floating, plain or as the
+  avatar) is on its client record.
 - **The avatar** (`avatar/`): the bundled and registered designs, the
   workspace's selection, the rendered image routes, and the status reader,
   which folds mngr's agents event file into a mood (working when any agent
