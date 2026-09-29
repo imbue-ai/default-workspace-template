@@ -8,7 +8,7 @@ the workspace-root-relayout + template-manifest restructuring effort.
 Templates (publish-template / use-template) currently declare their
 runtime needs only as prose plus `requires_permission:` / `requires_secret:` /
 `requires_llm:` lines in `inspiration-<slug>.md`. System packages a
-template's code needs are implicit -- the adopting mind discovers them by
+template's code needs are implicit -- the adopting agent discovers them by
 running into failures. With env-converge in place, the environment side has a
 principled home for these declarations.
 

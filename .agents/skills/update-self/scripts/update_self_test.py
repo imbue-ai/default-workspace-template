@@ -258,7 +258,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
         update_target.fetch_app_template_ref()
     except update_target.AppVersionUnavailableError as exc:
         assert "too old to report its version" in str(exc)
-        assert "Update the minds app itself first" in str(exc)
+        assert "Update the Imbue Studio app itself first" in str(exc)
     else:
         raise AssertionError("expected a 403 to block with the old-app message")
 
@@ -289,7 +289,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_call_fails(
     try:
         update_target.fetch_app_template_ref()
     except update_target.AppVersionUnavailableError as exc:
-        assert "could not reach the minds app" in str(exc)
+        assert "could not reach the Imbue Studio app" in str(exc)
         assert "connection refused" in str(exc)
     else:
         raise AssertionError("expected a transport failure to block")
@@ -438,7 +438,7 @@ def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "could not reach the minds app" in captured.err
+    assert "could not reach the Imbue Studio app" in captured.err
     # A refusal, not a crash: no traceback for the lead to relay.
     assert "Traceback" not in captured.err
 
@@ -6234,7 +6234,7 @@ def test_ledger_origin_takes_this_workspaces_own_creation_not_an_ancestors(
     """The template repo is itself developed from workspaces.
 
     A full-history clone therefore carries bootstrap markers older than this
-    workspace's own, and seeding from one of those dates the mind to a
+    workspace's own, and seeding from one of those dates the agent to a
     stranger's creation and names the release that stranger started from.
     """
     repo = _make_real_repo(tmp_path)
@@ -7031,7 +7031,7 @@ def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:
     assert calls == 4
 
 
-# run-status (the Mind app's status contract)
+# run-status (the Imbue Studio app's status contract)
 
 
 def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:

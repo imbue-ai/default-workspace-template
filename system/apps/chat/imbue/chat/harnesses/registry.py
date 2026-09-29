@@ -493,7 +493,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
         # a bare `agy` does on first launch, which is what the instructions below say.
     ),
-    # The seed segment of a chat the Mind app opened (``chat_seed.py``): turns the app wrote
+    # The seed segment of a chat the Imbue Studio app opened (``chat_seed.py``): turns the app wrote
     # before the workspace had any agent, read like an archived segment. No agent ever runs
     # on it, so every live part is inert: the watcher watches nothing, the tracker reads
     # idle, the resolver switches nothing, and there is no catalog and no popup.
