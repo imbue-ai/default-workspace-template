@@ -1,1 +1,0 @@
-The README now calls the desktop app Imbue Studio when describing who reads the service event stream. The desktop app is now called Imbue Studio, and the noun for the thing you talk to is now "your agent" rather than "your mind".

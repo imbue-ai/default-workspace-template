@@ -556,6 +556,20 @@ resumes), and how to honor a rollback request are in
   image-level hunk needs a manual workspace rebuild -- say so.
 - **Rebuild-only flags** -- surface as needing a workspace recreate; never
   imply they are live.
+- **User apps without `stop_when_no_windows`** -- the shell stops an app
+  whose manifest declares `stop_when_no_windows = true` a minute after its
+  last window closes and starts it again on the next request (the build-app
+  skill says which apps should carry it). A manifest without the field reads
+  as `false`, so an app built before the field existed keeps running for the
+  life of the workspace, as it always did. Do not add the field
+  mechanically. For each `system/apps/*/app.toml` that is the user's and
+  lacks it, read the app: if it only answers requests, add
+  `stop_when_no_windows = true` and restart its program so the registration
+  carries it; if it does work between requests (a background thread, a
+  poller or scheduled refresh, a subscription to an outside service, a job
+  that outlives the window, an API another agent drives with no window),
+  add `stop_when_no_windows = false` with a comment saying why, so the next
+  pass does not ask again. Name each decision in the results message.
 
 ### 5d. Escalate the built-in defects this pass found
 

@@ -7,7 +7,10 @@ from types import FrameType
 
 from app_manifest.registry import registry_path
 from flask import Flask
+from loguru import logger
 
+from imbue.system_interface.app_announcements import AppAnnouncementWriter
+from imbue.system_interface.app_announcements import announcements_path_from_environment
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.config import Config
@@ -28,7 +31,7 @@ from imbue.system_interface.wsgi import make_threaded_server
 def _exit_on_signal(signum: int, frame: FrameType | None) -> None:
     """Turn SIGTERM/SIGINT into a clean exit so the ``atexit`` teardown runs.
 
-    The shutdown itself (the broadcaster and the shell's inventory) is registered
+    The shutdown itself (the broadcaster, and the shell's inventory and lifecycle manager) is registered
     via ``atexit`` in ``main``; raising ``SystemExit`` here ensures that interpreter-exit
     path runs instead of the default abrupt termination.
     """
@@ -75,16 +78,32 @@ def build_production_state(
         cache_directory=presence_directory / PROFILES_DIRECTORY_NAME, share_env_path=DEFAULT_SHARE_ENV_PATH
     )
     presence = PresenceStore(directory=presence_directory)
+    app_announcement_writer = None if is_preview else build_app_announcement_writer()
     return SystemInterfaceState(
         config=config,
         shell=build_shell_state(
-            state_directory=state_directory, registry_path=registry_path(), broadcaster=broadcaster, profiles=profiles
+            state_directory=state_directory,
+            registry_path=registry_path(),
+            broadcaster=broadcaster,
+            profiles=profiles,
+            on_registry_read=app_announcement_writer.announce if app_announcement_writer is not None else None,
+            is_lifecycle_enabled=not is_preview,
         ),
         presence=presence,
         presence_sweep=build_presence_sweep(presence, profiles, broadcaster),
         profiles=profiles,
         is_preview=is_preview,
     )
+
+
+def build_app_announcement_writer() -> AppAnnouncementWriter | None:
+    """The writer of the services event stream the minds desktop discovers apps from, or None (warned once)
+    outside a workspace, where no agent state directory names the stream."""
+    events_path = announcements_path_from_environment()
+    if events_path is None:
+        logger.warning("MNGR_AGENT_STATE_DIR is not set; app registrations will not be announced to minds")
+        return None
+    return AppAnnouncementWriter(events_path=events_path)
 
 
 def build_application(config: Config, args: argparse.Namespace) -> Flask:
@@ -105,14 +124,16 @@ def main() -> None:
         state = get_state()
 
     # Start the shell now that the app is assembled: the stale-client prune, the registry
-    # watch, the liveness sweep, and the presence sweep. This is the one place they are started;
-    # ``build_application`` only constructs, so tests that build an app never start them.
+    # watch, the liveness and lifecycle sweeps, and the presence sweep. This is the one place
+    # they are started; ``build_application`` only constructs, so tests that build an app never
+    # start them.
     state.shell.start()
     state.presence_sweep.start()
 
-    # Tear down the broadcaster and the inventory on exit. ``atexit`` covers a normal return;
-    # the signal handlers cover supervisord's SIGTERM and an interactive SIGINT (Ctrl-C), which
-    # ``serve_forever`` would otherwise turn into an abrupt exit.
+    # Tear down the broadcaster, the inventory, and the lifecycle manager (which lets go of
+    # every parked port) on exit. ``atexit`` covers a normal return; the signal handlers cover
+    # supervisord's SIGTERM and an interactive SIGINT (Ctrl-C), which ``serve_forever`` would
+    # otherwise turn into an abrupt exit.
     atexit.register(state.shutdown)
     signal.signal(signal.SIGTERM, _exit_on_signal)
     signal.signal(signal.SIGINT, _exit_on_signal)

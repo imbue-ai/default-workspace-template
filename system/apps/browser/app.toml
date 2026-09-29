@@ -2,6 +2,10 @@ name = "browser"
 display_name = "Browser"
 icon = "icon.svg"
 critical = false
+# Chromium stops on the close hint below, but the coordinator stays: agents drive browsers with no
+# window at all (the agentic-browser-fleet skill, through the CDP proxy), and stopping the
+# coordinator closes every Chromium it runs.
+stop_when_no_windows = false
 priority = "browser"
 launcher_rank = 30
 # The one browser lives as long as a window shows it: the shell posts every closed window

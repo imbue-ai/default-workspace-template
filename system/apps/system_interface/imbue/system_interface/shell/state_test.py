@@ -1,7 +1,11 @@
 """Tests for ``ShellState``: the stale-client prune it runs at start and on its interval, the close hints, the
 arrival, and the absolute-directory invariant it is built with."""
 
+import itertools
+import socket
 import threading
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
@@ -14,12 +18,17 @@ from pydantic import ValidationError
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
+from imbue.system_interface.shell.app_lifecycle import WAKE_WAIT_SECONDS
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import StoredWindowPath
 from imbue.system_interface.shell.data_types import WindowOpenRequest
+from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.launches import LaunchPost
+from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import UserId
@@ -28,13 +37,17 @@ from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
+from imbue.system_interface.shell.testing import FakeLivenessProber
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import TEST_TERMINAL_URL
 from imbue.system_interface.shell.testing import TEST_TERMINAL_WINDOW_CLOSED_PATH
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import placement_record
+from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
+from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 
@@ -116,6 +129,160 @@ def test_closing_a_window_tells_its_app_when_the_row_names_a_window_closed_path(
     assert shell.close_window(home.id, terminal_window) is False
     assert shell.close_window(home.id, files_window) is True
     assert len(hints) == 1
+
+
+def test_a_stopped_app_is_not_told_of_its_closed_window(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    """The post would reach the shell's own parker and wake the app to tell it a window closed."""
+    hints: list[WindowClosedHint] = []
+    prober = FakeLivenessProber()
+    prober.is_running_by_name["terminal"] = False
+    registry_path = write_two_app_registry(tmp_path)
+    built = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster, prober=prober),
+    )
+    shell = built.model_copy_update(to_update(built.field_ref().close_hint_poster, hints.append))
+    (home,) = shell.list_desktops()
+    terminal_window = _open(shell, home.id, "terminal", "/?session=terminal-1")
+
+    assert shell.close_window(home.id, terminal_window) is True
+
+    assert hints == []
+
+
+def test_a_post_launch_to_a_stopped_stoppable_app_wakes_it_and_waits_for_it_to_answer(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The stop-when-no-windows spec, section 5.6: a POST launch cannot go through the parker (which answers
+    503), so the shell wakes the app and posts once its port accepts; an app that does not come up in time fails
+    the launch without a post."""
+    docs_port = find_free_port()
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml(
+            "docs",
+            f"http://127.0.0.1:{docs_port}",
+            program="docs",
+            launch_paths=(("new", "New doc", "/api/intake"),),
+            launch_methods={"new": "POST"},
+        ),
+    )
+    prober = FakeLivenessProber()
+    prober.is_running_by_name["docs"] = False
+    posts: list[LaunchPost] = []
+
+    def poster(post: LaunchPost) -> LaunchPostOutcome:
+        posts.append(post)
+        return LaunchPostOutcome(status_code=200, body={"path": "/?doc=1"})
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    started: list[str] = []
+
+    def start_and_bind(program: str) -> None:
+        started.append(program)
+        listener.bind(("127.0.0.1", docs_port))
+        listener.listen(1)
+
+    built = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster, prober=prober),
+        launch_poster=poster,
+    )
+    shell = built.model_copy_update(
+        to_update(built.field_ref().lifecycle, _launch_waking_manager(built, start_and_bind, time.monotonic))
+    )
+    entry = shell.inventory.entry("docs")
+    assert entry is not None and entry.is_running is False
+    (launch_path,) = entry.row.launch_paths
+
+    try:
+        path = shell.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
+    finally:
+        listener.close()
+
+    assert path == "/?doc=1" and started == ["docs"]
+    (post,) = posts
+    assert post.url == f"http://127.0.0.1:{docs_port}/api/intake"
+
+    # An app that never binds: the wait (over a clock that steps past it on each read) ends in a 502, unposted.
+    ticks = itertools.count(start=0.0, step=WAKE_WAIT_SECONDS)
+    never_up = built.model_copy_update(
+        to_update(built.field_ref().lifecycle, _launch_waking_manager(built, started.append, lambda: next(ticks)))
+    )
+    with pytest.raises(LaunchUnavailableError, match="could not be brought up"):
+        never_up.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
+    assert started == ["docs", "docs"] and len(posts) == 1
+
+    # A manager that does not own the live apps (a preview's) wakes nothing: the post goes out as it is and fails
+    # as one to any unreachable app does.
+    preview = built.model_copy_update(
+        to_update(
+            built.field_ref().lifecycle,
+            _launch_waking_manager(built, started.append, time.monotonic, is_enabled=False),
+        )
+    ).model_copy_update(to_update(built.field_ref().launch_poster, _refusing_launch_poster))
+    with pytest.raises(LaunchUnavailableError, match="refused"):
+        preview.launch_destination(entry, launch_path, {}, ClientId("c1"), DesktopId("home"), None)
+    assert started == ["docs", "docs"]
+
+
+def _refusing_launch_poster(post: LaunchPost) -> LaunchPostOutcome:
+    raise LaunchUnavailableError(f"{post.app} could not be reached for the launch: refused")
+
+
+def _launch_waking_manager(
+    shell: ShellState, start_program: Callable[[str], None], clock: Callable[[], float], is_enabled: bool = True
+) -> AppLifecycleManager:
+    """A lifecycle manager over the shell's inventory whose supervisord is a stopped ``docs`` and whose start is
+    ``start_program``; enabled, so a launch wakes the app, but never started, so nothing is swept."""
+    return AppLifecycleManager(
+        inventory=shell.inventory,
+        is_enabled=is_enabled,
+        count_windows_by_app=lambda: {},
+        granted_app_names=lambda: set(),
+        program_states=lambda: {"docs": "STOPPED"},
+        start_program=start_program,
+        stop_program=lambda program: None,
+        clock=clock,
+    )
+
+
+def test_the_lifecycle_manager_reads_the_per_app_share_grants_under_the_workspace_root(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    secrets_directory = tmp_path / "repo" / "data" / ".secrets"
+    secrets_directory.mkdir(parents=True)
+    (secrets_directory / "share_grants.toml").write_text('[services.docs]\nemails = ["reviewer@example.com"]\n')
+    shell = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster),
+        repo_root=tmp_path / "repo",
+    )
+
+    assert shell.lifecycle.granted_app_names() == set()
+    (secrets_directory / "share.env").write_text("export SHARE_BROKER_URL=https://broker.example\n")
+    assert shell.lifecycle.granted_app_names() == {"docs"}
+
+
+def test_an_arrival_marks_the_workspace_visited(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    shell = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+    assert shell.lifecycle.is_visited is False
+    shell.list_desktops()
+
+    shell.arrive_client(ClientId("laptop"), RequestIdentity(owner=True))
+
+    assert shell.lifecycle.is_visited is True
 
 
 def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(

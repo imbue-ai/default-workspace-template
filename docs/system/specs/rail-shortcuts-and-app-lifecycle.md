@@ -205,7 +205,7 @@ An optional env-converge step MAY rewrite known build-app blocks in bulk; decide
 
 ## Interactions between the parts
 
-- Clicking a shortcut (either mode) whose backing app is stopped **starts it first**, shows the shortcut's pending state while supervisord brings it up and the port re-registers, then opens the pane.
+- Clicking a shortcut (either mode) whose backing app is stopped opens its pane as for a running app; the app comes back on the pane's first request, since the shell holds a stopped app's port and starts the app on the first connection ([stop-when-no-windows.md](stop-when-no-windows.md), Part B, which superseded this spec's earlier rule that the shortcut starts the app first and shows a pending state meanwhile).
 - "Focus last X" ignores panes of stopped apps only in the sense that the app's rows are dimmed; the recency store itself is unaffected by stop/start.
 
 ## Phasing
