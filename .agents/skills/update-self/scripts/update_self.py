@@ -375,19 +375,10 @@ def _before_rollback_reverts(
     return commit
 
 
-def _has_update_rolled_back_since(
-    earlier: str, commit: str, history: UpdateRollbackHistory, repo_root: Path
-) -> bool:
-    """Whether ``commit``'s first-parent line since ``earlier`` holds an update
-    rollback that nothing on that line reverts."""
-    reverted: set[str] = set()
-    for sha in _list_names(
-        _git(["rev-list", "--first-parent", f"{earlier}..{commit}"], repo_root)
-    ):
-        reverted.update(history.reverts.get(sha, ()))
-        if sha in history.rollbacks and sha not in reverted:
-            return True
-    return False
+def _has_update_rolled_back_since(earlier: str, commit: str, repo_root: Path) -> bool:
+    """Whether ``commit``'s history since ``earlier`` holds an update rollback that
+    nothing there has undone."""
+    return bool(pending_update_rollbacks(earlier, commit, repo_root, Runner()))
 
 
 def _first_attempt_first_parent(
@@ -414,9 +405,7 @@ def _first_attempt_first_parent(
                     f"but no earlier '{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
                 )
             return first_parent
-        if not _has_update_rolled_back_since(
-            earlier, before_reverts, history, repo_root
-        ):
+        if not _has_update_rolled_back_since(earlier, before_reverts, repo_root):
             return first_parent
         first_parent = _commit_sha(f"{earlier}^1", repo_root)
 

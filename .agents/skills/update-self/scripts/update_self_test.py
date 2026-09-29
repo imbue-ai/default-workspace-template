@@ -1075,6 +1075,35 @@ def test_footprint_ranges_on_a_same_target_retry_that_reverted_several_rollbacks
     ]
 
 
+def test_footprint_ranges_on_a_retry_over_a_rollback_whose_revert_was_reverted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Reverting v1's rollback's revert put the rollback back in force, so the v2
+    # merge was made on top of the rolled-back v1 attempt, and the chain of attempts
+    # starts at v1's merge.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    history.revert(history.revert(history.roll_back("minds-v1")))
+    live = _head_sha(history.repo)
+    history.release("minds-v2")
+    for rollback in history.pending_rollbacks("minds-v2", capsys):
+        history.revert(rollback)
+    history.land("minds-v2")
+    history.revert(history.roll_back("minds-v2", restore_to=live))
+
+    ranges = history.footprint_ranges("minds-v2", capsys)
+
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt",
+        "minds-v2.txt",
+    ]
+
+
 @pytest.mark.parametrize("is_retry", [False, True], ids=["first-pass", "retry"])
 def test_footprint_ranges_count_a_restored_app_change_as_the_workspaces_own(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], is_retry: bool
