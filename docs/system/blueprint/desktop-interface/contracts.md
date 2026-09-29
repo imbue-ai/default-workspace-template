@@ -103,7 +103,7 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 
 - A desktop's creation (the default desktop's seeding, `POST /api/desktops`, a visiting user's desktop) adds the apps whose default shortcut it was made with. The reconcile that runs on every read of the desktops and after every change of the registry's rows adds each app whose default shortcut it has just offered to every desktop.
 - A listed app is not offered again, so a default shortcut the user removed stays removed, and an app that deregisters stays listed.
-- A desktop created when no other desktop stands (the default desktop seeded over a `desktops.json` read as absent, section 4.1, among them) starts the file over, listing only the apps whose default shortcut it was made with.
+- A desktop created while no other desktop stands, such as the default desktop seeded over a `desktops.json` read as absent (section 4.1), starts the file over: it then lists only the apps whose default shortcut that desktop was made with.
 - A missing file, or one whose `version` is not 1 or that fails validation (logged), reads as listing every app with a shortcut on any desktop, and the next reconcile writes it; with no `desktops.json` either, the default desktop's seeding writes it.
 - `desktops.json` carries none of it.
 

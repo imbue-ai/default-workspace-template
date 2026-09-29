@@ -261,7 +261,7 @@ class ShellState(MutableModel):
         """Every desktop holding the default shortcut of each registered app not yet offered (desktop plan section
         3.2) and one pinned window per pinned app (pinned-taskbar-entries plan section 3.2). A reconcile that wrote
         is announced once, after it, so nothing here recurses into itself. Callers hold the state lock and read
-        ``rows`` under it, so reconciles apply, and announce, the registry's rows in the order they were installed."""
+        ``rows`` under it."""
         shortcuts_outcome = self.desktops.ensure_default_shortcuts_offered(rows)
         pinned_outcome = self.desktops.ensure_pinned_windows(pinned_apps(rows), datetime.now(timezone.utc))
         if shortcuts_outcome.is_written or pinned_outcome.is_written:
