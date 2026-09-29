@@ -587,6 +587,33 @@ def test_a_state_directory_from_before_the_offered_record_gets_a_late_apps_short
     assert shortcut_apps_on(shell.list_desktops()[0]) == _APPS_BEFORE_CHAT
 
 
+def test_a_registry_change_whose_reconcile_cannot_write_is_logged_and_the_next_read_completes_it(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, loguru_records: list[str]
+) -> None:
+    """The reconcile a registry change runs must not raise into the registry read (the watch thread's); once the
+    state can be written again, the next read of the desktops records the late app as offered."""
+    registry_path = write_registry(tmp_path / "apps.toml", *builtin_rows_toml_before_chat())
+    inventory = build_inventory(registry_path, broadcaster)
+    shell = build_shell_state(tmp_path / "state", registry_path, broadcaster, inventory=inventory)
+    shell.list_desktops()
+    # A directory where the offered record goes makes every write of it fail.
+    offered_path = tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME
+    offered_path.unlink()
+    offered_path.mkdir()
+
+    _register_chat(registry_path)
+    inventory.reload_registry()
+
+    assert any(
+        record.startswith("ERROR Failed to reconcile the desktops with the changed app registry")
+        for record in loguru_records
+    )
+    offered_path.rmdir()
+    (home,) = shell.list_desktops()
+    assert shortcut_apps_on(home) == _APPS_WITH_CHAT
+    assert json.loads(offered_path.read_text())["apps"] == sorted(_APPS_WITH_CHAT)
+
+
 def test_a_late_registration_reaches_the_desktops_through_the_registry_watch(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
