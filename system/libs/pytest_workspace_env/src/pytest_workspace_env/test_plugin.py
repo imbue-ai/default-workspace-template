@@ -67,6 +67,7 @@ def _run_inner_session(
         capture_output=True,
         text=True,
         check=False,
+        timeout=60,
     )
 
 
