@@ -203,27 +203,27 @@ from the agent's terminal.
 
 A new chat starts on an agent that is already running (`spare_chat.py`). The
 chat app keeps a pool of spare agents (one by default, `SPARE_CHAT_POOL_SIZE` in
-`agent_manager.py`) started on the terms the next new chat would get (the default account, the primary agent's project, and the fast mode a
-new chat starts in), each created silent under the id and "Chat N" name of the
-chat it will become, and hidden from every chat listing, send, and route. A
-spare is ready once its harness says it accepts input, not when `mngr create`
-returns. A create that fits those terms and names no chat id, name, labels,
-templates, or installation-check waiver of its own is handed a ready spare
-instead of running `mngr create`:
-the chat is listed at once, running, so its first message never waits on
-"Connecting...". With none ready it claims one still starting, and is
+`agent_manager.py`) started on the terms the next new chat would get (the
+default account, the primary agent's project, and the fast mode a new chat
+starts in), each created silent under the id and "Chat N" name of the chat it
+will become, and hidden from every chat listing, send, and route. A spare is
+ready once its harness says it accepts input, not when `mngr create` returns. A
+create that fits those terms and names no chat id, name, labels, templates, or
+installation-check waiver of its own is handed a ready spare instead of running
+`mngr create`: the chat is listed at once, running, so its first message never
+waits on "Connecting...". With none ready it claims one still starting, and is
 provisional until that one is up, which is sooner than a create of its own that
 would queue behind it on mngr's host lock. Its message and model pick follow
 through the send path. The pool is topped up one spare at a time; with a pool
 larger than one, while another spare is still ready, 30 seconds after a
-hand-over, so the next boot does not compete with the new chat's first turn. A sign-in starts the spares at once, and
-the session sweep keeps them current: one whose terms went stale or whose
-process died is destroyed and replaced, and after a failed create or destroy the
-spares wait five minutes. The spares are recorded in
-`data/.apps/chat/spare_chat.json` before their create starts, so a restart of
-the app keeps a ready spare and destroys one whose create it cut short. `GET
-/api/agents`, the plain mngr listing, does list the spares. A secondary chat
-keeps none.
+hand-over, so the next boot does not compete with the new chat's first turn. A
+sign-in starts the spares at once, and the session sweep keeps them current: one
+whose terms went stale or whose process died is destroyed and replaced, and
+after a failed create or destroy the spares wait five minutes. The spares are
+recorded in `data/.apps/chat/spare_chat.json` before their create starts, so a
+restart of the app keeps a ready spare and destroys one whose create it cut
+short. `GET /api/agents`, the plain mngr listing, does list the spares. A
+secondary chat keeps none.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
