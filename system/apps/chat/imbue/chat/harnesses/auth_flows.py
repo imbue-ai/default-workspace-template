@@ -633,16 +633,17 @@ class AuthFlowService:
     def adopt_claude_credentials(self, pasted: str) -> accounts.Account:
         """Mint an account from a credential someone else obtained, with no flow involved.
 
-        A key obtained outside the chooser. There is no terminal to drive and nothing to poll,
-        so this skips the flow machinery and goes straight to seed, write, commit -- the account
-        existing IS the signed-in flag.
+        The Imbue path: the Electron chrome sends what the keys page handed the user. There
+        is no terminal to drive and nothing to poll, so this skips the flow machinery and
+        goes straight to seed, write, commit -- the account existing IS the signed-in flag.
         """
         managed_env = claude_env_from_paste(pasted)
         lane = get_lane("anthropic")
         with self._lock:
             # Re-key into the account this endpoint already owns rather than minting another.
-            # A fresh account per adopt leaves a row per re-key -- all but the newest holding a
-            # dead credential, and the newest quietly becoming the default for every new chat.
+            # It is called every time the user visits the keys page, and a fresh account per
+            # visit leaves a row per re-key -- all but the newest holding a dead credential,
+            # and the newest quietly becoming the default for every new chat.
             existing = _adopted_account(lane.id, self._home)
             if existing is not None:
                 path = accounts.account_dir(existing.id, self._home)
@@ -995,7 +996,7 @@ _OAUTH_TOKEN_PREFIX: Final = "sk-ant-oat01-"
 
 # What an adopted account is called. Distinct from the lane's own provider name on purpose:
 # it is how re-keying finds the row it already owns, and it is the only thing that tells the
-# user which of their anthropic accounts holds an adopted key rather than a sign-in of their own.
+# user which of their anthropic accounts came from the keys page rather than a browser sign-in.
 ADOPTED_DISPLAY: Final = "Anthropic (Imbue)"
 
 
