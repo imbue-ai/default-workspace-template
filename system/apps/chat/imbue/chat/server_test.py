@@ -2352,14 +2352,14 @@ def test_create_chat_refuses_a_message_beside_a_minted_id(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
     agent_manager: AgentManager = state_of(app).agent_manager
-    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", message="Teach me about Mind")
+    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", message="Teach me about Imbue Studio")
 
     response = client.post("/api/chats/create", json={"chat_id": failed.chat_id, "message": "other"})
 
     assert response.status_code == 400
     assert "first message" in response.get_json()["detail"]
     failed_proto = agent_manager.get_provisional_chat(failed.chat_id)
-    assert failed_proto is not None and failed_proto.message == "Teach me about Mind"
+    assert failed_proto is not None and failed_proto.message == "Teach me about Imbue Studio"
 
 
 def _seed_body() -> dict[str, Any]:
@@ -2373,7 +2373,7 @@ def _seed_body() -> dict[str, Any]:
 
 
 def test_seeding_a_chat_lists_it_awaiting_its_first_send_with_the_turns_as_its_transcript(tmp_path: Path) -> None:
-    """The Mind app's onboarding conversation arrives whole: the chat is created (201) as a
+    """The Imbue Studio app's onboarding conversation arrives whole: the chat is created (201) as a
     provisional chat awaiting the user, and its events route reads the seeded turns."""
     agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
     agent_manager.note_agent_list_known()
@@ -2547,7 +2547,7 @@ def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) ->
     """``system/scripts/message_chat.py --create`` is standard-library only and cannot import this
     package, so its copy of the route's path, its waiver setting, and the fields it posts are
     pinned here. ``CreateChatRequest`` forbids unknown fields, and the script reads that refusal as
-    a chat app from before them: a rename on this side would send every Minds-app chat back to the
+    a chat app from before them: a rename on this side would send every Imbue Studio chat back to the
     bare ``mngr create`` without a single failing test."""
     script = Path(__file__).resolve().parents[4] / "scripts" / "message_chat.py"
     spec = importlib.util.spec_from_file_location("message_chat_for_create_pin", script)

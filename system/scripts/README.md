@@ -39,8 +39,8 @@ Provisioning and utility scripts:
   environment; the one sanctioned reader of that directory, which
   `agent_secrets_guard.sh` enforces -- see the `connect-external-service`
   skill), `seed_welcome_chat.py` (open the workspace's first chat on the
-  conversation the Mind app had before the workspace existed; run through
-  `mngr exec` by the Mind app), `require_create_account.py` (the
+  conversation the Imbue Studio app had before the workspace existed; run through
+  `mngr exec` by the Imbue Studio app), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes), `migrate_claude_auth.py` (one-time auth migration).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.

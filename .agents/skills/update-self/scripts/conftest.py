@@ -3,6 +3,7 @@ when ``update_self.py`` runs); put it there for the tests too."""
 
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -11,17 +12,20 @@ from messenger_testing import RecordingMessengers
 sys.path.insert(0, str(Path(__file__).parent))
 
 
-@pytest.fixture(autouse=True)
-def _isolate_git_config(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture(autouse=True, scope="module")
+def _isolate_git_config() -> Iterator[None]:
     """Keep the developer's git config out of the real-git tests.
 
     The ledger and recovery tests drive real ``git`` (in the test and in the
     scripts under test), and a global ``commit.gpgsign`` or ``core.hooksPath``
     would reach into every one of them. Identity is set per repo by the
-    helpers, so nothing here needs the global file.
+    helpers, so nothing here needs the global file. Module-scoped so the repos
+    a module's shared fixtures build are covered too.
     """
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        yield
 
 
 @pytest.fixture(autouse=True)

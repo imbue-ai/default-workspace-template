@@ -96,7 +96,7 @@ rootfs back to that record at the pinned apt snapshot timestamp.
 - `uv run env-converge status` -- record vs reality summary as JSON
   (including whether an upgrade is pending).
 
-The minds in-place backup restore restarts this program
+The Imbue Studio in-place backup restore restarts this program
 (`supervisorctl restart env-converge`) after rewinding `/home/user`, which is
 what makes a restored record converge the rootfs back to exactly the restored
 package set.

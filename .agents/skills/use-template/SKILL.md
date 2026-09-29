@@ -1,6 +1,6 @@
 ---
 name: use-template
-description: Adapt an existing template (a published snapshot of apps/features from another mind) into this mind, resolving its requirements interactively. Use when the user gives a template's git URL, or asks to adopt/adapt/reuse a published template.
+description: Adapt an existing template (a published snapshot of apps/features from another agent) into this agent, resolving its requirements interactively. Use when the user gives a template's git URL, or asks to adopt/adapt/reuse a published template.
 metadata:
   author: imbue
 ---
@@ -19,12 +19,12 @@ manifest format. This skill reads BOTH:
   `template.toml` is what identifies it. Still adopted exactly as before;
   nothing writes this format any more.
 
-A template is a publishable, reusable snapshot of the apps and features a mind
+A template is a publishable, reusable snapshot of the apps and features an agent
 has built. It lives in its own GitHub repo as a real default-workspace-template tree
 plus its manifest at the repo root -- `template.md` with a
 `template.svg` thumbnail (v2 adds `template.toml`; a v1 repo instead has
 slug-named `inspiration-<slug>.md`, possibly several). Adapting a template means bringing
-that snapshot into *this* mind and then working through its "requirements" — the parts
+that snapshot into *this* agent and then working through its "requirements" — the parts
 the original author left stubbed or unwired — together with the user.
 
 All git commands run with cwd = the repo root (`/home/user/workspace`).
@@ -34,11 +34,11 @@ All git commands run with cwd = the repo root (`/home/user/workspace`).
 There are two ways this skill starts. Figure out which one applies before doing
 anything else.
 
-**A. Template path — this mind was created from a template repo.** The mind
+**A. Template path — this agent was created from a template repo.** The agent
 already has the template's tree at its root (it *is* the template repo), so
 there is nothing to fetch; the manifest (`template.md`, with `template.toml`
 beside it in v2) is at the repo root. When the user asks about or wants to set
-up the template this mind came from, read the manifest, tell them in plain
+up the template this agent came from, read the manifest, tell them in plain
 language what the template is and what it needs from them, and ask how they
 want to adapt it. The manifest's "How to adapt it" section is the script for
 that conversation.
@@ -51,28 +51,28 @@ ambiguous.) Skip step 1 below (the tree is already here) and go straight to
 reading the manifest.
 
 **B. Merge path — the user gave you a template's git URL.** Bring the
-template into the *current* mind at the repo root, then adapt it. Do step 1
+template into the *current* agent at the repo root, then adapt it. Do step 1
 below to merge it in.
 
 ## 0. Trust gate — confirm before merging in (merge path B only)
 
-A template is code published by ANOTHER mind's user, in a repo outside
+A template is code published by ANOTHER agent's user, in a repo outside
 Imbue's control. **Imbue does not review, verify, or vouch for templates.**
-Adopting one runs its code in this mind -- its services, skills, and scripts --
+Adopting one runs its code in this agent -- its services, skills, and scripts --
 and it could contain mistakes or malicious code (data exfiltration, destructive
 commands, hidden network calls). You cannot detect that by reading it, so the
 only safeguard is the user's informed consent.
 
 On the **merge path (B)**, BEFORE any fetch, merge, or execution in §1, tell the
 user in plain language that you are about to pull third-party code that **Imbue
-has not verified and that could be malicious** into their mind; name the repo
+has not verified and that could be malicious** into their agent; name the repo
 URL; and ask them to confirm they trust that source and want to proceed. Do NOT
 fetch, merge, or run anything from the template until they reply yes. If they
 decline, stop here. This is informed consent, not a security guarantee -- you
 are telling the user you cannot vouch for the code, not certifying it is safe.
 
-The **template path (A)** needs no such gate: creating a mind from a
-template repo WAS the trust decision, so a mind already built from one is
+The **template path (A)** needs no such gate: creating an agent from a
+template repo WAS the trust decision, so an agent already built from one is
 treated as trusted -- go straight to adapting it.
 
 ## 1. Bring in the template, verified in a worktree (merge path only)
@@ -117,7 +117,7 @@ git worktree add -q "$WT" HEAD
 **Check the merge went well, in the worktree:**
 
 - **Merge conflicts** are HOLES, not a hard failure: they mark where the
-  template and this mind's tree disagree. Do NOT resolve them mechanically or
+  template and this agent's tree disagree. Do NOT resolve them mechanically or
   land a half-merged tree -- remove the worktree (`git worktree remove --force
   "$WT"`), tell the user what conflicts (step 4, plain language), and only then
   redo the merge in `/home/user/workspace` and resolve it interactively with them.
@@ -143,7 +143,7 @@ git worktree add -q "$WT" HEAD
   ```
 
   If this fails, the merged tree does not boot -- the template broke this
-  mind (a wiring mistake, or something hostile). STOP: tell the user plainly,
+  agent (a wiring mistake, or something hostile). STOP: tell the user plainly,
   remove the worktree, and do NOT bring it into `/home/user/workspace`.
 
 **Land the verified result.** Only once the merge is clean and the boot check
@@ -157,7 +157,7 @@ git worktree remove --force "$WT"
 
 This preserves both trees at the root. The template's `template.md`
 manifest(s) and their `.svg` thumbnails land at the repo root alongside anything
-this mind already had.
+this agent already had.
 
 This merge path does not touch `system/config/parent.toml` — provenance is read-only reference
 (the template records only a link to the default-workspace-template base it was
@@ -232,7 +232,7 @@ conversation:**
    permission request per `requires_permission:` line (see
    `.agents/skills/connect-external-service/references/latchkey.md`: `latchkey
    curl -XPOST http://latchkey-self.invalid/permission-requests`; the request
-   opens the approval/login flow in the minds app). Each request is its own tool call,
+   opens the approval/login flow in the Imbue Studio app). Each request is its own tool call,
    with nothing else in it; when a template needs several, file them one after
    another without waiting for verdicts in between. Do not merely tell the user a
    permission is needed — send the request so it appears for them to approve.
@@ -312,16 +312,16 @@ The manifest is a worksheet. After adapting, **append** a dated entry to its
 `Adaptation history` section — never rewrite the rest of the file. Append only:
 
 ```markdown
-### <YYYY-MM-DD> — adapted by this mind
+### <YYYY-MM-DD> — adapted by this agent
 <what was changed / which requirements were resolved / decisions made>
 ```
 
-Earlier history entries are left exactly as they are; each mind that adapts the
+Earlier history entries are left exactly as they are; each agent that adapts the
 template adds one more entry below the previous ones.
 
 ## 6. Override and lineage
 
-A mind holds ONE manifest. A merged-in v2 template's `template.md` /
+An agent holds ONE manifest. A merged-in v2 template's `template.md` /
 `.toml` / `.svg` **override** whatever was at the repo root before -- they do
 not accumulate beside it. The previously-adopted template's *code* stays in
 the tree (the merge that brought it in is not undone); only its manifest is
@@ -340,7 +340,7 @@ adopted_on = "<today, YYYY-MM-DD>"
 
 That is the address the NEXT override turns into a `[[lineage]]` entry -- and
 what makes the chain in a later published manifest name every template this
-mind was built on, each at the commit it was actually used at. Without it the
+agent was built on, each at the commit it was actually used at. Without it the
 link is simply lost: nothing else records it.
 
 Keep any `[[lineage]]` entries the incoming manifest already carries; they are

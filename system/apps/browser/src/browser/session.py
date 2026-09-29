@@ -359,7 +359,7 @@ _CLAIM_WINDOW = float(os.environ.get("BROWSER_CLAIM_WINDOW", "12"))
 
 # Chromium's in-process sandbox cannot run as root: it exits with "Running as root
 # without --no-sandbox is not supported" (crbug 638180), and browser-use swallows that
-# into a ~30s launch hang. Every minds workspace runs this daemon as ROOT inside an OUTER
+# into a ~30s launch hang. Every Imbue Studio workspace runs this daemon as ROOT inside an OUTER
 # boundary -- gVisor (runsc) under docker/cloud/AWS, the VM under Lima/Vultr -- so the
 # inner sandbox is both unusable-as-root and redundant. We therefore disable it whenever
 # we're root (the reliable signal; browser-use's own IN_DOCKER check misses the bare-VM
@@ -1913,7 +1913,7 @@ def closed_window_browser(hint_body: object) -> str | None:
 class BrowserSessionManager(MutableModel):
     """Owns the whole fleet (all live browsers).
 
-    The fleet is shared per workspace: every agent in a mind reaches this one
+    The fleet is shared per workspace: every agent in the workspace reaches this one
     manager, so ``ls`` shows one fleet and ownership arbitrates between agents.
     Every browser is created on demand -- there is no default browser and the
     fleet starts EMPTY. A daemon-minted NAME is the first free ``browser-<N>``

@@ -59,7 +59,7 @@
  * requests resolved out of the order they were created never swap their
  * cards' verdicts, and a message that batches more than one permission request
  * resolves each of its cards independently. A notification with no id (recorded
- * before minds embedded ids) attributes nothing here -- an embedded page
+ * before Imbue Studio embedded ids) attributes nothing here -- an embedded page
  * recovers such verdicts from the response log via the card's hydration query.
  *
  * This module reads no timestamps. Pending placeholders are ordered by
@@ -560,7 +560,7 @@ export function buildSections(
   let lastSwitched: HandoffNode | null = null;
   for (const e of events) {
     if (e.type === "agent_switch" && e.from_harness === SEED_HARNESS) {
-      // The chat's first agent taking over from the seed segment the Mind app wrote: nothing
+      // The chat's first agent taking over from the seed segment the Imbue Studio app wrote: nothing
       // was handed off, so no node marks it; the agent's first turn simply opens a section.
       if (current !== null) carryover = openStepsAtEnd(current);
       current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`);
@@ -614,7 +614,7 @@ export function buildSections(
       // is on the card), so the new section has no user bubble.
       //
       // The notification's own request id is the correlation key. A
-      // notification with NO id (recorded before minds embedded ids)
+      // notification with NO id (recorded before Imbue Studio embedded ids)
       // attributes nothing -- guessing by arrival order is what swapped
       // verdicts between cards, and an embedded page recovers the verdict
       // from the response log instead (the card's hydration query). The

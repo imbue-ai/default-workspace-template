@@ -882,8 +882,8 @@ class AgentManager:
     _oom_prioritizer: ChatOomPrioritizer
     # Runs periodic context compaction checks (mngr autocompact run) for active chats.
     _autocompactor: ChatAutoCompactor
-    # Surfaces the window of a chat created from outside with an auto-open label (the Mind
-    # app's update and help chats): fed the agents that appear and go, seeded once with the
+    # Surfaces the window of a chat created from outside with an auto-open label (the Imbue
+    # Studio app's update and help chats): fed the agents that appear and go, seeded once with the
     # agents found at startup. Delivers through the shell, so ``main`` installs one that can
     # reach it; the default reaches nobody, so a manager a test builds opens no windows.
     _auto_open: AutoOpenReactor
@@ -1391,7 +1391,7 @@ class AgentManager:
         nothing on screen to say why.
 
         Every agent bound to the account carries the label, not only the chats this app
-        created: a worker, an automation, or a chat the Mind app started on the workspace's
+        created: a worker, an automation, or a chat the Imbue Studio app started on the workspace's
         default account gets it from the create defaults (`create_defaults`), so they restart too.
 
         `--no-resume` for the same reason the queue actions use it: the agent's transcript is
@@ -2526,7 +2526,7 @@ class AgentManager:
                 _loguru_logger.warning("No tracked agent for chat ref {}; leaving mngr alone", chat_ref)
             return
 
-        # The services agent runs the workspace itself; its name is the minds
+        # The services agent runs the workspace itself; its name is the Imbue Studio
         # app's to manage (alongside the host's), not a chat's.
         if agent_state.labels.get("is_primary") == "true":
             raise AgentRenameError("The workspace's services agent cannot be renamed from a chat")
@@ -2682,7 +2682,7 @@ class AgentManager:
     def seed_chat(self, title: str, turns: tuple[SeedTurn, ...]) -> CreatedChat:
         """Open a chat on a conversation that happened before the workspace existed (``chat_seed.py``).
 
-        The Mind app's onboarding continues here as the workspace's first chat: the turns become
+        The Imbue Studio app's onboarding continues here as the workspace's first chat: the turns become
         the chat's seed segment on disk, its record names the seed as its first member, and the
         chat is listed as a provisional chat awaiting the user's first message, with the
         transcript on its page and a composer under it. That first send picks the account (the

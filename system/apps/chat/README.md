@@ -242,7 +242,7 @@ the selected chat's (else through the shell), and a sub-agent view through the
 shell, its `shell:draft-text` relayed by the root.
 
 The create route is likewise how a chat is made from outside the chat page:
-`message_chat.py --create` posts to `/api/chats/create` (the Minds app's assist
+`message_chat.py --create` posts to `/api/chats/create` (the Imbue Studio app's assist
 and update chats go through it, run inside the workspace by `mngr exec`). Beside
 `name`, `account_id`, and `message`, the request takes `labels` for the chat's
 agent (`auto_open=true` has the shell surface its window; the labels the app sets
@@ -259,7 +259,7 @@ the field it does not know (a workspace that has taken a template update and has
 not restarted its chat app yet).
 
 A chat can also start from a conversation that happened before the workspace
-existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
+existed. `POST /api/chats/seed` (`chat_seed.py`; the Imbue Studio app runs
 `system/scripts/seed_welcome_chat.py` through `mngr exec` the moment a
 workspace is ready) takes a title and the turns of the onboarding conversation
 and opens a chat on them: the turns are written as the chat's first segment
@@ -313,7 +313,7 @@ the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare
-create the Minds app's chats fall back to on a template whose script has no
+create the Imbue Studio app's chats fall back to on a template whose script has no
 create mode -- through `.mngr/settings.local.toml`, mngr's
 git-ignored local config layer (`create_defaults.py`). The account store writes
 it on every index write and at boot: `[commands.create]` with the default
@@ -328,7 +328,7 @@ removed, and a create in the workspace is then refused by
 entry in `.mngr/settings.toml`) with a message that says to sign in.
 
 A chat created from outside the workspace with an `auto_open` or `assist` label
-(the Mind app's update and help chats) has its window surfaced by this app
+(the Imbue Studio app's update and help chats) has its window surfaced by this app
 (`auto_open.py`): when the agent appears, the app asks the shell to point this
 app's pinned window (the avatar's chat) at the chat and show it, in every
 connected client (a desktop with no pinned window gets a chat root window opened

@@ -1237,7 +1237,7 @@ def test_latest_session_parked_enqueues_replay_on_a_fresh_start(tmp_path: Path) 
 
 
 def test_new_latest_session_registered_mid_watch_purges_residue(tmp_path: Path) -> None:
-    """A new main session registered mid-watch (claude restarted outside minds)
+    """A new main session registered mid-watch (claude restarted outside Imbue Studio)
     purges residue on the next discovery cycle, without waiting for the new
     session to emit a queue signal, and the poll broadcasts the empty snapshot."""
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)

@@ -40,7 +40,7 @@ and Templates line ends in the commit it was cut from.
 
 ## Adopted templates
 
-Each template this mind has adopted and the version it is on;
+Each template this agent has adopted and the version it is on;
 `update-installed-template` appends here when it pulls a newer version.
 """
 
@@ -83,11 +83,11 @@ def _origin_line(repo_root: Path, runner: Runner) -> str:
     back to the first-parent root; its date, version and sha come from that
     commit itself, so seeding late still records when the workspace was created.
     A full-history clone reaches older markers -- the template repo's own, and a
-    source mind's when this one was created from a published template -- and any
+    source agent's when this one was created from a published template -- and any
     of those would date this workspace to a stranger's creation, so the walk
     takes the NEWEST. (``publish-template`` resolves the base the workspace is on
     *now* from the same log, which is the newest marker of either kind and
-    resolves a merge to its upstream parent; this wants where the mind started.)
+    resolves a merge to its upstream parent; this wants where the agent started.)
     The version uses ``git describe`` (reachability), never ``--points-at``: no
     tag is ever *on* an ``Initial workspace commit`` -- bootstrap writes it on
     top of the cloned template, so the tag is on an ancestor of it.

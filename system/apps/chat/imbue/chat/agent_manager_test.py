@@ -396,14 +396,14 @@ def test_a_chat_created_with_a_message_starts_on_it(
     """A chat created with its own first message carries it on its provisional record."""
     q = broadcaster.register()
 
-    seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Mind")
+    seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Imbue Studio")
     agent_manager.stop()
 
     raw = q.get_nowait()
     assert raw is not None
     proto_msg = json.loads(raw)
     assert proto_msg["chat_id"] == seeded.chat_id
-    assert proto_msg["message"] == "Teach me about Mind"
+    assert proto_msg["message"] == "Teach me about Imbue Studio"
 
 
 @pytest.mark.parametrize(("is_fast", "expected"), [(True, ("fast",)), (False, ())])
@@ -521,7 +521,7 @@ def _seed_manager(
 def test_seed_chat_opens_a_provisional_chat_awaiting_its_first_send_on_the_seeded_turns(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """The Mind app's conversation becomes the chat's first segment: the record names the seed
+    """The Imbue Studio app's conversation becomes the chat's first segment: the record names the seed
     as its only member, the seed file holds the turns, and the chat is listed awaiting the user."""
     manager, store = _seed_manager(broadcaster, tmp_path)
     q = broadcaster.register()
@@ -1687,7 +1687,7 @@ def test_chat_create_argv_carries_no_launch_settings() -> None:
 
 
 def test_chat_create_argv_carries_a_callers_labels_and_the_version_check_waiver() -> None:
-    """A create from outside the workspace (the Minds app's assist and update chats, through
+    """A create from outside the workspace (the Imbue Studio app's assist and update chats, through
     ``message_chat.py --create``) rides its labels and the claude version-check waiver on the
     same argv the app's own creates use."""
     argv = _chat_create_argv(
@@ -1875,7 +1875,7 @@ def test_rename_chat_refuses_the_primary_agent(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
-    """The services agent's name belongs to the minds app, not to a chat."""
+    """The services agent's name belongs to the Imbue Studio app, not to a chat."""
     manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
     try:
         with manager._lock:

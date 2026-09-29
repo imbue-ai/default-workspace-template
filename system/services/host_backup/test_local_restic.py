@@ -354,7 +354,7 @@ def test_backup_skips_unchanged_files_when_each_tick_reads_a_new_snapshot_path(
 
 
 def test_backup_stores_the_source_tree_at_the_snapshot_root(tmp_path: Path) -> None:
-    """`<snapshot>:/` restores exactly the backed-up tree -- the subpath minds restores from."""
+    """`<snapshot>:/` restores exactly the backed-up tree -- the subpath Imbue Studio restores from."""
     repo_dir = tmp_path / "repo"
     env = _env_for_local_repo(repo_dir)
     assert init_repo(env).returncode == 0
