@@ -200,6 +200,39 @@ def test_only_idle_chats_other_than_the_pass_and_its_worker_are_restarted(
     )
 
 
+def test_a_chat_that_starts_a_turn_before_its_restart_is_left_running(
+    fake_chat_list: Any,
+) -> None:
+    """The restarts run one after another, so a chat idle in the first read of the list may be
+    mid-turn by the time its restart comes up; it is read again first, and left alone."""
+    workspace = fake_chat_list.workspace
+    record = _install_message_chat_recorder(workspace)
+    fake_chat_list.answers = [
+        (200, {"chats": [_chat("agent-idle", "Trip planning", "idle", "WAITING")]}),
+        (
+            200,
+            {"chats": [_chat("agent-idle", "Trip planning", "working", "RUNNING")]},
+        ),
+    ]
+
+    report = update_agent_restarts.restart_idle_agents(
+        workspace,
+        _OWN_CHAT,
+        update_runtime.HttpClient(),
+        update_runtime.Runner(),
+        process_argvs=lambda: [],
+    )
+
+    assert _calls(record) == []
+    assert report == {
+        "restarted": [],
+        "left_running": [
+            {"chat_id": "agent-idle", "title": "Trip planning", "busy_with": "working"}
+        ],
+        "failed": [],
+    }
+
+
 class _ScriptedHttp(update_runtime.HttpClient):
     """Answers the chat-list reads from a script, one page (or None for no answer) per read."""
 
