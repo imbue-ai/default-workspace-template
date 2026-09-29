@@ -806,9 +806,11 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
     will be rather than on the shell; no agent is created until an account is chosen (post-launch-paths plan
     section 4.6)."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
-        _start_new_chat(page, server)
+        chat_frame = _start_new_chat(page, server)
         root = _chat_root(page)
         expect(root.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        # Under the chooser, the composer's provider row already says there is no provider to start on.
+        expect(chat_frame.locator(".model-selector-not-connected")).to_have_text("Not connected", timeout=15000)
         # The shell itself renders no chooser: the sign-in lives in the chat's page.
         assert page.locator('[data-e2e="provider-chooser"]').count() == 0
         assert [str(chat.chat_id) for chat in server.chat_state.agent_manager.get_chat_snapshots()] == [
@@ -865,6 +867,9 @@ def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
             expect(chat.locator(".message-list-creating")).to_have_count(1, timeout=45000)
             expect(chat.locator(".message-input-textbox")).to_be_editable()
             expect(chat.locator(".message-list-creating")).to_have_text("")
+            # The provider row is there before the agent is: it names the account the chat starts on.
+            expect(chat.locator(".model-selector-provisional")).to_have_text("Anthropic")
+            composer_while_starting = chat.locator(".message-input-textbox").bounding_box()
             assert chat.locator('[data-e2e="provider-chooser"]').count() == 0
         finally:
             release_create.touch()
@@ -872,6 +877,9 @@ def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
         expect(chat.locator(".message-list-empty")).to_have_count(1, timeout=15000)
         expect(chat.locator(".message-list-empty")).to_have_text("")
         expect(chat.locator(".message-input-textbox")).to_be_editable()
+        # The agent's own menu takes the row over without moving the composer above it.
+        expect(chat.locator(".model-selector-trigger")).to_be_visible()
+        assert chat.locator(".message-input-textbox").bounding_box() == composer_while_starting
         seen = [text for frame in page.frames for text in frame.evaluate("window.__placeholdersSeen || []")]
         assert seen == [], "a new chat showed placeholder screens while it started: {}".format(seen)
 

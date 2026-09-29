@@ -30,7 +30,8 @@ format. In brief:
   the whole of what the shell knows about what a window shows.
 - A **placement** is where one client keeps one window: its frame in fractions
   of the backdrop, whether it is snapped or maximized, whether it is
-  minimized; the order is the stack. A **client** is one browser context,
+  minimized, whether it is pulled out into a desktop window of the Imbue Studio app's
+  own; the order is the stack. A **client** is one browser context,
   identified by a stored id, with an active desktop. Truth is shared,
   arrangement is scoped.
 - A **shortcut** is an icon on a desktop's backdrop that runs one app's launch
@@ -97,7 +98,7 @@ and the profile cache.
   wallpaper, shortcuts, windows), a `Window` (an app, a path
   under its origin, and the title its page last reported; shared), and per
   client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
-  backdrop, state, minimized; the order is the stack).
+  backdrop, state, minimized, detached; the order is the stack).
 - **Pinned windows** (`docs/system/blueprint/pinned-taskbar-entries/`): an
   app whose manifest declares a `[pin]` has exactly one pinned window on
   every desktop, reconciled on every read after the registry is read and
@@ -116,7 +117,8 @@ and the profile cache.
   a while are pruned with their placement files. `users.json` holds the
   desktop made for each visiting user (see "Who is here").
 - **The pure editor** (`shell/desktop_document.py`): every verb (open, close,
-  focus, minimize, restore, maximize, snap, place, the shortcut edits) and
+  focus, minimize, restore, maximize, snap, place, detach, reattach, the
+  shortcut edits) and
   every geometry rule (cascade, fit, snap zones, un-snap, the grid, nearest
   free cell, reading order, shortcut placement) as pure functions over the
   records. The rules the frontend also applies pass the shared vectors in
@@ -216,7 +218,7 @@ are in one app, not in the workspace.
 not the header: the shell (`profiles.py`) fetches `GET {broker_url}/users/<user_id>/profile`
 (public; `{"user_id", "display_name", "profile_picture_url"}`) with a 2 second bound,
 where `broker_url` is `SHARE_BROKER_URL` in `data/.secrets/share.env`, the
-file the minds desktop writes while the workspace is shared (read fresh on
+file the Imbue Studio desktop writes while the workspace is shared (read fresh on
 every miss; no file means no profiles). Each answer, and each failure, is
 cached for 5 minutes under `data/.state/presence/profiles/<user_id>.json`, so
 a connector outage costs one failed fetch per user per 5 minutes and no
@@ -340,12 +342,15 @@ clients listed otherwise); `--desktop` edits that desktop and switches the
 client to it; `open` opens a window at `--path` or at a launch path
 (`--launch`, `--param`; a bare URL is the browser's `new`; a POST launch path
 is posted the params for the page it answers), minimized with
-`--minimized`, and prints the window's id; an `open` with no client to target
-still writes the window, unplaced. A close is posted to the app's registered
-`window_closed_path`, when it has one, so an app whose resources live as long
-as their windows (the terminal, the browser) can collect at once
-(`docs/system/specs/window-bound-resources.md`). Only `refresh` and the
-interface reload reach the browser as messages. See the `manage-desktop` skill for end-to-end orientation.
+`--minimized` or beside a window (`--beside [window]`, bare the caller's own
+chat), which is moved across only where it has to be and never resized unless
+it is over half the backdrop wide, and prints the window's id;
+an `open` with no client to target still writes the window, unplaced. A close
+is posted to the app's registered `window_closed_path`, when it has one, so an
+app whose resources live as long as their windows (the terminal, the browser)
+can collect at once (`docs/system/specs/window-bound-resources.md`). Only
+`refresh` and the interface reload reach the browser as messages. See the
+`manage-desktop` skill for end-to-end orientation.
 
 ## Updating the running UI
 
@@ -381,7 +386,7 @@ header and checks that the module script comes back as JavaScript). Only then
 does it ask every open view to reload, through
 `system/scripts/refresh_workspace_view.py` (a `reload_system_interface` op on
 the loopback-only op route, which reloads the top-level page and every child
-frame, plus the minds app's own refresh endpoint). On any failure it reverts
+frame, plus the Imbue Studio app's own refresh endpoint). On any failure it reverts
 the merge as a forward revert commit, restores the pre-apply snapshots it took
 before anything destructive ran, and re-confirms health; the exit code reports
 the outcome (`0` applied, `2` rolled back, `3` emergency, `1` precondition).
@@ -509,7 +514,7 @@ this order:
 
 "Affects what this process runs" is the whole design (see `update_staleness.py`
 for the rules and their test table). A bare HEAD comparison would show the
-banner near-permanently -- minds commit their ordinary work in this repo
+banner near-permanently -- agents commit their ordinary work in this repo
 constantly, the apply's own version-history commit lands after the restart, and
 a frontend-only apply rebuilds the served bundle without restarting -- so the
 check diffs the startup HEAD against the current one and reports only when a

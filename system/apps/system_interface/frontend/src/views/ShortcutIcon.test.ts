@@ -94,11 +94,13 @@ describe("ShortcutIcon", () => {
     expect(render({ isSelected: true }).getAttribute("aria-pressed")).toBe("true");
     unmountViews();
     // No drag: a cell change is the grid being re-fitted, which the icons take without sliding.
-    expect(render().className).not.toContain("transition-[left,top]");
+    expect(render().className).not.toContain("motion-safe:transition-[left,top]");
     unmountViews();
-    expect(render({ isSliding: true }).className).toContain("transition-[left,top]");
+    expect(render({ isSliding: true }).className).toContain("motion-safe:transition-[left,top]");
     unmountViews();
-    expect(render({ isSliding: true, lift: { x: 1, y: 2 } }).className).not.toContain("transition-[left,top]");
+    expect(render({ isSliding: true, lift: { x: 1, y: 2 } }).className).not.toContain(
+      "motion-safe:transition-[left,top]",
+    );
   });
 
   it("draws the one in the hand in its own box, translated and grown above everything, with nothing eased", () => {
@@ -109,7 +111,7 @@ describe("ShortcutIcon", () => {
     expect(lifted.style.top).toBe("240px");
     expect(lifted.style.transform).toBe("translate(40px, -12px) scale(var(--desk-shortcut-lift-scale))");
     expect(lifted.style.transition).toBe("none");
-    expect(lifted.className).not.toContain("transition-[left,top]");
+    expect(lifted.className).not.toContain("motion-safe:transition-[left,top]");
     unmountViews();
     expect(render().hasAttribute("data-lifted")).toBe(false);
   });

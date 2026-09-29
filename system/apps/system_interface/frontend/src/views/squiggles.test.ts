@@ -30,7 +30,7 @@ describe("monogramMarkup", () => {
   });
 
   it("flips at the lightness the titlebar flips at", () => {
-    // These two greys straddle CIE L* 49.44, the threshold the minds chrome's
+    // These two greys straddle CIE L* 49.44, the threshold the Imbue Studio chrome's
     // titlebar uses; achromatic colors are where this math and the chrome's
     // `lch(from ...)` agree exactly.
     expect(monogramMarkup("Grey", "#757575", 18)).toContain('fill="#ffffff"');

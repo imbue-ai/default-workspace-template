@@ -8,7 +8,7 @@ import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
-import { openProviderChooser } from "../models/Providers";
+import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
 import { beginSwitchToAccountId } from "./SwitchDialog";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -419,9 +419,10 @@ export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning
 /** The two ways out under an auth failure: "Sign in again", and the switch link beside it.
  *
  * "Sign in again" resolves the chat's own account from its `account` label, so the chooser opens
- * ON that account and re-authenticates it in place -- every chat bound to it recovers. Without
- * the label (a chat from before accounts, say) it opens the chooser plainly, which is still the
- * right destination.
+ * ON that account and re-authenticates it in place -- every chat bound to it recovers. When the
+ * label names no signed-in account (a chat from before accounts, or one whose account was signed
+ * out and signed in again as a new one), there is nothing to re-authenticate: the account signed
+ * in, or picked, is what this chat moves to.
  */
 const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
 
@@ -435,7 +436,19 @@ function renderReauthAction(chatId: string): m.Children {
       {
         type: "button",
         class: REAUTH_ACTION_CLASS,
-        onclick: () => openProviderChooser(accountId ? { accountId } : {}),
+        onclick: () => {
+          // Before the account list has loaded no account reads as signed in, which says nothing
+          // about whether this chat's is gone.
+          const isOwnAccountSignedIn =
+            accountId !== "" && (!areAccountsLoaded() || accountForAgent(accountId) !== null);
+          openProviderChooser(
+            isOwnAccountSignedIn
+              ? { accountId }
+              : chat === undefined
+                ? {}
+                : { onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen) },
+          );
+        },
       },
       "Sign in again",
     ),
@@ -472,7 +485,7 @@ function renderReauthAction(chatId: string): m.Children {
 function providerFaultNote(kind: string | null): string {
   const cause =
     kind === "api_error" ? "the model provider's servers hit an error" : "the model provider's servers are overloaded";
-  return `This isn't Mind's fault -- ${cause}. Try again in a moment.`;
+  return `This isn't Imbue Studio's fault -- ${cause}. Try again in a moment.`;
 }
 
 /** The tiny muted "thinking" toggle atop an assistant message whose harness recorded
@@ -618,7 +631,7 @@ function appendEventParts(
     flushChips();
     if (event.is_api_error || event.is_auth_error) {
       // A model API error: render the failure text in light red, and for a
-      // provider-side fault (5xx / overloaded) add a grey "not Mind's fault" note.
+      // provider-side fault (5xx / overloaded) add a grey "not Imbue Studio's fault" note.
       //
       // An auth error gets a button as well. It is the one failure the user can actually
       // fix, and the fix is not obvious from the provider's wording -- which is usually a

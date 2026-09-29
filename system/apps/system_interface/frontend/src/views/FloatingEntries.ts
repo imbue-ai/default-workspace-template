@@ -51,6 +51,7 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
             "data-entry-style": style,
             ...parts.attrs,
             "data-minimized": entry.isMinimized ? "true" : "false",
+            "data-detached": entry.isDetached ? "true" : "false",
             "data-focused": entry.isFocused ? "true" : "false",
             "aria-pressed": entry.isFocused ? "true" : "false",
             "aria-label": tooltip,
@@ -63,7 +64,8 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
                   (entry.isFocused
                     ? "border-default bg-surface text-primary shadow-overlay "
                     : "border-subtle bg-surface/90 text-secondary shadow-raised hover:bg-fill-hover ")) +
-              (entry.isMinimized ? "opacity-70 " : "") +
+              // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
+              (entry.isMinimized || entry.isDetached ? "opacity-70 " : "") +
               (isMenuOpen && !isAvatar ? "bg-fill-active" : ""),
             style: rectStyle(rect),
             ...hoverTooltipAttrs(tooltip),

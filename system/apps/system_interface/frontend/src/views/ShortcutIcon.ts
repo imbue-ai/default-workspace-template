@@ -35,9 +35,9 @@ export interface ShortcutIconAttrs {
   /** How far a drag has carried this icon out of its cell, or null when it is resting: the icon in the hand
    *  is drawn in the cell it was lifted from and translated by this, at full strength and above everything. */
   readonly lift: PixelPoint | null;
-  /** Whether a drag is making room right now: only then does an icon slide between cells. Outside a drag a
-   *  cell changes because the grid was re-fitted -- a desktop switch, or a resize, which re-fits it on every
-   *  frame of the drag. */
+  /** Whether a drag is making room right now: only then does an icon slide between cells, and only where
+   *  the platform welcomes motion. Outside a drag a cell changes because the grid was re-fitted -- a desktop
+   *  switch, or a resize, which re-fits it on every frame of the drag. */
   readonly isSliding: boolean;
   /** A click runs the shortcut instead of selecting it (touch: a finger has no double tap worth asking for). */
   readonly isRunOnClick: boolean;
@@ -161,7 +161,9 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
             "px-(--desk-cell-gap) text-center outline-none touch-none select-none " +
             // An icon that is not in the hand slides between cells, which is how the desktop shows where the
             // one in the hand would land. The one in the hand is not transitioned at all: it tracks the pointer.
-            (isSliding && lift === null ? "transition-[left,top] duration-(--desk-shortcut-slide) ease-out " : "") +
+            (isSliding && lift === null
+              ? "motion-safe:transition-[left,top] duration-(--desk-shortcut-slide) ease-out "
+              : "") +
             (isStopped || isConnecting ? "text-faint" : "text-primary"),
           style: { ...rectStyle(rect), ...liftStyle(lift) },
           ...hoverTooltipAttrs(shortcutTooltip(label, isStopped, isConnecting)),

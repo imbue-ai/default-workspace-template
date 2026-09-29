@@ -1,12 +1,12 @@
 """Verify that ``.mngr/settings.toml`` create-templates compose as expected.
 
-The minds/DEFAULT_WORKSPACE_TEMPLATE setup runs ``mngr create --template main --template <mode>``
+The Imbue Studio DEFAULT_WORKSPACE_TEMPLATE setup runs ``mngr create --template main --template <mode>``
 and relies on the fact that tuple-typed options (e.g. ``extra_provision_command``)
 concatenate when multiple templates stack, while scalar-typed options (e.g.
 ``provider``) get overridden by the latter template.
 
 If that behaviour ever regresses in mngr, the per-mode provisioning
-on minds hosts silently loses either the shared ``main`` setup (e.g. the
+on Imbue Studio hosts silently loses either the shared ``main`` setup (e.g. the
 default tmux config) or the mode-specific commands. These tests pin the
 contract.
 """

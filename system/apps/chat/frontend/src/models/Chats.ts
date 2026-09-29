@@ -117,8 +117,9 @@ export interface QueuedMessage {
   queued_id: string;
   content: string;
   timestamp: string;
-  // True while the backend is actively re-sending this chip (a codex shoulder-tap's
-  // interrupt+resend): it renders as an ordinary send's bubble rather than as a plain queued chip.
+  // True while the backend is actively delivering this chip (a codex shoulder-tap's
+  // interrupt+resend, or a Claude message still queued when the reply landed): it renders as an
+  // ordinary send's bubble rather than as a plain queued chip.
   is_sending?: boolean;
 }
 
@@ -134,8 +135,8 @@ export interface ProvisionalChat {
   phase: ProvisionalChatPhase;
   // Why the create failed, in the failed phase.
   error: string | null;
-  // Whether the chat has a seed segment to show while it is created: the conversation the Mind
-  // app had before the workspace existed. Its page keeps the transcript and the composer up
+  // Whether the chat has a seed segment to show while it is created: the conversation the
+  // Imbue Studio app had before the workspace existed. Its page keeps the transcript and the composer up
   // through the create rather than the provisional screens.
   is_seeded: boolean;
 }

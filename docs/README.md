@@ -10,7 +10,7 @@ Guides and records for this workspace.
   each harness against it. The planning documents that produced the harness work
   were folded into it and removed.
 - `system/` - Internal documentation: how the workspace machinery fits
-  together, design documents, and the code style guide. Written for the mind
+  together, design documents, and the code style guide. Written for the agent
   and for the curious.
 
 More guides land here over time as the workspace grows.

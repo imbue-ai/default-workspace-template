@@ -251,7 +251,7 @@ def is_seed_entry(entry: ChatAgentEntry) -> bool:
 class ChatRecord(FrozenModel):
     """A multi-agent chat: its agents in order, and its handoff or rebind state.
 
-    A chat the Mind app seeded (``chat_seed.py``) has the seed as its first member, under the
+    A chat the Imbue Studio app seeded (``chat_seed.py``) has the seed as its first member, under the
     chat's own id and already ended, so the record is well-formed before any real agent exists
     and the seed reads as the first segment once one does.
     """

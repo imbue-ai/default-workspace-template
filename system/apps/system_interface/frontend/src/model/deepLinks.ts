@@ -4,6 +4,8 @@
  * Unknown or stale targets are ignored by whoever applies them; this module only reads and strips.
  */
 
+import { withoutParams } from "./queryParams";
+
 export interface DeepLinkOpen {
   readonly app: string;
   readonly path: string;
@@ -52,8 +54,5 @@ export function isDeepLinkEmpty(link: DeepLink): boolean {
 
 /** The query string with the deep-link parameters removed (other parameters kept), "" when none remain. */
 export function stripDeepLinkParams(search: string): string {
-  const params = new URLSearchParams(search);
-  for (const name of DEEP_LINK_PARAMS) params.delete(name);
-  const remaining = params.toString();
-  return remaining === "" ? "" : `?${remaining}`;
+  return withoutParams(search, DEEP_LINK_PARAMS);
 }

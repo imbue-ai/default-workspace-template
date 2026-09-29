@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 from imbue.chat.harnesses.claude.queue_tracker import ClaudeQueueTracker
+from imbue.chat.harnesses.claude.queue_tracker import DELIVERY_GRACE_SECONDS
 from imbue.chat.harnesses.claude.session_parser import parse_queue_signals
 
 _SESSION = "sess-1"
@@ -99,9 +100,6 @@ def _contents(tracker: ClaudeQueueTracker) -> list[str]:
     return [entry["content"] for entry in tracker.snapshot()]
 
 
-# --- Scenario tests -----------------------------------------------------------
-
-
 def test_enqueue_then_dequeue_nets_to_empty() -> None:
     tracker = ClaudeQueueTracker.build()
     _feed(tracker, _enqueue_line("hello"))
@@ -154,11 +152,84 @@ def test_blank_enqueue_is_a_phantom_slot() -> None:
 def test_idle_backstop_clears_a_survivor_with_no_leave_record() -> None:
     tracker = ClaudeQueueTracker.build()
     # An enqueue whose leave never lands (interrupt / SIGKILL / crash): the entry
-    # stays until the working->IDLE backstop sweeps it.
+    # stays until the working->IDLE backstop sweeps it, once the grace is up.
     _feed(tracker, _enqueue_line("no leave will come"))
     assert _contents(tracker) == ["no leave will come"]
-    tracker.on_idle()
+    tracker.on_idle(now=100.0)
+    tracker.expire(now=100.0 + DELIVERY_GRACE_SECONDS)
     assert tracker.snapshot() == []
+
+
+def test_a_message_still_queued_at_idle_stays_visible_as_being_sent() -> None:
+    tracker = ClaudeQueueTracker.build()
+    _feed(tracker, _enqueue_line("queued during the reply"))
+    assert [entry["is_sending"] for entry in tracker.snapshot()] == [False]
+    # The reply lands and the agent reads as IDLE before claude dequeues the message.
+    tracker.on_idle(now=100.0)
+    tracker.expire(now=100.0 + DELIVERY_GRACE_SECONDS - 0.1)
+    assert [(entry["content"], entry["is_sending"]) for entry in tracker.snapshot()] == [
+        ("queued during the reply", True)
+    ]
+    # Its own leave record is what takes it out.
+    _feed(tracker, _dequeue_line())
+    assert tracker.snapshot() == []
+
+
+def test_the_idle_grace_runs_from_the_first_idle_not_the_latest() -> None:
+    tracker = ClaudeQueueTracker.build()
+    _feed(tracker, _enqueue_line("stranded"))
+    tracker.on_idle(now=100.0)
+    # The idle backstop re-runs on every recompute while idle; that must not restart the grace.
+    tracker.on_idle(now=100.0 + DELIVERY_GRACE_SECONDS - 1.0)
+    assert _contents(tracker) == ["stranded"]
+    tracker.on_idle(now=100.0 + DELIVERY_GRACE_SECONDS)
+    assert tracker.snapshot() == []
+
+
+def test_the_idle_grace_sweeps_a_stranded_phantom_so_later_leaves_stay_aligned() -> None:
+    tracker = ClaudeQueueTracker.build()
+    _feed(tracker, _enqueue_line("   ", timestamp="2026-08-07T00:00:01.000Z"), _enqueue_line("stranded"))
+    tracker.on_idle(now=100.0)
+    tracker.expire(now=100.0 + DELIVERY_GRACE_SECONDS)
+    assert tracker.snapshot() == []
+    # A left-over phantom would take this dequeue and leave the delivered message queued.
+    _feed(tracker, _enqueue_line("next", timestamp="2026-08-07T00:00:02.000Z"), _dequeue_line())
+    assert tracker.snapshot() == []
+
+
+def test_a_leave_parks_the_rest_of_the_queue_again() -> None:
+    tracker = ClaudeQueueTracker.build()
+    _feed(tracker, _enqueue_line("first"), _enqueue_line("second"))
+    tracker.on_idle(now=100.0)
+    assert [entry["is_sending"] for entry in tracker.snapshot()] == [True, True]
+    # Claude opened a turn with the first message; the second waits behind that turn.
+    _feed(tracker, _dequeue_line())
+    assert [(entry["content"], entry["is_sending"]) for entry in tracker.snapshot()] == [("second", False)]
+    tracker.expire(now=100.0 + DELIVERY_GRACE_SECONDS)
+    assert _contents(tracker) == ["second"]
+
+
+def test_the_agent_working_again_parks_what_an_early_idle_reading_marked() -> None:
+    tracker = ClaudeQueueTracker.build()
+    _feed(tracker, _enqueue_line("first"), _enqueue_line("second"))
+    _feed(tracker, _dequeue_line())
+    # An idle reading taken before the turn "first" opened was folded in marks "second" too.
+    tracker.on_idle(now=100.0)
+    tracker.on_busy()
+    assert [(entry["content"], entry["is_sending"]) for entry in tracker.snapshot()] == [("second", False)]
+    # Parked behind that turn, it outlasts the grace.
+    tracker.expire(now=100.0 + DELIVERY_GRACE_SECONDS)
+    assert _contents(tracker) == ["second"]
+
+
+def test_clear_and_reset_forget_the_idle_marks() -> None:
+    for drop in (ClaudeQueueTracker.clear, ClaudeQueueTracker.reset):
+        tracker = ClaudeQueueTracker.build()
+        _feed(tracker, _enqueue_line("old"))
+        tracker.on_idle(now=100.0)
+        drop(tracker)
+        _feed(tracker, _enqueue_line("new"))
+        assert [(entry["content"], entry["is_sending"]) for entry in tracker.snapshot()] == [("new", False)]
 
 
 def test_duplicate_content_two_entries_one_leave_leaves_one() -> None:
@@ -217,9 +288,6 @@ def test_snapshot_ids_are_stable_across_replays() -> None:
     assert first.snapshot()[0]["queued_id"] != ""
 
 
-# --- Regression: the real stranded-message bug --------------------------------
-
-
 def test_stranded_message_repro_nets_to_empty() -> None:
     """The exact 12-record ledger of the live bug must leave the snapshot empty.
 
@@ -232,9 +300,6 @@ def test_stranded_message_repro_nets_to_empty() -> None:
     tracker = ClaudeQueueTracker.build()
     _feed(tracker, *lines)
     assert tracker.snapshot() == []
-
-
-# --- Real recorded-session fixture tests --------------------------------------
 
 
 def _fixture_lines(path: Path) -> list[str]:
@@ -291,5 +356,6 @@ def test_idle_backstop_drains_any_recorded_session_to_empty() -> None:
     for fixture in sorted(_FIXTURE_DIR.glob("*.jsonl")):
         tracker = ClaudeQueueTracker.build()
         _feed(tracker, *_fixture_lines(fixture))
-        tracker.on_idle()
+        tracker.on_idle(now=0.0)
+        tracker.expire(now=DELIVERY_GRACE_SECONDS)
         assert tracker.snapshot() == [], fixture.name

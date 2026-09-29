@@ -7,7 +7,7 @@
  * empty transcript (a message typed now is held until the agent lands); failed, it shows the
  * reason and a way to try again over the composer, so a message held through the failure is
  * back in it where it can be seen. The transcript takes over when creation completes. A
- * seeded chat (the Mind app's onboarding conversation, continued here) has a transcript from
+ * seeded chat (the Imbue Studio app's onboarding conversation, continued here) has a transcript from
  * the start, so it renders as one through its wait for the first send and its create; only a
  * failed create shows the provisional screen.
  */
@@ -793,9 +793,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
               "div",
               {
                 // Same max-width as the composer card above it; relative as
-                // the containing block for centered overlays.
+                // the containing block for centered overlays. As tall as the model chip
+                // whether or not anything in it has rendered yet, so the composer never moves.
                 class:
-                  "composer-under-bar relative mx-auto mt-2 flex w-full " +
+                  "composer-under-bar relative mx-auto mt-2 flex min-h-[30px] w-full " +
                   "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2",
               },
               [

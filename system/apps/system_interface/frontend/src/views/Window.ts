@@ -18,6 +18,7 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import type { PixelRect, ResizeEdge } from "../geometry/frames";
 import { RESIZE_EDGES } from "../geometry/frames";
+import { windowChromeZIndex } from "../geometry/stacking";
 import type { AppRecord, WindowRecord, WindowState } from "../model/records";
 import { rectStyle } from "./pixelStyle";
 import { TitleBar } from "./TitleBar";
@@ -95,8 +96,7 @@ export function Window(): m.Component<WindowAttrs> {
           class: "window absolute",
           style: {
             ...rectStyle(rect),
-            // Interleaved with the pages: this chrome over its own page (2i+1) and every lower window.
-            zIndex: String(2 * stackIndex + 2),
+            zIndex: windowChromeZIndex(stackIndex),
           },
           onpointerdown: () => {
             if (!isFocused) attrs.onRaise();

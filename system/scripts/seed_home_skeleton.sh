@@ -11,7 +11,10 @@ mkdir -p /home/user/worktrees
 
 # ~/.cache deliberately points at the container-local /var/cache/user so even
 # tools that hardcode ~/.cache (rather than honoring XDG_CACHE_HOME) keep
-# their caches off the volume and out of backups.
+# their caches off the volume and out of backups. On lima the relation is the
+# other way around (lima_cache_on_data_disk.sh has already made ~/.cache a
+# subvolume on the data disk and /var/cache/user the symlink), so this is a
+# no-op there.
 mkdir -p /var/cache/user
 if [ ! -e /home/user/.cache ] && [ ! -L /home/user/.cache ]; then
     ln -s /var/cache/user /home/user/.cache

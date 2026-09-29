@@ -19,6 +19,7 @@ function pinnedEntry(overrides: Partial<TaskbarEntry> = {}): TaskbarEntry {
     app: buddy,
     title: "Buddy",
     isMinimized: true,
+    isDetached: false,
     isFocused: false,
     isPinned: true,
     look: { mode: "floating", style: "plain", declaredStyle: "avatar", position: { x: 0.5, y: 0.5 } },
@@ -50,6 +51,7 @@ describe("FloatingEntries", () => {
     expect(entry.getAttribute("data-entry-mode")).toBe("floating");
     expect(entry.getAttribute("data-entry-style")).toBe("plain");
     expect(entry.getAttribute("data-minimized")).toBe("true");
+    expect(entry.getAttribute("data-detached")).toBe("false");
     expect(entry.getAttribute("aria-pressed")).toBe("false");
     expect(entry.getAttribute("aria-label")).toBe("Buddy");
     expect(entry.style.left).toBe("500px");
@@ -60,6 +62,14 @@ describe("FloatingEntries", () => {
     expect(onClick).toHaveBeenCalledWith("win-9");
     entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 30, clientY: 40 }));
     expect(onContextMenu).toHaveBeenCalledWith("win-9", 30, 40, expect.any(Element));
+  });
+
+  it("marks and dims an entry whose window is shown in its own desktop window, like a minimized one", () => {
+    const layer = render({ entries: [pinnedEntry({ isMinimized: false, isDetached: true })] });
+    const entry = layer.querySelector('[data-pinned-entry="buddy"]') as HTMLElement;
+    expect(entry.getAttribute("data-minimized")).toBe("false");
+    expect(entry.getAttribute("data-detached")).toBe("true");
+    expect(entry.classList.contains("opacity-70")).toBe(true);
   });
 
   it("draws the avatar wearing the mood in the avatar style, marked stale when the status may be old", () => {
