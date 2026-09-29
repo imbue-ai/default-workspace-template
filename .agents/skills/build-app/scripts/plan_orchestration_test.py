@@ -568,3 +568,94 @@ def test_parse_command_leaves_the_plan_alone_without_the_flag(
     assert "no longer waits on" not in capsys.readouterr().out
     written = json.loads((run_dir / "plan.json").read_text())
     assert [node["access"] for node in written["nodes"]] == [[], [0], [0, 1], [0, 1, 2]]
+
+
+# The DAG this flag was designed against: one node opens the build, three run at once off
+# it, one joins them back, one finishes. Only the middle three are worth a worker.
+_FAN_OUT_ACCESS = "[[], [0], [0], [0], [1, 2, 3], [4]]"
+_FAN_OUT_PLAN = _plan_text(
+    '["high", "medium", "medium", "medium", "high", "low"]',
+    '["open", "a", "b", "c", "join", "finish"]',
+    _FAN_OUT_ACCESS,
+)
+
+
+def test_waves_replay_the_order_the_ready_loop_would_take() -> None:
+    access = {0: [], 1: [0], 2: [0], 3: [0], 4: [1, 2, 3], 5: [4]}
+    assert plan_orchestration.schedule_waves(access) == [[0], [1, 2, 3], [4], [5]]
+
+
+def test_a_wave_is_capped_at_the_parallelism_limit() -> None:
+    """Six nodes with nothing to wait for run five then one, not six at once."""
+    access = {idx: [] for idx in range(6)}
+    waves = plan_orchestration.schedule_waves(access)
+    assert waves == [[0, 1, 2, 3, 4], [5]]
+    assert len(waves[0]) == plan_orchestration.MAX_RUNNING_NODE_COUNT
+
+
+def test_waves_refuse_a_cycle() -> None:
+    with pytest.raises(plan_orchestration.PlanError, match="cycle"):
+        plan_orchestration.schedule_waves({0: [1], 1: [0]})
+
+
+def test_only_parallel_workers_leaves_the_solo_nodes_to_the_orchestrator() -> None:
+    """The flag's whole purpose, on the DAG it was designed against."""
+    nodes = plan_orchestration.parse_plan(_FAN_OUT_PLAN, only_parallel_workers=True)[
+        "nodes"
+    ]
+    assert [node["index"] for node in nodes if node["has_worker"]] == [1, 2, 3]
+    assert [node["index"] for node in nodes if not node["has_worker"]] == [0, 4, 5]
+
+
+def test_off_by_default_every_node_still_gets_a_worker() -> None:
+    """The flag off is the flow as it has always run, so nothing moves without it."""
+    nodes = plan_orchestration.parse_plan(_FAN_OUT_PLAN)["nodes"]
+    assert all(node["has_worker"] for node in nodes)
+
+
+def test_a_node_with_no_worker_has_no_model() -> None:
+    """A model is what a worker is launched with, so a node without one asks for none."""
+    nodes = plan_orchestration.parse_plan(_FAN_OUT_PLAN, only_parallel_workers=True)[
+        "nodes"
+    ]
+    for node in nodes:
+        assert (node["model"] is not None) == node["has_worker"], node["index"]
+
+
+def test_an_interactive_node_never_counts_as_company() -> None:
+    """An interactive node is the orchestrator talking, so it cannot be building
+    something else at the same time -- a worker node beside one is still alone."""
+    plan = _plan_text(
+        '["high", "interactive", "medium"]',
+        '["build", "ask the user", "finish"]',
+        "[[], [], [0, 1]]",
+    )
+    nodes = plan_orchestration.parse_plan(plan, only_parallel_workers=True)["nodes"]
+    assert not any(node["has_worker"] for node in nodes)
+
+
+def test_a_node_the_orchestrator_runs_takes_no_worker_slot() -> None:
+    """A node with no worker must not consume one of the five worker slots: it is the
+    orchestrator's own turn, not an agent occupying a slot."""
+    # Six nodes waiting on nothing: five fill the cap and get workers, the sixth is
+    # alone in the next wave and so is the orchestrator's.
+    plan = plan_orchestration.parse_plan(
+        _plan_text(
+            '["high", "high", "high", "high", "high", "high"]',
+            '["a", "b", "c", "d", "e", "f"]',
+            "[[], [], [], [], [], []]",
+        ),
+        only_parallel_workers=True,
+    )
+    assert [node["index"] for node in plan["nodes"] if not node["has_worker"]] == [5]
+    # All five slots are busy, and node 5 is still offered because it needs none.
+    assert plan_orchestration.find_ready_nodes(plan, [], [0, 1, 2, 3, 4]) == [5]
+
+
+def test_a_plan_written_before_the_flag_still_schedules() -> None:
+    """find_ready_nodes reads plan.json from disk, and a build in flight when this
+    shipped has nodes with no `has_worker` key at all."""
+    plan = plan_orchestration.parse_plan(_FAN_OUT_PLAN)
+    for node in plan["nodes"]:
+        del node["has_worker"]
+    assert plan_orchestration.find_ready_nodes(plan, [0], []) == [1, 2, 3]
