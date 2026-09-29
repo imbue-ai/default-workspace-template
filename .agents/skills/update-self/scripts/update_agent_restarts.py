@@ -51,6 +51,8 @@ AGENT_ID_ENV = "MNGR_AGENT_ID"
 # between an assistant message and the tool call after it.
 IDLE_CHAT_STATUS = "idle"
 STOPPED_CHAT_STATUS = "stopped"
+ATTENTION_CHAT_STATUS = "attention"
+ERROR_CHAT_STATUS = "error"
 WAITING_LIFECYCLE_STATE = "WAITING"
 
 # How long the chat list is retried while the chat app is unreachable or not ready: the apply
@@ -91,6 +93,17 @@ class ListedChat:
             and self.lifecycle_state == WAITING_LIFECYCLE_STATE
             and not self.is_converging
         )
+
+    @property
+    def busy_with(self) -> str:
+        """What a chat that is not idle is doing, in the words the results message uses."""
+        if self.is_converging:
+            return "switching to another agent"
+        if self.status == ATTENTION_CHAT_STATUS:
+            return "waiting on a dialog"
+        if self.status == ERROR_CHAT_STATUS:
+            return "in an error state"
+        return "working"
 
 
 @dataclass(frozen=True)
@@ -230,7 +243,7 @@ def restart_idle_agents(
     report: dict[str, list[dict[str, str]]] = {
         "restarted": [],
         "left_running": [
-            {"chat_id": chat.chat_id, "title": chat.title, "status": chat.status}
+            {"chat_id": chat.chat_id, "title": chat.title, "busy_with": chat.busy_with}
             for chat in plan.left_running
         ],
         "failed": [],
