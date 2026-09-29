@@ -674,8 +674,9 @@ finished."`), then `tk close <ticket-id> "Updated to <ref> -- worker branch
 merged and applied."`, adding the `archive/update-self-<timestamp>` name when
 Step 3b set a previous branch aside.
 
-**When §5c restarted agents, restart this chat too, as your last command**,
-after everything above and before the results message. It detaches a helper
+**When the §4d verdict was `needed`, restart this chat too, as your last command**
+-- even when §5c restarted no other chat -- after everything above and before the
+results message. It detaches a helper
 that waits for this turn to end, restarts this chat, and sends it a note asking
 you to confirm the restart to the user (and to repeat the offer for any chat
 left running). `--reason` is the report's one-line **Agent restarts** summary of
