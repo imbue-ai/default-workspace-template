@@ -407,10 +407,12 @@ def compose_self_restart_failure_note(problem: str) -> str:
     left believing the results message's promise that it would."""
     body = "\n\n".join(
         [
-            f"This chat was to restart after the update of this workspace, but it was not restarted: {problem}.",
+            "This chat was to restart after the update of this workspace, but it was not "
+            f"restarted: {problem}.",
             "Tell the user in one or two plain sentences that the update is complete but this chat "
-            "is still running the previous version, and that pressing its stop button restarts it "
-            "onto the new one (its conversation carries over).",
+            "is still running the previous version, and that choosing Stop agent in this chat's "
+            "model menu, then sending it any message, brings it back on the new one (its "
+            "conversation carries over).",
         ]
     )
     return wrap_background_task_report(
