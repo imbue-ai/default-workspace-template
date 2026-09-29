@@ -3195,12 +3195,8 @@ class AgentManager:
         with self._lock:
             terms = self._new_chat_terms_locked(account_id, project_id)
             spare = next((spare for spare in self._spares if self._is_spare_usable_locked(spare, terms)), None)
-            if spare is not None:
-                self._drop_spare_locked(spare.chat_id)
-                settled = threading.Event()
-                # ``should_wait`` waits on this: the chat's agent is already up.
-                settled.set()
-            else:
+            is_ready = spare is not None
+            if spare is None:
                 spare = next(
                     (
                         spare
@@ -3211,7 +3207,21 @@ class AgentManager:
                 )
                 if spare is None:
                     return None
-                self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.CLAIMED)
+            # Recorded before anything else changes, so a spares file that cannot be written leaves
+            # the spare as it was and the chat to a create of its own.
+            try:
+                if is_ready:
+                    self._drop_spare_locked(spare.chat_id)
+                else:
+                    self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.CLAIMED)
+            except OSError as e:
+                _loguru_logger.warning("Could not record spare agent {} as taken by a new chat: {}", spare.chat_id, e)
+                return None
+            settled = threading.Event()
+            if is_ready:
+                # ``should_wait`` waits on this: the chat's agent is already up.
+                settled.set()
+            else:
                 self._spare_claim_by_chat[spare.chat_id] = _SpareClaim(message=message, model_pick=model_pick)
                 provisional = ProvisionalChat(
                     chat_id=spare.chat_id,
@@ -3221,7 +3231,6 @@ class AgentManager:
                     phase=ProvisionalChatPhase.CREATING,
                 )
                 self._provisional_chats[spare.chat_id] = provisional
-                settled = threading.Event()
             self._creation_settled_by_chat[spare.chat_id] = settled
             self._fast_mode_for_launch_locked(spare.chat_id)
             if any(self._is_spare_usable_locked(ready, terms) for ready in self._spares):

@@ -5210,6 +5210,30 @@ def test_a_new_chat_the_spares_do_not_fit_is_created_and_the_spares_are_kept(
         manager.stop()
 
 
+def test_a_new_chat_is_created_its_own_way_when_the_spares_file_cannot_record_the_hand_over(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        spares = _wait_for_ready_spares(manager, 1)
+        (tmp_path / "spare_chat.json.tmp").mkdir()
+
+        created = manager.create_chat("")
+
+        assert created.chat_id != spares[0].chat_id
+        wait_until_true(
+            lambda: manager.get_agent_by_id(created.chat_id) is not None,
+            timeout_seconds=15.0,
+            what="the new chat's create finishing",
+        )
+        assert [call[3] for call in _mngr_calls(argv_log, "create")] == [spares[0].chat_id, created.chat_id]
+        assert list(manager._spares) == spares
+    finally:
+        manager.stop()
+
+
 def test_spares_on_an_account_that_is_no_longer_the_default_are_replaced(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
