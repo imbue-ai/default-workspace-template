@@ -1228,6 +1228,35 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
     wait_for(_first_on_top, timeout=15.0, poll_interval=0.1, error_message="the raise never reached the file")
 
 
+@pytest.mark.timeout(60, func_only=False)
+def test_raising_a_window_by_its_content_takes_the_focus_off_the_window_now_under_it(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """A press on a lower window's content raises it without the press reaching any page; the page that held the
+    keyboard (the one typed in last) must lose it, or keys go to a window the user can no longer see, and the
+    browser hands that page the focus back when the user returns from another application, which raises it again."""
+    _land(page, e2e_server)
+    first = _open_via_shortcut(page, e2e_server)
+    _move_window_off_the_shortcuts(page, first)
+    page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').click(button="right")
+    page.locator('[data-menu-row="open-new"]').click()
+    windows = _wait_for_window_count(e2e_server.base_url, 2)
+    (second,) = [window["id"] for window in windows if window["id"] != first]
+    expect(_window(page, second)).to_have_attribute("data-focused", "true", timeout=15000)
+    second_frame = _page_frame(page, second)
+    second_frame.click("#held")
+    page.keyboard.type("typed")
+    assert second_frame.input_value("#held") == "typed"
+
+    shield_box = _box(_window(page, first).locator("[data-window-shield]"))
+    page.mouse.click(shield_box["x"] + 20, shield_box["y"] + shield_box["height"] - 20)
+    expect(_window(page, first)).to_have_attribute("data-focused", "true")
+    page.keyboard.type(" stray")
+
+    assert second_frame.input_value("#held") == "typed"
+    assert page.evaluate(f"() => document.activeElement?.getAttribute('data-live-page') !== {json.dumps(second)}")
+
+
 @pytest.mark.timeout(90, func_only=False)
 def test_url_following_across_two_clients_in_place_and_by_reload(e2e_server: E2EServer, page: Page) -> None:
     """A page navigating in one client reports its location; the window's path changes for everyone, and the

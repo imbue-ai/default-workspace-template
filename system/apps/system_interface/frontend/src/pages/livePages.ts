@@ -333,10 +333,12 @@ export class LivePagesLayer implements PageDriver {
     this.follow(windowsById);
   }
 
-  /** Give the focused window's page the frame focus once, when the focused window changes. */
+  /** When the focused window changes, however it was raised, take the document's focus off every other window's
+   *  page and give the focused window's page the frame focus once. */
   private focusIfChanged(focused: string | null): void {
     if (focused === this.lastFocusedWindowId) return;
     this.lastFocusedWindowId = focused;
+    this.takeFocusFromOtherPages(focused);
     const page = focused === null ? undefined : this.pages.get(focused);
     if (page !== undefined) requestFrameFocus(page.wrapper);
   }
