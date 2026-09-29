@@ -14,7 +14,7 @@
  *
  * Trust: a page accepts a message only from `window.parent` (a nested third-party frame can
  * post here but can never satisfy that identity), and sends only to `window.parent`. The
- * target origin is `*` for the reason the minds embed contract gives: the workspace's own
+ * target origin is `*` for the reason the Imbue Studio embed contract gives: the workspace's own
  * `frame-ancestors` policy means only a workspace-family document can frame this page at all.
  * Unknown types are ignored and shipped types never change meaning; the contract evolves by
  * adding types.

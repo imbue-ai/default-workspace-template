@@ -155,7 +155,7 @@ export interface PageDriver {
   reload(windowId: string): void;
   /** Reload every page of an app. */
   reloadApp(appName: string): void;
-  /** Send the page ``shell:close-request`` (the minds close chord). */
+  /** Send the page ``shell:close-request`` (the Imbue Studio close chord). */
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
   ownsCloseChord(windowId: string): boolean;
@@ -1193,7 +1193,7 @@ export class DesktopStore {
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
   }
 
-  /** The minds close chord: the focused window is told, then closed for everyone; a pinned window, which is never
+  /** The Imbue Studio close chord: the focused window is told, then closed for everyone; a pinned window, which is never
    *  closed, is minimized instead. */
   async closeFocusedWindow(): Promise<void> {
     // In a solo shell the chord belongs to the chrome, which closes the desktop window instead; the focused

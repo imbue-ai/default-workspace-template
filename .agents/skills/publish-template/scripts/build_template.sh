@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Assemble a clean, shareable "template" snapshot on top of the DEFAULT_WORKSPACE_TEMPLATE base the
-# mind was created from, then commit it. Run by the launch-task WORKER the
+# agent was created from, then commit it. Run by the launch-task WORKER the
 # publish-template skill dispatches, from the worker's own git worktree
-# (cwd = worktree repo root); the live mind's /home/user/workspace is never written
+# (cwd = worktree repo root); the live agent's /home/user/workspace is never written
 # to -- step 1 reads the opted-in data paths out of it, and that is all. This is
 # v2 of the templates flow (see TEMPLATE_FLOW_VERSION below); the
 # generated manifest records it as `format: v2` in its front-matter and in the
@@ -19,7 +19,7 @@
 #
 # Known-correct methods embedded here (a prior build got these wrong):
 #   - Clean base via `git read-tree -u --reset` + `git clean -fdxq`, NEVER
-#     `git checkout <ref> -- .` (which leaks the mind's whole committed tree,
+#     `git checkout <ref> -- .` (which leaks the agent's whole committed tree,
 #     incl. secrets). No upstream fetch/pull -- provenance link only.
 #   - Overlay via `rsync -a "$STAGE/" "$REPO/"` (root-to-root), NEVER
 #     `cp -a "$STAGE/apps" "$REPO/apps"` (nests into apps/apps).
@@ -143,7 +143,7 @@ cd "$REPO"
 # refuse to run anywhere but a throwaway linked worktree
 #
 # Step 2 resets the tree to BASE_REF and runs `git clean -fdxq`, which deletes
-# untracked AND gitignored files. In a live mind that is data/, .mngr/, the
+# untracked AND gitignored files. In a live agent that is data/, .mngr/, the
 # secrets, and every scrap of runtime state: an unrecoverable wipe of the
 # user's workspace, by a script that believes it is doing its job.
 #
@@ -193,7 +193,7 @@ REPO_URL_PLACEHOLDER="MINDS_TEMPLATE_REPO_URL"
 
 # 0. validate that BASE_REF is a real, bootable default workspace template tree
 
-# Guard against a wrong --base-ref: minds assembled via subtree merges can have
+# Guard against a wrong --base-ref: agents assembled via subtree merges can have
 # several parallel root commits, and a naive fallback can land on a near-empty
 # one instead of the real DEFAULT_WORKSPACE_TEMPLATE seed. Any bootable template tree must contain
 # pyproject.toml, system/supervisord.conf, and the system/supervisord.conf.d
@@ -221,8 +221,8 @@ fi
 # work: step 2 resets to its tree and step 10 publishes its history. Everything
 # the workspace committed descends from its Initial workspace commit -- including
 # an update-self merge, whose upstream (second) parent is the real base. Only the
-# NEWEST marker is this workspace's own: a mind created from a published template
-# also carries the source mind's marker, and its correct base descends from that.
+# NEWEST marker is this workspace's own: an agent created from a published template
+# also carries the source agent's marker, and its correct base descends from that.
 BASE_COMMIT="$(git rev-parse "${BASE_REF}^{commit}")"
 while IFS=' ' read -r marker_sha marker_subject; do
     [ "$marker_subject" = "Initial workspace commit" ] || continue
@@ -334,12 +334,12 @@ done
 # everything else. The predecessor's address survives as a [[lineage]] entry
 # (staged above), which is what makes the override non-destructive.
 
-# 2. clean base = the DEFAULT_WORKSPACE_TEMPLATE version the mind was based on
+# 2. clean base = the DEFAULT_WORKSPACE_TEMPLATE version the agent was based on
 
 # read-tree -u --reset makes the index+worktree match BASE_REF, dropping
 # tracked-but-not-in-base files. clean -fdxq then drops untracked AND gitignored
 # cruft (secrets, runtime state). This is the ONLY correct way to get a clean
-# base -- `git checkout <ref> -- .` would leave the mind's whole tree in place.
+# base -- `git checkout <ref> -- .` would leave the agent's whole tree in place.
 # NO fetch/pull: BASE_REF is already a real commit in this repo's history.
 git read-tree -u --reset "$BASE_REF"
 git clean -fdxq
@@ -367,13 +367,13 @@ rsync -a "$STAGE/" "$REPO/"
 # prose.
 #
 # Scanning the STAGE (not the assembled tree) means the scan covers exactly
-# the content overlaid out of the live mind: the selected --include /
+# the content overlaid out of the live agent: the selected --include /
 # --data-include paths. The manifest files are generated after the scan. The
 # clean base is the trusted, public default workspace template -- it cannot
 # contain the user's secrets, and its own test fixtures legitimately hold
 # placeholder token strings (e.g. "sk-ant-test"), so scanning it would only
 # produce false positives that block every publish. The real risk is a secret
-# riding in from the live mind's overlaid paths, and that is exactly what the
+# riding in from the live agent's overlaid paths, and that is exactly what the
 # stage holds. It also keeps the scan cheap regardless of how large the base
 # is (never traverses vendor/, the base's fixtures, etc.). rsync -aR staged
 # every file at its repo-relative path, so scan_secrets.sh's
@@ -414,11 +414,11 @@ fi
 
 # 6. generate the manifest
 
-# The manifest is the single document the NEXT agent (in a mind created from
+# The manifest is the single document the NEXT agent (in an agent created from
 # this template) reads to understand, present, and adapt the template.
 # The deterministic parts (front-matter, included-path list, the "How to adapt
 # it" script, section skeletons) are generated here; the prose that requires
-# knowledge of the live mind is left as clearly-marked FILL-IN blocks that the
+# knowledge of the live agent is left as clearly-marked FILL-IN blocks that the
 # worker MUST replace before reporting done.
 
 # Human-readable list of what the snapshot includes, derived from the include
@@ -506,7 +506,7 @@ format: ${TEMPLATE_FLOW_VERSION}
 
 This file is the manifest for the **${TITLE}** template (slug:
 \`${SLUG}\`). It is the one document a future agent reads to understand,
-present, and adapt this template. If you are an agent in a mind that was
+present, and adapt this template. If you are an agent in a workspace that was
 created from this template, this file is your script: read all of it, then
 follow "How to adapt it" below.
 
@@ -518,12 +518,12 @@ ${manifest_description}
 with a one-paragraph overview of what this template does for its user: the
 problem it solves, the main things it produces (pages, reports, automations),
 and what the user sees when it is running. Write for a reader who has never
-seen the original mind. -->
+seen the original agent. -->
 
 ## How it works
 
 The snapshot includes these paths (each is a repo-root-relative path copied
-from the original mind onto a clean default-workspace-template base):
+from the original agent onto a clean default-workspace-template base):
 
 ${included_paths_block}
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
@@ -551,7 +551,7 @@ installed. That file is authoritative for all of it; this one holds the prose.
 
 ## Requirements
 
-Everything the adopting mind must deal with before this template is really
+Everything the adopting agent must deal with before this template is really
 theirs. Two kinds of entry, handled at different times:
 
 - **Activation** -- what must be SET UP before anything runs, in the
@@ -614,9 +614,9 @@ runs as published, with no external permissions or secrets." -->
 ## Environment
 
 What this template needs INSTALLED, beyond what the template already has.
-Declared in \`${MANIFEST_TOML}\`'s \`[environment]\` table; an adopting mind
+Declared in \`${MANIFEST_TOML}\`'s \`[environment]\` table; an adopting agent
 converges it at ITS OWN pinned apt snapshot timestamp, so package versions come
-out consistent with the rest of that mind's environment rather than frozen to
+out consistent with the rest of that agent's environment rather than frozen to
 whatever this publisher happened to have.
 
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
@@ -634,7 +634,7 @@ exactly: "Nothing extra -- runs on the stock workspace environment." -->
 ## How to adapt it
 
 Instructions for the NEXT agent -- the one adapting this template into a
-new mind. This is the \`use-template\` skill's template path; in short:
+new agent. This is the \`use-template\` skill's template path; in short:
 
 1. Read this entire file first, especially "Requirements" below. It holds two
    kinds of entry and they are handled at different times: the machine-readable
@@ -646,7 +646,7 @@ new mind. This is the \`use-template\` skill's template path; in short:
 3. Ask whether they want to use the same connectors (e.g. their own Slack).
    If YES: ACTIVATE FIRST -- initiate every \`requires_permission\` line NOW
    via a latchkey permission request (see the \`latchkey\` skill; the request
-   opens the approval/login flow in the minds app), wire up any
+   opens the approval/login flow in the Imbue Studio app), wire up any
    \`requires_secret\` values, start the services, and get the app showing
    THE USER'S OWN DATA. Done for a data-backed app means the user can open it
    and see their own data -- NOT that a service starts or an endpoint returns
@@ -673,7 +673,7 @@ flow) appends "### v2 (date) -- what changed since v1", and so on. -->
 
 ## Adaptation history
 
-Each mind that adapts this template appends one dated entry below. Earlier
+Each agent that adapts this template appends one dated entry below. Earlier
 entries are never rewritten.
 MANIFEST_EOF
 
@@ -732,7 +732,7 @@ ${manifest_description}
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
 with one or two plain sentences on the PROBLEM this solves -- why someone
 would want it, not how it is built. Write for a human browsing GitHub who has
-never seen the original mind. -->
+never seen the original agent. -->
 
 ## How to use it
 
@@ -754,8 +754,8 @@ two. -->
 
 ## What this is
 
-This repository is a published **minds template**: a clean, bootable
-snapshot of what a mind built, ready to adapt into your own. It is NOT the
+This repository is a published **Imbue Studio template**: a clean, bootable
+snapshot of what an agent built, ready to adapt into your own. It is NOT the
 generic workspace template -- it is this specific project.
 
 [\`${MANIFEST}\`](${MANIFEST}) is the full manifest -- what it is, how it
@@ -767,10 +767,10 @@ README_EOF
 # 8.5 remove the version history so it never ships in a template
 
 # docs/VERSION_HISTORY.md is WORKSPACE-only, never part of a template: it records
-# where a mind came from and every template it has published (slugs, repo
+# where an agent came from and every template it has published (slugs, repo
 # URLs, source commits). None of that belongs in a published template -- and the
 # template base can carry the shipped starter copy of it -- so drop it from the
-# snapshot entirely. A mind created from this template
+# snapshot entirely. An agent created from this template
 # grows its OWN ledger when it first runs update-self or publishes (update-self
 # and publish-template write the starter on demand if the file is absent), so
 # nothing is lost by omitting it here. `rm -f` is safe whether or not the base
@@ -863,12 +863,12 @@ if ! uv run --no-project --with 'pydantic>=2' python \
     exit 6
 fi
 
-# 10. single commit, parented on BASE_REF (never on the mind's HEAD)
+# 10. single commit, parented on BASE_REF (never on the agent's HEAD)
 
 # The snapshot commit's parent is BASE_REF, NOT the branch's previous HEAD.
 # This is a privacy invariant: the published repo's history must be the public
-# template's history plus the snapshot commits -- never the mind's own commit
-# history. Parenting on HEAD would ship every commit the mind ever made
+# template's history plus the snapshot commits -- never the agent's own commit
+# history. Parenting on HEAD would ship every commit the agent ever made
 # (including any secret that was ever committed and later removed: history
 # keeps it retrievable), and would defeat published-version modifications
 # ("publish a secret-cleaned copy of this file") entirely. commit-tree writes

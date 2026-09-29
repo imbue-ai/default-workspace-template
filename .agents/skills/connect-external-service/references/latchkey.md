@@ -1,7 +1,7 @@
 # Latchkey: the user's connected accounts (rows 1, 2 and 4)
 
 Latchkey is a CLI tool that automatically injects credentials into curl commands.
-Credentials are managed on the outside by the Mind app: sending a permission
+Credentials are managed on the outside by the Imbue Studio app: sending a permission
 request also triggers a login flow if necessary. No credential ever enters this
 workspace; the gateway attaches it to the request.
 
@@ -125,7 +125,7 @@ payload; approving it prompts the user to sign in. Double-check the resulting
 account; it may differ from the one you requested.
 
 Alternatively, the user can add one from the Permissions tab of this machine's
-options in the Mind app (the key icon in the tabs along the top): "Add connection"
+options in the Imbue Studio app (the key icon in the tabs along the top): "Add connection"
 lists the services that already have an account here under "Add another
 account", and the ones that do not under "Connect a new service". When
 applicable, always prefer sending a permission request over this option.
@@ -145,7 +145,7 @@ tell them to do that when more than one account is configured).
 ## Custom services (rows 2 and 4)
 
 A **custom service** is a connection to one domain latchkey has no builtin for.
-The user approves it in the Mind app, pastes the credential into the approval
+The user approves it in the Imbue Studio app, pastes the credential into the approval
 window (or signs in through a browser latchkey drives), and the gateway injects
 it into every `latchkey curl` to that domain. The value never enters this
 workspace.
@@ -248,11 +248,11 @@ subdomain of it.
 
 Every command above is routed through the latchkey gateway at
 `$LATCHKEY_GATEWAY`. If it cannot be reached, treat it as a transient outage; it
-usually helps if the user restarts the Mind app. Requests to `/permissions` and
+usually helps if the user restarts the Imbue Studio app. Requests to `/permissions` and
 `/permission-requests` are routed to the user's computer, so they fail while it
 is offline. If the user appears to be actively using the app or chatting with
 you, but the latchkey gateway is unreachable, ask them to try restarting the
-Minds app.
+Imbue Studio app.
 
 ## Notes
 
@@ -261,7 +261,7 @@ Minds app.
 - Unless the user explicitly asks, do not discuss latchkey or the technical
   details; it is easy for the user to get confused. Do not ask the user to run
   latchkey commands.
-- Do not call `latchkey auth` commands yourself. The Mind app runs them on the
+- Do not call `latchkey auth` commands yourself. The Imbue Studio app runs them on the
   user's computer as part of approving a permission request; for services with no
   browser auth, it provides the form the user pastes a credential into.
 

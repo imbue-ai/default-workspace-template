@@ -1,6 +1,6 @@
 ---
 name: migrate-workspace
-description: "Bring everything from another (older, broken, or replaced) workspace of the user's into this one -- their apps, skills, documents, data, scheduled automations, and every past chat. Use when the user says anything like 'move my stuff over from my old workspace', 'I made a new mind, bring everything across', 'my old workspace is broken, start me fresh', 'import my other mind', or -- asked from the OLD side -- 'I'd like to move to a new workspace'. Requires the other workspace to be startable, since the transfer runs over a live connection to it."
+description: "Bring everything from another (older, broken, or replaced) workspace of the user's into this one -- their apps, skills, documents, data, scheduled automations, and every past chat. Use when the user says anything like 'move my stuff over from my old workspace', 'I made a new agent, bring everything across', 'my old workspace is broken, start me fresh', 'import my other agent', or -- asked from the OLD side -- 'I'd like to move to a new workspace'. Requires the other workspace to be startable, since the transfer runs over a live connection to it."
 compatibility: Requires latchkey (the minds-api gateway) plus ssh/ssh-keygen for the live session, and mngr for recreating the old chats.
 metadata:
   author: imbue
@@ -65,7 +65,7 @@ workspace is findable even after its host is gone. Note the source's `agent_id`
 (call it `OLD`) and confirm the choice with the user before doing anything else.
 
 **The flow needs the source online.** It works over a live SSH session, so if the
-old host will not start, say so and explain the alternative in plain terms: minds
+old host will not start, say so and explain the alternative in plain terms: Imbue Studio
 can export that workspace's newest backup snapshot as a zip
 (`POST .../<OLD>/backups/<snapshot_id>/export`), and the two of you can work
 through its contents by hand. Do not try to drive a restore-from-backup migration

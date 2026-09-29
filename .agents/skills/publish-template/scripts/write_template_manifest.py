@@ -468,7 +468,7 @@ def render_manifest(
         lines.extend(
             [
                 "",
-                "# Templates this mind used on the way to this one, oldest first.",
+                "# Templates this agent used on the way to this one, oldest first.",
                 "# A new manifest overrides its predecessor rather than accumulating",
                 "# beside it; the commit hash is what keeps the superseded manifest",
                 "# retrievable in the repo where it is authoritative.",

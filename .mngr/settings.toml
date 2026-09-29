@@ -479,7 +479,7 @@ host_log_dir = "/var/log/mngr"
 # No `docker_runtime` is set here, so containers use Docker's default runtime
 # (runc), which is available everywhere -- notably macOS, where gVisor's `runsc`
 # is not. The gVisor-hardened runtime is selected per-create by stacking the
-# `docker_runsc` template overlay below (the minds desktop app does this by
+# `docker_runsc` template overlay below (the Imbue Studio desktop app does this by
 # default on Linux, where `runsc` is installed). A direct CLI user can opt in
 # with `--template docker --template docker_runsc`, or override either way with
 # MNGR__PROVIDERS__DOCKER__DOCKER_RUNTIME=<runc|runsc>.
@@ -490,15 +490,34 @@ host_log_dir = "/var/log/mngr"
 # socket inode. supervisord installs its control socket via a hard link, so on a
 # gofer-backed /run it wedges ("Unlinking stale socket") and never starts
 # system_interface -- the workspace then sits on the "Loading workspace" loader
-# forever. A tmpfs /run makes the hard link work. The same two mounts are applied
-# by the aws-<region> provider start args and by the imbue_cloud slice bake's
-# per-box `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2
-# slices run under runsc from the bake).
-# /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
-# persist or ride a backup. It says `exec` because Docker mounts a bare
-# `--tmpfs` noexec, and a stub executable a test writes under /tmp and puts on
-# PATH is then skipped, so the real binary it stands in for runs instead.
+# forever. A tmpfs /run makes the hard link work. This block covers the local
+# docker provider only: the cloud VM providers (aws / gcp / azure / vultr / ovh,
+# all on mngr_vps) add both mounts themselves whenever their `docker_runtime`
+# is runsc, with /tmp capped at an eighth of the VM's RAM, and the imbue_cloud
+# slice bake passes its own pair through its per-box
+# `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2 slices
+# run under runsc from the bake).
+# /tmp is tmpfs so it starts empty on every container start. It is memory: what
+# is written there counts against the container's limit and no process kill
+# frees it, so a multi-GB write can take a local workspace down; the cloud
+# providers cap theirs for that reason (mngr-internal #1402 tracks capping this
+# one). It says `exec` because Docker mounts a bare `--tmpfs` noexec, and a
+# stub executable a test writes under /tmp and puts on PATH is then skipped, so
+# the real binary it stands in for runs instead.
 default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec"]
+# The size of every new local workspace container: `docker run --cpus` and
+# `--memory` (with `--memory-swap` equal to the memory cap, so a workspace at its
+# limit is shed by the OOM killer rather than swapping the laptop to a halt).
+# Without a cap a runaway workspace can take the whole machine down; with one,
+# under runsc the container's /proc/meminfo reports the cap as MemTotal, so the
+# workspace's earlyoom (system/services/oom_priority) sheds relative to it.
+# Docker refuses a CPU cap above the daemon's CPU count, so mngr clamps
+# default_cpus to it (a 2-core laptop gets 2 CPUs, not a failed create). A
+# per-create `-s --cpus=N` / `-s --memory=Ng` overrides either, and `mngr docker
+# resize <host> --cpus N --memory Ng` changes a workspace's size afterwards;
+# `mngr list` reports the recorded size as host.resource.
+default_cpus = 4
+default_memory = "8g"
 
 [providers.lima]
 # is_enabled=false (mirrors [providers.docker]) is load-bearing: the lima backend
@@ -509,7 +528,7 @@ default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec"]
 # the plugin) still parses it. The lima create still works because `@<name>.lima`
 # resolves the provider by name regardless of is_enabled (same as @<name>.docker).
 is_enabled = false
-# Run the minds workspace directly in the Lima VM as root (uid 0) -- no nested
+# Run the Imbue Studio workspace directly in the Lima VM as root (uid 0) -- no nested
 # Docker container. is_run_as_root gives the agent the same "no sudo, install
 # anything" posture it has inside a docker/vps_docker container (the VM is the
 # isolation boundary). Root cannot traverse the 9p bind mount, so is_run_as_root
@@ -521,18 +540,25 @@ is_host_data_volume_exposed = false
 is_run_as_root = true
 # The user-data layout (matching the docker provider): /home/user symlinks to
 # the btrfs data disk with mngr's data dir inside it; plain-text mngr service
-# logs go to /var/log/mngr.
+# logs go to /var/log/mngr. That data disk (mngr's default 100 GiB, sparse) is
+# the one disk that grows: the lima create template also moves the regenerable
+# caches onto it (system/scripts/lima_cache_on_data_disk.sh), mngr caps the
+# VM's journal, and `mngr lima resize --disk` grows it. The VM's boot disk is
+# the pre-baked image's fixed size (see [create_templates.lima]).
 host_dir = "/home/user/.mngr"
 volume_home_path = "/home/user"
 host_log_dir = "/var/log/mngr"
 # Pin the Lima guest to the same Debian release the docker image uses (trixie),
-# so setup_system.sh provisions an identical toolchain everywhere. Set here
-# (dwt-side) rather than bumping mngr_lima's bookworm default, which outside
-# mngr users keep. Served from imbue's artifact mirror rather than
-# cloud.debian.org, which prunes old releases: the same image release the
-# gen-2 cloud slices boot (mngr's apps/minds_admin/.../slices/mirror_artifacts.py
-# is the manifest; bump both together, uploading the new release with
-# `minds-admin artifacts upload` before landing the bump here).
+# so setup_system.sh provisions an identical toolchain everywhere. mngr_lima's
+# library default is now this same release from the same mirror; the pin stays
+# here so the workspace's guest image is chosen by the template rather than by
+# whichever mngr version the desktop app happens to ship. Served from imbue's
+# artifact mirror rather than cloud.debian.org, which prunes old releases: the
+# same image release the gen-2 cloud slices boot (mngr's
+# apps/minds_admin/.../slices/mirror_artifacts.py is the manifest and
+# libs/mngr_lima/imbue/mngr_lima/constants.py the library default; bump all of
+# them together, uploading the new release with `minds-admin artifacts upload`
+# before landing the bump here).
 default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
 default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
 
@@ -604,7 +630,7 @@ type = "main"
 # it performed now runs inside bootstrap), and terminal is a supervisord
 # service rather than its own window.
 extra_window = ["bootstrap='uv run bootstrap'"]
-# Write a sane default tmux config on every minds host. tuple-typed
+# Write a sane default tmux config on every Imbue Studio host. tuple-typed
 # `extra_provision_command` stacks across templates (see
 # `apply_create_template` in mngr's cli/common_opts.py), so the
 # mode-specific templates (docker/lima/...) keep their own commands.
@@ -657,7 +683,7 @@ build_arg__extend = ["--file=system/Dockerfile", "."]
 # `--restart=unless-stopped` brings the container back after a docker daemon
 # restart or host reboot; the container entrypoint then self-heals sshd, so the
 # host is reachable again without a manual `mngr start`. The agent itself is
-# relaunched by the minds desktop client in this (debugging-oriented) mode.
+# relaunched by the Imbue Studio desktop client in this (debugging-oriented) mode.
 start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--restart=unless-stopped"]
 # Disable idle detection entirely -- the host should never auto-shutdown.
 # This also prevents shutdown when all agent tmux sessions exit.
@@ -686,6 +712,12 @@ setting__extend = ["providers.docker.docker_runtime=runsc"]
 provider = "lima"
 target_path = "/home/user/workspace/"
 idle_mode = "disabled"
+# The VM's size. --cpus / --memory are what the VM boots with; --disk is its
+# boot disk, which holds the OS and toolchain and is the pre-baked image's
+# size (build-lima-image.sh bakes 20 GiB, and lima cannot shrink a disk below
+# its image). The workspace's data lives on the separate btrfs data disk
+# [providers.lima] sizes. `mngr lima resize <host> --cpus/--memory/--disk`
+# changes a host's size afterwards (--disk there grows the data disk).
 start_arg__extend = ["--cpus=2", "--memory=4", "--disk=20"]
 # Mirror the docker template: flip the (default-disabled) lima provider on for
 # this create. Redundant in practice -- `@<name>.lima` resolves the provider by
@@ -712,11 +744,14 @@ setting__extend = ["providers.lima.is_enabled=true"]
 extra_provision_command__extend = [
     # Move root's home to the persistent /home/user tree (the Dockerfile does
     # this for container images; VM/sandbox provisioning does it here) so
-    # $HOME, passwd, and sshd agree. /var/cache/user is the off-volume cache
-    # target the host env points XDG_CACHE_HOME / npm_config_cache at.
-    # (Direct passwd edit rather than `usermod -d`: usermod refuses to modify
-    # a user with running processes, and root always has one here.)
-    "sed -i 's|^root:\\([^:]*:[^:]*:[^:]*:[^:]*\\):/root:|root:\\1:/home/user:|' /etc/passwd && grep -q '^root:.*:/home/user:' /etc/passwd && mkdir -p /home/user /var/cache/user",
+    # $HOME, passwd, and sshd agree. (Direct passwd edit rather than
+    # `usermod -d`: usermod refuses to modify a user with running processes,
+    # and root always has one here.)
+    "sed -i 's|^root:\\([^:]*:[^:]*:[^:]*:[^:]*\\):/root:|root:\\1:/home/user:|' /etc/passwd && grep -q '^root:.*:/home/user:' /etc/passwd && mkdir -p /home/user",
+    # Put the caches the host env points XDG_CACHE_HOME / npm_config_cache at
+    # (/var/cache/user) on the resizable btrfs data disk rather than the VM's
+    # fixed boot disk, before install_dependencies.sh fills them.
+    "sh /home/user/workspace/system/scripts/lima_cache_on_data_disk.sh",
     "bash /home/user/workspace/system/scripts/setup_system.sh",
     "bash /home/user/workspace/system/scripts/install_dependencies.sh",
     "bash /home/user/workspace/system/scripts/build_workspace.sh",
@@ -728,7 +763,7 @@ extra_provision_command__extend = [
     # (~/worktrees, ~/.cache symlink, ~/.bashrc, layout-version stamp).
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
     # Install a systemd unit that relaunches the system-services agent on VM
-    # boot, so the workspace recovers from a VM reboot even when the minds
+    # boot, so the workspace recovers from a VM reboot even when the Imbue Studio
     # desktop app is not running. The agent runs directly in the VM here, so
     # this runs `mngr start system-services` in the VM (mngr is installed by
     # build_workspace.sh above).
@@ -739,7 +774,7 @@ extra_provision_command__extend = [
 # Like Lima, Modal has no Dockerfile build -- the toolchain is provisioned over SSH
 # after the sandbox boots, reusing the exact scripts the Dockerfile RUNs. There is
 # no autostart unit: Modal sandboxes are ephemeral (~1 day) and do not survive a
-# reboot, so the minds desktop app re-creates them rather than relying on systemd
+# reboot, so the Imbue Studio desktop app re-creates them rather than relying on systemd
 # (the lima-autostart step is intentionally absent). Sizing + timeouts are set in
 # this template's setting__extend (below), not in the mngr_modal provider defaults.
 [create_templates.modal]
@@ -750,7 +785,7 @@ target_path = "/home/user/workspace/"
 # (matching how the vultr/aws/imbue_cloud templates disable idle).
 idle_mode = "disabled"
 # Enable the (default-disabled) modal provider for this create, and set the
-# minds-facing sizing + timeouts HERE rather than in the mngr_modal provider
+# sizing + timeouts Imbue Studio needs HERE rather than in the mngr_modal provider
 # defaults: 2 CPU / 4 GB (matching the lima/docker convention) and a ~24h sandbox
 # timeout. The sandbox timeout (86310) plus the provider's 90s shutdown buffer
 # lands at 86400s (24h), Modal's hard cap. The workspaces an eval run creates
@@ -803,7 +838,7 @@ target_path = "/home/user/workspace/"
 # machines, and the New Jersey region routinely produced ~1s SSH RTTs
 # and ~1.6 MB/s effective rsync throughput, which combined with the
 # ~1500-file build context made the cold upload time out at 10 minutes.
-# Keeping the default change at the template level so every minds /
+# Keeping the default change at the template level so every Imbue Studio /
 # imbue_cloud-pool create lands in the same place; CLI users who want
 # a different region can still override per-invocation with
 # ``-b --vps-region=<other>``.
@@ -889,7 +924,7 @@ BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
 cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 [Unit]
-Description=Start the minds system-services agent once the data volume is up
+Description=Start the Imbue Studio system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
 # Never rate-limit starts: while the trigger condition holds, a failing
@@ -906,7 +941,7 @@ ExecStart=/usr/local/sbin/minds-outer-autostart.sh
 UNIT
 cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 [Unit]
-Description=Watch for the mngr data volume and start the minds workspace
+Description=Watch for the mngr data volume and start the Imbue Studio workspace
 
 [Path]
 # The marker file is created exclusively by this installer, behind a hard
@@ -982,7 +1017,7 @@ start_arg__extend = ["--security-opt=no-new-privileges", "--workdir=/", "--resta
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
 # Install systemd units on the OUTER pool/slice VM that, on every VM boot,
 # start the agent container and relaunch the system-services agent inside it
-# -- so the workspace recovers from a VM reboot even when the minds desktop app
+# -- so the workspace recovers from a VM reboot even when the Imbue Studio desktop app
 # is not running. A path unit watches for the /mngr-btrfs data volume and only
 # then triggers the start service: on slices, lima mounts the data disk (and
 # recreates the /mngr-btrfs symlink) at a highly variable point late in boot,
@@ -1060,7 +1095,7 @@ BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
 cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 [Unit]
-Description=Start the minds system-services agent once the data volume is up
+Description=Start the Imbue Studio system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
 # Never rate-limit starts: while the trigger condition holds, a failing
@@ -1077,7 +1112,7 @@ ExecStart=/usr/local/sbin/minds-outer-autostart.sh
 UNIT
 cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 [Unit]
-Description=Watch for the mngr data volume and start the minds workspace
+Description=Watch for the mngr data volume and start the Imbue Studio workspace
 
 [Path]
 # The marker file is created exclusively by this installer, behind a hard
@@ -1128,23 +1163,23 @@ systemctl restart --no-block minds-autostart.service
 # template for AWS EC2 VPS provider (aws mode)
 [create_templates.aws]
 target_path = "/home/user/workspace/"
-# No `provider` declared: minds addresses the create as
+# No `provider` declared: Imbue Studio addresses the create as
 # `system-services@<host>.aws-<region>`, which selects the region-specific
-# `[providers.aws-<region>]` block minds writes into its mngr profile settings
+# `[providers.aws-<region>]` block Imbue Studio writes into its mngr profile settings
 # at startup (mirroring how the imbue_cloud template omits `provider` and lets
 # the `imbue_cloud_<slug>` address pick the instance). No region or instance
 # type is baked in: the region comes from the provider block's `default_region`
-# (and the matching `-b --aws-region=` minds passes), the instance type from
+# (and the matching `-b --aws-region=` Imbue Studio passes), the instance type from
 # `AwsProviderConfig.default_instance_type`.
 build_arg__extend = ["--file=system/Dockerfile", "."]
 # Disable idle detection entirely -- the host should never auto-shutdown. The
 # AWS provider's `auto_shutdown_seconds` max-lifetime cap is also left unset
-# (the minds-written provider blocks don't set it), so the EC2 instance stays
+# (the provider blocks Imbue Studio writes don't set it), so the EC2 instance stays
 # up for the whole user session rather than self-terminating after a timeout.
 idle_mode = "disabled"
 # gVisor runsc hardening for the agent container, matching the vultr/ovh
 # templates. runsc is installed+selected via `install_gvisor_runtime` /
-# `docker_runtime` on the minds-written `[providers.aws-<region>]` blocks; these
+# `docker_runtime` on the `[providers.aws-<region>]` blocks Imbue Studio writes; these
 # `docker run` args go via start_arg (vps_docker forwards start_arg to the inner
 # `docker run`): `--workdir=/` (runsc aborts when the image WORKDIR /home/user/workspace,
 # inside the mounted /home/user volume, already exists as the process cwd) and
@@ -1221,7 +1256,7 @@ BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
 cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 [Unit]
-Description=Start the minds system-services agent once the data volume is up
+Description=Start the Imbue Studio system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
 # Never rate-limit starts: while the trigger condition holds, a failing
@@ -1238,7 +1273,7 @@ ExecStart=/usr/local/sbin/minds-outer-autostart.sh
 UNIT
 cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 [Unit]
-Description=Watch for the mngr data volume and start the minds workspace
+Description=Watch for the mngr data volume and start the Imbue Studio workspace
 
 [Path]
 # The marker file is created exclusively by this installer, behind a hard
@@ -1287,11 +1322,11 @@ systemctl restart --no-block minds-autostart.service
 ]
 
 # template for GCP Compute Engine VPS provider (gcp mode). Mirrors the aws
-# template above: minds addresses the create as
-# `system-services@<host>.byo-gcp-<slug>` (a bring-your-own account block minds
+# template above: Imbue Studio addresses the create as
+# `system-services@<host>.byo-gcp-<slug>` (a bring-your-own account block Imbue Studio
 # writes on account setup), so no `provider` is declared here. Zone / machine
 # type come from that provider block (`default_zone` / `default_machine_type`)
-# plus the matching `-b --gcp-zone=` / `-b --gcp-machine-type=` minds passes.
+# plus the matching `-b --gcp-zone=` / `-b --gcp-machine-type=` Imbue Studio passes.
 [create_templates.gcp]
 target_path = "/home/user/workspace/"
 build_arg__extend = ["--file=system/Dockerfile", "."]
@@ -1374,7 +1409,7 @@ BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
 cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 [Unit]
-Description=Start the minds system-services agent once the data volume is up
+Description=Start the Imbue Studio system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
 # Never rate-limit starts: while the trigger condition holds, a failing
@@ -1391,7 +1426,7 @@ ExecStart=/usr/local/sbin/minds-outer-autostart.sh
 UNIT
 cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 [Unit]
-Description=Watch for the mngr data volume and start the minds workspace
+Description=Watch for the mngr data volume and start the Imbue Studio workspace
 
 [Path]
 # The marker file is created exclusively by this installer, behind a hard
@@ -1440,11 +1475,11 @@ systemctl restart --no-block minds-autostart.service
 ]
 
 # template for Azure Virtual Machines VPS provider (azure mode). Mirrors the
-# aws template above: minds addresses the create as
+# aws template above: Imbue Studio addresses the create as
 # `system-services@<host>.byo-azure-<slug>` (a bring-your-own account block
-# minds writes on account setup), so no `provider` is declared here. Region /
+# Imbue Studio writes on account setup), so no `provider` is declared here. Region /
 # VM size come from that provider block (`default_region` / `default_vm_size`)
-# plus the matching `-b --azure-region=` / `-b --azure-vm-size=` minds passes.
+# plus the matching `-b --azure-region=` / `-b --azure-vm-size=` Imbue Studio passes.
 [create_templates.azure]
 target_path = "/home/user/workspace/"
 build_arg__extend = ["--file=system/Dockerfile", "."]
@@ -1527,7 +1562,7 @@ BOOT
 chmod +x /usr/local/sbin/minds-outer-autostart.sh
 cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 [Unit]
-Description=Start the minds system-services agent once the data volume is up
+Description=Start the Imbue Studio system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
 # Never rate-limit starts: while the trigger condition holds, a failing
@@ -1544,7 +1579,7 @@ ExecStart=/usr/local/sbin/minds-outer-autostart.sh
 UNIT
 cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 [Unit]
-Description=Watch for the mngr data volume and start the minds workspace
+Description=Watch for the mngr data volume and start the Imbue Studio workspace
 
 [Path]
 # The marker file is created exclusively by this installer, behind a hard
@@ -1592,7 +1627,7 @@ systemctl restart --no-block minds-autostart.service
 """,
 ]
 
-# Template for imbue_cloud-leased pool hosts. minds invokes this as
+# Template for imbue_cloud-leased pool hosts. Imbue Studio invokes this as
 # `--template main --template imbue_cloud` (mirroring how the other modes
 # use `--template main --template <provider>`), so the imbue_cloud-specific
 # knobs that used to be inlined in `_build_mngr_create_command` live here
@@ -1620,7 +1655,7 @@ build_arg__extend = ["--file=system/Dockerfile", "."]
 # baked container from the pool_host template. The fast (adopt) path reuses the
 # pre-baked container, which already carries this policy.
 start_arg__extend = ["--restart=unless-stopped"]
-# Forward the minds-side MNGR_PREFIX from minds' subprocess env onto the
+# Forward MNGR_PREFIX from Imbue Studio's subprocess env onto the
 # host's ``/home/user/.mngr/env``, so the in-container mngr sees the same prefix the
 # desktop client used. Anthropic credentials are deliberately NOT forwarded
 # anywhere: workspace Claude auth lives in the env block of the shared

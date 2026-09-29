@@ -3,7 +3,7 @@
 The identity header a proxy stamps names the requester (``owner``, ``user_id``, ``email``) and
 nothing more; what to call them and what they look like is the account's profile, which the
 connector serves publicly at ``GET {broker_url}/users/{user_id}/profile``. The broker's URL is
-``SHARE_BROKER_URL`` in ``data/.secrets/share.env``, the file the minds desktop writes while the
+``SHARE_BROKER_URL`` in ``data/.secrets/share.env``, the file the Imbue Studio desktop writes while the
 workspace is shared (read fresh on every miss; absent means no profiles are available). Each
 answer -- and each failure -- is cached for five minutes under ``profiles/<user_id>.json``, so a
 connector outage costs one failed fetch per user per five minutes and never a hung request.
@@ -32,7 +32,7 @@ from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
-# The share materials the minds desktop writes while the workspace is shared, relative to the
+# The share materials the Imbue Studio desktop writes while the workspace is shared, relative to the
 # workspace root the supervised process runs from; the gateway's ``materials.py`` parses the same file.
 DEFAULT_SHARE_ENV_PATH: Final[Path] = Path("data/.secrets/share.env")
 SHARE_BROKER_URL_KEY: Final[str] = "SHARE_BROKER_URL"
