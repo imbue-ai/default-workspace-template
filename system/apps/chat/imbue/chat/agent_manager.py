@@ -3235,6 +3235,7 @@ class AgentManager:
                 provisional = ProvisionalChat(
                     chat_id=spare.chat_id,
                     name=spare.display_name,
+                    project_id=project_id,
                     account_id=account_id,
                     message=message,
                     phase=ProvisionalChatPhase.CREATING,
