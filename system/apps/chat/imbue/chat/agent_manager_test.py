@@ -5135,6 +5135,27 @@ def test_a_spare_is_not_ready_until_its_harness_says_it_accepts_input(
         manager.stop()
 
 
+def test_a_spare_still_starting_when_the_app_stops_is_left_for_the_next_start(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = _write_booting_mngr_binary(tmp_path)
+    manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        wait_until_true(
+            lambda: len(manager._spares) == 1 and manager.get_agent_by_id(manager._spares[0].chat_id) is not None,
+            timeout_seconds=15.0,
+            what="the spare's create finishing",
+        )
+        (booting,) = manager._spares
+    finally:
+        manager.stop()
+
+    assert _mngr_calls(argv_log, "destroy") == []
+    assert len(_mngr_calls(argv_log, "create")) == 1
+    assert spare_store.read() == (booting.with_phase(SpareChatPhase.DISCARDING),)
+
+
 def test_a_new_chat_claims_a_spare_still_starting_and_becomes_it_once_its_harness_is_up(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

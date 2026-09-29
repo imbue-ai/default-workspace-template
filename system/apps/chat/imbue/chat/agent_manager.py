@@ -3261,13 +3261,13 @@ class AgentManager:
         mode a new chat starts in changed) or whose process died is destroyed, and a spare is
         started while the pool holds fewer than its size, one at a time (mngr's
         host lock runs creates one at a time anyway). Nothing happens without a spares store,
-        before the agent list is known, or during the backoff after a spare's create or destroy
-        failed; with no account to start one on, the ready spares are destroyed and none is
+        before the agent list is known, once the app is stopping, or during the backoff after a
+        spare's create or destroy failed; with no account to start one on, the ready spares are destroyed and none is
         started. The mngr commands run on threads of their
         own; the sweep calls this every few seconds, and so do a sign-in, a hand-over, and a
         spare coming up.
         """
-        if self._spare_chat_store is None:
+        if self._spare_chat_store is None or self._shutdown_event.is_set():
             return
         try:
             account: Account | None = resolve_binding()
@@ -3329,6 +3329,9 @@ class AgentManager:
 
     def ensure_spare_chat_in_background(self) -> None:
         """``ensure_spare_chat`` on a thread of its own, for a caller that must not wait on or fail by it (a sign-in, a hand-over)."""
+        # A stopping app's creation group takes no new threads.
+        if self._shutdown_event.is_set():
+            return
         self._creation_cg.start_new_thread(target=self.ensure_spare_chat, name="ensure-spare-chat", is_checked=False)
 
     def _wait_for_spare_harness(self, spare: SpareChatAgent, harness: HarnessType) -> bool:
@@ -3444,7 +3447,11 @@ class AgentManager:
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
             if not self._wait_for_spare_harness(spare, harness):
-                failure = f"the harness did not come up within {SPARE_CHAT_BOOT_TIMEOUT_SECONDS:.0f}s"
+                failure = (
+                    "the chat app stopped before the harness came up"
+                    if self._shutdown_event.is_set()
+                    else f"the harness did not come up within {SPARE_CHAT_BOOT_TIMEOUT_SECONDS:.0f}s"
+                )
         error = None if failure is None else failure_notice(failure, output_tail.text())
         with self._lock:
             current = self._spare_locked(spare.chat_id)
@@ -3472,12 +3479,20 @@ class AgentManager:
         elif claim is not None:
             _loguru_logger.warning("Could not start spare agent {} for its chat: {}", agent_id, error)
             try:
-                self._discard_spare(spare.chat_id)
+                self._discard_spare_unless_stopping(spare.chat_id)
             finally:
                 self._settle_claimed_spare(spare.chat_id, claim, settled, error)
         else:
             _loguru_logger.warning("Could not start spare agent {}: {}", agent_id, error)
-            self._discard_spare(spare.chat_id)
+            self._discard_spare_unless_stopping(spare.chat_id)
+
+    def _discard_spare_unless_stopping(self, chat_id: ChatId) -> None:
+        """``_discard_spare``, except while the app stops: the spare is on file as discarded, so the next
+        start destroys it, and a destroy run now would hold up the stop for as long as mngr takes."""
+        if self._shutdown_event.is_set():
+            _loguru_logger.info("Left spare agent {} for the next start to destroy", chat_id)
+            return
+        self._discard_spare(chat_id)
 
     def _settle_claimed_spare(
         self, chat_id: ChatId, claim: _SpareClaim, settled: threading.Event | None, error: str | None
