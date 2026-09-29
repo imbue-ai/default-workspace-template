@@ -61,7 +61,6 @@ PROC_DIR = Path("/proc")
 IDLE_CHAT_STATUS = "idle"
 STOPPED_CHAT_STATUS = "stopped"
 ATTENTION_CHAT_STATUS = "attention"
-ERROR_CHAT_STATUS = "error"
 WAITING_LIFECYCLE_STATE = "WAITING"
 
 # How long the chat list is retried while the chat app is unreachable or not ready: the apply
@@ -113,8 +112,6 @@ class ListedChat:
             return "switching to another agent"
         if self.status == ATTENTION_CHAT_STATUS:
             return "waiting on a dialog"
-        if self.status == ERROR_CHAT_STATUS:
-            return "in an error state"
         if self.is_receiving_message:
             return "receiving a message"
         return "working"
