@@ -73,8 +73,8 @@ def find_workspace_origin(first_parent_log: Sequence[str]) -> str | None:
     Bootstrap writes exactly one ``Initial workspace commit`` per workspace, so
     the NEWEST one on the first-parent chain is this workspace's and everything
     the workspace ever committed descends from it. Older ones belong to someone
-    else: the template repo is itself developed from workspaces, and a mind
-    created from a published template carries the source mind's marker too.
+    else: the template repo is itself developed from workspaces, and an agent
+    created from a published template carries the source agent's marker too.
     Dating a workspace by one of those reports a stranger's creation, and
     treating one as the boundary of the workspace's own work rejects every
     legitimate template base.

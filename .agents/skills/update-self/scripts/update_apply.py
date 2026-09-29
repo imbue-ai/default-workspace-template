@@ -20,6 +20,7 @@ from __future__ import annotations
 import datetime
 import fcntl
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -91,6 +92,9 @@ from update_layout import (
     FRONTEND_DIR,
     FRONTEND_LIB_DIR,
     MANIFEST_FILENAME,
+    MNGR_ASSETS_DIR,
+    MNGR_ASSETS_SCRIPT,
+    MNGR_ASSETS_STAGING_DIR,
     NPM_LOCKFILE,
     NPM_ROOT_DIR,
     PROVISIONER_SCRIPT,
@@ -182,12 +186,24 @@ def _restore_tree(
 # them apart.
 _ROLLBACK_SUBJECT_PREFIX = "Roll back update apply"
 
+# The trailer an update's rollback carries, naming the release it rolled back. A
+# rollback of an app change writes the same subject without it, and only an update's
+# is a later update-self pass's to undo (:func:`pending_update_rollbacks`).
+_ROLLED_BACK_UPDATE_TRAILER = "Rolled-back-update"
+
 
 def _commit_rollback(
-    repo_root: Path, runner: Runner, rollback_to: str, reason: str
+    repo_root: Path,
+    runner: Runner,
+    rollback_to: str,
+    reason: str,
+    *,
+    rolled_back_update: str | None,
 ) -> None:
     """Commit the staged restore as a forward revert, if there is anything to
     commit (a re-entered rollback may find the commit already landed).
+    ``rolled_back_update`` is the release an update's rollback rolled back, and
+    None for any other apply's.
 
     The gate asks the index, not ``git status``: the commit stages nothing of
     its own, and status also lists untracked files, over which a commit of an
@@ -212,6 +228,8 @@ def _commit_rollback(
             stderr=getattr(staged, "stderr", ""),
         )
     message = f"{_ROLLBACK_SUBJECT_PREFIX} (restore to {rollback_to[:12]})\n\n{reason}"
+    if rolled_back_update is not None:
+        message += f"\n\n{_ROLLED_BACK_UPDATE_TRAILER}: {rolled_back_update}"
     runner.run(
         ["git", "commit", "--no-verify", "-m", message],
         cwd=str(repo_root),
@@ -250,50 +268,143 @@ def _has_rollback_since(merge_ref: str, repo_root: Path, runner: Runner) -> bool
     return any(line.startswith(_ROLLBACK_SUBJECT_PREFIX) for line in log.splitlines())
 
 
-def _refuse_a_re_merge_that_drops_a_rolled_back_target(
+# An update-self landing is the worker's merge, committed under this subject prefix
+# (the update-self worker reference); resolve_template_base.py reads the same marker.
+_UPDATE_SELF_SUBJECT_PREFIX = "update-self:"
+
+_ROLLBACK_SUBJECT = re.compile(
+    rf"^{re.escape(_ROLLBACK_SUBJECT_PREFIX)} \(restore to (?P<restore_to>[0-9a-f]+)\)"
+)
+
+# The line `git revert` puts in every revert commit's body.
+_REVERTS_COMMIT = re.compile(
+    r"^This reverts commit (?P<sha>[0-9a-f]{40})\b", re.MULTILINE
+)
+
+
+def _log_records(
+    runner: Runner, repo_root: Path, args: Sequence[str], fields: int
+) -> list[list[str]]:
+    """Each commit ``git log args`` prints, split into its ``fields`` fields, for a
+    format whose fields are NUL-separated and whose records end in 0x1e (a body spans
+    lines, so a newline cannot end a record)."""
+    return [
+        record.strip("\n").split("\x00", fields - 1)
+        for record in git_out(runner, repo_root, args).split("\x1e")
+        if record.strip()
+    ]
+
+
+# CLEANUP: remove this function, its call in pending_update_rollbacks,
+# _UPDATE_SELF_SUBJECT_PREFIX, and the restore_to group of _ROLLBACK_SUBJECT once every
+# workspace runs a release whose apply writes the _ROLLED_BACK_UPDATE_TRAILER: landing
+# that release reverted every older update's rollback, and each later one records it.
+def _undid_update_content(
+    rollback: str,
+    restore_to: str,
+    update_rollbacks: Collection[str],
+    repo_root: Path,
+    runner: Runner,
+) -> bool:
+    """Whether the history ``rollback`` undid carries update content: an update-self
+    landing, or the revert of an earlier update's rollback -- how an update's rollback
+    made before the apply recorded the release it rolled back is recognised.
+
+    The second case is a retry of a release already in history: its merge adds no
+    commit, so all it landed was the revert that put the release back.
+    """
+    undone = _log_records(
+        runner,
+        repo_root,
+        [
+            "log",
+            "--first-parent",
+            "--format=%s%x00%b%x1e",
+            f"{restore_to}..{rollback}^",
+        ],
+        fields=2,
+    )
+    for subject, body in undone:
+        if subject.startswith(_UPDATE_SELF_SUBJECT_PREFIX) or any(
+            sha in update_rollbacks for sha in _REVERTS_COMMIT.findall(body)
+        ):
+            return True
+    return False
+
+
+def pending_update_rollbacks(
+    target_ref: str, tip: str, repo_root: Path, runner: Runner
+) -> list[str]:
+    """The rollbacks of updates on ``tip`` that nothing has undone yet, newest first --
+    the order to revert them in.
+
+    Looks at ``target_ref..tip``: everything the workspace committed that the target
+    does not carry. An update's rollback is one carrying the
+    :data:`_ROLLED_BACK_UPDATE_TRAILER`, or one made before the apply wrote it whose
+    undone history carries update content (:func:`_undid_update_content`); a user who
+    asked for an app change back must keep it rolled back. A rollback is undone by a
+    later revert of it that is not itself undone, so reverting a revert puts a rollback
+    back in force. Until each is reverted, git counts the content it removed as merged,
+    and merging any later release lands only what that release changed since: the old
+    release plus a few files, which the apply's probes cannot tell from a good update.
+    """
+    newest_first = _log_records(
+        runner,
+        repo_root,
+        [
+            "log",
+            "--topo-order",
+            "--format=%H%x00%s%x00"
+            f"%(trailers:key={_ROLLED_BACK_UPDATE_TRAILER},valueonly)%x00%b%x1e",
+            f"{target_ref}..{tip}",
+        ],
+        fields=4,
+    )
+    # Oldest first, so an earlier update's rollback is known before a later rollback
+    # that undid its revert is classified.
+    update_rollbacks: set[str] = set()
+    for sha, subject, rolled_back_update, _body in reversed(newest_first):
+        rollback = _ROLLBACK_SUBJECT.match(subject)
+        if rollback is not None and (
+            rolled_back_update.strip()
+            or _undid_update_content(
+                sha, rollback.group("restore_to"), update_rollbacks, repo_root, runner
+            )
+        ):
+            update_rollbacks.add(sha)
+    # Newest first, so a commit's own undoing is known before its reverts are counted.
+    undone: set[str] = set()
+    pending: list[str] = []
+    for sha, _subject, _rolled_back_update, body in newest_first:
+        if sha in undone:
+            continue
+        undone.update(_REVERTS_COMMIT.findall(body))
+        if sha in update_rollbacks:
+            pending.append(sha)
+    return pending
+
+
+def _refuse_a_merge_that_leaves_an_update_rolled_back(
     target_ref: str, merge_ref: str, repo_root: Path, runner: Runner
 ) -> None:
-    """Refuse to apply ``merge_ref`` when it re-merges a target the tree landed and
-    then rolled back, unless it first reverts that rollback.
+    """Refuse to apply ``merge_ref`` while it still carries an update's rollback that it
+    has not reverted, whether it re-merges that release or a newer one.
 
-    The rollback is a forward revert, so git already counts the target's content as
-    merged: a plain re-merge lands only what the target gained since the failed
-    attempt, and the apply would then probe the old release plus a few files, find
-    it healthy (the manifests it probes by are not even in the tree), and record
-    the update as landed. Reverting the rollback commit on the worker's branch is
-    what puts the content back (the update-self worker reference says how); its
-    presence in ``HEAD..merge_ref`` is what lets the apply proceed.
+    Reverting the rollback on the worker's branch is what puts the content back (the
+    update-self worker reference's first step does it).
     """
-    if not _is_merge_landed(target_ref, repo_root, runner):
+    pending = pending_update_rollbacks(target_ref, merge_ref, repo_root, runner)
+    if not pending:
         return
-    since_target = git_out(
-        runner, repo_root, ["log", "--format=%H %s", f"{target_ref}..HEAD"]
-    )
-    rollback = next(
-        (
-            commit
-            for commit, _separator, subject in (
-                line.partition(" ") for line in since_target.splitlines()
-            )
-            if subject.startswith(_ROLLBACK_SUBJECT_PREFIX)
-        ),
-        None,
-    )
-    if rollback is None:
-        return
-    reverts = git_out(runner, repo_root, ["log", "--format=%s", f"HEAD..{merge_ref}"])
-    if any(
-        line.startswith(f'Revert "{_ROLLBACK_SUBJECT_PREFIX}')
-        for line in reverts.splitlines()
-    ):
-        return
+    reverts = "; ".join(f"git revert --no-edit {sha[:12]}" for sha in pending)
     raise ApplyPreconditionError(
-        f"{target_ref} was landed and then rolled back by {rollback[:12]}, so git "
-        f"already counts its content as merged and {merge_ref} would land only what "
-        "the target gained since: the tree would be the previous release plus a few "
-        "files, which the probes cannot tell from a good update. Revert that rollback "
-        f"on the worker's branch first (`git revert --no-edit {rollback[:12]}`, per the "
-        "update-self worker reference), then re-run. Nothing was changed."
+        f"{merge_ref} still carries {len(pending)} earlier update rollback(s) it has "
+        "not reverted, so git counts that content as merged and this update would "
+        f"land only what {target_ref} changed since: the tree would be the previous "
+        "release plus a few files, which the probes cannot tell from a good update. "
+        "Revert each on the worker's branch first, in this order "
+        f"(`{reverts}`, per the update-self worker reference), then re-run. Nothing "
+        "was changed."
     )
 
 
@@ -507,25 +618,25 @@ class _RestoredFrontend(NamedTuple):
     is_npm_workspace: bool
 
 
-# CLEANUP: drop the non-workspace branch below, ``_remove_unserved_bundles``, and the
-# always-True arm of ``_is_recovery_npm_ci_needed`` once every workspace has updated
-# past the release that introduced the ``system/`` npm workspace: a rollback can then
-# only land on a tree that has it.
+# CLEANUP: drop the non-workspace branch below and the always-True arm of
+# ``_is_recovery_npm_ci_needed`` once every workspace has updated past the release that
+# introduced the ``system/`` npm workspace: a rollback can then only land on a tree
+# that has it.
 def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
     """The frontend layout of the tree the rollback restored.
 
     A tree with no npm workspace at ``system/`` and no chat frontend builds its one
     bundle from the shell's own frontend directory, with the node_modules there. The
     forward apply never asks this (the merged tree always has the workspace), but a
-    rollback lands on whatever tree the workspace ran before.
+    rollback lands on whatever tree the workspace ran before -- which, workspace or not,
+    serves only the bundles whose frontends it carries: one from before an app's
+    frontend existed (getting_started's, say) cannot build that app's bundle.
 
     A frontend is told by its tracked manifest, not its directory: the rollback removes the
     tracked files, but the forward build leaves ignored files under a frontend's
     ``node_modules`` (vite's own temp files), and git cannot remove a directory that still
-    holds them, so the chat frontend's directory outlives its removal.
+    holds them, so a frontend's directory outlives its removal.
     """
-    if (repo_root / NPM_ROOT_DIR / "package.json").is_file():
-        return _RestoredFrontend(repo_root / NPM_ROOT_DIR, FRONTEND_BUNDLES, True)
     # The shell's bundle is served by every tree the workspace ever ran, manifest or not;
     # every other bundle depends on the restored tree carrying its app's frontend.
     served = tuple(
@@ -534,21 +645,31 @@ def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
         if bundle.frontend_dir == FRONTEND_DIR
         or (repo_root / bundle.frontend_dir / "package.json").is_file()
     )
+    if (repo_root / NPM_ROOT_DIR / "package.json").is_file():
+        return _RestoredFrontend(repo_root / NPM_ROOT_DIR, served, True)
     return _RestoredFrontend(repo_root / FRONTEND_DIR, served, False)
 
 
-def _remove_unserved_bundles(repo_root: Path, frontend: _RestoredFrontend) -> None:
-    """Remove a bundle the forward build wrote that the restored tree does not serve.
+def _remove_outputs_the_restored_tree_does_not_produce(
+    repo_root: Path, frontend: _RestoredFrontend
+) -> None:
+    """Remove what the forward apply generated that the restored tree has no producer for.
 
-    The chat's, on a rollback into a tree with no chat frontend: it has no copy to put
-    back and nothing that tracks or ignores it there, so left standing it keeps the tree
-    dirty and every later apply refused. Both rollback paths (the live one and the boot
-    path's ``recover --no-restart``) land on such a tree the same way.
+    A bundle the restored tree does not serve (the chat's on a tree with no chat
+    frontend, getting_started's on one from before that app), and the mngr assets on a
+    tree from before their fetch script. None was there before the apply, so none has
+    a copy to put back, the tree restore only touches tracked paths, and the restored
+    tree neither tracks nor ignores them -- left standing they keep the tree dirty and
+    every later apply refused. Every rollback path lands on such a tree the same way.
     """
     for bundle in FRONTEND_BUNDLES:
         unserved_static = repo_root / bundle.static_dir
         if bundle not in frontend.bundles and unserved_static.exists():
             shutil.rmtree(unserved_static)
+    if not (repo_root / MNGR_ASSETS_SCRIPT).is_file():
+        for assets in (MNGR_ASSETS_DIR, MNGR_ASSETS_STAGING_DIR):
+            if (repo_root / assets).exists():
+                shutil.rmtree(repo_root / assets)
 
 
 def _are_npm_dependencies_missing(npm_root: Path) -> bool:
@@ -622,7 +743,7 @@ def _recover_running_state(
         # has: a rollback into a tree without the npm workspace has neither a chat
         # bundle to restore nor a workspace to build it from.
         frontend = _restored_frontend_layout(repo_root)
-        _remove_unserved_bundles(repo_root, frontend)
+        _remove_outputs_the_restored_tree_does_not_produce(repo_root, frontend)
         if plan.frontend and any(
             bundle.snapshot_name not in restored for bundle in frontend.bundles
         ):
@@ -883,9 +1004,9 @@ def apply_update(
             "pass off the current HEAD instead. Nothing was changed."
         )
     # The fresh worker pass that follows such a rollback has the same trap one step
-    # later: its re-merge of the target lands nothing unless it reverts the rollback.
+    # later: its merge lands the rolled-back content only if it reverts the rollback.
     if target_ref is not None and not is_merge_landed:
-        _refuse_a_re_merge_that_drops_a_rolled_back_target(
+        _refuse_a_merge_that_leaves_an_update_rolled_back(
             target_ref, merge_ref, repo_root, runner
         )
     # A fresh apply replaces whatever rollback point the last one kept: its copies
@@ -1290,6 +1411,7 @@ def apply_update(
                 runner,
                 marker.rollback_to,
                 f"Apply failed and was auto-reverted: {failure.headline()}",
+                rolled_back_update=marker.target_ref,
             )
             outcome = _recover_running_state(
                 plan,
@@ -1683,10 +1805,19 @@ def _run_rollback(
         runner,
         record.rollback_to,
         f"Rolled back on the user's request from the update notice (reverting {record.merge_sha[:12]})",
+        rolled_back_update=None,
     )
 
     _record_rollback_progress(record, repo_root, _ROLLBACK_PROGRESS_RESTORING)
     failed = restore_snapshots(record.snapshots)
+    try:
+        _remove_outputs_the_restored_tree_does_not_produce(
+            repo_root, _restored_frontend_layout(repo_root)
+        )
+    except OSError as exc:
+        failed.append(
+            f"files the update left that the previous version does not use ({exc})"
+        )
     if failed:
         reason = (
             f"The source was reverted, but recovery could not restore: {', '.join(sorted(failed))}. "
@@ -1931,6 +2062,7 @@ def recover(
             marker.rollback_to,
             f"Interrupted apply of {marker.merge_ref} (last completed phase: "
             f"{marker.phase}) rolled back by recover",
+            rolled_back_update=marker.target_ref,
         )
     except (subprocess.CalledProcessError, OSError) as exc:
         # The marker is kept: the tree is still mid-motion and a later recover
@@ -1940,7 +2072,9 @@ def recover(
 
     if no_restart:
         failed = restore_snapshots(marker.snapshots)
-        _remove_unserved_bundles(repo_root, _restored_frontend_layout(repo_root))
+        _remove_outputs_the_restored_tree_does_not_produce(
+            repo_root, _restored_frontend_layout(repo_root)
+        )
         if marker.provisioner_ran:
             provisioner_failure = run_provisioner(runner, repo_root)
             if provisioner_failure is not None:

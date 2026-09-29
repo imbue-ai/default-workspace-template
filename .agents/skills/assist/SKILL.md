@@ -1,6 +1,6 @@
 ---
 name: assist
-description: Diagnose and fix a problem the user is hitting in this workspace, and escalate built-in (non-user) issues to imbue. Invoked as `/assist <description>` by the minds "get help -> have an agent help" flow (also usable directly when the user describes something broken).
+description: Diagnose and fix a problem the user is hitting in this workspace, and escalate built-in (non-user) issues to imbue. Invoked as `/assist <description>` by the Imbue Studio "get help -> have an agent help" flow (also usable directly when the user describes something broken).
 metadata:
   author: imbue
 ---
@@ -56,7 +56,7 @@ git log --grep="^update-self:" --oneline
 - **Fixable from here** -- you run inside this container, so you can change and use (*how* you apply each fix safely differs by creation -- see step 5):
   - user code,
   - template built-in code (e.g. `system/apps/system_interface`, skills, scripts), and
-- **Not fixable from here (give up on the fix)** -- anything in mngr, or in the outer minds desktop app. mngr runs in this container as packages installed from the commit `pyproject.toml` pins; an edit to its files under `site-packages` is overwritten by the next reinstall and cannot be submitted, so it is not a fix. The outer app (`apps/minds`, its bundled `mngr_forward` and `mngr_latchkey`) needs a new app build you cannot produce.
+- **Not fixable from here (give up on the fix)** -- anything in mngr, or in the outer Imbue Studio desktop app. mngr runs in this container as packages installed from the commit `pyproject.toml` pins; an edit to its files under `site-packages` is overwritten by the next reinstall and cannot be submitted, so it is not a fix. The outer app (`apps/minds`, its bundled `mngr_forward` and `mngr_latchkey`) needs a new app build you cannot produce.
 
   You can still read mngr's source to diagnose and to write a precise report -- the installed packages are plain Python under the tool's `site-packages`, and the full tree is at the pinned commit of https://github.com/imbue-ai/mngr -- you just cannot deploy a fix.
 

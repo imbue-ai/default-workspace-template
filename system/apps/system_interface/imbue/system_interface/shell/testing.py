@@ -69,6 +69,9 @@ def registry_row_toml(
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
     pin: tuple[str, str, str, str] | None = None,
     window_closed_path: str | None = None,
+    stop_when_no_windows: bool = False,
+    # Each message handler as ``(type, path)``.
+    message_handlers: Sequence[tuple[str, str]] = (),
 ) -> str:
     """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads.
     ``default_shortcut`` is ``(launch, mode)``."""
@@ -80,6 +83,7 @@ def registry_row_toml(
         f'display_name = "{display_name if display_name is not None else name.capitalize()}"',
         f"critical = {'true' if is_critical else 'false'}",
         f"internal = {'true' if is_internal else 'false'}",
+        f"stop_when_no_windows = {'true' if stop_when_no_windows else 'false'}",
     ]
     if program is not None:
         lines.append(f'program = "{program}"')
@@ -94,6 +98,9 @@ def registry_row_toml(
         )
     if window_closed_path is not None:
         lines.append(f'window_closed_path = "{window_closed_path}"')
+    if message_handlers:
+        handlers = ", ".join(f'{{ type = "{kind}", path = "{path}" }}' for kind, path in message_handlers)
+        lines.append(f"message_handlers = [{handlers}]")
     for launch_id, launch_label, launch_path in launch_paths:
         lines.append("[[apps.launch_paths]]")
         lines.append(f'id = "{launch_id}"')
@@ -208,6 +215,18 @@ def recording_app(received: list[dict[str, Any]]) -> Flask:
         return "", 204
 
     app.add_url_rule(TEST_TERMINAL_WINDOW_CLOSED_PATH, view_func=take, methods=["POST"], endpoint="take")
+    return app
+
+
+def message_handling_app(received: list[dict[str, Any]], path: str, status: int) -> Flask:
+    """An app that appends every JSON body posted to ``path`` to ``received`` and answers ``status``."""
+    app = Flask("message-handling")
+
+    def take() -> tuple[str, int]:
+        received.append(request.get_json(force=True))
+        return "{}", status
+
+    app.add_url_rule(path, view_func=take, methods=["POST"], endpoint="take")
     return app
 
 

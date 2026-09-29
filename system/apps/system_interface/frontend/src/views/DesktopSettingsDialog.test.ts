@@ -124,3 +124,46 @@ describe("isSameWallpaper", () => {
     expect(isSameWallpaper({ kind: "bundled", name: "dawn" }, { kind: "bundled", name: "dawn" })).toBe(true);
   });
 });
+
+describe("a wallpaper the workspace no longer offers", () => {
+  const ARCS = { kind: "bundled" as const, name: "arcs", url: "/wallpapers/bundled/arcs" };
+  const RETIRED = { kind: "bundled" as const, name: "retired" };
+
+  function pressed(): string[] {
+    return [...card().querySelectorAll<HTMLButtonElement>("[data-wallpaper]")]
+      .filter((swatch) => swatch.getAttribute("aria-pressed") === "true")
+      .map((swatch) => swatch.getAttribute("data-wallpaper") as string);
+  }
+
+  it("reads as Default rather than leaving every swatch unlit", () => {
+    render({
+      desktop: desktopRecord("home", { name: "Home", wallpaper: RETIRED }),
+      wallpapers: [ARCS],
+    });
+    expect(pressed()).toEqual(["default"]);
+  });
+
+  it("is saved as the default it already draws, so the dead reference is cleared", async () => {
+    const attrs = render({
+      desktop: desktopRecord("home", { name: "Home", wallpaper: RETIRED }),
+      wallpapers: [ARCS],
+    });
+    (card().querySelector(".desktop-settings-save") as HTMLButtonElement).click();
+    await settled();
+    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), null);
+  });
+
+  it("leaves a wallpaper that is still on offer selected and saved as itself", async () => {
+    const attrs = render({
+      desktop: desktopRecord("home", { name: "Home", wallpaper: { kind: "bundled", name: "arcs" } }),
+      wallpapers: [ARCS],
+    });
+    expect(pressed()).toEqual(["bundled:arcs"]);
+    (card().querySelector(".desktop-settings-save") as HTMLButtonElement).click();
+    await settled();
+    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), {
+      kind: "bundled",
+      name: "arcs",
+    });
+  });
+});

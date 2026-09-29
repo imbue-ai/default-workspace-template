@@ -99,7 +99,7 @@ Everything is a view like any other for arrangement purposes; its tab set is der
 | Fact or verb | Owner |
 |---|---|
 | Which apps exist, their display name, icon, actions, criticality, priority | Manifest, mirrored into the registry |
-| Whether an app is running; Stop and Start | Shell, via supervisord |
+| Whether an app is running; Stop, Start, and Quit | Shell, via supervisord |
 | Which instances exist, their URL, title, status, last-active | App |
 | Create, Delete, Rename an instance | App |
 | Where an instance's page currently is | App; the page reports it to the shell, which relays it to the app with the tab's key |
@@ -155,7 +155,7 @@ An app with `instances = false` declares no actions; the shell synthesizes its o
 A registry row carries `name`, `url`, `label`, `icon`, `internal`, and `program` from the registration, and `display_name`, `instances`, `instances_url`, `actions`, `default_shortcut`, `critical`, and `priority`, all copied from the manifest at registration.
 The `label` suffix has one job, an unguessable origin, and is never used as an identifier.
 Liveness (`is_running`) is derived from supervisord and is never stored.
-The app watcher, which writes the `service_registered` and `service_deregistered` events minds reads, reads `name`, `url`, `label`, and `icon` and ignores the manifest fields.
+The shell's services event writer, which writes the `service_registered` and `service_deregistered` events minds reads, reads `name`, `url`, `label`, and `icon` and ignores the manifest fields.
 
 ## 5. The app contract
 
@@ -273,9 +273,9 @@ The tab menu and the rail row build from one definition keyed by capabilities, n
 - Close: undock in this client. When this was the last reference to a `referenced` instance, the shell also calls the app's Delete.
 - Delete: shown for `explicit` instances of `instances = true` apps; calls the app. The tab disappears when the app's list no longer carries the instance.
 - Stop and Start the instance: shown when the instance reports `stoppable` (a chat's agent, a browser's Chromium, a terminal's session); calls the app, which keeps the instance and answers it as `stopped` until started again.
-- Stop and Start the app: supervisord via the shell, for apps with a `program` that are not `critical`. On a single-instance app's tab, where the two coincide; for every other app, on the rail's per-app row menu (the app's presence in a view), never on an instance's tab.
+- Quit the app: closes every window of the app and stops its program, supervisord via the shell, for apps with a `program` that are not `critical` (the stop-when-no-windows spec, Part E). On a single-instance app's tab, where the two coincide; for every other app, on the rail's per-app row menu (the app's presence in a view), never on an instance's tab.
 
-A stopped app's tabs render a placeholder with a Start button; instances of a stopped app show `stopped`. A stopped instance of a running app keeps its page (a stopped chat's transcript stays readable; the browser's viewer shows a stopped overlay with a Start button).
+A stopped stoppable app's tabs keep their page, which the shell's parker answers with a loading page until the app is up; the tabs of a stopped app the workspace cannot start render a placeholder with no button. Instances of a stopped app show `stopped`. A stopped instance of a running app keeps its page (a stopped chat's transcript stays readable; the browser's viewer shows a stopped overlay with a Start button).
 
 ### 6.5 `layout.py`
 

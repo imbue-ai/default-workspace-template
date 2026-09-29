@@ -39,7 +39,7 @@ at all.
 
 ## 2. Why the history file is load-bearing
 
-A minds chat agent's `CLAUDE_CONFIG_DIR` is the provider account it was created
+An Imbue Studio chat agent's `CLAUDE_CONFIG_DIR` is the provider account it was created
 on (`~/.minds/accounts/<id>/`), and every chat on the same account shares one
 `projects/` tree with nothing but the session id to tell them apart. There is no
 per-agent directory to read. `claude_session_id_history` is therefore the only

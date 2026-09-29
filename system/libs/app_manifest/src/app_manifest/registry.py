@@ -18,6 +18,7 @@ from app_manifest.errors import RegistryReadError
 from app_manifest.manifest import DEFAULT_PRIORITY
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import LaunchPathMethod
+from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import Pin
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
@@ -100,7 +101,14 @@ class RegistryRow(FrozenModel):
     internal: bool = Field(default=False, description="Hidden from every open surface")
     program: str | None = Field(default=None, description="The supervisord program that runs the app, when supervised")
     display_name: DisplayName | None = Field(default=None, description="What users see; absent on manifest-less rows")
-    critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
+    critical: bool = Field(
+        default=False,
+        description="No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the "
+        "update apply",
+    )
+    stop_when_no_windows: bool = Field(
+        default=False, description="Whether the shell may stop the app's program once no window shows it"
+    )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new desktop is seeded with")
     launch_paths: tuple[RegistryLaunchPath, ...] = Field(
@@ -112,6 +120,9 @@ class RegistryRow(FrozenModel):
     pin: Pin | None = Field(default=None, description="The app's pinned taskbar entry, when its manifest declares one")
     window_closed_path: LaunchPathValue | None = Field(
         default=None, description="Where the shell posts a closed window of the app; absent means no post"
+    )
+    message_handlers: tuple[MessageHandler, ...] = Field(
+        default=(), description="The messages the app takes and where the shell posts each; absent means none"
     )
 
 

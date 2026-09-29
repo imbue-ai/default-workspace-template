@@ -196,6 +196,25 @@ function namespaceIds(root: Element, prefix: string): void {
   }
 }
 
+/** The tile every icon is drawn on: `docs/system/app-icons.md`, 216 square with a 32 per cent
+ *  corner, and a 144 box centred in it for the mark. The tile is authored at 216 and drawn at
+ *  whatever pixel size the caller asks for. */
+const TILE_SIZE = 216;
+const TILE_RADIUS = 69.12;
+const GLYPH_BOX = 144;
+const GLYPH_INSET = (TILE_SIZE - GLYPH_BOX) / 2;
+
+// The pair the shell paints when an app brought no tile of its own: under the monogram of an app
+// with no icon, and under a line glyph drawn before these rules. One pair for both, so the two
+// read as the same kind of thing -- an app the workspace had to draw for.
+//
+// From the palette in `docs/system/app-icons.md`. It was the board's most neutral pair, on the
+// reasoning that a letter an app wears for want of an identity should not claim a louder one --
+// but that neutral is the arcs wallpaper's own colour, so the tile vanished into the backdrop and
+// left the letter and the shadow standing for the app alone.
+const FALLBACK_TILE_BACKGROUND = "#F5D6A0";
+const FALLBACK_TILE_INK = "#492222";
+
 /** Numeric length attribute (`24`, `24px`), or null when it says something
  *  this cannot turn into a viewBox. */
 function lengthAttribute(root: Element, name: string): number | null {
@@ -233,6 +252,69 @@ function normalizeRoot(root: Element, sizePx: number): boolean {
   // its shapes, which this never touches) and keeps every color it asked for.
   if (root.getAttribute("fill") === null) root.setAttribute("fill", "currentColor");
   return true;
+}
+
+/**
+ * Whether the icon brings colour of its own, rather than taking the surface's.
+ *
+ * A tile built to `docs/system/app-icons.md` carries a filled background shape. The line glyphs
+ * that predate those rules carry no fill at all and take `currentColor` from the text beside
+ * them, which is exactly what stopped working once the surfaces that draw an app stopped painting
+ * anything behind its icon. The test is a *filled descendant*: a fill on the root is what the
+ * glyph inherits, not what it paints.
+ */
+function paintsItsOwnColour(root: Element): boolean {
+  for (const element of Array.from(root.querySelectorAll("*"))) {
+    const fill = element.getAttribute("fill");
+    if (fill !== null && collapsed(fill).toLowerCase() !== "none") return true;
+  }
+  return false;
+}
+
+/** Repaint whatever the glyph was taking from the text around it in the tile's ink. */
+function inkCurrentColor(root: Element): void {
+  for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
+    for (const attribute of Array.from(element.attributes)) {
+      if (collapsed(attribute.value).toLowerCase() === "currentcolor") {
+        element.setAttribute(attribute.name, FALLBACK_TILE_INK);
+      }
+    }
+  }
+}
+
+/**
+ * A glyph that brought no tile, put on the shell's.
+ *
+ * Drawn into the same centred 32 box a drawn icon's mark sits in, rather than over the whole 48:
+ * these glyphs were authored to fill their own frame edge to edge, so at full bleed they crowd
+ * the corner radius and read heavier than every icon beside them. A nested `<svg>` does the
+ * scaling, so the art keeps its own coordinates and its aspect ratio.
+ */
+function tiledMarkup(root: Element, sizePx: number): string {
+  const document_ = root.ownerDocument;
+  const outer = document_.createElementNS(SVG_NAMESPACE, "svg");
+  outer.setAttribute("xmlns", SVG_NAMESPACE);
+  outer.setAttribute("width", String(sizePx));
+  outer.setAttribute("height", String(sizePx));
+  outer.setAttribute("viewBox", `0 0 ${TILE_SIZE} ${TILE_SIZE}`);
+  outer.setAttribute("fill", "none");
+  outer.setAttribute("aria-hidden", "true");
+  outer.setAttribute("focusable", "false");
+
+  const tile = document_.createElementNS(SVG_NAMESPACE, "rect");
+  tile.setAttribute("width", String(TILE_SIZE));
+  tile.setAttribute("height", String(TILE_SIZE));
+  tile.setAttribute("rx", String(TILE_RADIUS));
+  tile.setAttribute("fill", FALLBACK_TILE_BACKGROUND);
+  outer.appendChild(tile);
+
+  inkCurrentColor(root);
+  root.setAttribute("x", String(GLYPH_INSET));
+  root.setAttribute("y", String(GLYPH_INSET));
+  root.setAttribute("width", String(GLYPH_BOX));
+  root.setAttribute("height", String(GLYPH_BOX));
+  outer.appendChild(root);
+  return outer.outerHTML;
 }
 
 /**
@@ -276,7 +358,7 @@ function sanitizeUncached(markup: string, sizePx: number): string | null {
   scrubAttributes(root);
   namespaceIds(root, iconIdPrefix(markup));
   if (!normalizeRoot(root, sizePx)) return null;
-  return root.outerHTML;
+  return paintsItsOwnColour(root) ? root.outerHTML : tiledMarkup(root, sizePx);
 }
 
 /**
@@ -302,14 +384,14 @@ export function appIconMarkup(
  *
  * Almost every app is in this case, so the fallback cannot be one shared glyph:
  * a list of them all wearing the same box tells the reader nothing. A monogram
- * -- the app's initial in an outlined tile -- at least differs per app and
- * stays put, so the same app is recognisable everywhere it is drawn.
+ * -- the app's initial on a tile -- at least differs per app and stays put, so
+ * the same app is recognisable everywhere it is drawn.
  *
- * It is drawn in the house icon style: currentColor strokes on a transparent
- * background, the same frame every glyph in icons.ts uses, so an unnamed app
- * sits beside the built-in kinds instead of introducing colour the rest of the
- * chrome does not have. (Colour is the projects' identity language -- the
- * squiggles and their palette -- not the apps'.)
+ * It is built to the rules every app icon follows
+ * (`docs/system/app-icons.md`): 216 by 216, a flat background under one
+ * fill-only mark, a 32 per cent corner. That is what lets it stand beside the
+ * drawn icons -- the surfaces that draw an app paint nothing behind its icon,
+ * so a transparent monogram would be a thin letter floating on the wallpaper.
  */
 export function appMonogramMarkup(appName: string, sizePx: number): string {
   // App names are agent/user text, so the letter is escaped before it lands in
@@ -322,10 +404,11 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${sizePx}" height="${sizePx}" viewBox="0 0 24 24" ` +
-    `fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ` +
-    `aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/>` +
-    `<text x="12" y="12.7" stroke="none" fill="currentColor" font-size="11" font-weight="600" ` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${sizePx}" height="${sizePx}" ` +
+    `viewBox="0 0 ${TILE_SIZE} ${TILE_SIZE}" ` +
+    `fill="none" aria-hidden="true">` +
+    `<rect width="${TILE_SIZE}" height="${TILE_SIZE}" rx="${TILE_RADIUS}" fill="${FALLBACK_TILE_BACKGROUND}"/>` +
+    `<text x="108" y="114.3" fill="${FALLBACK_TILE_INK}" font-size="108" font-weight="600" ` +
     `text-anchor="middle" dominant-baseline="central">${initial}</text></svg>`
   );
 }

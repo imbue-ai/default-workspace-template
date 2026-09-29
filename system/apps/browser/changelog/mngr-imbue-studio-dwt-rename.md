@@ -1,0 +1,1 @@
+Browser docs and comments now call the desktop app Imbue Studio, and describe the per-workspace fleet in the new vocabulary. The desktop app is now called Imbue Studio, and the noun for the thing you talk to is now "your agent" rather than "your mind".

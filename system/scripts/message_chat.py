@@ -6,7 +6,7 @@ Usage, from the repo root (every skill's cwd)::
     python3 system/scripts/message_chat.py <chat-id> -m "text"
     python3 system/scripts/message_chat.py <chat-id> --message-file path/to/task.md
     some-command | python3 system/scripts/message_chat.py <chat-id>
-    python3 system/scripts/message_chat.py <chat-id> --system -m "an automated nudge"
+    python3 system/scripts/message_chat.py <chat-id> --browser-fleet -m "a browser-fleet nudge"
     python3 system/scripts/message_chat.py --create --name "assist-1a2b3c" --label auto_open=true -m "/assist ..."
 
 This is the in-workspace replacement for ``mngr message <agent>``. A chat is
@@ -22,6 +22,9 @@ route's verdict is the script's exit status, in ``mngr message``'s vocabulary:
     1  refused, or the chat app could not be reached and the backoff failed too
     7  delivered, but the agent's input is blocked on a dialog (``mngr
        message``'s "delivered but blocked" code)
+    8  the chat is gone: the chat app does not know it and mngr has no agent
+       by its id, so no later try can deliver it (``mngr``'s code for a target
+       that does not exist)
 
 ``mngr message`` is used only as a BACKOFF, when the chat app cannot take the
 message at all: the connection to it fails, or its route keeps answering 404
@@ -31,7 +34,9 @@ briefly first). Any other answer is the chat app's decision and is never
 second-guessed by pasting the text around it: a refusal during a handoff is
 what keeps the message from landing on the wrong agent, and a blocked send has
 already put the text in the pane. The backoff passes ``--start``: the chat app's
-route revives a stopped agent on send, so the backoff does the same.
+route revives a stopped agent on send, so the backoff does the same. Its verdict
+is read from mngr's JSONL events as well as its exit status, because an id that
+matches no agent exits 0 having sent nothing.
 
 A 503 means the chat app is up but not ready (it has not read its agent list
 from mngr yet, or the agent's daemon is still starting), so it is retried for a
@@ -42,9 +47,10 @@ no read timeout: the route blocks for as long as the harness takes to accept the
 text, and giving up part-way would be the one way to deliver the message twice.
 The connect timeout is short so an unreachable chat app is detected fast.
 
-``--system`` wraps the text in the sentinel the chat transcript renders as a
-collapsed system chip instead of a user bubble (the browser app's wake-up
-nudges use it); the tag is pinned against the chat app's copy by a test there.
+``--browser-fleet`` wraps the text in the browser fleet's sentinel, which the
+chat transcript renders as a collapsed "Browser fleet" chip instead of a user
+bubble; the browser app's wake-up nudges use it. The tag is pinned against the
+chat app's copy by a test there.
 
 ``--create`` makes a new chat instead of messaging one, through the chat app's
 create route, so the chat is what a launcher-started chat would be: the app mints its id,
@@ -91,12 +97,18 @@ CHAT_APP_FALLBACK_URL = "http://127.0.0.1:8010"
 
 # Mirrors ``BROWSER_FLEET_TAG`` in the chat app's ``harnesses/message_display.py``
 # (and the frontend's copy); a test in the chat app pins the two equal.
-SYSTEM_MESSAGE_TAG = "agentic-browser-fleet"
+BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
 # ``mngr message``'s exit codes (``imbue/mngr/cli/exit_codes.py``).
 EXIT_DELIVERED = 0
 EXIT_FAILED = 1
 EXIT_DELIVERED_BUT_BLOCKED = 7
+EXIT_CHAT_GONE = 8
+
+# The events ``mngr message --format jsonl`` emits per agent the text reached, and per agent
+# it did not (or reached behind a dialog), with the reason.
+MESSAGE_SENT_EVENT = "message_sent"
+MESSAGE_ERROR_EVENT = "message_error"
 
 # The route's ``kind`` for a send that landed behind a dialog
 # (``SendFailureKind.INPUT_BLOCKED`` in mngr).
@@ -193,9 +205,9 @@ class ChatAppUnreachableError(Exception):
     """
 
 
-def wrap_system_message(text: str) -> str:
-    """Wrap an automated nudge in the sentinel; adds no newlines, so the wrapped text types into a pane like the bare text."""
-    return f"<{SYSTEM_MESSAGE_TAG}>{text}</{SYSTEM_MESSAGE_TAG}>"
+def wrap_browser_fleet_nudge(text: str) -> str:
+    """Wrap a browser-fleet nudge in the sentinel; adds no newlines, so the wrapped text types into a pane like the bare text."""
+    return f"<{BROWSER_FLEET_TAG}>{text}</{BROWSER_FLEET_TAG}>"
 
 
 def chat_app_url(environ: Mapping[str, str], cwd: Path) -> str:
@@ -443,28 +455,53 @@ def _script_exit_for_mngr_exit(returncode: int) -> int:
 
 
 def send_through_mngr(chat_id: str, text: str) -> int:
-    """The backoff: ``mngr message --start`` straight to the agent, its verdict in this script's codes."""
+    """The backoff: ``mngr message --start`` straight to the agent, its verdict in this script's codes.
+
+    ``EXIT_CHAT_GONE`` when mngr has no agent by that id: it then exits 0 having sent nothing
+    (its ``--on-error`` default is ``continue``), and only the missing ``message_sent`` event
+    tells that apart from a delivery. mngr's reason for a failed or blocked send is a
+    ``message_error`` event in that output, so it is passed on to stderr.
+    """
     completed = _run_mngr(
-        ["mngr", "message", chat_id, "--start"], text, [], capture_stdout=False
+        ["mngr", "message", chat_id, "--start"],
+        text,
+        ["--format", "jsonl"],
+        capture_stdout=True,
     )
-    return (
-        EXIT_FAILED
-        if completed is None
-        else _script_exit_for_mngr_exit(completed.returncode)
-    )
+    if completed is None:
+        return EXIT_FAILED
+    for error in _jsonl_events(completed.stdout, MESSAGE_ERROR_EVENT):
+        print(
+            f"`mngr message` to {error.get('agent')}: {error.get('error')}",
+            file=sys.stderr,
+        )
+    if completed.returncode == EXIT_DELIVERED and not _jsonl_events(
+        completed.stdout, MESSAGE_SENT_EVENT
+    ):
+        print(f"`mngr message` found no agent with id {chat_id}", file=sys.stderr)
+        return EXIT_CHAT_GONE
+    return _script_exit_for_mngr_exit(completed.returncode)
 
 
-def _created_agent_id(create_stdout: str) -> str:
-    """The agent id from ``mngr create --format jsonl``'s ``created`` event; '' when it named none."""
-    for line in create_stdout.splitlines():
+def _jsonl_events(stdout: str, event_type: str) -> list[dict[str, object]]:
+    """The events of one type in an ``mngr --format jsonl`` run's stdout, skipping lines that are not JSON objects."""
+    events: list[dict[str, object]] = []
+    for line in stdout.splitlines():
         try:
             event = json.loads(line)
         except ValueError:
             continue
-        if isinstance(event, dict) and event.get("event") == "created":
-            agent_id = event.get("agent_id")
-            if isinstance(agent_id, str):
-                return agent_id
+        if isinstance(event, dict) and event.get("event") == event_type:
+            events.append(event)
+    return events
+
+
+def _created_agent_id(create_stdout: str) -> str:
+    """The agent id from ``mngr create --format jsonl``'s ``created`` event; '' when it named none."""
+    for event in _jsonl_events(create_stdout, "created"):
+        agent_id = event.get("agent_id")
+        if isinstance(agent_id, str):
+            return agent_id
     return ""
 
 
@@ -545,9 +582,15 @@ def _build_parser() -> argparse.ArgumentParser:
     source.add_argument("-m", "--message", help="The message text.")
     source.add_argument("--message-file", help="A file whose contents are the message.")
     parser.add_argument(
-        "--system",
+        "--browser-fleet",
         action="store_true",
-        help="Mark the message as an automated nudge, rendered as a collapsed chip in the chat.",
+        help="Mark the message as a browser-fleet nudge, rendered as a collapsed 'Browser fleet' chip in the chat.",
+    )
+    # CLEANUP: drop this alias once update-self's floor, the oldest release the app updates from,
+    # passes --browser-fleet itself: an update from an older release runs this script while the
+    # browser app, until the update restarts it, still passes --system.
+    parser.add_argument(
+        "--system", dest="browser_fleet", action="store_true", help=argparse.SUPPRESS
     )
     create = parser.add_argument_group("creating a chat")
     create.add_argument(
@@ -574,9 +617,9 @@ def _validate_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     if args.create:
         if args.chat_id is not None:
             parser.error("--create makes a new chat; it takes no chat id")
-        if args.system:
+        if args.browser_fleet:
             parser.error(
-                "--system marks a nudge to an existing chat; it does not apply to --create"
+                "--browser-fleet marks a nudge to an existing chat; it does not apply to --create"
             )
         return
     if args.chat_id is None:
@@ -597,8 +640,8 @@ def main(
     _validate_mode(parser, args)
     resolved_environ = os.environ if environ is None else environ
     text = _read_message(parser, args, sys.stdin if stdin is None else stdin)
-    if args.system:
-        text = wrap_system_message(text)
+    if args.browser_fleet:
+        text = wrap_browser_fleet_nudge(text)
     base_url = chat_app_url(resolved_environ, Path.cwd())
     if args.create:
         request = CreateRequest(
@@ -632,7 +675,13 @@ def main(
                 f"Falling back to `mngr message` for chat {args.chat_id}: {result.detail}",
                 file=sys.stderr,
             )
-            return send_through_mngr(args.chat_id, text)
+            returncode = send_through_mngr(args.chat_id, text)
+            if returncode == EXIT_CHAT_GONE and result.outcome is Outcome.UNREACHABLE:
+                # Only the chat app knows which chats exist; the id names the chat's first agent,
+                # which is not the chat once a handoff has retired it. So mngr missing that agent
+                # means the chat is gone only when the chat app said it does not know it either.
+                return EXIT_FAILED
+            return returncode
         case _ as unreachable:
             assert_never(unreachable)
 

@@ -20,6 +20,7 @@ from playwright.sync_api import Playwright
 from playwright.sync_api import sync_playwright
 
 from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.app_announcements import AppAnnouncementWriter
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.testing import build_inventory
@@ -228,6 +229,12 @@ def app(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> Flask:
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
     return app.test_client()
+
+
+@pytest.fixture
+def announcement_writer(tmp_path: Path) -> AppAnnouncementWriter:
+    """A services event writer over a stream under ``tmp_path``, remembering nothing yet."""
+    return AppAnnouncementWriter(events_path=tmp_path / "events.jsonl")
 
 
 @pytest.fixture

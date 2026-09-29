@@ -46,7 +46,7 @@ logfile=/var/log/supervisor/supervisord.log
 files = supervisord.conf.d/*.conf
 """
 
-# A workspace that predates the split, or one whose mind moved a program back:
+# A workspace that predates the split, or one whose agent moved a program back:
 # the scaffolder still reads the main config, so a program declared there has to
 # be seen by both the port pre-flight and the name guard. The program is
 # ``dashboard`` rather than a real built-in because a name in RESERVED_NAMES is
@@ -150,7 +150,7 @@ def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
     `uv sync` regenerates it -- skipped here, as it is derived rather than authored.
     """
     root = _make_workspace(
-        tmp_path / "workspace", {"browser": 8081, "app-watcher": None}
+        tmp_path / "workspace", {"browser": 8081, "host-backup": None}
     )
     before_conf = (root / "system/supervisord.conf").read_text()
     before_pyproject = (root / "pyproject.toml").read_text()
@@ -173,7 +173,7 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
     """The main config is scanned too, not just the drop-ins.
 
     Every program ships in a drop-in now, but the scaffolder must not assume it:
-    a workspace predating the split declares its programs inline, and a mind is
+    a workspace predating the split declares its programs inline, and an agent is
     free to move one back. Both its port and its name have to be respected.
     """
     root = _make_workspace(
@@ -397,13 +397,13 @@ def test_a_declared_secrets_file_wraps_the_entry_point_in_with_secrets(
     scaffold_flask_lib._write_supervisord_program(
         plain, "widget-app", "widget_app", 8090, None
     )
-    assert '&& widget-app"' in plain.read_text()
+    assert '&& exec widget-app"' in plain.read_text()
     wrapped = tmp_path / "wrapped.conf"
     scaffold_flask_lib._write_supervisord_program(
         wrapped, "widget-app", "widget_app", 8090, "widget"
     )
     assert (
-        '&& python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget-app"'
+        '&& exec python3 system/scripts/with_secrets.py data/.secrets/widget.env -- widget-app"'
         in wrapped.read_text()
     )
 

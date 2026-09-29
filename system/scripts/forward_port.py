@@ -21,13 +21,13 @@ Manifests
 An app with a directory ships ``system/apps/<package>/app.toml`` (see
 ``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
 and copies its static fields onto the row: ``display_name``, ``critical``,
-``priority``, ``program`` (default: the name), ``internal``, ``launcher_rank``,
+``stop_when_no_windows``, ``priority``, ``program`` (default: the name), ``internal``, ``launcher_rank``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
 the names of the params, and ``method``, ``presets``, ``text_param``, and
 ``draft_param`` when given), ``pin`` (path, and style, scope, and
-default_mode when given), and ``window_closed_path``; the icon is read from the file the
-manifest names, relative to the manifest. Every manifest field is authoritative
-on every call, so a re-registration with a changed manifest updates the row.
+default_mode when given), ``window_closed_path``, and ``message_handlers`` (type and path);
+the icon is read from the file the manifest names, relative to the manifest. Every manifest
+field is authoritative on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
@@ -39,12 +39,16 @@ name is what the workspace falls back to.
 Icons
 -----
 An app may register an icon so the workspace UI can draw it instead of a
-generic glyph. **The registry stores the SVG markup itself**, as a plain TOML
-string on the entry, not a path to a file. A path would have to be readable by
+generic glyph. ``docs/system/app-icons.md`` holds what one must look like (a
+216 by 216 two-layer tile, and the palette it is coloured from); this module only
+checks that the markup is safe to store.
+
+**The registry stores the SVG markup itself**, as a plain TOML string on the
+entry, not a path to a file. A path would have to be readable by
 every consumer -- the system-interface server, the desktop client, and anything
 reading the registry off a shared host -- at whatever moment it renders, and
 those do not share a filesystem view with the service that registered. The
-markup travels with the entry through the existing apps.toml -> app-watcher
+markup travels with the entry through the existing apps.toml -> services
 event -> WebSocket path with no extra plumbing and no file access at all.
 ``--icon-file`` (and the manifest's ``icon``) is only an input convenience: the
 file is read once here, at registration time, and its contents (not its path)
@@ -128,7 +132,8 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
 
 # Cap on the stored SVG markup. Generous for a hand-drawn or exported glyph
-# (icons in this repo run a few hundred bytes) while keeping apps.toml small:
+# (icons in this repo run from a few hundred bytes to a couple of kilobytes)
+# while keeping apps.toml small:
 # every consumer re-reads the whole registry on every change, and the markup
 # is broadcast to every connected client.
 MAX_ICON_LENGTH = 16384
@@ -152,10 +157,11 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 
 # The manifest keys copied verbatim onto the row, with the type each must have.
 # ``name`` (validated separately), ``icon`` (read from the named file), and the
-# structured keys (``default_shortcut``, ``launch_paths``, ``pin``) are handled
-# on their own. ``program`` defaults to the name when the manifest omits it.
+# structured keys (``default_shortcut``, ``launch_paths``, ``pin``,
+# ``message_handlers``) are handled on their own. ``program`` defaults to the
+# name when the manifest omits it.
 _MANIFEST_STRING_KEYS = ("display_name", "priority", "program", "window_closed_path")
-_MANIFEST_BOOL_KEYS = ("critical", "internal")
+_MANIFEST_BOOL_KEYS = ("critical", "internal", "stop_when_no_windows")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
 # A per-entry copier for one manifest array of tables: ``(copied, None)`` or ``(None, error)``.
 _TableCopier = Callable[[Any, Path], tuple[dict[str, object] | None, str | None]]
@@ -172,6 +178,7 @@ _MANIFEST_OWNED_KEYS = (
     "instances",
     "instances_url",
     "critical",
+    "stop_when_no_windows",
     "priority",
     "program",
     "internal",
@@ -181,6 +188,7 @@ _MANIFEST_OWNED_KEYS = (
     "launch_paths",
     "pin",
     "window_closed_path",
+    "message_handlers",
 )
 
 # The optional keys of a manifest's ``[pin]`` table, each a string when present; ``path`` is
@@ -498,7 +506,7 @@ def _save_apps(path: Path, apps: list[dict[str, object]]) -> None:
         return
 
     # Atomic write: write to a temp file in the same directory, then os.replace()
-    # into place. This guarantees that readers (like app-watcher) never observe
+    # into place. This guarantees that readers (like the shell) never observe
     # a truncated/partial file during the write window.
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(
@@ -596,7 +604,7 @@ def _read_manifest(
 def _copied_tables(
     entries: Any, path: Path, key: str, copy_entry: _TableCopier
 ) -> tuple[list[dict[str, object]] | None, str | None]:
-    """A manifest array of tables (``launch_paths``) as the registry row
+    """A manifest array of tables (``launch_paths``, ``message_handlers``) as the registry row
     carries it, each entry copied by ``copy_entry``. Returns ``(copied, None)``, or
     ``(None, error)`` when the value is not an array or an entry is not shaped as the
     manifest requires."""
@@ -709,8 +717,28 @@ def _copied_param_names(
     return [param["name"] for param in params], None
 
 
+def _copied_message_handler(
+    handler: Any, path: Path
+) -> tuple[dict[str, object] | None, str | None]:
+    """One manifest message handler as the registry row carries it: ``type`` and ``path``. Returns
+    ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
+    if not (
+        isinstance(handler, dict)
+        and isinstance(handler.get("type"), str)
+        and isinstance(handler.get("path"), str)
+    ):
+        return (
+            None,
+            f"manifest {str(path)!r}: every message handler needs a string 'type' and 'path'",
+        )
+    return {"type": handler["type"], "path": handler["path"]}, None
+
+
 # The manifest arrays of tables copied onto the row, each with the copier for its entries.
-_MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (("launch_paths", _copied_launch_path),)
+_MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (
+    ("launch_paths", _copied_launch_path),
+    ("message_handlers", _copied_message_handler),
+)
 
 
 def _upsert(
@@ -840,7 +868,8 @@ def main() -> None:
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
             "critical, priority, program, internal, launcher_rank, default_shortcut, "
-            "launch_paths with their text_param, pin, window_closed_path) are copied onto the row on every call."
+            "launch_paths with their text_param, pin, window_closed_path, message_handlers) are copied onto the row on "
+            "every call."
         ),
     )
     parser.add_argument(
@@ -982,9 +1011,9 @@ def main() -> None:
                     )
                 if icon is None and not args.no_icon and is_new_pickable:
                     parser.error(
-                        f"app {name!r} is new and has no icon: pass --icon-file with a house-style "
-                        "SVG (see the build-app skill), name one in the manifest, or pass --no-icon "
-                        "to keep the generic letter monogram"
+                        f"app {name!r} is new and has no icon: pass --icon-file with a tile icon "
+                        "drawn to docs/system/app-icons.md, name one in the manifest, or pass "
+                        "--no-icon to keep the generic letter monogram"
                     )
                 _upsert(
                     apps_file,

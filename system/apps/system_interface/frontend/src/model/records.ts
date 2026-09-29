@@ -147,6 +147,13 @@ export interface AppPin {
   readonly default_mode: EntryMode;
 }
 
+/** A message an app takes from the Imbue Studio chrome, and the route under its origin the shell posts it to
+ *  (contracts.md section 2). */
+export interface MessageHandler {
+  readonly type: string;
+  readonly path: string;
+}
+
 /** One registered app as the shell lists it (contracts.md section 5.5). */
 export interface AppRecord {
   readonly name: string;
@@ -159,11 +166,15 @@ export interface AppRecord {
   readonly internal: boolean;
   readonly program: string;
   readonly critical: boolean;
+  /** Whether the shell stops the app's program once no window shows it (the stop-when-no-windows spec). */
+  readonly stop_when_no_windows: boolean;
   /** The app's launch paths; the shell synthesizes ``open`` at ``/`` for an app declaring none. */
   readonly launch_paths: readonly LaunchPath[];
   readonly default_shortcut: DefaultShortcut | null;
   readonly launcher_rank: number | null;
   readonly pin: AppPin | null;
+  /** The messages from the Imbue Studio chrome the app takes, which the shell relays to it. */
+  readonly message_handlers: readonly MessageHandler[];
   readonly is_running: boolean;
 }
 
@@ -447,6 +458,14 @@ function parsePin(raw: unknown): AppPin | null {
   };
 }
 
+function parseMessageHandler(raw: unknown): MessageHandler {
+  const record = asObject(raw, "message handler");
+  return {
+    type: asString(record.type, "message_handler.type"),
+    path: asString(record.path, "message_handler.path"),
+  };
+}
+
 export function parseAppRecord(raw: unknown): AppRecord {
   const record = asObject(raw, "app");
   const name = asString(record.name, "app.name");
@@ -460,10 +479,12 @@ export function parseAppRecord(raw: unknown): AppRecord {
     internal: record.internal === true,
     program: typeof record.program === "string" ? record.program : "",
     critical: record.critical === true,
+    stop_when_no_windows: record.stop_when_no_windows === true,
     launch_paths: asArray(record.launch_paths ?? [], "app.launch_paths").map(parseLaunchPath),
     default_shortcut: parseDefaultShortcut(record.default_shortcut),
     launcher_rank: typeof rank === "number" && Number.isFinite(rank) ? rank : null,
     pin: parsePin(record.pin),
+    message_handlers: asArray(record.message_handlers ?? [], "app.message_handlers").map(parseMessageHandler),
     is_running: record.is_running === true,
   };
 }

@@ -378,7 +378,7 @@ export function getSelectedAccount(): ProviderAccount | null {
 
 /**
  * Whether the chooser is showing. One app-level modal, like the login modal it replaces:
- * accounts are mind-global, so there is nothing per-chat about picking one.
+ * accounts are workspace-global, so there is nothing per-chat about picking one.
  */
 let chooserOpen = false;
 // Which account the chooser should open ON, when it is being opened to fix a specific one

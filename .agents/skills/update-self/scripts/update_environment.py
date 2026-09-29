@@ -13,7 +13,7 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, NamedTuple, Sequence
+from typing import Collection, Mapping, NamedTuple, Sequence
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import tool_env
@@ -202,6 +202,12 @@ def take_snapshots(
 def restore_snapshots(snapshots: Sequence[SnapshotRecord]) -> list[str]:
     """Put every pre-apply copy back over its original path.
 
+    A tool environment's entrypoints live outside it, in the bin directory, so
+    putting the directory back is not the whole restore: the forward reinstall
+    removed the entrypoints the old receipt listed and linked the ones the new
+    tree declares. Those are put back to the restored receipt's set
+    (:func:`_restore_tool_entrypoints`).
+
     Returns the names that could NOT be restored. Never raises: this is the
     last line of defense, and one failed restore must not stop the others.
     """
@@ -216,10 +222,12 @@ def restore_snapshots(snapshots: Sequence[SnapshotRecord]) -> list[str]:
             )
             continue
         try:
+            forward_entrypoints = _receipt_entrypoints(source)
             if source.exists():
                 shutil.rmtree(source)
             source.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(copy, source, symlinks=True)
+            _restore_tool_entrypoints(source, forward_entrypoints)
         except OSError as exc:
             failed.append(record.name)
             sys.stderr.write(
@@ -227,6 +235,97 @@ def restore_snapshots(snapshots: Sequence[SnapshotRecord]) -> list[str]:
                 f"({type(exc).__name__}: {exc}).\n"
             )
     return failed
+
+
+def _receipt_entrypoints(environment: Path) -> frozenset[Path]:
+    """The bin-directory paths the uv receipt in ``environment`` says the tool installed.
+
+    Empty when there is no readable receipt: a directory that is not a tool
+    environment, or one a failed install left without one.
+    """
+    try:
+        parsed = tomllib.loads((environment / RECEIPT).read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return frozenset()
+    entrypoints = parsed.get("tool", {}).get("entrypoints", [])
+    if not isinstance(entrypoints, list):
+        return frozenset()
+    return frozenset(
+        Path(entrypoint["install-path"])
+        for entrypoint in entrypoints
+        if isinstance(entrypoint, dict) and entrypoint.get("install-path")
+    )
+
+
+def _links_into(link: Path, environment: Path) -> bool:
+    """Whether ``link`` is a symlink whose target lies inside ``environment``.
+
+    Read off the link itself, not its target: an entrypoint whose environment
+    no longer has that script dangles, and it is exactly those that matter. Only
+    the directory is resolved; the script it names may itself be a link out.
+    """
+    if not link.is_symlink():
+        return False
+    target = Path(os.path.normpath(link.parent / os.readlink(link)))
+    return target.parent.resolve().is_relative_to(environment.resolve())
+
+
+def _remove_unowned_entrypoints(
+    environment: Path, bin_dirs: Collection[Path], kept: Collection[Path]
+) -> list[Path]:
+    """Unlink every symlink in ``bin_dirs`` into ``environment`` that is not in ``kept``; return them."""
+    removed: list[Path] = []
+    for directory in bin_dirs:
+        if not directory.is_dir():
+            continue
+        for entry in sorted(directory.iterdir()):
+            if entry not in kept and _links_into(entry, environment):
+                entry.unlink()
+                removed.append(entry)
+    return removed
+
+
+def _restore_tool_entrypoints(
+    environment: Path, forward_entrypoints: Collection[Path]
+) -> None:
+    """Put the bin directory's entrypoints into ``environment`` back to what its
+    restored receipt lists.
+
+    uv links each entrypoint to ``<environment>/bin/<name>``. The forward
+    reinstall unlinked the ones the old receipt listed and linked the new
+    tree's; left as they are, an entrypoint the apply added dangles into the
+    restored environment until a later reinstall rebuilds its script, and uv
+    then refuses to overwrite an executable no receipt owns -- every later
+    apply fails. And an entrypoint the old receipt listed is gone, so the
+    program resolving it does not start. A no-op for a copy with no receipt
+    (not a tool environment).
+    """
+    restored = _receipt_entrypoints(environment)
+    if not restored:
+        return
+    bin_dirs = {path.parent for path in (*restored, *forward_entrypoints)}
+    for stale in _remove_unowned_entrypoints(environment, bin_dirs, restored):
+        sys.stderr.write(
+            f"recovery: removed {stale}, an entrypoint the rolled-back apply added.\n"
+        )
+    for entrypoint in sorted(restored):
+        script = environment / "bin" / entrypoint.name
+        if entrypoint.is_symlink():
+            if Path(os.readlink(entrypoint)) == script:
+                continue
+            if not _links_into(entrypoint, environment):
+                sys.stderr.write(
+                    f"recovery: {entrypoint} does not link into {environment}; leaving it.\n"
+                )
+                continue
+            entrypoint.unlink()
+        elif entrypoint.exists():
+            sys.stderr.write(
+                f"recovery: {entrypoint} is not a link into {environment}; leaving it.\n"
+            )
+            continue
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.symlink_to(script)
 
 
 def discard_snapshots(repo_root: Path) -> None:
@@ -689,6 +788,19 @@ def _reinstall_tool(
     """
     if destination.note is not None:
         sys.stderr.write(destination.note)
+    # uv unlinks only the entrypoints the existing receipt lists before it relinks,
+    # and refuses one that exists and no receipt owns. A link into this tool's own
+    # environment that its receipt does not list is what a rollback made before
+    # :func:`_restore_tool_entrypoints` left behind: it dangles until the reinstall
+    # rebuilds its script, then fails the install. It can only be this tool's.
+    environment = destination.tool_dir / tool_name
+    for stale in _remove_unowned_entrypoints(
+        environment, [destination.bin_dir], _receipt_entrypoints(environment)
+    ):
+        sys.stderr.write(
+            f"refresh: removed {stale}, an entrypoint into '{tool_name}' its receipt "
+            "does not list (left by an earlier rollback).\n"
+        )
     env = dict(os.environ)
     env["UV_TOOL_DIR"] = str(destination.tool_dir)
     env["UV_TOOL_BIN_DIR"] = str(destination.bin_dir)

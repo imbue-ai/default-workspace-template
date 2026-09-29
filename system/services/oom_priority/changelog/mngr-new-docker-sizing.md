@@ -1,0 +1,1 @@
+Documented how the container memory cap that local docker workspaces now run with interacts with earlyoom: under gVisor the container's `/proc/meminfo` reports the cap as MemTotal, so earlyoom sheds relative to the workspace's own limit; under runc it still sees the whole machine. No code change.

@@ -46,15 +46,19 @@ describe("sanitizeIconMarkup", () => {
   });
 
   it("draws at the size the caller asked for, on the icon's own grid", () => {
-    const root = parsed(sanitizeIconMarkup('<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="8"/></svg>', 14)!);
+    const root = parsed(
+      sanitizeIconMarkup('<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="8" fill="#e11d48"/></svg>', 14)!,
+    );
     expect(root.getAttribute("width")).toBe("14");
     expect(root.getAttribute("height")).toBe("14");
     expect(root.getAttribute("viewBox")).toBe("0 0 32 32");
   });
 
   it("scales an icon that gave a size instead of a viewBox", () => {
-    const root = parsed(sanitizeIconMarkup('<svg width="48" height="48"><circle cx="24" cy="24" r="8"/></svg>', 16)!);
-    expect(root.getAttribute("viewBox")).toBe("0 0 48 48");
+    const root = parsed(
+      sanitizeIconMarkup('<svg width="60" height="60"><circle cx="30" cy="30" r="8" fill="#e11d48"/></svg>', 16)!,
+    );
+    expect(root.getAttribute("viewBox")).toBe("0 0 60 60");
     expect(root.getAttribute("width")).toBe("16");
   });
 
@@ -68,9 +72,39 @@ describe("sanitizeIconMarkup", () => {
     expect(root.getAttribute("focusable")).toBe("false");
   });
 
-  it("lets a monochrome icon inherit currentColor", () => {
+  it("puts a glyph that paints nothing on the shell's tile, inside the centred 144 box", () => {
+    // A line glyph drawn before `docs/system/app-icons.md` brings no tile and took its colour from
+    // the text beside it. Nothing is painted behind an icon any more, so the shell draws the tile
+    // the glyph is missing rather than leaving a bare stroke on the wallpaper -- and draws it in
+    // the same 144 box a drawn icon's mark sits in, since these glyphs fill their own frame.
+    const root = parsed(
+      sanitizeIconMarkup(
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M0 0h4v4H0z"/></svg>',
+        16,
+      )!,
+    );
+    expect([root.getAttribute("viewBox"), root.getAttribute("width")]).toEqual(["0 0 216 216", "16"]);
+    const tile = root.querySelector("rect");
+    expect([tile?.getAttribute("width"), tile?.getAttribute("rx"), tile?.getAttribute("fill")]).toEqual([
+      "216",
+      "69.12",
+      "#F5D6A0",
+    ]);
+    const glyph = root.querySelector("svg");
+    expect([
+      glyph?.getAttribute("x"),
+      glyph?.getAttribute("y"),
+      glyph?.getAttribute("width"),
+      glyph?.getAttribute("height"),
+      glyph?.getAttribute("viewBox"),
+    ]).toEqual(["36", "36", "144", "144", "0 0 24 24"]);
+    expect(glyph?.getAttribute("stroke")).toBe("#492222");
+  });
+
+  it("inks a glyph that named no colour at all in the tile's ink too", () => {
     const root = parsed(sanitizeIconMarkup('<svg viewBox="0 0 24 24"><path d="M0 0h4v4H0z"/></svg>', 16)!);
-    expect(root.getAttribute("fill")).toBe("currentColor");
+    expect(root.querySelector("rect")?.getAttribute("fill")).toBe("#F5D6A0");
+    expect(root.querySelector("svg")?.getAttribute("fill")).toBe("#492222");
   });
 
   it("leaves an icon that paints itself alone", () => {
@@ -325,16 +359,21 @@ describe("appIconMarkupByName", () => {
     }
   });
 
-  it("draws the monogram in the house icon style, not in colour", () => {
-    // Monochrome currentColor strokes on a transparent background, like every
-    // glyph in icons.ts. Colour is the projects' identity language, not the
-    // apps' -- an app told apart by its letter needs no palette of its own.
+  it("draws the monogram as a tile, to the rules every app icon follows", () => {
+    // docs/system/app-icons.md: 216 by 216, a flat background under one fill-only mark, a 32 per
+    // cent corner. It matters here because the surfaces that draw an app paint nothing behind
+    // its icon -- a transparent monogram would be a thin letter on the wallpaper.
     const root = parsed(appIconMarkupByName("plain", 16, FALLBACK));
-    expect(root.getAttribute("stroke")).toBe("currentColor");
-    expect(root.getAttribute("fill")).toBe("none");
-    expect(root.getAttribute("viewBox")).toBe("0 0 24 24");
-    expect(root.querySelector("rect")?.getAttribute("fill")).toBeNull();
-    expect(root.querySelector("text")?.getAttribute("fill")).toBe("currentColor");
+    expect(root.getAttribute("viewBox")).toBe("0 0 216 216");
+    expect(root.getAttribute("width")).toBe("16");
+    expect(root.getAttribute("stroke")).toBeNull();
+    const tile = root.querySelector("rect");
+    expect(tile?.getAttribute("width")).toBe("216");
+    expect(tile?.getAttribute("rx")).toBe("69.12");
+    expect(tile?.getAttribute("fill")).toBe("#F5D6A0");
+    const letter = root.querySelector("text");
+    expect(letter?.getAttribute("fill")).toBe("#492222");
+    expect(letter?.getAttribute("stroke")).toBeNull();
   });
 
   it("is stable: the same app monograms identically every time", () => {

@@ -26,7 +26,7 @@ The model is the conservation law ``enqueue = dequeue + remove + popAll`` (see
   that turn.
 
 This keys resolution off the ledger's LEAVE ops ONLY -- never ``promptSource`` or
-the ``queued_command`` attachment -- because in the real Mind flow every message
+the ``queued_command`` attachment -- because in the real Imbue Studio flow every message
 is delivered via mngr (typed into the TUI) and commits as a ``dequeue`` whose
 ``promptSource`` is "typed", which those markers do not catch. Resolution is
 POSITIONAL (drop the FIFO head): the ledger carries no correlation id. There is NO

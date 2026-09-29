@@ -2,6 +2,8 @@ name = "files"
 display_name = "File Viewer"
 icon = "icon.svg"
 critical = false
+# The viewer holds nothing between windows: the shell stops it once none shows it.
+stop_when_no_windows = true
 priority = "files"
 launcher_rank = 20
 

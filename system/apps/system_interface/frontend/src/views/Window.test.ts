@@ -23,7 +23,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     isMenuOpen: false,
     sizeMenuTrigger: {},
     isShielded: false,
-    onStartApp: null,
+    isStopped: false,
     onRaise: vi.fn(),
     onControl: vi.fn(),
     onToggleMaximize: vi.fn(),
@@ -111,18 +111,16 @@ describe("Window", () => {
     expect(render({ isTouch: true }).querySelectorAll("[data-resize-edge]")).toHaveLength(0);
   });
 
-  it("shows a placeholder for a stopped app, with Start where the workspace can start it", () => {
-    const onStartApp = vi.fn();
-    const element = render({ app: appRecord("docs", { is_running: false }), onStartApp });
+  it("shows a placeholder, and no page, for an app the caller says is stopped", () => {
+    const element = render({ app: appRecord("docs", { is_running: false, program: "" }), isStopped: true });
     const placeholder = element.querySelector("[data-stopped-app]") as HTMLElement;
     expect(placeholder.textContent).toContain("Docs");
-    (placeholder.querySelector("button") as HTMLElement).click();
-    expect(onStartApp).toHaveBeenCalled();
+    expect(placeholder.textContent).toContain("not running (managed outside the workspace)");
+    expect(placeholder.querySelector("button")).toBeNull();
     unmountViews();
+    // A stopped app the shell wakes on a request keeps its page: the parker answers it.
     expect(
-      render({ app: appRecord("docs", { is_running: false }), onStartApp: null }).querySelector(
-        "[data-stopped-app] button",
-      ),
+      render({ app: appRecord("docs", { is_running: false }), isStopped: false }).querySelector("[data-stopped-app]"),
     ).toBeNull();
   });
 

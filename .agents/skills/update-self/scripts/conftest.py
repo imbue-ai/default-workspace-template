@@ -1,25 +1,31 @@
 """The skill's scripts import each other as siblings (the directory is ``sys.path[0]``
 when ``update_self.py`` runs); put it there for the tests too."""
 
+import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from messenger_testing import RecordingMessengers
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 
-@pytest.fixture(autouse=True)
-def _isolate_git_config(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture(autouse=True, scope="module")
+def _isolate_git_config() -> Iterator[None]:
     """Keep the developer's git config out of the real-git tests.
 
     The ledger and recovery tests drive real ``git`` (in the test and in the
     scripts under test), and a global ``commit.gpgsign`` or ``core.hooksPath``
     would reach into every one of them. Identity is set per repo by the
-    helpers, so nothing here needs the global file.
+    helpers, so nothing here needs the global file. Module-scoped so the repos
+    a module's shared fixtures build are covered too.
     """
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -34,3 +40,13 @@ def _isolate_tool_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     installation it was validating a release against.
     """
     monkeypatch.setenv("TOOL_ENV_HOME", str(tmp_path / "pinned-tool-home"))
+
+
+@pytest.fixture
+def recording_messengers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> RecordingMessengers:
+    bin_dir = tmp_path / "fake-bin"
+    messengers = RecordingMessengers(bin_dir, tmp_path / "messenger-calls.jsonl")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return messengers
