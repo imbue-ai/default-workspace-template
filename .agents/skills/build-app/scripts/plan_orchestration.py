@@ -510,7 +510,9 @@ def render_node_task(
         raise PlanError(
             f"node {node_idx} needs the reports of nodes {missing_reports}, which are "
             f"missing from both reports/report.md and reports/consumed/ -- those nodes "
-            f"have not delivered, so this node is not ready to start"
+            f"have not delivered, so this node is not ready to start. A node with "
+            f"has_worker false is one the orchestrator does itself, and it has to write "
+            f"reports/report.md the same way a worker would; that is the usual cause here"
         )
 
     handoff_sections = [
