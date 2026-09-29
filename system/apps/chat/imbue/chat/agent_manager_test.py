@@ -5315,6 +5315,44 @@ def test_a_spare_whose_create_fails_is_destroyed_and_the_next_waits_out_the_back
         manager.stop()
 
 
+def test_a_chat_that_claimed_a_spare_whose_create_fails_is_told_why(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    argv_log = tmp_path / "mngr-argv.log"
+    release = tmp_path / "release-create"
+    mngr_binary = tmp_path / "held-failing-create-mngr"
+    mngr_binary.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> "{argv_log}"\n'
+        '[ "$1" = create ] || exit 0\n'
+        f'while [ ! -e "{release}" ]; do sleep 0.05; done\n'
+        "exit 1\n"
+    )
+    mngr_binary.chmod(0o755)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, str(mngr_binary), 1)
+    pushes = broadcaster.register()
+    try:
+        manager.ensure_spare_chat()
+        wait_until_true(
+            lambda: len(_mngr_calls(argv_log, "create")) == 1, timeout_seconds=15.0, what="the spare's create starting"
+        )
+        (starting,) = manager._spares
+        created = manager.create_chat("")
+        assert created.chat_id == starting.chat_id
+
+        release.write_text("")
+
+        outcome = manager.wait_for_chat_creation(created.chat_id, timeout=15.0)
+        assert outcome is not None and not outcome.is_created
+        assert "mngr create exited with code 1" in outcome.error
+        assert ["destroy", starting.chat_id, "--force"] in _mngr_calls(argv_log, "destroy")
+        completions = [message for message in _drain(pushes) if message.get("type") == "provisional_chat_completed"]
+        assert [(message["chat_id"], message["success"]) for message in completions] == [(starting.chat_id, False)]
+    finally:
+        release.write_text("")
+        manager.stop()
+
+
 def test_a_manager_with_no_spares_store_starts_no_spare(agent_manager: AgentManager) -> None:
     agent_manager.note_agent_list_known()
 

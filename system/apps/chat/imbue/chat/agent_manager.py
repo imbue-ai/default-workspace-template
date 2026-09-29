@@ -3379,8 +3379,11 @@ class AgentManager:
         with self._lock:
             current = self._spare_locked(spare.chat_id)
             claim = self._spare_claim_by_chat.pop(spare.chat_id, None)
-            is_claimed = current is not None and current.phase is SpareChatPhase.CLAIMED and claim is not None
-            if is_claimed and failure is None:
+            if current is None or current.phase is not SpareChatPhase.CLAIMED:
+                claim = None
+            # Taken now: the discard below forgets the chat's per-chat records, this event included.
+            settled = self._creation_settled_by_chat.get(spare.chat_id) if claim is not None else None
+            if claim is not None and failure is None:
                 self._drop_spare_locked(spare.chat_id)
                 self._provisional_chats.pop(spare.chat_id, None)
             elif failure is None:
@@ -3389,37 +3392,37 @@ class AgentManager:
                 self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.DISCARDING)
                 self._spare_retry_not_before = time.monotonic() + SPARE_CHAT_RETRY_BACKOFF_SECONDS
                 self._spare_ids_being_discarded.add(spare.chat_id)
-                if is_claimed and error is not None:
+                if claim is not None and error is not None:
                     self._mark_creation_failed_locked(spare.chat_id, error)
-        if failure is None and is_claimed:
-            self._settle_claimed_spare(spare.chat_id, claim, True, None)
+        if claim is not None and failure is None:
+            self._settle_claimed_spare(spare.chat_id, claim, settled, None)
         elif failure is None:
             _loguru_logger.debug("Spare agent {} is ready", agent_id)
             self.ensure_spare_chat()
-        elif is_claimed:
+        elif claim is not None:
             _loguru_logger.warning("Could not start spare agent {} for its chat: {}", agent_id, error)
             self._discard_spare(spare.chat_id)
-            self._settle_claimed_spare(spare.chat_id, claim, False, error)
+            self._settle_claimed_spare(spare.chat_id, claim, settled, error)
         else:
             _loguru_logger.warning("Could not start spare agent {}: {}", agent_id, error)
             self._discard_spare(spare.chat_id)
 
     def _settle_claimed_spare(
-        self, chat_id: ChatId, claim: "_SpareClaim | None", is_created: bool, error: str | None
+        self, chat_id: ChatId, claim: _SpareClaim, settled: threading.Event | None, error: str | None
     ) -> None:
-        """Finish the chat that claimed a spare while it started: list it and hand it its pick and message,
-        then answer the page's provisional record either way."""
+        """Finish the chat that claimed a spare while it started: with no ``error``, list it and hand it
+        its pick and message; either way, set ``settled`` and answer the page's provisional record."""
         try:
-            if is_created and claim is not None:
+            if error is None:
                 _loguru_logger.info("Handed claimed spare agent {} to its chat", chat_id)
                 self._broadcast_chats_updated()
                 self._settle_new_chat(chat_id, str(chat_id), claim.model_pick, claim.message)
         finally:
-            with self._lock:
-                settled = self._creation_settled_by_chat.get(chat_id)
             if settled is not None:
                 settled.set()
-            self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=is_created, error=error)
+            self._broadcaster.broadcast_provisional_chat_completed(
+                chat_id=chat_id, success=error is None, error=error
+            )
 
     def _discard_spare(self, chat_id: ChatId) -> None:
         """``mngr destroy`` a spare no longer wanted, and forget it once it is gone.
@@ -3461,8 +3464,12 @@ class AgentManager:
             return None
         with self._lock:
             self._creation_settled_by_chat.pop(chat_id, None)
-            # A seeded chat's agent has an id of its own, so the chat's agent is found by membership.
-            if any(self._chat_id_of_agent_locked(agent_id) == chat_id for agent_id in self._agents):
+            # A seeded chat's agent has an id of its own, so the chat's agent is found by membership;
+            # a spare still on the spares (a claimed one that failed) is no chat's.
+            if any(
+                self._chat_id_of_agent_locked(agent_id) == chat_id and not self._is_spare_locked(agent_id)
+                for agent_id in self._agents
+            ):
                 return ChatCreationOutcome(is_created=True)
             provisional = self._provisional_chats.get(chat_id)
         error = provisional.error if provisional is not None and provisional.error is not None else ""
