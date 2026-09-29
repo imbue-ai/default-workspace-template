@@ -73,7 +73,7 @@ belong in tested code rather than agent prose:
     After a successful apply of an update that changes what an agent process loads at
     start, restart every chat that has ended its turn (not the pass's own, not its
     worker), through the chat app, and report as JSON which were restarted, which were
-    left running because they were mid-turn, and which failed.
+    left running because they were busy (``busy_with`` says with what), and which failed.
 
 ``restart-self``
     Detach a helper that restarts the pass's own chat once its last turn ends, then sends
