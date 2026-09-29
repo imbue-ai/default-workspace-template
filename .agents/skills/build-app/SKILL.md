@@ -711,10 +711,11 @@ Flags:
   glyph. The colours are a pair from the palette in that doc, and the
   glyph is one iconic *object* for what the app is *for* -- an
   envelope, a clipboard, a bell -- drawn true to that object's own
-  geometry and then inked: the edge drifting a unit or two off true,
-  the width breathing, ends round and lifting, with its interior detail
-  cut through to the background colour at one weight the whole set
-  shares. Drawn in one pass and never revised. That doc carries the
+  proportions and then inked: the whole mark about a degree off level,
+  the width of every run breathing a fifth either side of its nominal,
+  the line itself drifting only a unit or two, ends round and lifting,
+  with its interior detail cut through to the background colour at one
+  nominal weight the whole set shares. Drawn in one pass and never revised. That doc carries the
   full look, and says how an icon that already exists is changed
   without losing its hand-placed points.
 - `--no-icon`: skip the icon requirement for a brand-new entry. Uses

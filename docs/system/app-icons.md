@@ -47,25 +47,33 @@ sparse one smaller.
 ## The look
 
 The mark is a real, everyday object drawn true, and then inked. Those are the two halves
-of it, and the second one is small: the hand shows as a slight deviation laid over correct
-geometry, never as a different way of building the shape. The reference is the inked
-column on Gleb's Copyboard ("Clean vs hand-drawn"), where the inked icon and the clean one
-are the same drawing and you have to look to tell them apart.
+of it, and only the first is strict: the object has to stay the object, and everything
+about how it is *made* is loose. The reference is the inked column on Gleb's Copyboard
+("Clean vs hand-drawn"), and the bullseye there (node `191:688`) is the one to look at --
+its rings are the clearest read on how much unevenness the look wants.
+
+Two things that column settles. The *clean* side is not machine-drawn either: its rings
+already vary about a fifth in thickness around their circumference. And the inking pass
+does not move the line much -- it changes the *weight* of it. Measured on that bullseye,
+the ring edges wander by one or two units in 120 while the ring thickness swings by two
+fifths peak to peak. Drift is small; breathing is not.
 
 **Draw it true.**
 
-- **The object keeps its own geometry.** An envelope is a rectangle with a crease; a
-  clipboard has two dead-vertical sides; a checkbox is a square. What is straight in the
-  object stays straight, what is square stays square, what is symmetric stays symmetric.
-  Lopsidedness is not the goal and never was -- a silhouette that bows on every edge stops
-  reading as the object and starts reading as a cushion.
+- **The object keeps its own proportions.** An envelope is a rectangle with a crease; a
+  clipboard has two long parallel sides; a checkbox is a square; a bullseye is rings
+  around a dot. What is straight reads as straight and what is round reads as round. What
+  is *not* required is exactness -- lopsidedness is not the goal, but neither is
+  correctness. A silhouette that bows on every edge stops reading as the object and starts
+  reading as a cushion, and that is the only failure on this side.
 - **Corners are generous and consistent.** A hand-drawn rectangle has four corners of
-  roughly one radius, not four different ones. Rounding varying corner to corner is the
-  thing that reads as sloppy rather than as hand-made.
+  roughly one radius, not four different ones. Rounding varying corner to corner reads as
+  sloppy rather than as hand-made.
 - **One nominal weight, and the set shares it.** Every cut-through stroke in one icon is
-  the same nominal width, and that width carries across the whole set. Different weights
-  inside one mark, or from one icon to the next, is what makes a set look assembled by
-  different people.
+  drawn to the same nominal width, and that width carries across the whole set. Different
+  *nominals* inside one mark, or from one icon to the next, is what makes a set look
+  assembled by different people -- which is a separate thing from the variation around a
+  nominal, and that one is wanted.
 - **A stroke is thin against the thing it crosses** -- roughly a sixth to an eighth of it.
   The object has to stay the thing you read first; a cut wide enough to halve the body
   turns the object into two shapes.
@@ -75,18 +83,26 @@ are the same drawing and you have to look to tell them apart.
 
 **Then ink it.**
 
-- **The edge drifts off true and comes back.** One to three units in 216 -- about one per
-  cent of the tile. It is a wobble around the line, not a departure from it. Visible at
-  216, gone by 48, and that is the right amount.
-- **The width breathes.** A few per cent either side of the nominal along the run. Not a
-  taper, not a swell-and-pinch: a stroke that visibly fattens and thins is a brush mark,
-  and these are not brush marks.
+- **The whole mark sits a little off level.** Not each edge separately -- the object as a
+  whole, turned about a degree off its axis. On the board's checkbox the square's right
+  side sits a unit higher than its left over a sixty-unit run, where the clean version is
+  dead level. Nothing symmetric stays symmetric through this, and it should not: this is
+  the deviation that most makes a mark look placed by hand rather than snapped to a grid.
+- **The width breathes, and it breathes a lot** -- about a fifth either side of the
+  nominal along the run, which is a swing of two fifths from the thinnest place to the
+  thickest. This is the big one, and it is the one most likely to be drawn too timidly.
+  What it is not is a taper: it thins and fattens and thins again, rather than running
+  from fat to thin.
+- **The edge drifts off true and comes back**, but only a little -- one to three units in
+  216, about one per cent of the tile. Small next to the breathing. The line knows where
+  it is going; the pen's pressure is what does not.
 - **Ends are round, and they lift** -- the cap sits a few degrees off square to the path,
   as a pen leaving the paper does.
-- **Nothing is ragged.** No fray, no chatter, no noise along an edge. Ragged is the single
-  fastest way to make the set look rough, and there is none of it anywhere on the board.
-- **An outline is a ring of one weight, breathing** -- a tenth either way, not a half. A
-  ring that is visibly thick in one place and thin in another reads as a mistake.
+- **Nothing is ragged.** No fray, no chatter, no noise along an edge. Unevenness lives in
+  the *width* of a stroke and the *tilt* of the mark, never in the quality of its
+  boundary, which stays smooth however much the width under it moves.
+- **An outline is a ring of one nominal, breathing** -- a fifth either way. A ring of
+  constant thickness is the surest sign a machine drew it.
 
 **Big, simple marks.** The glyph carries one or two kinds of detail at most -- a cut
 stroke *or* a rim, rarely both, never three. When a mark is not reading, make it bigger
@@ -144,11 +160,13 @@ The mark is drawn, not assembled:
 2. Fix the object's true geometry inside a 144 by 144 box, and place that box in the
    middle of the tile. Size it by eye against the icons already drawn, not by filling the
    box.
-3. Fix the nominal weight for the cuts before drawing any of them, and hold it for every
-   cut in the icon.
-4. Place the points inked: on the true line, a unit or two either side of it. Edges that
-   are meant to be straight stay straight to within that; a curve that is meant to be a
-   curve stays one.
+3. Fix the nominal weight for the cuts before drawing any of them, and hold that nominal
+   for every cut in the icon.
+4. Turn the whole thing about a degree off its axis, so it sits off level as one piece
+   rather than edge by edge.
+5. Place the points inked: the line a unit or two either side of true, and the width a
+   fifth either side of its nominal, thinning and fattening and thinning again along the
+   run. The line is the thing that stays put; the width is the thing that moves.
 
 **Draw it in one pass.** Place the points as you go, and stop when the mark is there. Do
 not emit a path and then revise it: nudging it, re-balancing it, regularising it, or
