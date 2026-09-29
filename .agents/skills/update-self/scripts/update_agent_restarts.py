@@ -309,7 +309,9 @@ def restart_idle_agents(
 ) -> dict[str, list[dict[str, str]]]:
     """Restart every idle chat but the pass's own and its worker's; the report of what happened.
 
-    The report is also written to ``AGENT_RESTARTS_REPORT_REL``. Raises
+    Each chat is read again just before its restart, since the restarts run one after another
+    and a chat that was idle in the first read may have started a turn since; one that has is
+    left running instead. The report is also written to ``AGENT_RESTARTS_REPORT_REL``. Raises
     ``ChatListUnavailableError`` when there is no chat list to act on.
     """
     report_path = repo_root / AGENT_RESTARTS_REPORT_REL
@@ -320,17 +322,21 @@ def restart_idle_agents(
     )
     report: dict[str, list[dict[str, str]]] = {
         "restarted": [],
-        "left_running": [
-            {
-                "chat_id": entry.chat.chat_id,
-                "title": entry.chat.title,
-                "busy_with": entry.busy_with,
-            }
-            for entry in plan.left_running
-        ],
+        "left_running": [_left_running_entry(entry) for entry in plan.left_running],
         "failed": [],
     }
-    for chat in plan.to_restart:
+    for planned in plan.to_restart:
+        # A chat the list cannot show right now keeps its plan; the interrupt route decides.
+        current = read_listed_chat(repo_root, planned.chat_id, http) or planned
+        recheck = plan_agent_restarts(
+            [current], own_chat_id, chats_running_background_commands(process_argvs())
+        )
+        report["left_running"].extend(
+            _left_running_entry(entry) for entry in recheck.left_running
+        )
+        if not recheck.to_restart:
+            continue
+        chat = recheck.to_restart[0]
         problem = _run_message_chat(
             interrupt_argv(repo_root, chat.chat_id), repo_root, runner
         )
@@ -343,6 +349,14 @@ def restart_idle_agents(
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     return report
+
+
+def _left_running_entry(entry: LeftRunningChat) -> dict[str, str]:
+    return {
+        "chat_id": entry.chat.chat_id,
+        "title": entry.chat.title,
+        "busy_with": entry.busy_with,
+    }
 
 
 def compose_self_restart_note(
