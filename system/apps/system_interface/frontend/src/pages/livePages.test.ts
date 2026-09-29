@@ -645,7 +645,7 @@ describe("the contract", () => {
 
   it("takes the document's focus off a page whose window another window is raised over, however it was raised", () => {
     frameOf("win-1").focus();
-    // A raise no press on a handle made (a press on the window's shield, an agent's focus, a menu's Focus last).
+    // A raise that no press on a handle made.
     store.restoreWindow("win-2");
     layer.reconcile();
     expect(activeFocusedWindowId(store.getState())).toBe("win-2");
