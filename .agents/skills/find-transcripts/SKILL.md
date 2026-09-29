@@ -119,8 +119,8 @@ jq -r '
 ```
 
 Drop the `[0:300]` slices to see tool inputs and outputs whole. An old-format
-file stored only the first 200 characters of each tool input (`input_preview`);
-for a claude agent the complete record is the raw transcript
+file stored only the first 200 characters of each tool input (`input_preview`)
+and the first 2,000 of each tool output; for a claude agent the complete record is the raw transcript
 `logs/claude_transcript/events.jsonl` in the same agent directory (kept for
 destroyed agents too).
 
