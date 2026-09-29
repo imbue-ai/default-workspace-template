@@ -61,7 +61,6 @@ CHAT_LIST_RETRY_WINDOW_SECONDS = 60.0
 CHAT_LIST_RETRY_INTERVAL_SECONDS = 2.0
 CHAT_LIST_REQUEST_TIMEOUT_SECONDS = 10.0
 
-# A restart stops and starts the harness, and the chat app's own restart allows it a minute.
 RESTART_TIMEOUT_SECONDS = 180.0
 
 # How long the self-restart helper waits for the pass's last turn to end.
@@ -80,7 +79,7 @@ class ListedChat:
     chat_id: str
     name: str
     title: str
-    # The chat app's status: working, idle, attention, stopped, or error.
+    # The chat app's status for the chat (its ``ChatStatus`` wire value).
     status: str
     # The mngr lifecycle state of the agent the chat runs on.
     lifecycle_state: str
