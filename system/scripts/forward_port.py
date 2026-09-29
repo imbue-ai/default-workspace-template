@@ -40,7 +40,7 @@ Icons
 -----
 An app may register an icon so the workspace UI can draw it instead of a
 generic glyph. ``docs/system/app-icons.md`` holds what one must look like (a
-48 by 48 two-layer tile, and the palette it is coloured from); this module only
+216 by 216 two-layer tile, and the palette it is coloured from); this module only
 checks that the markup is safe to store.
 
 **The registry stores the SVG markup itself**, as a plain TOML string on the
@@ -132,7 +132,8 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
 
 # Cap on the stored SVG markup. Generous for a hand-drawn or exported glyph
-# (icons in this repo run a few hundred bytes) while keeping apps.toml small:
+# (icons in this repo run from a few hundred bytes to a couple of kilobytes)
+# while keeping apps.toml small:
 # every consumer re-reads the whole registry on every change, and the markup
 # is broadcast to every connected client.
 MAX_ICON_LENGTH = 16384

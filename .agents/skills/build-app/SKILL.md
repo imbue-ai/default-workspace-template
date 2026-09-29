@@ -132,9 +132,9 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   already used by an existing program (`system_interface`, `browser`, etc.
   are reserved by the scaffolder, which also refuses a name any
   `system/supervisord.conf.d/*.conf` already declares).
-- **Draw the app's icon** -- a 48 by 48 two-layer tile specific to what
+- **Draw the app's icon** -- a 216 by 216 two-layer tile specific to what
   *this* app does, built to the rules in `docs/system/app-icons.md` (a
-  flat background under one fill-only glyph inside a centred 32 box, in
+  flat background under one fill-only glyph inside a centred 144 box, in
   a colour pair from the palette that doc carries);
   `forward_port.py` refuses a brand-new registration without one. The
   scaffold copies it beside the app's manifest (`app.toml`), which names
@@ -691,14 +691,15 @@ Flags:
   warns on re-registration (the stored icon is kept), so a corrupted
   icon cannot crash-loop a running app.
 
-  **Draw the icon to the rules in `docs/system/app-icons.md`**: a 48 by
-  48 tile of exactly two layers -- a flat background, and one glyph in a
-  second colour that fits a 32 by 32 box centred in it. The frame to
-  author in is
+  **Draw the icon to the rules in `docs/system/app-icons.md`**: a 216 by
+  216 tile of exactly two layers -- a flat background, and one glyph in a
+  second colour that fits a 144 by 144 box centred in it. The tile is
+  drawn small but authored large, so the hand-drawn detail the look asks
+  for has a grid to sit on. The frame to author in is
 
   ```svg
-  <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
-  <rect width="48" height="48" rx="15.36" fill="BACKGROUND"/>
+  <svg xmlns="http://www.w3.org/2000/svg" width="216" height="216" viewBox="0 0 216 216" fill="none">
+  <rect width="216" height="216" rx="69.12" fill="BACKGROUND"/>
   <path d="..." fill="FOREGROUND"/>
   </svg>
   ```
@@ -708,9 +709,11 @@ Flags:
   `--desk-icon-radius` also uses; and a root `fill="none"`, so the shell
   does not ink the tile with `currentColor` the way it inks a line
   glyph. The colours are a pair from the palette in that doc, and the
-  glyph is one iconic mark for what the app is *for*, drawn by hand
-  rather than ruled. That doc also says how a glyph gets from Figma into
-  the repo without losing its hand-placed points.
+  glyph is one iconic mark for what the app is *for*: a blobby,
+  lopsided silhouette with its interior detail cut through to the
+  background colour, drawn in one pass and never revised. That doc
+  carries the full look, and says how a glyph gets from Figma into the
+  repo without losing its hand-placed points.
 - `--no-icon`: skip the icon requirement for a brand-new entry. Uses
   the generic letter monogram. Use this only when the user explicitly
   declines an icon, or for short-lived preview windows.

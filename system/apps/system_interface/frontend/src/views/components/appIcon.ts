@@ -196,11 +196,12 @@ function namespaceIds(root: Element, prefix: string): void {
   }
 }
 
-/** The tile every icon is drawn on: `docs/system/app-icons.md`, 48 square with a 32 per cent
- *  corner, and a 32 box centred in it for the mark. */
-const TILE_SIZE = 48;
-const TILE_RADIUS = 15.36;
-const GLYPH_BOX = 32;
+/** The tile every icon is drawn on: `docs/system/app-icons.md`, 216 square with a 32 per cent
+ *  corner, and a 144 box centred in it for the mark. The tile is authored at 216 and drawn at
+ *  whatever pixel size the caller asks for. */
+const TILE_SIZE = 216;
+const TILE_RADIUS = 69.12;
+const GLYPH_BOX = 144;
 const GLYPH_INSET = (TILE_SIZE - GLYPH_BOX) / 2;
 
 // The pair the shell paints when an app brought no tile of its own: under the monogram of an app
@@ -387,7 +388,7 @@ export function appIconMarkup(
  * the same app is recognisable everywhere it is drawn.
  *
  * It is built to the rules every app icon follows
- * (`docs/system/app-icons.md`): 48 by 48, a flat background under one
+ * (`docs/system/app-icons.md`): 216 by 216, a flat background under one
  * fill-only mark, a 32 per cent corner. That is what lets it stand beside the
  * drawn icons -- the surfaces that draw an app paint nothing behind its icon,
  * so a transparent monogram would be a thin letter floating on the wallpaper.
@@ -407,7 +408,7 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
     `viewBox="0 0 ${TILE_SIZE} ${TILE_SIZE}" ` +
     `fill="none" aria-hidden="true">` +
     `<rect width="${TILE_SIZE}" height="${TILE_SIZE}" rx="${TILE_RADIUS}" fill="${FALLBACK_TILE_BACKGROUND}"/>` +
-    `<text x="24" y="25.4" fill="${FALLBACK_TILE_INK}" font-size="24" font-weight="600" ` +
+    `<text x="108" y="114.3" fill="${FALLBACK_TILE_INK}" font-size="108" font-weight="600" ` +
     `text-anchor="middle" dominant-baseline="central">${initial}</text></svg>`
   );
 }
