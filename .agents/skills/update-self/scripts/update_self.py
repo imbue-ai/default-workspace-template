@@ -163,7 +163,11 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
-from run_in_background import own_chat_id
+from run_in_background import (
+    OWN_OOM_SCORE_ADJ_PATH,
+    move_to_runner_oom_band,
+    own_chat_id,
+)
 from update_agent_restarts import (
     ChatListUnavailableError,
     compose_self_restart_note,
@@ -530,6 +534,9 @@ def _cmd_restart_self(args: argparse.Namespace) -> int:
         return 1
     repo_root = _repo_root(args).resolve()
     if args.wait:
+        # The helper has to outlive the chat it restarts, so it leaves the band of the tool
+        # call that started it, which is shed before the agent.
+        move_to_runner_oom_band(OWN_OOM_SCORE_ADJ_PATH)
         return restart_self_when_idle(repo_root, chat_id, HttpClient(), Runner())
     if not args.reason:
         print(
