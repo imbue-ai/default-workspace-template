@@ -40,9 +40,9 @@ These hold for every icon: the built-in ones and any new app's alike.
   interface, and not an abstraction: the reader should be able to say what the thing is.
 - The two colours are **a pair from the palette below**.
 
-Sizing inside the 144 box is optical, not maximal: scale a set of icons together so their
-marks carry the same weight, with the largest reaching 144. A circular mark runs large, a
-sparse one smaller.
+Sizing inside the 144 box is optical, not maximal: what should match from one icon to the
+next is the weight the mark carries, not the fraction of the box it fills. A circular mark
+runs large, reaching 144; a sparse one runs smaller.
 
 ## The look
 
@@ -65,9 +65,10 @@ Drawn by hand means:
 The deviation is slight, and it lives in the shape -- never in the quality of an edge,
 which stays smooth however much the line under it moves. No fray, no chatter, no noise
 along a boundary. Corners stay generous and of roughly one radius each; rounding that
-varies corner to corner reads as sloppy rather than as hand-made. Every stroke in the set
-is drawn to one nominal weight, thin against the thing it crosses, so the object stays
-what you read first.
+varies corner to corner reads as sloppy rather than as hand-made. Every cut in one icon is
+drawn to one nominal weight, and that weight is thin against the thing it crosses --
+roughly a sixth of it, so about 25 in 216 for a mark that fills the box. A cut wide enough
+to halve the body turns the object into two shapes.
 
 **Big, simple marks.** The glyph carries one or two kinds of detail at most -- a cut
 stroke *or* a rim, rarely both, never three. When a mark is not reading, make it bigger
