@@ -12,8 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from conftest import message_chat, seed_welcome_chat
+from script_modules_testing import message_chat, seed_welcome_chat
 
 _BODY = {
     "title": "Getting started",
