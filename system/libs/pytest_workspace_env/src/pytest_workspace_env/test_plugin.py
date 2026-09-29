@@ -3,38 +3,34 @@ import subprocess
 import sys
 from pathlib import Path
 
-from pytest_workspace_env.plugin import REQUIRE_WORKSPACE_ENV_VAR
+from pytest_workspace_env.plugin import MAY_SKIP_MARKER, REQUIRE_WORKSPACE_ENV_VAR
 
-# One test per way a workspace-only test can skip, one skip the plugin must leave alone, and one
-# marked test that runs.
-_INNER_TEST = """
+# One test per way a test can skip, one skip the plugin must leave alone, and one test that runs.
+_INNER_TEST = f"""
 import pytest
 
 
-@pytest.mark.browser
-def test_marked_test_that_skips_itself() -> None:
+def test_a_test_that_skips_itself() -> None:
     pytest.skip("no Fortress on this host 40213")
 
 
-@pytest.mark.real_claude
 @pytest.mark.skipif(True, reason="no claude binary on this host 40213")
-def test_marked_test_skipped_by_a_condition() -> None:
+def test_a_test_skipped_by_a_condition() -> None:
     pass
 
 
-def test_unmarked_test_that_skips_itself() -> None:
-    pytest.skip("skips for a reason of its own 40213")
+@pytest.mark.{MAY_SKIP_MARKER}
+def test_a_test_whose_skip_is_right_in_a_workspace_too() -> None:
+    pytest.skip("needs a non-root user 40213")
 
 
-@pytest.mark.browser
-def test_marked_test_that_runs() -> None:
+def test_a_test_that_runs() -> None:
     pass
 """
 
-_INNER_INI = """[pytest]
+_INNER_INI = f"""[pytest]
 markers =
-    browser: drives a browser
-    real_claude: runs the real claude binary
+    {MAY_SKIP_MARKER}: a skip that is right inside a workspace too
 """
 
 
@@ -43,7 +39,7 @@ def _run_inner_session(
 ) -> subprocess.CompletedProcess[str]:
     project.mkdir()
     (project / "test_inner.py").write_text(_INNER_TEST)
-    # An empty-ish ini keeps the workspace's own pytest config (addopts, ignores) out of the inner run.
+    # A minimal ini keeps the workspace's own pytest config (addopts, ignores) out of the inner run.
     (project / "pytest.ini").write_text(_INNER_INI)
     inherited = {
         name: value
@@ -71,7 +67,7 @@ def _run_inner_session(
     )
 
 
-def test_marked_tests_that_skip_fail_when_the_workspace_env_is_required(
+def test_skips_fail_when_the_workspace_env_is_required_unless_marked(
     tmp_path: Path,
 ) -> None:
     completed = _run_inner_session(
@@ -83,17 +79,13 @@ def test_marked_tests_that_skip_fail_when_the_workspace_env_is_required(
     assert "1 failed, 1 passed, 1 skipped, 1 error" in completed.stdout, (
         completed.stdout
     )
-    assert (
-        "FAILED test_inner.py::test_marked_test_that_skips_itself" in completed.stdout
-    )
-    assert (
-        "ERROR at setup of test_marked_test_skipped_by_a_condition" in completed.stdout
-    )
+    assert "FAILED test_inner.py::test_a_test_that_skips_itself" in completed.stdout
+    assert "ERROR at setup of test_a_test_skipped_by_a_condition" in completed.stdout
     assert "SKIPPED [1] test_inner.py:" in completed.stdout
-    # The failure names the marker and keeps the skip's own reason.
-    assert "a `browser` test skipped" in completed.stdout
+    assert "needs a non-root user 40213" in completed.stdout
+    # The failure says how to mark a legitimate skip and keeps the skip's own reason.
+    assert f"@pytest.mark.{MAY_SKIP_MARKER}" in completed.stdout
     assert "no Fortress on this host 40213" in completed.stdout
-    assert "a `real_claude` test skipped" in completed.stdout
     assert "no claude binary on this host 40213" in completed.stdout
 
 

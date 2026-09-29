@@ -40,7 +40,7 @@ dev = [
     "mngr-cli-contract",
     # Keeps tmp_path somewhere a stub executable can run (a workspace container mounts /tmp noexec).
     "pytest-executable-tmp",
-    # Fails a browser / real_claude test that skips where the environment is meant to be complete
+    # Fails a test that skips where the environment is meant to be complete
     # (the CI job that runs the suites inside the workspace image).
     "pytest-workspace-env",
     # The tests' polling helper (imbue.mngr.utils.polling); the shell's own code imports
@@ -80,6 +80,7 @@ markers = [
     "browser: marks tests that drive a browser",
     "frontend: marks tests that read an app's frontend source",
     "real_claude: marks tests that run the real claude binary",
+    "may_skip_in_workspace: marks a test whose skip holds inside a provisioned workspace too, so pytest-workspace-env leaves it alone",
     "flaky: marks tests as known-flaky (retried by offload with a separate retry count)",
 ]
 junit_family = "xunit1"

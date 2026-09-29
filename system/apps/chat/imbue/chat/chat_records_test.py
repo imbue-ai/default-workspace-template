@@ -170,6 +170,7 @@ def test_a_file_store_round_trips_a_record_and_deletes_its_folder(tmp_path: Path
     store.delete(ChatId(second))
 
 
+@pytest.mark.may_skip_in_workspace
 @pytest.mark.skipif(os.geteuid() == 0, reason="root removes a folder whatever its parent's mode says")
 def test_a_file_store_raises_when_a_record_cannot_be_removed(tmp_path: Path) -> None:
     """A delete that leaves the record on disk must not look like a delete: the next build would

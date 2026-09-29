@@ -110,8 +110,8 @@ checkpoint image is `system/Dockerfile` as shipped, plus a first boot
 (the Fortress env.d unit and the offload binary); it rebuilds only when one of
 the config's build inputs changes, and every other commit rides it as a thin
 source diff followed by `system/scripts/offload_post_patch.sh`. Inside the
-image a `browser` or `real_claude` test that skips fails the job
-(`system/libs/pytest_workspace_env`). Coverage for the two app suites is
+image any test that skips fails the job, unless it is marked
+`may_skip_in_workspace` (`system/libs/pytest_workspace_env`). Coverage for the two app suites is
 measured there and held to each app's floor on the runner.
 
 That job needs two things this repo cannot provide for itself, and skips

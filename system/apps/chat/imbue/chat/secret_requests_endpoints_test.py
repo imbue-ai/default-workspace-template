@@ -160,6 +160,7 @@ def test_filing_answers_like_the_message_route_for_an_unknown_or_not_yet_known_c
     assert not_ready_client.post("/api/secret-requests", json=body).status_code == 503
 
 
+@pytest.mark.may_skip_in_workspace
 @pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file, so there is nothing to refuse")
 def test_an_unreadable_existing_env_file_answers_with_a_reason_rather_than_crashing(tmp_path: Path) -> None:
     """Filing reads the file already there to report what a submit would replace, so a
