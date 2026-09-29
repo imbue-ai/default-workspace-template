@@ -271,8 +271,11 @@ default run when it was reached as a consumer, and only its tests marked
 `browser` or `frontend` (`-m 'browser or frontend'`) when only a frontend it
 builds changed; reached both ways, it runs its default run and then only its
 `browser` tests (`-m browser`), since the default run holds the `frontend` ones.
+A changed test file of such an app is not a change to its Python: nothing else
+in the suite imports it, so it runs on its own with every marker (`-m ''`), and
+a marker run beside it leaves it out (`--ignore`) so none of its tests runs twice.
 The selection reads the markers, never the test files. A run of
-only some of such a suite's tests (by marker, or a changed test file) passes
+only some of such a suite's tests (by marker, or changed test files) passes
 `--no-cov` when the suite measures coverage, since only a whole run can reach
 its coverage floor. When a run includes the chat suite's `test_no_type_errors`,
 the test is deselected and its `ty check` printed as a command of its own, so

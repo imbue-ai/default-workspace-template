@@ -367,6 +367,34 @@ def test_a_frontend_change_to_the_app_runs_its_npm_checks_and_only_its_browser_a
     ]
 
 
+def test_a_changed_test_file_of_the_app_runs_alone_with_every_marker(workspace: Path) -> None:
+    selection = _select(workspace, ["system/apps/chat/imbue/chat/test_e2e.py"])
+
+    # Nothing else in the suite imports it, so neither the rest of the suite nor the type check runs.
+    assert _command_lines(selection) == [
+        *_FRONTEND_BUILD,
+        _ALWAYS_RUN,
+        "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_e2e.py)",
+    ]
+
+
+def test_a_frontend_change_with_a_new_browser_test_runs_that_file_once_and_not_the_whole_suite(
+    workspace: Path,
+) -> None:
+    selection = _select(
+        workspace, ["system/apps/chat/frontend/src/main.ts", "system/apps/chat/imbue/chat/test_e2e.py"]
+    )
+
+    lines = _command_lines(selection)
+    assert (
+        "(cd system/apps/chat && uv run pytest --no-cov -m 'browser or frontend' --ignore=imbue/chat/test_e2e.py)"
+        in lines
+    )
+    assert "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_e2e.py)" in lines
+    assert _CHAT_WHOLE_WITH_BROWSER not in lines
+    assert _CHAT_TYPE_CHECK not in lines
+
+
 def test_an_app_reached_through_a_library_and_its_frontend_adds_only_its_browser_tests(
     workspace: Path,
 ) -> None:
