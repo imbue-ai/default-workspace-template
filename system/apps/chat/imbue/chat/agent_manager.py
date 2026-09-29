@@ -2650,7 +2650,11 @@ class AgentManager:
     def _run_session_sweep(self) -> None:
         while not self._session_sweep_stop.is_set():
             self._reconnect_pending_sessions()
-            self.ensure_spare_chat()
+            # A spares file that cannot be written must not end the sweep; the next pass retries.
+            try:
+                self.ensure_spare_chat()
+            except OSError as e:
+                _loguru_logger.warning("Could not keep the spare chat agents: {}", e)
             self._session_sweep_stop.wait(timeout=_SESSION_SWEEP_INTERVAL_SECONDS)
 
     def _reconnect_pending_sessions(self) -> None:
