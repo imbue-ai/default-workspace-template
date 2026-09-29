@@ -1,0 +1,75 @@
+# offload configuration for running the repo-root pytest suite inside the
+# workspace image on Modal (the test-workspace-image CI job). The two app suites
+# have their own configs beside this one, because each runs from its own
+# directory and offload takes one pytest root per config.
+[offload]
+max_parallel = 20
+test_timeout_secs = 600
+sandbox_repo_root = "/home/user/workspace"
+# First boot, then what a CI image needs on top of it (the browser stack and the
+# offload binary); once per checkpoint build.
+sandbox_init_cmd = "default-workspace-template-seed && bash /home/user/workspace/system/scripts/offload_sandbox_init.sh"
+post_patch_cmd = "bash /home/user/workspace/system/scripts/offload_post_patch.sh"
+
+[provider]
+type = "modal"
+# The product image, unmodified. Modal layer-caches each of its steps.
+dockerfile = "system/Dockerfile"
+cpu_cores = 2.0
+memory_gb = 4
+
+[checkpoint]
+# A commit touching any of these rebuilds the checkpoint image; every other
+# commit rides it as a thin source diff.
+build_inputs = [
+    "system/Dockerfile",
+    ".mngr/apt-snapshot-timestamp",
+    # .dockerignore is a symlink to it, so it decides what `COPY .` brings into the image.
+    ".gitignore",
+    "pyproject.toml",
+    "uv.lock",
+    "system/package.json",
+    "system/package-lock.json",
+    # Everything system/Dockerfile copies in and runs.
+    "system/scripts/write_apt_sources.sh",
+    "system/scripts/setup_system.sh",
+    "system/scripts/_provision_guard.sh",
+    "system/scripts/install_secret_scanners.sh",
+    "system/scripts/agy_install-1.1.22.sh",
+    "system/scripts/install_owner_exec.sh",
+    "system/scripts/install_dufs.sh",
+    "system/scripts/install_earlyoom.sh",
+    "system/scripts/install_dependencies.sh",
+    "system/scripts/_mngr_git_auth.sh",
+    "system/scripts/build_workspace.sh",
+    "system/scripts/_tool_env.sh",
+    "system/scripts/install_mngr.py",
+    "system/scripts/list_mngr_plugins.py",
+    "system/scripts/tool_env.py",
+    "system/scripts/default_workspace_template_seed.sh",
+    "system/scripts/seed_home_skeleton.sh",
+    # What the first-boot steps run on top of it.
+    "system/scripts/env.d/1000-playwright-fortress.sh",
+    "system/scripts/env.d/1300-mcpc-home-link.sh",
+    "system/scripts/offload_sandbox_init.sh",
+]
+
+[framework]
+type = "pytest"
+command = "uv run pytest"
+# Inside the image every workspace-only test can run, so a skip is a missing install (pytest-workspace-env).
+env = { DWT_REQUIRE_WORKSPACE_ENV = "1" }
+
+[groups.all]
+retry_count = 0
+filters = "-m 'not flaky'"
+
+[groups.flaky]
+retry_count = 4
+filters = "-m 'flaky'"
+
+[report]
+output_dir = "test-results/root"
+junit = true
+junit_file = "junit.xml"
+download_globs = [".test_output/**"]

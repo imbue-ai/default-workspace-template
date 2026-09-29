@@ -18,7 +18,6 @@ import asyncio
 import contextlib
 import http.server
 import json
-import os
 import socket
 import threading
 import time
@@ -40,17 +39,6 @@ from browser.xinput import InputRouter
 from playwright.async_api import Error as PlaywrightError
 from Xlib import X
 from Xlib.display import Display
-
-# Real Chromium launches but its CDP connection never completes on the GitHub Actions
-# runner -- the launch hangs (manifesting as a pytest-timeout + a NoneType CDP-session
-# error), even though `playwright install` put the binary there and even with the sandbox
-# off. It is not a product issue: the fleet runs fine on real workspaces (docker / Lima /
-# cloud, all verified). So skip the real-Chromium tests in GH CI; they still run locally
-# and on offload, where a real browser actually comes up.
-_SKIP_REAL_CHROMIUM_IN_GH_CI = pytest.mark.skipif(
-    os.environ.get("GITHUB_ACTIONS") == "true",
-    reason="real Chromium can't start under the GitHub Actions runner; runs locally / on offload",
-)
 
 
 def _require_running(browser: "bsession.LiveBrowser") -> None:
@@ -102,7 +90,6 @@ async def _running_browser(
             bsession.set_proxy_server(None)
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 async def _noop_wake_method(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
     """Stand-in for ``_wake_agent``: skip the real ``message_chat.py`` subprocess in tests."""
 
@@ -272,8 +259,6 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
         runner._init_done.set()
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pytest.MonkeyPatch) -> None:
     # While the fleet is still restoring, taking ownership returns 503 "initializing", but
     # read-only routes (ls/health) AND create stay open -- the locked "init must not block
@@ -357,7 +342,6 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
 
 
 @pytest.mark.browser
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
     # The whole handover in one pass against a real browser: Chromium launches without
@@ -391,7 +375,6 @@ def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest
 
 
 @pytest.mark.browser
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
     # The lifecycle hole this design had to close: crash detection must NOT depend on an
@@ -413,7 +396,6 @@ def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
 
 
 @pytest.mark.browser
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch) -> None:
     # The whole point of persistence: a cookie set in one daemon "session" is still
@@ -670,7 +652,6 @@ def _held_keycodes(display: str) -> list[int]:
 
 
 @pytest.mark.browser
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> None:
     # A window.open with a features string asks for a popup, which would be a second
@@ -711,7 +692,6 @@ def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> Non
 
 
 @pytest.mark.browser
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
     # Playwright auto-attaches with waitForDebuggerOnStart, so Chromium holds every new tab
@@ -745,7 +725,6 @@ def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkey
 
 
 @pytest.mark.browser
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(180)
 def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
     # Paste-in presses Ctrl+V in the shown tab over CDP after setting the X clipboard. The
