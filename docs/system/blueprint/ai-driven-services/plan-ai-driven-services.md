@@ -124,12 +124,12 @@ API key is present) or shells out to `claude -p` (when it isn't), and the
     after `--`, so one starting with `-` is not read as an option); run the
     subprocess off the event loop (a worker thread) so an async service isn't
     blocked; raise with the captured stderr on a non-zero exit; parse the JSON
-    result distinguishing the **success arm** (`subtype == "success"`, has `result`)
-    from the **error arm** (`is_error` true -- e.g. `error_max_turns` -- carrying
-    `errors`), raising on the error arm or a missing `result` rather than
-    returning empty text; return a small typed result carrying `text`,
-    `cost_usd` (from `total_cost_usd`), `usage` (input/output plus cache-read and
-    cache-write tokens), and the raw JSON.
+    result distinguishing the **success arm** (`subtype == "success"`, has
+    `result`) from the **error arm** (`is_error` true -- e.g.
+    `error_max_turns` -- carrying `errors`), raising on the error arm or a
+    missing `result` rather than returning empty text; return a small typed
+    result carrying `text`, `cost_usd` (from `total_cost_usd`), `usage`
+    (input/output plus cache-read and cache-write tokens), and the raw JSON.
   - *Completion wrapper:* disable tools (`--tools ""`) **and** run from an
     isolated temporary working directory so `claude -p` doesn't auto-discover the
     repo's `CLAUDE.md` / `.claude` hooks (which otherwise bleed into -- and
