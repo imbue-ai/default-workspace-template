@@ -74,7 +74,7 @@ function permissionRequestResult(ts: string, requestId: string): TranscriptEvent
   };
 }
 
-/** The resolution notice minds injects once the agent is actually told. */
+/** The resolution notice Imbue Studio injects once the agent is actually told. */
 function resolutionNotice(ts: string, requestId: string): TranscriptEvent {
   return {
     timestamp: ts,

@@ -1,6 +1,6 @@
 /**
- * Type surface for the vendored minds embed contract module (see the vite
- * alias in vite.config.ts). The implementation is plain JS shipped by minds
+ * Type surface for the vendored Imbue Studio embed contract module (see the vite
+ * alias in vite.config.ts). The implementation is plain JS shipped by Imbue Studio
  * (mngr's `apps/minds/imbue/minds/desktop_client/static/embed_contract.js`);
  * this declaration mirrors its exports -- update both together.
  */

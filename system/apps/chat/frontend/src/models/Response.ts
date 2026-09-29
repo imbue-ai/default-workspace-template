@@ -154,7 +154,7 @@ export interface AssistantMessageEvent extends BaseTranscriptEvent {
   // is carried for wording only, and never gates whether the error renders.
   api_error_kind: string | null;
   // True when the API error is the model provider's fault (a 5xx / overloaded)
-  // rather than our request -- these get the "not Mind's fault" note.
+  // rather than our request -- these get the "not Imbue Studio's fault" note.
   is_provider_fault: boolean;
   // True when the harness recorded READABLE reasoning for this turn (codex summaries,
   // pi thinking blocks, agy step reasoning; never claude, whose thinking is encrypted).
@@ -214,7 +214,7 @@ export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
 }
 
 /** The ``source`` of the events of a seeded chat's seed segment (the backend's ``SEED_SOURCE``):
- *  the turns the Mind app wrote before the workspace had any agent. */
+ *  the turns the Imbue Studio app wrote before the workspace had any agent. */
 export const SEED_SOURCE = "seed";
 
 /** The pseudo-harness a seed segment reads as (the backend's ``HarnessType.SEED``). */

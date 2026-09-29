@@ -1,6 +1,6 @@
 # data/documents/
 
-A starter folder for documents your mind makes for you -- reports, notes,
+A starter folder for documents your agent makes for you -- reports, notes,
 exports, anything file-shaped.
 
 This is just a suggestion: everything visible under `data/` is yours to

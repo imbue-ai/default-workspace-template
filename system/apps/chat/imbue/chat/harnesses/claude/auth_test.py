@@ -304,4 +304,4 @@ def test_status_managed_env_outranks_credentials_fold(isolated_claude_config: Pa
 # repo<->mngr CLI contract
 # These assert the argv shapes we hand to subprocesses are accepted by the
 # LIVE mngr CLI (parse-only), so a CLI flag rename breaks these tests
-# instead of runtime behavior in a deployed mind.
+# instead of runtime behavior in a deployed workspace.

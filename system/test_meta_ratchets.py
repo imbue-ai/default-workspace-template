@@ -420,7 +420,7 @@ def test_prevent_application_terminology() -> None:
 # identifiers that still say "service" so the count never grows.
 # Identifiers only, never prose: Python names come from the tokenizer (so
 # docstrings and comments do not count), TypeScript names from the source with
-# its comments and string literals blanked. The remainder is the minds embed
+# its comments and string literals blanked. The remainder is the Imbue Studio embed
 # contract's own vocabulary, which the shell speaks but does not own: the
 # ``serviceName`` payload key of ``minds:open-share-settings`` (its vendored
 # declaration file is skipped whole), and one HTTP status name.

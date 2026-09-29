@@ -4,7 +4,6 @@ import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   DETACHED_WINDOWS,
   EMBEDDER_CAPABILITIES,
-  FOCUS_CHAT,
   POP_OUT_WINDOW,
   REATTACH_WINDOW,
   TEAR_OUT,
@@ -13,6 +12,7 @@ import {
   announceReadyToEmbedder,
   sendToEmbedder,
   setEmbedderMessageHandler,
+  setEmbedderMessageObserver,
 } from "@imbue/workspace-ui/src/embed";
 import "./style.css";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
@@ -112,10 +112,8 @@ function bootstrap(): void {
   // shell side of the app contract.
   initEmbedderRelay();
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, () => void desktopStore.closeFocusedWindow());
-  setEmbedderMessageHandler(FOCUS_CHAT, (message) => {
-    const chatId = message.chatId;
-    if (typeof chatId === "string" && chatId !== "") void desktopStore.focusChat(chatId);
-  });
+  // Every message the chrome sends also goes, its payload unread, to the apps registered for its type.
+  setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message));
   // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     desktopStore.setCanPopOut(message.canPopOut === true);
@@ -146,9 +144,8 @@ function bootstrap(): void {
   }
   const started = desktopStore.start(takeDeepLinkFromLocation());
   // Announced once the page can act on what the embedder held, not merely once a handler is
-  // registered: a focus-chat ask needs the desktops and the apps. ``start`` reads both from the
-  // inventory, but one whose inventory read failed returns without them, and the apps then land
-  // with the socket's first ``apps_updated``; the embedder sends the ask the moment this lands.
+  // registered: relaying a message needs the apps (which of them take it), and the embedder sends
+  // what it held the moment this lands.
   void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder());
 }
 

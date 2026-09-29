@@ -46,6 +46,7 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.testing import identity_headers
+from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
@@ -148,6 +149,8 @@ def _running_e2e_server(
     is_second_app_offered: bool = False,
     # The pinned stub's ``[pin]`` as ``(style, scope, default_mode)``; None offers no pinned app.
     pin: tuple[str, str, str] | None = None,
+    # Further registry rows, for apps a test serves itself.
+    extra_rows: tuple[str, ...] = (),
 ) -> Generator[E2EServer, None, None]:
     """Run the shell on a free port over the stub app (and the second one when asked).
 
@@ -220,7 +223,7 @@ def _running_e2e_server(
                     },
                 )
             )
-        write_registry(registry_path, *rows)
+        write_registry(registry_path, *rows, *extra_rows)
         monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
         monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
         state_dir = tmp_path / "shell-state"
@@ -1307,15 +1310,16 @@ def test_close_removes_the_window_for_every_client_and_the_close_chord_closes_th
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupant(tmp_path: Path, page: Page) -> None:
-    """Dragging a shortcut to an empty cell moves it there for everyone; dropping one on an occupied cell takes the
-    cell and moves the occupant to the nearest free one, so no two shortcuts share a cell."""
+def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tmp_path: Path, page: Page) -> None:
+    """Dragging a shortcut to an empty cell moves it there for everyone and moves nothing else; held over an
+    occupied cell the occupant steps aside under the hand, before the drop, and the drop keeps it there."""
     with _running_e2e_server(tmp_path, is_second_app_offered=True) as server:
         _land(page, server)
         assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0), _SECOND_SHORTCUT_KEY: (0, 1)}
         backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
 
         docs = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
+        notes = page.locator(f'[data-shortcut="{_SECOND_SHORTCUT_KEY}"]')
         _drag(page, _center(_box(docs)), _cell_center(backdrop, 2, 2))
         wait_for(
             lambda: _shortcut_cells(server.base_url)[_STUB_SHORTCUT_KEY] == (2, 2),
@@ -1324,19 +1328,28 @@ def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupa
             error_message="the shortcut never moved to (2, 2)",
         )
         expect(docs).to_have_attribute("data-cell", "2,2")
+        # An empty cell needs nothing stepping aside: the other shortcut stayed where it was.
+        assert _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (0, 1)
 
-        notes = page.locator(f'[data-shortcut="{_SECOND_SHORTCUT_KEY}"]')
-        _drag(page, _center(_box(notes)), _cell_center(backdrop, 2, 2))
+        # Held over the cell docs is in, without releasing: docs has already stepped aside to (1, 2), the
+        # nearest free cell to the one it is being displaced from, and notes is the icon in the hand.
+        _drag(page, _center(_box(notes)), _cell_center(backdrop, 2, 2), is_released=False)
+        expect(notes).to_have_attribute("data-lifted", "true")
+        expect(notes).to_have_attribute("data-cell", "2,2")
+        expect(docs).to_have_attribute("data-cell", "1,2")
+        # Nothing is written until the drop: the step aside is the desktop showing where the icon would land.
+        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (2, 2), _SECOND_SHORTCUT_KEY: (0, 1)}
+
+        page.mouse.up()
         wait_for(
-            lambda: _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (2, 2),
+            lambda: _shortcut_cells(server.base_url)
+            == {_STUB_SHORTCUT_KEY: (1, 2), _SECOND_SHORTCUT_KEY: (2, 2)},
             timeout=15.0,
             poll_interval=0.1,
-            error_message="the dropped shortcut never took the occupied cell",
+            error_message="the drop did not keep the room that was made for it",
         )
-        # The nearest free cell, ties by lower column then lower row (contracts.md section 10).
-        displaced = _shortcut_cells(server.base_url)[_STUB_SHORTCUT_KEY]
-        assert displaced == (1, 2)
         expect(notes).to_have_attribute("data-cell", "2,2")
+        expect(notes).not_to_have_attribute("data-lifted", "true")
         expect(docs).to_have_attribute("data-cell", "1,2")
 
 
@@ -2017,3 +2030,71 @@ def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_
 
     expect(page.locator(".update-notice-banner")).to_have_count(0, timeout=15000)
     assert _get_json(f"{e2e_server.base_url}/api/updates/pending") is None
+
+
+# The Imbue Studio chrome, played by a page on its own origin: it frames the shell, waits for the shell's
+# ``minds:workspace-ready``, and then posts the chat notification's ask down to it, as the Imbue Studio app does.
+_CHROME_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Chrome</title></head><body>
+<iframe id="workspace" src="__SHELL_URL__/" style="width: 1200px; height: 800px"></iframe>
+<script>
+window.__readyCount = 0;
+window.addEventListener("message", (event) => {
+  const frame = document.getElementById("workspace");
+  if (event.source !== frame.contentWindow || event.data?.type !== "minds:workspace-ready") return;
+  window.__readyCount += 1;
+  frame.contentWindow.postMessage({ type: "minds:focus-chat", chatId: "__CHAT_ID__" }, "*");
+});
+</script></body></html>"""
+
+_FOCUS_CHAT_TYPE = "minds:focus-chat"
+_FOCUS_CHAT_HANDLER_PATH = "/api/focus-chat"
+_FOCUSED_CHAT_ID = "agent-5f0c2e7a"
+
+
+def _chrome_app(shell_url: str) -> Flask:
+    app = Flask("chrome")
+    page = _CHROME_PAGE_TEMPLATE.replace("__SHELL_URL__", shell_url).replace("__CHAT_ID__", _FOCUSED_CHAT_ID)
+    app.add_url_rule("/", view_func=lambda: Response(page, mimetype="text/html"), endpoint="chrome")
+    return app
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_type_once_with_the_client(
+    tmp_path: Path, page: Page
+) -> None:
+    """The shell framed by the Imbue Studio chrome relays ``minds:focus-chat`` to the app whose registry row registers the
+    type: the app's handler route is posted the message once, with the client id of the shell page that received
+    it, and the shell reads nothing of it itself."""
+    received: list[dict[str, Any]] = []
+    with serve_app(message_handling_app(received, _FOCUS_CHAT_HANDLER_PATH, 200)) as handler_app:
+        handler_row = registry_row_toml(
+            "helper",
+            handler_app.http_url,
+            display_name="Helper",
+            message_handlers=[(_FOCUS_CHAT_TYPE, _FOCUS_CHAT_HANDLER_PATH)],
+        )
+        with _running_e2e_server(tmp_path, extra_rows=(handler_row,)) as server:
+            port = find_free_port()
+            chrome_server = make_threaded_server("127.0.0.1", port, _chrome_app(server.base_url))
+            chrome_thread = threading.Thread(target=chrome_server.serve_forever, daemon=True)
+            chrome_thread.start()
+            try:
+                page.goto(f"http://127.0.0.1:{port}/")
+                shell_frame = page.frame_locator("#workspace")
+                expect(shell_frame.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
+                page.wait_for_function("() => window.__readyCount === 1", timeout=15000)
+                wait_for(
+                    lambda: len(received) >= 1,
+                    timeout=15.0,
+                    poll_interval=0.1,
+                    error_message="the app registered for minds:focus-chat was never posted the message",
+                )
+                page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+                shell = next(frame for frame in page.frames if frame.url.startswith(f"{server.base_url}/"))
+                client_id = shell.evaluate("() => localStorage.getItem('si-client-id')")
+            finally:
+                chrome_server.shutdown()
+                chrome_thread.join(timeout=5.0)
+                chrome_server.server_close()
+    assert isinstance(client_id, str) and client_id
+    assert received == [{"type": _FOCUS_CHAT_TYPE, "client_id": client_id, "chatId": _FOCUSED_CHAT_ID}]

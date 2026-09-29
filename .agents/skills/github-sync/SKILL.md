@@ -1,7 +1,7 @@
 ---
 name: github-sync
 description: Enable, check, or disable GitHub sync for this workspace. Enabling creates a dedicated PRIVATE GitHub repo via latchkey, points origin at it, and auto-pushes every commit from every checkout. Workspace data under data/ is NOT synced to GitHub (the restic host backup covers it). Use when the user asks to back up / sync the workspace to GitHub, enable auto-push, or asks about GitHub sync status.
-compatibility: Requires latchkey (see the connect-external-service skill) and the user approving GitHub permissions in the Mind app.
+compatibility: Requires latchkey (see the connect-external-service skill) and the user approving GitHub permissions in the Imbue Studio app.
 metadata:
   author: imbue
 ---
@@ -117,7 +117,7 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
    ```bash
    latchkey curl -s -X POST https://api.github.com/user/repos \
      -H 'Content-Type: application/json' \
-     -d '{"name": "<repo-name>", "private": true, "description": "Private sync repo for the <workspace> minds workspace"}'
+     -d '{"name": "<repo-name>", "private": true, "description": "Private sync repo for the <workspace> Imbue Studio workspace"}'
    ```
 
    (For an org: `POST https://api.github.com/orgs/<org>/repos`.) On a 422

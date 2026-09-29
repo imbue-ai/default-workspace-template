@@ -1,10 +1,10 @@
 """Project-specific ratchets confining postMessage to the sanctioned boundaries.
 
 Cross-frame messaging flows through exactly four files, each owning one
-boundary: messaging with the embedding minds chrome goes through the
-vendored embed contract (imported via the library's ``embed.ts``; see minds'
+boundary: messaging with the embedding Imbue Studio chrome goes through the
+vendored embed contract (imported via the library's ``embed.ts``; see Imbue Studio's
 ``docs/embed-contract.md``), the shell's side of every message crossing to
-or from the frames it created (the minds relay of the workspace app model's
+or from the frames it created (the Imbue Studio relay of the workspace app model's
 contracts section 11 and the ``shell:`` messages of its section 10, the
 location beacons included) goes through ``src/relay.ts``, an app page's side
 of that contract goes through the library's ``app_contract.ts`` (the module
@@ -64,7 +64,7 @@ _RAW_POST_MESSAGE_RULE = RatchetRuleInfo(
         "and shell<->framed page through src/relay.ts and src/app_contract.ts -- so the whole "
         "message surface stays in auditable, allowlisted files with each boundary's source checks "
         "and payload validation applied. Do not call postMessage or register 'message' listeners "
-        "anywhere else -- extend a boundary module instead (see minds' docs/embed-contract.md and "
+        "anywhere else -- extend a boundary module instead (see Imbue Studio's docs/embed-contract.md and "
         "relay.ts's own docstring)."
     ),
 )

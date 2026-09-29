@@ -149,7 +149,7 @@ You can (and should) modify your own configuration to improve yourself:
 
 Commit your changes to git after making modifications, silently (see "Git" below).
 
-Users make "creations": apps (opened as windows), skills (a skill run automatically on a schedule is an "automation" -- run via the machinery in `system/libs/automations/`, see the manage-scheduled-tasks skill), data (documents, images, notes), and customizations of any of them. Templates are a publishable, reusable, bootable snapshot of the creations a mind has built (one repo can accumulate several); another mind can adapt one into itself.
+Users make "creations": apps (opened as windows), skills (a skill run automatically on a schedule is an "automation" -- run via the machinery in `system/libs/automations/`, see the manage-scheduled-tasks skill), data (documents, images, notes), and customizations of any of them. Templates are a publishable, reusable, bootable snapshot of the creations an agent has built (one repo can accumulate several); another agent can adapt one into itself.
 
 # Updates
 
@@ -223,6 +223,8 @@ If you get a failure when trying to commit the first time, just try committing a
 If something unexpected happens -- errors, confusing state, things not working as documented -- use the `dealing-with-the-unexpected` skill for guidance.
 
 A background OOM-prevention daemon (earlyoom) kills ("sheds") memory-heavy processes under sustained memory pressure -- most-expendable first (an agent's build/test/browser subprocesses before the agent itself). If a command of yours dies with exit 137 (or SIGKILL/SIGTERM) and you did not kill it, confirm by checking the shed ledger at `/home/user/workspace/data/.state/oom_priority/events/shed.jsonl` for a record naming it (matched by pid or process name). If it was shed, do NOT blindly re-run a memory-heavy command -- it will likely be shed again; find a lower-memory approach (smaller batches, streaming, releasing data you no longer need) and only retry if you can.
+
+`/tmp` is a small RAM disk: a tmpfs capped at about 1 GiB, whose contents count against the container's memory limit until deleted. A write past the cap fails with "No space left on device" (ENOSPC), and until you delete what filled it, everything else that writes to `/tmp` fails the same way. Keep it to small files. Anything that can run to gigabytes -- a copy of an app's data, a clone, a download, a backup export or restore -- goes on disk: a throwaway file under `/var/tmp` (outside the backup), and a copy of an app's data through `serve_isolated_instance.py --copy` (see the `update-app` skill), which checks that it fits.
 
 # Sandboxed runtime
 
