@@ -77,7 +77,7 @@ def _calls(record: Path) -> list[dict[str, Any]]:
 
 
 def test_only_idle_chats_other_than_the_pass_and_its_worker_are_restarted(
-    fake_chat_list: Any, monkeypatch: pytest.MonkeyPatch
+    fake_chat_list: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     workspace = fake_chat_list.workspace
     record = _install_message_chat_recorder(workspace)
@@ -118,13 +118,56 @@ def test_only_idle_chats_other_than_the_pass_and_its_worker_are_restarted(
                         "WAITING",
                         is_connecting=True,
                     ),
+                    # Ended its turn to wait on a background command the restart would kill.
+                    _chat("agent-awaiting", "Site rebuild", "idle", "WAITING"),
                 ]
             },
         )
     ]
+    running_processes = [
+        [
+            "python3",
+            "/home/user/workspace/system/scripts/run_in_background.py",
+            "--foreground",
+            "--task-dir",
+            "data/.tasks/run-in-background/1",
+            "--chat-id",
+            "agent-awaiting",
+            "--description",
+            "Wait for the worker",
+            "--agent-id",
+            "agent-awaiting",
+            "--",
+            "uv",
+            "run",
+            "create_worker.py",
+            "await",
+        ],
+        # The caller's own invocation, which exits once it has detached the runner.
+        [
+            "python3",
+            "system/scripts/run_in_background.py",
+            "--chat-id",
+            "agent-idle",
+            "--description",
+            "Build",
+            "--",
+            "make",
+        ],
+    ]
+    proc_dir = tmp_path / "proc"
+    for pid, argv in enumerate(running_processes, start=100):
+        (proc_dir / str(pid)).mkdir(parents=True)
+        (proc_dir / str(pid) / "cmdline").write_bytes(
+            b"\0".join(arg.encode() for arg in argv) + b"\0"
+        )
 
     report = update_agent_restarts.restart_idle_agents(
-        workspace, _OWN_CHAT, update_runtime.HttpClient(), update_runtime.Runner()
+        workspace,
+        _OWN_CHAT,
+        update_runtime.HttpClient(),
+        update_runtime.Runner(),
+        process_argvs=lambda: update_agent_restarts.read_process_argvs(proc_dir),
     )
 
     assert [call["argv"] for call in _calls(record)] == [
@@ -147,6 +190,7 @@ def test_only_idle_chats_other_than_the_pass_and_its_worker_are_restarted(
         ("agent-dialog", "waiting on a dialog"),
         ("agent-handoff", "switching to another agent"),
         ("agent-connecting", "receiving a message"),
+        ("agent-awaiting", "running a background command"),
     ]
     assert (
         json.loads(
