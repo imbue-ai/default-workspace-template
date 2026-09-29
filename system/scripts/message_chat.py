@@ -54,8 +54,8 @@ bubble; the browser app's wake-up nudges use it. The tag is pinned against the
 chat app's copy by a test there.
 
 ``--interrupt`` restarts the chat's agent first, through the chat app's interrupt route
-(what the chat's stop button does: the process is restarted and resumes its own
-conversation, and any turn in progress ends), then sends the message, if one was given,
+(the process is replaced and resumes its own conversation, and any turn in progress
+ends), then sends the message, if one was given,
 the same way as any other. A refusal is final there too; only when the chat app cannot
 take the restart does ``mngr start --restart --no-resume`` do it, and ``mngr message``
 then carries the text. A restart with no message exits 0 once the agent is back.
