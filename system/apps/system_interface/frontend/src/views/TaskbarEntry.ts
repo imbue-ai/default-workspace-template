@@ -88,13 +88,10 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
             // is left here is the fade for a window that is out of sight.
             class:
               "taskbar-entry-tile flex size-(--desk-taskbar-entry-icon) shrink-0 items-center justify-center " +
-              // A hairline of light along the top and bottom edges, always; and under it the shadow a
-              // shortcut casts on the desktop, since it is the same tile and on a solid bar it wants
-              // the same lift. Not on a selected chip: the tint under it is what says selected, and
-              // an icon still casting onto it reads as two claims about one chip.
-              (entry.isFocused || isMenuOpen
-                ? "shadow-(--desk-icon-highlight) "
-                : "shadow-[var(--desk-icon-highlight),var(--desk-icon-shadow)] ") +
+              // A hairline of light along the top and bottom edges, over the bar's own quieter cast --
+              // the same in every state, selected included: the tint behind the icon is what says
+              // selected, and the icon has no reason to sit differently on it.
+              "shadow-[var(--desk-icon-highlight),var(--desk-taskbar-entry-shadow)] " +
               (isAvatar ? "rounded-2xl [&>img]:size-full " : "rounded-[32%] [&>svg]:size-full ") +
               (isDimmed ? "opacity-70 group-hover:opacity-100" : ""),
           },
