@@ -15,6 +15,7 @@
 
 import {
   CLOSE_ACTIVE_TAB,
+  OPEN_AI_KEYS_ACK,
   createWorkspaceEndpoint,
   type ContractEndpoint,
   type ContractMessage,
@@ -89,6 +90,7 @@ type EmbedderMessageHandler = (message: ContractMessage) => void;
 // handler and then the observer.
 const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   CLOSE_ACTIVE_TAB,
+  OPEN_AI_KEYS_ACK,
   PERMISSION_RESOLUTIONS,
   FOCUS_CHAT,
   EMBEDDER_CAPABILITIES,
