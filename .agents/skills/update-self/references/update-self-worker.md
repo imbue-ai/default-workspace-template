@@ -311,8 +311,9 @@ A restart is **needed** when the update changes any of:
 
 - **A harness version pin**: `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `PI_VERSION`,
   `PI_SUBAGENTS_VERSION`, `PI_WEB_ACCESS_VERSION` or `OPENCODE_VERSION` in
-  `system/scripts/setup_system.sh`, or an `[agent_types.*]` `version` in `.mngr/settings.toml`.
-  The apply's provisioner installs the new binary, but a running agent keeps executing the
+  `system/scripts/setup_system.sh`, the versioned Antigravity installer it runs
+  (`system/scripts/agy_install-<version>.sh`, agy's only version pin), or an `[agent_types.*]`
+  `version` in `.mngr/settings.toml`. The apply's provisioner installs the new binary, but a running agent keeps executing the
   old one.
 - **Code a harness loads into its process at start**: `.pi/extensions/**` (pi loads every
   extension when it starts), and a harness extension or plugin tree like it that the update
