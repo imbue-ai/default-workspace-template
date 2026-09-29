@@ -120,8 +120,7 @@ The mark is drawn, not assembled:
 
 1. Name the object, and pick the pair -- which of the two is the background.
 2. Fix the object's geometry inside a 144 by 144 box, and place that box in the
-   middle of the tile. Size it by eye against the icons already drawn, not by filling the
-   box.
+   middle of the tile. Size it by eye, not by filling the box.
 3. Fix the nominal weight for the cuts before drawing any of them, and hold that nominal
    for every cut in the icon.
 4. Draw it, placing the points already uneven -- rather than laying down something regular
