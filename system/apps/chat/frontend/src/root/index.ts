@@ -137,7 +137,8 @@ function select(chatId: string | null): void {
   if (fill.kind === "open_new") openChatForEmptyList();
 }
 
-/** Fill an empty slot now that something it depends on changed (the chat list arrived, the root came on screen). */
+/** Fill an empty slot now that something it depends on changed (the chat list arrived, the root came on screen, the
+ *  layout left the phone width). */
 function fillSlot(): void {
   if (selectedChatId === null) select(null);
 }
@@ -446,7 +447,10 @@ function bootstrap(): void {
   initChats();
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
-  compactQuery.addEventListener("change", () => m.redraw());
+  compactQuery.addEventListener("change", () => {
+    fillSlot();
+    m.redraw();
+  });
   const shell = connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
