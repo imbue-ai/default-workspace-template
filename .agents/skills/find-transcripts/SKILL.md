@@ -112,7 +112,7 @@ jq -r '
     [.results[] | "TOOL(\(.extra.tool_name // "?")): \(.content | text | .[0:300])"] | join("\n")
   elif .type == "user_message" then "USER: \(.content)"
   elif .type == "assistant_message" then
-    "AGENT: \([.parts[]? | select(.type == "text").content] | join(" "))"
+    "AGENT: \(.text)"
     + ([.tool_calls[]? | "\n  -> \(.tool_name)(\(.input_preview))"] | join(""))
   elif .type == "tool_result" then "TOOL(\(.tool_name)): \(.output[0:300])"
   else empty end' "$F"
