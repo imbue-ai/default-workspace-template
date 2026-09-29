@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from messenger_testing import RecordingMessengers
+from update_layout import APPS_REGISTRY_PATH
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -92,7 +93,7 @@ def fake_chat_list(tmp_path: Path) -> Iterator[Any]:
     server.answers = [(200, {"chats": []})]
     server.list_reads = 0
     server.workspace = tmp_path / "workspace"
-    registry = server.workspace / "data" / ".state" / "apps.toml"
+    registry = server.workspace / APPS_REGISTRY_PATH
     registry.parent.mkdir(parents=True)
     registry.write_text(
         f'[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:{server.server_address[1]}"\n'

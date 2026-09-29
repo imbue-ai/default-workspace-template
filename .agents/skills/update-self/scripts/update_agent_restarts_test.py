@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 import update_agent_restarts
+import update_layout
 import update_runtime
 
 _OWN_CHAT = "agent-00000000000000000000000000000001"
@@ -295,7 +296,7 @@ class _FakeClock:
 
 
 def _registered_workspace(tmp_path: Path) -> Path:
-    registry = tmp_path / "data" / ".state" / "apps.toml"
+    registry = tmp_path / update_layout.APPS_REGISTRY_PATH
     registry.parent.mkdir(parents=True)
     registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
     return tmp_path
