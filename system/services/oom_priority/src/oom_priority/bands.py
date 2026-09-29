@@ -4,8 +4,9 @@ Each process is assigned to one band by writing its ``oom_score_adj`` once at
 startup. The workspace runs the imbue-ai fork of earlyoom, which picks its
 victim by the kernel's badness computed from each process's ``oom_score_adj``
 and memory -- ``VmRSS + VmSwap + VmPTE + oom_score_adj * (MemTotal + SwapTotal)
-/ 1000`` -- rather than reading ``/proc/<pid>/oom_score``, which gVisor serves
-as 0 for every process. So a higher band makes a process more likely to be shed
+/ 1000``, with the smaps Anonymous total in place of VmRSS under gVisor --
+rather than reading ``/proc/<pid>/oom_score``, which gVisor serves as 0 for
+every process. So a higher band makes a process more likely to be shed
 first, under gVisor and runc alike: one band point is worth MemTotal/1000 of
 memory.
 

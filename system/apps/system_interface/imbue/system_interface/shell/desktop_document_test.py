@@ -426,13 +426,13 @@ def _desktop_with_shortcuts(*shortcuts: DesktopShortcut) -> Desktop:
 
 
 def test_setting_a_shortcut_replaces_the_same_target_in_place_and_appends_a_new_one() -> None:
-    desktop = _desktop_with_shortcuts(_shortcut("chat", "new", 0, 0), _shortcut("files", "new", 0, 1))
+    desktop = _desktop_with_shortcuts(_shortcut("chat", "new", 0, 0), _shortcut("files", "new", 1, 0))
     flipped = with_shortcut(desktop, _shortcut("chat", "new", 0, 0, ShortcutMode.NEW))
     assert [shortcut.target.app for shortcut in flipped.shortcuts] == ["chat", "files"]
     assert flipped.shortcuts[0].mode is ShortcutMode.NEW
-    added = with_shortcut(flipped, _shortcut("terminal", "new", 0, 2))
+    added = with_shortcut(flipped, _shortcut("terminal", "new", 2, 0))
     assert [shortcut.target.app for shortcut in added.shortcuts] == ["chat", "files", "terminal"]
-    assert next_shortcut_cell(added) == GridCell(column=0, row=3)
+    assert next_shortcut_cell(added) == GridCell(column=3, row=0)
     removed = without_shortcut(added, AppName("files"), LaunchPathId("new"))
     assert [shortcut.target.app for shortcut in removed.shortcuts] == ["chat", "terminal"]
 
@@ -447,19 +447,23 @@ def test_moving_a_shortcut_onto_an_occupied_cell_displaces_the_occupant_to_the_n
     assert with_shortcut_moved(desktop, AppName("nope"), LaunchPathId("new"), GridCell(column=3, row=3)) is desktop
 
 
-def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one_column(tmp_path: Path) -> None:
+def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one_row(tmp_path: Path) -> None:
     rows = read_registry(
         write_registry(
             tmp_path / "apps.toml",
+            # Registered last but ranked first, so the seed reads the rank rather than the registration order.
+            registry_row_toml("files", "http://localhost:4", launcher_rank=20, default_shortcut=("open", "focus")),
+            registry_row_toml("hidden", "http://localhost:2", is_internal=True, default_shortcut=("open", "focus")),
+            registry_row_toml("plain", "http://localhost:3"),
             registry_row_toml(
                 "chat",
                 "http://localhost:1",
+                launcher_rank=10,
                 launch_paths=[("new", "New Chat", "/new")],
                 default_shortcut=("new", "new"),
             ),
-            registry_row_toml("hidden", "http://localhost:2", is_internal=True, default_shortcut=("open", "focus")),
-            registry_row_toml("plain", "http://localhost:3"),
-            registry_row_toml("files", "http://localhost:4", default_shortcut=("open", "focus")),
+            # An app that declares no rank follows every ranked one.
+            registry_row_toml("extra", "http://localhost:6", default_shortcut=("open", "focus")),
             # A default shortcut naming a launch path the row does not declare seeds nothing.
             registry_row_toml("odd", "http://localhost:5", default_shortcut=("make", "focus")),
         )
@@ -468,8 +472,13 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
     assert [(str(shortcut.target.app), str(shortcut.target.launch), shortcut.mode.value) for shortcut in seeded] == [
         ("chat", "new", "new"),
         ("files", "open", "focus"),
+        ("extra", "open", "focus"),
     ]
-    assert [shortcut.cell for shortcut in seeded] == [GridCell(column=0, row=0), GridCell(column=0, row=1)]
+    assert [shortcut.cell for shortcut in seeded] == [
+        GridCell(column=0, row=0),
+        GridCell(column=1, row=0),
+        GridCell(column=2, row=0),
+    ]
     # The same rule answers what a bare ``open`` op runs: the declared launch, or nothing for a launch path the
     # app does not offer and for an app with no default shortcut.
     assert {str(row.name): default_launch_path_id(row) for row in rows} == {
@@ -477,6 +486,7 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
         "hidden": "open",
         "plain": None,
         "files": "open",
+        "extra": "open",
         "odd": None,
     }
 

@@ -20,7 +20,9 @@ const CONTROL_GLYPH_SIZE = 14;
 /** The two actions that follow the title: a smaller glyph than the window's own controls wear,
  *  in a box the same size as theirs. */
 const TITLE_ACTION_GLYPH_SIZE = 12;
-const APP_GLYPH_SIZE = 14;
+/** The app's own tile, taller than any glyph in the bar: it is a picture rather than a mark, and
+ *  at a control's size it reads as mud. 20 in a 36 bar leaves 8 above and below. */
+const APP_GLYPH_SIZE = 20;
 
 export type WindowControl = "minimize" | "maximize" | "restore" | "close" | "menu" | "refresh";
 
@@ -91,7 +93,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           // its own leading margin.
           class:
             "title-bar pointer-events-auto flex h-(--desk-title-bar-height) shrink-0 items-center border-b " +
-            "border-default pr-1 pl-2 touch-none select-none " +
+            "border-default pr-1 pl-1.5 touch-none select-none " +
             // The open hand says the bar is the handle. Not in compact mode, where a window fills
             // the backdrop and there is nothing to drag it to. The controls carry their own cursor.
             (isCompact ? "" : "cursor-grab ") +
@@ -102,16 +104,45 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           },
         },
         [
-          // No colour of its own: the icon takes the bar's, which is the title's, so the two read as
-          // one thing and dim together when the window loses focus.
-          m("span", { class: "flex shrink-0 items-center" }, m.trust(appGlyph(app, APP_GLYPH_SIZE))),
-          m("span", { class: "window-title ml-1 min-w-0 truncate text-(length:--font-size-row) font-medium" }, title),
-          control("refresh", "Refresh", icon("refresh", { size: TITLE_ACTION_GLYPH_SIZE }), false, onControl, {
-            extra: "ml-2",
-          }),
-          control("menu", "Window menu", glyph("kebab", TITLE_ACTION_GLYPH_SIZE), isMenuOpen, onControl, {
-            extra: "ml-0.5",
-          }),
+          // The app's icon paints itself (`docs/system/app-icons.md`), and so does the monogram an
+          // app with no icon wears, so unlike every other glyph in the bar it cannot take the
+          // bar's colour: an unfocused window fades it by hand instead, and further than it fades
+          // the title, since a tile of colour pulls the eye harder than grey text does. The only
+          // thing here that still takes the bar's colour is the built-in glyph for a window whose
+          // app the registry no longer has.
+          m(
+            "span",
+            { class: "flex shrink-0 items-center " + (isFocused ? "" : "opacity-50") },
+            m.trust(appGlyph(app, APP_GLYPH_SIZE)),
+          ),
+          // Bold while the window is focused: the colour already says which window you are in, and
+          // the weight says it from across the screen, where a shade of grey does not read. Faded
+          // when it is not, so the name of a background window reads as a label rather than as
+          // something to act on.
+          m(
+            "span",
+            {
+              class:
+                "window-title ml-1.5 min-w-0 truncate text-(length:--font-size-row) " +
+                (isFocused ? "font-bold" : "font-medium opacity-70"),
+            },
+            title,
+          ),
+          // The two title actions belong to the window you are in. An unfocused bar drops them
+          // rather than fading them -- a greyed pair of buttons is still two things to look at,
+          // and what is left then is the window's name and the controls every window owes you.
+          // They come back with the click that focuses the window, and nothing to their right
+          // moves, since the spacer beside them takes up the room.
+          !isFocused
+            ? null
+            : control("refresh", "Refresh", icon("refresh", { size: TITLE_ACTION_GLYPH_SIZE }), false, onControl, {
+                extra: "ml-2",
+              }),
+          !isFocused
+            ? null
+            : control("menu", "Window menu", glyph("kebab", TITLE_ACTION_GLYPH_SIZE), isMenuOpen, onControl, {
+                extra: "ml-0.5",
+              }),
           m("span", { class: "flex-1" }),
           control("minimize", "Minimize", glyph("minimize", CONTROL_GLYPH_SIZE), false, onControl),
           isCompact

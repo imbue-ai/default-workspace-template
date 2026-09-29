@@ -1,13 +1,13 @@
 /**
  * The bundled brand mark for a permission scope's service.
  *
- * The artwork is minds' own service-icon set, fetched at build time from the mngr
+ * The artwork is Imbue Studio's own service-icon set, fetched at build time from the mngr
  * commit pyproject.toml pins rather than copied into this repo a second time
  * (system/scripts/fetch_mngr_assets.sh, run by the npm workspace root's prebuild), and the
  * same fetch already supplies this frontend with the embed contract (see the
  * alias in vite.config.ts). Globbing it means the two surfaces cannot drift, and
  * the marks become ordinary build assets -- so the card needs no network round
- * trip and looks the same embedded in the minds app and opened directly in a
+ * trip and looks the same embedded in the Imbue Studio app and opened directly in a
  * browser.
  *
  * A scope is a latchkey service name plus a transport suffix (`slack-api`,
@@ -18,7 +18,7 @@
  * `github-rest-api` -> `github` from `github-rest`.
  */
 
-// The `-on-dark` files are vendor-published white variants for minds' dark
+// The `-on-dark` files are vendor-published white variants for Imbue Studio's dark
 // theme. This UI has one (light) theme, so they are excluded by the glob rather
 // than filtered afterwards -- a matched file is imported, and so emitted into
 // the build, whether or not the map ends up keeping it.

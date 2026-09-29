@@ -1,0 +1,7 @@
+The icon a new app is asked for is a tile now, not line art.
+
+- `build-app` describes the icon it requires by pointing at `docs/system/app-icons.md` -- a 216x216 two-layer tile, a flat background under one fill-only glyph in a centred 144x144 box, coloured from the pair palette that doc carries -- in place of the monochrome `currentColor` line-art frame it used to spell out. Both the pre-flight step and the `forward_port.py` CLI reference say so, so an agent scaffolding an app draws the same thing the built-in apps wear.
+
+- The tile is authored at 216 rather than 48, and `docs/system/app-icons.md` now says what the mark should look like as well as what it must be. It is one everyday object, drawn by hand rather than constructed: no perfectly straight line, no machine-drawn curve, and no mirror symmetry -- whatever is symmetric in the object comes out slightly off in the drawing. The deviation is slight and lives in the shape, never in the quality of an edge, which stays smooth however much the line under it moves. At 48 there was nowhere to put the points that carry a deviation that small, so every glyph came out as smooth as a logo. Drawing is one pass and never revised -- a second pass averages the deviation back out.
+
+- `manage-desktop` names arcs as the bundled wallpaper that ships, in place of dawn, and points at `GET /api/wallpapers` for the current list rather than spelling one out that will rot.

@@ -13,7 +13,9 @@ earlyoom could pick,
     VmRSS + VmSwap + VmPTE + oom_score_adj * (MemTotal + SwapTotal) / 1000
 
 with ``--avoid`` names 300 points lower -- the imbue-ai earlyoom fork's
-scoring, which on a Linux kernel is also the kernel's own. A wrong victim, or
+scoring, which on a Linux kernel is also the kernel's own. Under gVisor, whose
+status has no RssAnon line, the fork counts the sum of the Anonymous lines in
+/proc/<pid>/smaps in place of VmRSS, and so does the drill. A wrong victim, or
 a built-in service (adj <= 80) shed while something at adj >= 900 remained,
 stops the drill at once and frees the hog's memory.
 
@@ -91,10 +93,24 @@ class ProcessSample(NamedTuple):
     pid: int
     comm: str
     oom_score_adj: int
-    # None for a process without an mm (no VmRSS line): a kernel thread.
+    # The resident memory the fork's badness counts (see StatusMemory), or None
+    # for a process without an mm.
+    rss_kib: int | None
+    vm_swap_kib: int
+    vm_pte_kib: int
+
+
+class StatusMemory(NamedTuple):
+    # None for a process without an mm, as the fork reads it: no VmRSS line
+    # (Linux: a kernel thread or a zombie), or a VmSize of 0 (gVisor: a zombie
+    # or an exiting task). A gVisor zombie leader whose threads still run reads
+    # 0, since gVisor cannot list its task directory to reach their memory.
     vm_rss_kib: int | None
     vm_swap_kib: int
     vm_pte_kib: int
+    # Linux prints RssAnon; gVisor does not, and its VmRSS counts whole mapped
+    # ranges, so there the fork counts the smaps Anonymous total instead.
+    has_rss_anon: bool
 
 
 class RankedProcess(NamedTuple):
@@ -125,13 +141,13 @@ def predict_ranking(
     for sample in samples:
         if sample.pid == 1 or sample.pid in excluded_pids:
             continue
-        if sample.vm_rss_kib is None or sample.oom_score_adj == UNKILLABLE_ADJ:
+        if sample.rss_kib is None or sample.oom_score_adj == UNKILLABLE_ADJ:
             continue
         adj = sample.oom_score_adj
         if avoid_regex is not None and avoid_regex.search(sample.comm):
             adj += AVOID_ADJ
         badness = (
-            sample.vm_rss_kib
+            sample.rss_kib
             + sample.vm_swap_kib
             + sample.vm_pte_kib
             + adj * total_kib // 1000
@@ -167,14 +183,14 @@ def last_snapshot_with(
     A kill only shrinks its victim. Later snapshots can still list it, first
     with part or all of its memory already released (earlyoom calls
     process_mrelease right after the signal), then as an unreaped zombie with
-    no VmRSS. So the pre-kill state is the newest snapshot where the victim's
+    no mm. So the pre-kill state is the newest snapshot where the victim's
     RSS was within ``tolerance_kib`` of the most it held in any snapshot."""
     held = [
-        (snapshot, sample.vm_rss_kib)
+        (snapshot, sample.rss_kib)
         for snapshot in snapshots
         if chosen_at is None or snapshot.taken_at < chosen_at
         for sample in snapshot.samples
-        if sample.pid == pid and sample.vm_rss_kib is not None
+        if sample.pid == pid and sample.rss_kib is not None
     ]
     if not held:
         return None
@@ -230,17 +246,34 @@ def judge_kill(
     )
 
 
-def parse_status_memory(text: str) -> tuple[int | None, int, int]:
-    """``(VmRSS, VmSwap, VmPTE)`` in KiB from a /proc/<pid>/status body; a missing
+def parse_status_memory(text: str) -> StatusMemory:
+    """The memory counters of a /proc/<pid>/status body, in KiB; a missing
     VmSwap/VmPTE (gVisor serves neither) reads as 0."""
     values: dict[str, int] = {}
     for line in text.splitlines():
         name, _, rest = line.partition(":")
-        if name in ("VmRSS", "VmSwap", "VmPTE"):
+        if name in ("VmRSS", "VmSwap", "VmPTE", "VmSize", "Threads", "RssAnon"):
             fields = rest.split()
             if fields and fields[0].isdigit():
                 values[name] = int(fields[0])
-    return values.get("VmRSS"), values.get("VmSwap", 0), values.get("VmPTE", 0)
+    rss = values.get("VmRSS")
+    if rss is not None and values.get("VmSize") == 0:
+        rss = 0 if values.get("Threads", 1) > 1 else None
+    return StatusMemory(
+        vm_rss_kib=rss,
+        vm_swap_kib=values.get("VmSwap", 0),
+        vm_pte_kib=values.get("VmPTE", 0),
+        has_rss_anon="RssAnon" in values,
+    )
+
+
+def parse_smaps_anonymous(text: str) -> int:
+    """The sum of a /proc/<pid>/smaps body's Anonymous lines, in KiB."""
+    return sum(
+        int(line.split()[1])
+        for line in text.splitlines()
+        if line.startswith("Anonymous:")
+    )
 
 
 def parse_avoid_regex(cmdline: list[str]) -> re.Pattern[str] | None:
@@ -263,18 +296,25 @@ def read_meminfo() -> dict[str, int]:
     return values
 
 
-def snapshot_processes() -> list[ProcessSample]:
+def snapshot_processes(proc: Path) -> list[ProcessSample]:
     samples: list[ProcessSample] = []
-    for entry in PROC.iterdir():
+    for entry in proc.iterdir():
         if not entry.name.isdigit():
             continue
         try:
             comm = (entry / "comm").read_text().rstrip("\n")
             adj = int((entry / "oom_score_adj").read_text())
-            rss, swap, pte = parse_status_memory((entry / "status").read_text())
+            memory = parse_status_memory((entry / "status").read_text())
+            rss = memory.vm_rss_kib
+            if rss and not memory.has_rss_anon:
+                rss = parse_smaps_anonymous((entry / "smaps").read_text())
         except (OSError, ValueError):
             continue
-        samples.append(ProcessSample(int(entry.name), comm, adj, rss, swap, pte))
+        samples.append(
+            ProcessSample(
+                int(entry.name), comm, adj, rss, memory.vm_swap_kib, memory.vm_pte_kib
+            )
+        )
     return samples
 
 
@@ -488,7 +528,7 @@ def main() -> int:
     # A kill is judged against the last snapshot before its victim shrank,
     # which may be a few snapshots back by the time its ledger line is read.
     snapshots: deque[Snapshot] = deque(
-        [Snapshot(time.time(), snapshot_processes())], maxlen=30
+        [Snapshot(time.time(), snapshot_processes(PROC))], maxlen=30
     )
     deadline = time.monotonic() + args.timeout
     every_sleeper_gone_at: float | None = None
@@ -541,13 +581,13 @@ def main() -> int:
                 # Let the kill settle before growing again, so earlyoom picks one
                 # victim at a time, and see the settled state before the next.
                 time.sleep(2)
-                snapshots.append(Snapshot(time.time(), snapshot_processes()))
+                snapshots.append(Snapshot(time.time(), snapshot_processes(PROC)))
             else:
                 hog.stdin.write(f"{step_kib}\n")
                 hog.stdin.flush()
                 hog.stdout.readline()
             if time.time() - snapshots[-1].taken_at >= 1:
-                snapshots.append(Snapshot(time.time(), snapshot_processes()))
+                snapshots.append(Snapshot(time.time(), snapshot_processes(PROC)))
             time.sleep(0.1)
     finally:
         hog.kill()

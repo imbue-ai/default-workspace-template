@@ -1,4 +1,4 @@
-"""Which ref to update to: the ``minds-v*`` release the Mind app driving the
+"""Which ref to update to: the ``minds-v*`` release the Imbue Studio app driving the
 workspace was built against, or an explicit override.
 """
 
@@ -9,9 +9,9 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import NamedTuple, Sequence
+from typing import Collection, NamedTuple, Sequence
 
-# A released minds version tag, e.g. ``minds-v0.3.7`` (stable) or
+# A released Imbue Studio version tag, e.g. ``minds-v0.3.7`` (stable) or
 # ``minds-v0.3.7-rc1`` (a release candidate -- a prerelease we never default to).
 _TAG_RE = re.compile(r"^minds-v(\d+)\.(\d+)\.(\d+)(?:-(?P<pre>.+))?$")
 
@@ -39,8 +39,9 @@ class NoUpdateTargetError(ValueError):
 class ResolvedTarget(NamedTuple):
     """The ref the update merges in, plus a coarse ``kind`` for the caller's log.
 
-    ``kind`` is ``tag`` (a resolved ``minds-v*`` release), ``branch`` (``main``),
-    or ``ref`` (any other override passed straight through for git to validate).
+    ``kind`` is ``tag`` (a resolved ``minds-v*`` release), ``branch`` (a branch of
+    the remote, qualified), or ``ref`` (any other override passed straight
+    through for git to validate).
 
     ``app_version`` is the template ref the app reported, passed through as
     given. ``None`` means none was supplied, which only a direct caller does.
@@ -143,6 +144,7 @@ def resolve_target(
     tags: Sequence[str],
     remote: str = "upstream",
     app_version: str | None = None,
+    remote_branches: Collection[str] = (),
 ) -> ResolvedTarget:
     """Resolve the update target ref.
 
@@ -150,15 +152,19 @@ def resolve_target(
     named by ``app_version``, which must exist upstream. Anything else is a fault
     for the skill to judge, not a thing to work around here -- picking some
     other release would hand the workspace a template that no one verified
-    against this app. An override of ``main``
-    selects the template's default branch, **remote-qualified** to
-    ``<remote>/main`` -- a bare ``main`` would resolve to the *local* branch, which
-    ``git fetch upstream`` never advances, so the pull would merge stale local
-    code. A tag, by contrast, lands in the local tag namespace on fetch and
-    resolves by its bare name, so a known-tag override is returned as-is. Any
-    other override is passed through verbatim as a ``ref`` for git to validate at
-    fetch time (so a user can pin an arbitrary commit or a ref they've already
-    qualified themselves).
+    against this app.
+
+    An override naming a branch of ``remote`` (``main`` always does; the rest are
+    ``remote_branches``, the names under ``refs/remotes/<remote>/``) is
+    **remote-qualified** to ``<remote>/<branch>``. A bare branch name resolves only
+    through a *local* branch: a workspace usually has none for anything but its
+    own, and one it does have is a copy ``git fetch upstream`` never advances --
+    so the remote branch wins even over a local branch of the same name, or the
+    pull would merge stale local code. A tag, by contrast, lands in the local tag
+    namespace on fetch and resolves by its bare name, so a known-tag override is
+    returned as-is. Any other override is passed through verbatim as a ``ref``
+    for git to validate (so a user can pin an arbitrary commit or a ref they've
+    already qualified themselves).
 
     An override is never silently blocked -- the user asked for it by name -- but
     one that is not provably at or below the app's version comes back with
@@ -168,24 +174,24 @@ def resolve_target(
     if override is None:
         if app_version is None or parse_version(app_version) is None:
             raise AppVersionNotReleasedError(
-                f"this workspace's minds app reports {app_version!r}, which is not a release "
+                f"this workspace's Imbue Studio app reports {app_version!r}, which is not a release "
                 f"tag, so there is no release to match. A dev build reports its branch "
                 f"this way. Decide what this workspace should take and pass it as "
                 f"--override, or update the app to a release."
             )
         if app_version not in set(tags):
             raise AppVersionNotReleasedError(
-                f"this workspace's minds app is {app_version}, but the template upstream has no "
+                f"this workspace's Imbue Studio app is {app_version}, but the template upstream has no "
                 f"such tag, so the release this app was built against cannot be fetched. "
                 f"Something is wrong with that release, not with this workspace: report it "
                 f"rather than updating to a different version, unless the user names one."
             )
         return ResolvedTarget(app_version, "tag", app_version, False)
     exceeds = not _is_at_or_below_app_version(override, app_version)
-    if override == "main":
-        return ResolvedTarget(f"{remote}/{override}", "branch", app_version, exceeds)
     if override in set(tags):
         return ResolvedTarget(override, "tag", app_version, exceeds)
+    if override == "main" or override in set(remote_branches):
+        return ResolvedTarget(f"{remote}/{override}", "branch", app_version, exceeds)
     return ResolvedTarget(override, "ref", app_version, exceeds)
 
 
@@ -193,7 +199,7 @@ def already_current_message(ref: str) -> str:
     return f"this workspace is already on {ref}; nothing to update"
 
 
-# The minds app's version route, addressed through the latchkey gateway's
+# The Imbue Studio app's version route, addressed through the latchkey gateway's
 # ``minds-api-proxy`` on the reserved gateway-self host. Allowed by the agent
 # permissions baseline (``minds-app-version-read``), so this needs no grant and
 # never raises a permission dialog -- which matters because update-self resolves
@@ -216,7 +222,7 @@ _APP_TOO_OLD_STATUSES = frozenset({"403", "404"})
 
 
 class AppVersionUnavailableError(Exception):
-    """Raised when the minds app's own version could not be read.
+    """Raised when the Imbue Studio app's own version could not be read.
 
     Never downgraded to "no version to match": an app that cannot answer is very
     often an app too old to *have* this route, which is exactly the case that
@@ -225,7 +231,7 @@ class AppVersionUnavailableError(Exception):
 
 
 def fetch_app_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
-    """Return the newest workspace-template ref the running minds app supports.
+    """Return the newest workspace-template ref the running Imbue Studio app supports.
 
     Goes through ``latchkey curl``, which injects the gateway credentials and
     passes every other argument (and curl's exit code) straight through. Each
@@ -254,12 +260,12 @@ def fetch_app_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
             )
         except (OSError, subprocess.TimeoutExpired) as e:
             raise AppVersionUnavailableError(
-                f"could not reach the minds app to read its version ({e}). The app may be "
+                f"could not reach the Imbue Studio app to read its version ({e}). The app may be "
                 f"closed or the gateway down; retry once it is running."
             ) from e
         if result.returncode != 0:
             raise AppVersionUnavailableError(
-                f"could not reach the minds app to read its version (latchkey curl exited "
+                f"could not reach the Imbue Studio app to read its version (latchkey curl exited "
                 f"{result.returncode}: {result.stderr.strip()}). The app may be closed or the "
                 f"gateway down; retry once it is running."
             )
@@ -268,22 +274,22 @@ def fetch_app_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
 
     if status in _APP_TOO_OLD_STATUSES:
         raise AppVersionUnavailableError(
-            "this workspace's minds app is too old to report its version (it answered "
+            "this workspace's Imbue Studio app is too old to report its version (it answered "
             f"HTTP {status} for {url}), so there is no way to tell how far this workspace "
-            "may safely update. Update the minds app itself first."
+            "may safely update. Update the Imbue Studio app itself first."
         )
     if status != "200":
         raise AppVersionUnavailableError(
-            f"the minds app returned HTTP {status} for its version ({body.strip()[:200]})."
+            f"the Imbue Studio app returned HTTP {status} for its version ({body.strip()[:200]})."
         )
     try:
         template_ref = json.loads(body)["workspace_template_ref"]
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         raise AppVersionUnavailableError(
-            f"the minds app's version response could not be parsed ({e}): {body.strip()[:200]}"
+            f"the Imbue Studio app's version response could not be parsed ({e}): {body.strip()[:200]}"
         ) from e
     if not isinstance(template_ref, str) or not template_ref:
         raise AppVersionUnavailableError(
-            f"the minds app reported an empty workspace_template_ref: {body.strip()[:200]}"
+            f"the Imbue Studio app reported an empty workspace_template_ref: {body.strip()[:200]}"
         )
     return template_ref

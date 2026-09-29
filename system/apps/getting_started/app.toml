@@ -8,7 +8,9 @@ display_name = "Getting Started"
 icon = "icon.svg"
 critical = false
 priority = "getting-started"
-launcher_rank = 5
+# Between the chat (10) and the file viewer (20): this rank orders the desktop's seeded shortcuts as
+# well as the launcher's apps, and the chat leads both.
+launcher_rank = 15
 
 [default_shortcut]
 launch = "open"

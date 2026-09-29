@@ -3,7 +3,7 @@
 Background service that watches the app registry (`data/.state/apps.toml`).
 On startup and on every change it writes `service_registered` /
 `service_deregistered` events to
-`$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` so the minds desktop
+`$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` so the Imbue Studio desktop
 client can discover which app ports an agent is exposing. A registration
 event goes out only for an app whose registered fields (URL, label, icon)
 changed, since the whole registry is rewritten whenever any app registers;

@@ -232,12 +232,15 @@ def _ensure_pulse_daemon() -> bool:
         # above; only a stop that overruns stopwaitsecs reaps it with the group.
         # --daemonize=yes double-forks and trips over a stale PID file in this container; a
         # plain Popen does not.
-        subprocess.Popen(
+        daemon = subprocess.Popen(
             ["pulseaudio", "--system", "--daemonize=no", "--disallow-exit",
              "--exit-idle-time=-1", "--log-target=stderr", "-n",
              "-L", "module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        # Reap it the moment it exits (shed under memory pressure, or crashed). Left
+        # unwaited it stays a zombie of this process, which earlyoom cannot free.
+        threading.Thread(target=daemon.wait, name="pulseaudio-reaper", daemon=True).start()
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
@@ -359,7 +362,7 @@ _CLAIM_WINDOW = float(os.environ.get("BROWSER_CLAIM_WINDOW", "12"))
 
 # Chromium's in-process sandbox cannot run as root: it exits with "Running as root
 # without --no-sandbox is not supported" (crbug 638180), and browser-use swallows that
-# into a ~30s launch hang. Every minds workspace runs this daemon as ROOT inside an OUTER
+# into a ~30s launch hang. Every Imbue Studio workspace runs this daemon as ROOT inside an OUTER
 # boundary -- gVisor (runsc) under docker/cloud/AWS, the VM under Lima/Vultr -- so the
 # inner sandbox is both unusable-as-root and redundant. We therefore disable it whenever
 # we're root (the reliable signal; browser-use's own IN_DOCKER check misses the bare-VM
@@ -388,8 +391,8 @@ def _repo_root() -> Path:
 # The in-workspace chat messenger (see `_message_agent`): the owner recorded on a browser is
 # a chat id, and the chat app knows which agent is taking that chat's messages; the script
 # falls back to `mngr message` itself when the chat app cannot take the message. Its
-# `--system` flag wraps the fleet's nudges in the sentinel the chat transcript renders as a
-# collapsed system chip instead of a bare user bubble.
+# `--browser-fleet` flag wraps the fleet's nudges in the sentinel the chat transcript renders
+# as a collapsed "Browser fleet" chip instead of a bare user bubble.
 _MESSAGE_CHAT_SCRIPT = Path("system") / "scripts" / "message_chat.py"
 
 # Per-browser persistent Chromium profiles (cookies/logins/history) live here, on the
@@ -1356,16 +1359,17 @@ class LiveBrowser(MutableModel):
         delivered but the agent's input is blocked) both leave a warning; the claim window /
         lifecycle handling is the backstop if a message never lands.
 
-        These are automated, non-human nudges, so they go with ``--system``: the transcript
-        UI renders them as a collapsed system chip instead of a bare user bubble. This is
-        display-only -- the agent still receives the message and resumes its turn exactly
-        as before. The chat is addressed by its chat id, never by an agent's name."""
+        These are automated, non-human nudges, so they go with ``--browser-fleet``: the
+        transcript UI renders them as a collapsed "Browser fleet" chip instead of a bare user
+        bubble. This is display-only -- the agent still receives the message and resumes its
+        turn exactly as before. The chat is addressed by its chat id, never by an agent's
+        name."""
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 str(_MESSAGE_CHAT_SCRIPT),
                 agent_id,
-                "--system",
+                "--browser-fleet",
                 "--message",
                 text,
                 # Run from the repo root: the script path is repo-relative and the `mngr`
@@ -1912,7 +1916,7 @@ def closed_window_browser(hint_body: object) -> str | None:
 class BrowserSessionManager(MutableModel):
     """Owns the whole fleet (all live browsers).
 
-    The fleet is shared per workspace: every agent in a mind reaches this one
+    The fleet is shared per workspace: every agent in the workspace reaches this one
     manager, so ``ls`` shows one fleet and ownership arbitrates between agents.
     Every browser is created on demand -- there is no default browser and the
     fleet starts EMPTY. A daemon-minted NAME is the first free ``browser-<N>``

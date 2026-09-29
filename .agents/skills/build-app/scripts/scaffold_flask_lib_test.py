@@ -46,7 +46,7 @@ logfile=/var/log/supervisor/supervisord.log
 files = supervisord.conf.d/*.conf
 """
 
-# A workspace that predates the split, or one whose mind moved a program back:
+# A workspace that predates the split, or one whose agent moved a program back:
 # the scaffolder still reads the main config, so a program declared there has to
 # be seen by both the port pre-flight and the name guard. The program is
 # ``dashboard`` rather than a real built-in because a name in RESERVED_NAMES is
@@ -173,7 +173,7 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
     """The main config is scanned too, not just the drop-ins.
 
     Every program ships in a drop-in now, but the scaffolder must not assume it:
-    a workspace predating the split declares its programs inline, and a mind is
+    a workspace predating the split declares its programs inline, and an agent is
     free to move one back. Both its port and its name have to be respected.
     """
     root = _make_workspace(
