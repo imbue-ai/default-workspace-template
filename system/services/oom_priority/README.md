@@ -13,6 +13,11 @@ the kernel's "badness", computed from each process's `oom_score_adj` and memory:
 
     VmRSS + VmSwap + VmPTE + oom_score_adj * (MemTotal + SwapTotal) / 1000
 
+Under gVisor the fork counts the sum of the `Anonymous:` lines in
+`/proc/<pid>/smaps` in place of `VmRSS`: gVisor's `VmRSS` counts every page of
+each range it has mapped, so each claude process would carry the whole claude
+binary, which killing one of them does not free.
+
 Upstream earlyoom reads `/proc/*/oom_score` instead, which gVisor serves as 0
 for every process, so under gVisor it shed the largest process whatever its
 band. On a Linux kernel (runc) the fork's order is the kernel's own. So the
@@ -34,6 +39,15 @@ MemTotal only after a restart. A lima workspace runs directly in its VM, so
 MemTotal is the VM's own RAM (the lima create template's `--memory`,
 changeable with `mngr lima resize`): earlyoom's thresholds follow the VM's
 size, and a resize takes effect once the VM restarts at the new size.
+
+Under gVisor, `/proc/meminfo` also misses the memory the runtime itself is
+charged against the cgroup (0.3-0.9 GB on a gen-2 slice), so earlyoom's 10%
+threshold can arrive only after the cgroup has killed the whole sandbox. A
+gen-2 slice VM therefore publishes the cgroup's own limit and headroom into the
+workspace's volume, and earlyoom runs with `--host-meminfo
+/mngr-vol/.host-meminfo` (`system/supervisord.conf.d/earlyoom.conf`), acting on
+whichever of the two shows less headroom. Where nothing is published (local
+docker, lima), earlyoom logs that once and uses `/proc/meminfo` alone.
 
 - **`bands`** -- the `oom_score_adj` value per band and the helper that writes
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in
@@ -298,4 +312,9 @@ Two things here are best-effort, not hard guarantees:
   comparable; in the common case the services are lightweight and the order
   holds. Widening the gaps would need to push the top service bands past the
   agent bands, which would defeat the "services outlive agents" goal, so the
-  bands stay a steer rather than a strict priority.
+  bands stay a steer rather than a strict priority. Under gVisor the memory
+  counted is also approximate: anonymous memory is counted in 2 MiB-aligned
+  blocks (summed over a workspace, about a fifth of what was counted had never
+  been touched), and file pages and
+  shared memory are not counted, so Chromium's shared buffers do not add to
+  its badness.
