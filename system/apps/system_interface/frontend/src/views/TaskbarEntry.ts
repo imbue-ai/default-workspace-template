@@ -62,7 +62,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           // what carries the states, since a tint behind an icon that no longer fills the entry has
           // somewhere to show. Body text -- this is a name being read, not a dense list.
           "taskbar-entry relative flex h-(--desk-taskbar-entry-size) min-w-(--desk-touch-target) max-w-48 " +
-          "shrink-0 items-center gap-2 rounded-md border px-2 text-(length:--font-size-body) " +
+          "shrink-0 items-center gap-2 rounded-xl border p-1 text-(length:--font-size-body) " +
           "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-accent " +
           (entry.isFocused ? "border-default bg-surface shadow-raised " : "border-transparent hover:bg-fill-hover ") +
           // A window's name is a name whichever window you are in: the chip's surface and its
