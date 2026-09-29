@@ -105,23 +105,9 @@ interface HostRect {
   height: number;
 }
 
-/** How wide a peeked window is drawn, and how far the card stands off the taskbar. A window is never
- *  drawn larger than it renders, so a small window peeks at its own size rather than magnified. */
-const PEEK_WIDTH = 220;
-const PEEK_GAP = 10;
-/** The name under the picture, and the space between them. It is drawn by the layer rather than left to
- *  the entry's hover bubble: the bubble is placed against the ENTRY, which puts it across the bottom of
- *  the picture, and a name belongs to the thing it is under. */
-const PEEK_CAPTION_GAP = 6;
-
 export class LivePagesLayer implements PageDriver {
   private readonly pages = new Map<string, LivePage>();
   private isGestureActive = false;
-  /** The minimized window being peeked at from its taskbar entry: its page is drawn small above the
-   *  entry instead of being hidden. Null when nothing is being peeked at. */
-  private peekedWindowId: string | null = null;
-  /** The name drawn under a peeked window, made on the first peek and kept for the rest. */
-  private peekCaption: HTMLElement | null = null;
   /** The window a tear-out drag has pulled past the viewport: its page is hidden until the drag comes back
    *  inside or ends (the pull-out-window spec). */
   private tornOutWindowId: string | null = null;
@@ -267,23 +253,11 @@ export class LivePagesLayer implements PageDriver {
     const placements = desktop === null ? [] : activePlacements(state);
     const focused = activeFocusedWindowId(state);
     const shownIds = new Set<string>();
-    let isPeekDrawn = false;
     placements.forEach((placement, index) => {
       const found = windowsById.get(placement.window_id);
       if (found === undefined || desktop === null) return;
-      if (placement.is_minimized) {
-        // A minimized window has no chrome to lie under, so its page is hidden -- unless the pointer
-        // is resting on its taskbar entry, when it is drawn small above that entry instead.
-        if (placement.window_id !== this.peekedWindowId || placement.is_detached) return;
-        const app = appByName(state, found.window.app);
-        const page = app === undefined ? undefined : this.pages.get(found.window.id);
-        if (app === undefined || page === undefined || !app.is_running) return;
-        if (this.showPeek(page, placement, effectiveWindowTitle(state, found.window, app))) {
-          shownIds.add(found.window.id);
-          isPeekDrawn = true;
-        }
-        return;
-      }
+      // A minimized window has no chrome to lie under: its page is hidden until it is restored.
+      if (placement.is_minimized) return;
       // A pulled-out window's page is shown in the chrome's own desktop window; one being pulled out right now
       // is already drawn there under the cursor.
       if (placement.is_detached || placement.window_id === this.tornOutWindowId) return;
@@ -304,7 +278,6 @@ export class LivePagesLayer implements PageDriver {
     for (const page of this.pages.values()) {
       if (!shownIds.has(page.windowId)) this.hide(page);
     }
-    if (!isPeekDrawn && this.peekCaption !== null) this.peekCaption.style.display = "none";
     this.followIfRevised(windowsById);
     this.focusIfChanged(focused);
   }
@@ -485,7 +458,6 @@ export class LivePagesLayer implements PageDriver {
   }
 
   private show(page: LivePage, box: HostRect, stackIndex: number, isInteractive: boolean): void {
-    this.clearPeek(page);
     this.position(page, box);
     const style = page.wrapper.style;
     style.zIndex = windowPageZIndex(stackIndex);
@@ -494,105 +466,10 @@ export class LivePagesLayer implements PageDriver {
     this.syncVisibility(page, true);
   }
 
-  /** Rest the pointer on a minimized window's taskbar entry, or take it off again (``null``). */
-  peekWindow(windowId: string | null): void {
-    if (this.peekedWindowId === windowId) return;
-    this.peekedWindowId = windowId;
-    this.reconcile();
-  }
-
-  /**
-   * Draw a minimized window's page small, above its taskbar entry: the Dock's trick, except that this
-   * is the page itself still running rather than a picture taken of it when it was put away.
-   *
-   * The window is drawn at its own rendered size and scaled by a transform. Shrinking the frame's box
-   * instead would re-lay the app out at 260px wide, and peek at a page the window does not have.
-   *
-   * Nothing is told it has been shown, because it has not been: a peek must not mark a chat read.
-   *
-   * It stands above the bar rather than inside the entry because that is where a page can be drawn at
-   * all -- the backdrop clips at the taskbar, and a page is never re-parented (that reloads it).
-   */
-  private showPeek(page: LivePage, placement: Placement, title: string): boolean {
-    const entry = document.querySelector<HTMLElement>(
-      `[${TASKBAR_ENTRY_ATTRIBUTE}="${CSS.escape(placement.window_id)}"]`,
-    );
-    if (entry === null) return false;
-    const rendered = this.store.renderedRect(placement);
-    if (rendered.width <= 0 || rendered.height <= 0) return false;
-    const host = this.host.getBoundingClientRect();
-    const entryBox = entry.getBoundingClientRect();
-    // Never magnified: a window smaller than the picture peeks at its own size.
-    const width = Math.min(PEEK_WIDTH, rendered.width);
-    const scale = width / rendered.width;
-    const height = rendered.height * scale;
-    const centred = entryBox.left + entryBox.width / 2 - width / 2 - host.left;
-    const left = Math.max(PEEK_GAP, Math.min(centred, host.width - width - PEEK_GAP));
-    // The picture and its name are one block standing off the bar, so the name is measured before
-    // the picture is placed: it is the bottom of the pair, not the picture, that keeps the gap.
-    const captionHeight = this.drawPeekCaption(title, left + width / 2, host.width);
-    const top = Math.max(PEEK_GAP, host.height - PEEK_GAP - captionHeight - height);
-    this.position(page, { left, top, width, height });
-    if (this.peekCaption !== null) {
-      this.peekCaption.style.top = `${top + height + PEEK_CAPTION_GAP}px`;
-    }
-    const style = page.wrapper.style;
-    style.setProperty("z-index", "var(--z-sticky)");
-    style.pointerEvents = "none";
-    style.boxShadow = "var(--shadow-overlay)";
-    style.borderRadius = "var(--desk-window-radius)";
-    style.display = "";
-    const frame = page.frame.style;
-    frame.width = `${rendered.width}px`;
-    frame.height = `${rendered.height}px`;
-    frame.transform = `scale(${scale})`;
-    frame.transformOrigin = "0 0";
-    return true;
-  }
-
-  /**
-   * Put the peeked window's name under its picture, and answer how much room the name takes (its own
-   * height plus the gap above it), so the picture can be placed with the pair standing off the bar.
-   *
-   * It is centred on the picture and clamped to the viewport, and it is the layer's rather than the
-   * entry's hover bubble because the bubble is placed against the entry -- which is under the picture.
-   */
-  private drawPeekCaption(title: string, centreX: number, hostWidth: number): number {
-    if (this.peekCaption === null) {
-      const caption = document.createElement("div");
-      caption.className =
-        "live-page-caption type-helper pointer-events-none absolute max-w-[220px] truncate rounded-md " +
-        "bg-inverse px-2 py-1 text-center text-on-accent shadow-overlay dark:bg-surface dark:text-primary";
-      this.peekCaption = caption;
-      this.host.appendChild(caption);
-    }
-    const caption = this.peekCaption;
-    caption.textContent = title;
-    caption.style.display = "";
-    caption.style.left = `${Math.max(PEEK_GAP, Math.min(centreX, hostWidth - PEEK_GAP))}px`;
-    caption.style.transform = "translateX(-50%)";
-    caption.style.setProperty("z-index", "var(--z-sticky)");
-    return caption.offsetHeight + PEEK_CAPTION_GAP;
-  }
-
-  /** Give a page its own box back, after it has been drawn as a peek. */
-  private clearPeek(page: LivePage): void {
-    if (page.frame.style.transform === "") return;
-    const frame = page.frame.style;
-    frame.width = "";
-    frame.height = "";
-    frame.transform = "";
-    frame.transformOrigin = "";
-    const style = page.wrapper.style;
-    style.boxShadow = "";
-    style.borderRadius = "";
-  }
-
   /** Out of sight, and out of the document's focus: a hidden frame left holding it is the one the browser
    *  restores focus to when the chrome window's focus comes back, and the page would then report focus it
    *  never got from the user. */
   private hide(page: LivePage): void {
-    this.clearPeek(page);
     page.wrapper.style.display = "none";
     if (document.activeElement === page.frame) this.host.focus({ preventScroll: true });
     this.syncVisibility(page, false);

@@ -25,17 +25,13 @@ export interface TaskbarEntryAttrs {
   readonly entry: TaskbarEntryRecord;
   readonly avatar: AvatarState;
   readonly isMenuOpen: boolean;
-  /** Whether this entry's window is being peeked at right now: its picture stands where the bubble would. */
-  readonly isPeeked: boolean;
   readonly onClick: () => void;
   readonly onContextMenu: (x: number, y: number, target: Element) => void;
-  /** The pointer arriving on (true) or leaving (false) a MINIMIZED entry, which peeks at its window. */
-  readonly onPeek: (isPeeking: boolean) => void;
 }
 
 export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
   view(vnode) {
-    const { entry, avatar, isMenuOpen, isPeeked, onClick, onContextMenu, onPeek } = vnode.attrs;
+    const { entry, avatar, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
     // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
     const isDimmed = entry.isMinimized || entry.isDetached;
     const look = entry.look;
@@ -60,7 +56,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         class:
           // A labelled chip rather than a bare tile: the icon and the name sit in it, and the chip is
           // what carries the states. Body text -- this is a name being read, not a dense list.
-          "taskbar-entry relative flex h-(--desk-taskbar-entry-size) min-w-(--desk-touch-target) max-w-48 " +
+          "taskbar-entry group relative flex h-(--desk-taskbar-entry-size) min-w-(--desk-touch-target) max-w-48 " +
           // 4px all round, but 8 on the right: the name ends where the chip does otherwise, and a
           // title cut off mid-word wants somewhere to stop.
           "shrink-0 items-center gap-1.5 rounded-md p-1 pr-2 text-(length:--font-size-body) " +
@@ -71,24 +67,12 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           (entry.isFocused || isMenuOpen ? "bg-fill-active " : "hover:bg-fill-hover ") +
           // A window's name is a name whichever window you are in: the tint says which is focused and
           // the text stays out of it. Faint is a different thing -- the window is out of sight, not
-          // merely not in front.
-          (isDimmed ? "text-faint " : "text-primary "),
-        // The peek stands in the bubble's place and says more than it does, so the two never show at
-        // once. The pause is the shared one again: the entry names itself now, so the bubble is an
-        // aside (the whole of a truncated title) rather than the only thing saying what this is.
-        ...hoverTooltipAttrs(isPeeked ? null : tooltip, "above"),
-        // Only a minimized window peeks: a window already on the desktop is its own preview. Entering
-        // any other entry ends the peek the one beside it started, so a sweep along the bar is clean.
-        onmouseenter: () => onPeek(entry.isMinimized),
-        onmouseleave: () => onPeek(false),
-        onclick: () => {
-          // The pointer is already resting here, so no enter or leave will fire for what the click
-          // changes: a click that puts the window away has to start the peek itself, and one that
-          // brings it back has to end it.
-          const willMinimize = !entry.isDetached && !entry.isMinimized && entry.isFocused;
-          onClick();
-          onPeek(willMinimize);
-        },
+          // merely not in front -- and it lifts under the pointer, which is the one moment the entry
+          // is being read rather than scanned.
+          (isDimmed ? "text-faint hover:text-primary " : "text-primary "),
+        // The bubble is an aside -- the whole of a truncated title -- so it takes the shared pause.
+        ...hoverTooltipAttrs(tooltip, "above"),
+        onclick: onClick,
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
           onContextMenu(event.clientX, event.clientY, targetElementOf(event));
@@ -109,7 +93,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
               // says selected, and an icon still casting onto it reads as two claims about one chip.
               (entry.isFocused || isMenuOpen ? "" : "shadow-(--desk-icon-shadow) ") +
               (isAvatar ? "rounded-2xl [&>img]:size-full " : "rounded-[32%] [&>svg]:size-full ") +
-              (isDimmed ? "opacity-70" : ""),
+              (isDimmed ? "opacity-70 group-hover:opacity-100" : ""),
           },
           image,
         ),

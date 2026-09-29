@@ -103,11 +103,15 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
         {
           "data-launcher-field": "",
           class:
-            // The same corner the menu card above it takes (``menuCardClass``): the two are one thing
-            // with a seam in it, not a box and a card that happen to be stacked.
-            "launcher-field absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-xl border bg-surface " +
-            "px-2.5 " +
-            (isOpen ? "border-accent" : "border-default"),
+            // Fully round, and padded so its mark lands under the mark of the menu row above it: the
+            // card insets its rows by 4 and pads them by 8 around a 24 cell, which puts a row's glyph
+            // centre 14px inside the card's border -- so the field's 20px mark wants 14 of its own.
+            "launcher-field absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-full " +
+            // A heavier edge than a panel seam: this is a control you type into, and it has to read
+            // as one against a bar of the same colour. Open is a ring OUTSIDE that edge rather than
+            // a recolouring of it, so the box does not change weight as it opens.
+            "border border-strong bg-surface pr-2.5 pl-3.5 " +
+            (isOpen ? "ring-2 ring-accent" : ""),
         },
         [
           m(
@@ -123,7 +127,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
             class:
               // Body text rather than a row's: this is a line being written, not an entry in a list.
               "launcher-input min-w-0 flex-1 resize-none overflow-y-auto bg-transparent py-1.75 leading-5 " +
-              "text-(length:--font-size-body) text-primary outline-none placeholder:text-faint",
+              "text-(length:--font-size-body) text-primary outline-none placeholder:text-secondary",
             oncreate: (created: m.VnodeDOM) => {
               fit(created.dom as HTMLTextAreaElement, vnode.attrs);
               if (isCompact) (created.dom as HTMLTextAreaElement).focus();
