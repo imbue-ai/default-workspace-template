@@ -989,24 +989,46 @@ def test_footprint_ranges_on_a_same_target_retry_after_a_moved_target_retry(
     ]
 
 
-def _land_v2_over_v1s_rollback_and_roll_it_back(history: _UpdateHistory) -> str:
+# Whether the workspace committed on top of v1's rollback before v2 landed over it.
+_IS_WORKED_ON_AFTER_THE_ROLLBACK = pytest.mark.parametrize(
+    "is_worked_on_after_the_rollback", [False, True], ids=["on-rollback", "worked-on"]
+)
+
+
+def _own_files(is_worked_on_after_the_rollback: bool) -> list[str]:
+    """The workspace's own files in :func:`_land_v2_over_v1s_rollback_and_roll_it_back`."""
+    later = ["system/apps/later/app.py"] if is_worked_on_after_the_rollback else []
+    return [*later, "system/apps/mine/app.py"]
+
+
+def _land_v2_over_v1s_rollback_and_roll_it_back(
+    history: _UpdateHistory, is_worked_on_after_the_rollback: bool
+) -> str:
     """v1 landed and was rolled back, then a pass whose guide predated the revert step
-    landed v2 over that rollback and v2 was rolled back too, leaving both rollbacks for
-    the next pass to revert. Return v2's rollback: the tree the live workspace runs."""
+    landed v2 over that rollback (or over the workspace's own commit on top of it) and
+    v2 was rolled back too, leaving both rollbacks for the next pass to revert. Return
+    v2's rollback: the tree the live workspace runs."""
     history.release("minds-v1")
     history.commit("system/apps/mine/app.py", "local work")
     history.land("minds-v1")
     history.roll_back("minds-v1")
+    if is_worked_on_after_the_rollback:
+        history.commit("system/apps/later/app.py", "local work after the rollback")
     history.release("minds-v2")
     history.land("minds-v2")
     return history.roll_back("minds-v2")
 
 
+@_IS_WORKED_ON_AFTER_THE_ROLLBACK
 def test_footprint_ranges_on_a_pass_that_reverted_several_rollbacks(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    is_worked_on_after_the_rollback: bool,
 ) -> None:
     history = _UpdateHistory(tmp_path)
-    live = _land_v2_over_v1s_rollback_and_roll_it_back(history)
+    live = _land_v2_over_v1s_rollback_and_roll_it_back(
+        history, is_worked_on_after_the_rollback
+    )
     history.release("minds-v3")
     for rollback in history.pending_rollbacks("minds-v3", capsys):
         history.revert(rollback)
@@ -1015,9 +1037,9 @@ def test_footprint_ranges_on_a_pass_that_reverted_several_rollbacks(
     ranges = history.footprint_ranges("minds-v3", capsys)
 
     assert ranges["update_base"] == live
-    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
-        "system/apps/mine/app.py"
-    ]
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == _own_files(
+        is_worked_on_after_the_rollback
+    )
     assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
         "minds-v1.txt",
         "minds-v2.txt",
@@ -1025,13 +1047,18 @@ def test_footprint_ranges_on_a_pass_that_reverted_several_rollbacks(
     ]
 
 
+@_IS_WORKED_ON_AFTER_THE_ROLLBACK
 def test_footprint_ranges_on_a_same_target_retry_that_reverted_several_rollbacks(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    is_worked_on_after_the_rollback: bool,
 ) -> None:
-    # The landed v2 merge sits on v1's rollback, not on a revert of it, and the
-    # workspace's own tree is still the one from before v1.
+    # The landed v2 merge sits on v1's rollback (or on a local commit over it), not
+    # on a revert of it, and the workspace's own tree is still the one from before v1.
     history = _UpdateHistory(tmp_path)
-    live = _land_v2_over_v1s_rollback_and_roll_it_back(history)
+    live = _land_v2_over_v1s_rollback_and_roll_it_back(
+        history, is_worked_on_after_the_rollback
+    )
     for rollback in history.pending_rollbacks("minds-v2", capsys):
         history.revert(rollback)
 
@@ -1039,9 +1066,9 @@ def test_footprint_ranges_on_a_same_target_retry_that_reverted_several_rollbacks
 
     assert ranges["update_base"] == live
     assert ranges["update_ref"] == _head_sha(history.repo)
-    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
-        "system/apps/mine/app.py"
-    ]
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == _own_files(
+        is_worked_on_after_the_rollback
+    )
     assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
         "minds-v1.txt",
         "minds-v2.txt",

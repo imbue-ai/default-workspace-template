@@ -375,28 +375,50 @@ def _before_rollback_reverts(
     return commit
 
 
+def _has_update_rolled_back_since(
+    earlier: str, commit: str, history: UpdateRollbackHistory, repo_root: Path
+) -> bool:
+    """Whether ``commit``'s first-parent line since ``earlier`` holds an update
+    rollback that nothing on that line reverts."""
+    reverted: set[str] = set()
+    for sha in _list_names(
+        _git(["rev-list", "--first-parent", f"{earlier}..{commit}"], repo_root)
+    ):
+        reverted.update(history.reverts.get(sha, ()))
+        if sha in history.rollbacks and sha not in reverted:
+            return True
+    return False
+
+
 def _first_attempt_first_parent(
     merge: str, history: UpdateRollbackHistory, repo_root: Path
 ) -> str:
     """The first parent of the first merge in ``merge``'s chain of retries.
 
-    A merge whose first parent reverts an update's rollback, or is one, was
-    made on top of an earlier landed-and-rolled-back merge; the chain ends at a
-    merge made on the workspace's own line, whose first parent carries none of
-    those releases.
+    A merge made while an earlier landed merge's rollback was still in force
+    under it -- directly, under the reverts of it that the pass's first step
+    committed, or under the workspace's own later commits -- was made on top
+    of that rolled-back attempt; the chain ends at a merge made on the
+    workspace's own line, whose first parent carries none of those releases.
     """
     first_parent = _commit_sha(f"{merge}^1", repo_root)
-    while first_parent in history.reverts or first_parent in history.rollbacks:
+    while True:
+        before_reverts = _before_rollback_reverts(first_parent, history, repo_root)
         earlier = _latest_commit_with_subject(
-            UPDATE_SELF_MERGE_SUBJECT, f"{first_parent}^", repo_root
+            UPDATE_SELF_MERGE_SUBJECT, before_reverts, repo_root
         )
         if earlier is None:
-            raise NoUpdateMergeError(
-                f"{first_parent} rolls back an update or reverts its rollback, but "
-                f"no earlier '{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
-            )
+            if first_parent in history.reverts or first_parent in history.rollbacks:
+                raise NoUpdateMergeError(
+                    f"{first_parent} rolls back an update or reverts its rollback, "
+                    f"but no earlier '{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
+                )
+            return first_parent
+        if not _has_update_rolled_back_since(
+            earlier, before_reverts, history, repo_root
+        ):
+            return first_parent
         first_parent = _commit_sha(f"{earlier}^1", repo_root)
-    return first_parent
 
 
 def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
