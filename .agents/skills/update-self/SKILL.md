@@ -285,8 +285,9 @@ Per §6 of the worker guide: the report shapes come from
 `.agents/shared/references/worker-reporting.md`, but you write and push the
 report by hand as §6 spells out -- not with the launcher's `report` subcommand,
 which this workspace's own launcher may predate. Valid `name:` values:
-`question` (mid-flight gate: a genuine, unresolvable conflict, the §4a/§4b/§4c
-scope escape hatch, or a §4b customization the update cannot keep),
+`question` (mid-flight gate: a genuine, unresolvable conflict, the
+§4a/§4b/§4c/§4d scope escape hatch, or a §4b customization the update cannot
+keep),
 `done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
@@ -384,11 +385,12 @@ report, re-arm the poll.
    results message presents each with the alternative still on offer. A
    conflict where *every* resolution breaks something the user built is not
    a merge question; it is the hold below.
-2. **The worker's scope escape hatch** (its §4a, §4b or §4c): a process
+2. **The worker's scope escape hatch** (its §4a, §4b, §4c or §4d): a process
    question about whether its impact analysis runs, whether a validation item
-   runs, or whether and at what scope the review gates run. Answer it by the
-   rule it names as written; where the rule is silent, the fallback is more
-   coverage, never less. Escalate only if it contains a real question of user
+   runs, whether and at what scope the review gates run, or whether a changed
+   file needs the agents restarted. Answer it by the rule it names as written;
+   where the rule is silent, the fallback is more coverage, never less (for
+   §4d, a restart). Escalate only if it contains a real question of user
    intent.
 3. **A customization hold** (its §4b verdict): something the user built that
    the update **cannot keep**, after the worker genuinely tried to re-fit it.
