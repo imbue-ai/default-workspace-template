@@ -1,12 +1,12 @@
 """Putting the workspace's running agents onto what an update installed.
 
-An agent's harness process loads its binary, extensions and launch config once, when it
-starts, so an update that changes one of them reaches a running agent only when that agent
+An agent's harness process loads its binary, its extensions and some of its config once, when
+it starts, so an update that changes one of them reaches a running agent only when that agent
 is restarted. A restart keeps the conversation: each harness resumes its own session.
 
 ``restart_idle_agents`` restarts every agent the chat app lists that has ended its turn, other
 than the pass's own chat and its worker, and reports the ones it left running because they
-were busy.``start_self_restart`` restarts the pass's own chat once its last turn ends,
+were busy. ``start_self_restart`` restarts the pass's own chat once its last turn ends,
 from a detached helper, and sends it a note to confirm the restart to the user (or, when
 the restart does not happen, a note saying so).
 
