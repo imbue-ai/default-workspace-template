@@ -583,7 +583,7 @@ resumes), and how to honor a rollback request are in
   ```
 
   Its JSON lists what it `restarted`, what it `left_running` because it was
-  mid-turn, waiting on a dialog, or mid-handoff (with the chat's status), and
+  mid-turn, waiting on a dialog, or mid-handoff (`busy_with` says which), and
   what `failed`. Nothing is interrupted: the results message names each chat
   left running or failed, says it is still on the previous version, and asks
   the user whether to interrupt and restart it (`python3

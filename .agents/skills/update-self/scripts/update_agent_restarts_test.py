@@ -126,11 +126,13 @@ def test_only_idle_chats_other_than_the_pass_and_its_worker_are_restarted(
             "detail": "the chat is converging",
         }
     ]
-    assert [(chat["chat_id"], chat["status"]) for chat in report["left_running"]] == [
+    assert [
+        (chat["chat_id"], chat["busy_with"]) for chat in report["left_running"]
+    ] == [
         ("agent-working", "working"),
-        ("agent-between-steps", "idle"),
-        ("agent-dialog", "attention"),
-        ("agent-handoff", "working"),
+        ("agent-between-steps", "working"),
+        ("agent-dialog", "waiting on a dialog"),
+        ("agent-handoff", "switching to another agent"),
     ]
     assert (
         json.loads(
@@ -247,7 +249,7 @@ def test_the_pass_waits_for_its_own_turn_to_end_not_a_transcript_that_reads_idle
 def test_the_note_stands_on_its_own_and_carries_the_chats_left_running() -> None:
     note = update_agent_restarts.compose_self_restart_note(
         "Claude Code  2.1.300\n",
-        [{"chat_id": "agent-working", "title": "Research", "status": "working"}],
+        [{"chat_id": "agent-working", "title": "Research", "busy_with": "working"}],
     )
 
     assert note.startswith(
@@ -275,7 +277,7 @@ def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
                     {
                         "chat_id": "agent-working",
                         "title": "Research",
-                        "status": "working",
+                        "busy_with": "working",
                     }
                 ],
                 "failed": [],
