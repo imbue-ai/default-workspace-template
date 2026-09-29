@@ -34,7 +34,7 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   module every app serves at `/_static/context_menu.js` with its framework-free
   renderer for pages without Mithril (`src/components/contextMenuOpener.ts` is
   the opener a Mithril page hands it, backed by the shared Menu); `src/embed.ts` and
-  `src/embed-contract.d.ts`: the minds embed contract (the vendored source is
+  `src/embed-contract.d.ts`: the Imbue Studio embed contract (the vendored source is
   aliased by each app's vite config); `src/terminalFocus.ts`: the focus grant
   the shell sends a framed page.
 - `src/search.ts`: `matchesQuery`, the one text match of the workspace's

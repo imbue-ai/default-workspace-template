@@ -9,7 +9,7 @@ the update exists for. Staging a newer launcher alongside would not help: it
 may itself depend on settings or plugins the merge has not landed yet.
 
 So every ``create_worker.py`` invocation in the update-self prose is held to
-the launcher interface of the oldest release the Mind app offers an update
+the launcher interface of the oldest release the Imbue Studio app offers an update
 from (``minds-v0.3.17``). Adding a flag here means checking that release's
 ``create_worker.py`` still accepts it, or doing the work with plain ``mngr``
 commands instead, as the predecessor cleanup in Step 3b does.
@@ -48,21 +48,32 @@ _LAUNCHER_FLAGS_AT_FLOOR: dict[str, frozenset[str]] = {
 
 _FENCED_CODE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 
+# Where the report poll runs from: the staged skill's own copy, since the workspace's
+# own tree may predate ``system/scripts/run_in_background.py``.
+_STAGED_RUNNER = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py"
+
+
+def _fenced_commands(text: str) -> list[str]:
+    """Every command in the fenced code blocks; a block may hold several, each
+    possibly line-continued."""
+    return [
+        command
+        for block in _FENCED_CODE.findall(text)
+        for command in re.split(r"\n(?=\S)", block.replace("\\\n", " "))
+    ]
+
 
 def _launcher_invocations(text: str) -> list[list[str]]:
     """Every ``create_worker.py <subcommand> ...`` argv in the fenced code blocks."""
     invocations: list[list[str]] = []
-    for block in _FENCED_CODE.findall(text):
-        # A block may hold several commands; each launcher call is one
-        # (possibly line-continued) command.
-        for command in re.split(r"\n(?=\S)", block.replace("\\\n", " ")):
-            if "create_worker.py" not in command:
-                continue
-            words = shlex.split(command, comments=True)
-            for index, word in enumerate(words):
-                if word.endswith("create_worker.py") and index + 1 < len(words):
-                    invocations.append(words[index + 1 :])
-                    break
+    for command in _fenced_commands(text):
+        if "create_worker.py" not in command:
+            continue
+        words = shlex.split(command, comments=True)
+        for index, word in enumerate(words):
+            if word.endswith("create_worker.py") and index + 1 < len(words):
+                invocations.append(words[index + 1 :])
+                break
     return invocations
 
 
@@ -89,4 +100,31 @@ def test_update_self_prose_uses_only_the_floor_launcher_interface() -> None:
             "which the launcher at minds-v0.3.17 does not accept; the prose runs "
             "against the workspace's own launcher, so do this with plain mngr "
             "commands instead"
+        )
+
+
+def test_update_self_waits_through_the_staged_skills_runner() -> None:
+    """The floor release has no ``system/scripts/run_in_background.py``, so the report poll
+    runs the skill's own copy, which ``bootstrap-skill`` stages from ``$REF``; the
+    workspace's own path would fail on exactly the workspaces the update exists for."""
+    assert (_SKILL_DIR / "scripts" / "run_in_background.py").is_file(), (
+        "the skill no longer carries run_in_background.py, so the staged copy the prose runs "
+        "does not exist"
+    )
+    commands = [
+        command
+        for prose in _PROSE_FILES
+        for command in _fenced_commands(prose.read_text())
+    ]
+    await_commands = [
+        shlex.split(command, comments=True)
+        for command in commands
+        if "create_worker.py await" in command
+    ]
+    assert await_commands, (
+        "the update-self prose no longer runs await; this guard is vacuous"
+    )
+    for words in await_commands:
+        assert words[:2] == ["python3", _STAGED_RUNNER], (
+            f"`{shlex.join(words)}` does not wait through the staged skill's runner"
         )

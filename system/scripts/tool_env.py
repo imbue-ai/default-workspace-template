@@ -21,7 +21,7 @@ importing across the two, and this file therefore exists twice, byte for byte:
     system/scripts/tool_env.py
     .agents/skills/update-self/scripts/tool_env.py
 
-``system/scripts/tool_env_sync_test.py`` fails if they differ; edit one and copy it over
+``system/scripts/update_self_mirrors_sync_test.py`` fails if they differ; edit one and copy it over
 the other. They are kept identical rather than merely equivalent because the equivalent
 versions did diverge, silently: one parsed a shebang by cutting at the first space and the
 other by stripping first, so a ``#! /path`` spelling resolved to nothing and the cleanup

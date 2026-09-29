@@ -151,7 +151,7 @@ https://*.{workspace_domain}:{https_port} {{
     header Referrer-Policy same-origin
 
     # Who may embed this workspace in an iframe: its own origin family plus the
-    # hosted minds chrome (when the share carries one). This is what makes the
+    # hosted Imbue Studio chrome (when the share carries one). This is what makes the
     # chrome's cross-origin iframe render at all; a service's own CSP still
     # applies (multiple CSP headers compose by intersection).
     header Content-Security-Policy "frame-ancestors {frame_ancestors}"

@@ -27,6 +27,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppPin
+from imbue.system_interface.shell.data_types import ClientDesktopView
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopLayout
@@ -34,6 +35,7 @@ from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import Frame
 from imbue.system_interface.shell.data_types import GridCell
 from imbue.system_interface.shell.data_types import ShortcutTarget
+from imbue.system_interface.shell.data_types import ShowChoice
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.data_types import effective_launch_paths
@@ -41,7 +43,9 @@ from imbue.system_interface.shell.errors import GridSearchExhaustedError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import ShowOutcome
 from imbue.system_interface.shell.primitives import WindowId
+from imbue.system_interface.shell.primitives import WindowPage
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
@@ -73,9 +77,11 @@ PAIRED_WIDTH: Final[float] = 0.5
 _PAIRING_TOLERANCE: Final[float] = 1e-6
 
 # The shell seeds a new desktop's shortcuts and places a shortcut added by an agent without knowing any
-# backdrop, so it lays them out in reading order over a grid this many columns wide: one column down the
-# left edge, which every grid a backdrop can hold contains.
-SEED_GRID_COLUMNS: Final[int] = 1
+# backdrop, so it lays them out in reading order over a grid this many columns wide: one row along the
+# top edge, wrapping only past a width (8 * 96 + 16 = 784px) no backdrop worth laying a full row out on
+# is under. A stored cell past the last column a real backdrop holds is re-packed where it is drawn
+# (``grid.ts`` ``placeShortcuts``), so a narrow backdrop still shows every shortcut.
+SEED_GRID_COLUMNS: Final[int] = 8
 
 DESKTOPS_FILE_VERSION: Final[int] = 1
 PLACEMENTS_FILE_VERSION: Final[int] = 1
@@ -629,11 +635,24 @@ def desktop_seeded_from(
 
 
 @pure
+def launcher_order(rows: Sequence[RegistryRow]) -> tuple[RegistryRow, ...]:
+    """The rows in the order the workspace lists their apps: every row declaring a ``launcher_rank``, lowest first
+    and registry order breaking a tie, then every row declaring none, in registry order. The launcher orders its
+    rows this way in the frontend (``model/launch.ts``); the desktop seeds its shortcuts in it too, so one manifest
+    key decides where an app sits in both and neither depends on the order the apps happened to register in."""
+    ranked = [(row.launcher_rank, row) for row in rows if row.launcher_rank is not None]
+    return (
+        *(row for _, row in sorted(ranked, key=lambda entry: entry[0])),
+        *(row for row in rows if row.launcher_rank is None),
+    )
+
+
+@pure
 def seed_desktop_shortcuts(rows: Sequence[RegistryRow]) -> tuple[DesktopShortcut, ...]:
     """A new desktop's shortcuts: every registered, non-internal app's ``default_shortcut`` (``default_launch_path_id``),
-    in registry order, laid out in reading order from the grid origin."""
+    in launcher order, laid out in reading order from the grid origin."""
     shortcuts: list[DesktopShortcut] = []
-    for row in rows:
+    for row in launcher_order(rows):
         if row.internal or row.default_shortcut is None:
             continue
         launch = default_launch_path_id(row)
@@ -714,6 +733,13 @@ def is_placement_shown(placement: WindowPlacement) -> bool:
 
 
 @pure
+def is_placement_on_screen(placement: WindowPlacement) -> bool:
+    """Whether the window is on the client's screen somewhere: on the desktop, or pulled out (its desktop window is
+    on screen whether or not its ghost is hidden)."""
+    return placement.is_detached or not placement.is_minimized
+
+
+@pure
 def focused_window_id(placements: Sequence[WindowPlacement]) -> WindowId | None:
     """The last placement that is shown (neither minimized nor pulled out); None when the backdrop has focus."""
     return next((placement.window_id for placement in reversed(placements) if is_placement_shown(placement)), None)
@@ -728,6 +754,57 @@ def most_recently_focused_window_of_app(layout: DesktopLayout, desktop: Desktop,
         if window is not None and window.app == app:
             return window
     return None
+
+
+@pure
+def stacked_windows(view: ClientDesktopView) -> list[tuple[Window, WindowPlacement]]:
+    """The desktop's windows as the client sees them, frontmost first in the client's stack, each with its placement."""
+    seen_by_id = {window.id: window for window in view.seen_windows}
+    return [
+        (seen_by_id[placement.window_id], placement)
+        for placement in reversed(effective_placements(view.layout, view.desktop))
+        if placement.window_id in seen_by_id
+    ]
+
+
+@pure
+def page_of_path(path: str) -> str:
+    """The page a path is at: the path without its query string or fragment."""
+    return urlsplit(path).path
+
+
+@pure
+def choose_show_target(
+    active: ClientDesktopView,
+    others: Sequence[ClientDesktopView],
+    app: AppName,
+    path: WindowPath,
+    showing: AbstractSet[WindowPath],
+    repoint: AbstractSet[WindowPage],
+) -> ShowChoice:
+    """Where a ``show`` op puts ``path`` for one client (desktop contracts.md section 8): a window of ``app`` already at
+    ``path`` or a path in ``showing``, on the client's active desktop before its ``others`` and frontmost first; else
+    the frontmost on-screen window of ``app`` on the active desktop whose page is in ``repoint``; else the app's pinned
+    window on the active desktop; else a new window there."""
+    shown_paths = {path, *showing}
+    for view in (active, *others):
+        for window, _placement in stacked_windows(view):
+            if window.app == app and window.path in shown_paths:
+                return ShowChoice(outcome=ShowOutcome.RAISED, desktop_id=view.desktop.id, window=window)
+    repointable = next(
+        (
+            window
+            for window, placement in stacked_windows(active)
+            if window.app == app and is_placement_on_screen(placement) and page_of_path(window.path) in repoint
+        ),
+        None,
+    )
+    if repointable is not None:
+        return ShowChoice(outcome=ShowOutcome.NAVIGATED, desktop_id=active.desktop.id, window=repointable)
+    pinned = next((window for window in active.seen_windows if window.app == app and window.is_pinned), None)
+    if pinned is not None:
+        return ShowChoice(outcome=ShowOutcome.PINNED, desktop_id=active.desktop.id, window=pinned)
+    return ShowChoice(outcome=ShowOutcome.OPENED, desktop_id=active.desktop.id, window=None)
 
 
 @pure

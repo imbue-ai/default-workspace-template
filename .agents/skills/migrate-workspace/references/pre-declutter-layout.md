@@ -204,8 +204,8 @@ built.
   when a deterministic check finds something (services in FATAL/BACKOFF, fresh
   errors in the supervisor logs, disk at 85 percent, new OOM shedding). See
   `enable-caretaker` / `disable-caretaker`.
-- **Templates.** A publishable, bootable snapshot of what a mind has built, so
-  another mind can be created from it or adopt it. See `publish-template`,
+- **Templates.** A publishable, bootable snapshot of what an agent has built, so
+  another agent can be created from it or adopt it. See `publish-template`,
   `use-template`, `update-installed-template`.
 - **Desktop operations.** `system/scripts/layout.py` reads and arranges the
   desktop's windows -- open, focus, place, minimize, maximize, close, navigate.

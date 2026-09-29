@@ -46,7 +46,7 @@ _AGENT_SCRIPT: Final[str] = """#!/bin/bash
 # Attach to a mngr agent's tmux session window 0.
 #
 # If a session name is provided as $1, use "$MNGR_PREFIX$1" as the target
-# session (so the minds chat UI can deep-link to a specific sub-agent's
+# session (so the Imbue Studio chat UI can deep-link to a specific sub-agent's
 # terminal by passing the agent name). Otherwise fall back to the current
 # tmux session -- useful when ttyd is invoked without args.
 set -euo pipefail

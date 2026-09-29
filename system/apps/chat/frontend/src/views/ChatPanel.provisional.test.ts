@@ -134,7 +134,7 @@ function mountPanel(): () => unknown {
   return () => panel.view({ attrs: { chatId: AGENT_ID } } as m.Vnode<{ chatId: string }>);
 }
 
-/** A seeded chat (the Mind app's onboarding conversation) in `phase`, its create having failed
+/** A seeded chat (the Imbue Studio app's onboarding conversation) in `phase`, its create having failed
  *  with `error` in the failed phase. */
 function seeded(phase: "awaiting_first_send" | "creating" | "failed", error: string | null = null): void {
   mocks.proto = {
