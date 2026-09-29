@@ -25,9 +25,9 @@ and copies its static fields onto the row: ``display_name``, ``critical``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
 the names of the params, and ``method``, ``presets``, ``text_param``, and
 ``draft_param`` when given), ``pin`` (path, and style, scope, and
-default_mode when given), and ``window_closed_path``; the icon is read from the file the
-manifest names, relative to the manifest. Every manifest field is authoritative
-on every call, so a re-registration with a changed manifest updates the row.
+default_mode when given), ``window_closed_path``, and ``message_handlers`` (type and path);
+the icon is read from the file the manifest names, relative to the manifest. Every manifest
+field is authoritative on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
 the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
@@ -152,8 +152,9 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 
 # The manifest keys copied verbatim onto the row, with the type each must have.
 # ``name`` (validated separately), ``icon`` (read from the named file), and the
-# structured keys (``default_shortcut``, ``launch_paths``, ``pin``) are handled
-# on their own. ``program`` defaults to the name when the manifest omits it.
+# structured keys (``default_shortcut``, ``launch_paths``, ``pin``,
+# ``message_handlers``) are handled on their own. ``program`` defaults to the
+# name when the manifest omits it.
 _MANIFEST_STRING_KEYS = ("display_name", "priority", "program", "window_closed_path")
 _MANIFEST_BOOL_KEYS = ("critical", "internal")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
@@ -181,6 +182,7 @@ _MANIFEST_OWNED_KEYS = (
     "launch_paths",
     "pin",
     "window_closed_path",
+    "message_handlers",
 )
 
 # The optional keys of a manifest's ``[pin]`` table, each a string when present; ``path`` is
@@ -596,7 +598,7 @@ def _read_manifest(
 def _copied_tables(
     entries: Any, path: Path, key: str, copy_entry: _TableCopier
 ) -> tuple[list[dict[str, object]] | None, str | None]:
-    """A manifest array of tables (``launch_paths``) as the registry row
+    """A manifest array of tables (``launch_paths``, ``message_handlers``) as the registry row
     carries it, each entry copied by ``copy_entry``. Returns ``(copied, None)``, or
     ``(None, error)`` when the value is not an array or an entry is not shaped as the
     manifest requires."""
@@ -709,8 +711,28 @@ def _copied_param_names(
     return [param["name"] for param in params], None
 
 
+def _copied_message_handler(
+    handler: Any, path: Path
+) -> tuple[dict[str, object] | None, str | None]:
+    """One manifest message handler as the registry row carries it: ``type`` and ``path``. Returns
+    ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
+    if not (
+        isinstance(handler, dict)
+        and isinstance(handler.get("type"), str)
+        and isinstance(handler.get("path"), str)
+    ):
+        return (
+            None,
+            f"manifest {str(path)!r}: every message handler needs a string 'type' and 'path'",
+        )
+    return {"type": handler["type"], "path": handler["path"]}, None
+
+
 # The manifest arrays of tables copied onto the row, each with the copier for its entries.
-_MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (("launch_paths", _copied_launch_path),)
+_MANIFEST_TABLE_ARRAY_COPIERS: tuple[tuple[str, _TableCopier], ...] = (
+    ("launch_paths", _copied_launch_path),
+    ("message_handlers", _copied_message_handler),
+)
 
 
 def _upsert(
@@ -840,7 +862,8 @@ def main() -> None:
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
             "critical, priority, program, internal, launcher_rank, default_shortcut, "
-            "launch_paths with their text_param, pin, window_closed_path) are copied onto the row on every call."
+            "launch_paths with their text_param, pin, window_closed_path, message_handlers) are copied onto the row on "
+            "every call."
         ),
     )
     parser.add_argument(
