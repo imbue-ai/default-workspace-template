@@ -24,6 +24,7 @@ import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCurs
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
+import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import {
   PendingIntakeGoneError,
   addChatsUpdatedListener,
@@ -111,6 +112,9 @@ function reportLocation(): void {
 
 // Whether a chat for the empty list is being asked for, so the list asks once.
 let isOpeningChatForEmptyList = false;
+// Paces asking again after a failure: the app refuses until it has read its agent list, and a list that is still
+// empty after that brings no push to ask again on (an unchanged list is not passed on).
+const emptyListChatBackoff = new ReconnectBackoff();
 
 /** The rail's rows in display order, most recent first. */
 function railRows(): ChatRow[] {
@@ -153,10 +157,14 @@ function openChatForEmptyList(): void {
   isOpeningChatForEmptyList = true;
   awaitingChatForEmptyList()
     .then((chatId) => {
+      emptyListChatBackoff.reset();
       awaitingListing.add(chatId);
       if (selectedChatId === null) select(chatId);
     })
-    .catch((error: unknown) => console.warn("[chat-root] could not open a chat for the empty list", error))
+    .catch((error: unknown) => {
+      console.warn("[chat-root] could not open a chat for the empty list; asking again", error);
+      setTimeout(fillSlot, emptyListChatBackoff.nextDelay());
+    })
     .finally(() => {
       isOpeningChatForEmptyList = false;
     });
