@@ -55,8 +55,9 @@ belong in tested code rather than agent prose:
     Name the two commit ranges the worker reads each app's footprint over:
     what the workspace itself changed, and what the update changes in the tree
     the live workspace runs. Anchored on this pass's merge commit, so a fix
-    committed on top of it leaves them unchanged, and shifted for the two kinds
-    of retry after a rolled-back apply (the target moved, or it did not).
+    committed on top of it leaves them unchanged, and shifted past the
+    rollback reverts of a pass after rolled-back updates (whether the target
+    moved or not).
 
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
@@ -158,12 +159,13 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from update_apply import (
-    ROLLBACK_REVERT_SUBJECT_PREFIX,
+    UpdateRollbackHistory,
     apply_update,
     confirm_last,
     pending_update_rollbacks,
     recover,
     rollback_last,
+    update_rollback_history,
 )
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
@@ -363,27 +365,35 @@ def _latest_commit_with_subject(
     return None
 
 
-def _is_rollback_revert(commit: str, repo_root: Path) -> bool:
-    subject = _git(["log", "-1", "--format=%s", commit], repo_root)
-    return subject.startswith(ROLLBACK_REVERT_SUBJECT_PREFIX)
+def _before_rollback_reverts(
+    commit: str, history: UpdateRollbackHistory, repo_root: Path
+) -> str:
+    """The commit under the run of update-rollback reverts ending at ``commit``
+    (``commit`` itself when it is not one): the tree before the worker's first step."""
+    while commit in history.reverts:
+        commit = _commit_sha(f"{commit}^", repo_root)
+    return commit
 
 
-def _first_attempt_first_parent(merge: str, repo_root: Path) -> str:
+def _first_attempt_first_parent(
+    merge: str, history: UpdateRollbackHistory, repo_root: Path
+) -> str:
     """The first parent of the first merge in ``merge``'s chain of retries.
 
-    A merge whose first parent reverts a rollback was a retry on top of an
-    earlier landed-and-rolled-back merge; the chain ends at a merge made on the
-    workspace's own line, whose first parent carries none of those releases.
+    A merge whose first parent reverts an update's rollback, or is one, was
+    made on top of an earlier landed-and-rolled-back merge; the chain ends at a
+    merge made on the workspace's own line, whose first parent carries none of
+    those releases.
     """
     first_parent = _commit_sha(f"{merge}^1", repo_root)
-    while _is_rollback_revert(first_parent, repo_root):
+    while first_parent in history.reverts or first_parent in history.rollbacks:
         earlier = _latest_commit_with_subject(
             UPDATE_SELF_MERGE_SUBJECT, f"{first_parent}^", repo_root
         )
         if earlier is None:
             raise NoUpdateMergeError(
-                f"{first_parent} reverts a rollback, but no earlier "
-                f"'{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
+                f"{first_parent} rolls back an update or reverts its rollback, but "
+                f"no earlier '{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
             )
         first_parent = _commit_sha(f"{earlier}^1", repo_root)
     return first_parent
@@ -398,17 +408,20 @@ def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
     ``update-self: merge upstream template`` commit rather than on ``HEAD``, so
     a fix committed on top of the merge leaves them unchanged.
 
-    A retry after a rolled-back apply shifts the anchors. The worker reverts the
-    rollback before merging, so on a retry whose target moved, the merge's first
-    parent is that revert, which already carries the landed release: the update
-    range starts at the commit the revert sits on instead. On a retry of the
-    same target the revert leaves ``git merge`` nothing to do, so the merge found
-    is the landed attempt's own; the revert is then the whole update, and the
-    local range runs to the commit it sits on, which carries every local commit
-    since that attempt branched. That commit runs the tree from before every
+    A pass after rolled-back updates shifts the anchors. The worker first reverts
+    every update rollback nothing has undone, so when the target moved, the
+    merge's first parent is the last of those reverts, which already carries the
+    landed releases: the update range starts under the whole run of reverts
+    instead, at the tree the live workspace runs. On a retry of the same target
+    the reverts leave ``git merge`` nothing to do, so the merge found is the
+    landed attempt's own; the reverts are then the whole update, and the local
+    range runs to the commit under them, which carries every local commit since
+    that attempt branched. That commit runs the tree from before every
     rolled-back attempt, so its fork point is taken from the first attempt in
-    the chain rather than from the landed one, which may itself have been a
-    moved-target retry on top of an earlier release.
+    the chain rather than from the landed one, which may itself have been made
+    on top of an earlier release. A user's rollback of an app change, and its
+    revert, carry the same subjects but are the workspace's own history, and
+    shift nothing.
     """
     target_sha = _commit_sha(target, repo_root)
     merge = _latest_commit_with_subject(UPDATE_SELF_MERGE_SUBJECT, "HEAD", repo_root)
@@ -423,20 +436,22 @@ def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
             f"merge {target}; an earlier update's merge carries the same subject"
         )
     first_parent = parents[0]
-    same_target_revert = _latest_commit_with_subject(
-        ROLLBACK_REVERT_SUBJECT_PREFIX, f"{merge}..HEAD", repo_root
+    history = update_rollback_history(target, "HEAD", repo_root, Runner())
+    since_merge = _list_names(
+        _git(["rev-list", "--first-parent", f"{merge}..HEAD"], repo_root)
+    )
+    same_target_revert = next(
+        (commit for commit in since_merge if commit in history.reverts), None
     )
     if same_target_revert is not None:
-        local_fork = _first_attempt_first_parent(merge, repo_root)
-        local_ref = update_base = _commit_sha(f"{same_target_revert}^", repo_root)
+        local_fork = _first_attempt_first_parent(merge, history, repo_root)
+        local_ref = update_base = _before_rollback_reverts(
+            same_target_revert, history, repo_root
+        )
         update_ref = same_target_revert
     else:
         local_fork = local_ref = first_parent
-        update_base = (
-            _commit_sha(f"{first_parent}^", repo_root)
-            if _is_rollback_revert(first_parent, repo_root)
-            else first_parent
-        )
+        update_base = _before_rollback_reverts(first_parent, history, repo_root)
         update_ref = merge
     local_base = _git(["merge-base", local_fork, target_sha], repo_root)
     return {

@@ -182,7 +182,6 @@ def _restore_tree(
 # "applied and undone". This prefix is how :func:`_has_rollback_since` tells
 # them apart.
 _ROLLBACK_SUBJECT_PREFIX = "Roll back update apply"
-ROLLBACK_REVERT_SUBJECT_PREFIX = f'Revert "{_ROLLBACK_SUBJECT_PREFIX}'
 
 # The trailer an update's rollback carries, naming the release it rolled back. A
 # rollback of an app change writes the same subject without it, and only an update's
@@ -293,7 +292,7 @@ def _log_records(
     ]
 
 
-# CLEANUP: remove this function, its call in pending_update_rollbacks,
+# CLEANUP: remove this function, its call in _update_rollbacks_in,
 # _UPDATE_SELF_SUBJECT_PREFIX, and the restore_to group of _ROLLBACK_SUBJECT once every
 # workspace runs a release whose apply writes the _ROLLED_BACK_UPDATE_TRAILER: landing
 # that release reverted every older update's rollback, and each later one records it.
@@ -330,6 +329,73 @@ def _undid_update_content(
     return False
 
 
+def _rollback_log(
+    target_ref: str, tip: str, repo_root: Path, runner: Runner
+) -> list[list[str]]:
+    """Each commit in ``target_ref..tip``, newest first, as its sha, subject, the release
+    its :data:`_ROLLED_BACK_UPDATE_TRAILER` names, and body."""
+    return _log_records(
+        runner,
+        repo_root,
+        [
+            "log",
+            "--topo-order",
+            "--format=%H%x00%s%x00"
+            f"%(trailers:key={_ROLLED_BACK_UPDATE_TRAILER},valueonly)%x00%b%x1e",
+            f"{target_ref}..{tip}",
+        ],
+        fields=4,
+    )
+
+
+def _update_rollbacks_in(
+    newest_first: Sequence[Sequence[str]], repo_root: Path, runner: Runner
+) -> set[str]:
+    """The update rollbacks among ``newest_first`` (:func:`_rollback_log`'s records):
+    each carrying the :data:`_ROLLED_BACK_UPDATE_TRAILER`, or made before the apply
+    wrote it and undoing history that carries update content
+    (:func:`_undid_update_content`)."""
+    # Oldest first, so an earlier update's rollback is known before a later rollback
+    # that undid its revert is classified.
+    update_rollbacks: set[str] = set()
+    for sha, subject, rolled_back_update, _body in reversed(newest_first):
+        rollback = _ROLLBACK_SUBJECT.match(subject)
+        if rollback is not None and (
+            rolled_back_update.strip()
+            or _undid_update_content(
+                sha, rollback.group("restore_to"), update_rollbacks, repo_root, runner
+            )
+        ):
+            update_rollbacks.add(sha)
+    return update_rollbacks
+
+
+class UpdateRollbackHistory(NamedTuple):
+    """The rollbacks of updates in a range of history, undone or not, and the commits
+    there that revert one (what the update-self worker's first step commits)."""
+
+    rollbacks: frozenset[str]
+    reverts: frozenset[str]
+
+
+def update_rollback_history(
+    target_ref: str, tip: str, repo_root: Path, runner: Runner
+) -> UpdateRollbackHistory:
+    """The update rollbacks in ``target_ref..tip`` and their reverts, told from a user's
+    rollback of an app change (and its revert) by :func:`pending_update_rollbacks`'s
+    rule, although both carry the same subject."""
+    newest_first = _rollback_log(target_ref, tip, repo_root, runner)
+    rollbacks = _update_rollbacks_in(newest_first, repo_root, runner)
+    return UpdateRollbackHistory(
+        rollbacks=frozenset(rollbacks),
+        reverts=frozenset(
+            sha
+            for sha, _subject, _rolled_back_update, body in newest_first
+            if any(reverted in rollbacks for reverted in _REVERTS_COMMIT.findall(body))
+        ),
+    )
+
+
 def pending_update_rollbacks(
     target_ref: str, tip: str, repo_root: Path, runner: Runner
 ) -> list[str]:
@@ -346,30 +412,8 @@ def pending_update_rollbacks(
     and merging any later release lands only what that release changed since: the old
     release plus a few files, which the apply's probes cannot tell from a good update.
     """
-    newest_first = _log_records(
-        runner,
-        repo_root,
-        [
-            "log",
-            "--topo-order",
-            "--format=%H%x00%s%x00"
-            f"%(trailers:key={_ROLLED_BACK_UPDATE_TRAILER},valueonly)%x00%b%x1e",
-            f"{target_ref}..{tip}",
-        ],
-        fields=4,
-    )
-    # Oldest first, so an earlier update's rollback is known before a later rollback
-    # that undid its revert is classified.
-    update_rollbacks: set[str] = set()
-    for sha, subject, rolled_back_update, _body in reversed(newest_first):
-        rollback = _ROLLBACK_SUBJECT.match(subject)
-        if rollback is not None and (
-            rolled_back_update.strip()
-            or _undid_update_content(
-                sha, rollback.group("restore_to"), update_rollbacks, repo_root, runner
-            )
-        ):
-            update_rollbacks.add(sha)
+    newest_first = _rollback_log(target_ref, tip, repo_root, runner)
+    update_rollbacks = _update_rollbacks_in(newest_first, repo_root, runner)
     # Newest first, so a commit's own undoing is known before its reverts are counted.
     undone: set[str] = set()
     pending: list[str] = []

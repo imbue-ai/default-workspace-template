@@ -989,6 +989,91 @@ def test_footprint_ranges_on_a_same_target_retry_after_a_moved_target_retry(
     ]
 
 
+def _land_v2_over_v1s_rollback_and_roll_it_back(history: _UpdateHistory) -> str:
+    """v1 landed and was rolled back, then a pass whose guide predated the revert step
+    landed v2 over that rollback and v2 was rolled back too, leaving both rollbacks for
+    the next pass to revert. Return v2's rollback: the tree the live workspace runs."""
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    history.roll_back("minds-v1")
+    history.release("minds-v2")
+    history.land("minds-v2")
+    return history.roll_back("minds-v2")
+
+
+def test_footprint_ranges_on_a_pass_that_reverted_several_rollbacks(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    history = _UpdateHistory(tmp_path)
+    live = _land_v2_over_v1s_rollback_and_roll_it_back(history)
+    history.release("minds-v3")
+    for rollback in history.pending_rollbacks("minds-v3", capsys):
+        history.revert(rollback)
+    history.land("minds-v3")
+
+    ranges = history.footprint_ranges("minds-v3", capsys)
+
+    assert ranges["update_base"] == live
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt",
+        "minds-v2.txt",
+        "minds-v3.txt",
+    ]
+
+
+def test_footprint_ranges_on_a_same_target_retry_that_reverted_several_rollbacks(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The landed v2 merge sits on v1's rollback, not on a revert of it, and the
+    # workspace's own tree is still the one from before v1.
+    history = _UpdateHistory(tmp_path)
+    live = _land_v2_over_v1s_rollback_and_roll_it_back(history)
+    for rollback in history.pending_rollbacks("minds-v2", capsys):
+        history.revert(rollback)
+
+    ranges = history.footprint_ranges("minds-v2", capsys)
+
+    assert ranges["update_base"] == live
+    assert ranges["update_ref"] == _head_sha(history.repo)
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt",
+        "minds-v2.txt",
+    ]
+
+
+def test_footprint_ranges_count_a_restored_app_change_as_the_workspaces_own(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The user took an app change back and then restored it. The restoring revert
+    # carries the same subject as a revert of an update's rollback, but what it put
+    # back is the workspace's own change, not the update's.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    history.commit("system/apps/mine/view.py", "app change")
+    history.revert(history.roll_back(None))
+    history.release("minds-v2")
+    history.land("minds-v2")
+
+    ranges = history.footprint_ranges("minds-v2", capsys)
+
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py",
+        "system/apps/mine/view.py",
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v2.txt"
+    ]
+
+
 def test_footprint_ranges_refuses_an_earlier_updates_merge(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
