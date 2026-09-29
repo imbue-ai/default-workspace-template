@@ -455,6 +455,21 @@ def _deregister_chat(registry_path: Path) -> None:
     write_registry(registry_path, *builtin_rows_toml_before_chat())
 
 
+def _shell_restarted_after_the_chat_registered(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> ShellState:
+    """A shell over the state of one that seeded Home before the chat registered, its inventory having read the
+    chat's row before the shell listened to it (a restart)."""
+    registry_path = write_registry(tmp_path / "apps.toml", *builtin_rows_toml_before_chat())
+    seeding = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+    (home,) = seeding.list_desktops()
+    assert shortcut_apps_on(home) == _APPS_BEFORE_CHAT
+    _register_chat(registry_path)
+    return build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+
+
 def _desktops_updates(client_queue: "queue.Queue[str | None]") -> list[list[str]]:
     """The shortcut apps of the first desktop in each ``desktops_updated`` the client was sent."""
     return [
@@ -489,16 +504,7 @@ def test_an_app_registering_after_home_was_seeded_reaches_it_through_a_later_rea
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     """A shell whose inventory read the chat's row before the shell listened to it (a restart) adds it on the read."""
-    registry_path = write_registry(tmp_path / "apps.toml", *builtin_rows_toml_before_chat())
-    seeding = build_shell_state(
-        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
-    )
-    (home,) = seeding.list_desktops()
-    assert shortcut_apps_on(home) == _APPS_BEFORE_CHAT
-    _register_chat(registry_path)
-    reading = build_shell_state(
-        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
-    )
+    reading = _shell_restarted_after_the_chat_registered(tmp_path, broadcaster)
     assert shortcut_apps_on(reading.desktops.list_desktops()[0]) == _APPS_BEFORE_CHAT
     client_queue = broadcaster.register()
 
@@ -516,16 +522,7 @@ def test_a_desktop_created_before_a_late_app_was_reconciled_leaves_it_offered_on
 ) -> None:
     """A shell whose inventory read the chat's row before the shell listened to it, and before any read of the
     desktops: creating a desktop, which records the chat as offered, first adds it to the desktops already there."""
-    registry_path = write_registry(tmp_path / "apps.toml", *builtin_rows_toml_before_chat())
-    seeding = build_shell_state(
-        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
-    )
-    (home,) = seeding.list_desktops()
-    assert shortcut_apps_on(home) == _APPS_BEFORE_CHAT
-    _register_chat(registry_path)
-    reading = build_shell_state(
-        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
-    )
+    reading = _shell_restarted_after_the_chat_registered(tmp_path, broadcaster)
 
     work = reading.create_desktop("Work", "#123456", 1)
 
