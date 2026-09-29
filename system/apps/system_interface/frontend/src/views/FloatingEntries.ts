@@ -12,16 +12,22 @@ import m from "mithril";
 import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { PixelRect } from "../geometry/frames";
+import type { Desktop } from "../model/records";
 import type { AvatarState, TaskbarEntry } from "../reducers/desktopState";
 import { entryStyleParts } from "./AvatarImage";
+import { desktopIdentityMarkup } from "./DesktopsWidget";
 import { rectStyle } from "./pixelStyle";
 
 /** The intrinsic size the glyph markup carries; the drawing fills the tile (``[&>svg]:size-full``). */
 const FLOATING_GLYPH_MARKUP_SIZE = 32;
+/** For the launch video, an avatar-style floating entry draws the desktop's own squiggle, in this red, in place of the avatar. */
+const FLOATING_SQUIGGLE_COLOR = "#e5322d";
 
 export interface FloatingEntriesAttrs {
   readonly entries: readonly TaskbarEntry[];
   readonly avatar: AvatarState;
+  /** The desktop shown, whose squiggle an avatar-style entry draws. */
+  readonly desktop: Pick<Desktop, "name" | "color" | "glyph">;
   /** Where each entry's box is, in backdrop pixels (the drag's rectangle while one moves it). */
   readonly rectOf: (entry: TaskbarEntry) => PixelRect;
   readonly openMenuWindowId: string | null;
@@ -59,7 +65,7 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
               "floating-entry pointer-events-auto absolute flex cursor-pointer items-center justify-center " +
               "touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-accent " +
               (isAvatar
-                ? "rounded-2xl border-0 bg-transparent p-0 [&>img]:size-full "
+                ? "rounded-2xl border-0 bg-transparent p-0 [&>svg]:size-full "
                 : // The icon brings its own tile (`docs/system/app-icons.md`), so this box paints nothing and
                   // pads nothing, the way a backdrop shortcut does not: a surface and 8px of padding around a
                   // tile framed it in a second one, which is the pale edge the avatar loses when it is
@@ -82,7 +88,9 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
               attrs.onContextMenu(entry.window.id, event.clientX, event.clientY, targetElementOf(event));
             },
           },
-          parts.image,
+          isAvatar
+            ? m.trust(desktopIdentityMarkup({ ...attrs.desktop, color: FLOATING_SQUIGGLE_COLOR }, FLOATING_GLYPH_MARKUP_SIZE))
+            : parts.image,
         );
       }),
     );

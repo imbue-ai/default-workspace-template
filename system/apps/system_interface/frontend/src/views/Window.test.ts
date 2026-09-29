@@ -94,7 +94,8 @@ describe("Window", () => {
     const controls = [...element.querySelectorAll("[data-window-control]")].map((control) =>
       control.getAttribute("data-window-control"),
     );
-    expect(controls).toEqual(["refresh", "menu", "minimize", "maximize", "close"]);
+    // The launch video's framing: no Refresh and no window menu on the bar.
+    expect(controls).toEqual(["minimize", "maximize", "close"]);
     (element.querySelector('[data-window-control="close"]') as HTMLElement).click();
     expect(onControl).toHaveBeenCalledWith("close", expect.anything());
   });
