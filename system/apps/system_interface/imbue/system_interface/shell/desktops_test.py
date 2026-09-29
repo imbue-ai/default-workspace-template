@@ -203,7 +203,7 @@ def test_seeding_the_default_desktop_again_starts_the_offered_record_over(
     store = DesktopStore(state_directory=state_directory)
     store.ensure_default(lambda: seed_desktop_shortcuts(before_chat))
     store.ensure_default_shortcuts_offered(with_chat)
-    assert "chat" in _offered_record(state_directory)["apps"]
+    assert _offered_record(state_directory)["apps"] == ["browser", "chat", "files", "getting-started", "terminal"]
     spoil_desktops_file(state_directory / "desktops.json")
 
     (home,) = store.ensure_default(lambda: seed_desktop_shortcuts(before_chat))
