@@ -5019,6 +5019,29 @@ def _mark_harness_ready(tmp_path: Path, agent_id: str) -> None:
     (tmp_path / "agents" / agent_id / CLAUDE_STARTUP_READY_MARKER.filename).write_text("")
 
 
+def _wait_for_created_spare(manager: AgentManager) -> SpareChatAgent:
+    """The pool's one spare, once its ``mngr create`` has returned and its agent is tracked."""
+    wait_until_true(
+        lambda: len(manager._spares) == 1 and manager.get_agent_by_id(manager._spares[0].chat_id) is not None,
+        timeout_seconds=15.0,
+        what="the spare's create finishing",
+    )
+    (spare,) = manager._spares
+    return spare
+
+
+def _record_cut_short_spare(tmp_path: Path) -> SpareChatAgent:
+    """A spare on the default account left being created in the spares file, as a restart finds one."""
+    cut_short = SpareChatAgent(
+        chat_id=ChatId(f"agent-{uuid4().hex}"),
+        display_name="Chat 1",
+        terms=SpareChatTerms(account_id=read_index().accounts[0].id, project_label="", is_fast=True),
+        phase=SpareChatPhase.CREATING,
+    )
+    SpareChatStore(path=tmp_path / "spare_chat.json").write((cut_short,))
+    return cut_short
+
+
 @pytest.mark.parametrize("pool_size", [1, 2])
 def test_the_pool_fills_with_silent_spares_on_the_default_account_that_no_listing_shows(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pool_size: int
@@ -5146,17 +5169,11 @@ def test_a_rename_addressed_to_a_spare_name_leaves_the_spare_alone(
 def test_a_spare_is_not_ready_until_its_harness_says_it_accepts_input(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    mngr_binary, argv_log = _write_booting_mngr_binary(tmp_path)
+    mngr_binary, _ = _write_booting_mngr_binary(tmp_path)
     manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
         manager.ensure_spare_chat()
-        wait_until_true(
-            lambda: len(_mngr_calls(argv_log, "create")) == 1
-            and manager.get_agent_by_id(_mngr_calls(argv_log, "create")[0][3]) is not None,
-            timeout_seconds=15.0,
-            what="the spare's create finishing",
-        )
-        (booting,) = manager._spares
+        booting = _wait_for_created_spare(manager)
         assert booting.phase is SpareChatPhase.CREATING
 
         _mark_harness_ready(tmp_path, booting.chat_id)
@@ -5177,12 +5194,7 @@ def test_a_spare_still_starting_when_the_app_stops_is_left_for_the_next_start(
     manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
         manager.ensure_spare_chat()
-        wait_until_true(
-            lambda: len(manager._spares) == 1 and manager.get_agent_by_id(manager._spares[0].chat_id) is not None,
-            timeout_seconds=15.0,
-            what="the spare's create finishing",
-        )
-        (booting,) = manager._spares
+        booting = _wait_for_created_spare(manager)
     finally:
         manager.stop()
 
@@ -5201,12 +5213,7 @@ def test_a_new_chat_claims_a_spare_still_starting_and_becomes_it_once_its_harnes
     pushes = broadcaster.register()
     try:
         manager.ensure_spare_chat()
-        wait_until_true(
-            lambda: len(manager._spares) == 1 and manager.get_agent_by_id(manager._spares[0].chat_id) is not None,
-            timeout_seconds=15.0,
-            what="the spare's create finishing",
-        )
-        (booting,) = manager._spares
+        booting = _wait_for_created_spare(manager)
 
         created = manager.create_chat("", message="Draft the agenda 5190")
 
@@ -5347,13 +5354,7 @@ def test_a_spare_whose_create_a_restart_cut_short_is_destroyed_and_replaced(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    cut_short = SpareChatAgent(
-        chat_id=ChatId(f"agent-{uuid4().hex}"),
-        display_name="Chat 1",
-        terms=SpareChatTerms(account_id=read_index().accounts[0].id, project_label="", is_fast=True),
-        phase=SpareChatPhase.CREATING,
-    )
-    SpareChatStore(path=tmp_path / "spare_chat.json").write((cut_short,))
+    cut_short = _record_cut_short_spare(tmp_path)
     manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
         manager.ensure_spare_chat()
@@ -5374,13 +5375,7 @@ def test_a_spare_left_to_destroy_by_a_sweep_that_could_not_record_its_new_spare_
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    cut_short = SpareChatAgent(
-        chat_id=ChatId(f"agent-{uuid4().hex}"),
-        display_name="Chat 1",
-        terms=SpareChatTerms(account_id=read_index().accounts[0].id, project_label="", is_fast=True),
-        phase=SpareChatPhase.CREATING,
-    )
-    SpareChatStore(path=tmp_path / "spare_chat.json").write((cut_short,))
+    cut_short = _record_cut_short_spare(tmp_path)
     manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     unwritable = tmp_path / "spare_chat.json.tmp"
     try:
