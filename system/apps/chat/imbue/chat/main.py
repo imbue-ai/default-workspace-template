@@ -162,7 +162,6 @@ def build_production_state(
         # bound to that account -- they do not pick up a swapped credential on their own.
         auth_flows=AuthFlowService.create(
             restart_bound_agents=agent_manager.restart_agents_on_account_in_background,
-            # A sign-in starts the spare agents for new chats at once.
             on_account_committed=lambda _account_id: agent_manager.ensure_spare_chat_in_background(),
         ),
         # Read-only: it reports claude's auth state and writes and restarts nothing, so it

@@ -224,14 +224,13 @@ FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO: Final[int] = 2
 
 
 # How many spare agents (``spare_chat.py``) are kept started for new chats. Two, so the chat after
-# one that took a spare finds another already up while the pool is topped up. An idle claude costs
-# about 250 MB and next to no CPU.
+# one that took a spare finds another already up while the pool is topped up.
 SPARE_CHAT_POOL_SIZE: Final[int] = 2
 # How long after a hand-over the pool is left short when another spare is still ready: long enough
 # for the chat that took one to get through its first turn before the next spare's boot competes
 # with it for the host's CPUs.
 SPARE_CHAT_REPLENISH_DELAY_SECONDS: Final[float] = 30.0
-# How long a created spare's harness may take to say it accepts input (pi takes about half a minute).
+# How long a created spare's harness may take to say it accepts input.
 SPARE_CHAT_BOOT_TIMEOUT_SECONDS: Final[float] = 180.0
 SPARE_CHAT_BOOT_POLL_SECONDS: Final[float] = 0.5
 # How long the spares are left alone after a create or a destroy failed, so a workspace where mngr
@@ -2963,9 +2962,8 @@ class AgentManager:
         if owned_keys:
             raise AgentCreationError(f"The chat app sets {', '.join(owned_keys)} itself; a create cannot restate them")
 
-        # A new chat on the terms the spare was started on is the spare. A name, labels, or
-        # templates of the caller's own need an agent created with them, and a chat minted
-        # earlier keeps its own id, which the spare's is not.
+        # A name, labels, or templates of the caller's own need an agent created with them, and a
+        # chat minted earlier keeps its own id, which no spare's is.
         if not chat_id and not explicit_name and not extra_labels and not extra_role_templates:
             created_from_spare = self._create_chat_from_spare(account.id, project_id, message, model_pick)
             if created_from_spare is not None:
