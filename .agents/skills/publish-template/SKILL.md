@@ -1,6 +1,6 @@
 ---
 name: publish-template
-description: Publish a clean, shareable snapshot of the apps/features this mind built to a new GitHub repo (an "template" another mind can adapt). Use when the user asks to publish, share, or export what they built as a reusable template.
+description: Publish a clean, shareable snapshot of the apps/features this agent built to a new GitHub repo (an "template" another agent can adapt). Use when the user asks to publish, share, or export what they built as a reusable template.
 metadata:
   author: imbue
 ---
@@ -16,10 +16,10 @@ and the environment an adopter must install) in the TOML. v1 -- slug-named
 still READ by the adopt paths, but nothing writes it any more.
 
 An "template" is a clean, shareable, **bootable** snapshot of something this
-mind built -- an app or feature, but equally a chat customization or behavior, a
+agent built -- an app or feature, but equally a chat customization or behavior, a
 skill, a workflow, a service, config, or seed data: anything committable that
 lives in the repo tree and can be snapshotted -- published to a new GitHub repo
-so another mind can be created FROM it (not just read its source). A repo holds
+so another agent can be created FROM it (not just read its source). A repo holds
 EXACTLY ONE template -- `template.md`, `template.toml`, and
 `template.svg` at the repo root -- and publishing overrides whatever was
 there before, recording what it replaced as a `[[lineage]]` entry. This skill delegates the assembly to a `launch-task` sub-agent
@@ -29,7 +29,7 @@ chat, obtains GitHub access via latchkey permissioning (never the `gh` CLI),
 and then creates the repo and pushes -- directly from the worker's worktree.
 
 > **CWD INVARIANT -- read this before running anything in §§6-8.** From the
-> moment §3's worker reports `done`, the live mind's checkout at `/home/user/workspace` is
+> moment §3's worker reports `done`, the live agent's checkout at `/home/user/workspace` is
 > DONE being touched for the rest of this skill. Every command in §6 (chat
 > confirmation and any confirmed manifest/thumbnail edits), §7 (GitHub auth),
 > and §8 (create repo + push) runs with **cwd = `$WT`** (the worker's
@@ -44,7 +44,7 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 > silently reset `/home/user/workspace`'s entire live tree to an old base (a normal 3-way
 > merge diffs from the merge-base, and the assembled tree looks nothing like
 > `/home/user/workspace`'s HEAD, so git read everything present in HEAD but absent from the
-> old base as an intentional deletion -- 1400+ files gone from a live mind).
+> old base as an intentional deletion -- 1400+ files gone from a live agent).
 > Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/home/user/workspace`, or any
 > other step that runs from `/home/user/workspace` after assembly.
 >
@@ -65,7 +65,7 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 > `.mngr/`, `.agents/skills/`, `system/config/parent.toml`,
 > etc.) plus the selected app/feature paths -- never just the app code plus a
 > README. That full tree is what makes `/use-template`'s template path work:
-> another mind must be creatable FROM the published repo, not merely able to
+> another agent must be creatable FROM the published repo, not merely able to
 > read its source. If assembly (§3), the chat confirmation or GitHub auth
 > (§6-§7), or the push (§8) fails for ANY reason, do NOT invent an alternate
 > publish mechanism -- do not push a hand-assembled subset of files via `gh
@@ -94,7 +94,7 @@ and then creates the repo and pushes -- directly from the worker's worktree.
   guessed -- resolve it after the worker's `done` report per §3. Everything
   after assembly runs with cwd = `$WT` (see the callout above).
 - **`BASE_REF` (provenance + clean base).** The workspace's template base
-  -- the template state this mind started from (or last updated itself to).
+  -- the template state this agent started from (or last updated itself to).
   Resolve it **in-repo, with no network access** (see step 2); do NOT
   `git fetch`/`git pull` upstream. Pass it to `build_template.sh` as
   `--base-ref`.
@@ -116,7 +116,7 @@ Then, by their answer:
 - **They have one.** Ask them to connect it, and initiate the GitHub
   permission request now (§7 has the exact latchkey calls; it re-probes before
   the push, so requesting early is safe and never duplicates a grant). Doing it
-  here means the approval is waiting for them in minds while assembly runs,
+  here means the approval is waiting for them in Imbue Studio while assembly runs,
   instead of stalling the publish at the end.
 - **They do not.** Point them at <https://github.com/signup> -- a free account
   is enough for this -- and wait for them to tell you it exists before going on
@@ -133,7 +133,7 @@ Then, by their answer:
     scopes, and the push goes through the gateway's GitHub proxy;
   - **repo creation** -- §8 step 1 POSTs to `api.github.com/user/repos`, and
     step 1b/3 PATCH settings and set the `minds-template` topic;
-  - **the README** -- the generated "Open in Mind" button and its copyable
+  - **the README** -- the generated "Open in Imbue Studio" button and its copyable
     `/use-template` line both hardcode a `https://github.com/` prefix
     around the repo placeholder, so both need rewriting for another host. The
     trampoline itself takes any git URL, so only the prefix is wrong.
@@ -155,7 +155,7 @@ Ask the user, in plain language. Never enumerate files at them:
   `.agents/skills/<name>` for a skill) -- you reason about the backing paths,
   the user does not. Include the program's own drop-in, never
   `system/supervisord.conf`: that file is the daemon's config plus every other
-  program the mind happens to run, none of which belongs in this snapshot;
+  program the agent happens to run, none of which belongs in this snapshot;
 - what data should be included -- and this is NOT an all-or-nothing default.
   Judge each candidate data path by whether it is **personal**: information
   about the user or specific real people (names, emails, accounts, messages,
@@ -209,7 +209,7 @@ gate.** Send ONE message that lays out, in plain language:
 - what WILL be included (apps/features, plus any non-personal data that ships
   with them -- not file lists);
 - what will NOT be included that they might expect (their personal data, other
-  apps this mind has, secrets/config) -- so surprises surface now;
+  apps this agent has, secrets/config) -- so surprises surface now;
 - any data near the personal/non-personal boundary you flagged in the data
   question above, restated so they can settle it before assembly begins;
 - the published-version modifications you will apply (or "none");
@@ -245,7 +245,7 @@ dispatch anyway, handle it in place:
 ## 2. Resolve `BASE_REF` and `SOURCE_SHA` (in-repo, no network)
 
 `BASE_REF` is this workspace's **template base** -- the pristine template
-commit the mind started from (or last updated itself to). Resolve it with the
+commit the agent started from (or last updated itself to). Resolve it with the
 shared script, never by hand:
 
 ```bash
@@ -254,25 +254,25 @@ BASE_REF=$(uv run .agents/shared/scripts/resolve_template_base.py)
 
 It walks HEAD's first-parent history for the NEWEST template-state marker:
 
-- **an `update-self: ...` merge** -- the mind pulled a newer template version
+- **an `update-self: ...` merge** -- the agent pulled a newer template version
   after creation (the same subject convention `update-self` / `assist` rely
   on). The base is the merge's **second parent**, the upstream template commit
   it merged. **Never the merge commit itself**: its tree is the upstream
-  template merged with everything the mind had built by then, and its
-  first-parent history is the mind's own, so as a base it would ship every
-  other creation the mind had built, and its pre-update history, inside a
+  template merged with everything the agent had built by then, and its
+  first-parent history is the agent's own, so as a base it would ship every
+  other creation the agent had built, and its pre-update history, inside a
   template meant to hold only what the user chose.
-- **`Initial workspace commit`** -- written by bootstrap on the mind's very
+- **`Initial workspace commit`** -- written by bootstrap on the agent's very
   first boot (always present -- it is created `--allow-empty` by
   `system/libs/bootstrap` -- and it snapshots exactly what the workspace started
   from, including any uncommitted source state a dev-flow clone carried).
-  The marker itself is the base. This is the normal answer for a mind that
+  The marker itself is the base. This is the normal answer for an agent that
   never ran `update-self`.
 
 This is NOT a judgment call -- do not go hunting for an older "clean template"
 commit past the marker. A full-history clone's first-parent ancestry reaches
-ancient template commits that have nothing to do with this mind; the marker is
-what names the mind's actual base.
+ancient template commits that have nothing to do with this agent; the marker is
+what names the agent's actual base.
 
 **Fallback (only if the script exits 1 because NO marker exists** -- a
 hand-made or pre-bootstrap repo): the **first-parent root**:
@@ -283,7 +283,7 @@ git rev-list --first-parent HEAD | tail -1
 
 The fallback MUST be the first-parent root, never a bare root-commit lookup
 (`git rev-list --max-parents=0 HEAD`): subtree merges add parallel root commits
-that are NOT the seed (a mind repo can have several near-empty roots), while
+that are NOT the seed (an agent repo can have several near-empty roots), while
 the first-parent chain from HEAD always ends at the true template seed. Do NOT
 fetch or pull from upstream to obtain `BASE_REF` in any case -- `system/config/parent.toml`
 is a provenance link only.
@@ -311,10 +311,10 @@ too-old-base problems in seconds instead of a full worker round-trip.
 a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check. It also exits 5 for a base that descends from this workspace's
 `Initial workspace commit` -- the merge commit itself, `HEAD`, or any other
-commit carrying the mind's own work.
+commit carrying the agent's own work.
 
 (The same script, under `--origin`, seeds the version ledger's `## Workspace`
-origin line in §8 step 4 below: that asks where the mind *started* -- its own
+origin line in §8 step 4 below: that asks where the agent *started* -- its own
 `Initial workspace commit` -- where this section asks what template state it is
 on *now*. Two questions, one marker convention. The update apply seeds the same
 line from its own inline copy of the `--origin` rule, because it runs from a
@@ -407,7 +407,7 @@ worktree to a clean template base and deletes gitignored state -- including
 
 2. **Apply the published-version modifications** (skip if the list below
    says none). These are user-confirmed edits that belong ONLY in the
-   published snapshot -- the live mind keeps its own versions, and nothing
+   published snapshot -- the live agent keeps its own versions, and nothing
    you do here touches it:
 
    <one line per modification: file + the change to make, e.g.
@@ -464,12 +464,12 @@ worktree to a clean template base and deletes gitignored state -- including
 
    **LLM access is a first-class activation requirement.** If any included code calls an
    LLM (Claude) -- an AI-driven service, an AI integration, a scripted model
-   step -- record that dependency explicitly, because HOW a mind reaches Claude
+   step -- record that dependency explicitly, because HOW an agent reaches Claude
    is per-environment and differs between the publisher and the adopter. This
    repo's `use-ai-integration` skill routes through a KEYED path
    (`ANTHROPIC_API_KEY` set -> `litellm`, pay-per-token API) or a KEYLESS path
    (`claude -p` -> the subscription credit pool), chosen by whether
-   `ANTHROPIC_API_KEY` is present. The adopter's mind may use the OTHER method
+   `ANTHROPIC_API_KEY` is present. The adopter's agent may use the OTHER method
    than the one this code was written against. So add a `requires_llm:` line naming
    the LLM dependency and the method it was built for, e.g. `requires_llm: calls
    Claude via the keyed litellm path (ANTHROPIC_API_KEY); an adopter on the
@@ -536,7 +536,7 @@ worktree to a clean template base and deletes gitignored state -- including
    the manifest's Requirements, is in
    `.agents/skills/publish-template/references/readme-recipe.md`. Read it
    before writing them. The hero graphic is the thumbnail you design in step 4,
-   and the "Open in Mind" button carries a placeholder repo URL the LEAD
+   and the "Open in Imbue Studio" button carries a placeholder repo URL the LEAD
    substitutes once the repo exists -- leave that alone.
 
    Do NOT render a preview yourself. The preview tab lives in the USER's
@@ -583,7 +583,7 @@ worktree to a clean template base and deletes gitignored state -- including
 
 - Your worktree is a fresh checkout on branch `mngr/<slug>`. The script
   resets it to the clean template base `<BASE_REF>` and overlays only the
-  selected paths, so the final tree looks nothing like the live mind's HEAD
+  selected paths, so the final tree looks nothing like the live agent's HEAD
   -- that is correct and expected. Do not "restore" anything it removes.
 - Included paths and what each one is:
   <one line per include path: what it is and its role>
@@ -741,7 +741,7 @@ stderr. What each exit means, and what you do:
   `pyproject.toml`, `system/supervisord.conf`, and/or
   `system/supervisord.conf.d` (e.g. a parallel subtree root was picked instead
   of the real seed). Or it descends from the workspace's `Initial workspace
-  commit`, so it carries the mind's own work (e.g. an `update-self:` merge
+  commit`, so it carries the agent's own work (e.g. an `update-self:` merge
   commit was passed instead of its upstream parent). Nothing was committed;
   re-resolve `BASE_REF` with §2's script and relaunch.
 
@@ -823,7 +823,7 @@ Then END YOUR TURN and WAIT. **This is a hard gate, exactly like §1's:** §8
 (create the repo + push) may only run after an explicit go-ahead in the
 user's reply TO THIS MESSAGE. No earlier approval counts -- not the §1 scope
 confirmation, not a "go ahead and publish" given before assembly, not
-approving the GitHub permission requests in the minds app. The final title,
+approving the GitHub permission requests in the Imbue Studio app. The final title,
 description, and thumbnail only came into existence during assembly, so the
 user cannot have approved them yet. Your own gate checks (the FILL-IN /
 placeholder / safety greps, generalization spot-checks) are VERIFICATION,
@@ -845,7 +845,7 @@ If the user asks to abort, stop here and leave the assembled commit intact
   them again** -- edit `$WT/README.md`, re-render, refresh the tab, and loop
   until they are happy (see `references/readme-recipe.md`). Keep the generated
   structure; their objection is almost always about the WORDS, not the shape,
-  and the Open in Mind call-to-action and its placeholder repo URL must
+  and the Open in Imbue Studio call-to-action and its placeholder repo URL must
   survive any rewrite. A go-ahead given while they are still unhappy with the
   README is not a go-ahead for the README.
 - If the user asks for thumbnail changes, YOU edit
@@ -893,9 +893,9 @@ in place and this section is a no-op -- it always probes before requesting, so
 running it after an early request never duplicates anything. Do NOT use
 the `gh` CLI anywhere in this flow -- no `gh auth`, no `gh repo` -- and do not
 run browser/device login flows. Latchkey keeps the credential outside the
-container and injects it per-request; the user approves once in the minds app.
+container and injects it per-request; the user approves once in the Imbue Studio app.
 
-The flow needs TWO github scopes, both approved once by the user in minds:
+The flow needs TWO github scopes, both approved once by the user in Imbue Studio:
 
 - `github-rest-api` (`github-read-user` + `github-write-all`) -- the API
   calls in §8: repo creation and the topic. The names matter: repo creation
@@ -926,7 +926,7 @@ latchkey curl http://latchkey-self.invalid/permissions/self \
 ```
 
 For whichever is missing, initiate the permission request YOURSELF (each
-request opens the approval/login flow in the minds app; the body must be
+request opens the approval/login flow in the Imbue Studio app; the body must be
 exactly the four fields shown -- `agent_id`, `type`, `payload`, `rationale`).
 A request has to be the **only** command in its tool call, so when both are
 missing this is two calls, one after the other -- no waiting for the first
@@ -944,7 +944,7 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
     -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-write"]}, "rationale": "Push the published template'"'"'s git history to the new repo."}'
 ```
 
-Tell the user in chat that a GitHub approval is waiting for them in minds (say
+Tell the user in chat that a GitHub approval is waiting for them in Imbue Studio (say
 so once, and mention that a second one follows when you are filing both),
 then poll the probes **as a background task, bounded** (mirror `launch-task`'s
 background-await pattern; a foreground `while` loop can be killed by your own
@@ -971,7 +971,7 @@ mechanism (no token-in-URL pushes, no partial-tree API uploads -- see
 the "MUST BE BOOTABLE" callout).
 
 **Then fill in the README's repo URL (cwd = `$WT`).** The landing page's "Open
-in Mind" button and its copyable `/use-template` fallback both need
+in Imbue Studio" button and its copyable `/use-template` fallback both need
 `<owner>/<repo_name>`, which did not exist when the assembly ran, so
 `build_template.sh` wrote the placeholder `MINDS_TEMPLATE_REPO_URL` in
 both places. You now have both halves: `repo_name` from §6's confirmation, and
@@ -987,7 +987,7 @@ OWNER="$(latchkey curl -sf https://api.github.com/user | jq -r .login)"
 ( cd "$WT" \
     && sed -i "s|MINDS_TEMPLATE_REPO_URL|${OWNER}/<repo_name>|g" README.md \
     && git add README.md \
-    && git commit -m "readme: point the Open in Mind link at the published repo" )
+    && git commit -m "readme: point the Open in Imbue Studio link at the published repo" )
 ```
 
 Doing it here rather than after the push is what keeps the "never push and then
@@ -1018,7 +1018,7 @@ With `repo_name` / `visibility` taken from the chat confirmation:
     still in place (the bespoke thumbnail never landed); the other patterns
     are the SVG safety rules. On ANY hit, block the push, fix the file (a
     real bespoke SVG, rules applied), commit in `$WT`, and re-run the gate.
-  - **Repo-URL gate** -- the README's "Open in Mind" button and its copyable
+  - **Repo-URL gate** -- the README's "Open in Imbue Studio" button and its copyable
     fallback are written with a placeholder, because neither the owner nor the
     final repo name exists when the assembly runs. You substituted both in §7.
     This grep must print NOTHING:
@@ -1114,7 +1114,7 @@ latchkey gateway):**
 1. **the template files exactly as they came** -- at least one commit, and
    preferably the template's whole real history (carried along by parenting on
    `BASE_REF`; see below). This is the pristine, already-public template base,
-   never this mind's own accumulated history.
+   never this agent's own accumulated history.
 2. **exactly one** commit on top carrying ONLY this template's changes -- the
    delta over `BASE_REF`, with all published-version cleanups already applied,
    minted atomically so no pre-cleanup state ever exists as its own commit.
@@ -1125,7 +1125,7 @@ template commit (intermediate commits would leak pre-cleanup state). The
 
 The published history must be **the public template's full history with
 EXACTLY ONE new commit on top** -- the template's commits, unchanged, capped
-by a single commit that carries ONLY this mind's changes (the delta over
+by a single commit that carries ONLY this agent's changes (the delta over
 `BASE_REF`). "One commit" here means **one commit OF CHANGES, never one commit
 TOTAL.** The distinction is load-bearing and is the single easiest thing to
 get wrong:
@@ -1144,7 +1144,7 @@ get wrong:
 Why the shared base matters: because the published repo keeps `BASE_REF` and
 its ancestry, it shares a real **merge-base** with the template and with every
 other template built on that template. That common ancestor is what lets an
-adopting mind cleanly **merge this template into itself (or into another
+adopting agent cleanly **merge this template into itself (or into another
 template)** -- a 3-way merge against `BASE_REF` brings in exactly this
 snapshot's changes and nothing else. An orphan single-commit repo has NO common
 ancestor with anything, so adopting it degenerates from "merge just the
@@ -1192,7 +1192,7 @@ state and NO intermediate assembly state exists anywhere off this machine.
 The gateway proxies git's smart-HTTP endpoints and injects the GitHub
 credential server-side (gated by the `github-git-write` permission from §7);
 the two extra headers are the gateway's own auth material, already in this
-container's environment. The mind's own commit history never leaves the
+container's environment. The agent's own commit history never leaves the
 machine either (`build_template.sh` parents the assembly commit on
 `BASE_REF`; the minted commit here is parented there directly). No GitHub
 token appears anywhere -- not in the URL, not on disk -- and nothing is
@@ -1240,7 +1240,7 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   `update-self`'s `scripts/update_self.py`) -- then append.
 
 - **Seed the `## Workspace` origin line if it is absent** -- exactly once per
-  workspace, as the FIRST line under `## Workspace`. Resolve where the mind
+  workspace, as the FIRST line under `## Workspace`. Resolve where the agent
   started with `uv run .agents/shared/scripts/resolve_template_base.py --origin`
   (its own `Initial workspace commit`; fall back to the first-parent root when
   that exits 1), and resolve its date/version/sha from that commit itself.
@@ -1253,7 +1253,7 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   "the workspace template">  <7-char sha>`, note padded to width 26 but never
   fewer than two spaces before the sha (`created from minds-v0.3.NN` is exactly
   26 chars, so a bare pad-to-26 would land the sha flush). (This is the
-  `--origin` end of §2's script -- where the mind started, not the base it is on
+  `--origin` end of §2's script -- where the agent started, not the base it is on
   now.)
 
 - **Append the template entry.** Create the heading `### <slug>  --  <repo-url>`
@@ -1301,7 +1301,7 @@ diagnose before retrying step 2 -- do NOT re-create the repo:
 
 - "request not permitted by the user" means the `github-git-write` permission
   is missing -- go back to §7.
-- A request-body-too-large rejection (HTTP 413) means the user's minds app is
+- A request-body-too-large rejection (HTTP 413) means the user's Imbue Studio app is
   older than the gateway's raised body cap and cannot proxy a push this size;
   report that plainly and stop.
 - A rejection mentioning `workflow` scope means the stored GitHub credential
@@ -1319,7 +1319,7 @@ report the blocker; do not improvise a substitute publish.
 
 ## 9. Override and lineage
 
-A repo holds exactly ONE template. Publishing from a mind that already has a
+A repo holds exactly ONE template. Publishing from an agent that already has a
 `template.md` / `.toml` / `.svg` **overrides** them -- the new manifest
 replaces the old rather than landing beside it.
 
@@ -1328,15 +1328,15 @@ What survives the override is the **lineage chain**. Before its reset,
 its `[[lineage]]` entries plus, when the outgoing manifest has an `[origin]`
 table, one new entry for the manifest being replaced: slug, repo URL, and the
 exact commit it was used at. So the published TOML names every template this
-mind built on, each addressed precisely enough to go and read it in the repo
+agent built on, each addressed precisely enough to go and read it in the repo
 where it is authoritative. Nothing is lost by overriding -- only relocated.
 
 Two consequences worth stating plainly:
 
 - The *code* of a superseded template is still in the tree (the merge that
-  brought it in is not undone); only its manifest is replaced. A mind can
+  brought it in is not undone); only its manifest is replaced. An agent can
   therefore be running an app whose manifest lives one repo away.
-- An outgoing manifest with no `[origin]` -- one this mind published itself, or
+- An outgoing manifest with no `[origin]` -- one this agent published itself, or
   any v1 manifest, which predates the field -- contributes no link, because
   there is no address to record. Its inherited chain still carries through. If
   that missing link matters, add it by hand to the new `template.toml`
@@ -1377,7 +1377,7 @@ the VM). Interface (cwd = worktree repo root):
 
 ```
 .agents/skills/publish-template/scripts/build_template.sh \
-  --base-ref <BASE_REF> \          # DEFAULT_WORKSPACE_TEMPLATE commit the mind was based on (provenance + clean base)
+  --base-ref <BASE_REF> \          # DEFAULT_WORKSPACE_TEMPLATE commit the agent was based on (provenance + clean base)
   --slug <slug> \
   --title <title> \
   --include <path> [--include <path> ...] \   # repo-root-relative app/feature paths to overlay
@@ -1402,7 +1402,7 @@ What it does, in order (see the script for the exact commands):
    `git read-tree -u --reset <BASE_REF>` then `git clean -fdxq` -- this drops
    tracked-but-not-in-base files AND gitignored cruft (secrets, runtime state,
    including the worker's `data/` task file). It never
-   `git checkout <ref> -- .` (that leaks the mind's whole committed tree) and
+   `git checkout <ref> -- .` (that leaks the agent's whole committed tree) and
    never fetches/pulls upstream.
 4. Overlays the staged paths onto the clean base with
    `rsync -a "$STAGE/" "$REPO/"` (root-to-root contents merge) -- never a
@@ -1430,9 +1430,9 @@ What it does, in order (see the script for the exact commands):
    replace the whole file with a bespoke SVG before reporting done, and the
    marker makes §8's pre-push gate a deterministic grep.
 9. Removes `docs/VERSION_HISTORY.md` from the snapshot entirely: that ledger is
-   WORKSPACE-only -- the SOURCE mind's own record of what it came from and
+   WORKSPACE-only -- the SOURCE agent's own record of what it came from and
    everything it has published -- and never belongs in a published template.
-   A mind created from this template grows its own ledger on demand (this
+   An agent created from this template grows its own ledger on demand (this
    skill's §8 step 4 and the update apply -- `update-self`'s
    `scripts/update_self.py` -- write the starter the first time it
    is needed), so nothing is lost by omitting it. Runs after the no-diff guard, so it can

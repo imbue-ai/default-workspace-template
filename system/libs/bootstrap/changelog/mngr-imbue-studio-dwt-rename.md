@@ -1,0 +1,1 @@
+Bootstrap docstrings now call the desktop app Imbue Studio, including the timezone fetch from the desktop client and the clean-branch guarantee for a new workspace. The desktop app is now called Imbue Studio, and the noun for the thing you talk to is now "your agent" rather than "your mind".

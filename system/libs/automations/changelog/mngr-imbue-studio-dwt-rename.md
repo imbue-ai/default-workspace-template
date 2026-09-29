@@ -1,0 +1,1 @@
+The automation runner comment now refers to agents in the Imbue Studio UI. The desktop app is now called Imbue Studio, and the noun for the thing you talk to is now "your agent" rather than "your mind".

@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -258,7 +259,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
         update_target.fetch_app_template_ref()
     except update_target.AppVersionUnavailableError as exc:
         assert "too old to report its version" in str(exc)
-        assert "Update the minds app itself first" in str(exc)
+        assert "Update the Imbue Studio app itself first" in str(exc)
     else:
         raise AssertionError("expected a 403 to block with the old-app message")
 
@@ -289,7 +290,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_call_fails(
     try:
         update_target.fetch_app_template_ref()
     except update_target.AppVersionUnavailableError as exc:
-        assert "could not reach the minds app" in str(exc)
+        assert "could not reach the Imbue Studio app" in str(exc)
         assert "connection refused" in str(exc)
     else:
         raise AssertionError("expected a transport failure to block")
@@ -438,7 +439,7 @@ def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "could not reach the minds app" in captured.err
+    assert "could not reach the Imbue Studio app" in captured.err
     # A refusal, not a crash: no traceback for the lead to relay.
     assert "Traceback" not in captured.err
 
@@ -1416,10 +1417,11 @@ def _finish_npm_install(node_modules: Path) -> None:
 
 
 def _make_apply_repo(tmp_path: Path) -> Path:
-    """A repo root shaped like the live tree: the npm workspace at ``system/`` over the shell's frontend."""
+    """A repo root shaped like the live tree: the npm workspace at ``system/`` over every app's frontend."""
     repo_root = tmp_path / "repo"
-    (repo_root / update_layout.FRONTEND_DIR).mkdir(parents=True)
-    (repo_root / update_layout.FRONTEND_DIR / "package.json").write_text("{}")
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        (repo_root / bundle.frontend_dir).mkdir(parents=True)
+        (repo_root / bundle.frontend_dir / "package.json").write_text("{}")
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").write_text("{}")
     # A live workspace has its dependencies installed; a tree without them is the
     # exception, and the tests that want it remove this.
@@ -1729,6 +1731,8 @@ def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     runner.respond(
         ("git", "log"), _Result(stdout=f"{_ROLLBACK} Initial workspace commit")
     )
+    # Nothing committed locally past the target, so no rollback to revert.
+    runner.respond(("git", "log", "--topo-order"), _Result(stdout=""))
     runner.respond(("git", "rev-list"), _Result(stdout=_ROLLBACK))
     runner.respond(("git", "describe"), _Result(returncode=128))
     return runner
@@ -2444,35 +2448,41 @@ def test_re_applying_a_rolled_back_merge_refuses_instead_of_claiming_success(
 _ROLLBACK_OF_TARGET = "0123456789abcdef0123456789abcdef01234567"
 
 
-def _target_landed_then_rolled_back(runner: _RecordingRunner, target_ref: str) -> None:
-    """Shape git's answers as after a rolled-back apply of ``target_ref``: the target is an
-    ancestor of HEAD with a rollback commit on top, while the new merge ref is not yet landed."""
+def _log_record(
+    sha: str, subject: str, body: str = "", rolled_back_update: str = ""
+) -> str:
+    """One commit as ``pending_update_rollbacks`` asks ``git log`` to print it."""
+    return f"{sha}\x00{subject}\x00{rolled_back_update}\x00{body}\x1e\n"
+
+
+def _merge_ref_carries_an_update_rollback(
+    runner: _RecordingRunner, *newer_commits: str
+) -> None:
+    """Shape git's answers as for a merge ref whose history carries an update's
+    rollback, under ``newer_commits`` (log records, newest first)."""
     runner.respond(
-        ("git", "merge-base", "--is-ancestor", target_ref), _Result(returncode=0)
-    )
-    runner.respond(
-        ("git", "log", "--format=%H %s", f"{target_ref}..HEAD"),
+        ("git", "log", "--topo-order"),
         _Result(
-            stdout=f"{_ROLLBACK_OF_TARGET} Roll back update apply (restore to abc123def456)\n"
-            "1111111111111111111111111111111111111111 Tidy a note\n"
+            stdout="".join(newer_commits)
+            + _log_record(
+                _ROLLBACK_OF_TARGET,
+                "Roll back update apply (restore to abc123def456)",
+                rolled_back_update="minds-v0.4.1",
+            )
         ),
     )
 
 
-def test_a_re_merge_of_a_rolled_back_target_is_refused_until_the_rollback_is_reverted(
+def test_a_merge_that_leaves_an_update_rolled_back_is_refused(
     apply_repo: Path,
 ) -> None:
-    # After a rollback (a forward revert) git counts the target's content as already
-    # merged, so a fresh worker pass that plainly re-merges it lands only what the
-    # target gained since; the apply would probe the old release plus a few files,
-    # find it healthy, and record the update as landed. The apply refuses instead,
-    # naming the rollback commit the worker must revert first.
+    # After a rollback (a forward revert) git counts that update's content as already
+    # merged, so a worker pass that plainly merges -- the same release or a newer one --
+    # lands only what the target changed since; the apply would probe the old release
+    # plus a few files, see it healthy, and record the update as landed. The apply
+    # refuses instead, naming the rollback commit the worker must revert first.
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    _target_landed_then_rolled_back(runner, "minds-v0.4.2")
-    runner.respond(
-        ("git", "log", "--format=%s", f"HEAD..{_MERGE_REF}"),
-        _Result(stdout="Tidy a note\n"),
-    )
+    _merge_ref_carries_an_update_rollback(runner, _log_record("1" * 40, "Tidy a note"))
 
     with pytest.raises(update_runtime.ApplyPreconditionError) as raised:
         _apply(
@@ -2488,15 +2498,16 @@ def test_a_re_merge_of_a_rolled_back_target_is_refused_until_the_rollback_is_rev
     assert not _marker_exists(apply_repo)
 
 
-def test_a_re_merge_that_reverts_the_rollback_first_is_applied(
+def test_a_merge_that_reverts_the_rollback_first_is_applied(
     apply_repo: Path,
 ) -> None:
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    _target_landed_then_rolled_back(runner, "minds-v0.4.2")
-    runner.respond(
-        ("git", "log", "--format=%s", f"HEAD..{_MERGE_REF}"),
-        _Result(
-            stdout='Revert "Roll back update apply (restore to abc123def456)"\nTidy a note\n'
+    _merge_ref_carries_an_update_rollback(
+        runner,
+        _log_record(
+            "2" * 40,
+            'Revert "Roll back update apply (restore to abc123def456)"',
+            f"This reverts commit {_ROLLBACK_OF_TARGET}.\n",
         ),
     )
 
@@ -2510,6 +2521,248 @@ def test_a_re_merge_that_reverts_the_rollback_first_is_applied(
 
     assert code == 0
     assert runner.ran("git", "merge")
+    # The worker's revert is on the merge ref, not yet on HEAD.
+    assert [
+        argv[-1] for argv in runner.argvs_starting("git", "log", "--topo-order")
+    ] == [f"minds-v0.4.2..{_MERGE_REF}"]
+
+
+def _rolled_back_update(message: str) -> str:
+    """The release a rollback commit's message records, as git reads its trailers."""
+    trailers = subprocess.run(
+        ["git", "interpret-trailers", "--parse"],
+        input=message,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    key = f"{update_apply._ROLLED_BACK_UPDATE_TRAILER}: "
+    return next(
+        (line[len(key) :] for line in trailers.splitlines() if line.startswith(key)),
+        "",
+    )
+
+
+@pytest.mark.parametrize("target_ref", ["minds-v0.4.2", None])
+def test_a_failed_apply_records_the_release_it_rolled_back_only_for_an_update(
+    apply_repo: Path, target_ref: str | None
+) -> None:
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref=target_ref,
+    )
+
+    assert code == 2
+    [commit] = runner.argvs_starting("git", "commit", "--no-verify")
+    assert _rolled_back_update(commit[commit.index("-m") + 1]) == (target_ref or "")
+
+
+class _UpdateHistory:
+    """A real repo whose history is built the way update-self passes build one: releases
+    tagged on an upstream line, landed as ``update-self:`` merges, and rolled back as
+    forward reverts under the apply's rollback subject."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.repo = _make_real_repo(tmp_path)
+        self.local = _git_in(self.repo, "rev-parse", "--abbrev-ref", "HEAD")
+        _git_in(self.repo, "branch", "upstream")
+
+    def release(self, tag: str) -> None:
+        """Tag a release on the upstream line that adds the file ``<tag>.txt``."""
+        _git_in(self.repo, "checkout", "-q", "upstream")
+        (self.repo / f"{tag}.txt").write_text(f"{tag}\n")
+        _git_in(self.repo, "add", "-A")
+        _git_in(self.repo, "commit", "-q", "-m", f"release {tag}")
+        _git_in(self.repo, "tag", tag)
+        _git_in(self.repo, "checkout", "-q", self.local)
+
+    def land(self, ref: str, subject: str | None = None) -> None:
+        _git_in(
+            self.repo,
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            subject or f"update-self: merge upstream template ({ref})",
+            ref,
+        )
+
+    def roll_back(
+        self, rolled_back_update: str | None, restore_to: str | None = None
+    ) -> str:
+        """Put the tree back to ``restore_to`` (default: the first parent of the merge
+        at HEAD) and commit it the way the apply does, recording ``rolled_back_update``
+        as the release it rolled back (None: no record, as a rollback of an app change,
+        or of an update before the apply recorded one, has); return the commit."""
+        restore_to = restore_to or _git_in(self.repo, "rev-parse", "HEAD^1")
+        _git_in(self.repo, "read-tree", "-u", "--reset", restore_to)
+        update_apply._commit_rollback(
+            self.repo,
+            update_runtime.Runner(),
+            restore_to,
+            "Apply failed",
+            rolled_back_update=rolled_back_update,
+        )
+        return _head_sha(self.repo)
+
+    def revert(self, sha: str) -> str:
+        _git_in(self.repo, "revert", "--no-edit", sha)
+        return _head_sha(self.repo)
+
+    def pending_rollbacks(
+        self, target: str, capsys: pytest.CaptureFixture[str]
+    ) -> list[str]:
+        """What the worker reference's first step reads: ``pending-rollbacks``."""
+        capsys.readouterr()
+        code = update_self.main(
+            ["pending-rollbacks", "--target", target, "--repo-root", str(self.repo)]
+        )
+        assert code == 0
+        return capsys.readouterr().out.split()
+
+
+# An update's rollback records the release it rolled back; one made before the apply
+# recorded it is recognised by the history it undid instead.
+_IS_RECORDED = pytest.mark.parametrize(
+    "is_recorded", [True, False], ids=["recorded", "unrecorded"]
+)
+
+
+@_IS_RECORDED
+@pytest.mark.parametrize("target", ["minds-v1", "minds-v2"])
+def test_an_updates_rollback_is_reverted_before_a_retry_or_a_newer_release(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    target: str,
+    is_recorded: bool,
+) -> None:
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.land("minds-v1")
+    rollback = history.roll_back("minds-v1" if is_recorded else None)
+    history.release("minds-v2")
+
+    pending = history.pending_rollbacks(target, capsys)
+
+    assert pending == [rollback]
+    # Following the worker reference: revert each, then merge. The rolled-back
+    # release's content is back; without the revert the merge would leave it out.
+    for sha in pending:
+        history.revert(sha)
+    history.land(target)
+    assert (history.repo / "minds-v1.txt").exists()
+
+
+def test_a_rollback_an_earlier_retry_already_reverted_is_left_alone(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # v1's retry reverted v1's rollback and landed; reverting that rollback again is
+    # an empty revert, which stops the worker on an error.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.land("minds-v1")
+    history.revert(history.roll_back("minds-v1"))
+    history.release("minds-v2")
+
+    assert history.pending_rollbacks("minds-v2", capsys) == []
+
+
+def test_every_unreverted_rollback_is_listed_newest_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A pass whose guide predates this step landed v2 over v1's rollback, and v2 was
+    # rolled back too; a later retry that undid only the newest still leaves v1's.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.land("minds-v1")
+    older = history.roll_back("minds-v1")
+    history.release("minds-v2")
+    history.land("minds-v2")
+    newer = history.roll_back("minds-v2")
+    history.release("minds-v3")
+
+    assert history.pending_rollbacks("minds-v3", capsys) == [newer, older]
+
+    history.revert(newer)
+    assert history.pending_rollbacks("minds-v3", capsys) == [older]
+
+
+def test_a_reverted_revert_puts_the_rollback_back_in_force(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.land("minds-v1")
+    rollback = history.roll_back("minds-v1")
+    history.revert(history.revert(rollback))
+    history.release("minds-v2")
+
+    assert history.pending_rollbacks("minds-v2", capsys) == [rollback]
+
+
+@_IS_RECORDED
+def test_a_failed_retry_of_a_release_already_in_history_is_still_an_updates_rollback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], is_recorded: bool
+) -> None:
+    # Re-merging a release that is already in history adds no commit, so the retry
+    # landed only the revert of the first rollback; its own rollback undid just that.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.land("minds-v1")
+    first = history.roll_back("minds-v1" if is_recorded else None)
+    before_retry = _head_sha(history.repo)
+    history.revert(first)
+    second = history.roll_back(
+        "minds-v1" if is_recorded else None, restore_to=before_retry
+    )
+    history.release("minds-v2")
+
+    assert history.pending_rollbacks("minds-v2", capsys) == [second]
+
+    history.revert(second)
+    history.land("minds-v2")
+    assert (history.repo / "minds-v1.txt").exists()
+
+
+def _land_an_app_change(history: _UpdateHistory) -> None:
+    _git_in(history.repo, "checkout", "-q", "-b", "app-edit")
+    (history.repo / "app.txt").write_text("edited\n")
+    _git_in(history.repo, "add", "-A")
+    _git_in(history.repo, "commit", "-q", "-m", "Edit the app")
+    _git_in(history.repo, "checkout", "-q", history.local)
+    history.land("app-edit", subject="Merge branch 'app-edit'")
+
+
+def test_a_users_rollback_of_an_app_change_is_not_an_updates_to_undo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The careful flow's rollback-last writes the same subject when the user asks for
+    # an app change back; re-applying it would undo the user's own choice.
+    history = _UpdateHistory(tmp_path)
+    _land_an_app_change(history)
+    history.roll_back(None)
+    history.release("minds-v1")
+
+    assert history.pending_rollbacks("minds-v1", capsys) == []
+
+
+def test_a_rollback_that_records_an_update_is_one_whatever_history_it_undid(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The record is what says a rollback is an update's; reading the history it undid
+    # is only the fallback for a rollback made before the apply wrote one.
+    history = _UpdateHistory(tmp_path)
+    _land_an_app_change(history)
+    rollback = history.roll_back("minds-v1")
+    history.release("minds-v1")
+
+    assert history.pending_rollbacks("minds-v1", capsys) == [rollback]
 
 
 def test_re_applying_an_already_applied_merge_is_still_a_no_op_not_a_refusal(
@@ -5633,10 +5886,11 @@ def test_a_rollback_rebuild_into_a_tree_with_no_node_modules_installs_first(
 
 def _make_pre_split_tree(repo_root: Path) -> None:
     """Shape the tree like one without the npm workspace: no ``system/package.json`` and no
-    chat bundle, just the shell's frontend directory."""
+    other app's frontend or bundle, just the shell's frontend directory."""
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").unlink()
     for bundle in update_layout.FRONTEND_BUNDLES:
         if bundle.frontend_dir != update_layout.FRONTEND_DIR:
+            shutil.rmtree(repo_root / bundle.frontend_dir)
             shutil.rmtree(repo_root / bundle.static_dir, ignore_errors=True)
 
 
@@ -5722,6 +5976,95 @@ def test_a_rollback_into_a_pre_split_tree_removes_the_chat_bundle_the_forward_bu
     assert code == 2
     assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
     assert not (apply_repo / update_layout.CHAT_STATIC_DIR).exists()
+
+
+def test_a_rollback_into_a_tree_from_before_an_apps_frontend_does_not_rebuild_its_bundle(
+    apply_repo: Path,
+) -> None:
+    # testtest, 2026-09-27: the restored tree has the npm workspace but predates the
+    # getting_started app, so its bundle was never built and had no copy to put back.
+    # Counting it as one of the restored tree's bundles sent recovery into a rebuild
+    # that cannot write it, and the rollback ended in an emergency over a bundle that
+    # tree never had -- where restoring the shell's and chat's copies was the whole job.
+    getting_started = next(
+        bundle
+        for bundle in update_layout.FRONTEND_BUNDLES
+        if bundle.app == "getting_started"
+    )
+    shutil.rmtree(apply_repo / getting_started.static_dir)
+    runner = _apply_runner(
+        _FRONTEND_DIFF + f"A\t{getting_started.frontend_dir}/package.json\n", apply_repo
+    )
+    runner.respond(
+        ("npm", "run", "build"), [_Result(returncode=1, stderr="boom"), _Result()]
+    )
+
+    def remove_on_restore(argv: list[str]) -> None:
+        if argv[:2] == ["git", "rm"] and argv[-1].startswith(
+            getting_started.frontend_dir
+        ):
+            shutil.rmtree(apply_repo / getting_started.frontend_dir)
+            runner.unwritten_bundle_apps = frozenset({getting_started.app})
+
+    runner.on_command = remove_on_restore
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert (
+        len(runner.argvs_starting("npm", "run", "build")) == 1
+    )  # the forward build only
+    assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
+    assert (apply_repo / update_layout.CHAT_FRONTEND_BUILD_INDEX).exists()
+    assert not (apply_repo / getting_started.static_dir).exists()
+
+
+@pytest.mark.parametrize(
+    "is_script_in_restored_tree",
+    [
+        pytest.param(False, id="tree-from-before-the-fetch"),
+        pytest.param(True, id="tree-that-fetches-them-too"),
+    ],
+)
+def test_a_rollback_removes_the_mngr_assets_only_from_a_tree_that_does_not_fetch_them(
+    apply_repo: Path, is_script_in_restored_tree: bool
+) -> None:
+    # The forward refresh fetches the mngr assets into a directory the merged tree
+    # ignores. A restored tree from before the fetch script neither tracks nor ignores
+    # it, so left standing it is an untracked file that refuses every later apply. A
+    # restored tree that fetches them too keeps them: they are its own ignored output.
+    (apply_repo / ".venv").mkdir()
+    script = apply_repo / update_layout.MNGR_ASSETS_SCRIPT
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("")
+    assets = apply_repo / update_layout.MNGR_ASSETS_DIR
+    script_status = "M" if is_script_in_restored_tree else "A"
+    runner = _apply_runner(
+        _BACKEND_MANIFEST_DIFF
+        + f"{script_status}\t{update_layout.MNGR_ASSETS_SCRIPT}\n",
+        apply_repo,
+    )
+
+    def fetch_and_restore(argv: list[str]) -> None:
+        if argv == ["bash", str(script)]:
+            (assets / "apps").mkdir(parents=True, exist_ok=True)
+            (assets / ".commit").write_text(f"{_MNGR_REV} 0123456789ab\n")
+        if argv[:2] == ["git", "rm"] and argv[-1] == update_layout.MNGR_ASSETS_SCRIPT:
+            script.unlink()
+
+    runner.on_command = fetch_and_restore
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    assert runner.ran("bash", str(script))
+    assert assets.exists() == is_script_in_restored_tree
 
 
 def test_a_rollback_into_a_pre_split_tree_rebuilds_at_the_shell_frontend(
@@ -5838,6 +6181,169 @@ def test_a_rollback_restores_the_tool_env_the_last_resort_reinstalled(
     # Put back by copy, so recovery needed no reinstall of its own: the untagged
     # calls (recovery's) hold no mngr install.
     assert [c for c in runner.raw_calls if c[: len(mngr_install)] == mngr_install] == []
+
+
+@dataclass
+class _FakeUvToolInstall:
+    """What ``uv tool install -e <app> --reinstall`` does to the disk for one tool, as
+    uv's ``finalize_tool_install`` does it: unlink the entrypoints the existing receipt
+    lists, rebuild the environment, then refuse -- removing the new environment -- when
+    any entrypoint's path already exists (following the link, so one that dangled into
+    the old environment exists again once the new one has its script); otherwise link
+    each ``[project.scripts]`` entry into the bin directory and write the receipt.
+
+    Installed as the runner's ``on_command``; ``is_failing_next`` makes the next install
+    die after the old one is gone, as a failed resolve does.
+    """
+
+    runner: _RecordingRunner
+    repo_root: Path
+    tool_name: str
+    home: Path
+    is_failing_next: bool = False
+
+    @property
+    def environment(self) -> Path:
+        return tool_env.tools_dir(self.home) / self.tool_name
+
+    @property
+    def bin_dir(self) -> Path:
+        return tool_env.bin_dir(self.home)
+
+    def install(self, scripts: Sequence[str]) -> None:
+        """Lay the tool down with ``scripts`` as its entrypoints, as a clean install does."""
+        shutil.rmtree(self.environment, ignore_errors=True)
+        (self.environment / "bin").mkdir(parents=True)
+        self.bin_dir.mkdir(parents=True, exist_ok=True)
+        for script in scripts:
+            (self.environment / "bin" / script).write_text(
+                f"#!{self.environment}/bin/python3\nimport sys\n"
+            )
+            (self.bin_dir / script).symlink_to(self.environment / "bin" / script)
+        entrypoints = "".join(
+            f'    {{ name = "{script}", install-path = "{self.bin_dir / script}", '
+            f'from = "{self.tool_name}" }},\n'
+            for script in scripts
+        )
+        (self.environment / update_layout.RECEIPT).write_text(
+            f"[tool]\nrequirements = []\nentrypoints = [\n{entrypoints}]\n"
+        )
+
+    def __call__(self, argv: list[str]) -> None:
+        if argv[:3] != ["uv", "tool", "install"]:
+            return
+        self.runner.respond(("uv", "tool", "install"), _Result())
+        if "-e" not in argv:
+            return
+        project = self.repo_root / argv[argv.index("-e") + 1]
+        pyproject = tomllib.loads((project / "pyproject.toml").read_text())["project"]
+        if pyproject["name"] != self.tool_name:
+            return
+        receipt = self.environment / update_layout.RECEIPT
+        if receipt.is_file():
+            for entrypoint in tomllib.loads(receipt.read_text())["tool"]["entrypoints"]:
+                Path(entrypoint["install-path"]).unlink(missing_ok=True)
+        shutil.rmtree(self.environment, ignore_errors=True)
+        scripts = sorted(pyproject.get("scripts", {}))
+        if self.is_failing_next:
+            self.is_failing_next = False
+            self._refuse("error: Failed to resolve")
+            return
+        (self.environment / "bin").mkdir(parents=True)
+        for script in scripts:
+            (self.environment / "bin" / script).write_text("")
+        existing = [script for script in scripts if (self.bin_dir / script).exists()]
+        if existing:
+            self._refuse(f"error: Executable already exists: {', '.join(existing)}")
+            return
+        self.install(scripts)
+
+    def _refuse(self, stderr: str) -> None:
+        shutil.rmtree(self.environment, ignore_errors=True)
+        self.runner.respond(
+            ("uv", "tool", "install"), _Result(returncode=2, stderr=stderr)
+        )
+
+    def entrypoints_into_environment(self) -> dict[str, bool]:
+        """Every bin-directory link into the tool's environment, by name: whether it
+        reaches a script."""
+        return {
+            link.name: link.exists()
+            for link in sorted(self.bin_dir.iterdir())
+            if link.is_symlink()
+            and Path(os.readlink(link)).parent.parent == self.environment
+        }
+
+
+_PTY_SCRIPT = "system-interface-pty"
+
+
+def _shell_tool_with_scripts(
+    apply_repo: Path, tmp_path: Path, runner: _RecordingRunner
+) -> _FakeUvToolInstall:
+    """The shell's tool installed with its one entrypoint, under a merged tree whose
+    pyproject declares a second one -- the terminal's ``terminal-pty`` on testtest."""
+    (apply_repo / update_layout.SYSTEM_INTERFACE_DIR / "pyproject.toml").write_text(
+        '[project]\nname = "system-interface"\nversion = "0.1.0"\n\n[project.scripts]\n'
+        'system-interface = "system_interface.main:main"\n'
+        f'{_PTY_SCRIPT} = "system_interface.pty_main:main"\n'
+    )
+    uv = _FakeUvToolInstall(runner, apply_repo, "system-interface", tmp_path / "root")
+    uv.install(["system-interface"])
+    runner.executables[update_layout.TOOL_NAME] = str(uv.bin_dir / "system-interface")
+    runner.on_command = uv
+    return uv
+
+
+@pytest.mark.parametrize(
+    "is_install_failing",
+    [
+        # The 2026-09-26 apply: the reinstall linked the new entrypoint, the apply failed later.
+        pytest.param(False, id="install-landed"),
+        # The 2026-09-27 apply: uv unlinked the old entrypoints, then the install died.
+        pytest.param(True, id="install-died"),
+    ],
+)
+def test_a_rollback_puts_a_restored_tools_entrypoints_back_to_the_pre_apply_set(
+    apply_repo: Path, tmp_path: Path, is_install_failing: bool
+) -> None:
+    # The tool's environment is copied aside and restored, but its entrypoints live in
+    # the bin directory beside every other tool's. Restoring the directory alone leaves
+    # the entrypoint the apply added dangling into it (and every later reinstall refused
+    # over it), and after an install that died, none of the old ones at all.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    uv = _shell_tool_with_scripts(apply_repo, tmp_path, runner)
+    uv.is_failing_next = is_install_failing
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    assert uv.entrypoints_into_environment() == {"system-interface": True}
+
+
+def test_a_reinstall_clears_an_entrypoint_an_earlier_rollback_left_dangling(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # A workspace an older rollback already left with a link into the tool that its
+    # receipt does not list: uv refuses to overwrite it once the rebuilt environment
+    # has its script again, so every apply failed until the link was deleted by hand.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    uv = _shell_tool_with_scripts(apply_repo, tmp_path, runner)
+    (uv.bin_dir / _PTY_SCRIPT).symlink_to(uv.environment / "bin" / _PTY_SCRIPT)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert uv.entrypoints_into_environment() == {
+        "system-interface": True,
+        _PTY_SCRIPT: True,
+    }
 
 
 def test_a_rollback_leaves_the_tool_of_an_app_the_merge_added_alone(
@@ -6152,7 +6658,7 @@ def test_ledger_origin_takes_this_workspaces_own_creation_not_an_ancestors(
     """The template repo is itself developed from workspaces.
 
     A full-history clone therefore carries bootstrap markers older than this
-    workspace's own, and seeding from one of those dates the mind to a
+    workspace's own, and seeding from one of those dates the agent to a
     stranger's creation and names the release that stranger started from.
     """
     repo = _make_real_repo(tmp_path)
@@ -6727,6 +7233,34 @@ def _repo_left_mid_merge(tmp_path: Path, *, is_conflicting: bool) -> tuple[Path,
     return repo, rollback_to
 
 
+def _write_interrupted_marker(
+    repo: Path,
+    *,
+    rollback_to: str,
+    merge_ref: str,
+    target_ref: str | None,
+    ff_only: bool,
+    phase: str,
+) -> None:
+    """Write the marker an apply killed at ``phase`` leaves in a real repo."""
+    update_apply_contract.write_marker(
+        update_apply_contract.ApplyMarker(
+            dri_agent="the-lead",
+            rollback_to=rollback_to,
+            merge_ref=merge_ref,
+            target_ref=target_ref,
+            ff_only=ff_only,
+            worker_bundles=None,
+            phase=phase,
+            pid=12345,
+            started_at=1.0,
+            updated_at=1.0,
+        ),
+        repo,
+        now=lambda: 2.0,
+    )
+
+
 def _recover_boot_path(repo: Path) -> int:
     """``recover --no-restart``: the boot path, which touches only disk state."""
     return update_apply.recover(
@@ -6754,21 +7288,13 @@ def test_recover_aborts_a_merge_killed_before_it_committed(
     without the abort recovery never makes progress.
     """
     repo, rollback_to = _repo_left_mid_merge(tmp_path, is_conflicting=is_conflicting)
-    update_apply_contract.write_marker(
-        update_apply_contract.ApplyMarker(
-            dri_agent="the-lead",
-            rollback_to=rollback_to,
-            merge_ref="worker",
-            target_ref=None,
-            ff_only=False,
-            worker_bundles=None,
-            phase=update_apply_contract.PHASE_STARTED,
-            pid=12345,
-            started_at=1.0,
-            updated_at=1.0,
-        ),
+    _write_interrupted_marker(
         repo,
-        now=lambda: 2.0,
+        rollback_to=rollback_to,
+        merge_ref="worker",
+        target_ref=None,
+        ff_only=False,
+        phase=update_apply_contract.PHASE_STARTED,
     )
 
     assert _recover_boot_path(repo) == 0
@@ -6801,21 +7327,13 @@ def test_recover_with_nothing_to_restore_commits_nothing_over_an_untracked_file(
     (repo / "stray-notes.txt").write_text("untracked\n")
     rollback_to = _head_sha(repo)
     commits_before = _commit_count(repo)
-    update_apply_contract.write_marker(
-        update_apply_contract.ApplyMarker(
-            dri_agent="the-lead",
-            rollback_to=rollback_to,
-            merge_ref="worker",
-            target_ref=None,
-            ff_only=True,
-            worker_bundles=None,
-            phase=update_apply_contract.PHASE_STARTED,
-            pid=12345,
-            started_at=1.0,
-            updated_at=1.0,
-        ),
+    _write_interrupted_marker(
         repo,
-        now=lambda: 2.0,
+        rollback_to=rollback_to,
+        merge_ref="worker",
+        target_ref=None,
+        ff_only=True,
+        phase=update_apply_contract.PHASE_STARTED,
     )
 
     assert _recover_boot_path(repo) == 0
@@ -6823,6 +7341,39 @@ def test_recover_with_nothing_to_restore_commits_nothing_over_an_untracked_file(
     assert not _marker_exists(repo)
     assert _commit_count(repo) == commits_before
     assert (repo / "stray-notes.txt").exists()
+
+
+def test_recovering_an_interrupted_update_records_the_release_it_rolled_back(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Recovery at boot runs the workspace's own copy of the apply, not the target's,
+    # so it has to write the record too for the next pass to find the rollback by it.
+    history = _UpdateHistory(tmp_path)
+    (history.repo / ".gitignore").write_text("data/\n")
+    _git_in(history.repo, "add", "-A")
+    _git_in(history.repo, "commit", "-q", "-m", "Ignore data")
+    history.release("minds-v1")
+    rollback_to = _head_sha(history.repo)
+    history.land("minds-v1")
+    _write_interrupted_marker(
+        history.repo,
+        rollback_to=rollback_to,
+        merge_ref="minds-v1",
+        target_ref="minds-v1",
+        ff_only=True,
+        phase=update_apply_contract.PHASE_MERGED,
+    )
+
+    assert _recover_boot_path(history.repo) == 0
+
+    rollback = _head_sha(history.repo)
+    assert not (history.repo / "minds-v1.txt").exists()
+    assert (
+        _rolled_back_update(_git_in(history.repo, "log", "-1", "--format=%B"))
+        == "minds-v1"
+    )
+    history.release("minds-v2")
+    assert history.pending_rollbacks("minds-v2", capsys) == [rollback]
 
 
 # surface-chat-tab
@@ -6904,7 +7455,7 @@ def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:
     assert calls == 4
 
 
-# run-status (the Mind app's status contract)
+# run-status (the Imbue Studio app's status contract)
 
 
 def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
@@ -7451,6 +8002,47 @@ def test_rolling_back_restores_the_copies_and_restarts_exactly_the_recorded_prog
     assert _rollback(_rollback_runner(apply_repo), apply_repo) == 1
     assert update_apply.confirm_last(apply_repo) == 0
     assert _rollback_point(apply_repo) is None
+
+
+def test_rolling_back_removes_what_the_update_generated_that_the_previous_version_does_not(
+    apply_repo: Path,
+) -> None:
+    """The revert takes back the update's tracked files, but not the getting_started
+    bundle its build wrote nor the mngr assets its refresh fetched. A previous version
+    with neither the app nor the fetch script tracks or ignores neither, so left
+    standing they keep the tree dirty and refuse the next apply."""
+    getting_started = next(
+        bundle
+        for bundle in update_layout.FRONTEND_BUNDLES
+        if bundle.app == "getting_started"
+    )
+    script = apply_repo / update_layout.MNGR_ASSETS_SCRIPT
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("")
+    assets = apply_repo / update_layout.MNGR_ASSETS_DIR
+    apply_runner = _apply_runner(_FRONTEND_DIFF + _BACKEND_MANIFEST_DIFF, apply_repo)
+
+    def fetch(argv: list[str]) -> None:
+        if argv == ["bash", str(script)]:
+            (assets / "apps").mkdir(parents=True, exist_ok=True)
+
+    apply_runner.on_command = fetch
+    assert _apply_keeping_the_rollback_point(apply_runner, apply_repo) == 0
+    assert assets.exists() and (apply_repo / getting_started.index_path).exists()
+    runner = _rollback_runner(apply_repo)
+
+    def revert(argv: list[str]) -> None:
+        if argv[:2] == ["git", "revert"]:
+            script.unlink()
+            (apply_repo / getting_started.frontend_dir / "package.json").unlink()
+
+    runner.on_command = revert
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert not assets.exists()
+    assert not (apply_repo / getting_started.static_dir).exists()
+    assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
 
 
 @pytest.mark.parametrize(

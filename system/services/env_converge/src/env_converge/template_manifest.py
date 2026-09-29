@@ -347,7 +347,7 @@ class EnvironmentDeclaration(FrozenManifestModel):
 
 
 class LineageEntry(FrozenManifestModel):
-    """One template this mind used on the way to producing this one.
+    """One template this agent used on the way to producing this one.
 
     The commit hash is what makes overriding non-destructive: the superseded
     manifest stays readable by fetching that repo at that commit.
@@ -361,7 +361,7 @@ class LineageEntry(FrozenManifestModel):
         description="Exact commit of the predecessor that was used"
     )
     used_on: date | None = Field(
-        default=None, description="Date this mind adopted or built on it"
+        default=None, description="Date this agent adopted or built on it"
     )
 
 
@@ -369,13 +369,13 @@ class ManifestOrigin(FrozenManifestModel):
     """Where THIS COPY of the manifest was obtained from.
 
     Written by the adopt paths -- `use-template` knows the fetch URL and
-    `FETCH_HEAD`, and a mind created from a template repo knows its parent
+    `FETCH_HEAD`, and an agent created from a template repo knows its parent
     -- and read by the publish flow, which turns it into the newest
     `[[lineage]]` entry when a new manifest overrides this one. Without it an
     override would lose the address of what it replaced, which is the one thing
     that makes overriding safe.
 
-    Absent in a manifest a mind published itself (nothing was adopted) and in
+    Absent in a manifest an agent published itself (nothing was adopted) and in
     any v1 manifest (the field did not exist), so consumers treat absence as
     "unknown provenance", never as an error.
     """
@@ -385,7 +385,7 @@ class ManifestOrigin(FrozenManifestModel):
     )
     commit: CommitHash = Field(description="Exact commit this copy was taken at")
     adopted_on: date | None = Field(
-        default=None, description="Date this mind adopted it"
+        default=None, description="Date this agent adopted it"
     )
 
 
@@ -484,7 +484,7 @@ def lineage_after_override(
 
     The chain is transitive: the predecessor's own lineage comes through first
     (oldest first), then the predecessor itself. A predecessor with no
-    `[origin]` -- one this mind published rather than adopted, or a v1 manifest
+    `[origin]` -- one this agent published rather than adopted, or a v1 manifest
     from before the field existed -- contributes no link of its own, because
     there is no address to record; its inherited chain still carries through
     rather than being dropped.

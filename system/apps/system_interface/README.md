@@ -30,7 +30,7 @@ format. In brief:
   the whole of what the shell knows about what a window shows.
 - A **placement** is where one client keeps one window: its frame in fractions
   of the backdrop, whether it is snapped or maximized, whether it is
-  minimized, whether it is pulled out into a desktop window of the Mind app's
+  minimized, whether it is pulled out into a desktop window of the Imbue Studio app's
   own; the order is the stack. A **client** is one browser context,
   identified by a stored id, with an active desktop. Truth is shared,
   arrangement is scoped.
@@ -70,8 +70,9 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   pinned-entry presentation
   (`/api/clients/<client>/entries/<app>`), the avatar (`/api/avatars`,
   `/api/avatars/<id>/image.svg|source.svg`, `/api/avatar-selection`; the
-  registration `POST /api/avatars` is loopback-only), and the loopback-only
-  op route (`/api/layout/broadcast`).
+  registration `POST /api/avatars` is loopback-only), the embedder-message
+  relay (`/api/embedder-messages`), and the loopback-only op route
+  (`/api/layout/broadcast`).
 - Presence (`/api/presence`, `/api/presence/heartbeat`): who is connected
   right now, with their identity and profile (see "Who is here").
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
@@ -132,9 +133,9 @@ and the profile cache.
 - **The op route** (`shell/layout_ops.py`): an op is `{op, args, requester}`,
   the requester `{app, marker}` or null; `self` names the requester's app's
   window whose path carries the marker. The document verbs (`open`, `focus`,
-  `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `load`, the
-  shortcut and wallpaper edits) are applied to the files and announced as
-  `desktops_updated` and `placements_updated`; `context` answers every
+  `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `load`,
+  `show`, the shortcut and wallpaper edits) are applied to the files and
+  announced as `desktops_updated` and `placements_updated`; `context` answers every
   client's recent activity, folded from the client-activity log and the live
   socket registrations, and `desktops` and `list` answer the inventory
   document (`GET /api/inventory`'s `{desktops, apps, clients}`); only
@@ -153,13 +154,30 @@ modules it shares with the app pages live in `system/libs/workspace_ui`, and
 `src/relay.ts` is the shell's side of the embedder relay (it forwards the
 framed pages' `minds:` messages to the minds chrome unchanged).
 
+A message the Imbue Studio chrome sends the shell's page reaches an app another way
+too: an app whose manifest registers its type (`[[message_handlers]]`) has it
+posted, by the shell's page once (never by a solo page, whose client is the
+main window's) and then by the shell's backend
+(`POST /api/embedder-messages`, `shell/embedder_messages.py`), to the route it
+named, with the client whose page received it. The shell reads no payload. An
+app that wants a window for what it was told asks the op route's `show`, which
+takes the app, a path, the other paths that count as already showing it, and
+the pages whose windows it may point at the path, and picks the window itself:
+one already showing it (switching desktops if it must), else the frontmost
+window on screen at one of those pages (pointed at the path), else the app's
+pinned window, else a new one. A pulled-out window it settles on stays out, and
+the client stays on its desktop: the shell asks that client's page to have the
+Imbue Studio app raise the window's own desktop window. The shell reads no meaning into
+a path's query string.
+
 ### How the shell learns about apps
 
 The **inventory** (`shell/inventory.py`) watches the registry, probes each
 app's liveness (supervisord for rows with a `program`, a TCP connect
 otherwise) on a periodic sweep, and pushes the diffed result to every browser
 as `apps_updated`. That is all it knows of an app: its row (display name,
-icon, launch paths, default shortcut, launcher rank) and whether it is running.
+icon, launch paths, default shortcut, launcher rank, message handlers) and
+whether it is running.
 The page learns the apps from `GET /api/inventory` right after it arrives (one
 read for the desktops, the apps, and the clients), so it never draws a
 shortcut for an app it does not know; the socket's `apps_updated` (sent on
@@ -218,7 +236,7 @@ are in one app, not in the workspace.
 not the header: the shell (`profiles.py`) fetches `GET {broker_url}/users/<user_id>/profile`
 (public; `{"user_id", "display_name", "profile_picture_url"}`) with a 2 second bound,
 where `broker_url` is `SHARE_BROKER_URL` in `data/.secrets/share.env`, the
-file the minds desktop writes while the workspace is shared (read fresh on
+file the Imbue Studio desktop writes while the workspace is shared (read fresh on
 every miss; no file means no profiles). Each answer, and each failure, is
 cached for 5 minutes under `data/.state/presence/profiles/<user_id>.json`, so
 a connector outage costs one failed fetch per user per 5 minutes and no
@@ -386,7 +404,7 @@ header and checks that the module script comes back as JavaScript). Only then
 does it ask every open view to reload, through
 `system/scripts/refresh_workspace_view.py` (a `reload_system_interface` op on
 the loopback-only op route, which reloads the top-level page and every child
-frame, plus the minds app's own refresh endpoint). On any failure it reverts
+frame, plus the Imbue Studio app's own refresh endpoint). On any failure it reverts
 the merge as a forward revert commit, restores the pre-apply snapshots it took
 before anything destructive ran, and re-confirms health; the exit code reports
 the outcome (`0` applied, `2` rolled back, `3` emergency, `1` precondition).
@@ -514,7 +532,7 @@ this order:
 
 "Affects what this process runs" is the whole design (see `update_staleness.py`
 for the rules and their test table). A bare HEAD comparison would show the
-banner near-permanently -- minds commit their ordinary work in this repo
+banner near-permanently -- agents commit their ordinary work in this repo
 constantly, the apply's own version-history commit lands after the restart, and
 a frontend-only apply rebuilds the served bundle without restarting -- so the
 check diffs the startup HEAD against the current one and reports only when a
