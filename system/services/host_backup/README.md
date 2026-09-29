@@ -239,5 +239,5 @@ Out of scope for v1. To restore manually:
 ```
 set -a; source /home/user/workspace/data/.secrets/restic.env; set +a
 restic snapshots
-restic restore <snapshot_id> --target /tmp/restored
+restic restore <snapshot_id> --target /var/tmp/restored
 ```

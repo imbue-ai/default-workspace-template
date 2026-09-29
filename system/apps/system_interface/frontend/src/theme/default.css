@@ -41,6 +41,15 @@
   /* Drop shadows rather than a text-shadow: the name is clamped to two lines, so its own box
      clips anything painted inside it, and a filter draws the same silhouette from outside. */
   --desk-shortcut-label-shadow: drop-shadow(0 2px 4px rgb(0 0 0 / 0.45)) drop-shadow(0 1px 0.5px rgb(0 0 0 / 0.4));
+  /* The tile's elevation while a drag holds it: the same pair, deeper and further spread, so the icon in
+     the hand reads as lifted off the desktop rather than as a bigger icon. */
+  --desk-icon-shadow-lifted: 0 8px 20px 0 rgb(0 0 0 / 0.22), 0 3px 4px 0 rgb(0 0 0 / 0.12);
+  /* How much a shortcut grows while it is in the hand: enough to read as picked up, not so much that it
+     covers the cells it is being carried over. */
+  --desk-shortcut-lift-scale: 1.12;
+  /* How long a shortcut takes to slide to the cell it has stepped aside into. Short: it is feedback under
+     a moving hand, and a slower slide lags behind the pointer it is answering. */
+  --desk-shortcut-slide: 160ms;
   --desk-floating-entry-size: 56px;
   --desk-floating-entry-inset-x: 16px;
   --desk-floating-entry-inset-y: 12px;

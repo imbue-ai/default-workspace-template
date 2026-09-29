@@ -14,10 +14,11 @@ ITS detectors here; a detector only some harnesses emit simply never fires for t
 
 Order of decision (:func:`classify_user_message`):
 
-1. An explicit detector matches (stop hook, fleet, task-notification, skill, /welcome, a
-   seeded chat's context block, model-bar traffic, a latchkey resolution, a secret-card
-   resolution) -> that decision. Explicit detectors WIN over ``is_meta`` -- Stop-hook
-   feedback is ``is_meta`` yet deliberately surfaces as a chip.
+1. An explicit detector matches (stop hook, fleet, task-notification, background-task report,
+   skill, /welcome, a seeded chat's context block, model-bar traffic, a latchkey resolution,
+   a secret-card resolution, reports merged into a turn with the user's words)
+   -> that decision. Explicit detectors WIN over ``is_meta`` -- Stop-hook feedback is
+   ``is_meta`` yet deliberately surfaces as a chip.
 2. else ``is_meta`` (a framework-injected, model-only message) -> hidden. One rule hides the
    whole family, present and future.
 3. else -> no decision (a genuine human turn; the parser emits no ``display`` field).
@@ -39,9 +40,14 @@ from imbue.imbue_common.pure import pure
 
 # Cross-layer contract: the sentinel an automated in-workspace sender (today the agentic
 # browser fleet's wake-ups) wraps its agent-facing nudges in. The wrapping side is
-# ``system/scripts/message_chat.py --system`` (``SYSTEM_MESSAGE_TAG``), which posts through
+# ``system/scripts/message_chat.py --browser-fleet`` (``BROWSER_FLEET_TAG``), which posts through
 # this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
 BROWSER_FLEET_TAG = "agentic-browser-fleet"
+
+# Cross-layer contract: the wrapper ``system/scripts/run_in_background.py`` puts around the
+# report it sends an agent's own chat when a command it ran for that agent exits. Only its
+# ``<summary>`` line is for the user; ``message_display_test.py`` pins the two tags equal.
+BACKGROUND_TASK_REPORT_TAG = "background-task-report"
 
 # Cross-layer contract: the tag the chat app wraps a seeded chat's context in when it launches
 # that chat's first agent (``chat_seed.seed_context_message``). The agent reads the whole
@@ -59,6 +65,16 @@ _ZERO_EXIT_CODE_RE = re.compile(r"\s*\(exit code 0\)")
 # Anchored, DOTALL match of the fleet sentinel wrapping the whole message. We control the
 # format, so an exact match is safe.
 _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_FLEET_TAG}>\s*$")
+_BACKGROUND_TASK_REPORT_RE = re.compile(
+    rf"^\s*<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>([^\n]*?)</summary>[\s\S]*</{BACKGROUND_TASK_REPORT_TAG}>\s*$"
+)
+# One report in a text that newline-joins several messages (a queue handed back on Stop). A
+# report is a whole message, so its tags sit on lines of their own; its output is the command's
+# raw text and may carry the tag mid-line.
+_EMBEDDED_BACKGROUND_TASK_REPORT_RE = re.compile(
+    rf"^<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>[^\n]*?</summary>[\s\S]*?^</{BACKGROUND_TASK_REPORT_TAG}>$",
+    re.MULTILINE,
+)
 # Anchored, DOTALL match of the seed-context block PREFIXING a message (the user's own words
 # follow it). Non-greedy, since the block never nests.
 _SEED_CONTEXT_RE = re.compile(rf"^\s*<{SEED_CONTEXT_TAG}>[\s\S]*?</{SEED_CONTEXT_TAG}>\s*")
@@ -195,9 +211,12 @@ class MessageDisplay(FrozenModel):
     display: DisplayKind
     # Chip title (CHIP) or skill name (SKILL_EXPANSION); omitted otherwise.
     display_label: str | None = None
-    # The body to display when a wrapper sentinel was stripped (a fleet nudge), or the user's
-    # own words behind a stripped context block (PROMPT_WITH_CONTEXT); omitted when the raw
-    # content is already the display body.
+    # The body to display when a wrapper sentinel was stripped (a fleet nudge), a notice's
+    # summary line (NOTICE), or the user's own words behind machine context (PROMPT_WITH_CONTEXT:
+    # a seeded chat's context block, or background-task reports flushed into the turn); omitted
+    # when the raw content is already the display body. On a SECRET_RESOLUTION, which draws no
+    # row, the notice alone when background-task reports were flushed with it: the page reads
+    # the declined note from it.
     display_body: str | None = None
     # PERMISSION_RESOLUTION only: granted / denied / error. SECRET_RESOLUTION only: stored /
     # declined / superseded.
@@ -283,6 +302,34 @@ def _task_notification_summary(content: str) -> str:
     return _ZERO_EXIT_CODE_RE.sub("", match.group(1)).strip()
 
 
+def _match_background_task_report(content: str) -> MessageDisplay | None:
+    """A background command's result, delivered to the agent that started it; a NOTICE like
+    the harness's own task notification, showing only the report's summary line."""
+    match = _BACKGROUND_TASK_REPORT_RE.match(content)
+    if match is None:
+        return None
+    # The match can run from one report to another with the user's words between them (a flushed
+    # queue); those are the user's turn, which the merged-report detector shows.
+    words, reports = split_background_task_reports(content)
+    if reports and words:
+        return None
+    # Several reports flushed together are one message, so its one notice names each of them.
+    each_report = (_BACKGROUND_TASK_REPORT_RE.match(report) for report in reports)
+    summaries = "; ".join(report.group(1).strip() for report in each_report if report is not None)
+    return MessageDisplay(
+        display=DisplayKind.NOTICE, display_label="Background task", display_body=summaries or match.group(1).strip()
+    )
+
+
+def _match_merged_background_task_reports(content: str) -> MessageDisplay | None:
+    """The user's words merged into one turn with reports that were queued beside them (a harness
+    that flushes its queue as one message); the page shows only the words."""
+    words, reports = split_background_task_reports(content)
+    if not reports:
+        return None
+    return MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=words)
+
+
 def _match_browser_fleet(content: str) -> MessageDisplay | None:
     """A browser-fleet nudge; the sentinel is stripped so the chip shows the inner text."""
     match = _BROWSER_FLEET_RE.match(content)
@@ -344,31 +391,46 @@ def _match_bash_block(content: str) -> MessageDisplay | None:
 
 
 def _match_permission_resolution(content: str) -> MessageDisplay | None:
-    """A latchkey permission-request verdict, injected as a plain user message."""
-    tag = _RESOLUTION_TAG_RE.search(content)
+    """A latchkey permission-request verdict, injected as a plain user message.
+
+    A background-task report flushed into the same message is a command's raw output, so its
+    text never counts as the notice.
+    """
+    notice, _ = split_background_task_reports(content)
+    tag = _RESOLUTION_TAG_RE.search(notice)
     if tag is not None:
         return MessageDisplay(
             display=DisplayKind.PERMISSION_RESOLUTION, resolution=tag.group(1), request_id=tag.group(2)
         )
-    if _RESOLUTION_GRANTED_RE.search(content) is not None:
+    if _RESOLUTION_GRANTED_RE.search(notice) is not None:
         resolution = "granted"
-    elif _RESOLUTION_DENIED_RE.search(content) is not None:
+    elif _RESOLUTION_DENIED_RE.search(notice) is not None:
         resolution = "denied"
-    elif _RESOLUTION_ERROR_RE.search(content) is not None:
+    elif _RESOLUTION_ERROR_RE.search(notice) is not None:
         resolution = "error"
     else:
         return None
-    request_id_match = _RESOLUTION_REQUEST_ID_RE.search(content)
+    request_id_match = _RESOLUTION_REQUEST_ID_RE.search(notice)
     request_id = request_id_match.group(1) if request_id_match is not None else None
     return MessageDisplay(display=DisplayKind.PERMISSION_RESOLUTION, resolution=resolution, request_id=request_id)
 
 
 def _match_secret_resolution(content: str) -> MessageDisplay | None:
-    """The chat app's notice that a secret card was answered, sent as a plain user message."""
-    tag = _SECRET_RESOLUTION_TAG_RE.search(content)
+    """The chat app's notice that a secret card was answered, sent as a plain user message.
+
+    A background-task report flushed into the same message is a command's raw output, so its
+    text never counts as the notice, and the page reads the notice's note without it.
+    """
+    notice, reports = split_background_task_reports(content)
+    tag = _SECRET_RESOLUTION_TAG_RE.search(notice)
     if tag is None:
         return None
-    return MessageDisplay(display=DisplayKind.SECRET_RESOLUTION, resolution=tag.group(1), request_id=tag.group(2))
+    return MessageDisplay(
+        display=DisplayKind.SECRET_RESOLUTION,
+        display_body=notice if reports else None,
+        resolution=tag.group(1),
+        request_id=tag.group(2),
+    )
 
 
 # Most-specific first; classify_user_message takes the first match.
@@ -378,6 +440,7 @@ _DETECTORS = (
     _match_skill_expansion,
     _match_stop_hook,
     _match_task_notification,
+    _match_background_task_report,
     _match_browser_fleet,
     _match_composer_command,
     _match_handoff_summary_request,
@@ -386,6 +449,7 @@ _DETECTORS = (
     _match_bash_block,
     _match_permission_resolution,
     _match_secret_resolution,
+    _match_merged_background_task_reports,
 )
 
 
@@ -459,3 +523,17 @@ def is_non_turn_tail(content: str, *, is_meta: bool = False) -> bool:
         return True
     # The detectors themselves, so this can never drift from rendering.
     return _match_composer_command(content) is not None or _match_local_command_output(content) is not None
+
+
+@pure
+def split_background_task_reports(block: str) -> tuple[str, tuple[str, ...]]:
+    """The joined queue ``block`` without its background-task reports, and the reports themselves.
+
+    The reports are for the agent, not the user, so a queue handed back to the composer keeps
+    only the rest; each piece of that is stripped of the newlines that joined it to a report.
+    """
+    reports = tuple(match.group(0) for match in _EMBEDDED_BACKGROUND_TASK_REPORT_RE.finditer(block))
+    if not reports:
+        return block, ()
+    pieces = (piece.strip("\n") for piece in _EMBEDDED_BACKGROUND_TASK_REPORT_RE.split(block))
+    return "\n".join(piece for piece in pieces if piece.strip()), reports

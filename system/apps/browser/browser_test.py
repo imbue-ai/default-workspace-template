@@ -1805,11 +1805,11 @@ def test_a_new_browser_lands_on_a_blank_page() -> None:
     assert bsession._is_restorable_url(bsession._HOME_URL) is False
 
 
-def test_message_agent_goes_through_the_chat_messenger_by_id_as_a_system_message(
+def test_message_agent_goes_through_the_chat_messenger_by_id_as_a_browser_fleet_nudge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The wake rides ``system/scripts/message_chat.py`` (the chat app, with ``mngr message`` as
-    its own backoff), addressed by the agent's id and marked ``--system`` so the transcript
+    its own backoff), addressed by the agent's id and marked ``--browser-fleet`` so the transcript
     renders it as a collapsed chip; the agent's name is never the address."""
     spawned: list[tuple[tuple[str, ...], dict[str, object]]] = []
 
@@ -1831,7 +1831,7 @@ def test_message_agent_goes_through_the_chat_messenger_by_id_as_a_system_message
         sys.executable,
         str(Path("system") / "scripts" / "message_chat.py"),
         "agent-0123456789abcdef0123456789abcdef",
-        "--system",
+        "--browser-fleet",
         "--message",
         "the browser is yours",
     )

@@ -3,9 +3,7 @@
  * transcript is displayed, and the single source of truth a NEW HARNESS reads to
  * know what it must produce.
  *
- * ---------------------------------------------------------------------------
  * Why this file exists
- * ---------------------------------------------------------------------------
  * SCOPE: this catalogues ONLY the `user_message` event channel -- the transcript
  * slot that is OVERLOADED (a genuine human turn AND framework/system injections
  * all share it), and so needs disambiguating. Assistant-side surfaces
@@ -34,9 +32,7 @@
  *      description of the net visual. Read it to answer "what will my message look
  *      like?" without tracing render code.
  *
- * ---------------------------------------------------------------------------
  * Adding a harness (Codex, etc.)
- * ---------------------------------------------------------------------------
  * The `UserMessageKind`s below are harness-AGNOSTIC -- they are display buckets, not
  * Claude-specific markers. A new harness does NOT add kinds; it appends detectors
  * that map ITS framework markers to these existing kinds onto the ONE shared list in
@@ -217,8 +213,8 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
  * bare user bubble. mngr itself is untouched (it is an independent product and has
  * no business knowing about this display concern).
  *
- * The wrapping side is `system/scripts/message_chat.py --system`
- * (`SYSTEM_MESSAGE_TAG`), which posts through the chat app's send route; the
+ * The wrapping side is `system/scripts/message_chat.py --browser-fleet`
+ * (`BROWSER_FLEET_TAG`), which posts through the chat app's send route; the
  * backend's copy is `BROWSER_FLEET_TAG` in `harnesses/message_display.py`. Keep the
  * tag string in sync. The tag adds no newlines, so a wrapped message types into the
  * agent's pane identically to the same text sent unwrapped.

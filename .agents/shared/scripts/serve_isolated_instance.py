@@ -68,8 +68,10 @@ instance is given (a bare ``ENVVAR`` is the ``main`` port, the one probed for
 health; ``sidecar=MYSVC_API_PORT`` adds a second), and ``--port <name>`` gives it
 one that no env var carries, reachable only by placeholder (what a manifest's
 ``[preview]`` table declares). ``--copy KEY=SOURCE`` copies
-a directory (repo-relative or absolute) into the instance's scratch space before
-boot, so the instance can write to it freely. The launch argv and every ``--env``
+a directory (repo-relative or absolute) into the instance's scratch space on disk
+before boot, so the instance can write to it freely, and ``down`` removes it. A
+copy that would not leave the disk room to spare fails the boot before anything
+runs. The launch argv and every ``--env``
 value may carry ``{port:<name>}``, ``{copy:<key>}``, ``{scratch}`` (a fresh
 directory of the instance's own), and ``{host}`` (the loopback host); they are
 filled once the ports are allocated and the copies made. These are the
@@ -95,6 +97,7 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -115,6 +118,10 @@ WRAPPER_LOG_FILENAME = "wrapper.log"
 # dir so ``down`` removes them with everything else.
 COPIES_DIRNAME = "copies"
 SCRATCH_DIRNAME = "scratch"
+# What a ``--copy`` must leave free on its disk, as ``statfs`` reports it: room for
+# the live workspace's own writes, above the 4 GiB a cloud workspace's disk quota
+# holds back from the filesystem (``statfs`` does not see the quota).
+COPY_RESERVE_BYTES = 6 * 1024**3
 # The port the health probe reaches and the wrapper frames; every instance has it.
 MAIN_PORT_NAME = "main"
 LOOPBACK_HOST = "127.0.0.1"
@@ -216,6 +223,64 @@ class InstanceError(Exception):
     def __init__(self, message: str, log_path: Path | None = None) -> None:
         super().__init__(message)
         self.log_path = log_path
+
+
+def free_bytes(path: Path) -> int:
+    """Free space on the filesystem holding ``path``, which must exist."""
+    return shutil.disk_usage(path).free
+
+
+def tree_size_bytes(root: Path) -> int:
+    """The bytes a copy of ``root`` writes: every regular file's size, symlinks not followed."""
+    total = 0
+    for directory, _subdirectories, filenames in os.walk(root):
+        for filename in filenames:
+            stat_result = os.lstat(os.path.join(directory, filename))
+            if stat.S_ISREG(stat_result.st_mode):
+                total += stat_result.st_size
+    return total
+
+
+def _format_bytes(count: int) -> str:
+    return (
+        f"{count / 1024**3:.1f} GiB"
+        if count >= 1024**3
+        else f"{count / 1024**2:.1f} MiB"
+    )
+
+
+def _nearest_existing(path: Path) -> Path:
+    while not path.exists():
+        path = path.parent
+    return path
+
+
+def copy_tree_checked(
+    source: Path, destination: Path, free_space: Callable[[Path], int]
+) -> None:
+    """Copy the directory ``source`` to ``destination`` (which must not exist yet).
+
+    Refuses, writing nothing, when the copy would leave less than
+    ``COPY_RESERVE_BYTES`` free on the destination's disk; a copy that fails part
+    way is removed.
+    """
+    if destination.exists():
+        raise InstanceError(f"{destination} already exists; not copying over it")
+    size = tree_size_bytes(source)
+    available = free_space(_nearest_existing(destination.parent))
+    if size + COPY_RESERVE_BYTES > available:
+        raise InstanceError(
+            f"copying {source} ({_format_bytes(size)}) would leave "
+            f"{_format_bytes(max(available - size, 0))} free on its disk, under the "
+            f"{_format_bytes(COPY_RESERVE_BYTES)} the workspace needs for its own "
+            "writes. Copy only what the test needs (a subdirectory, or a small store "
+            "seeded for the test), or verify read-only against the live service."
+        )
+    try:
+        shutil.copytree(source, destination, symlinks=True)
+    except OSError as exc:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise InstanceError(f"copying {source} to {destination} failed: {exc}") from exc
 
 
 def _reap_if_exited_child(pid: int) -> None:
@@ -553,13 +618,17 @@ def parse_copy_assignments(assignments: Sequence[str]) -> dict[str, str]:
 
 
 def _make_copies(
-    repo_root: Path, state_dir: Path, copy_sources: dict[str, str]
+    repo_root: Path,
+    state_dir: Path,
+    copy_sources: dict[str, str],
+    free_space: Callable[[Path], int],
 ) -> dict[str, str]:
     """Copy each source directory into the instance's scratch space; return key -> copy path.
 
     A source that does not exist yet (an app that has never written its store) becomes
     an empty directory rather than an error: the instance creates what it needs there,
-    exactly as the live app would on its first run.
+    exactly as the live app would on its first run. A copy that would not fit on the
+    disk is refused before it is written.
     """
     copy_by_key: dict[str, str] = {}
     for key, source in copy_sources.items():
@@ -568,7 +637,10 @@ def _make_copies(
             source_path = repo_root / source_path
         destination = state_dir / COPIES_DIRNAME / key
         if source_path.is_dir():
-            shutil.copytree(source_path, destination, symlinks=True)
+            try:
+                copy_tree_checked(source_path, destination, free_space)
+            except InstanceError as exc:
+                raise InstanceError(f"--copy {key}={source}: {exc}") from exc
         else:
             sys.stderr.write(
                 f"note: --copy {key}={source}: {source_path} is not a directory; "
@@ -780,6 +852,7 @@ def up(
     http: HttpClient,
     spawner: Spawner,
     sleeper: Callable[[float], None] = time.sleep,
+    free_space: Callable[[Path], int] = free_bytes,
 ) -> int:
     """Boot an isolated instance of a service; optionally register + wrap it.
 
@@ -844,7 +917,7 @@ def up(
         #    it with the isolating env overrides.
         port_by_name = {port_name: find_free_port() for port_name in port_env_by_name}
         inner_port = port_by_name[MAIN_PORT_NAME]
-        copy_by_key = _make_copies(repo_root, state_dir, copy_sources or {})
+        copy_by_key = _make_copies(repo_root, state_dir, copy_sources or {}, free_space)
         resolved_command = [
             substitute_placeholders(part, port_by_name, copy_by_key, str(scratch_dir))
             for part in command
@@ -1268,7 +1341,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         metavar="NAME=VALUE",
         help="Env override for the instance (repeatable); e.g. point a *_DATA_DIR "
-        "at a scratch copy of the data.",
+        "at a copy of the data made with --copy: --env MYSVC_DATA_DIR={copy:data}.",
     )
     up_parser.add_argument(
         "--unset-env",
@@ -1283,9 +1356,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         metavar="KEY=SOURCE",
         help="Copy a directory (repo-relative or absolute) into the instance's "
-        "scratch space before boot (repeatable); reachable as {copy:KEY} in --env "
-        "values and the launch argv. {scratch} names a fresh directory of the "
-        "instance's own, and {host} the loopback host.",
+        "scratch space on disk before boot (repeatable), refused if it would not fit; "
+        "reachable as {copy:KEY} in --env values and the launch argv, and removed "
+        "by 'down'. {scratch} names a fresh directory of the instance's own, and "
+        "{host} the loopback host.",
     )
     up_parser.add_argument(
         "--health-path",

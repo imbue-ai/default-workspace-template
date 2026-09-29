@@ -1,8 +1,8 @@
 """Tests for the OOM drill's prediction and its wrong-victim check.
 
 The drill itself needs real memory pressure and a running earlyoom, so only its
-pure pieces are tested here; the drill is run for real in the staging rehearsal
-and the AWS release test.
+pieces that need neither are tested here; the drill is run for real in the
+staging rehearsal and the AWS release test.
 """
 
 import json
@@ -25,7 +25,7 @@ def _sample(
         pid=pid,
         comm=comm,
         oom_score_adj=adj,
-        vm_rss_kib=rss,
+        rss_kib=rss,
         vm_swap_kib=swap,
         vm_pte_kib=pte,
     )
@@ -220,15 +220,71 @@ def test_earlyoom_kill_lines_are_read_whole_and_new(tmp_path: Path) -> None:
 
 def test_status_memory_reads_gvisor_and_kernel_threads() -> None:
     assert oom_drill.parse_status_memory(
-        "Name:\tx\nVmRSS:\t  812 kB\nVmPTE:\t 64 kB\nVmSwap:\t 3 kB\n"
-    ) == (812, 3, 64)
-    # gVisor serves no VmSwap or VmPTE.
-    assert oom_drill.parse_status_memory("Name:\tx\nVmRSS:\t812 kB\n") == (812, 0, 0)
+        "Name:\tx\nVmSize:\t9000 kB\nVmRSS:\t  812 kB\nRssAnon:\t 700 kB\nVmPTE:\t 64 kB\nVmSwap:\t 3 kB\n"
+    ) == (812, 3, 64, True)
+    # gVisor serves no VmSwap, VmPTE or RssAnon.
+    assert oom_drill.parse_status_memory(
+        "Name:\tx\nVmSize:\t9000 kB\nVmRSS:\t812 kB\n"
+    ) == (812, 0, 0, False)
     assert oom_drill.parse_status_memory("Name:\tkthreadd\nThreads:\t1\n") == (
         None,
         0,
         0,
+        False,
     )
+
+
+def test_status_memory_reads_a_gvisor_task_without_an_mm_as_the_fork_does() -> None:
+    # gVisor prints every Vm* line as 0 for a zombie or an exiting task.
+    zombie = "Name:\tpulseaudio\nState:\tZ (zombie)\nVmSize:\t0 kB\nVmRSS:\t0 kB\n"
+    assert oom_drill.parse_status_memory(zombie + "Threads:\t1\n").vm_rss_kib is None
+    # A zombie leader whose threads still run competes on its adj alone.
+    assert oom_drill.parse_status_memory(zombie + "Threads:\t3\n").vm_rss_kib == 0
+
+
+def test_smaps_anonymous_sums_every_mapping_and_skips_file_pages() -> None:
+    smaps = (
+        "55d5c0a00000-55d5c0c00000 r-xp 00000000 00:31 99 /root/.local/share/claude/versions/2.1.280\n"
+        "Rss:\t225000 kB\nAnonymous:\t0 kB\nAnonHugePages:\t0 kB\n"
+        "55d5c1000000-55d5c1400000 rw-p 00000000 00:00 0 [heap]\n"
+        "Rss:\t4096 kB\nAnonymous:\t4096 kB\nAnonHugePages:\t0 kB\n"
+        "7f3a00000000-7f3a00200000 rw-p 00000000 00:00 0\n"
+        "Rss:\t2048 kB\nAnonymous:\t2048 kB\n"
+    )
+    assert oom_drill.parse_smaps_anonymous(smaps) == 6144
+
+
+def test_snapshot_counts_smaps_anonymous_only_where_status_has_no_rss_anon(
+    tmp_path: Path,
+) -> None:
+    def add(pid: int, status: str, smaps: str | None) -> None:
+        entry = tmp_path / str(pid)
+        entry.mkdir()
+        (entry / "comm").write_text(f"proc{pid}\n")
+        (entry / "oom_score_adj").write_text("900\n")
+        (entry / "status").write_text(status)
+        if smaps is not None:
+            (entry / "smaps").write_text(smaps)
+
+    smaps = (
+        "55d5c0a00000-55d5c0c00000 r-xp 00000000 00:31 99 /usr/bin/claude\n"
+        "Rss:\t225000 kB\nAnonymous:\t0 kB\n"
+        "7f3a00000000-7f3a40000000 rw-p 00000000 00:00 0\n"
+        "Rss:\t30000 kB\nAnonymous:\t30000 kB\n"
+    )
+    # gVisor: no RssAnon, so the smaps Anonymous total stands in for VmRSS.
+    add(10, "VmSize:\t900000 kB\nVmRSS:\t255000 kB\nThreads:\t4\n", smaps)
+    # Linux: RssAnon is printed, and VmRSS is the kernel's own count.
+    add(11, "VmSize:\t900000 kB\nVmRSS:\t255000 kB\nRssAnon:\t30000 kB\n", smaps)
+    # gVisor zombies read every Vm* line as 0 and have no smaps to read.
+    add(12, "VmSize:\t0 kB\nVmRSS:\t0 kB\nThreads:\t1\n", None)
+    add(13, "VmSize:\t0 kB\nVmRSS:\t0 kB\nThreads:\t3\n", None)
+    (tmp_path / "self").mkdir()
+
+    samples = oom_drill.snapshot_processes(tmp_path)
+
+    rss_by_pid = {sample.pid: sample.rss_kib for sample in samples}
+    assert rss_by_pid == {10: 30000, 11: 255000, 12: None, 13: 0}
 
 
 def test_avoid_regex_is_read_from_earlyoom_argv() -> None:
