@@ -35,20 +35,18 @@ These hold for every icon: the built-in ones and any new app's alike.
   the other way, or `fill-rule="evenodd"`) that lets the background show through. A shape
   in the background's colour laid over the glyph would be a third layer, and would stop
   being background the moment either colour changed.
-- The mark is **one iconic object**, named as a noun -- an envelope, a clipboard, a
-  funnel, a bell -- that carries the poetic idea of the app. Not a picture of its
-  interface, and not an abstraction: the reader should be able to say what the thing is.
+- The mark is **one iconic object**, named as a noun, that carries the poetic idea of the
+  app. Not a picture of its interface, and not an abstraction: the reader should be able
+  to say what the thing is.
 - The two colours are **a pair from the palette below**.
 
-Sizing inside the 144 box is optical, not maximal: what should match from one icon to the
-next is the weight the mark carries, not the fraction of the box it fills. A circular mark
-runs large, reaching 144; a sparse one runs smaller.
+Sizing inside the 144 box is optical, not maximal: a circular mark runs large, reaching
+144; a sparse one runs smaller.
 
 ## The look
 
 The mark is a real, everyday object, and it is drawn by hand rather than constructed. The
-object has to stay the object -- an envelope is a rectangle with a crease, a clipboard has
-two long parallel sides, a checkbox is a square, a bullseye is rings around a dot -- and
+object has to stay the object -- an envelope is still a rectangle with a crease -- and
 everything about how it is *made* is loose.
 
 Drawn by hand means:
