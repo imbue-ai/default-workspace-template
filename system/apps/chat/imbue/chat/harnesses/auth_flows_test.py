@@ -565,6 +565,23 @@ def test_every_committed_sign_in_is_reported_and_a_failed_one_is_not(tmp_path: P
     assert committed == [account.id, account.id]
 
 
+def test_an_adopted_credential_is_reported_when_it_mints_an_account(tmp_path: Path) -> None:
+    """A re-key of the adopted account mints nothing, so it is not reported again."""
+    committed: list[str] = []
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        probe=lambda *_a: SignedIn.YES,
+        on_account_committed=committed.append,
+    )
+
+    adopted = service.adopt_claude_credentials("sk-ant-api03-" + "E" * 40)
+    assert committed == [adopted.id]
+
+    service.adopt_claude_credentials("sk-ant-api03-" + "F" * 40)
+    assert committed == [adopted.id]
+
+
 def test_a_failed_re_auth_restarts_nothing(tmp_path: Path) -> None:
     """The account still holds the credential it had, so its chats are working. Restarting
     them would interrupt turns for no reason."""
