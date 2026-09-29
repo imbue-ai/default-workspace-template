@@ -24,6 +24,10 @@ README for details.
 - `pytest_executable_tmp/` - Test-only pytest plugin that keeps a session's
   temporary files where a stub executable written there can run, or stops
   the session before any test starts.
+- `pytest_workspace_env/` - Test-only pytest plugin that, with
+  `DWT_REQUIRE_WORKSPACE_ENV=1` set, fails rather than skips a `browser` or
+  `real_claude` test whose environment is missing (the CI job that runs the
+  suites inside the workspace image sets it).
 - `tk_command_parsing/` - Parsing helpers for the vendored `tk` ticket
   tracker's command output.
 
