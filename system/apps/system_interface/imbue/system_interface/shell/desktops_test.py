@@ -8,14 +8,21 @@ from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
+from app_manifest.registry import RegistryRow
+from app_manifest.registry import read_registry
 
 from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import ClientRecord
+from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopShortcut
+from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.data_types import GridCell
 from imbue.system_interface.shell.data_types import ShortcutTarget
 from imbue.system_interface.shell.data_types import Wallpaper
+from imbue.system_interface.shell.desktop_document import next_shortcut_cell
+from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
+from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
 from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.desktops import DesktopStore
 from imbue.system_interface.shell.desktops import FALLBACK_USER_DESKTOP_NAME
@@ -41,7 +48,10 @@ from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.testing import TEST_NOW
+from imbue.system_interface.shell.testing import builtin_chat_row_toml
+from imbue.system_interface.shell.testing import builtin_rows_toml_before_chat
 from imbue.system_interface.shell.testing import window_record
+from imbue.system_interface.shell.testing import write_registry
 
 # The frontend's glyph palette, which ``DESKTOP_GLYPH_COLORS`` restates for the desktops the shell names itself.
 _SQUIGGLES_PATH = Path(__file__).resolve().parents[3] / "frontend" / "src" / "views" / "squiggles.ts"
@@ -68,6 +78,111 @@ def test_the_default_desktop_is_created_once_on_the_first_read_that_may_seed(tmp
     # A later read with another seed keeps what was written.
     assert store.ensure_default(lambda: ()) == seeded
     assert json.loads((tmp_path / "desktops.json").read_text())["version"] == 1
+    # The apps of the seeded shortcuts are recorded as offered.
+    assert _offered_record(tmp_path) == {"version": 1, "apps": ["chat"]}
+
+
+def _offered_record(state_directory: Path) -> dict[str, object]:
+    return json.loads((state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME).read_text())
+
+
+def _builtin_rows(tmp_path: Path) -> tuple[list[RegistryRow], list[RegistryRow]]:
+    """The built-in apps' rows without the chat, and with it registered last."""
+    before_chat = read_registry(write_registry(tmp_path / "before.toml", *builtin_rows_toml_before_chat()))
+    with_chat = read_registry(
+        write_registry(tmp_path / "with_chat.toml", *builtin_rows_toml_before_chat(), builtin_chat_row_toml())
+    )
+    return before_chat, with_chat
+
+
+def _apps_on(desktop: Desktop) -> list[str]:
+    return [str(shortcut.target.app) for shortcut in desktop.shortcuts]
+
+
+def test_a_late_apps_default_shortcut_is_offered_once_on_every_desktop_and_a_removal_sticks(tmp_path: Path) -> None:
+    before_chat, with_chat = _builtin_rows(tmp_path / "registry")
+    store = DesktopStore(state_directory=tmp_path)
+    store.ensure_default(lambda: seed_desktop_shortcuts(before_chat))
+    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(before_chat), ())
+    rearranged = store.move_shortcut("work", AppName("files"), LaunchPathId("new"), GridCell(column=0, row=3))
+    assert store.ensure_default_shortcuts_offered(before_chat).is_written is False
+
+    offered = store.ensure_default_shortcuts_offered(with_chat)
+
+    assert offered.is_written is True
+    home, work = offered.desktops
+    # Home was untouched, so it reads as if the chat had registered first; Work keeps its arrangement.
+    assert home.shortcuts == seed_desktop_shortcuts(with_chat)
+    assert work.shortcuts[:-1] == rearranged.shortcuts
+    assert (_apps_on(work)[-1], work.shortcuts[-1].cell) == ("chat", next_shortcut_cell(rearranged))
+    assert store.list_desktops() == list(offered.desktops)
+    assert _offered_record(tmp_path) == {
+        "version": 1,
+        "apps": ["browser", "chat", "files", "getting-started", "terminal"],
+    }
+    stamp = (tmp_path / "desktops.json").stat().st_mtime_ns
+    assert store.ensure_default_shortcuts_offered(with_chat).is_written is False
+    assert (tmp_path / "desktops.json").stat().st_mtime_ns == stamp
+
+    # A shortcut the user removes stays removed, the app's rows deregistered and registered again included.
+    store.remove_shortcut("home", AppName("chat"), LaunchPathId("root"))
+    for rows in (with_chat, before_chat, with_chat):
+        assert store.ensure_default_shortcuts_offered(rows).is_written is False
+    assert "chat" not in _apps_on(store.list_desktops()[0])
+
+
+def test_a_desktops_file_from_before_the_offered_record_counts_its_shortcuts_as_offered(tmp_path: Path) -> None:
+    """A workspace whose default desktop was seeded before the chat registered, by a shell that kept no record: the
+    chat is added once, the record is created, and desktops.json keeps the shape every release reads."""
+    before_chat, with_chat = _builtin_rows(tmp_path / "registry")
+    state_directory = tmp_path / "state"
+    state_directory.mkdir()
+    (state_directory / "desktops.json").write_text(
+        json.dumps(
+            DesktopsDocument(version=1, desktops=(default_desktop(seed_desktop_shortcuts(before_chat)),)).model_dump(
+                mode="json"
+            )
+        )
+    )
+    store = DesktopStore(state_directory=state_directory)
+
+    offered = store.ensure_default_shortcuts_offered(with_chat)
+
+    assert offered.is_written is True
+    assert _apps_on(offered.desktops[0]) == ["chat", "getting-started", "files", "browser", "terminal"]
+    assert _offered_record(state_directory)["apps"] == ["browser", "chat", "files", "getting-started", "terminal"]
+    raw = json.loads((state_directory / "desktops.json").read_text())
+    assert set(raw) == {"version", "desktops"} and raw["version"] == 1
+    assert set(raw["desktops"][0]) == {"id", "name", "color", "glyph", "wallpaper", "shortcuts", "windows"}
+    assert DesktopsDocument.model_validate(raw).desktops == offered.desktops
+
+
+def test_a_created_or_added_desktop_records_the_apps_of_its_default_shortcuts(tmp_path: Path) -> None:
+    store = DesktopStore(state_directory=tmp_path)
+    store.create_desktop("Alpha", "#111111", 1, _SEED, ())
+    assert _offered_record(tmp_path)["apps"] == ["chat"]
+    store.add_desktop(default_desktop(()), {AppName("files")})
+    assert _offered_record(tmp_path)["apps"] == ["chat", "files"]
+
+
+def test_a_desktop_added_before_any_offered_record_starts_it_from_the_shortcuts_already_there(tmp_path: Path) -> None:
+    store = DesktopStore(state_directory=tmp_path)
+    store.ensure_default(lambda: _SEED)
+    (tmp_path / DEFAULT_SHORTCUTS_OFFERED_FILENAME).unlink()
+
+    store.create_desktop("Alpha", "#111111", 1, (), ())
+
+    assert _offered_record(tmp_path)["apps"] == ["chat"]
+
+
+def test_with_no_desktop_nothing_is_offered_or_recorded(tmp_path: Path) -> None:
+    _, with_chat = _builtin_rows(tmp_path / "registry")
+    store = DesktopStore(state_directory=tmp_path / "state")
+
+    outcome = store.ensure_default_shortcuts_offered(with_chat)
+
+    assert outcome.is_written is False and outcome.desktops == ()
+    assert not (tmp_path / "state").exists()
 
 
 def test_pinned_windows_are_reconciled_across_every_desktop_and_written_only_on_a_change(tmp_path: Path) -> None:

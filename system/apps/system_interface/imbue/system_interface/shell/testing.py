@@ -149,6 +149,60 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
     )
 
 
+def builtin_rows_toml_before_chat() -> tuple[str, ...]:
+    """The rows of the built-in apps that register before the chat, shaped as their manifests make them: the shell
+    (internal), Getting Started, the file viewer, the browser, and the terminal."""
+    return (
+        registry_row_toml("system_interface", "http://localhost:8000", is_internal=True, is_critical=True),
+        registry_row_toml(
+            "getting-started",
+            "http://localhost:7400",
+            display_name="Getting Started",
+            launcher_rank=15,
+            default_shortcut=("open", "focus"),
+        ),
+        registry_row_toml(
+            "files",
+            TEST_FILES_URL,
+            display_name="File Viewer",
+            launcher_rank=20,
+            default_shortcut=("new", "new"),
+            launch_paths=[("new", "File Viewer", "/home/user/workspace/")],
+        ),
+        registry_row_toml(
+            "browser",
+            "http://localhost:7500",
+            launcher_rank=30,
+            default_shortcut=("new", "focus"),
+            launch_paths=[("new", "Browser", "/new")],
+            launch_methods={"new": "POST"},
+        ),
+        registry_row_toml(
+            "terminal",
+            TEST_TERMINAL_URL,
+            is_critical=True,
+            launcher_rank=40,
+            default_shortcut=("new", "new"),
+            launch_paths=[("new", "Terminal", "/new")],
+            launch_methods={"new": "POST"},
+        ),
+    )
+
+
+def builtin_chat_row_toml() -> str:
+    """The chat's row, shaped as its manifest makes it: ranked first, its default shortcut the chat list, pinned."""
+    return registry_row_toml(
+        "chat",
+        "http://localhost:7800",
+        is_critical=True,
+        launcher_rank=10,
+        default_shortcut=("root", "new"),
+        launch_paths=[("root", "Chat", "/"), ("new", "New Chat", "/api/chats/intake")],
+        launch_methods={"new": "POST"},
+        pin=("/", "avatar", "independent", "floating"),
+    )
+
+
 def shell_application(
     tmp_path: Path,
     inventory: AppInventory,

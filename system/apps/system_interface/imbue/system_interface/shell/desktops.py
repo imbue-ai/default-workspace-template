@@ -11,6 +11,7 @@ from typing import Final
 
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
+from app_manifest.registry import RegistryRow
 from loguru import logger
 from pydantic import Field
 
@@ -19,6 +20,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import ClientRecord
+from imbue.system_interface.shell.data_types import DefaultShortcutsOfferedDocument
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
@@ -29,6 +31,9 @@ from imbue.system_interface.shell.data_types import GridCell
 from imbue.system_interface.shell.data_types import Wallpaper
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
+from imbue.system_interface.shell.desktop_document import apps_with_a_default_shortcut
+from imbue.system_interface.shell.desktop_document import apps_with_a_shortcut_on
+from imbue.system_interface.shell.desktop_document import with_default_shortcuts_offered
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_ensured
 from imbue.system_interface.shell.desktop_document import with_shortcut
 from imbue.system_interface.shell.desktop_document import with_shortcut_moved
@@ -53,6 +58,9 @@ from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
 DESKTOPS_FILENAME: Final[str] = "desktops.json"
+# The apps whose default shortcut the shell has offered (desktop plan section 3.2).
+DEFAULT_SHORTCUTS_OFFERED_FILENAME: Final[str] = "default_shortcuts_offered.json"
+DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION: Final[int] = 1
 
 # The one desktop a fresh workspace starts with (desktop plan section 3.2).
 DEFAULT_DESKTOP_NAME: Final[str] = "Home"
@@ -250,7 +258,7 @@ def find_desktop_by_name_or_id(desktops: Sequence[Desktop], requested: str) -> D
 
 
 class DesktopStore(MutableModel):
-    """Reads and writes ``desktops.json`` under the shell's state lock."""
+    """Reads and writes ``desktops.json`` and ``default_shortcuts_offered.json`` under the shell's state lock."""
 
     state_directory: Path = Field(frozen=True, description="The shell's state directory")
 
@@ -270,6 +278,33 @@ class DesktopStore(MutableModel):
     def _write_unlocked(self, document: DesktopsDocument) -> None:
         write_json_atomic(self._path(), document.model_dump(mode="json"))
 
+    def _offered_path(self) -> Path:
+        return self.state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME
+
+    def _read_offered_unlocked(self) -> frozenset[AppName] | None:
+        """The apps recorded as offered, or None when the file is absent, unreadable, or of another version (logged)."""
+        document = parse_versioned_document(
+            read_json_object(self._offered_path()),
+            DefaultShortcutsOfferedDocument,
+            DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION,
+            self._offered_path(),
+        )
+        return frozenset(document.apps) if document is not None else None
+
+    def _write_offered_unlocked(self, apps: AbstractSet[AppName]) -> None:
+        document = DefaultShortcutsOfferedDocument(
+            version=DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION, apps=tuple(sorted(apps))
+        )
+        write_json_atomic(self._offered_path(), document.model_dump(mode="json"))
+
+    def _record_offered_unlocked(self, apps: AbstractSet[AppName], desktops_before: Sequence[Desktop]) -> None:
+        """Add ``apps``, whose default shortcuts a write just placed, to the offered record; with no record yet, it
+        starts from the apps with a shortcut on the desktops as they stood before that write."""
+        recorded = self._read_offered_unlocked()
+        offered = (recorded if recorded is not None else apps_with_a_shortcut_on(desktops_before)) | apps
+        if offered != recorded:
+            self._write_offered_unlocked(offered)
+
     def list_desktops(self) -> list[Desktop]:
         """Every desktop in creation order; an absent or unreadable file lists none (``ensure_default`` seeds one)."""
         with STATE_FILES_LOCK:
@@ -277,19 +312,47 @@ class DesktopStore(MutableModel):
         return list(document.desktops) if document is not None else []
 
     def ensure_default(self, seed_shortcuts: Callable[[], Sequence[DesktopShortcut]]) -> list[Desktop]:
-        """The desktops, after creating the default one when the file holds none (desktop plan section 3.2)."""
+        """The desktops, after creating the default one when the file holds none (desktop plan section 3.2), with the
+        apps of its seeded shortcuts recorded as offered."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             if document is not None and document.desktops:
                 return list(document.desktops)
             seeded = DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=(default_desktop(seed_shortcuts()),))
             self._write_unlocked(seeded)
+            self._record_offered_unlocked(
+                frozenset(shortcut.target.app for shortcut in seeded.desktops[0].shortcuts), ()
+            )
             logger.info(
                 "Created the default desktop {!r} with {} shortcut(s)",
                 DEFAULT_DESKTOP_NAME,
                 len(seeded.desktops[0].shortcuts),
             )
             return list(seeded.desktops)
+
+    def ensure_default_shortcuts_offered(self, rows: Sequence[RegistryRow]) -> DesktopsChangeOutcome:
+        """The desktops, after every desktop holds the default shortcut of each registered app not yet offered
+        (``with_default_shortcuts_offered``) and those apps are recorded as offered; desktops.json is written only when
+        a desktop changed. With no record yet, the apps with a shortcut on any desktop count as offered."""
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            desktops = document.desktops if document is not None else ()
+            if not desktops:
+                return DesktopsChangeOutcome(desktops=desktops, is_written=False)
+            recorded = self._read_offered_unlocked()
+            offered = recorded if recorded is not None else apps_with_a_shortcut_on(desktops)
+            reconciled = tuple(with_default_shortcuts_offered(desktop, rows, offered) for desktop in desktops)
+            changed_count = sum(1 for after, before in zip(reconciled, desktops, strict=True) if after is not before)
+            if changed_count:
+                self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=reconciled))
+            newly_offered = apps_with_a_default_shortcut(rows) - offered
+            if recorded is None or newly_offered:
+                self._write_offered_unlocked(offered | newly_offered)
+        if newly_offered:
+            logger.info(
+                "Offered the default shortcuts of {} ({} desktop(s) changed)", sorted(newly_offered), changed_count
+            )
+        return DesktopsChangeOutcome(desktops=reconciled, is_written=changed_count > 0)
 
     def ensure_pinned_windows(self, pins: Sequence[AppPin], now: datetime) -> DesktopsChangeOutcome:
         """The desktops, after every desktop holds exactly one pinned window per pinned app and no pin mark of an app
@@ -311,8 +374,8 @@ class DesktopStore(MutableModel):
     def create_desktop(
         self, name: str, color: str, glyph: int, shortcuts: Sequence[DesktopShortcut], windows: Sequence[Window]
     ) -> Desktop:
-        """Register a new desktop with its seeded shortcuts and pinned windows and no wallpaper; two names that
-        shorten to one id conflict."""
+        """Register a new desktop with its seeded shortcuts (whose apps are recorded as offered) and pinned windows and
+        no wallpaper; two names that shorten to one id conflict."""
         return self.add_desktop(
             Desktop(
                 id=slugify_desktop_name(name),
@@ -322,11 +385,13 @@ class DesktopStore(MutableModel):
                 wallpaper=None,
                 shortcuts=tuple(shortcuts),
                 windows=tuple(windows),
-            )
+            ),
+            frozenset(shortcut.target.app for shortcut in shortcuts),
         )
 
-    def add_desktop(self, desktop: Desktop) -> Desktop:
-        """Append a fully formed desktop (a created or a seeded one); an id already taken conflicts."""
+    def add_desktop(self, desktop: Desktop, default_shortcut_apps: AbstractSet[AppName]) -> Desktop:
+        """Append a fully formed desktop (a created or a seeded one), recording as offered the apps whose default
+        shortcut it holds; an id already taken conflicts."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             existing_desktops = document.desktops if document is not None else ()
@@ -339,6 +404,7 @@ class DesktopStore(MutableModel):
             self._write_unlocked(
                 DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=(*existing_desktops, desktop))
             )
+            self._record_offered_unlocked(default_shortcut_apps, existing_desktops)
         return desktop
 
     def update_settings(self, desktop_id: str, name: str, color: str, glyph: int) -> Desktop:
