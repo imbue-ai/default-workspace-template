@@ -128,11 +128,14 @@ def parse_chat_list(body: object) -> list[ListedChat]:
         active_agent = raw.get("active_agent") if isinstance(raw, dict) else None
         if not isinstance(active_agent, dict):
             raise ValueError(f"a chat in the list has no active agent: {raw!r}")
+        chat_id = raw.get("chat_id")
+        if not isinstance(chat_id, str) or not chat_id:
+            raise ValueError(f"a chat in the list has no id: {raw!r}")
         chats.append(
             ListedChat(
-                chat_id=str(raw["chat_id"]),
+                chat_id=chat_id,
                 name=str(raw.get("name") or ""),
-                title=str(raw.get("title") or raw.get("name") or raw["chat_id"]),
+                title=str(raw.get("title") or raw.get("name") or chat_id),
                 status=str(raw.get("status") or ""),
                 lifecycle_state=str(active_agent.get("state") or ""),
                 is_converging=raw.get("handoff") is not None,
