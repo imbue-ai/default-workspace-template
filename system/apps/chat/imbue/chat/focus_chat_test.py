@@ -1,4 +1,4 @@
-"""``POST /api/focus-chat``: the chat app turns the Mind app's ask to show a chat into one ``show`` of its injected
+"""``POST /api/focus-chat``: the chat app turns the Imbue Studio app's ask to show a chat into one ``show`` of its injected
 shell, and answers with what the shell did."""
 
 from typing import Any

@@ -146,7 +146,7 @@ export interface DesktopApi {
   relayEmbedderMessage(type: string, clientId: string, payload: Readonly<Record<string, unknown>>): Promise<void>;
 }
 
-/** A message the minds chrome sent this page: its type and its own fields. */
+/** A message the Imbue Studio chrome sent this page: its type and its own fields. */
 export type EmbedderMessage = { readonly type: string } & Readonly<Record<string, unknown>>;
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
@@ -523,7 +523,7 @@ export class DesktopStore {
 
   /** Resolves once the app list has landed, with the bootstrap's inventory read or the socket's first
    *  ``apps_updated``, whichever comes first. A ``start`` that failed to read the inventory resolves without
-   *  it, so a caller that needs the apps (which of them take the minds chrome's messages) waits on this too. */
+   *  it, so a caller that needs the apps (which of them take the Imbue Studio chrome's messages) waits on this too. */
   whenAppsLoaded(): Promise<void> {
     return this.appsLoaded;
   }
@@ -743,7 +743,7 @@ export class DesktopStore {
     return launched !== null;
   }
 
-  /** A message from the minds chrome: when an app registered for its type, the shell is asked, once, to post it
+  /** A message from the Imbue Studio chrome: when an app registered for its type, the shell is asked, once, to post it
    *  there with this client's id (contracts.md section 5.6); the app decides what it means. False when no app
    *  registered for the type, the shell could not pass it on, this is a preview shell (whose backend refuses
    *  the relay: the apps it names are the live ones), or this is a solo shell (whose client is the main window's,

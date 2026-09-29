@@ -1,4 +1,4 @@
-"""The embedder-message relay (desktop contracts.md section 5.6): the shell posts a message from the minds chrome to
+"""The embedder-message relay (desktop contracts.md section 5.6): the shell posts a message from the Imbue Studio chrome to
 every app whose row registered its type, over real loopback servers standing in for the apps."""
 
 from pathlib import Path

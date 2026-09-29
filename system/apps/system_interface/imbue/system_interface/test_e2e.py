@@ -2022,8 +2022,8 @@ def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_
     assert _get_json(f"{e2e_server.base_url}/api/updates/pending") is None
 
 
-# The minds chrome, played by a page on its own origin: it frames the shell, waits for the shell's
-# ``minds:workspace-ready``, and then posts the chat notification's ask down to it, as the Mind app does.
+# The Imbue Studio chrome, played by a page on its own origin: it frames the shell, waits for the shell's
+# ``minds:workspace-ready``, and then posts the chat notification's ask down to it, as the Imbue Studio app does.
 _CHROME_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Chrome</title></head><body>
 <iframe id="workspace" src="__SHELL_URL__/" style="width: 1200px; height: 800px"></iframe>
 <script>
@@ -2052,7 +2052,7 @@ def _chrome_app(shell_url: str) -> Flask:
 def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_type_once_with_the_client(
     tmp_path: Path, page: Page
 ) -> None:
-    """The shell framed by the minds chrome relays ``minds:focus-chat`` to the app whose registry row registers the
+    """The shell framed by the Imbue Studio chrome relays ``minds:focus-chat`` to the app whose registry row registers the
     type: the app's handler route is posted the message once, with the client id of the shell page that received
     it, and the shell reads nothing of it itself."""
     received: list[dict[str, Any]] = []

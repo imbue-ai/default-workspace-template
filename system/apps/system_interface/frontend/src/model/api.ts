@@ -273,7 +273,7 @@ export async function setAppLifecycle(appName: string, action: AppLifecycleActio
   await postJson<void>(apiUrl(`/api/apps/${encodeURIComponent(appName)}/${action}`), {});
 }
 
-/** Ask the shell to post a message the minds chrome sent this client's page to the apps registered for its type
+/** Ask the shell to post a message the Imbue Studio chrome sent this client's page to the apps registered for its type
  *  (contracts.md section 5.6); throws with the shell's detail when an app did not take it. */
 export async function relayEmbedderMessage(
   type: string,

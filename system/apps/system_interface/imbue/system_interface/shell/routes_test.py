@@ -1285,7 +1285,7 @@ def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     """The inventory document and the socket's ``apps_updated`` both carry each app's ``message_handlers``, so the
-    shell page knows which messages from the minds chrome to relay."""
+    shell page knows which messages from the Imbue Studio chrome to relay."""
     registry_path = write_two_app_registry(
         tmp_path,
         registry_row_toml(

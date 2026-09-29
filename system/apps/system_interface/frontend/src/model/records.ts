@@ -147,7 +147,7 @@ export interface AppPin {
   readonly default_mode: EntryMode;
 }
 
-/** A message an app takes from the minds chrome, and the route under its origin the shell posts it to
+/** A message an app takes from the Imbue Studio chrome, and the route under its origin the shell posts it to
  *  (contracts.md section 2). */
 export interface MessageHandler {
   readonly type: string;
@@ -171,7 +171,7 @@ export interface AppRecord {
   readonly default_shortcut: DefaultShortcut | null;
   readonly launcher_rank: number | null;
   readonly pin: AppPin | null;
-  /** The messages from the minds chrome the app takes, which the shell relays to it. */
+  /** The messages from the Imbue Studio chrome the app takes, which the shell relays to it. */
   readonly message_handlers: readonly MessageHandler[];
   readonly is_running: boolean;
 }

@@ -1,4 +1,4 @@
-"""The embedder-message relay (desktop contracts.md section 5.6): a message the minds chrome sent the shell's page is
+"""The embedder-message relay (desktop contracts.md section 5.6): a message the Imbue Studio chrome sent the shell's page is
 posted, with the client that received it, to every app whose registry row names its type in ``message_handlers``.
 
 The shell reads no payload: the app that registered the type is the one that knows what it means.
@@ -35,7 +35,7 @@ _REFUSAL_DETAIL_LIMIT: Final[int] = 300
 
 
 class EmbedderMessageRelayRequest(FrozenModel):
-    """The body of ``POST /api/embedder-messages``: a message the shell's page received from the minds chrome."""
+    """The body of ``POST /api/embedder-messages``: a message the shell's page received from the Imbue Studio chrome."""
 
     type: MessageType = Field(description="The message's type")
     client_id: ClientId = Field(description="The client whose page received the message")

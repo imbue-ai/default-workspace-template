@@ -51,7 +51,7 @@ export class FakeDesktopApi implements DesktopApi {
   /** ``<client>/<window>`` -> the client's own path and title for an independent window. */
   readonly windowPaths = new Map<string, StoredWindowPath>();
   readonly calls: string[] = [];
-  /** Every message relayed for the minds chrome, in order. */
+  /** Every message relayed for the Imbue Studio chrome, in order. */
   readonly relayedMessages: { type: string; clientId: string; payload: Readonly<Record<string, unknown>> }[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;

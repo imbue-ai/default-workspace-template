@@ -52,7 +52,7 @@ observe`, its own supervised service) writes, and serves:
   its last message as `last_messaged_at`, which the chat root's list orders on)
   and the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`).
-- `POST /api/focus-chat`: what the shell posts for the Mind app's `minds:focus-chat` (the user opened a
+- `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
   chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
   (`focus_chat.py`) to put the chat root with the chat selected (`/?chat=<chat-id>`) on that client's

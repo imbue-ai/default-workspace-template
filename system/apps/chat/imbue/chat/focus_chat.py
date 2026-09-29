@@ -1,6 +1,6 @@
-"""Showing a chat the Mind app asked for, when the user opens the chat's notification.
+"""Showing a chat the Imbue Studio app asked for, when the user opens the chat's notification.
 
-The Mind app sends the workspace ``minds:focus-chat`` with the chat's id; the shell posts it here, because this
+The Imbue Studio app sends the workspace ``minds:focus-chat`` with the chat's id; the shell posts it here, because this
 app's manifest registers the type (``[[message_handlers]]``), with the client whose page received it. The shell
 chooses the window itself: this app only says which of its paths show the chat and which of its windows may be
 pointed at it, through one ``show`` op (desktop-interface contracts.md section 8). The chat root with the chat
@@ -41,7 +41,7 @@ HTTP_BAD_GATEWAY: Final[int] = 502
 class FocusChatRequest(FrozenModel):
     """What the shell posts for ``minds:focus-chat``: the message's fields and the client whose page received it."""
 
-    # The relay adds nothing a newer Mind app could not, so an unknown field is ignored rather than refused.
+    # The relay adds nothing a newer Imbue Studio app could not, so an unknown field is ignored rather than refused.
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     client_id: NonEmptyStr = Field(description="The client whose page received the message")

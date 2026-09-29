@@ -346,7 +346,7 @@ export function findWindow(state: DesktopState, windowId: string): { desktop: De
   return null;
 }
 
-/** Whether an app registered for the minds chrome's messages of ``type``, so the shell relays them. */
+/** Whether an app registered for the Imbue Studio chrome's messages of ``type``, so the shell relays them. */
 export function isEmbedderMessageHandled(state: DesktopState, type: string): boolean {
   return state.apps.some((app) => app.message_handlers.some((handler) => handler.type === type));
 }

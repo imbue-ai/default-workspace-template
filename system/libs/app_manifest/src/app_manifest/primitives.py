@@ -231,7 +231,7 @@ class LaunchPathValue(str):
 
 
 # An embedder message type an app may handle (desktop-interface contracts.md section 2): ``minds:`` and a
-# lowercase kebab-case name, the spelling every type of the minds embed contract uses.
+# lowercase kebab-case name, the spelling every type of the Imbue Studio embed contract uses.
 MESSAGE_TYPE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^minds:[a-z0-9]+(?:-[a-z0-9]+)*$")
 MAX_MESSAGE_TYPE_LENGTH: Final[int] = 64
 

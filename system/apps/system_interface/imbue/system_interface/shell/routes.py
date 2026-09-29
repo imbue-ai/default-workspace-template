@@ -258,7 +258,7 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
 
 
 def relay_embedder_message() -> ResponseReturnValue:
-    """Post a message the minds chrome sent this client's page to every app registered for its type; 200 when
+    """Post a message the Imbue Studio chrome sent this client's page to every app registered for its type; 200 when
     every app took it, 502 with each app's answer and a ``detail`` naming the ones that did not, 404 when no app
     handles the type. Refused in a preview, whose copied registry names the live app of every sibling not
     previewed."""

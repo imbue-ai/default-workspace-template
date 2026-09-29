@@ -1,4 +1,4 @@
-"""The Mind app's ask to show a chat, through the real shell.
+"""The Imbue Studio app's ask to show a chat, through the real shell.
 
 The shell and this app are served together (``running_workspace``); the test posts ``minds:focus-chat`` to this
 app's handler as the shell's relay does, for a client the shell knows, and reads the shell's own desktop and

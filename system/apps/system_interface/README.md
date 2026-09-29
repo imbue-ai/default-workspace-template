@@ -154,7 +154,7 @@ modules it shares with the app pages live in `system/libs/workspace_ui`, and
 `src/relay.ts` is the shell's side of the embedder relay (it forwards the
 framed pages' `minds:` messages to the minds chrome unchanged).
 
-A message the minds chrome sends the shell's page reaches an app another way
+A message the Imbue Studio chrome sends the shell's page reaches an app another way
 too: an app whose manifest registers its type (`[[message_handlers]]`) has it
 posted, by the shell's page once (never by a solo page, whose client is the
 main window's) and then by the shell's backend
@@ -167,7 +167,7 @@ one already showing it (switching desktops if it must), else the frontmost
 window on screen at one of those pages (pointed at the path), else the app's
 pinned window, else a new one. A pulled-out window it settles on stays out, and
 the client stays on its desktop: the shell asks that client's page to have the
-Mind app raise the window's own desktop window. The shell reads no meaning into
+Imbue Studio app raise the window's own desktop window. The shell reads no meaning into
 a path's query string.
 
 ### How the shell learns about apps
