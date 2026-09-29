@@ -221,9 +221,12 @@ Repeat until every node is done.
    one go -- one design, one set of files, one commit -- then count every node in the
    group done. Those nodes are consecutive and all yours, so keeping them apart divides
    the work between you and yourself, and each split invites another pass over the same
-   files. A group never spans a node that has a worker, because you must wait for it and
-   merge its branch first, and never spans an interactive node, because the nodes after
-   a question are meant to be written against its answer.
+   files. A group ends only at a node that has a worker, because you must wait for it and
+   merge its branch before building on it.
+
+   An interactive node sits inside a group like any other -- it is you asking a question
+   you then act on. It does fix an order within the group: ask it when you reach it, and
+   write the nodes after it against the answer rather than designing past them.
 
 3. **Launch each node whose `has_worker` is true, one node per command.** Never put
    two launches in one shell command: they run one after the other anyway, and a

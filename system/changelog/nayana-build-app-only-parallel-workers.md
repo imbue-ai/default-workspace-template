@@ -28,6 +28,7 @@ nodes to reach, and a node running with four others already has every slot the c
 should do as one piece of work, with each node's `own_group` naming its run. For the DAG
 above that is `[[0], [4, 5]]` -- node 0 alone, then nodes 4 and 5 together, because they are
 consecutive and both the orchestrator's, so keeping them apart divides the work between one
-agent and itself and invites a second pass over the same files. A run stops at a node with a
-worker, which has to be waited for and merged first, and at an interactive node, since the
-nodes after a question are written against its answer.
+agent and itself and invites a second pass over the same files. A run stops only at a node
+with a worker, which has to be waited for and merged first. An interactive node stays inside
+a run -- it is the same agent asking a question it then acts on -- but fixes an order within
+it, since the nodes after the question are written against its answer.
