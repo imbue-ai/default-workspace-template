@@ -32,6 +32,7 @@ def _chat(
     state: str,
     name: str = "",
     handoff: dict[str, str] | None = None,
+    is_connecting: bool = False,
 ) -> dict[str, Any]:
     """One chat of ``GET /api/chats``, in the chat app's ``ChatSnapshot`` shape (the fields read here)."""
     return {
@@ -40,7 +41,11 @@ def _chat(
         "name": name or title.lower().replace(" ", "-"),
         "status": status,
         "handoff": handoff,
-        "active_agent": {"agent_id": chat_id, "state": state},
+        "active_agent": {
+            "agent_id": chat_id,
+            "state": state,
+            "is_connecting": is_connecting,
+        },
     }
 
 
@@ -105,6 +110,14 @@ def test_only_idle_chats_other_than_the_pass_and_its_worker_are_restarted(
                         handoff={"phase": "summarizing"},
                     ),
                     _chat("agent-stopped", "Old chat", "stopped", "STOPPED"),
+                    # A send waiting for the harness to come up; a restart would land under it.
+                    _chat(
+                        "agent-connecting",
+                        "Letters",
+                        "idle",
+                        "WAITING",
+                        is_connecting=True,
+                    ),
                 ]
             },
         )
@@ -133,6 +146,7 @@ def test_only_idle_chats_other_than_the_pass_and_its_worker_are_restarted(
         ("agent-between-steps", "working"),
         ("agent-dialog", "waiting on a dialog"),
         ("agent-handoff", "switching to another agent"),
+        ("agent-connecting", "receiving a message"),
     ]
     assert (
         json.loads(
