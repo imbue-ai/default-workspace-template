@@ -3259,7 +3259,8 @@ class AgentManager:
             return
         try:
             account: Account | None = resolve_binding()
-        except (AccountError, BindingError):
+        except (AccountError, BindingError) as e:
+            _loguru_logger.trace("No account to keep spare chat agents on: {}", e)
             account = None
         harness = harness_for(account) if account is not None else None
         now = time.monotonic()
