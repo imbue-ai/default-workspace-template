@@ -4,6 +4,6 @@ The rules every app icon is drawn to, and the docs and scripts that point at the
 
 - `AGENTS.md` and `forward_port.py` point at that doc rather than describing a house style of their own: the registration error an app with no icon raises names it, and the module's own docs say the markup check here is about safety, not style.
 
-- The file viewer's icon is Courage on Inspiration, drawn on Gleb's Copyboard and built to those rules, replacing its `currentColor` line glyph.
+- The file viewer's icon is Courage on Inspiration, built to those rules, replacing its `currentColor` line glyph.
 
 - `test_app_manifests.py` pins the order of the built-ins the desktop seeds its shortcuts in and the launcher lists -- chat 10, Getting Started 15, the file viewer 20, the browser 30, the terminal 40 -- rather than asserting one app's rank on its own.

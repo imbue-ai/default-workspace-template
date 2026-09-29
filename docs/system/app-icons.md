@@ -48,15 +48,14 @@ sparse one smaller.
 
 The mark is a real, everyday object drawn true, and then inked. Those are the two halves
 of it, and only the first is strict: the object has to stay the object, and everything
-about how it is *made* is loose. The reference is the inked column on Gleb's Copyboard
-("Clean vs hand-drawn"), and the bullseye there (node `191:688`) is the one to look at --
-its rings are the clearest read on how much unevenness the look wants.
+about how it is *made* is loose.
 
-Two things that column settles. The *clean* side is not machine-drawn either: its rings
-already vary about a fifth in thickness around their circumference. And the inking pass
-does not move the line much -- it changes the *weight* of it. Measured on that bullseye,
-the ring edges wander by one or two units in 120 while the ring thickness swings by two
-fifths peak to peak. Drift is small; breathing is not.
+The test to hold in mind is a bullseye -- rings around a dot, the one shape where every
+kind of unevenness is visible at once. Inked, its rings stay where a bullseye's rings
+belong, its edges wander by a unit or two, and its *thickness* swings about two fifths
+from the thinnest place to the thickest. That is the whole look in one mark: the line goes
+where it means to and the weight of it does not sit still. Drift is small; breathing is
+not.
 
 **Draw it true.**
 
@@ -84,10 +83,10 @@ fifths peak to peak. Drift is small; breathing is not.
 **Then ink it.**
 
 - **The whole mark sits a little off level.** Not each edge separately -- the object as a
-  whole, turned about a degree off its axis. On the board's checkbox the square's right
-  side sits a unit higher than its left over a sixty-unit run, where the clean version is
-  dead level. Nothing symmetric stays symmetric through this, and it should not: this is
-  the deviation that most makes a mark look placed by hand rather than snapped to a grid.
+  whole, turned about a degree off its axis, so a square's right side ends up sitting a
+  unit higher than its left over a sixty-unit run. Nothing symmetric stays symmetric
+  through this, and it should not: this is the deviation that most makes a mark look
+  placed by hand rather than snapped to a grid.
 - **The width breathes, and it breathes a lot** -- about a fifth either side of the
   nominal along the run, which is a swing of two fifths from the thinnest place to the
   thickest. This is the big one, and it is the one most likely to be drawn too timidly.
