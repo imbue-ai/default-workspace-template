@@ -132,8 +132,10 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   already used by an existing program (`system_interface`, `browser`, etc.
   are reserved by the scaffolder, which also refuses a name any
   `system/supervisord.conf.d/*.conf` already declares).
-- **Draw the app's icon** -- an `.svg` glyph specific to what *this*
-  app does, in the house style (see the CLI reference below);
+- **Draw the app's icon** -- a 216 by 216 two-layer tile specific to what
+  *this* app does, built to the rules in `docs/system/app-icons.md` (a
+  flat background under one fill-only glyph inside a centred 144 box, in
+  a colour pair from the palette that doc carries);
   `forward_port.py` refuses a brand-new registration without one. The
   scaffold copies it beside the app's manifest (`app.toml`), which names
   it.
@@ -689,22 +691,33 @@ Flags:
   warns on re-registration (the stored icon is kept), so a corrupted
   icon cannot crash-loop a running app.
 
-  **Draw the icon in the workspace's house style**: monochrome line
-  art on a transparent background, exactly like the built-in glyphs.
-  The frame to author in is
+  **Draw the icon to the rules in `docs/system/app-icons.md`**: a 216 by
+  216 tile of exactly two layers -- a flat background, and one glyph in a
+  second colour that fits a 144 by 144 box centred in it. The tile is
+  drawn small but authored large, so the hand-drawn detail the look asks
+  for has a grid to sit on. The frame to author in is
 
   ```svg
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="..."/>
+  <svg xmlns="http://www.w3.org/2000/svg" width="216" height="216" viewBox="0 0 216 216" fill="none">
+  <rect width="216" height="216" rx="69.12" fill="BACKGROUND"/>
+  <path d="..." fill="FOREGROUND"/>
   </svg>
   ```
 
-  -- strokes only, no `fill` on the shapes, no hardcoded colors.
-  `currentColor` is what lets the workspace ink the glyph to match the
-  text beside it, and a transparent background is what keeps it from
-  reading as a sticker in a row of line icons. Only use color if the
-  user explicitly asks for a colored icon.
+  -- fills only, never strokes; no shadow (every surface that draws an
+  icon casts its own); the 32 percent corner radius the shell's
+  `--desk-icon-radius` also uses; and a root `fill="none"`, so the shell
+  does not ink the tile with `currentColor` the way it inks a line
+  glyph. The colours are a pair from the palette in that doc, and the
+  glyph is one iconic *object* for what the app is *for* -- an
+  envelope, a clipboard, a bell -- drawn true to that object's own
+  proportions and then inked: the whole mark about a degree off level,
+  the width of every run breathing a fifth either side of its nominal,
+  the line itself drifting only a unit or two, ends round and lifting,
+  with its interior detail cut through to the background colour at one
+  nominal weight the whole set shares. Drawn in one pass and never revised. That doc carries the
+  full look, and says how an icon that already exists is changed
+  without losing its hand-placed points.
 - `--no-icon`: skip the icon requirement for a brand-new entry. Uses
   the generic letter monogram. Use this only when the user explicitly
   declines an icon, or for short-lived preview windows.

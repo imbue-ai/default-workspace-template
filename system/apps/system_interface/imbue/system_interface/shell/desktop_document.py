@@ -77,9 +77,11 @@ PAIRED_WIDTH: Final[float] = 0.5
 _PAIRING_TOLERANCE: Final[float] = 1e-6
 
 # The shell seeds a new desktop's shortcuts and places a shortcut added by an agent without knowing any
-# backdrop, so it lays them out in reading order over a grid this many columns wide: one column down the
-# left edge, which every grid a backdrop can hold contains.
-SEED_GRID_COLUMNS: Final[int] = 1
+# backdrop, so it lays them out in reading order over a grid this many columns wide: one row along the
+# top edge, wrapping only past a width (8 * 96 + 16 = 784px) no backdrop worth laying a full row out on
+# is under. A stored cell past the last column a real backdrop holds is re-packed where it is drawn
+# (``grid.ts`` ``placeShortcuts``), so a narrow backdrop still shows every shortcut.
+SEED_GRID_COLUMNS: Final[int] = 8
 
 DESKTOPS_FILE_VERSION: Final[int] = 1
 PLACEMENTS_FILE_VERSION: Final[int] = 1
@@ -633,11 +635,24 @@ def desktop_seeded_from(
 
 
 @pure
+def launcher_order(rows: Sequence[RegistryRow]) -> tuple[RegistryRow, ...]:
+    """The rows in the order the workspace lists their apps: every row declaring a ``launcher_rank``, lowest first
+    and registry order breaking a tie, then every row declaring none, in registry order. The launcher orders its
+    rows this way in the frontend (``model/launch.ts``); the desktop seeds its shortcuts in it too, so one manifest
+    key decides where an app sits in both and neither depends on the order the apps happened to register in."""
+    ranked = [(row.launcher_rank, row) for row in rows if row.launcher_rank is not None]
+    return (
+        *(row for _, row in sorted(ranked, key=lambda entry: entry[0])),
+        *(row for row in rows if row.launcher_rank is None),
+    )
+
+
+@pure
 def seed_desktop_shortcuts(rows: Sequence[RegistryRow]) -> tuple[DesktopShortcut, ...]:
     """A new desktop's shortcuts: every registered, non-internal app's ``default_shortcut`` (``default_launch_path_id``),
-    in registry order, laid out in reading order from the grid origin."""
+    in launcher order, laid out in reading order from the grid origin."""
     shortcuts: list[DesktopShortcut] = []
-    for row in rows:
+    for row in launcher_order(rows):
         if row.internal or row.default_shortcut is None:
             continue
         launch = default_launch_path_id(row)
