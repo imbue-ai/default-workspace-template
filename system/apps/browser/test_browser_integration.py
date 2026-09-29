@@ -102,7 +102,6 @@ async def _running_browser(
             bsession.set_proxy_server(None)
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 async def _noop_wake_method(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
     """Stand-in for ``_wake_agent``: skip the real ``message_chat.py`` subprocess in tests."""
 
@@ -272,8 +271,6 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
         runner._init_done.set()
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pytest.MonkeyPatch) -> None:
     # While the fleet is still restoring, taking ownership returns 503 "initializing", but
     # read-only routes (ls/health) AND create stay open -- the locked "init must not block
