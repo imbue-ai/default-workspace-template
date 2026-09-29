@@ -308,9 +308,8 @@ function onChatsUpdated(): void {
       if (!isKept(heldId)) pool.destroy(heldId);
     }
   }
-  if (selectedChatId !== null && !isKept(selectedChatId)) select(null);
+  if (selectedChatId === null || !isKept(selectedChatId)) select(null);
   else reportLocation();
-  fillSlot();
 }
 
 const ChatRoot: m.Component = {
