@@ -63,19 +63,74 @@ def test_parse_plan_builds_nodes_with_access_and_models() -> None:
     assert nodes[3]["capability"] == "interactive"
     assert nodes[3]["model"] is None
     assert [node["model"] for node in nodes if node["capability"] != "interactive"] == [
-        plan_orchestration.MODEL_BY_CAPABILITY[node["capability"]]
+        plan_orchestration.TIERED_MODEL_BY_CAPABILITY[node["capability"]]
         for node in nodes
         if node["capability"] != "interactive"
     ]
     assert nodes[7]["subtask"] == "Hand off to crystallize-creation."
 
 
-def test_every_worker_capability_maps_to_opus_by_default() -> None:
-    assert plan_orchestration.MODEL_BY_CAPABILITY == {
-        "low": "opus",
-        "medium": "opus",
-        "high": "opus",
+def test_each_capability_gets_its_own_model_tier() -> None:
+    assert plan_orchestration.TIERED_MODEL_BY_CAPABILITY == {
+        "low": "haiku",
+        "medium": "sonnet[1m]",
+        "high": "opus[1m]",
     }
+
+
+def test_every_tier_asks_for_the_context_window_the_workspace_provisions() -> None:
+    """A bare alias is accepted and quietly hands back a window smaller than the 1M the
+    workspace pays for, and it reports the same display name either way -- so the only
+    place that mistake can be caught is here. Haiku has no ``[1m]`` variant."""
+    for capability, model in plan_orchestration.TIERED_MODEL_BY_CAPABILITY.items():
+        if model.startswith("haiku"):
+            assert model == "haiku", capability
+        else:
+            assert model.endswith("[1m]"), capability
+
+
+def test_no_tier_names_a_dated_model_id() -> None:
+    """Every tier switches with an alias, which follows the pinned binary's own table to
+    the current best model in that family. A dated id pins a tier to one release and
+    goes stale silently on the next pin bump."""
+    for capability, model in plan_orchestration.TIERED_MODEL_BY_CAPABILITY.items():
+        assert not model.startswith("claude-"), f"{capability} names {model}"
+
+
+def test_an_interactive_node_has_no_model() -> None:
+    assert plan_orchestration.model_for_capability("interactive") is None
+
+
+def test_the_uniform_override_puts_every_worker_on_one_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The arm a comparison of the tiering runs against: one model for every node."""
+    monkeypatch.setenv(plan_orchestration.UNIFORM_MODEL_VARIABLE, "opus[1m]")
+    assert [
+        plan_orchestration.model_for_capability(capability)
+        for capability in plan_orchestration.TIERED_MODEL_BY_CAPABILITY
+    ] == ["opus[1m]", "opus[1m]", "opus[1m]"]
+    # Still nothing for the node the orchestrator runs itself.
+    assert plan_orchestration.model_for_capability("interactive") is None
+
+
+def test_an_empty_override_leaves_the_tiers_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exported-but-blank variable is the shape a shell leaves behind, and reading it
+    as a model name would ask mngr to set the model to the empty string."""
+    monkeypatch.setenv(plan_orchestration.UNIFORM_MODEL_VARIABLE, "   ")
+    assert plan_orchestration.model_for_capability("low") == "haiku"
+
+
+def test_the_override_reaches_a_parsed_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """plan.json is what the orchestrator reads the model out of, so the override has to
+    be visible there rather than only in the resolver."""
+    monkeypatch.setenv(plan_orchestration.UNIFORM_MODEL_VARIABLE, "opus[1m]")
+    nodes = plan_orchestration.parse_plan(_TODO_PLAN)["nodes"]
+    assert {
+        node["model"] for node in nodes if node["capability"] != "interactive"
+    } == {"opus[1m]"}
 
 
 def test_planner_prompt_examples_are_valid_plans() -> None:
