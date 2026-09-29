@@ -6,7 +6,7 @@ is restarted. A restart keeps the conversation: each harness resumes its own ses
 
 ``restart_idle_agents`` restarts every agent the chat app lists that has ended its turn, other
 than the pass's own chat and its worker, and reports the ones it left running because they
-were mid-turn. ``start_self_restart`` restarts the pass's own chat once its last turn ends,
+were busy.``start_self_restart`` restarts the pass's own chat once its last turn ends,
 from a detached helper, and sends it a note to confirm the restart to the user (or, when
 the restart does not happen, a note saying so).
 
