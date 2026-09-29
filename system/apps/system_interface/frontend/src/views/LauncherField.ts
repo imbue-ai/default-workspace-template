@@ -17,7 +17,7 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { isMessageText } from "../reducers/launcherRows";
 import { glyph } from "./glyphs";
 
-export const LAUNCHER_PLACEHOLDER = "Start an app or send a message";
+export const LAUNCHER_PLACEHOLDER = "Open an app or send a message";
 const FIELD_GLYPH_SIZE = 14;
 /** The field's own emblem: a plus rather than a magnifier, since the field starts things at least as
  *  often as it finds them. The same size and the same weight as the plus a free-text row wears in the
