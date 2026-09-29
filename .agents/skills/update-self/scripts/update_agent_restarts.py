@@ -308,8 +308,9 @@ def restart_idle_agents(
 
     Each chat is read again just before its restart, since the restarts run one after another
     and a chat that was idle in the first read may have started a turn since; one that has is
-    left running instead, and one no longer listed is skipped. The report is also written to ``AGENT_RESTARTS_REPORT_REL``. Raises
-    ``ChatListUnavailableError`` when there is no chat list to act on.
+    left running instead, and one no longer listed is skipped. The report is also written to
+    ``AGENT_RESTARTS_REPORT_REL``. Raises ``ChatListUnavailableError`` when there is no chat
+    list to act on.
     """
     report_path = repo_root / AGENT_RESTARTS_REPORT_REL
     report_path.unlink(missing_ok=True)
