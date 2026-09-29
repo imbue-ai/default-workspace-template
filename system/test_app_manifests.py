@@ -373,6 +373,18 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False
+    # The stop-when-no-windows spec, section 4.2: the file viewer and Getting Started stop once no window shows
+    # them; the browser keeps running, since agents drive its browsers with no window; and the critical ones
+    # (which the manifest refuses the field on) never stop.
+    assert {name: manifest.stop_when_no_windows for name, manifest in by_name.items()} == {
+        "system_interface": False,
+        "chat": False,
+        "terminal": False,
+        "terminal-pty": False,
+        "files": True,
+        "browser": False,
+        "getting-started": True,
+    }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
     # focuses it like the browser's; it declares no launch path, so the desktop synthesizes ``open`` at its root.
     assert by_name["getting-started"].critical is False

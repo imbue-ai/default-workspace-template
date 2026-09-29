@@ -307,17 +307,28 @@ describe("creating and positioning", () => {
     expect(wrapperOf("win-1").style.display).toBe("");
   });
 
-  it("hides a stopped app's page and reloads it at the window's stored path once the app runs again", async () => {
+  it("hides the page of a stopped app nothing brings back, and reloads it at the window's stored path once the app runs again", async () => {
+    await navigateInPage("win-1", "/?doc=2");
+    const reloads = spyOnSrc("win-1");
+    socket.deliver().onAppsUpdated([{ ...docs, is_running: false, program: "" }, notes]);
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.display).toBe("none");
+    expect(reloads).toEqual([]);
+    socket.deliver().onAppsUpdated([{ ...docs, program: "" }, notes]);
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.display).toBe("");
+    expect(reloads).toEqual(["http://127.0.0.1:7001/?doc=2"]);
+  });
+
+  it("keeps a stoppable app's page while it is stopped: the shell's parker answers it", async () => {
     await navigateInPage("win-1", "/?doc=2");
     const reloads = spyOnSrc("win-1");
     socket.deliver().onAppsUpdated([{ ...docs, is_running: false }, notes]);
     layer.reconcile();
-    expect(wrapperOf("win-1").style.display).toBe("none");
-    expect(reloads).toEqual([]);
+    expect(wrapperOf("win-1").style.display).toBe("");
     socket.deliver().onAppsUpdated([docs, notes]);
     layer.reconcile();
-    expect(wrapperOf("win-1").style.display).toBe("");
-    expect(reloads).toEqual(["http://127.0.0.1:7001/?doc=2"]);
+    expect(reloads).toEqual([]);
   });
 });
 

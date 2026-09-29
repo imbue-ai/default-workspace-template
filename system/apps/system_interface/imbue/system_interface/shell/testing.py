@@ -69,6 +69,7 @@ def registry_row_toml(
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
     pin: tuple[str, str, str, str] | None = None,
     window_closed_path: str | None = None,
+    stop_when_no_windows: bool = False,
     # Each message handler as ``(type, path)``.
     message_handlers: Sequence[tuple[str, str]] = (),
 ) -> str:
@@ -82,6 +83,7 @@ def registry_row_toml(
         f'display_name = "{display_name if display_name is not None else name.capitalize()}"',
         f"critical = {'true' if is_critical else 'false'}",
         f"internal = {'true' if is_internal else 'false'}",
+        f"stop_when_no_windows = {'true' if stop_when_no_windows else 'false'}",
     ]
     if program is not None:
         lines.append(f'program = "{program}"')

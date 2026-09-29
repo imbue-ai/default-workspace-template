@@ -11,7 +11,6 @@ dependencies = [
     # shared file; they depend on mngr's restore and update scripts syncing
     # with --all-packages (pinned in backup_workspace_scripts_test.py).
     "bootstrap",
-    "app-watcher",
     "github-sync",
     "env-converge",
     "host-backup",
@@ -95,7 +94,6 @@ exclude = ["system/libs/workspace_ui", "system/apps/terminal_pty", "system/apps/
 
 [tool.uv.sources]
 bootstrap = { workspace = true }
-app-watcher = { workspace = true }
 github-sync = { workspace = true }
 env-converge = { workspace = true }
 host-backup = { workspace = true }

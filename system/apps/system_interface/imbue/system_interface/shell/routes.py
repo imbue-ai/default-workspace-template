@@ -20,6 +20,7 @@ from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientActivityReport
 from imbue.system_interface.shell.data_types import EntryPresentation
+from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
 from imbue.system_interface.shell.desktop_routes import inventory_document_json
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
@@ -53,9 +54,7 @@ from imbue.system_interface.shell.layout_ops import CONTEXT_OP
 from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.layout_ops import is_known_op
 from imbue.system_interface.shell.layout_ops import parse_op_requester
-from imbue.system_interface.shell.liveness import start_supervisor_program
-from imbue.system_interface.shell.liveness import stop_supervisor_program
-from imbue.system_interface.shell.liveness import supervisor_socket_path
+from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.primitives import AppLifecycleAction
 from imbue.system_interface.shell.primitives import ClientActivityKind
 from imbue.system_interface.shell.primitives import ClientId
@@ -159,7 +158,7 @@ def client_activity_route() -> ResponseReturnValue:
     return "", HTTP_NO_CONTENT
 
 
-# Section 5: stop and start of an app
+# Section 5: stop, start, and quit of an app
 
 
 def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
@@ -168,37 +167,20 @@ def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
         return refusal
     shell = _shell()
     entry = _entry_or_raise(name)
-    program = entry.row.program or ""
-    if not program:
-        raise AppLifecycleRefusedError(
-            f"App {name!r} has no supervised program registered, so it cannot be stopped or started from the workspace"
-        )
-    # A critical app is never stopped from here, and neither is any row running inside a
-    # critical app's program.
-    critical_programs = {
-        other.row.program for other in shell.inventory.entries() if other.row.critical and other.row.program
-    }
-    if entry.row.critical or program in critical_programs:
-        raise AppLifecycleRefusedError(
-            f"App {name!r} is critical to the workspace and cannot be stopped or started here"
-        )
+    program = _stoppable_program_or_raise(shell, entry)
     try:
         match action:
             case AppLifecycleAction.STOP:
-                stop_supervisor_program(program, supervisor_socket_path())
+                shell.lifecycle.stop_app(name)
             case AppLifecycleAction.START:
-                start_supervisor_program(program, supervisor_socket_path())
+                if shell.lifecycle.wake(name) is ParkedPageKind.FAILED:
+                    return detail_response(
+                        f"App {name!r} (program {program!r}) could not be started", HTTP_BAD_GATEWAY
+                    )
             case _ as unreachable:
                 assert_never(unreachable)
     except SupervisorProgramActionError as e:
         return detail_response(str(e), HTTP_BAD_GATEWAY)
-    logger.info(
-        "{} app {} (program {})",
-        "Stopped" if action is AppLifecycleAction.STOP else "Started",
-        name,
-        program,
-    )
-    shell.inventory.refresh_liveness()
     refreshed = shell.inventory.entry(name)
     return jsonify(
         {
@@ -208,8 +190,40 @@ def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
     )
 
 
+def _stoppable_program_or_raise(shell: ShellState, entry: AppInventoryEntry) -> str:
+    """The program the workspace may act on for the app; raises AppLifecycleRefusedError (a 400) for an app with no
+    supervised program, a critical one, or a row inside a critical app's program."""
+    name = str(entry.row.name)
+    if not entry.row.program:
+        raise AppLifecycleRefusedError(
+            f"App {name!r} has no supervised program registered, so it cannot be stopped or started from the workspace"
+        )
+    program = stoppable_program_of(entry, shell.inventory.entries())
+    if program is None:
+        raise AppLifecycleRefusedError(
+            f"App {name!r} is critical to the workspace and cannot be stopped or started here"
+        )
+    return program
+
+
 def stop_app(name: str) -> ResponseReturnValue:
     return _lifecycle(name, AppLifecycleAction.STOP)
+
+
+def quit_app(name: str) -> ResponseReturnValue:
+    """``POST /api/apps/<name>/quit``: close every window of the app, then stop it; refused as a stop is."""
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
+    shell = _shell()
+    entry = _entry_or_raise(name)
+    _stoppable_program_or_raise(shell, entry)
+    try:
+        shell.quit_app(name)
+    except SupervisorProgramActionError as e:
+        return detail_response(str(e), HTTP_BAD_GATEWAY)
+    refreshed = shell.inventory.entry(name)
+    return jsonify({"name": name, "is_running": refreshed.is_running if refreshed is not None else False})
 
 
 def start_app(name: str) -> ResponseReturnValue:
@@ -387,6 +401,12 @@ def register_shell_routes(application: Flask) -> None:
         view_func=start_app,
         methods=["POST"],
         endpoint="start_app",
+    )
+    application.add_url_rule(
+        "/api/apps/<name>/quit",
+        view_func=quit_app,
+        methods=["POST"],
+        endpoint="quit_app",
     )
     application.add_url_rule("/api/clients", view_func=list_clients, methods=["GET"], endpoint="list_clients")
     application.add_url_rule(

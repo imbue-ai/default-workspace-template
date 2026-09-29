@@ -1,0 +1,1 @@
+The File Viewer's manifest declares `stop_when_no_windows = true`: the viewer holds nothing between windows, so the shell stops the program a minute after its last window closes and starts it again on the next request, answering that request with a loading page that reloads into the viewer (`docs/system/specs/stop-when-no-windows.md`).
