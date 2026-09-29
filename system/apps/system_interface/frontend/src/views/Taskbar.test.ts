@@ -72,6 +72,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
     },
     onEntryClick: vi.fn(),
     onEntryContextMenu: vi.fn(),
+    onEntryPeek: vi.fn(),
     ...overrides,
   };
   const root = mountView(() => m(Taskbar, attrs));

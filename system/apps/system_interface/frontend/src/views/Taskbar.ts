@@ -20,6 +20,8 @@ export interface TaskbarAttrs {
   readonly tray: SystemTrayAttrs;
   readonly onEntryClick: (windowId: string) => void;
   readonly onEntryContextMenu: (windowId: string, x: number, y: number, target: Element) => void;
+  /** The pointer resting on a minimized window's entry (its id) or leaving it (null). */
+  readonly onEntryPeek: (windowId: string | null) => void;
 }
 
 export const Taskbar: m.Component<TaskbarAttrs> = {
@@ -58,6 +60,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
               isMenuOpen: attrs.openEntryMenuWindowId === entry.window.id,
               onClick: () => attrs.onEntryClick(entry.window.id),
               onContextMenu: (x, y, target) => attrs.onEntryContextMenu(entry.window.id, x, y, target),
+              onPeek: (isPeeking) => attrs.onEntryPeek(isPeeking ? entry.window.id : null),
             }),
           ),
         ),

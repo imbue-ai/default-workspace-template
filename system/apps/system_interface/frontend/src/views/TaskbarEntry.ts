@@ -28,11 +28,13 @@ export interface TaskbarEntryAttrs {
   readonly isMenuOpen: boolean;
   readonly onClick: () => void;
   readonly onContextMenu: (x: number, y: number, target: Element) => void;
+  /** The pointer arriving on (true) or leaving (false) a MINIMIZED entry, which peeks at its window. */
+  readonly onPeek: (isPeeking: boolean) => void;
 }
 
 export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
   view(vnode) {
-    const { entry, avatar, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
+    const { entry, avatar, isMenuOpen, onClick, onContextMenu, onPeek } = vnode.attrs;
     // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
     const isDimmed = entry.isMinimized || entry.isDetached;
     const look = entry.look;
@@ -61,7 +63,13 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-accent " +
           (isMenuOpen ? "ring-2 ring-accent " : ""),
         ...hoverTooltipAttrs(tooltip, "above", "instant"),
-        onclick: onClick,
+        // Only a minimized window peeks: a window already on the desktop is its own preview.
+        onmouseenter: entry.isMinimized ? () => onPeek(true) : undefined,
+        onmouseleave: entry.isMinimized ? () => onPeek(false) : undefined,
+        onclick: () => {
+          if (entry.isMinimized) onPeek(false);
+          onClick();
+        },
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
           onContextMenu(event.clientX, event.clientY, targetElementOf(event));

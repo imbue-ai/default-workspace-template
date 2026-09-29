@@ -166,6 +166,8 @@ export interface PageDriver {
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
   ownsCloseChord(windowId: string): boolean;
+  /** Draw a minimized window's page above its taskbar entry, or stop (``null``). */
+  peekWindow(windowId: string | null): void;
 }
 
 /** What the shell asks the embedding chrome for when a window is pulled out (the pull-out-window spec). */
@@ -486,6 +488,11 @@ export class DesktopStore {
 
   setPageDriver(driver: PageDriver | null): void {
     this.pageDriver = driver;
+  }
+
+  /** Rest the pointer on a minimized window's taskbar entry, which draws its page above the entry. */
+  peekWindow(windowId: string | null): void {
+    this.pageDriver?.peekWindow(windowId);
   }
 
   dispatch(event: DesktopEvent): void {

@@ -34,8 +34,9 @@ import {
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { windowPageZIndex } from "../geometry/stacking";
+import { TASKBAR_ENTRY_ATTRIBUTE } from "../gestures/pointerGestures";
 import { windowPageUrl } from "../model/pageUrl";
-import type { AppRecord, Desktop, WindowRecord } from "../model/records";
+import type { AppRecord, Desktop, Placement, WindowRecord } from "../model/records";
 import { navigationsToFollow } from "../reducers/following";
 import type { PageReport } from "../reducers/following";
 import {
@@ -104,9 +105,17 @@ interface HostRect {
   height: number;
 }
 
+/** How wide a peeked window is drawn, and how far its bottom edge stands off the taskbar. A window is
+ *  never drawn larger than it renders, so a small window peeks at its own size rather than magnified. */
+const PEEK_WIDTH = 260;
+const PEEK_GAP = 10;
+
 export class LivePagesLayer implements PageDriver {
   private readonly pages = new Map<string, LivePage>();
   private isGestureActive = false;
+  /** The minimized window being peeked at from its taskbar entry: its page is drawn small above the
+   *  entry instead of being hidden. Null when nothing is being peeked at. */
+  private peekedWindowId: string | null = null;
   /** The window a tear-out drag has pulled past the viewport: its page is hidden until the drag comes back
    *  inside or ends (the pull-out-window spec). */
   private tornOutWindowId: string | null = null;
@@ -254,7 +263,17 @@ export class LivePagesLayer implements PageDriver {
     const shownIds = new Set<string>();
     placements.forEach((placement, index) => {
       const found = windowsById.get(placement.window_id);
-      if (found === undefined || desktop === null || placement.is_minimized) return;
+      if (found === undefined || desktop === null) return;
+      if (placement.is_minimized) {
+        // A minimized window has no chrome to lie under, so its page is hidden -- unless the pointer
+        // is resting on its taskbar entry, when it is drawn small above that entry instead.
+        if (placement.window_id !== this.peekedWindowId || placement.is_detached) return;
+        const app = appByName(state, found.window.app);
+        const page = app === undefined ? undefined : this.pages.get(found.window.id);
+        if (app === undefined || page === undefined || !app.is_running) return;
+        if (this.showPeek(page, placement)) shownIds.add(found.window.id);
+        return;
+      }
       // A pulled-out window's page is shown in the chrome's own desktop window; one being pulled out right now
       // is already drawn there under the cursor.
       if (placement.is_detached || placement.window_id === this.tornOutWindowId) return;
@@ -455,6 +474,7 @@ export class LivePagesLayer implements PageDriver {
   }
 
   private show(page: LivePage, box: HostRect, stackIndex: number, isInteractive: boolean): void {
+    this.clearPeek(page);
     this.position(page, box);
     const style = page.wrapper.style;
     style.zIndex = windowPageZIndex(stackIndex);
@@ -463,10 +483,77 @@ export class LivePagesLayer implements PageDriver {
     this.syncVisibility(page, true);
   }
 
+  /** Rest the pointer on a minimized window's taskbar entry, or take it off again (``null``). */
+  peekWindow(windowId: string | null): void {
+    if (this.peekedWindowId === windowId) return;
+    this.peekedWindowId = windowId;
+    this.reconcile();
+  }
+
+  /**
+   * Draw a minimized window's page small, above its taskbar entry: the Dock's trick, except that this
+   * is the page itself still running rather than a picture taken of it when it was put away.
+   *
+   * The window is drawn at its own rendered size and scaled by a transform. Shrinking the frame's box
+   * instead would re-lay the app out at 260px wide, and peek at a page the window does not have.
+   *
+   * Nothing is told it has been shown, because it has not been: a peek must not mark a chat read.
+   *
+   * It stands above the bar rather than inside the entry because that is where a page can be drawn at
+   * all -- the backdrop clips at the taskbar, and a page is never re-parented (that reloads it).
+   */
+  private showPeek(page: LivePage, placement: Placement): boolean {
+    const entry = document.querySelector<HTMLElement>(
+      `[${TASKBAR_ENTRY_ATTRIBUTE}="${CSS.escape(placement.window_id)}"]`,
+    );
+    if (entry === null) return false;
+    const rendered = this.store.renderedRect(placement);
+    if (rendered.width <= 0 || rendered.height <= 0) return false;
+    const host = this.host.getBoundingClientRect();
+    const entryBox = entry.getBoundingClientRect();
+    // Never magnified: a window smaller than the picture peeks at its own size.
+    const width = Math.min(PEEK_WIDTH, rendered.width);
+    const scale = width / rendered.width;
+    const height = rendered.height * scale;
+    const centred = entryBox.left + entryBox.width / 2 - width / 2 - host.left;
+    this.position(page, {
+      left: Math.max(PEEK_GAP, Math.min(centred, host.width - width - PEEK_GAP)),
+      top: Math.max(PEEK_GAP, host.height - height - PEEK_GAP),
+      width,
+      height,
+    });
+    const style = page.wrapper.style;
+    style.setProperty("z-index", "var(--z-sticky)");
+    style.pointerEvents = "none";
+    style.boxShadow = "var(--shadow-overlay)";
+    style.borderRadius = "var(--desk-window-radius)";
+    style.display = "";
+    const frame = page.frame.style;
+    frame.width = `${rendered.width}px`;
+    frame.height = `${rendered.height}px`;
+    frame.transform = `scale(${scale})`;
+    frame.transformOrigin = "0 0";
+    return true;
+  }
+
+  /** Give a page its own box back, after it has been drawn as a peek. */
+  private clearPeek(page: LivePage): void {
+    if (page.frame.style.transform === "") return;
+    const frame = page.frame.style;
+    frame.width = "";
+    frame.height = "";
+    frame.transform = "";
+    frame.transformOrigin = "";
+    const style = page.wrapper.style;
+    style.boxShadow = "";
+    style.borderRadius = "";
+  }
+
   /** Out of sight, and out of the document's focus: a hidden frame left holding it is the one the browser
    *  restores focus to when the chrome window's focus comes back, and the page would then report focus it
    *  never got from the user. */
   private hide(page: LivePage): void {
+    this.clearPeek(page);
     page.wrapper.style.display = "none";
     if (document.activeElement === page.frame) this.host.focus({ preventScroll: true });
     this.syncVisibility(page, false);

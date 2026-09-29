@@ -652,6 +652,7 @@ describe("windows", () => {
       reloadApp: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
+      peekWindow: () => {},
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual([]);
@@ -668,6 +669,7 @@ describe("windows", () => {
       reloadApp: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
+      peekWindow: () => {},
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -682,6 +684,7 @@ describe("windows", () => {
       reloadApp: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: (id) => id === "win-1",
+      peekWindow: () => {},
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -726,6 +729,7 @@ describe("windows", () => {
       reloadApp: (app) => void reloaded.push(`app:${app}`),
       requestClose: () => undefined,
       ownsCloseChord: () => false,
+      peekWindow: () => {},
     });
     socket.deliver().onLayoutOp({ op: "refresh", args: { window: "win-1" }, requester: "" });
     socket.deliver().onLayoutOp({ op: "refresh", args: { app: "docs" }, requester: "" });
