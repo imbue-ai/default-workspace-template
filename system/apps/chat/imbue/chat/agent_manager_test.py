@@ -5382,11 +5382,9 @@ def test_a_spare_whose_destroy_cannot_run_is_kept_for_a_later_sweep(
 def test_a_spare_whose_create_fails_is_destroyed_and_the_next_waits_out_the_backoff(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    argv_log = tmp_path / "mngr-argv.log"
-    mngr_binary = tmp_path / "failing-create-mngr"
-    mngr_binary.write_text(f'#!/bin/sh\necho "$*" >> "{argv_log}"\n[ "$1" != create ]\n')
-    mngr_binary.chmod(0o755)
-    manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, str(mngr_binary), 1)
+    mngr_binary, go_path, argv_log = _write_gated_mngr_binary(tmp_path, create_exit_code=1)
+    go_path.write_text("")
+    manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
         manager.ensure_spare_chat()
         wait_until_true(
@@ -5409,18 +5407,8 @@ def test_a_spare_whose_create_fails_is_destroyed_and_the_next_waits_out_the_back
 def test_a_chat_that_claimed_a_spare_whose_create_fails_is_told_why(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    argv_log = tmp_path / "mngr-argv.log"
-    release = tmp_path / "release-create"
-    mngr_binary = tmp_path / "held-failing-create-mngr"
-    mngr_binary.write_text(
-        "#!/bin/sh\n"
-        f'echo "$*" >> "{argv_log}"\n'
-        '[ "$1" = create ] || exit 0\n'
-        f'while [ ! -e "{release}" ]; do sleep 0.05; done\n'
-        "exit 1\n"
-    )
-    mngr_binary.chmod(0o755)
-    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, str(mngr_binary), 1)
+    mngr_binary, release, argv_log = _write_gated_mngr_binary(tmp_path, create_exit_code=1)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     pushes = broadcaster.register()
     try:
         manager.ensure_spare_chat()
@@ -5447,17 +5435,8 @@ def test_a_chat_that_claimed_a_spare_whose_create_fails_is_told_why(
 def test_a_chat_that_claimed_a_spare_whose_creation_breaks_off_is_answered(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    argv_log = tmp_path / "mngr-argv.log"
-    release = tmp_path / "release-create"
-    mngr_binary = tmp_path / "held-create-mngr"
-    mngr_binary.write_text(
-        "#!/bin/sh\n"
-        f'echo "$*" >> "{argv_log}"\n'
-        '[ "$1" = create ] || exit 0\n'
-        f'while [ ! -e "{release}" ]; do sleep 0.05; done\n'
-    )
-    mngr_binary.chmod(0o755)
-    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, str(mngr_binary), 1)
+    mngr_binary, release, argv_log = _write_gated_mngr_binary(tmp_path)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     pushes = broadcaster.register()
     try:
         manager.ensure_spare_chat()
