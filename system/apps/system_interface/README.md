@@ -82,7 +82,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   report.
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`,
-`placements/<desktop>/<client>.json`, `window_paths/<client>.json` (a client's
+`default_shortcuts_offered.json` (the apps whose default shortcut the shell
+has offered), `placements/<desktop>/<client>.json`, `window_paths/<client>.json` (a client's
 own paths for independent windows), `clients.json`, `users.json` (the desktop
 made for each visiting user), `avatar_selection.json`, and the client-activity
 event log (`events/client_activity/events.jsonl`, what `layout.py context`
@@ -113,7 +114,10 @@ and the profile cache.
   but the services agent is running) and pushes `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's `default_shortcut` on the first read after the
-  registry has been read. A client record holds the client's active desktop,
+  registry has been read. An app that registers later has its default
+  shortcut added to every desktop once, on the registry change and on every
+  read; `default_shortcuts_offered.json` lists the apps offered so far, so a
+  shortcut the user removed stays removed. A client record holds the client's active desktop,
   when it was last seen, and the user it last arrived as; clients unseen for
   a while are pruned with their placement files. `users.json` holds the
   desktop made for each visiting user (see "Who is here").

@@ -49,6 +49,7 @@ An app that declares no launch path has one synthesized by the shell, `open`, la
 Section 8 has the manifest; contracts.md section 2 has the exact fields.
 
 The inventory is the registry plus liveness, refreshed when the registry file changes and on the liveness sweep, and pushed as `apps_updated`.
+A read of the registry that changes its rows also reconciles the desktops with it (3.2).
 It carries no lists of anything inside an app.
 
 ### 3.2 Desktops
@@ -58,6 +59,14 @@ The id is the slugified name and never changes; two names that shorten to one id
 Every desktop is shared: a window holds a resource (a terminal, a browser) for everyone, so a desktop that only one person could see would still be everyone's, and there is no private mode. What keeps users out of each other's way is that each arriving user gets a desktop of their own (3.10).
 A fresh workspace, and a workspace whose state directory holds no `desktops.json`, gets one desktop named `Home` with the theme's default wallpaper and the seeded shortcuts of 3.6.
 It is created on the first read of the desktops after the inventory has read the registry once, so its shortcuts are seeded from the apps that are actually registered rather than from an empty registry at boot.
+Apps register one at a time as their programs finish starting, so an app may register after `Home` was seeded; its default shortcut is added then rather than waited for.
+The shell records every app whose default shortcut it has offered in `default_shortcuts_offered.json`: the apps each new desktop was seeded with, and every app added as follows.
+On every read of the desktops and after every change of the registry's rows, each registered, non-internal app whose `default_shortcut` names a launch path it offers, and which is not recorded, is added to every desktop and then recorded.
+A desktop that already holds a shortcut of that `(app, launch)` gets nothing.
+A desktop whose shortcuts are exactly the seed of the recorded apps that are registered is seeded again from every registered app, so it reads in launcher order however late each app registered.
+Any other desktop gets the shortcut at the first free cell in reading order, and nothing on it moves.
+A recorded app is never added again: a shortcut the user removed stays removed when its app registers again, on every boot and across restarts, and an app that deregisters changes nothing.
+A state directory holding `desktops.json` but no record counts every app with a shortcut on any desktop as recorded.
 Deleting the last desktop is refused with `409`.
 Deleting a desktop closes its windows (their pages are destroyed in every client) and removes every client's layout of it; clients on it switch to the first remaining desktop.
 
@@ -102,7 +111,8 @@ A shortcut is `{target, mode, cell}` where `target` is `{kind: "launch", app, la
 `focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs the launch path only when there is none; `new` always runs it.
 A desktop holds at most one shortcut per `(app, launch)`.
 
-A new desktop is seeded from every registered, non-internal app's `default_shortcut`, in registry order, laid out in reading order from the grid origin.
+A new desktop is seeded from every registered, non-internal app's `default_shortcut`, in launcher order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
+An app that registers after a desktop was made is added to it as 3.2 says.
 The grid is `columns = max(1, floor((width - inset) / cell_width))` by `rows = max(1, floor((height - inset) / cell_height))` over the backdrop, with the cell size and inset from the theme (contracts.md section 10).
 Rendering places every shortcut that has a free cell inside the grid at its cell, then every other shortcut at the nearest free cell to its clamped cell (Euclidean distance in cell units, ties by column then row); no two shortcuts ever draw in one cell, and nothing is written.
 Dragging a shortcut writes its cell; dropping it on an occupied cell moves the occupant to the nearest free cell (that occupant's cell is written too).
@@ -271,7 +281,7 @@ Window cycling and keyboard move and resize are deferred.
 
 ### 5.1 State files
 
-Under `data/.state/system_interface/`: `desktops.json`, `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
+Under `data/.state/system_interface/`: `desktops.json`, `default_shortcuts_offered.json` (the apps whose default shortcut the shell has offered, 3.2), `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
 Under `data/.apps/system_interface/`: `wallpapers/`.
 The old `projects.json`, `layouts/`, and `migrated.json` are ignored and left in place; a `CLEANUP:` note names them for deletion once migration lands.
 The boot-time `migrate_workspace_layouts.py` is removed from bootstrap and the apply, and deleted.
