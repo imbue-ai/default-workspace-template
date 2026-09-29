@@ -311,7 +311,7 @@ def restart_idle_agents(
 
     Each chat is read again just before its restart, since the restarts run one after another
     and a chat that was idle in the first read may have started a turn since; one that has is
-    left running instead. The report is also written to ``AGENT_RESTARTS_REPORT_REL``. Raises
+    left running instead, and one no longer listed is skipped. The report is also written to ``AGENT_RESTARTS_REPORT_REL``. Raises
     ``ChatListUnavailableError`` when there is no chat list to act on.
     """
     report_path = repo_root / AGENT_RESTARTS_REPORT_REL
@@ -326,8 +326,17 @@ def restart_idle_agents(
         "failed": [],
     }
     for planned in plan.to_restart:
-        # A chat the list cannot show right now keeps its plan; the interrupt route decides.
-        current = read_listed_chat(repo_root, planned.chat_id, http) or planned
+        listed_now = read_chat_list_once(repo_root, http)
+        if listed_now is None:
+            # The chat app cannot give its list right now: the plan stands, and the interrupt
+            # route decides.
+            current = planned
+        else:
+            found = _find_chat(listed_now, planned.chat_id)
+            if found is None:
+                # Deleted since the first read: there is nothing left to restart.
+                continue
+            current = found
         recheck = plan_agent_restarts(
             [current], own_chat_id, chats_running_background_commands(process_argvs())
         )
@@ -467,10 +476,8 @@ def wait_for_idle_chat(
         sleep(poll_seconds)
 
 
-def read_listed_chat(
-    repo_root: Path, chat_id: str, http: HttpClient
-) -> ListedChat | None:
-    """One read of ``chat_id`` from the chat list; None when the chat app cannot show it now."""
+def read_chat_list_once(repo_root: Path, http: HttpClient) -> list[ListedChat] | None:
+    """One read of the chat list; None when the chat app cannot give it now."""
     base_url = registry_app_url(repo_root, CHAT_APP_NAME)
     if base_url is None:
         return None
@@ -480,10 +487,21 @@ def read_listed_chat(
     if page is None or page.status != 200:
         return None
     try:
-        chats = parse_chat_list(json.loads(page.body))
+        return parse_chat_list(json.loads(page.body))
     except ValueError:
         return None
+
+
+def _find_chat(chats: Iterable[ListedChat], chat_id: str) -> ListedChat | None:
     return next((chat for chat in chats if chat.chat_id == chat_id), None)
+
+
+def read_listed_chat(
+    repo_root: Path, chat_id: str, http: HttpClient
+) -> ListedChat | None:
+    """One read of ``chat_id`` from the chat list; None when the chat app cannot show it now."""
+    chats = read_chat_list_once(repo_root, http)
+    return None if chats is None else _find_chat(chats, chat_id)
 
 
 def restart_self_when_idle(

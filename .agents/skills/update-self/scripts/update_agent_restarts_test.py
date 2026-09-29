@@ -200,19 +200,36 @@ def test_only_idle_chats_other_than_the_pass_and_its_worker_are_restarted(
     )
 
 
-def test_a_chat_that_starts_a_turn_before_its_restart_is_left_running(
+@pytest.mark.parametrize(
+    "chats_by_then, expected_left_running",
+    [
+        (
+            [_chat("agent-idle", "Trip planning", "working", "RUNNING")],
+            [
+                {
+                    "chat_id": "agent-idle",
+                    "title": "Trip planning",
+                    "busy_with": "working",
+                }
+            ],
+        ),
+        ([], []),
+    ],
+    ids=["started-a-turn", "deleted"],
+)
+def test_a_chat_that_changed_before_its_restart_is_not_restarted(
     fake_chat_list: Any,
+    chats_by_then: list[dict[str, Any]],
+    expected_left_running: list[dict[str, str]],
 ) -> None:
     """The restarts run one after another, so a chat idle in the first read of the list may be
-    mid-turn by the time its restart comes up; it is read again first, and left alone."""
+    mid-turn, or gone, by the time its restart comes up; it is read again first, and a busy
+    one is left running while a deleted one is dropped."""
     workspace = fake_chat_list.workspace
     record = _install_message_chat_recorder(workspace)
     fake_chat_list.answers = [
         (200, {"chats": [_chat("agent-idle", "Trip planning", "idle", "WAITING")]}),
-        (
-            200,
-            {"chats": [_chat("agent-idle", "Trip planning", "working", "RUNNING")]},
-        ),
+        (200, {"chats": chats_by_then}),
     ]
 
     report = update_agent_restarts.restart_idle_agents(
@@ -226,9 +243,7 @@ def test_a_chat_that_starts_a_turn_before_its_restart_is_left_running(
     assert _calls(record) == []
     assert report == {
         "restarted": [],
-        "left_running": [
-            {"chat_id": "agent-idle", "title": "Trip planning", "busy_with": "working"}
-        ],
+        "left_running": expected_left_running,
         "failed": [],
     }
 
