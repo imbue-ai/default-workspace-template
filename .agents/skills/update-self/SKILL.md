@@ -437,8 +437,8 @@ carry on into §5 and get their verdict there.
 ### 5a. Audit the report
 
 The worker contract (the staged copy's `references/update-self-worker.md`,
-§4a, §4b, §4c and §6) makes the impact analysis, the validation scope and the
-review gates rule-driven and the report evidence-bearing. It must show which
+§4a, §4b, §4c, §4d and §6) makes the impact analysis, the validation scope, the
+review gates and the agent-restart verdict rule-driven and the report evidence-bearing. It must show which
 branch of the 4a and 4b rules applied (the footprint evidence, and each
 validation item's condition and whether it held), and either show the
 clean-pull skip's three conditions held (`has_merge_work: false`, no impacted
@@ -447,7 +447,8 @@ rollback reverts as git made them or with a `both added` file taken at the
 target's version, shown by an empty diff against the landed merge) or carry
 the gate run's own evidence (fix commits kept or reverted, or a clean run,
 plus architecture-gate verdicts); a side-picked conflict must carry the
-discarded-side accounting. A report missing any of this -- including one that
+discarded-side accounting; and it must carry the §4d **Agent restarts**
+verdict with the changed files that decided it. A report missing any of this -- including one that
 openly discloses skipping a gate outside the rule -- goes back to the worker
 via the Step 4 cycle (say what is missing, consume the report into
 `data/.tasks/update-self/reports/consumed/`, re-arm). Do not run the apply
@@ -569,6 +570,25 @@ resumes), and how to honor a rollback request are in
   that outlives the window, an API another agent drives with no window),
   add `stop_when_no_windows = false` with a comment saying why, so the next
   pass does not ask again. Name each decision in the results message.
+- **Agent restarts** -- when the report's §4d verdict is `needed` (a harness
+  upgrade, new pi extensions, other config a harness loads once at start),
+  every running chat and background agent is still on what it loaded before
+  the apply. Restart the idle ones now; a restart keeps each conversation.
+  This chat and the update's worker are left out (this chat restarts last, in
+  §6):
+
+  ```bash
+  python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+      restart-agents
+  ```
+
+  Its JSON lists what it `restarted`, what it `left_running` because it was
+  mid-turn, waiting on a dialog, or mid-handoff (with the chat's status), and
+  what `failed`. Nothing is interrupted: the results message names each chat
+  left running or failed, says it is still on the previous version, and asks
+  the user whether to interrupt and restart it (`python3
+  system/scripts/message_chat.py <chat-id> --interrupt` on a yes). A non-zero
+  exit with no JSON means no chat was restarted; say so in the same place.
 
 ### 5d. Escalate the built-in defects this pass found
 
@@ -653,6 +673,21 @@ close` each `editing critical app <name>` lease 5b took, then the
 finished."`), then `tk close <ticket-id> "Updated to <ref> -- worker branch
 merged and applied."`, adding the `archive/update-self-<timestamp>` name when
 Step 3b set a previous branch aside.
+
+**When §5c restarted agents, restart this chat too, as your last command**,
+after everything above and before the results message. It detaches a helper
+that waits for this turn to end, restarts this chat, and sends it a note asking
+you to confirm the restart to the user (and to repeat the offer for any chat
+left running). `--reason` is the report's one-line **Agent restarts** summary of
+what the restart picks up:
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    restart-self --reason "<what the restart picks up, one plain line>"
+```
+
+Then end the turn with the results message, which says this chat restarts
+right after it. Do nothing after the turn ends: the note starts your next turn.
 
 ## To push local improvements back upstream
 

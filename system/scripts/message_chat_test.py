@@ -660,7 +660,8 @@ def test_a_chat_app_without_the_create_route_hands_the_create_to_mngr(
     "argv, complaint",
     [
         (["--create", _CHAT_ID, "-m", "x"], "takes no chat id"),
-        (["--create", "--browser-fleet", "-m", "x"], "does not apply to --create"),
+        (["--create", "--browser-fleet", "-m", "x"], "do not apply to --create"),
+        (["--create", "--interrupt", "-m", "x"], "do not apply to --create"),
         ([_CHAT_ID, "--name", "n", "-m", "x"], "apply only with --create"),
         ([_CHAT_ID, "--label", "a=b", "-m", "x"], "apply only with --create"),
         (["--create", "--label", "novalue", "-m", "x"], "takes NAME=VALUE"),
@@ -681,3 +682,117 @@ def test_the_two_modes_refuse_each_others_arguments(
     assert raised.value.code == 2
     assert complaint in capsys.readouterr().err
     assert fake_chat_app.posted == []
+
+
+class _Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+# What ``mngr start --format jsonl`` ends with when it matched and restarted the agent.
+_START_RESULT_LINE = (
+    json.dumps(
+        {
+            "event": "start_result",
+            "started_agents": ["some-chat"],
+            "count": 1,
+            "was_host_started": False,
+        }
+    )
+    + "\n"
+)
+
+
+def test_an_interrupt_restarts_the_chat_then_sends_the_message(
+    fake_chat_app: Any, fake_mngr: Path
+) -> None:
+    rc, _ = _run("--interrupt", "-m", "you are back")
+
+    assert rc == message_chat.EXIT_DELIVERED
+    [(interrupt_path, _), (message_path, message_body)] = fake_chat_app.posted
+    assert interrupt_path == f"/api/chats/{_CHAT_ID}/interrupt"
+    assert message_path == f"/api/chats/{_CHAT_ID}/message"
+    assert message_body["message"] == "you are back"
+    assert _mngr_calls(fake_mngr) == []
+
+
+def test_an_interrupt_with_no_message_only_restarts_the_chat(
+    fake_chat_app: Any, fake_mngr: Path
+) -> None:
+    rc = message_chat.main(
+        [_CHAT_ID, "--interrupt"],
+        stdin=_Terminal(),
+        clock=_FakeClock(0.0),
+        sleep=lambda _: None,
+    )
+
+    assert rc == message_chat.EXIT_DELIVERED
+    assert [path for path, _body in fake_chat_app.posted] == [
+        f"/api/chats/{_CHAT_ID}/interrupt"
+    ]
+
+
+def test_a_refused_interrupt_sends_nothing_and_takes_no_backoff(
+    fake_chat_app: Any, fake_mngr: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A 409 is the chat mid-handoff: restarting its agent behind the chat app's back is the
+    thing the refusal exists to prevent."""
+    fake_chat_app.answers = [(409, {"detail": "the chat is converging"})]
+
+    rc, _ = _run("--interrupt", "-m", "you are back")
+
+    assert rc == message_chat.EXIT_FAILED
+    assert "the chat is converging" in capsys.readouterr().err
+    assert len(fake_chat_app.posted) == 1
+    assert _mngr_calls(fake_mngr) == []
+
+
+def test_an_unreachable_chat_app_hands_the_restart_and_the_message_to_mngr(
+    fake_mngr: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = tmp_path / "apps.toml"
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
+    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    monkeypatch.setenv("FAKE_MNGR_STDOUT", _START_RESULT_LINE + _MESSAGE_SENT_LINE)
+
+    rc, _ = _run("--interrupt", "-m", "you are back")
+
+    assert rc == message_chat.EXIT_DELIVERED
+    start_call, message_call = _mngr_calls(fake_mngr)
+    assert start_call["argv"][:4] == ["start", _CHAT_ID, "--restart", "--no-resume"]
+    assert message_call["argv"][:3] == ["message", _CHAT_ID, "--start"]
+    assert message_call["text"] == "you are back"
+    for call in (start_call, message_call):
+        assert_mngr_argv_valid(["mngr", *call["argv"]])
+
+
+@pytest.mark.parametrize(
+    "chat_app_reachable, expected_rc",
+    [(True, message_chat.EXIT_CHAT_GONE), (False, message_chat.EXIT_FAILED)],
+)
+def test_a_backoff_restart_that_matched_no_agent_sends_nothing(
+    fake_chat_app: Any,
+    fake_mngr: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    chat_app_reachable: bool,
+    expected_rc: int,
+) -> None:
+    """mngr exits 0 for a restart that matched nothing; that is a gone chat only when the chat
+    app, too, said it does not know it."""
+    fake_chat_app.answers = [(404, {"detail": "Chat 'x' not found"})]
+    if not chat_app_reachable:
+        registry = tmp_path / "unreachable-apps.toml"
+        registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
+        monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+
+    rc, _ = _run(
+        "--interrupt",
+        "-m",
+        "you are back",
+        clock_step=message_chat.UNKNOWN_RETRY_WINDOW_SECONDS,
+    )
+
+    assert rc == expected_rc
+    [start_call] = _mngr_calls(fake_mngr)
+    assert start_call["argv"][0] == "start"

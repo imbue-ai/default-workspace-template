@@ -7,6 +7,7 @@ Usage, from the repo root (every skill's cwd)::
     python3 system/scripts/message_chat.py <chat-id> --message-file path/to/task.md
     some-command | python3 system/scripts/message_chat.py <chat-id>
     python3 system/scripts/message_chat.py <chat-id> --browser-fleet -m "a browser-fleet nudge"
+    python3 system/scripts/message_chat.py <chat-id> --interrupt [-m "text to send once it is back"]
     python3 system/scripts/message_chat.py --create --name "assist-1a2b3c" --label auto_open=true -m "/assist ..."
 
 This is the in-workspace replacement for ``mngr message <agent>``. A chat is
@@ -51,6 +52,13 @@ The connect timeout is short so an unreachable chat app is detected fast.
 chat transcript renders as a collapsed "Browser fleet" chip instead of a user
 bubble; the browser app's wake-up nudges use it. The tag is pinned against the
 chat app's copy by a test there.
+
+``--interrupt`` restarts the chat's agent first, through the chat app's interrupt route
+(what the chat's stop button does: the process is restarted and resumes its own
+conversation, and any turn in progress ends), then sends the message, if one was given,
+the same way as any other. A refusal is final there too; only when the chat app cannot
+take the restart does ``mngr start --restart --no-resume`` do it, and ``mngr message``
+then carries the text. A restart with no message exits 0 once the agent is back.
 
 ``--create`` makes a new chat instead of messaging one, through the chat app's
 create route, so the chat is what a launcher-started chat would be: the app mints its id,
@@ -109,6 +117,9 @@ EXIT_CHAT_GONE = 8
 # it did not (or reached behind a dialog), with the reason.
 MESSAGE_SENT_EVENT = "message_sent"
 MESSAGE_ERROR_EVENT = "message_error"
+# The event ``mngr start --format jsonl`` ends with when it matched an agent; a start that
+# matched none exits 0 without it.
+START_RESULT_EVENT = "start_result"
 
 # The route's ``kind`` for a send that landed behind a dialog
 # (``SendFailureKind.INPUT_BLOCKED`` in mngr).
@@ -348,6 +359,22 @@ def send_through_chat_app(
     return SendResult(Outcome.REFUSED, answer.detail)
 
 
+def interrupt_through_chat_app(
+    base_url: str,
+    chat_id: str,
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> SendResult:
+    """Post to the chat app's interrupt route, which restarts the chat's agent, and report how it ended."""
+    path = f"/api/chats/{urllib.parse.quote(chat_id, safe='')}/interrupt"
+    answer = _post_until_answered(base_url, path, {}, clock, sleep)
+    if isinstance(answer, SendResult):
+        return answer
+    if 200 <= answer.status < 300:
+        return SendResult(Outcome.DELIVERED, "")
+    return SendResult(Outcome.REFUSED, answer.detail)
+
+
 def create_request_body(request: CreateRequest) -> dict[str, object]:
     """The JSON the create route is posted: the chat app's ``CreateChatRequest``, which forbids
     unknown fields, so a test there pins these keys against it."""
@@ -483,6 +510,28 @@ def send_through_mngr(chat_id: str, text: str) -> int:
     return _script_exit_for_mngr_exit(completed.returncode)
 
 
+def restart_through_mngr(chat_id: str) -> int:
+    """The backoff: ``mngr start --restart --no-resume`` on the agent, its verdict in this script's codes.
+
+    ``EXIT_CHAT_GONE`` when mngr matched no agent by that id, which it answers with exit 0
+    and no ``start_result`` event.
+    """
+    completed = _run_mngr(
+        ["mngr", "start", chat_id, "--restart", "--no-resume", "--format", "jsonl"],
+        None,
+        [],
+        capture_stdout=True,
+    )
+    if completed is None:
+        return EXIT_FAILED
+    if completed.returncode == EXIT_DELIVERED and not _jsonl_events(
+        completed.stdout, START_RESULT_EVENT
+    ):
+        print(f"`mngr start` found no agent with id {chat_id}", file=sys.stderr)
+        return EXIT_CHAT_GONE
+    return _script_exit_for_mngr_exit(completed.returncode)
+
+
 def _jsonl_events(stdout: str, event_type: str) -> list[dict[str, object]]:
     """The events of one type in an ``mngr --format jsonl`` run's stdout, skipping lines that are not JSON objects."""
     events: list[dict[str, object]] = []
@@ -545,8 +594,9 @@ def _read_message(
     if args.message_file is not None:
         return Path(args.message_file).read_text(encoding="utf-8")
     if stdin.isatty():
-        if args.create:
-            # A create needs no first message; the chat then just opens.
+        if args.create or args.interrupt:
+            # A create needs no first message (the chat then just opens), nor a restart a
+            # message to follow it.
             return ""
         parser.error(
             "no message given (use -m, --message-file, or pipe the text on stdin)"
@@ -592,6 +642,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--system", dest="browser_fleet", action="store_true", help=argparse.SUPPRESS
     )
+    parser.add_argument(
+        "--interrupt",
+        action="store_true",
+        help="Restart the chat's agent first (ending any turn in progress; its conversation carries over), "
+        "then send the message, if one is given.",
+    )
     create = parser.add_argument_group("creating a chat")
     create.add_argument(
         "--create",
@@ -617,9 +673,9 @@ def _validate_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     if args.create:
         if args.chat_id is not None:
             parser.error("--create makes a new chat; it takes no chat id")
-        if args.browser_fleet:
+        if args.browser_fleet or args.interrupt:
             parser.error(
-                "--browser-fleet marks a nudge to an existing chat; it does not apply to --create"
+                "--browser-fleet and --interrupt act on an existing chat; they do not apply to --create"
             )
         return
     if args.chat_id is None:
@@ -650,38 +706,90 @@ def main(
             labels=_parse_labels(parser, args.label),
         )
         return _create(base_url, request, clock, sleep)
+    if args.interrupt:
+        return _interrupt(base_url, args.chat_id, text, clock, sleep)
+    return _send(base_url, args.chat_id, text, clock, sleep)
+
+
+def _backoff_verdict(returncode: int, chat_app_outcome: Outcome) -> int:
+    """A backoff ``mngr`` run's status, except that a missing agent is a gone chat only when the
+    chat app said it does not know the chat either.
+
+    Only the chat app knows which chats exist; the id names the chat's first agent, which is
+    not the chat once a handoff has retired it.
+    """
+    if returncode == EXIT_CHAT_GONE and chat_app_outcome is Outcome.UNREACHABLE:
+        return EXIT_FAILED
+    return returncode
+
+
+def _send(
+    base_url: str,
+    chat_id: str,
+    text: str,
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> int:
     result = send_through_chat_app(
-        base_url, args.chat_id, text, uuid.uuid4().hex, clock, sleep
+        base_url, chat_id, text, uuid.uuid4().hex, clock, sleep
     )
     match result.outcome:
         case Outcome.DELIVERED:
-            print(f"Sent to chat {args.chat_id} through the chat app")
+            print(f"Sent to chat {chat_id} through the chat app")
             return EXIT_DELIVERED
         case Outcome.BLOCKED:
             print(
-                f"Delivered to chat {args.chat_id}, but its input is blocked: {result.detail}",
+                f"Delivered to chat {chat_id}, but its input is blocked: {result.detail}",
                 file=sys.stderr,
             )
             return EXIT_DELIVERED_BUT_BLOCKED
         case Outcome.REFUSED:
             print(
-                f"The chat app refused the message for chat {args.chat_id}: {result.detail}",
+                f"The chat app refused the message for chat {chat_id}: {result.detail}",
                 file=sys.stderr,
             )
             return EXIT_FAILED
         case Outcome.UNREACHABLE | Outcome.NOT_FOUND:
             # The chat app cannot take this message, so mngr delivers it.
             print(
-                f"Falling back to `mngr message` for chat {args.chat_id}: {result.detail}",
+                f"Falling back to `mngr message` for chat {chat_id}: {result.detail}",
                 file=sys.stderr,
             )
-            returncode = send_through_mngr(args.chat_id, text)
-            if returncode == EXIT_CHAT_GONE and result.outcome is Outcome.UNREACHABLE:
-                # Only the chat app knows which chats exist; the id names the chat's first agent,
-                # which is not the chat once a handoff has retired it. So mngr missing that agent
-                # means the chat is gone only when the chat app said it does not know it either.
-                return EXIT_FAILED
-            return returncode
+            return _backoff_verdict(send_through_mngr(chat_id, text), result.outcome)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _interrupt(
+    base_url: str,
+    chat_id: str,
+    text: str,
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> int:
+    result = interrupt_through_chat_app(base_url, chat_id, clock, sleep)
+    match result.outcome:
+        case Outcome.DELIVERED:
+            print(f"Restarted chat {chat_id} through the chat app")
+            return (
+                _send(base_url, chat_id, text, clock, sleep) if text else EXIT_DELIVERED
+            )
+        case Outcome.REFUSED | Outcome.BLOCKED:
+            print(
+                f"The chat app refused to restart chat {chat_id}: {result.detail}",
+                file=sys.stderr,
+            )
+            return EXIT_FAILED
+        case Outcome.UNREACHABLE | Outcome.NOT_FOUND:
+            # The chat app cannot take the restart, so mngr does it and carries the message too.
+            print(
+                f"Falling back to `mngr start --restart` for chat {chat_id}: {result.detail}",
+                file=sys.stderr,
+            )
+            returncode = _backoff_verdict(restart_through_mngr(chat_id), result.outcome)
+            if returncode != EXIT_DELIVERED or not text:
+                return returncode
+            return send_through_mngr(chat_id, text)
         case _ as unreachable:
             assert_never(unreachable)
 

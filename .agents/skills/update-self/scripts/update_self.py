@@ -69,6 +69,17 @@ belong in tested code rather than agent prose:
     that retries ``layout.py open`` until one takes it (or a deadline passes)
     and returns at once; the open focuses a window that is already there.
 
+``restart-agents``
+    After a successful apply of an update that changes what an agent process loads at
+    start, restart every chat that has ended its turn (not the pass's own, not its
+    worker), through the chat app, and report as JSON which were restarted, which were
+    left running because they were mid-turn, and which failed.
+
+``restart-self``
+    Detach a helper that restarts the pass's own chat once its last turn ends, then sends
+    it a note (a ``<background-task-report>``, one line to the user) asking it to confirm
+    the restart. The helper drops ``MNGR_AGENT_ID`` so the restart's stop does not kill it.
+
 ``bootstrap-skill``
     Stage the copy of the update-self skill (SKILL.md, references, scripts) that
     the rest of the pass runs, at a single fixed path, and report whether it
@@ -132,8 +143,9 @@ classes and the apply plan), ``update_apply_contract`` (every path, phase,
 verdict and record the Imbue Studio app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
 ``update_environment``, ``update_probes``, ``update_ledger``,
-``update_history_bridge``, and ``update_apply`` (the apply and recover
-orchestration). All of it is covered by ``update_self_test.py`` and
+``update_history_bridge``, ``update_agent_restarts`` (restarting agents onto what an
+update installed), and ``update_apply`` (the apply and recover orchestration). All of
+it is covered by ``update_self_test.py``, ``update_agent_restarts_test.py`` and
 ``test_update_history_bridge.py``.
 """
 
@@ -151,6 +163,15 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
+from run_in_background import own_chat_id
+from update_agent_restarts import (
+    ChatListUnavailableError,
+    compose_self_restart_note,
+    read_left_running,
+    restart_idle_agents,
+    restart_self_when_idle,
+    start_self_restart,
+)
 from update_apply import (
     apply_update,
     confirm_last,
@@ -474,6 +495,67 @@ def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
+    )
+    return 0
+
+
+def _chat_id_or_complain(args: argparse.Namespace) -> str:
+    chat_id = args.chat_id or own_chat_id(os.environ)
+    if not chat_id:
+        print(
+            "error: no chat id: pass --chat-id or run as an agent (MINDS_CHAT_ID or MNGR_AGENT_ID).",
+            file=sys.stderr,
+        )
+    return chat_id
+
+
+def _cmd_restart_agents(args: argparse.Namespace) -> int:
+    chat_id = _chat_id_or_complain(args)
+    if not chat_id:
+        return 1
+    try:
+        report = restart_idle_agents(
+            _repo_root(args).resolve(), chat_id, HttpClient(), Runner()
+        )
+    except ChatListUnavailableError as exc:
+        print(f"error: no agent was restarted: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2))
+    return 1 if report["failed"] else 0
+
+
+def _cmd_restart_self(args: argparse.Namespace) -> int:
+    chat_id = _chat_id_or_complain(args)
+    if not chat_id:
+        return 1
+    repo_root = _repo_root(args).resolve()
+    if args.wait:
+        return restart_self_when_idle(repo_root, chat_id, HttpClient(), Runner())
+    if not args.reason:
+        print(
+            "error: --reason is required: what the restart picks up, in one plain line.",
+            file=sys.stderr,
+        )
+        return 1
+    note_path = start_self_restart(
+        repo_root,
+        chat_id,
+        compose_self_restart_note(args.reason, read_left_running(repo_root)),
+        os.environ,
+        helper_argv=[
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "restart-self",
+            "--wait",
+            "--chat-id",
+            chat_id,
+            "--repo-root",
+            str(repo_root),
+        ],
+    )
+    print(
+        f"This chat restarts once this turn ends, and then receives the note at {note_path}. "
+        "Nothing needs to wait on it."
     )
     return 0
 
@@ -855,6 +937,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Run the retry loop in this process (what the detached helper does) instead of detaching one.",
     )
     surface_parser.set_defaults(func=_cmd_surface_chat_tab)
+
+    restart_agents_parser = sub.add_parser(
+        "restart-agents",
+        help="Restart every chat that has ended its turn (not this pass's own, not its worker) "
+        "onto what the update installed, and report which were restarted, left running, or failed.",
+        parents=[common],
+    )
+    restart_agents_parser.add_argument(
+        "--chat-id",
+        default="",
+        help="This pass's own chat, which is left alone (default: $MINDS_CHAT_ID, else $MNGR_AGENT_ID).",
+    )
+    restart_agents_parser.set_defaults(func=_cmd_restart_agents)
+
+    restart_self_parser = sub.add_parser(
+        "restart-self",
+        help="Restart this pass's own chat once its turn ends, then send it a note to confirm the "
+        "restart to the user.",
+        parents=[common],
+    )
+    restart_self_parser.add_argument(
+        "--chat-id",
+        default="",
+        help="The chat to restart (default: $MINDS_CHAT_ID, else $MNGR_AGENT_ID).",
+    )
+    restart_self_parser.add_argument(
+        "--reason",
+        default="",
+        help="What the restart picks up, in one plain line (e.g. 'Claude Code 2.1.300'); the note names it.",
+    )
+    restart_self_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="Wait and restart in this process (what the detached helper runs) instead of detaching one.",
+    )
+    restart_self_parser.set_defaults(func=_cmd_restart_self)
 
     bootstrap_parser = sub.add_parser(
         "bootstrap-skill",
