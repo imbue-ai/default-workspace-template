@@ -31,11 +31,11 @@ const GLYPH_PATHS = {
 
 export type GlyphName = keyof typeof GLYPH_PATHS;
 
-export function glyph(name: GlyphName, size: number): string {
+export function glyph(name: GlyphName, size: number, strokeWidth = 2): string {
   return (
     `<svg xmlns="${XMLNS}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" ` +
-    `stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
-    `${GLYPH_PATHS[name]}</svg>`
+    `stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" ` +
+    `aria-hidden="true">${GLYPH_PATHS[name]}</svg>`
   );
 }
 

@@ -67,7 +67,10 @@
      user and the window. */
   --desk-window-move: 180ms;
   --desk-window-move-ease: cubic-bezier(0.2, 0, 0, 1);
-  --desk-launcher-menu-width: 22rem;
+  --desk-launcher-field-width: 18rem;
+  /* The menu hangs off the field and lines up with its left edge, so it takes the field's width too:
+     a card wider than the thing it belongs to reads as a second thing. */
+  --desk-launcher-menu-width: var(--desk-launcher-field-width);
 }
 
 [data-compact] {

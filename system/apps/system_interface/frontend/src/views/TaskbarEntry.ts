@@ -64,10 +64,11 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           "taskbar-entry relative flex h-(--desk-taskbar-entry-size) min-w-(--desk-touch-target) max-w-48 " +
           "shrink-0 items-center gap-2 rounded-md border px-2 text-(length:--font-size-body) " +
           "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-accent " +
-          (entry.isFocused
-            ? "border-default bg-surface text-primary shadow-raised "
-            : "border-transparent hover:bg-fill-hover ") +
-          (isDimmed ? "text-faint " : entry.isFocused ? "" : "text-secondary ") +
+          (entry.isFocused ? "border-default bg-surface shadow-raised " : "border-transparent hover:bg-fill-hover ") +
+          // A window's name is a name whichever window you are in: the chip's surface and its
+          // elevation say which one is focused, and the text stays out of it. Faint is a different
+          // thing -- the window is out of sight, not merely not in front.
+          (isDimmed ? "text-faint " : "text-primary ") +
           (isMenuOpen ? "bg-fill-active " : ""),
         // The peek stands in the bubble's place and says more than it does, so the two never show at
         // once. The pause is the shared one again: the entry names itself now, so the bubble is an

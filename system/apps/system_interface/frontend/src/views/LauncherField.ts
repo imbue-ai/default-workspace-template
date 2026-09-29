@@ -15,9 +15,15 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { isMessageText } from "../reducers/launcherRows";
+import { glyph } from "./glyphs";
 
-export const LAUNCHER_PLACEHOLDER = "Start app or send message...";
+export const LAUNCHER_PLACEHOLDER = "Start an app or send a message";
 const FIELD_GLYPH_SIZE = 14;
+/** The field's own emblem rather than a control beside it: bigger than the glyphs it sits among and
+ *  drawn with a heavier stroke, so it reads at a glance as what the box is for. A plus rather than a
+ *  magnifier -- the field starts things at least as often as it finds them. */
+const FIELD_MARK_SIZE = 18;
+const FIELD_MARK_STROKE = 2.5;
 /** Past this many lines the field scrolls rather than growing. */
 export const MAX_FIELD_LINES = 8;
 
@@ -89,7 +95,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
             "data-launcher-field": "",
             onclick: onOpen,
           },
-          m.trust(icon("search", { size: FIELD_GLYPH_SIZE })),
+          m.trust(glyph("plus", FIELD_MARK_SIZE, FIELD_MARK_STROKE)),
         );
       }
       const field = m(
@@ -105,7 +111,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
           m(
             "span",
             { class: "flex h-8.5 shrink-0 items-center text-faint" },
-            m.trust(icon("search", { size: FIELD_GLYPH_SIZE })),
+            m.trust(glyph("plus", FIELD_MARK_SIZE, FIELD_MARK_STROKE)),
           ),
           m("textarea", {
             rows: 1,
@@ -113,8 +119,9 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
             placeholder: LAUNCHER_PLACEHOLDER,
             value: query,
             class:
+              // Body text rather than a row's: this is a line being written, not an entry in a list.
               "launcher-input min-w-0 flex-1 resize-none overflow-y-auto bg-transparent py-1.75 leading-5 " +
-              "text-(length:--font-size-row) text-primary outline-none placeholder:text-faint",
+              "text-(length:--font-size-body) text-primary outline-none placeholder:text-faint",
             oncreate: (created: m.VnodeDOM) => {
               fit(created.dom as HTMLTextAreaElement, vnode.attrs);
               if (isCompact) (created.dom as HTMLTextAreaElement).focus();
@@ -198,7 +205,9 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
         {
           class:
             "launcher-field-slot h-9 " +
-            (isCompact ? "absolute inset-x-2 z-(--z-content)" : "relative w-72 max-w-[40vw] shrink-0"),
+            (isCompact
+              ? "absolute inset-x-2 z-(--z-content)"
+              : "relative w-(--desk-launcher-field-width) max-w-[40vw] shrink-0"),
         },
         field,
       );
