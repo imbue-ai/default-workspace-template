@@ -1312,7 +1312,7 @@ def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupa
     cell and moves the occupant to the nearest free one, so no two shortcuts share a cell."""
     with _running_e2e_server(tmp_path, is_second_app_offered=True) as server:
         _land(page, server)
-        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0), _SECOND_SHORTCUT_KEY: (0, 1)}
+        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0), _SECOND_SHORTCUT_KEY: (1, 0)}
         backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
 
         docs = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')

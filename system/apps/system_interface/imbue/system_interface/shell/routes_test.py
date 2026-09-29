@@ -698,7 +698,7 @@ def test_the_default_desktop_is_seeded_from_the_registry_on_the_first_read(clien
         {
             "target": {"kind": "launch", "app": "files", "launch": "open"},
             "mode": "focus",
-            "cell": {"column": 0, "row": 1},
+            "cell": {"column": 1, "row": 0},
         },
     ]
 
