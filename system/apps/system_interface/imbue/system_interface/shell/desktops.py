@@ -321,9 +321,7 @@ class DesktopStore(MutableModel):
                 return list(document.desktops)
             seeded = DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=(default_desktop(seed_shortcuts()),))
             self._write_unlocked(seeded)
-            self._record_offered_unlocked(
-                frozenset(shortcut.target.app for shortcut in seeded.desktops[0].shortcuts), ()
-            )
+            self._record_offered_unlocked(apps_with_a_shortcut_on(seeded.desktops), ())
             logger.info(
                 "Created the default desktop {!r} with {} shortcut(s)",
                 DEFAULT_DESKTOP_NAME,
@@ -377,18 +375,16 @@ class DesktopStore(MutableModel):
     ) -> Desktop:
         """Register a new desktop with its seeded shortcuts (whose apps are recorded as offered) and pinned windows and
         no wallpaper; two names that shorten to one id conflict."""
-        return self.add_desktop(
-            Desktop(
-                id=slugify_desktop_name(name),
-                name=validated_desktop_name(name),
-                color=validated_desktop_color(color),
-                glyph=validated_desktop_glyph(glyph),
-                wallpaper=None,
-                shortcuts=tuple(shortcuts),
-                windows=tuple(windows),
-            ),
-            frozenset(shortcut.target.app for shortcut in shortcuts),
+        desktop = Desktop(
+            id=slugify_desktop_name(name),
+            name=validated_desktop_name(name),
+            color=validated_desktop_color(color),
+            glyph=validated_desktop_glyph(glyph),
+            wallpaper=None,
+            shortcuts=tuple(shortcuts),
+            windows=tuple(windows),
         )
+        return self.add_desktop(desktop, apps_with_a_shortcut_on((desktop,)))
 
     def add_desktop(self, desktop: Desktop, default_shortcut_apps: AbstractSet[AppName]) -> Desktop:
         """Append a fully formed desktop (a created or a seeded one), recording as offered the apps whose default
