@@ -5370,6 +5370,38 @@ def test_a_spare_whose_create_a_restart_cut_short_is_destroyed_and_replaced(
         manager.stop()
 
 
+def test_a_spare_left_to_destroy_by_a_sweep_that_could_not_record_its_new_spare_is_destroyed_by_the_next(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    cut_short = SpareChatAgent(
+        chat_id=ChatId(f"agent-{uuid4().hex}"),
+        display_name="Chat 1",
+        terms=SpareChatTerms(account_id=read_index().accounts[0].id, project_label="", is_fast=True),
+        phase=SpareChatPhase.CREATING,
+    )
+    SpareChatStore(path=tmp_path / "spare_chat.json").write((cut_short,))
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    unwritable = tmp_path / "spare_chat.json.tmp"
+    try:
+        unwritable.mkdir()
+        with pytest.raises(OSError):
+            manager.ensure_spare_chat()
+        assert _mngr_calls(argv_log, "destroy") == []
+        unwritable.rmdir()
+
+        manager.ensure_spare_chat()
+
+        wait_until_true(
+            lambda: _mngr_calls(argv_log, "destroy") == [["destroy", cut_short.chat_id, "--force"]]
+            and cut_short.chat_id not in [spare.chat_id for spare in manager._spares],
+            timeout_seconds=15.0,
+            what="the cut-short spare destroyed by the next sweep",
+        )
+    finally:
+        manager.stop()
+
+
 def test_a_spare_whose_destroy_cannot_run_is_kept_for_a_later_sweep(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

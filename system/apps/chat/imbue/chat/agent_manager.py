@@ -3300,7 +3300,6 @@ class AgentManager:
                 for spare in self._spares
                 if spare.phase is SpareChatPhase.DISCARDING and spare.chat_id not in self._spare_ids_being_discarded
             ]
-            self._spare_ids_being_discarded.update(discarded_ids)
             pooled = pooled_spares(self._spares)
             is_one_being_created = any(spare.phase is SpareChatPhase.CREATING for spare in pooled)
             is_one_ready = any(spare.phase is SpareChatPhase.READY for spare in pooled)
@@ -3321,6 +3320,8 @@ class AgentManager:
                 )
                 # On record before the create, so the observe stream never lists it as a chat.
                 self._set_spares_locked((*self._spares, new_spare))
+            # Marked only once nothing above can raise, so a failed write leaves them to the next sweep.
+            self._spare_ids_being_discarded.update(discarded_ids)
         for discarded_id in discarded_ids:
             self._creation_cg.start_new_thread(
                 target=self._discard_spare,
