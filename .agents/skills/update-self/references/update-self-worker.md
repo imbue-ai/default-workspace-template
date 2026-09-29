@@ -179,7 +179,7 @@ workspace itself changed since it forked from the target's line, and the
 update range is what the update changes in the tree the live workspace runs.
 Both are anchored on this pass's merge commit rather than on `HEAD`, so a fix
 you commit on top of it, and any rerun, reads the same two sides; the command
-shifts them for a retry after a rolled-back apply, and refuses when the latest
+shifts them for a pass after rolled-back updates, and refuses when the latest
 merge commit it finds does not merge `$TARGET_REF` (an earlier update's merge
 carries the same subject). `--package app-manifest` installs the library from
 the merged tree, which a workspace from before the app model has none of (the
