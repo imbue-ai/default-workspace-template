@@ -52,8 +52,9 @@ def _dockerfile_copy_sources() -> list[str]:
     for line in _DOCKERFILE_PATH.read_text().splitlines():
         if not line.startswith("COPY "):
             continue
-        # Every argument but the last is a source.
-        sources.extend(line.split()[1:-1])
+        # After the options (--chown=..., --from=..., --link), every argument but the last is a source.
+        arguments = [token for token in line.split()[1:] if not token.startswith("--")]
+        sources.extend(arguments[:-1])
     return sources
 
 
