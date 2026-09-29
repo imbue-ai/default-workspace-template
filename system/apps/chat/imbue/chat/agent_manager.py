@@ -3282,7 +3282,9 @@ class AgentManager:
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
             return
-        _loguru_logger.warning("Could not start spare agent {}: {}", agent_id, failure_notice(failure, output_tail.text()))
+        _loguru_logger.warning(
+            "Could not start spare agent {}: {}", agent_id, failure_notice(failure, output_tail.text())
+        )
         if not self._shutdown_event.is_set():
             with self._lock:
                 self._spare_ids_being_discarded.add(spare.chat_id)
