@@ -72,10 +72,10 @@ changes nothing until the workspace is someday recreated) is one line at most,
 or nothing; a change to something they built, or a decision they might have
 made differently, always makes the cut.
 
-Detail in the informational sections (2-6); plain language at the decision
-points -- the headline, any caveat that needs the user's action, and the
-closing offer. Those carry no jargon: never "merge", "land" or "fast-forward"
-there. Frame the close around *what changed in their workspace and how to undo
+Detail in the informational sections (2-5); plain language at the decision
+points -- the headline, the question about chats still on the previous version
+(6), any caveat that needs the user's action, and the closing offer. Those
+carry no jargon: never "merge", "land" or "fast-forward" there. Frame the close around *what changed in their workspace and how to undo
 it*: "Your workspace is updated -- if anything looks or behaves differently
 than you'd like, tell me and I can put it back."
 
