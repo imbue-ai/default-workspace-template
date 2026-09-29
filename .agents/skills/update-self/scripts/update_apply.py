@@ -372,11 +372,10 @@ def _update_rollbacks_in(
 
 class UpdateRollbackHistory(NamedTuple):
     """The rollbacks of updates in a range of history, undone or not, and the commits
-    there that revert one (what the update-self worker's first step commits), each
-    with the rollbacks it reverts."""
+    there that revert one (what the update-self worker's first step commits)."""
 
     rollbacks: frozenset[str]
-    reverts: Mapping[str, frozenset[str]]
+    reverts: frozenset[str]
 
 
 def update_rollback_history(
@@ -389,11 +388,11 @@ def update_rollback_history(
     rollbacks = _update_rollbacks_in(newest_first, repo_root, runner)
     return UpdateRollbackHistory(
         rollbacks=frozenset(rollbacks),
-        reverts={
-            sha: reverted
+        reverts=frozenset(
+            sha
             for sha, _subject, _rolled_back_update, body in newest_first
-            if (reverted := frozenset(_REVERTS_COMMIT.findall(body)) & rollbacks)
-        },
+            if any(reverted in rollbacks for reverted in _REVERTS_COMMIT.findall(body))
+        ),
     )
 
 
