@@ -102,6 +102,12 @@ chrome still owns is the shadow (`--desk-icon-shadow`) and the hover, which is w
 keeps the matching rounding even though it paints nothing.
 
 That is also why an app which registered **no** icon is given a tile rather than a line
-glyph. `appMonogramMarkup` draws its initial on the palette's most neutral pair (`#CFC7B3`
-under `#492222`), to these same rules -- with nothing painted behind it, a transparent
-letter would be left floating on the wallpaper.
+glyph. `appMonogramMarkup` draws its initial on `#F5D6A0` under `#492222`, to these same
+rules -- with nothing painted behind it, a transparent letter would be left floating on the
+wallpaper, and a tile in the wallpaper's own colour would be no better.
+
+An icon that brings no tile of its own gets the same one. A glyph drawn before these rules
+has no filled shape and takes `currentColor` from the text beside it, which is nothing to
+take once the surface paints nothing: `sanitizeIconMarkup` puts it on the tile and inks it,
+scaled into the centred 32 box rather than over the whole 48, since such a glyph was drawn
+to fill its own frame edge to edge. An icon with a filled shape is left exactly as it is.

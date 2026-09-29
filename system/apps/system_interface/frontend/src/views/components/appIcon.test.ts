@@ -46,15 +46,19 @@ describe("sanitizeIconMarkup", () => {
   });
 
   it("draws at the size the caller asked for, on the icon's own grid", () => {
-    const root = parsed(sanitizeIconMarkup('<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="8"/></svg>', 14)!);
+    const root = parsed(
+      sanitizeIconMarkup('<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="8" fill="#e11d48"/></svg>', 14)!,
+    );
     expect(root.getAttribute("width")).toBe("14");
     expect(root.getAttribute("height")).toBe("14");
     expect(root.getAttribute("viewBox")).toBe("0 0 32 32");
   });
 
   it("scales an icon that gave a size instead of a viewBox", () => {
-    const root = parsed(sanitizeIconMarkup('<svg width="48" height="48"><circle cx="24" cy="24" r="8"/></svg>', 16)!);
-    expect(root.getAttribute("viewBox")).toBe("0 0 48 48");
+    const root = parsed(
+      sanitizeIconMarkup('<svg width="60" height="60"><circle cx="30" cy="30" r="8" fill="#e11d48"/></svg>', 16)!,
+    );
+    expect(root.getAttribute("viewBox")).toBe("0 0 60 60");
     expect(root.getAttribute("width")).toBe("16");
   });
 
@@ -68,9 +72,39 @@ describe("sanitizeIconMarkup", () => {
     expect(root.getAttribute("focusable")).toBe("false");
   });
 
-  it("lets a monochrome icon inherit currentColor", () => {
+  it("puts a glyph that paints nothing on the shell's tile, inside the centred 32 box", () => {
+    // A line glyph drawn before `docs/system/app-icons.md` brings no tile and took its colour from
+    // the text beside it. Nothing is painted behind an icon any more, so the shell draws the tile
+    // the glyph is missing rather than leaving a bare stroke on the wallpaper -- and draws it in
+    // the same 32 box a drawn icon's mark sits in, since these glyphs fill their own frame.
+    const root = parsed(
+      sanitizeIconMarkup(
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M0 0h4v4H0z"/></svg>',
+        16,
+      )!,
+    );
+    expect([root.getAttribute("viewBox"), root.getAttribute("width")]).toEqual(["0 0 48 48", "16"]);
+    const tile = root.querySelector("rect");
+    expect([tile?.getAttribute("width"), tile?.getAttribute("rx"), tile?.getAttribute("fill")]).toEqual([
+      "48",
+      "15.36",
+      "#F5D6A0",
+    ]);
+    const glyph = root.querySelector("svg");
+    expect([
+      glyph?.getAttribute("x"),
+      glyph?.getAttribute("y"),
+      glyph?.getAttribute("width"),
+      glyph?.getAttribute("height"),
+      glyph?.getAttribute("viewBox"),
+    ]).toEqual(["8", "8", "32", "32", "0 0 24 24"]);
+    expect(glyph?.getAttribute("stroke")).toBe("#492222");
+  });
+
+  it("inks a glyph that named no colour at all in the tile's ink too", () => {
     const root = parsed(sanitizeIconMarkup('<svg viewBox="0 0 24 24"><path d="M0 0h4v4H0z"/></svg>', 16)!);
-    expect(root.getAttribute("fill")).toBe("currentColor");
+    expect(root.querySelector("rect")?.getAttribute("fill")).toBe("#F5D6A0");
+    expect(root.querySelector("svg")?.getAttribute("fill")).toBe("#492222");
   });
 
   it("leaves an icon that paints itself alone", () => {
@@ -336,7 +370,7 @@ describe("appIconMarkupByName", () => {
     const tile = root.querySelector("rect");
     expect(tile?.getAttribute("width")).toBe("48");
     expect(tile?.getAttribute("rx")).toBe("15.36");
-    expect(tile?.getAttribute("fill")).toBe("#CFC7B3");
+    expect(tile?.getAttribute("fill")).toBe("#F5D6A0");
     const letter = root.querySelector("text");
     expect(letter?.getAttribute("fill")).toBe("#492222");
     expect(letter?.getAttribute("stroke")).toBeNull();
