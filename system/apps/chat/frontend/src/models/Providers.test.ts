@@ -73,13 +73,16 @@ describe("loadAccountsWithRetry", () => {
 });
 
 describe("whenAccountsReadyToChoose", () => {
-  beforeEach(() => {
+  // A fresh module per test: the first account read it waits for is module state.
+  let providers: typeof import("./Providers");
+
+  beforeEach(async () => {
     mockRequest.mockReset();
+    vi.resetModules();
+    providers = await import("./Providers");
   });
 
   it("settles only once the account list has been read, so a new chat never decides on the empty list", async () => {
-    vi.resetModules();
-    const providers = await import("./Providers");
     let answer: (body: typeof ACCOUNTS_BODY) => void = () => {};
     mockRequest.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
     const settled = vi.fn();
@@ -99,8 +102,6 @@ describe("whenAccountsReadyToChoose", () => {
   });
 
   it("reads the list again when the first read named no account, so a sign-in on another page counts", async () => {
-    vi.resetModules();
-    const providers = await import("./Providers");
     mockRequest.mockResolvedValueOnce({ accounts: [], mru: null }).mockResolvedValueOnce(ACCOUNTS_BODY);
     await providers.loadAccounts();
     expect(providers.getSelectedAccount()).toBeNull();
@@ -112,8 +113,6 @@ describe("whenAccountsReadyToChoose", () => {
   });
 
   it("does not read the list again when it already names an account", async () => {
-    vi.resetModules();
-    const providers = await import("./Providers");
     mockRequest.mockResolvedValueOnce(ACCOUNTS_BODY);
     await providers.loadAccounts();
 
@@ -123,8 +122,6 @@ describe("whenAccountsReadyToChoose", () => {
   });
 
   it("chooses from the list it has when the second read fails", async () => {
-    vi.resetModules();
-    const providers = await import("./Providers");
     mockRequest.mockResolvedValueOnce({ accounts: [], mru: null }).mockRejectedValueOnce(new Error("offline"));
     await providers.loadAccounts();
 
