@@ -201,35 +201,61 @@ def test_only_idle_chats_other_than_the_pass_and_its_worker_are_restarted(
 
 
 @pytest.mark.parametrize(
-    "chats_by_then, expected_left_running",
+    "answer_by_then, expected_report",
     [
         (
-            [_chat("agent-idle", "Trip planning", "working", "RUNNING")],
-            [
-                {
-                    "chat_id": "agent-idle",
-                    "title": "Trip planning",
-                    "busy_with": "working",
-                }
-            ],
+            (
+                200,
+                {"chats": [_chat("agent-idle", "Trip planning", "working", "RUNNING")]},
+            ),
+            {
+                "restarted": [],
+                "left_running": [
+                    {
+                        "chat_id": "agent-idle",
+                        "title": "Trip planning",
+                        "busy_with": "working",
+                    }
+                ],
+                "failed": [],
+            },
         ),
-        ([], []),
+        (
+            (200, {"chats": []}),
+            {"restarted": [], "left_running": [], "failed": []},
+        ),
+        # With the chat app down, the restart would bypass its checks for a turn or a handoff.
+        (
+            (503, {}),
+            {
+                "restarted": [],
+                "left_running": [],
+                "failed": [
+                    {
+                        "chat_id": "agent-idle",
+                        "title": "Trip planning",
+                        "detail": "the chat app could not show its state just before the restart",
+                    }
+                ],
+            },
+        ),
     ],
-    ids=["started-a-turn", "deleted"],
+    ids=["started-a-turn", "deleted", "unreadable"],
 )
 def test_a_chat_that_changed_before_its_restart_is_not_restarted(
     fake_chat_list: Any,
-    chats_by_then: list[dict[str, Any]],
-    expected_left_running: list[dict[str, str]],
+    answer_by_then: tuple[int, dict[str, Any]],
+    expected_report: dict[str, list[dict[str, str]]],
 ) -> None:
     """The restarts run one after another, so a chat idle in the first read of the list may be
     mid-turn, or gone, by the time its restart comes up; it is read again first, and a busy
-    one is left running while a deleted one is dropped."""
+    one is left running, a deleted one is dropped, and one that cannot be read is not
+    restarted blind."""
     workspace = fake_chat_list.workspace
     record = _install_message_chat_recorder(workspace)
     fake_chat_list.answers = [
         (200, {"chats": [_chat("agent-idle", "Trip planning", "idle", "WAITING")]}),
-        (200, {"chats": chats_by_then}),
+        answer_by_then,
     ]
 
     report = update_agent_restarts.restart_idle_agents(
@@ -241,11 +267,7 @@ def test_a_chat_that_changed_before_its_restart_is_not_restarted(
     )
 
     assert _calls(record) == []
-    assert report == {
-        "restarted": [],
-        "left_running": expected_left_running,
-        "failed": [],
-    }
+    assert report == expected_report
 
 
 class _ScriptedHttp(update_runtime.HttpClient):

@@ -308,7 +308,8 @@ def restart_idle_agents(
 
     Each chat is read again just before its restart, since the restarts run one after another
     and a chat that was idle in the first read may have started a turn since; one that has is
-    left running instead, and one no longer listed is skipped. The report is also written to
+    left running instead, one no longer listed is skipped, and one that cannot be read again
+    is reported as failed rather than restarted blind. The report is also written to
     ``AGENT_RESTARTS_REPORT_REL``. Raises ``ChatListUnavailableError`` when there is no chat
     list to act on.
     """
@@ -326,15 +327,20 @@ def restart_idle_agents(
     for planned in plan.to_restart:
         listed_now = read_chat_list_once(repo_root, http)
         if listed_now is None:
-            # The chat app cannot give its list right now: the plan stands, and the interrupt
-            # route decides.
-            current = planned
-        else:
-            found = _find_chat(listed_now, planned.chat_id)
-            if found is None:
-                # Deleted since the first read: there is nothing left to restart.
-                continue
-            current = found
+            # With the chat app unreachable, message_chat.py's backoff would restart the agent
+            # through mngr, which checks neither for a turn nor for a handoff in progress.
+            report["failed"].append(
+                {
+                    "chat_id": planned.chat_id,
+                    "title": planned.title,
+                    "detail": "the chat app could not show its state just before the restart",
+                }
+            )
+            continue
+        current = _find_chat(listed_now, planned.chat_id)
+        if current is None:
+            # Deleted since the first read: there is nothing left to restart.
+            continue
         recheck = plan_agent_restarts(
             [current], own_chat_id, chats_running_background_commands(process_argvs())
         )
