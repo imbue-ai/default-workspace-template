@@ -13,9 +13,10 @@
   /* A taskbar entry's height. The launcher field's, so the field and the entries beside it read as
      one row of controls rather than two sizes of thing. */
   --desk-taskbar-entry-size: 36px;
-  /* The app's icon inside an entry, which carries its window's name beside it: the icon says which
-     app, the name says which window, and neither has to be big enough to do both. */
-  --desk-taskbar-entry-icon: 24px;
+  /* The app's icon inside an entry: the entry's own height less the 4px the chip pads itself by on
+     each side, so the icon fills the chip top to bottom rather than floating in it. One value drives
+     both, here and in touch mode, where the entry grows to the finger's target. */
+  --desk-taskbar-entry-icon: calc(var(--desk-taskbar-entry-size) - 8px);
   --desk-cell-width: 96px;
   --desk-cell-height: 112px;
   --desk-grid-inset: 16px;
