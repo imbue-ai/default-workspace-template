@@ -47,7 +47,7 @@ import {
   isProviderChooserOpen,
   loadAccountsWithRetry,
   openProviderChooser,
-  whenAccountsLoaded,
+  whenAccountsReadyToChoose,
 } from "../models/Providers";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { ChatRail } from "./ChatRail";
@@ -168,7 +168,7 @@ async function createAndSelect(accountId: string): Promise<void> {
 
 /** The New chat button: a chat on the selected account, or after a sign-in when nothing is signed in. */
 async function startNewChat(): Promise<void> {
-  await whenAccountsLoaded();
+  await whenAccountsReadyToChoose();
   const account = getSelectedAccount();
   if (account !== null) {
     await createAndSelect(account.id);
@@ -199,13 +199,14 @@ function draftInto(chatId: string, text: string): void {
  *  through the provider chooser, as the composer's first send does; a dismissed chooser leaves the text in the
  *  composer, where the next send offers the chooser again. A chooser already open (for the New chat button) takes
  *  no second intent, so the text goes to the composer at once. */
-function launchWithFirstMessage(chatId: string, text: string): void {
+async function launchWithFirstMessage(chatId: string, text: string): Promise<void> {
   const launchOrDraft = (accountId: string): void => {
     launchChat(chatId, accountId, text).catch((error: unknown) => {
       alert(`Failed to start the chat: ${(error as Error).message}`);
       draftInto(chatId, text);
     });
   };
+  await whenAccountsReadyToChoose();
   const minted = getProvisionalChats().find((chat) => chat.chat_id === chatId);
   const account = accountForFirstSend(minted?.account_id);
   if (account !== null) {
@@ -240,7 +241,7 @@ function takeApplied(applied: AppliedIntake): void {
   startedHere.add(applied.chatId);
   settleIntake(applied.chatId);
   if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
-  if (applied.firstMessage !== null) launchWithFirstMessage(applied.chatId, applied.firstMessage);
+  if (applied.firstMessage !== null) void launchWithFirstMessage(applied.chatId, applied.firstMessage);
 }
 
 /** Apply a held intake on the chat it resolved to, or on ``pickedChatId``; a token already gone (another client

@@ -21,7 +21,7 @@ import type { ProviderAccount } from "../models/Providers";
 import { openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
-import { accountForFirstSend, openProviderChooser, whenAccountsLoaded } from "../models/Providers";
+import { accountForFirstSend, openProviderChooser, whenAccountsReadyToChoose } from "../models/Providers";
 import type { ProvisionalChat } from "../models/Chats";
 import {
   ensureHarnessCatalogs,
@@ -584,7 +584,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
        * provider chooser produces, or null when it is dismissed instead.
        */
       async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | null> {
-        await whenAccountsLoaded();
+        await whenAccountsReadyToChoose();
         const account = accountForFirstSend(provisional.account_id);
         if (account !== null) {
           return account.id;

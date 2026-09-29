@@ -138,6 +138,19 @@ export function whenAccountsLoaded(): Promise<void> {
   return firstAccountsLoad;
 }
 
+/** Settles once the account list can choose a new chat's account: after its first read, and after a fresh read when
+ *  it names no account. A sign-in made on another page (the chat list, another chat) does not reach this page's list,
+ *  so an empty list read earlier is not taken for "nothing signed in". */
+export async function whenAccountsReadyToChoose(): Promise<void> {
+  await firstAccountsLoad;
+  if (getSelectedAccount() !== null) return;
+  try {
+    await loadAccounts();
+  } catch (error) {
+    console.warn("Could not read the account list again; choosing from the one read before", error);
+  }
+}
+
 export function areLanesLoaded(): boolean {
   return lanesLoaded;
 }

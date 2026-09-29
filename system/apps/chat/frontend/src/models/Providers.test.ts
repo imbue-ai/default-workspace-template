@@ -98,6 +98,46 @@ describe("whenAccountsLoaded", () => {
   });
 });
 
+describe("whenAccountsReadyToChoose", () => {
+  beforeEach(() => {
+    mockRequest.mockReset();
+  });
+
+  it("reads the list again when the first read named no account, so a sign-in on another page counts", async () => {
+    vi.resetModules();
+    const providers = await import("./Providers");
+    mockRequest.mockResolvedValueOnce({ accounts: [], mru: null }).mockResolvedValueOnce(ACCOUNTS_BODY);
+    await providers.loadAccounts();
+    expect(providers.getSelectedAccount()).toBeNull();
+
+    await providers.whenAccountsReadyToChoose();
+
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    expect(providers.getSelectedAccount()?.id).toBe("acct-1");
+  });
+
+  it("does not read the list again when it already names an account", async () => {
+    vi.resetModules();
+    const providers = await import("./Providers");
+    mockRequest.mockResolvedValueOnce(ACCOUNTS_BODY);
+    await providers.loadAccounts();
+
+    await providers.whenAccountsReadyToChoose();
+
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("chooses from the list it has when the second read fails", async () => {
+    vi.resetModules();
+    const providers = await import("./Providers");
+    mockRequest.mockResolvedValueOnce({ accounts: [], mru: null }).mockRejectedValueOnce(new Error("offline"));
+    await providers.loadAccounts();
+
+    await expect(providers.whenAccountsReadyToChoose()).resolves.toBeUndefined();
+    expect(providers.getSelectedAccount()).toBeNull();
+  });
+});
+
 describe("startFlow", () => {
   beforeEach(() => {
     vi.useFakeTimers();
