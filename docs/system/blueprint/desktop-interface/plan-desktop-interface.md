@@ -67,6 +67,7 @@ A desktop whose shortcuts are exactly the seed of the recorded apps that are reg
 Any other desktop gets the shortcut at the first free cell in reading order, and nothing on it moves.
 A recorded app is never added again: a shortcut the user removed stays removed when its app registers again, on every boot and across restarts, and an app that deregisters changes nothing.
 A state directory holding `desktops.json` but no record counts every app with a shortcut on any desktop as recorded.
+A desktop created when no other desktop stands, such as `Home` seeded over a missing or unusable `desktops.json`, starts the record over from the apps it is seeded with.
 Deleting the last desktop is refused with `409`.
 Deleting a desktop closes its windows (their pages are destroyed in every client) and removes every client's layout of it; clients on it switch to the first remaining desktop.
 

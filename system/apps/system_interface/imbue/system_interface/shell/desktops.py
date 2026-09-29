@@ -298,10 +298,11 @@ class DesktopStore(MutableModel):
         write_json_atomic(self._offered_path(), document.model_dump(mode="json"))
 
     def _record_offered_unlocked(self, apps: AbstractSet[AppName], desktops_before: Sequence[Desktop]) -> None:
-        """Add ``apps``, whose default shortcuts a write just placed, to the offered record; with no record yet, it
-        starts from the apps with a shortcut on the desktops as they stood before that write."""
+        """Add ``apps``, whose default shortcuts a write just placed, to the offered record; with no record yet, or no
+        desktop before that write, the record starts over from the apps with a shortcut on the desktops before it."""
         recorded = self._read_offered_unlocked()
-        offered = (recorded if recorded is not None else apps_with_a_shortcut_on(desktops_before)) | apps
+        kept = recorded if recorded is not None and desktops_before else apps_with_a_shortcut_on(desktops_before)
+        offered = kept | apps
         if offered != recorded:
             self._write_offered_unlocked(offered)
 
@@ -313,7 +314,7 @@ class DesktopStore(MutableModel):
 
     def ensure_default(self, seed_shortcuts: Callable[[], Sequence[DesktopShortcut]]) -> list[Desktop]:
         """The desktops, after creating the default one when the file holds none (desktop plan section 3.2), with the
-        apps of its seeded shortcuts recorded as offered."""
+        offered record started over from the apps of its seeded shortcuts."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             if document is not None and document.desktops:

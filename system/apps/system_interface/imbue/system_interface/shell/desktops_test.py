@@ -1,5 +1,6 @@
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -173,6 +174,54 @@ def test_a_desktop_added_before_any_offered_record_starts_it_from_the_shortcuts_
     store.create_desktop("Alpha", "#111111", 1, (), ())
 
     assert _offered_record(tmp_path)["apps"] == ["chat"]
+
+
+def _delete_file(path: Path) -> None:
+    path.unlink()
+
+
+def _add_an_unknown_desktop_key(path: Path) -> None:
+    raw = json.loads(path.read_text())
+    raw["desktops"][0]["unknown_key"] = True
+    path.write_text(json.dumps(raw))
+
+
+def _set_another_version(path: Path) -> None:
+    raw = json.loads(path.read_text())
+    raw["version"] = 2
+    path.write_text(json.dumps(raw))
+
+
+@pytest.mark.parametrize("spoil_desktops_file", [_delete_file, _add_an_unknown_desktop_key, _set_another_version])
+def test_seeding_the_default_desktop_again_starts_the_offered_record_over(
+    tmp_path: Path, spoil_desktops_file: Callable[[Path], None]
+) -> None:
+    """A desktops.json read as absent is seeded over before the chat registers: the record left from the desktops it
+    replaced no longer names the chat as offered, so the chat still reaches the new default desktop."""
+    before_chat, with_chat = _builtin_rows(tmp_path / "registry")
+    state_directory = tmp_path / "state"
+    store = DesktopStore(state_directory=state_directory)
+    store.ensure_default(lambda: seed_desktop_shortcuts(before_chat))
+    store.ensure_default_shortcuts_offered(with_chat)
+    assert "chat" in _offered_record(state_directory)["apps"]
+    spoil_desktops_file(state_directory / "desktops.json")
+
+    (home,) = store.ensure_default(lambda: seed_desktop_shortcuts(before_chat))
+
+    assert _offered_record(state_directory)["apps"] == sorted(_apps_on(home))
+    offered = store.ensure_default_shortcuts_offered(with_chat)
+    assert offered.is_written is True
+    assert offered.desktops[0].shortcuts == seed_desktop_shortcuts(with_chat)
+
+
+def test_a_desktop_added_where_no_desktop_stands_starts_the_offered_record_over(tmp_path: Path) -> None:
+    store = DesktopStore(state_directory=tmp_path)
+    store.ensure_default(lambda: _SEED)
+    (tmp_path / "desktops.json").unlink()
+
+    store.create_desktop("Alpha", "#111111", 1, (), ())
+
+    assert _offered_record(tmp_path)["apps"] == []
 
 
 def test_with_no_desktop_nothing_is_offered_or_recorded(tmp_path: Path) -> None:
