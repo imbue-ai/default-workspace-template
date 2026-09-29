@@ -177,7 +177,7 @@ python3 system/scripts/layout.py shortcut set docs open --mode new --cell 2,0 --
 python3 system/scripts/layout.py shortcut move docs open --cell 3,0 --desktop "Research"
 python3 system/scripts/layout.py shortcut remove docs open --desktop "Research"
 
-# The wallpaper: a bundled image (`dawn` ships; GET /api/wallpapers lists what does), a file
+# The wallpaper: a bundled image (`arcs` and `dawn` ship; GET /api/wallpapers lists what does), a file
 # under data/.apps/system_interface/wallpapers/, or none.
 python3 system/scripts/layout.py wallpaper bundled dawn --desktop "Research"
 python3 system/scripts/layout.py wallpaper none

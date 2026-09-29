@@ -665,7 +665,7 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     assert (
         page.locator(".app-layout")
         .evaluate("(el) => getComputedStyle(el).backgroundImage")
-        .endswith('/wallpapers/bundled/dawn")')
+        .endswith('/wallpapers/bundled/arcs")')
     )
     client_id = _client_id(page)
     wait_for(

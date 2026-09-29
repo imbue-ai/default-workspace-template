@@ -30,7 +30,7 @@
   --desk-taskbar-surface: color-mix(in srgb, var(--c-surface) 70%, transparent);
   --desk-taskbar-blur: 20px;
   --desk-backdrop: var(--c-bg);
-  --desk-default-wallpaper: url(/wallpapers/bundled/dawn);
+  --desk-default-wallpaper: url(/wallpapers/bundled/arcs);
   --desk-icon-size: 48px;
   /* The icon tile's corner, as a fraction of the tile: an icon shown larger or smaller keeps
      the same silhouette rather than growing a corner that is suddenly too tight or too round. */
