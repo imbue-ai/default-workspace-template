@@ -68,8 +68,6 @@ def test_task_argv_keeps_tools_and_sets_permission_mode() -> None:
 
 
 def test_dash_leading_prompt_follows_the_option_terminator() -> None:
-    # claude rejects a bare "---..." positional as an unknown option, so every
-    # prompt must come after the only "--" in the argv.
     prompt = "---\nname: some-skill\n---\nSummarize this skill."
     completion = claude_p._completion_argv(
         prompt, model="claude-haiku-4-5", system="You summarize."
