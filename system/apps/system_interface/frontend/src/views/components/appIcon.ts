@@ -297,19 +297,25 @@ export function appIconMarkup(
   return appName === undefined ? fallbackMarkup : appMonogramMarkup(appName, sizePx);
 }
 
+// The monogram's own colour pair, from the palette in `docs/system/app-icons.md`: Strength under
+// Courage, at 8.12 to 1. Deliberately the set's most neutral pair -- a letter is what an app wears
+// for want of an identity, so it should not claim one of the palette's louder ones.
+const MONOGRAM_BACKGROUND = "#CFC7B3";
+const MONOGRAM_INK = "#492222";
+
 /**
  * What an app wears when it has registered no icon of its own.
  *
  * Almost every app is in this case, so the fallback cannot be one shared glyph:
  * a list of them all wearing the same box tells the reader nothing. A monogram
- * -- the app's initial in an outlined tile -- at least differs per app and
- * stays put, so the same app is recognisable everywhere it is drawn.
+ * -- the app's initial on a tile -- at least differs per app and stays put, so
+ * the same app is recognisable everywhere it is drawn.
  *
- * It is drawn in the house icon style: currentColor strokes on a transparent
- * background, the same frame every glyph in icons.ts uses, so an unnamed app
- * sits beside the built-in kinds instead of introducing colour the rest of the
- * chrome does not have. (Colour is the projects' identity language -- the
- * squiggles and their palette -- not the apps'.)
+ * It is built to the rules every app icon follows
+ * (`docs/system/app-icons.md`): 48 by 48, a flat background under one
+ * fill-only mark, a 32 per cent corner. That is what lets it stand beside the
+ * drawn icons -- the surfaces that draw an app paint nothing behind its icon,
+ * so a transparent monogram would be a thin letter floating on the wallpaper.
  */
 export function appMonogramMarkup(appName: string, sizePx: number): string {
   // App names are agent/user text, so the letter is escaped before it lands in
@@ -322,10 +328,10 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${sizePx}" height="${sizePx}" viewBox="0 0 24 24" ` +
-    `fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ` +
-    `aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/>` +
-    `<text x="12" y="12.7" stroke="none" fill="currentColor" font-size="11" font-weight="600" ` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${sizePx}" height="${sizePx}" viewBox="0 0 48 48" ` +
+    `fill="none" aria-hidden="true">` +
+    `<rect width="48" height="48" rx="15.36" fill="${MONOGRAM_BACKGROUND}"/>` +
+    `<text x="24" y="25.4" fill="${MONOGRAM_INK}" font-size="24" font-weight="600" ` +
     `text-anchor="middle" dominant-baseline="central">${initial}</text></svg>`
   );
 }

@@ -5,7 +5,7 @@ import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopShortcut } from "../model/records";
 import { appRecord, launchPathRecord } from "../testing/records";
-import { CONNECTING_TOOLTIP, ShortcutIcon, shortcutLabel, shortcutTooltip } from "./ShortcutIcon";
+import { CONNECTING_TOOLTIP, ICON_MARKUP_SIZE, ShortcutIcon, shortcutLabel, shortcutTooltip } from "./ShortcutIcon";
 import type { ShortcutIconAttrs } from "./ShortcutIcon";
 
 const docs = appRecord("docs", { launch_paths: [launchPathRecord({ id: "new", label: "New docs" })] });
@@ -93,6 +93,25 @@ describe("ShortcutIcon", () => {
     expect(render({ isSelected: true }).getAttribute("aria-pressed")).toBe("true");
     unmountViews();
     expect(render({ isLifted: true }).className).toContain("opacity-40");
+  });
+
+  it("hands the icon the whole box: the drawing brings its own tile, so nothing paints or pads behind it", () => {
+    // An app icon is a 48x48 tile with its own flat background and its own 32 per cent corner
+    // (docs/system/app-icons.md), so a surface and a padding here would frame the tile in a
+    // second one. What the box still owes the tile is its shadow and the hover.
+    const tile =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">' +
+      '<rect width="48" height="48" rx="15.36" fill="#4B4C08"/>' +
+      '<path d="M12 12h24v24H12z" fill="#F5D6A0"/></svg>';
+    const box = render({ app: appRecord("docs", { icon: tile }) }).querySelector(".shortcut-icon") as HTMLElement;
+    expect(box.className).not.toMatch(/\bbg-/);
+    expect(box.className).not.toMatch(/\bp-\d/);
+    expect(box.className).toContain("rounded-(--desk-icon-radius)");
+    expect(box.className).toContain("shadow-(--desk-icon-shadow)");
+    // The app's own tile, at the box's own size, with its background intact.
+    const drawing = box.querySelector("svg") as SVGElement;
+    expect(drawing.getAttribute("width")).toBe(String(ICON_MARKUP_SIZE));
+    expect(drawing.querySelector("rect")?.getAttribute("fill")).toBe("#4B4C08");
   });
 
   it("draws an unknown app as connecting only while no app list has landed", () => {

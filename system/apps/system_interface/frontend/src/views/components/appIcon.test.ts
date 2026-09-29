@@ -325,16 +325,21 @@ describe("appIconMarkupByName", () => {
     }
   });
 
-  it("draws the monogram in the house icon style, not in colour", () => {
-    // Monochrome currentColor strokes on a transparent background, like every
-    // glyph in icons.ts. Colour is the projects' identity language, not the
-    // apps' -- an app told apart by its letter needs no palette of its own.
+  it("draws the monogram as a tile, to the rules every app icon follows", () => {
+    // docs/system/app-icons.md: 48 by 48, a flat background under one fill-only mark, a 32 per
+    // cent corner. It matters here because the surfaces that draw an app paint nothing behind
+    // its icon -- a transparent monogram would be a thin letter on the wallpaper.
     const root = parsed(appIconMarkupByName("plain", 16, FALLBACK));
-    expect(root.getAttribute("stroke")).toBe("currentColor");
-    expect(root.getAttribute("fill")).toBe("none");
-    expect(root.getAttribute("viewBox")).toBe("0 0 24 24");
-    expect(root.querySelector("rect")?.getAttribute("fill")).toBeNull();
-    expect(root.querySelector("text")?.getAttribute("fill")).toBe("currentColor");
+    expect(root.getAttribute("viewBox")).toBe("0 0 48 48");
+    expect(root.getAttribute("width")).toBe("16");
+    expect(root.getAttribute("stroke")).toBeNull();
+    const tile = root.querySelector("rect");
+    expect(tile?.getAttribute("width")).toBe("48");
+    expect(tile?.getAttribute("rx")).toBe("15.36");
+    expect(tile?.getAttribute("fill")).toBe("#CFC7B3");
+    const letter = root.querySelector("text");
+    expect(letter?.getAttribute("fill")).toBe("#492222");
+    expect(letter?.getAttribute("stroke")).toBeNull();
   });
 
   it("is stable: the same app monograms identically every time", () => {
