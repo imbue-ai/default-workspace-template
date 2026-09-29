@@ -239,16 +239,18 @@ class ShellState(MutableModel):
         desktop reconciled with the registry (``_reconcile_desktops_with``)."""
         if not self.inventory.is_registry_read:
             return self.desktops.list_desktops()
-        rows = self._registry_rows()
-        self.desktops.ensure_default(lambda: seed_desktop_shortcuts(rows))
-        return list(self._reconcile_desktops_with(rows))
+        with STATE_FILES_LOCK:
+            rows = self._registry_rows()
+            self.desktops.ensure_default(lambda: seed_desktop_shortcuts(rows))
+            return list(self._reconcile_desktops_with(rows))
 
     def reconcile_desktops_with_registry(self) -> None:
         """Reconcile every desktop with the registry as it reads now: what the inventory calls after a read that
         changed the rows. It seeds no default desktop, which only a read of the desktops creates. A state file that
         cannot be written is logged, and the next read of the desktops reconciles again."""
         try:
-            self._reconcile_desktops_with(self._registry_rows())
+            with STATE_FILES_LOCK:
+                self._reconcile_desktops_with(self._registry_rows())
         except ShellStateError as e:
             logger.opt(exception=e).error("Failed to reconcile the desktops with the changed app registry")
 
@@ -258,7 +260,8 @@ class ShellState(MutableModel):
     def _reconcile_desktops_with(self, rows: Sequence[RegistryRow]) -> tuple[Desktop, ...]:
         """Every desktop holding the default shortcut of each registered app not yet offered (desktop plan section
         3.2) and one pinned window per pinned app (pinned-taskbar-entries plan section 3.2). A reconcile that wrote
-        is announced once, after it, so nothing here recurses into itself."""
+        is announced once, after it, so nothing here recurses into itself. Callers hold the state lock and read
+        ``rows`` under it, so reconciles apply, and announce, the registry's rows in the order they were installed."""
         shortcuts_outcome = self.desktops.ensure_default_shortcuts_offered(rows)
         pinned_outcome = self.desktops.ensure_pinned_windows(pinned_apps(rows), datetime.now(timezone.utc))
         if shortcuts_outcome.is_written or pinned_outcome.is_written:
