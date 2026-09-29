@@ -318,9 +318,7 @@ def find_nodes_worth_a_worker(
 
 
 def group_orchestrator_nodes(
-    waves: Sequence[Sequence[int]],
-    node_indices_with_worker: set[int],
-    capabilities: Sequence[str],
+    waves: Sequence[Sequence[int]], node_indices_with_worker: set[int]
 ) -> list[list[int]]:
     """Runs of consecutive nodes the orchestrator does, each run to be done in one go.
 
@@ -329,14 +327,15 @@ def group_orchestrator_nodes(
     a plan artefact rather than a handoff. Reporting them as one run lets it write the
     code once instead of dividing work it is not dividing between anyone.
 
-    A run ends at a node that has a worker, because the orchestrator must wait for that
-    worker and merge its branch before going on. A run also ends at an interactive node:
-    that one is a conversation with the user, and its answer is what the nodes after it
-    are supposed to be written against, so folding it into surrounding work would put
-    that work before the answer it depends on. An interactive node is therefore always a
-    run of its own.
+    An interactive node belongs to the orchestrator like any other, so it does not break
+    a run -- it is the same agent asking the question it then acts on. It does fix an
+    order within the run: nodes after the question are written against its answer, which
+    is what the caller's instruction has to say, since a group is otherwise free to be
+    designed all at once.
+
+    Only a node with a worker ends a run, because the orchestrator has to wait for that
+    worker and merge its branch before it can build on the result.
     """
-    is_interactive = [c == INTERACTIVE_CAPABILITY for c in capabilities]
     groups: list[list[int]] = []
     current: list[int] = []
     for wave in waves:
@@ -346,11 +345,6 @@ def group_orchestrator_nodes(
                 if current:
                     groups.append(current)
                     current = []
-            elif is_interactive[idx]:
-                if current:
-                    groups.append(current)
-                groups.append([idx])
-                current = []
             else:
                 current.append(idx)
     if current:
@@ -418,9 +412,7 @@ def parse_plan(
         }
 
     # The runs of nodes the orchestrator does itself, each to be done in one go.
-    own_groups = group_orchestrator_nodes(
-        schedule_waves(access), with_worker, capabilities
-    )
+    own_groups = group_orchestrator_nodes(schedule_waves(access), with_worker)
     group_by_node = {
         idx: group_number
         for group_number, group in enumerate(own_groups)

@@ -675,9 +675,9 @@ def test_consecutive_orchestrator_nodes_become_one_piece_of_work() -> None:
     assert [node["own_group"] for node in plan["nodes"]] == [0, None, None, None, 1, 1]
 
 
-def test_an_interactive_node_splits_the_work_around_it() -> None:
-    """The nodes after a question are meant to be written against its answer, so work
-    cannot be folded across one."""
+def test_an_interactive_node_stays_inside_a_run() -> None:
+    """An interactive node is the same agent asking a question it then acts on, so it
+    does not divide the work -- it only fixes an order inside the run."""
     plan = plan_orchestration.parse_plan(
         _plan_text(
             '["high", "medium", "medium", "interactive", "high", "low"]',
@@ -686,17 +686,15 @@ def test_an_interactive_node_splits_the_work_around_it() -> None:
         ),
         only_parallel_workers=True,
     )
-    # 1 and 2 run together so they keep their workers; 3 is the question; 4 and 5 follow.
-    assert plan["own_groups"] == [[0], [3], [4, 5]]
+    # 1 and 2 run together so they keep their workers; everything after is one run.
+    assert plan["own_groups"] == [[0], [3, 4, 5]]
 
 
 def test_a_worker_node_ends_a_run_of_the_orchestrators_own() -> None:
     """The orchestrator has to wait for a worker and merge its branch, so its own work
     cannot continue across one."""
     waves = [[0], [1, 2], [3]]
-    groups = plan_orchestration.group_orchestrator_nodes(
-        waves, {1, 2}, ["high", "medium", "medium", "low"]
-    )
+    groups = plan_orchestration.group_orchestrator_nodes(waves, {1, 2})
     assert groups == [[0], [3]]
 
 
