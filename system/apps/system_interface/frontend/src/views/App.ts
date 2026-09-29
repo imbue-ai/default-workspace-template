@@ -17,7 +17,7 @@ import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu"
 import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
-import { fetchWallpapers, wallpaperImageUrl } from "../model/api";
+import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
 import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
@@ -951,7 +951,7 @@ export function App(): m.Component<AppAttrs> {
       // the taskbar's translucent surface then has the desktop behind it to blur, and the backdrop
       // stays the viewport less the taskbar height that the geometry rules measure.
       const wallpaperStyle =
-        desktop?.wallpaper == null ? {} : { backgroundImage: `url("${wallpaperImageUrl(desktop.wallpaper)}")` };
+        desktop?.wallpaper == null ? {} : { backgroundImage: wallpaperBackgroundImage(desktop.wallpaper) };
       return m(
         "div",
         {

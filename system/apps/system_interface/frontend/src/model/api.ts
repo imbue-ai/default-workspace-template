@@ -241,8 +241,23 @@ export async function fetchWallpapers(): Promise<WallpaperListing[]> {
 }
 
 /** Where a wallpaper reference's image is served. */
-export function wallpaperImageUrl(wallpaper: Wallpaper): string {
+function wallpaperImageUrl(wallpaper: Wallpaper): string {
   return apiUrl(`/wallpapers/${wallpaper.kind}/${encodeURIComponent(wallpaper.name)}`);
+}
+
+/**
+ * The `background-image` a desktop's chosen wallpaper paints: the image itself, and the default
+ * under it.
+ *
+ * A reference outlives the file it names -- a bundled wallpaper the shell stops shipping, a file
+ * taken back out of the wallpapers directory -- and the desktop keeps holding it, since the choice
+ * is still the choice and the file may come back. A layer whose image does not load is simply not
+ * painted, so the default shows through in the meantime, which is what a desktop with no wallpaper
+ * of its own already wears. Without the second layer that desktop would fall all the way to the
+ * flat page colour, which reads as a broken shell rather than as a wallpaper that went missing.
+ */
+export function wallpaperBackgroundImage(wallpaper: Wallpaper): string {
+  return `url("${wallpaperImageUrl(wallpaper)}"), var(--desk-default-wallpaper)`;
 }
 
 export async function fetchAvatars(): Promise<AvatarCatalog> {
