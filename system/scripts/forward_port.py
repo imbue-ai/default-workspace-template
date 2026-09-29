@@ -39,8 +39,12 @@ name is what the workspace falls back to.
 Icons
 -----
 An app may register an icon so the workspace UI can draw it instead of a
-generic glyph. **The registry stores the SVG markup itself**, as a plain TOML
-string on the entry, not a path to a file. A path would have to be readable by
+generic glyph. ``docs/system/app-icons.md`` holds what one must look like (a
+216 by 216 two-layer tile, and the palette it is coloured from); this module only
+checks that the markup is safe to store.
+
+**The registry stores the SVG markup itself**, as a plain TOML string on the
+entry, not a path to a file. A path would have to be readable by
 every consumer -- the system-interface server, the desktop client, and anything
 reading the registry off a shared host -- at whatever moment it renders, and
 those do not share a filesystem view with the service that registered. The
@@ -128,7 +132,8 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
 
 # Cap on the stored SVG markup. Generous for a hand-drawn or exported glyph
-# (icons in this repo run a few hundred bytes) while keeping apps.toml small:
+# (icons in this repo run from a few hundred bytes to a couple of kilobytes)
+# while keeping apps.toml small:
 # every consumer re-reads the whole registry on every change, and the markup
 # is broadcast to every connected client.
 MAX_ICON_LENGTH = 16384
@@ -1005,9 +1010,9 @@ def main() -> None:
                     )
                 if icon is None and not args.no_icon and is_new_pickable:
                     parser.error(
-                        f"app {name!r} is new and has no icon: pass --icon-file with a house-style "
-                        "SVG (see the build-app skill), name one in the manifest, or pass --no-icon "
-                        "to keep the generic letter monogram"
+                        f"app {name!r} is new and has no icon: pass --icon-file with a tile icon "
+                        "drawn to docs/system/app-icons.md, name one in the manifest, or pass "
+                        "--no-icon to keep the generic letter monogram"
                     )
                 _upsert(
                     apps_file,

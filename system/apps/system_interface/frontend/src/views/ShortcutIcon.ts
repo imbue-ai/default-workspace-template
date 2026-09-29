@@ -68,11 +68,16 @@ function shortcutContent(app: AppRecord | undefined, label: string, isLifted: bo
     m(
       "span",
       {
+        // The icon brings its own tile (`docs/system/app-icons.md`): a flat background over the
+        // whole 48, with the same 32 per cent corner `--desk-icon-radius` computes. So this box
+        // paints nothing and pads nothing -- it is the shadow's shape and the hover's handle, and
+        // the drawing fills it edge to edge.
+        //
         // The hover is the tile growing: a tint behind it is what says selected, and one look
         // cannot say both. A transform moves nothing around it.
         class:
           "shortcut-icon relative flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center " +
-          "rounded-(--desk-icon-radius) bg-surface p-2 [&>svg]:size-full " +
+          "rounded-(--desk-icon-radius) [&>svg]:size-full " +
           (isLifted
             ? "shadow-(--desk-icon-shadow-lifted)"
             : "shadow-(--desk-icon-shadow) transition-transform group-hover:scale-110"),

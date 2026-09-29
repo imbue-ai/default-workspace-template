@@ -668,7 +668,7 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     assert (
         page.locator(".app-layout")
         .evaluate("(el) => getComputedStyle(el).backgroundImage")
-        .endswith('/wallpapers/bundled/dawn")')
+        .endswith('/wallpapers/bundled/arcs")')
     )
     client_id = _client_id(page)
     wait_for(
@@ -1315,7 +1315,7 @@ def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tm
     occupied cell the occupant steps aside under the hand, before the drop, and the drop keeps it there."""
     with _running_e2e_server(tmp_path, is_second_app_offered=True) as server:
         _land(page, server)
-        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0), _SECOND_SHORTCUT_KEY: (0, 1)}
+        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0), _SECOND_SHORTCUT_KEY: (1, 0)}
         backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
 
         docs = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
@@ -1329,7 +1329,7 @@ def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tm
         )
         expect(docs).to_have_attribute("data-cell", "2,2")
         # An empty cell needs nothing stepping aside: the other shortcut stayed where it was.
-        assert _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (0, 1)
+        assert _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (1, 0)
 
         # Held over the cell docs is in, without releasing: docs has already stepped aside to (1, 2), the
         # nearest free cell to the one it is being displaced from, and notes is the icon in the hand.
@@ -1338,7 +1338,7 @@ def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tm
         expect(notes).to_have_attribute("data-cell", "2,2")
         expect(docs).to_have_attribute("data-cell", "1,2")
         # Nothing is written until the drop: the step aside is the desktop showing where the icon would land.
-        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (2, 2), _SECOND_SHORTCUT_KEY: (0, 1)}
+        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (2, 2), _SECOND_SHORTCUT_KEY: (1, 0)}
 
         page.mouse.up()
         wait_for(
