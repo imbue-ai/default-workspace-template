@@ -40,6 +40,15 @@ MemTotal is the VM's own RAM (the lima create template's `--memory`,
 changeable with `mngr lima resize`): earlyoom's thresholds follow the VM's
 size, and a resize takes effect once the VM restarts at the new size.
 
+Under gVisor, `/proc/meminfo` also misses the memory the runtime itself is
+charged against the cgroup (0.3-0.9 GB on a gen-2 slice), so earlyoom's 10%
+threshold can arrive only after the cgroup has killed the whole sandbox. A
+gen-2 slice VM therefore publishes the cgroup's own limit and headroom into the
+workspace's volume, and earlyoom runs with `--host-meminfo
+/mngr-vol/.host-meminfo` (`system/supervisord.conf.d/earlyoom.conf`), acting on
+whichever of the two shows less headroom. Where nothing is published (local
+docker, lima), earlyoom logs that once and uses `/proc/meminfo` alone.
+
 - **`bands`** -- the `oom_score_adj` value per band and the helper that writes
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in
   services and apps (`SERVICE_BANDS`, 5-75, keyed by service name and by the
