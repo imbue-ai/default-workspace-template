@@ -119,7 +119,7 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 | Fact or verb | Owner |
 |---|---|
 | Which apps exist, their display name, icon, launch paths, criticality, priority | Manifest, mirrored into the registry |
-| Whether an app is running; Stop and Start | Shell, via supervisord |
+| Whether an app is running; Stop, Start, and Quit | Shell, via supervisord |
 | What is inside an app, and its own verbs on those things | The app, in its pages |
 | Desktops: name, colour, glyph, wallpaper, shortcuts and cells | Shell, shared |
 | Which desktop was made for which user | Shell, in `users.json` |
@@ -201,6 +201,7 @@ A viewport resize re-renders every window from the same fractions, so windows sc
 Close removes the window from the desktop for every client: the shell drops it from `desktops.json`, drops it from every layout of that desktop, destroys every client's page for it, and broadcasts.
 The close button, the window menu, a taskbar entry's context menu, an agent's `close`, and the minds chrome's close chord (`minds:close-active-tab`, which closes the focused window after sending it `shell:close-request`) all do this.
 The shell itself has no notion of stopping or deleting what the window showed; what the window showed is the app's to keep or collect, and the terminal and the browser collect it once no window shows it, told of the close through the manifest's `window_closed_path` and sweeping the shell's windows regardless (`docs/system/specs/window-bound-resources.md`).
+The app's *process* is another matter: an app whose manifest declares `stop_when_no_windows` is stopped by the shell a minute after its last window closes, and comes back on the next request for it, the shell holding its port meanwhile (`docs/system/specs/stop-when-no-windows.md`).
 A pinned window is never closed: the route answers `409`, the op is refused with "minimize it instead", and its close control, its menus' Close, and the close chord all minimize it instead (pinned-taskbar-entries plan section 3.2).
 
 ### 4.6 Following the URL
@@ -279,7 +280,7 @@ Exact shapes: contracts.md section 4.
 ### 5.2 Routes and the WebSocket
 
 The full tables are contracts.md sections 5 and 6.
-In brief: desktops (list, create, settings, delete, shortcuts, wallpaper), windows (open, close, location), placements (read, save), clients, inventory, wallpapers, the app-level Stop and Start, the templates catalog, client activity, health, the contract module, the op route, and the socket carrying `apps_updated`, `desktops_updated`, `placements_updated`, `active_desktop_changed`, and `layout_op`.
+In brief: desktops (list, create, settings, delete, shortcuts, wallpaper), windows (open, close, location), placements (read, save), clients, inventory, wallpapers, the app-level Stop, Start, and Quit, the templates catalog, client activity, health, the contract module, the op route, and the socket carrying `apps_updated`, `desktops_updated`, `placements_updated`, `active_desktop_changed`, and `layout_op`.
 Gone: every `/_instances` relay route, `/api/tabs/<id>/instance`, `/api/apps/<name>/changed`, `/api/projects/*`, `/api/layouts/*`.
 
 ### 5.3 The pure document editor
@@ -376,7 +377,7 @@ It drops `instances` and `instances_url`.
 `actions` becomes `launch_paths`: `[[launch_paths]] id, label, path, params`, where `path` is a path under the app origin and `params` is the documented list of query parameter names the shell may append.
 `default_shortcut.action` becomes `default_shortcut.launch`, naming a declared launch path id or `open`.
 A `[pin]` table (`path`, and optionally `style`, `scope`, `default_mode`) declares the app's pinned window (pinned-taskbar-entries plan section 7.1).
-`forward_port.py` copies the new fields onto the registry row and drops the old ones; the app watcher and minds read `name`, `url`, `label`, `icon` as before.
+`forward_port.py` copies the new fields onto the registry row and drops the old ones; the shell's services event writer and minds read `name`, `url`, `label`, `icon` as before.
 
 ## 9. The built-in apps
 

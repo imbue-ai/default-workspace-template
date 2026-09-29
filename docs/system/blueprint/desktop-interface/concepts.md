@@ -102,7 +102,7 @@ A page that ends up somewhere else reports its real path, and the window follows
 Left to right: the app icon, the title, the window menu (three dots, directly after the title), then at the right edge minimize, maximize (restore when maximized), close.
 No status indicator.
 The title bar is the drag handle; double-click toggles maximize; dragging to the left or right edge snaps to that half, and to the top edge maximizes.
-The window menu offers Refresh, Open in its own window (where the embedding chrome can pull windows out), Share, Stop and Start the app, and Close.
+The window menu offers Refresh, Open in its own window (where the embedding chrome can pull windows out), Share, Quit the app (which closes every window of it and stops it; `docs/system/specs/stop-when-no-windows.md`), and Close.
 Close removes the window from the desktop for everyone; there is no separate "remove from desktop".
 A pinned window keeps its close control and its menus' Close, and each minimizes it: it is never closed, only minimized.
 
@@ -179,7 +179,7 @@ flowchart TB
 
 | Fact or verb | Owner |
 |---|---|
-| Which apps exist, their display name, icon, launch paths; whether an app runs; Stop and Start | Manifest and registry; the shell via supervisord (unchanged) |
+| Which apps exist, their display name, icon, launch paths; whether an app runs; Stop, Start, and Quit | Manifest and registry; the shell via supervisord (unchanged) |
 | What is inside an app: its chats, sessions, folders, their names and status | The app, in its own pages (new) |
 | Desktops: name, colour, glyph, wallpaper, shortcuts and cells, windows | Shell, shared |
 | Open and close a window; a window's path and title | Shell, shared; the page reports path and title |

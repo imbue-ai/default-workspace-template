@@ -12,7 +12,7 @@ import { cellRect } from "../geometry/grid";
 import type { PixelPoint } from "../geometry/frames";
 import type { Desktop, DesktopShortcut, Placement } from "../model/records";
 import { shortcutKey } from "../model/records";
-import { appByName, effectiveWindowTitle, renderedState } from "../reducers/desktopState";
+import { appByName, effectiveWindowTitle, isAppShownStopped, renderedState } from "../reducers/desktopState";
 import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
 import { DetachedWindowGhost } from "./DetachedWindowGhost";
@@ -87,6 +87,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             },
             placed.map(({ shortcut, cell }) => {
               const key = shortcutKey(shortcut.target.app, shortcut.target.launch);
+              const app = appByName(state, shortcut.target.app);
               // The one in the hand is drawn in the cell it came from and translated out of it, so the icon
               // stays exactly where it was grabbed whatever cell the room being made has put it in.
               const lifted = heldKey === key ? held : null;
@@ -95,7 +96,8 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                 shortcut,
                 cell,
                 rect: cellRect(lifted === null ? cell : lifted.originCell, metrics),
-                app: appByName(state, shortcut.target.app),
+                app,
+                isStopped: isAppShownStopped(state, app),
                 isAppsLoaded: state.isAppsLoaded,
                 isSelected: attrs.selectedShortcutKey === key,
                 lift: lifted === null ? null : lifted.lift,
@@ -157,10 +159,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   isMenuOpen: attrs.openMenuWindowId === window.id,
                   sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                   isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
-                  onStartApp:
-                    app !== undefined && !app.is_running && store.canStopApp(app)
-                      ? () => void store.setAppLifecycle(app.name, "start")
-                      : null,
+                  isStopped: isAppShownStopped(state, app),
                   onRaise: () => store.raiseWindow(window.id),
                   onControl: (control, event) => attrs.onWindowControl(window.id, control, event),
                   onToggleMaximize: () => store.toggleMaximized(window.id),

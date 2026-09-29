@@ -152,6 +152,19 @@ a skill that drives it, a script, a doc -- is registered in the app's `app.toml`
 under `[[references]]` with a `note` naming the surface it uses, so it travels
 with the app through hardening, testing, and publishing.
 
+Check the app's `stop_when_no_windows` against what the change makes it do.
+The scaffold writes `true`: the shell stops the program a minute after the
+app's last window closes and starts it again only on the next request. If
+the change gives the app work between requests -- a background thread or
+scheduler that refreshes data, a poller or file watcher, a websocket or
+subscription to an outside service, a job that must finish after the user
+closes the window, or an API another agent drives with no window open --
+set it to `false` in `app.toml`, or that work is lost or interrupted at the
+stop. The reverse holds: an app that no longer does anything between
+requests can go back to `true`. The field is read at registration, so the
+restart in step 2 is what applies it; `uv run app-manifest validate-manifest
+system/apps/<package>/app.toml` checks the file.
+
 ### 2. Apply it so it actually takes effect
 
 The scaffolded web runner runs with `use_reloader=False`, and daemons

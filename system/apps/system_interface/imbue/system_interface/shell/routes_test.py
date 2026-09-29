@@ -11,6 +11,7 @@ from flask.testing import FlaskClient
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
+from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.identity import RequestIdentity
@@ -152,12 +153,13 @@ def test_a_preview_shell_refuses_only_the_verbs_that_reach_the_live_workspace(
         refusals = [
             client.post("/api/apps/plain/stop"),
             client.post("/api/apps/plain/start"),
+            client.post("/api/apps/plain/quit"),
             client.post(
                 "/api/embedder-messages",
                 json={"type": "minds:focus-chat", "client_id": "c1", "payload": {"chatId": "agent-1"}},
             ),
         ]
-    assert [refusal.status_code for refusal in refusals] == [403, 403, 403]
+    assert [refusal.status_code for refusal in refusals] == [403, 403, 403, 403]
     assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
     assert fake_supervisor.statename_by_program.get("plain") is None
     assert received == []
@@ -206,6 +208,59 @@ def test_stop_and_start_drive_the_supervised_program(
     assert client.post("/api/apps/chat/stop").status_code == 400
     assert client.post("/api/apps/plain/stop").status_code == 400
     assert client.post("/api/apps/unknown/stop").status_code == 404
+
+
+def test_a_start_past_the_wake_budget_is_a_502(client: FlaskClient, fake_supervisor: FakeSupervisorServer) -> None:
+    """A start is a wake, and the budget counts wakes the app did not come up from: with no sweep to see the app
+    RUNNING, the count past the budget is refused without asking supervisord."""
+    fake_supervisor.statename_by_program["files"] = "STOPPED"
+    for _ in range(WAKE_BUDGET_COUNT):
+        assert client.post("/api/apps/files/start").status_code == 200
+        assert fake_supervisor.statename_by_program["files"] == "RUNNING"
+        fake_supervisor.statename_by_program["files"] = "STOPPED"
+
+    refused = client.post("/api/apps/files/start")
+
+    assert refused.status_code == 502
+    assert "could not be started" in refused.get_json()["detail"]
+    assert fake_supervisor.statename_by_program["files"] == "STOPPED"
+
+
+def test_quit_closes_every_window_of_the_app_on_every_desktop_and_stops_it(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    fake_supervisor: FakeSupervisorServer,
+) -> None:
+    fake_supervisor.statename_by_program["files"] = "RUNNING"
+    fake_supervisor.statename_by_program["terminal"] = "RUNNING"
+    registry_path = write_two_app_registry(
+        tmp_path, registry_row_toml("chat", "http://localhost:8000", program="chat", is_critical=True)
+    )
+    inventory = build_inventory(registry_path, broadcaster, prober=probe_all_app_liveness)
+    application = shell_application(tmp_path, inventory, broadcaster)
+    client = application.test_client()
+    _register_client(application, "c1", "home")
+    assert client.post("/api/desktops", json={"name": "Work", "color": "#123456", "glyph": 1}).status_code == 201
+    assert _open_window(client, "files", "/a/").status_code == 201
+    assert _open_window(client, "files", "/b/").status_code == 201
+    assert (
+        client.post("/api/desktops/work/windows", json={"app": "files", "path": "/c/", "client_id": "c1"}).status_code
+        == 201
+    )
+    assert _open_window(client, "terminal", "/?session=terminal-1").status_code == 201
+
+    quit_answer = client.post("/api/apps/files/quit")
+
+    assert quit_answer.status_code == 200 and quit_answer.get_json() == {"name": "files", "is_running": False}
+    assert fake_supervisor.statename_by_program["files"] == "STOPPED"
+    desktops = client.get("/api/desktops").get_json()["desktops"]
+    assert [[window["app"] for window in desktop["windows"]] for desktop in desktops] == [["terminal"], []]
+    # Quitting an app with no windows still stops it; a critical app is refused.
+    fake_supervisor.statename_by_program["files"] = "RUNNING"
+    assert client.post("/api/apps/files/quit").status_code == 200
+    assert fake_supervisor.statename_by_program["files"] == "STOPPED"
+    assert client.post("/api/apps/chat/quit").status_code == 400
+    assert client.post("/api/apps/unknown/quit").status_code == 404
 
 
 def test_an_unreachable_supervisord_is_a_502(

@@ -1,5 +1,6 @@
 """Tests for the inventory: the registry read, liveness, the registry watch, and the diffed broadcast."""
 
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -62,6 +63,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
         "internal",
         "program",
         "critical",
+        "stop_when_no_windows",
         "launch_paths",
         "default_shortcut",
         "launcher_rank",
@@ -152,3 +154,91 @@ def test_a_failing_pass_does_not_end_the_sweep(tmp_path: Path, broadcaster: WebS
     inventory.sweep_once()
     assert probed == [2, 2, 2]
     assert all(entry.is_running for entry in inventory.entries())
+
+
+def test_every_registry_read_is_handed_to_the_hook(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    handed: list[list[str]] = []
+    inventory = AppInventory(
+        registry_path=registry_path,
+        broadcaster=broadcaster,
+        liveness_prober=FakeLivenessProber(),
+        on_registry_read=lambda rows: handed.append([str(row.name) for row in rows]),
+    )
+
+    inventory.reload_registry()
+    write_registry(registry_path, registry_row_toml("files", TEST_FILES_URL, program="files"))
+    inventory.reload_registry()
+    registry_path.write_text("[[apps]\nname = ")
+    inventory.reload_registry()
+
+    # An unreadable registry keeps the last read and hands nothing on.
+    assert handed == [["terminal", "files"], ["files"]]
+
+
+def test_the_sweep_re_reads_a_registry_whose_mtime_moved(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    """The backstop for a write no watch event reported: a sweep pass compares the file's mtime with the
+    last read's and reads again when it moved."""
+    registry_path = write_two_app_registry(tmp_path)
+    inventory = build_inventory(registry_path, broadcaster)
+
+    write_registry(registry_path, registry_row_toml("files", TEST_FILES_URL, program="files"))
+    os.utime(registry_path, ns=(1, 1))
+    inventory.sweep_once()
+    assert [str(entry.row.name) for entry in inventory.entries()] == ["files"]
+
+    # A pass over an unchanged file reads nothing again.
+    handed: list[int] = []
+    inventory_with_hook = AppInventory(
+        registry_path=registry_path,
+        broadcaster=broadcaster,
+        liveness_prober=FakeLivenessProber(),
+        on_registry_read=lambda rows: handed.append(len(rows)),
+    )
+    inventory_with_hook.reload_registry()
+    inventory_with_hook.sweep_once()
+    inventory_with_hook.sweep_once()
+    assert handed == [1]
+
+
+def test_a_broken_registry_is_read_again_only_once_it_changes(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A read that fails still records the file's mtime, so the sweep's backstop does not parse (and log) the
+    same broken file on every pass; the next change to the file is what brings a re-read."""
+    registry_path = write_two_app_registry(tmp_path)
+    inventory = build_inventory(registry_path, broadcaster)
+
+    registry_path.write_text("[[apps]\nname = ")
+    os.utime(registry_path, ns=(1, 1))
+    inventory.sweep_once()
+    assert [str(entry.row.name) for entry in inventory.entries()] == ["terminal", "files"]
+
+    # A good registry written at the same mtime is not read: the failed read was recorded against that mtime.
+    write_registry(registry_path, registry_row_toml("files", TEST_FILES_URL, program="files"))
+    os.utime(registry_path, ns=(1, 1))
+    inventory.sweep_once()
+    assert [str(entry.row.name) for entry in inventory.entries()] == ["terminal", "files"]
+
+    os.utime(registry_path, ns=(2, 2))
+    inventory.sweep_once()
+    assert [str(entry.row.name) for entry in inventory.entries()] == ["files"]
+
+
+def test_a_registry_that_cannot_be_stat_ed_is_warned_about_and_does_not_end_the_sweep(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, loguru_records: list[str]
+) -> None:
+    """A missing registry is the quiet, expected case; any other stat failure (here, a parent that is a file) is
+    logged, so the mtime backstop failing to see a write does not pass in silence."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file where the registry's directory should be")
+    inventory = build_inventory(blocker / "apps.toml", broadcaster)
+
+    inventory.sweep_once()
+
+    assert inventory.entries() == []
+    warnings = [record for record in loguru_records if record.startswith("WARNING")]
+    assert warnings and all("Could not stat the app registry" in record for record in warnings)
+    absent = build_inventory(tmp_path / "absent" / "apps.toml", broadcaster)
+    absent.sweep_once()
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == len(warnings)

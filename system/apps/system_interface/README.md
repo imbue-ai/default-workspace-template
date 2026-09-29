@@ -63,8 +63,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
   placements (`/api/placements/<desktop>`), wallpapers (`/api/wallpapers`,
-  `/wallpapers/<kind>/<name>`), the per-app Stop and Start
-  (`/api/apps/<name>/stop|start`), clients (`/api/clients`, and the arrival
+  `/wallpapers/<kind>/<name>`), the per-app Stop, Start, and Quit
+  (`/api/apps/<name>/stop|start|quit`), clients (`/api/clients`, and the arrival
   `/api/clients/<client>/arrive` a page posts first), client activity
   (`/api/client-activity`), the inventory (`/api/inventory`), each client's
   pinned-entry presentation
@@ -185,11 +185,31 @@ every connect, and on every change) keeps the list current from then on.
 Until that first read answers, a shortcut whose app the page cannot look up
 draws faint as "Connecting to the workspace..." and running it says the page is
 still connecting; only once the apps are known is a missing app reported as
-not registered.
+not registered. The sweep also compares the registry's mtime with the last
+read's and re-reads on a change, the backstop for a write no watch event
+reported (under gVisor and on lima, a change made outside the sandbox raises no
+inotify event in it).
 
-Stop and Start of the whole app act on its supervisord program and are refused
-for critical apps; the desktop offers them on the window menu
-(`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
+Every registry read is also announced to the minds desktop (`app_announcements.py`):
+one `service_registered` event per app whose URL, label, or icon differs from
+the last announced, and one `service_deregistered` per app that left, appended
+to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
+event envelope; the first read after the shell starts announces every app. The
+stream is what `mngr forward` and the desktop resolve app origins from. A
+preview shell announces nothing, since its registry is a copy.
+
+The shell also owns each stoppable app's process (`shell/app_lifecycle.py`,
+the stop-when-no-windows spec): an app whose manifest declares
+`stop_when_no_windows` is stopped once no window on any desktop has shown it
+for a minute (only once someone has visited the workspace, and never while a
+per-app share grant names it, since such a visitor reaches the app without the
+shell: `shell/share_grants.py` reads `data/.secrets/share_grants.toml`), and while any
+stoppable app is stopped the shell holds its port (`shell/port_parking.py`), so
+the first request for the app starts it again and is answered with a loading
+page that reloads into the app. "Quit <app>" on the window menu
+(`frontend/src/views/WindowMenu.ts`) closes every window of the app and stops
+it at once; critical apps offer nothing there and are never stopped or parked.
+The stop and start routes remain for agents. A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 `shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
 stored on its window and reopens there, one that declared `navigation`

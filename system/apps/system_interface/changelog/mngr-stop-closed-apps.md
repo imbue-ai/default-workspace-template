@@ -1,0 +1,11 @@
+The shell owns app lifecycles (`docs/system/specs/stop-when-no-windows.md`):
+
+- A lifecycle manager parks the loopback port of every stoppable app that is stopped and wakes the app on the first connection, answering it with a loading page that reloads until the app is up; wakes are budgeted (3 per 5 minutes per app, counting only wakes the app did not come up from: a wake after which the app ran, or was stopped on purpose while still starting, spends nothing, so an app opened and closed or Quit a few times in five minutes is woken every time) and a wake that ends in FATAL is answered with a "could not start" page. A POST launch to a stopped app wakes it first and waits for it to answer.
+
+- An app whose row carries `stop_when_no_windows` is stopped once no window on any desktop has shown it for 60 seconds, and only once a client has arrived at the shell since it started. An app with a per-app share grant (a `[services.<name>]` table of `data/.secrets/share_grants.toml` that names anyone, while the workspace is shared) is exempt: its visitors reach it without loading the shell, so no window of theirs exists to count (`shell/share_grants.py` reads the grants document; one the gateway would refuse grants no app, warned about once per version of the file). The close hint an app declares is no longer posted to a stopped app.
+
+- `POST /api/apps/<name>/quit` closes every window of the app on every desktop and stops its program; the window menu offers "Quit <app>" in place of Stop and Start. A stoppable app's window keeps its page while the app is stopped (the parker answers it); the stopped placeholder, without its Start button, survives only for rows the shell cannot start.
+
+- The registry read announces registrations to the minds desktop (`app_announcements.py`, formerly the `app-watcher` service), and the inventory's sweep re-reads the registry when its mtime moved. The `app` wire object carries `stop_when_no_windows`.
+
+- The liveness sweep answers a supervised row from supervisord alone: when supervisord cannot answer for it, the row keeps its last liveness instead of being TCP-probed, since a connect on a stopped app's port would now wake it through the parker. Rows without a program are still probed over TCP.

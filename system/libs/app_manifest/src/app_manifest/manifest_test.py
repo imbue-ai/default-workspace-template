@@ -30,6 +30,7 @@ def _full_manifest_data() -> dict[str, object]:
         "display_name": "File Viewer",
         "icon": "icon.svg",
         "critical": False,
+        "stop_when_no_windows": True,
         "priority": "files",
         "program": "files",
         "internal": False,
@@ -70,6 +71,15 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.pin.scope is LocationScope.INDEPENDENT
     assert manifest.pin.default_mode is EntryMode.FLOATING
     assert manifest.window_closed_path == "/api/window-closed"
+    assert manifest.stop_when_no_windows is True
+
+
+def test_stop_when_no_windows_defaults_to_false_and_is_refused_on_a_critical_app() -> None:
+    manifest = AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg"})
+    assert manifest.stop_when_no_windows is False
+    with pytest.raises(ValidationError, match="critical app cannot declare stop_when_no_windows"):
+        AppManifest.model_validate({**_full_manifest_data(), "critical": True, "stop_when_no_windows": True})
+    assert AppManifest.model_validate({**_full_manifest_data(), "critical": True, "stop_when_no_windows": False}).critical
 
 
 def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> None:

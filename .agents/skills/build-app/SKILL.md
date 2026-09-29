@@ -201,7 +201,19 @@ What gets generated:
 - `system/apps/<package>/app.toml` -- the app's manifest: its registered
   `name`, `display_name`, `icon`,
   `priority = "user"` (shed before any built-in under memory pressure),
-  and `program` (its supervisord program). `forward_port.py --manifest`
+  `program` (its supervisord program), and `stop_when_no_windows = true` (the
+  shell stops the app a minute after its last window closes and starts it
+  again on the next request; `false` keeps it running for the life of the
+  workspace). Leave it `true` for an app that only answers requests: the stop
+  frees the whole process while nobody looks at it, its data on disk is
+  untouched, and the next request wakes it. Set it to `false` when the app
+  does work between requests that a stop would lose or interrupt: a
+  background thread or scheduler that refreshes data, a poller or file
+  watcher, a websocket or subscription to an outside service, a job that
+  must finish after the user closes the window, or an API another agent
+  drives with no window open. A stopped app runs nothing until its next
+  request, and the wake serves that request, not the work that was in
+  flight. `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
   editing it). Anything you build for this app outside `system/apps/<package>/`
@@ -257,7 +269,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec <name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -271,8 +283,9 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   FATAL rather than restarting a broken app several times a second for the life
   of the workspace. Built-in services deliberately retry forever instead.
 
-  The command ends in the app's own name, not `uv run <name>`; supervisord
-  resolves that name on PATH. The copy it finds is the console script
+  The command ends in `exec` of the app's own name, not `uv run <name>`, so
+  the app is the process supervisord tagged rather than a child of a wrapper;
+  supervisord resolves that name on PATH. The copy it finds is the console script
   `uv sync --all-packages` writes into the workspace venv -- `uv tool install
   -e` puts the tool's own entry point under your HOME, which supervisord's
   children do not have on PATH. So always sync with `--all-packages`: a
@@ -298,7 +311,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   ```
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && python3 system/scripts/with_secrets.py data/.secrets/example.env -- <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec python3 system/scripts/with_secrets.py data/.secrets/example.env -- <name>"
   ```
 
   A preview (`update-app`'s `preview_app.py`) runs the app under the same
@@ -587,7 +600,7 @@ shed before any built-in service under memory pressure (see
 
 ```ini
 [program:<name>]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port> && <existing_start_command>"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port> && exec <existing_start_command>"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -601,7 +614,7 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8090 && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8090 && exec jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -634,7 +647,7 @@ reread && supervisorctl update` to start the new program.
 
 The `forward_port.py` call MUST come first in the command -- the port
 must be registered before the app starts listening, otherwise the
-app-watcher races with the backend coming up.
+shell's announcement of the registration races with the backend coming up.
 
 For the full program schema and logging knobs, see the shared
 [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
@@ -724,7 +737,10 @@ Flags:
 - `--program`: name of the supervisord program that runs the app --
   the program-name-equals-service-name convention both paths follow, so
   pass the app's own name. Its presence on the registry entry is what
-  lets the workspace offer Stop/Start for the app (supervisord RPC);
+  lets the shell act on the app's process over supervisord's RPC: Quit it
+  from its window menu, stop it once no window shows it, hold its port
+  while it is stopped, and start it again on the next request (the
+  `/api/apps/<name>/stop` and `/start` routes remain for agents);
   omitting it clears any previously-stored value, so every registration
   call is authoritative. Never pass it for unsupervised instances
   (previews, `serve_isolated_instance.py` test servers) -- those own
