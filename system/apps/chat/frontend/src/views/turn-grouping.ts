@@ -446,6 +446,11 @@ type SectionEntry =
   | { kind: "handoff"; node: HandoffNode }
   | { kind: "event"; event: AssistantMessageEvent; step_id: string | null };
 
+/** Returns true if an entry represents conversation progress or work rather than a trailing status. */
+function isSubsequentTurnActivity(entry: SectionEntry): boolean {
+  return entry.kind !== "status";
+}
+
 interface SectionBuilder {
   user_event: UserMessageEvent | null;
   key: string;
@@ -894,15 +899,7 @@ function finalizeSection(
     // A handoff node bounds the reply too: what the agent said before the switch stays above it.
     else if (en.kind === "step" || en.kind === "handoff") lastStepEntryIdx = i;
     else if (en.kind === "status") {
-      const hasLaterContent = section.entries
-        .slice(i + 1)
-        .some(
-          (later) =>
-            later.kind === "step" ||
-            later.kind === "permission" ||
-            later.kind === "handoff" ||
-            (later.kind === "event" && (isWork(later.event) || isProse(later.event))),
-        );
+      const hasLaterContent = section.entries.slice(i + 1).some(isSubsequentTurnActivity);
       if (hasLaterContent) {
         lastWorkEntryIdx = i;
       }
