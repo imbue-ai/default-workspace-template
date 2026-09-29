@@ -1329,7 +1329,7 @@ def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tm
         )
         expect(docs).to_have_attribute("data-cell", "2,2")
         # An empty cell needs nothing stepping aside: the other shortcut stayed where it was.
-        assert _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (0, 1)
+        assert _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (1, 0)
 
         # Held over the cell docs is in, without releasing: docs has already stepped aside to (1, 2), the
         # nearest free cell to the one it is being displaced from, and notes is the icon in the hand.
@@ -1338,7 +1338,7 @@ def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tm
         expect(notes).to_have_attribute("data-cell", "2,2")
         expect(docs).to_have_attribute("data-cell", "1,2")
         # Nothing is written until the drop: the step aside is the desktop showing where the icon would land.
-        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (2, 2), _SECOND_SHORTCUT_KEY: (0, 1)}
+        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (2, 2), _SECOND_SHORTCUT_KEY: (1, 0)}
 
         page.mouse.up()
         wait_for(
