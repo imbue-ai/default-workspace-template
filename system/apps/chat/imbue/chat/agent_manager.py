@@ -3391,14 +3391,18 @@ class AgentManager:
                 self._spare_ids_being_discarded.add(spare.chat_id)
                 if is_claimed and error is not None:
                     self._mark_creation_failed_locked(spare.chat_id, error)
-        if failure is not None:
-            _loguru_logger.warning("Could not start spare agent {}: {}", agent_id, error)
-            self._discard_spare(spare.chat_id)
-        if is_claimed:
-            self._settle_claimed_spare(spare.chat_id, claim, failure is None, error)
+        if failure is None and is_claimed:
+            self._settle_claimed_spare(spare.chat_id, claim, True, None)
         elif failure is None:
             _loguru_logger.debug("Spare agent {} is ready", agent_id)
             self.ensure_spare_chat()
+        elif is_claimed:
+            _loguru_logger.warning("Could not start spare agent {} for its chat: {}", agent_id, error)
+            self._discard_spare(spare.chat_id)
+            self._settle_claimed_spare(spare.chat_id, claim, False, error)
+        else:
+            _loguru_logger.warning("Could not start spare agent {}: {}", agent_id, error)
+            self._discard_spare(spare.chat_id)
 
     def _settle_claimed_spare(
         self, chat_id: ChatId, claim: "_SpareClaim | None", is_created: bool, error: str | None
