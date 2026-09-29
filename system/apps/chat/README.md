@@ -201,6 +201,24 @@ alike: the catalog for a static harness, for codex the options an agent of the
 account was last offered, and nothing for antigravity, whose model is changed
 from the agent's terminal.
 
+A new chat starts on an agent that is already running (`spare_chat.py`). The
+chat app keeps one spare agent started on the terms the next new chat would get
+(the default account, the primary agent's project, and the fast mode a new chat
+starts in), created silent under the id and "Chat N" name of the chat it will
+become, and hidden from every chat listing, send, and route. A create that fits
+those terms and names no chat id, name, labels, or templates of its own is
+handed the spare instead of running `mngr create`: the chat is listed at once,
+running, so its first message never waits on "Connecting...". Its message and
+model pick follow through the send path, and a new spare is started for the
+chat after it. Any other create runs as before. The session sweep keeps the
+spare current: one whose terms went stale or whose process died is destroyed
+and replaced, and a spare whose create or destroy failed waits five minutes
+before the next attempt. The spares are recorded in
+`data/.apps/chat/spare_chat.json` before their create starts, so a restart of
+the app keeps a ready spare and destroys one whose create it cut short. `GET
+/api/agents`, the plain mngr listing, does list the spare. A secondary chat
+keeps none.
+
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
 wake-ups, a lead's replies to a worker, the automation runner, and the

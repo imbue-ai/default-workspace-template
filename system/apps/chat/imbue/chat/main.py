@@ -38,6 +38,8 @@ from imbue.chat.server import create_application
 from imbue.chat.shell_client import DisconnectedShell
 from imbue.chat.shell_client import ShellLayoutClient
 from imbue.chat.shell_client import shell_base_url
+from imbue.chat.spare_chat import SPARE_CHAT_FILENAME
+from imbue.chat.spare_chat import SpareChatStore
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -138,6 +140,8 @@ def build_production_state(
         chat_files_root=chat_records_root,
         chat_settings=chat_settings,
         is_secondary=is_secondary,
+        # The agent kept started for the next new chat; a secondary's chats are a scratch copy, so it keeps none.
+        spare_chat_store=None if is_secondary else SpareChatStore(path=data_dir / SPARE_CHAT_FILENAME),
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
