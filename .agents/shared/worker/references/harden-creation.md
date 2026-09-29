@@ -265,8 +265,8 @@ invocation breaks collection. What it selects, and why, is in
 changed packages' and skills' own suites with their ratchets, the suites of
 whatever declares a dependency on them, the browser tests too of an app whose
 Python changed, only the `browser` and `frontend` tests of the chat app or the
-shell when its frontend alone changed (any other app runs whole), and the
-frontend checks. A changed path outside every package and skill, or in a
+shell when its frontend alone changed (any other app runs whole), each changed
+test file of those two on its own, and the frontend checks. A changed path outside every package and skill, or in a
 package the root project depends on, brings in the full root suite; that is
 the gate working, not a gap. Do not drop any line of it.
 

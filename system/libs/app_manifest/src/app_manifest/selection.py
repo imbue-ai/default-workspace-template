@@ -482,16 +482,22 @@ def _referenced_directory_requests(
 
 
 def _select_for_unit(context: _SelectionContext, path: str, unit: str) -> _PathOutcome:
-    """A package's or skill's own suite; for a package's non-test file, also the suites of the
-    members that depend on it and of the directories an app's manifest references, and the full
-    root suite when the root project depends on the package or on one of those members. A
-    non-test file in an app's frontend selects nothing here."""
+    """A package's or skill's own suite, or only the changed test file in an app with its own
+    pytest root; for a package's non-test file, also the suites of the members that depend on it
+    and of the directories an app's manifest references, and the full root suite when the root
+    project depends on the package or on one of those members. A non-test file in an app's
+    frontend selects nothing here."""
     layout = context.layout
     # An app's frontend is built into the app's own bundle, which no Python code of the app or
     # of a package that depends on it loads; its tests marked browser or frontend, and its npm
     # consumers, are the frontend selection's.
     if _owning_npm_package(layout, path) is not None and not is_test_file_name(path):
         return _PathOutcome()
+    # Nothing else in an own-root suite imports one of its test files, so a changed one runs alone,
+    # every marker included; the whole suite runs when the app's own code changes.
+    if is_test_file_name(path) and unit in layout.own_root_units:
+        reason = _reason(path, ChangedPathClass.PACKAGE, f"changed in {unit}")
+        return _PathOutcome(pytest_requests=_present([_file_request(layout, path, reason)]))
     requests = list(
         _present(
             [
@@ -815,6 +821,10 @@ def _own_root_commands(
     scopes = {request.marker_scope for request in whole}
     split_type_check = _SPLIT_TYPE_CHECKS.get(root)
     relative_files = [_relative_to_root(root, file) for file in files]
+    # A marker run leaves out the files that run on their own below, so no test runs twice; a
+    # whole default run keeps them, since leaving tests out of it could drop it under its
+    # coverage floor.
+    ignored_files = tuple(f"--ignore={file}" for file in relative_files)
     is_whole_run = bool(scopes - {MarkerScope.FRONTEND})
     runs_type_check_test = split_type_check is not None and (
         is_whole_run or split_type_check.split("::")[0] in relative_files
@@ -832,10 +842,10 @@ def _own_root_commands(
         commands.append(_command(SuiteKind.PYTEST, root, ("uv", "run", "pytest", *deselect), reasons))
         if MarkerScope.FRONTEND in scopes:
             # The default run already holds the frontend-marked tests, not the browser ones.
-            argv = (*partial_run, "-m", _BROWSER_MARKER)
+            argv = (*partial_run, "-m", _BROWSER_MARKER, *ignored_files)
             commands.append(_command(SuiteKind.PYTEST, root, argv, reasons))
     elif MarkerScope.FRONTEND in scopes:
-        argv = (*partial_run, "-m", _FRONTEND_MARKERS_EXPRESSION)
+        argv = (*partial_run, "-m", _FRONTEND_MARKERS_EXPRESSION, *ignored_files)
         commands.append(_command(SuiteKind.PYTEST, root, argv, reasons))
     if relative_files:
         # A file named on its own runs in full, whatever its markers; a whole run may skip it.
