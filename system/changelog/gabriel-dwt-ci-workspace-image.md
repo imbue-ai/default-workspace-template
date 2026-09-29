@@ -2,4 +2,4 @@ CI now runs the three pytest roots inside the workspace image on Modal, through 
 
 The job runs when the repository variable `TEST_IN_WORKSPACE_IMAGE` is `true` and the PR is not from a fork (it reads the Modal token from Vault through the `dwt_ci_gh` role). Where it runs, the bare-runner `test` job no longer runs the Python suites itself, matching how mngr's CI is laid out; workspace repos made from the template, and fork PRs, keep the bare-runner suites.
 
-Removed `system/scripts/test_claude_plugin_first_session.py`: it needed a live Claude credential, which no automated run has ever had, so nothing ever ran it.
+Removed `system/scripts/test_claude_plugin_first_session.py`: it needed a live Claude credential, which no CI run has ever had, so only a deliberate manual run could exercise it and none was scheduled.
