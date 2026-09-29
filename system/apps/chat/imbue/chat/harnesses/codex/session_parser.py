@@ -28,13 +28,19 @@ Codex has emitted that human turn under two shapes across versions: older codex 
 ``event_msg`` ``item_completed`` with a typed ``item`` (``UserMessage`` for the human
 turn, plus ``AgentMessage`` / ``CommandExecution`` / ``Reasoning`` display duplicates
 of the canonical ``response_item`` lines). We accept both user-turn shapes and ignore
-the rest of ``item_completed`` (already covered by ``response_item``). Everything else
-in ``event_msg`` (``agent_message`` echoes, ``token_count``) is skipped in this core cut.
+the rest of ``item_completed`` (already covered by ``response_item``). ``event_msg``
+``token_count`` becomes an internal usage marker (see :data:`TOKEN_USAGE_MARKER_TYPE`);
+everything else in ``event_msg`` (``agent_message`` echoes) is skipped.
 
-Lossy by design for this first cut -- all deferred to later slices: ``usage``
-(``token_count`` -> Phase 2, and coarse), ``is_auth_error`` (lives in codex's
-``logs_2.sqlite``, never the transcript), subagent linkage, tk step-progress.
-``stop_reason`` is left null.
+Usage arrives after the message it measures: codex writes one ``token_count`` per model
+response, after the response's items and the outputs of every tool call it made. An
+assistant event is therefore emitted with ``usage: None`` and the watcher stamps the
+response's usage onto it when the ``token_count`` lands, as an in-place supersession of the
+stored event (see ``CodexTranscriptLoader``). Holding the event back instead would keep a
+tool call off the screen for as long as the tool runs.
+
+Lossy by design: ``is_auth_error`` (lives in codex's ``logs_2.sqlite``, never the
+transcript), subagent linkage, tk step-progress. ``stop_reason`` is left null.
 
 Event ids prefer codex's own stable identity (the assistant message ``id``, or a
 tool call's ``call_id``) so the watcher dedups codex 0.144.3's re-serialised
@@ -103,6 +109,38 @@ _CODEX_ERROR_KINDS: Final[dict[str, str]] = {
     "overloaded": "overloaded",
     "context_window_exceeded": "request_too_large",
 }
+
+
+def _token_count(usage: dict[str, Any], key: str) -> int | None:
+    value = usage.get(key)
+    return value if isinstance(value, int) else None
+
+
+def _chat_usage(info: Any) -> dict[str, int | None] | None:
+    """One response's usage (``token_count`` ``info.last_token_usage``) in the chat's usage shape, or None.
+
+    The shape is the one the claude and pi parsers emit, whose ``input_tokens`` excludes the
+    cache buckets. Codex's ``input_tokens`` includes both its cached (read) and cache-written
+    subsets, so they are subtracted back out; ``output_tokens`` already includes the reasoning
+    tokens, which bill as output. A block with no input or output count describes nothing.
+    """
+    if not isinstance(info, dict):
+        return None
+    usage = info.get("last_token_usage")
+    if not isinstance(usage, dict):
+        return None
+    input_tokens = _token_count(usage, "input_tokens")
+    output_tokens = _token_count(usage, "output_tokens")
+    if input_tokens is None and output_tokens is None:
+        return None
+    cache_read = _token_count(usage, "cached_input_tokens")
+    cache_write = _token_count(usage, "cache_write_input_tokens")
+    return {
+        "input_tokens": max((input_tokens or 0) - (cache_read or 0) - (cache_write or 0), 0),
+        "output_tokens": output_tokens or 0,
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
+    }
 
 
 def _join_output_text(content: Any) -> str:
@@ -235,7 +273,7 @@ def _assistant_event(
         "tool_calls": tool_calls,
         # deferred (derive from task_complete later)
         "stop_reason": None,
-        # deferred (token_count -> Phase 2)
+        # Stamped later by the watcher, from the response's ``token_count`` (see the module docstring).
         "usage": None,
         "message_uuid": event_id,
         # A codex failure never arrives as an assistant message -- it arrives on the turn's
@@ -540,6 +578,18 @@ def parse_lines(
             # Other item_completed items (AgentMessage, CommandExecution, Reasoning)
             # are display duplicates of the response_item lines we already parse; skip.
             return []
+        # The usage of the model response that just finished, for the watcher to stamp on that
+        # response's last assistant event. The running total lets it recognise a repeat.
+        if payload_type == "token_count":
+            info = payload.get("info")
+            total = info.get("total_token_usage") if isinstance(info, dict) else None
+            return [
+                {
+                    "type": TOKEN_USAGE_MARKER_TYPE,
+                    "usage": _chat_usage(info),
+                    "total_usage": total if isinstance(total, dict) else None,
+                }
+            ]
         # A user interrupt aborts the turn. Codex does NOT persist the synthetic
         # aborted tool output, so an in-flight tool call would otherwise stay
         # unmatched forever and pin the activity dot at "Running". Emit a lightweight
@@ -687,6 +737,11 @@ def parse_lines(
 # Internal marker (never ingested into the store, never on the wire): tells the watcher
 # that this rollout line carries readable reasoning for the next assistant event.
 THINKING_SOURCE_MARKER_TYPE: Final[str] = "_codex_thinking_source"
+
+# Internal marker (never ingested into the store, never on the wire): one ``token_count``,
+# carrying ``usage`` (the finished response's usage in the chat's shape, or None) and
+# ``total_usage`` (codex's running session total, or None).
+TOKEN_USAGE_MARKER_TYPE: Final[str] = "_codex_token_usage"
 
 
 def _reasoning_summary_text(payload: dict[str, Any]) -> str:
