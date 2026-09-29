@@ -113,11 +113,12 @@ The mark is drawn, not assembled. Name the object and pick the pair, settle the 
 and the nominal weight before anything goes down, then draw -- placing the points already
 uneven, rather than laying down something regular and disturbing it afterwards.
 
-**Draw it in one pass.** Stop when the mark is there, and do not emit a path and then
-revise it: nudging it, re-balancing it, regularising it, tidying it up. Every pass over
-the same geometry averages out the unevenness the look depends on. If a mark comes out
-wrong, throw it away and draw the whole thing again rather than correcting the one you
-have.
+**Draw it, don't tidy it.** Stop when the mark is there, and do not go back over what is
+already down to regularise it -- nudging, re-balancing, smoothing, straightening. Each
+such pass averages out the unevenness the look depends on.
+
+Drawing again is not tidying. When part of the object is wrong, draw that part again;
+when the mark as a whole is not working, throw it away and draw the whole thing.
 
 ## What the workspace draws behind one
 
