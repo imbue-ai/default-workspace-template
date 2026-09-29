@@ -86,6 +86,9 @@ class ListedChat:
     # The mngr lifecycle state of the agent the chat runs on.
     lifecycle_state: str
     is_converging: bool
+    # A send is in flight, waiting for the agent's harness to come up; a restart would land
+    # underneath it.
+    is_receiving_message: bool
 
     @property
     def is_idle(self) -> bool:
@@ -93,6 +96,7 @@ class ListedChat:
             self.status == IDLE_CHAT_STATUS
             and self.lifecycle_state == WAITING_LIFECYCLE_STATE
             and not self.is_converging
+            and not self.is_receiving_message
         )
 
     @property
@@ -104,6 +108,8 @@ class ListedChat:
             return "waiting on a dialog"
         if self.status == ERROR_CHAT_STATUS:
             return "in an error state"
+        if self.is_receiving_message:
+            return "receiving a message"
         return "working"
 
 
@@ -130,6 +136,7 @@ def parse_chat_list(body: object) -> list[ListedChat]:
                 status=str(raw.get("status") or ""),
                 lifecycle_state=str(active_agent.get("state") or ""),
                 is_converging=raw.get("handoff") is not None,
+                is_receiving_message=active_agent.get("is_connecting") is True,
             )
         )
     return chats
