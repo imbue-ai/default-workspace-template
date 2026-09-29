@@ -2586,7 +2586,9 @@ class AgentManager:
                     (
                         agent
                         for agent in self._agents.values()
-                        if agent.name == chat_ref and not self._is_archived_member_locked(agent.id)
+                        if agent.name == chat_ref
+                        and not self._is_archived_member_locked(agent.id)
+                        and not self._is_spare_locked(agent.id)
                     ),
                     None,
                 )

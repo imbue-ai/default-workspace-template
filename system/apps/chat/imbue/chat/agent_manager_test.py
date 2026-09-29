@@ -5108,6 +5108,24 @@ def test_a_new_chat_that_brings_a_message_sends_it_to_the_handed_spare(
         manager.stop()
 
 
+def test_a_rename_addressed_to_a_spare_name_leaves_the_spare_alone(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+
+        manager.rename_chat("Chat-1", "Renamed 6604")
+
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["create"]
+        agent = manager.get_agent_by_id(spare.chat_id)
+        assert agent is not None and agent.name == "Chat-1"
+    finally:
+        manager.stop()
+
+
 def test_a_spare_is_not_ready_until_its_harness_says_it_accepts_input(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
