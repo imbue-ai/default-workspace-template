@@ -170,6 +170,10 @@ def _all_healthy(_url: str) -> int:
     return 200
 
 
+def _plenty_of_disk(_path: Path) -> int:
+    return 1024**4
+
+
 def _up(
     tmp_path: Path,
     *,
@@ -208,7 +212,7 @@ def test_the_self_hint_still_names_where_this_script_actually_lives() -> None:
     assert str(_SCRIPT).endswith(mod._SELF_HINT)
 
 
-# --- bare instance (own testing) --------------------------------------------
+# bare instance (own testing)
 
 
 def test_up_boots_on_a_port_injects_port_env_and_reports_url(
@@ -427,7 +431,7 @@ def test_up_clears_a_stale_instance_before_booting(tmp_path: Path) -> None:
     assert json.loads(_state_path(tmp_path).read_text())["pids"][0] == 4242
 
 
-# --- registered service (surfaced, no wrapper) ------------------------------
+# registered service (surfaced, no wrapper)
 
 
 def test_up_with_service_name_registers_the_instance(tmp_path: Path) -> None:
@@ -445,7 +449,7 @@ def test_up_with_service_name_registers_the_instance(tmp_path: Path) -> None:
     assert state["services"] == ["demo-app"]
 
 
-# --- preview (surfaced, wrapped) --------------------------------------------
+# preview (surfaced, wrapped)
 
 
 def _up_preview(
@@ -580,7 +584,7 @@ def _first_port(url: str, spawner: _FakeSpawner) -> bool:
     return inner_port is not None and f":{inner_port}" in url
 
 
-# --- teardown ---------------------------------------------------------------
+# teardown
 
 
 def test_down_tears_down_servers_and_services(tmp_path: Path) -> None:
@@ -693,7 +697,7 @@ def test_up_refuses_to_boot_over_an_instance_it_could_not_clear(
     assert not spawner.detached_spawns
 
 
-# --- refresh (in-place inner reboot) ----------------------------------------
+# refresh (in-place inner reboot)
 
 
 def _refresh(
@@ -816,7 +820,7 @@ def test_down_reports_unreadable_state(tmp_path: Path) -> None:
     assert code == 1
 
 
-# --- CLI + parsing ----------------------------------------------------------
+# CLI + parsing
 
 
 def test_parse_env_assignments_rejects_a_missing_equals() -> None:
@@ -910,6 +914,7 @@ def test_copies_land_in_the_scratch_space_and_fill_their_placeholder(
         http=_FakeHttp(_all_healthy),
         spawner=spawner,
         sleeper=lambda _seconds: None,
+        free_space=_plenty_of_disk,
     )
 
     assert code == 0
@@ -928,6 +933,90 @@ def test_copies_land_in_the_scratch_space_and_fill_their_placeholder(
     state = json.loads(_state_path(tmp_path).read_text())
     assert state["copies"]["store"] == str(copy_path)
     assert state["scratch"] == str(scratch)
+
+
+def test_a_copy_that_would_not_fit_on_disk_fails_the_boot_before_anything_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "data" / ".apps" / "my-service"
+    source.mkdir(parents=True)
+    (source / "records.json").write_text("[1]")
+    spawner = _FakeSpawner()
+    code = _up(
+        tmp_path,
+        spawner=spawner,
+        copy_sources={"store": "data/.apps/my-service"},
+        free_space=lambda _path: 0,
+    )
+
+    assert code == 1
+    assert spawner.detached_spawns == []
+    assert not mod._state_dir(tmp_path, _NAME).exists()
+    assert "--copy store=data/.apps/my-service" in capsys.readouterr().err
+
+
+def _seed_store(root: Path) -> Path:
+    source = root / "store"
+    (source / "repos" / "one").mkdir(parents=True)
+    (source / "repos" / "one" / "pack.bin").write_bytes(b"x" * 3000)
+    (source / "records.json").write_text("[1]")
+    os.symlink("records.json", source / "latest.json")
+    return source
+
+
+def test_a_copys_size_counts_file_bytes_and_not_symlink_targets(tmp_path: Path) -> None:
+    assert mod.tree_size_bytes(_seed_store(tmp_path)) == 3000 + len("[1]")
+
+
+def test_a_copy_that_fits_is_made_whole_with_symlinks_kept(tmp_path: Path) -> None:
+    destination = tmp_path / "copies" / "data"
+
+    mod.copy_tree_checked(_seed_store(tmp_path), destination, _plenty_of_disk)
+
+    assert (destination / "repos" / "one" / "pack.bin").read_bytes() == b"x" * 3000
+    assert os.readlink(destination / "latest.json") == "records.json"
+
+
+def test_a_copy_that_would_not_leave_the_reserve_is_refused_before_writing(
+    tmp_path: Path,
+) -> None:
+    source = _seed_store(tmp_path)
+    destination = tmp_path / "copies" / "data"
+    probed: list[Path] = []
+
+    def just_short(path: Path) -> int:
+        probed.append(path)
+        return mod.COPY_RESERVE_BYTES + mod.tree_size_bytes(source) - 1
+
+    with pytest.raises(mod.InstanceError, match="Copy only what the test needs"):
+        mod.copy_tree_checked(source, destination, just_short)
+
+    assert not destination.parent.exists()
+    # The probe asks about the disk the copy would land on, not the source's.
+    assert probed == [tmp_path]
+
+
+def test_a_copy_that_fails_part_way_is_removed(tmp_path: Path) -> None:
+    # copytree copies everything else, then fails on the pipe it cannot copy.
+    source = _seed_store(tmp_path)
+    os.mkfifo(source / "repos" / "one" / "pipe")
+    destination = tmp_path / "copies" / "data"
+
+    with pytest.raises(mod.InstanceError, match="failed"):
+        mod.copy_tree_checked(source, destination, _plenty_of_disk)
+
+    assert not destination.exists()
+
+
+def test_a_copy_never_lands_on_an_existing_destination(tmp_path: Path) -> None:
+    destination = tmp_path / "copies" / "data"
+    destination.mkdir(parents=True)
+    (destination / "kept.json").write_text("{}")
+
+    with pytest.raises(mod.InstanceError, match="already exists"):
+        mod.copy_tree_checked(_seed_store(tmp_path), destination, _plenty_of_disk)
+
+    assert (destination / "kept.json").exists()
 
 
 def test_a_port_with_no_env_var_reaches_the_argv_by_placeholder_alone(
@@ -1002,6 +1091,7 @@ def test_refresh_replays_the_named_ports_and_copies(tmp_path: Path) -> None:
             http=_FakeHttp(_all_healthy),
             spawner=_FakeSpawner(),
             sleeper=lambda _seconds: None,
+            free_space=_plenty_of_disk,
         )
         == 0
     )
@@ -1083,7 +1173,7 @@ def test_main_routes_down(tmp_path: Path) -> None:
     assert code == 0  # no state -> idempotent no-op
 
 
-# --- wrapper page (moved here with the wrapper server) ----------------------
+# wrapper page
 
 
 def test_wrapper_page_derives_the_inner_origin_from_location_host() -> None:
