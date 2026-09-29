@@ -1,10 +1,14 @@
 """The skill's scripts import each other as siblings (the directory is ``sys.path[0]``
 when ``update_self.py`` runs); put it there for the tests too."""
 
+import json
 import os
 import sys
+import threading
 from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 from messenger_testing import RecordingMessengers
@@ -50,3 +54,54 @@ def recording_messengers(
     messengers = RecordingMessengers(bin_dir, tmp_path / "messenger-calls.jsonl")
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     return messengers
+
+
+class _FakeChatListHandler(BaseHTTPRequestHandler):
+    """The chat app's ``GET /api/chats``, answering a scripted sequence of chat lists."""
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return
+
+    def do_GET(self) -> None:
+        server: Any = self.server
+        if self.path != "/api/chats":
+            self.send_response(404)
+            self.end_headers()
+            return
+        server.list_reads += 1
+        # The last scripted answer repeats, so a test scripts only the transitions it is about.
+        status, body = (
+            server.answers.pop(0) if len(server.answers) > 1 else server.answers[0]
+        )
+        payload = json.dumps(body).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+@pytest.fixture
+def fake_chat_list(tmp_path: Path) -> Iterator[Any]:
+    """A chat app over loopback, registered under the ``chat`` row of ``tmp_path/workspace``'s registry.
+
+    ``server.answers`` is the sequence of ``(status, body)`` its chat list gives, the last one
+    repeating; ``server.list_reads`` counts the reads; ``server.workspace`` is the workspace root.
+    """
+    server: Any = ThreadingHTTPServer(("127.0.0.1", 0), _FakeChatListHandler)
+    server.answers = [(200, {"chats": []})]
+    server.list_reads = 0
+    server.workspace = tmp_path / "workspace"
+    registry = server.workspace / "data" / ".state" / "apps.toml"
+    registry.parent.mkdir(parents=True)
+    registry.write_text(
+        f'[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:{server.server_address[1]}"\n'
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
