@@ -4894,6 +4894,20 @@ def test_the_empty_list_chat_is_minted_once_and_handed_back_while_it_waits(
     assert q.empty()
 
 
+def test_the_empty_list_chat_is_never_a_seeded_chat(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    manager, _store = _seed_manager(broadcaster, tmp_path)
+    try:
+        seeded = manager.seed_chat("Getting started", _seed_turns())
+
+        empty_list_chat = manager.awaiting_chat_for_empty_list()
+    finally:
+        manager.stop()
+
+    assert empty_list_chat.chat_id != seeded.chat_id
+    assert empty_list_chat.is_seeded is False
+    assert empty_list_chat.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+
+
 def test_discarding_an_awaiting_chat_drops_it(agent_manager: AgentManager) -> None:
     minted = agent_manager.mint_awaiting_chat("")
 
