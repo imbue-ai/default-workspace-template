@@ -83,9 +83,10 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`,
 `default_shortcuts_offered.json` (the apps whose default shortcut the shell
-has offered), `placements/<desktop>/<client>.json`, `window_paths/<client>.json` (a client's
-own paths for independent windows), `clients.json`, `users.json` (the desktop
-made for each visiting user), `avatar_selection.json`, and the client-activity
+has offered), `placements/<desktop>/<client>.json`,
+`window_paths/<client>.json` (a client's own paths for independent windows),
+`clients.json`, `users.json` (the desktop made for each visiting user),
+`avatar_selection.json`, and the client-activity
 event log (`events/client_activity/events.jsonl`, what `layout.py context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
 `data/.apps/system_interface/wallpapers/` (files the user adds); avatar designs
@@ -118,10 +119,11 @@ and the profile cache.
   registry has been read. An app that registers later has its default
   shortcut added to every desktop once, on the registry change and on every
   read; `default_shortcuts_offered.json` lists the apps offered so far, so a
-  shortcut the user removed stays removed. A client record holds the client's active desktop,
-  when it was last seen, and the user it last arrived as; clients unseen for
-  a while are pruned with their placement files. `users.json` holds the
-  desktop made for each visiting user (see "Who is here").
+  shortcut the user removed stays removed. A client record holds the client's
+  active desktop, when it was last seen, and the user it last arrived as;
+  clients unseen for a while are pruned with their placement files.
+  `users.json` holds the desktop made for each visiting user (see "Who is
+  here").
 - **The pure editor** (`shell/desktop_document.py`): every verb (open, close,
   focus, minimize, restore, maximize, snap, place, detach, reattach, the
   shortcut edits) and
