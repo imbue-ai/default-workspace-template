@@ -53,12 +53,13 @@ chat transcript renders as a collapsed "Browser fleet" chip instead of a user
 bubble; the browser app's wake-up nudges use it. The tag is pinned against the
 chat app's copy by a test there.
 
-``--interrupt`` restarts the chat's agent first, through the chat app's interrupt route
-(the process is replaced and resumes its own conversation, and any turn in progress
-ends), then sends the message, if one was given,
-the same way as any other. A refusal is final there too; only when the chat app cannot
-take the restart does ``mngr start --restart --no-resume`` do it, and ``mngr message``
-then carries the text. A restart with no message exits 0 once the agent is back.
+``--interrupt`` restarts the chat's agent first, through the chat app's
+interrupt route (the process is replaced and resumes its own conversation, and
+any turn in progress ends), then sends the message, if one was given, the same
+way as any other. A refusal is final there too; only when the chat app cannot
+take the restart does ``mngr start --restart --no-resume`` do it, and
+``mngr message`` then carries the text. A restart with no message exits 0 once
+the agent is back.
 
 ``--create`` makes a new chat instead of messaging one, through the chat app's
 create route, so the chat is what a launcher-started chat would be: the app mints its id,
