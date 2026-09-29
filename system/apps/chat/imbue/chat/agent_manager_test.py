@@ -5483,6 +5483,10 @@ def test_a_chat_that_claimed_a_spare_whose_creation_breaks_off_is_answered(
             starting.with_phase(SpareChatPhase.DISCARDING)
         ]
         assert manager._spare_retry_not_before > time.monotonic()
+
+        with pytest.raises(AgentCreationError, match="still being cleaned up"):
+            manager.create_chat("", chat_id=created.chat_id)
+        assert [create[3] for create in _mngr_calls(argv_log, "create")].count(starting.chat_id) == 1
     finally:
         release.write_text("")
         manager.stop()

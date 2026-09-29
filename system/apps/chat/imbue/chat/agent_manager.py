@@ -3000,6 +3000,13 @@ class AgentManager:
 
             seed_record: ChatRecord | None = None
             if chat_id:
+                # A chat whose claimed spare failed keeps the spare's id, and the spare's agent under
+                # it is destroyed first: a create under that id before then would be hidden as the
+                # spare, and destroyed with it.
+                if self._is_spare_locked(chat_id):
+                    raise AgentCreationError(
+                        f"Chat {chat_id}'s last agent is still being cleaned up; try again in a few minutes"
+                    )
                 provisional = self._provisional_chats.get(ChatId(chat_id))
                 if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
                     raise AgentCreationError(f"Chat {chat_id} is not waiting to be launched")
