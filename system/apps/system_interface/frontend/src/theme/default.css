@@ -42,9 +42,10 @@
   /* The icon tile's corner, as a fraction of the tile: an icon shown larger or smaller keeps
      the same silhouette rather than growing a corner that is suddenly too tight or too round. */
   --desk-icon-radius: calc(var(--desk-icon-size) * 0.32);
-  /* The icon tile's own elevation: a wide soft cast under a tight one, the pair the shortcuts
-     want over a photograph -- lighter and further spread than the --shadow-raised the chrome uses. */
-  --desk-icon-shadow: 0 3px 8px 0 rgb(0 0 0 / 0.15), 0 1px 1px 0 rgb(0 0 0 / 0.08);
+  /* The icon tile's own elevation: a soft cast under a tight one. Tighter and darker than a shadow
+     for a photograph needs to be -- a tile sits on the bar's own white as often as on the wallpaper,
+     and a wide pale cast disappears there. */
+  --desk-icon-shadow: 0 2px 6px 0 rgb(0 0 0 / 0.2), 0 1px 2px 0 rgb(0 0 0 / 0.16);
   /* A hairline of light along a tile's top and bottom edges, drawn on the box rather than into the
      art: it gives a flat tile a rounded face without every icon having to draw one for itself. */
   --desk-icon-highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.3), inset 0 -1px 0 0 rgb(255 255 255 / 0.3);
@@ -53,7 +54,7 @@
   --desk-shortcut-label-shadow: drop-shadow(0 2px 4px rgb(0 0 0 / 0.45)) drop-shadow(0 1px 0.5px rgb(0 0 0 / 0.4));
   /* The tile's elevation while a drag holds it: the same pair, deeper and further spread, so the icon in
      the hand reads as lifted off the desktop rather than as a bigger icon. */
-  --desk-icon-shadow-lifted: 0 8px 20px 0 rgb(0 0 0 / 0.22), 0 3px 4px 0 rgb(0 0 0 / 0.12);
+  --desk-icon-shadow-lifted: 0 8px 20px 0 rgb(0 0 0 / 0.28), 0 3px 4px 0 rgb(0 0 0 / 0.18);
   /* How much a shortcut grows while it is in the hand: enough to read as picked up, not so much that it
      covers the cells it is being carried over. */
   --desk-shortcut-lift-scale: 1.12;
