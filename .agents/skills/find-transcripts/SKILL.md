@@ -107,6 +107,7 @@ jq -r '
   if .type == "step" then
     "\(.source | ascii_upcase): \(.message)"
     + ([.tool_calls[]? | "\n  -> \(.function_name)(\(.arguments | tojson | .[0:300]))"] | join(""))
+    + ([.observation.results[]? | "\n  \(.content | text)"] | join(""))
   elif .type == "observation" then
     [.results[] | "TOOL(\(.extra.tool_name // "?")): \(.content | text | .[0:300])"] | join("\n")
   elif .type == "user_message" then "USER: \(.content)"
