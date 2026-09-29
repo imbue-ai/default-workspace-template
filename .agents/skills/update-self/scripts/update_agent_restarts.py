@@ -48,13 +48,6 @@ SELF_RESTART_LOG_NAME = "helper.log"
 # The variable mngr tags an agent's processes with and kills them by on a stop.
 AGENT_ID_ENV = "MNGR_AGENT_ID"
 
-# The detached runner ``run_in_background.py`` leaves while a chat's background command runs. It
-# gives the command the chat's agent id, so a restart of the chat kills the command.
-RUN_IN_BACKGROUND_SCRIPT_NAME = "run_in_background.py"
-BACKGROUND_RUNNER_FLAG = "--foreground"
-BACKGROUND_RUNNER_CHAT_ID_FLAG = "--chat-id"
-PROC_DIR = Path("/proc")
-
 # The chat app's status for a chat whose agent has ended its turn, and the mngr lifecycle
 # state its Stop hook leaves behind. A transcript-derived "idle" alone can show for a moment
 # between an assistant message and the tool call after it.
@@ -118,16 +111,9 @@ class ListedChat:
 
 
 @dataclass(frozen=True)
-class LeftRunningChat:
-    chat: ListedChat
-    # What the chat is doing, in the words the results message uses.
-    busy_with: str
-
-
-@dataclass(frozen=True)
 class AgentRestartPlan:
     to_restart: tuple[ListedChat, ...]
-    left_running: tuple[LeftRunningChat, ...]
+    left_running: tuple[ListedChat, ...]
 
 
 def parse_chat_list(body: object) -> list[ListedChat]:
@@ -156,69 +142,26 @@ def parse_chat_list(body: object) -> list[ListedChat]:
     return chats
 
 
-def read_process_argvs(proc_dir: Path = PROC_DIR) -> list[list[str]]:
-    """Every running process's argv, from ``/proc``; none on a host without it (not a workspace)."""
-    argvs: list[list[str]] = []
-    for cmdline_path in proc_dir.glob("[0-9]*/cmdline"):
-        try:
-            raw = cmdline_path.read_bytes()
-        except (FileNotFoundError, ProcessLookupError):
-            # The process exited between the listing and the read.
-            continue
-        if raw:
-            argvs.append(
-                raw.rstrip(b"\0").decode("utf-8", errors="replace").split("\0")
-            )
-    return argvs
-
-
-def chats_running_background_commands(
-    process_argvs: Iterable[Sequence[str]],
-) -> frozenset[str]:
-    """The chats a live ``run_in_background.py`` runner holds a command (or its report) for."""
-    chat_ids: set[str] = set()
-    for argv in process_argvs:
-        runner_options = list(argv[: argv.index("--")] if "--" in argv else argv)
-        if not any(
-            Path(arg).name == RUN_IN_BACKGROUND_SCRIPT_NAME for arg in runner_options
-        ):
-            continue
-        if (
-            BACKGROUND_RUNNER_FLAG not in runner_options
-            or BACKGROUND_RUNNER_CHAT_ID_FLAG not in runner_options
-        ):
-            continue
-        value_index = runner_options.index(BACKGROUND_RUNNER_CHAT_ID_FLAG) + 1
-        if value_index < len(runner_options):
-            chat_ids.add(runner_options[value_index])
-    return frozenset(chat_ids)
-
-
 def plan_agent_restarts(
-    chats: Sequence[ListedChat],
-    own_chat_id: str,
-    chats_with_background_commands: frozenset[str],
+    chats: Sequence[ListedChat], own_chat_id: str
 ) -> AgentRestartPlan:
     """Which chats to restart now: every idle one but the pass's own and its worker's.
 
     A stopped chat needs nothing, since its next start loads what the update installed; any
-    other is mid-turn, waiting on a dialog, mid-handoff, receiving a message, or has ended
-    its turn while a background command it started runs (which the restart would kill), and
-    is left running for the user to decide about.
+    other is mid-turn, waiting on a dialog, or mid-handoff, and is left running for the user
+    to decide about.
     """
     to_restart: list[ListedChat] = []
-    left_running: list[LeftRunningChat] = []
+    left_running: list[ListedChat] = []
     for chat in chats:
         if chat.chat_id == own_chat_id or chat.name == UPDATE_WORKER_NAME:
             continue
         if chat.status == STOPPED_CHAT_STATUS:
             continue
-        if not chat.is_idle:
-            left_running.append(LeftRunningChat(chat, chat.busy_with))
-        elif chat.chat_id in chats_with_background_commands:
-            left_running.append(LeftRunningChat(chat, "running a background command"))
-        else:
+        if chat.is_idle:
             to_restart.append(chat)
+        else:
+            left_running.append(chat)
     return AgentRestartPlan(
         to_restart=tuple(to_restart), left_running=tuple(left_running)
     )
@@ -302,7 +245,6 @@ def restart_idle_agents(
     runner: Runner,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
-    process_argvs: Callable[[], Iterable[Sequence[str]]] = read_process_argvs,
 ) -> dict[str, list[dict[str, str]]]:
     """Restart every idle chat but the pass's own and its worker's; the report of what happened.
 
@@ -315,13 +257,12 @@ def restart_idle_agents(
     """
     report_path = repo_root / AGENT_RESTARTS_REPORT_REL
     report_path.unlink(missing_ok=True)
-    chats = fetch_chat_list(repo_root, http, monotonic, sleep)
     plan = plan_agent_restarts(
-        chats, own_chat_id, chats_running_background_commands(process_argvs())
+        fetch_chat_list(repo_root, http, monotonic, sleep), own_chat_id
     )
     report: dict[str, list[dict[str, str]]] = {
         "restarted": [],
-        "left_running": [_left_running_entry(entry) for entry in plan.left_running],
+        "left_running": [_left_running_entry(chat) for chat in plan.left_running],
         "failed": [],
     }
     for planned in plan.to_restart:
@@ -341,9 +282,7 @@ def restart_idle_agents(
         if current is None:
             # Deleted since the first read: there is nothing left to restart.
             continue
-        recheck = plan_agent_restarts(
-            [current], own_chat_id, chats_running_background_commands(process_argvs())
-        )
+        recheck = plan_agent_restarts([current], own_chat_id)
         report["left_running"].extend(
             _left_running_entry(entry) for entry in recheck.left_running
         )
@@ -364,12 +303,8 @@ def restart_idle_agents(
     return report
 
 
-def _left_running_entry(entry: LeftRunningChat) -> dict[str, str]:
-    return {
-        "chat_id": entry.chat.chat_id,
-        "title": entry.chat.title,
-        "busy_with": entry.busy_with,
-    }
+def _left_running_entry(chat: ListedChat) -> dict[str, str]:
+    return {"chat_id": chat.chat_id, "title": chat.title, "busy_with": chat.busy_with}
 
 
 def compose_self_restart_note(
