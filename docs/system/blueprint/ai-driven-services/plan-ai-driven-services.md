@@ -120,8 +120,10 @@ API key is present) or shells out to `claude -p` (when it isn't), and the
   so a caller can't forget them.
   - *Shared core (both scenarios):* unset `MAIN_CLAUDE_SESSION_ID` in the child
     environment (optionally also the `MNGR_AGENT_*` identity vars); invoke
-    `claude -p <prompt> --output-format json --model <m>`; run the subprocess off
-    the event loop (a worker thread) so an async service isn't blocked; raise
+    `claude -p --output-format json --model <m> -- <prompt>` (the prompt last,
+    after `--`, so one starting with `-` is not read as an option); run the
+    subprocess off the event loop (a worker thread) so an async service isn't
+    blocked; raise
     with the captured stderr on a non-zero exit; parse the JSON result
     distinguishing the **success arm** (`subtype == "success"`, has `result`)
     from the **error arm** (`is_error` true -- e.g. `error_max_turns` -- carrying
