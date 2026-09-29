@@ -137,7 +137,7 @@ class ShellState(MutableModel):
     lifecycle: AppLifecycleManager = Field(
         frozen=True, description="Parks, wakes, starts, and stops the stoppable apps (the stop-when-no-windows spec)"
     )
-    desktops: DesktopStore = Field(frozen=True, description="desktops.json")
+    desktops: DesktopStore = Field(frozen=True, description="desktops.json and default_shortcuts_offered.json")
     placements: PlacementStore = Field(frozen=True, description="The per-client layouts of each desktop")
     window_paths: WindowPathStore = Field(
         frozen=True, description="The per-client paths and titles of independent windows"
