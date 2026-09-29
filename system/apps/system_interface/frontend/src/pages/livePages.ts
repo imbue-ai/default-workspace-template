@@ -105,10 +105,14 @@ interface HostRect {
   height: number;
 }
 
-/** How wide a peeked window is drawn, and how far its bottom edge stands off the taskbar. A window is
- *  never drawn larger than it renders, so a small window peeks at its own size rather than magnified. */
-const PEEK_WIDTH = 260;
+/** How wide a peeked window is drawn, and how far the card stands off the taskbar. A window is never
+ *  drawn larger than it renders, so a small window peeks at its own size rather than magnified. */
+const PEEK_WIDTH = 220;
 const PEEK_GAP = 10;
+/** The name under the picture, and the space between them. It is drawn by the layer rather than left to
+ *  the entry's hover bubble: the bubble is placed against the ENTRY, which puts it across the bottom of
+ *  the picture, and a name belongs to the thing it is under. */
+const PEEK_CAPTION_GAP = 6;
 
 export class LivePagesLayer implements PageDriver {
   private readonly pages = new Map<string, LivePage>();
@@ -116,6 +120,8 @@ export class LivePagesLayer implements PageDriver {
   /** The minimized window being peeked at from its taskbar entry: its page is drawn small above the
    *  entry instead of being hidden. Null when nothing is being peeked at. */
   private peekedWindowId: string | null = null;
+  /** The name drawn under a peeked window, made on the first peek and kept for the rest. */
+  private peekCaption: HTMLElement | null = null;
   /** The window a tear-out drag has pulled past the viewport: its page is hidden until the drag comes back
    *  inside or ends (the pull-out-window spec). */
   private tornOutWindowId: string | null = null;
@@ -261,6 +267,7 @@ export class LivePagesLayer implements PageDriver {
     const placements = desktop === null ? [] : activePlacements(state);
     const focused = activeFocusedWindowId(state);
     const shownIds = new Set<string>();
+    let isPeekDrawn = false;
     placements.forEach((placement, index) => {
       const found = windowsById.get(placement.window_id);
       if (found === undefined || desktop === null) return;
@@ -271,7 +278,10 @@ export class LivePagesLayer implements PageDriver {
         const app = appByName(state, found.window.app);
         const page = app === undefined ? undefined : this.pages.get(found.window.id);
         if (app === undefined || page === undefined || !app.is_running) return;
-        if (this.showPeek(page, placement)) shownIds.add(found.window.id);
+        if (this.showPeek(page, placement, effectiveWindowTitle(state, found.window, app))) {
+          shownIds.add(found.window.id);
+          isPeekDrawn = true;
+        }
         return;
       }
       // A pulled-out window's page is shown in the chrome's own desktop window; one being pulled out right now
@@ -294,6 +304,7 @@ export class LivePagesLayer implements PageDriver {
     for (const page of this.pages.values()) {
       if (!shownIds.has(page.windowId)) this.hide(page);
     }
+    if (!isPeekDrawn && this.peekCaption !== null) this.peekCaption.style.display = "none";
     this.followIfRevised(windowsById);
     this.focusIfChanged(focused);
   }
@@ -502,7 +513,7 @@ export class LivePagesLayer implements PageDriver {
    * It stands above the bar rather than inside the entry because that is where a page can be drawn at
    * all -- the backdrop clips at the taskbar, and a page is never re-parented (that reloads it).
    */
-  private showPeek(page: LivePage, placement: Placement): boolean {
+  private showPeek(page: LivePage, placement: Placement, title: string): boolean {
     const entry = document.querySelector<HTMLElement>(
       `[${TASKBAR_ENTRY_ATTRIBUTE}="${CSS.escape(placement.window_id)}"]`,
     );
@@ -516,12 +527,15 @@ export class LivePagesLayer implements PageDriver {
     const scale = width / rendered.width;
     const height = rendered.height * scale;
     const centred = entryBox.left + entryBox.width / 2 - width / 2 - host.left;
-    this.position(page, {
-      left: Math.max(PEEK_GAP, Math.min(centred, host.width - width - PEEK_GAP)),
-      top: Math.max(PEEK_GAP, host.height - height - PEEK_GAP),
-      width,
-      height,
-    });
+    const left = Math.max(PEEK_GAP, Math.min(centred, host.width - width - PEEK_GAP));
+    // The picture and its name are one block standing off the bar, so the name is measured before
+    // the picture is placed: it is the bottom of the pair, not the picture, that keeps the gap.
+    const captionHeight = this.drawPeekCaption(title, left + width / 2, host.width);
+    const top = Math.max(PEEK_GAP, host.height - PEEK_GAP - captionHeight - height);
+    this.position(page, { left, top, width, height });
+    if (this.peekCaption !== null) {
+      this.peekCaption.style.top = `${top + height + PEEK_CAPTION_GAP}px`;
+    }
     const style = page.wrapper.style;
     style.setProperty("z-index", "var(--z-sticky)");
     style.pointerEvents = "none";
@@ -534,6 +548,31 @@ export class LivePagesLayer implements PageDriver {
     frame.transform = `scale(${scale})`;
     frame.transformOrigin = "0 0";
     return true;
+  }
+
+  /**
+   * Put the peeked window's name under its picture, and answer how much room the name takes (its own
+   * height plus the gap above it), so the picture can be placed with the pair standing off the bar.
+   *
+   * It is centred on the picture and clamped to the viewport, and it is the layer's rather than the
+   * entry's hover bubble because the bubble is placed against the entry -- which is under the picture.
+   */
+  private drawPeekCaption(title: string, centreX: number, hostWidth: number): number {
+    if (this.peekCaption === null) {
+      const caption = document.createElement("div");
+      caption.className =
+        "live-page-caption type-helper pointer-events-none absolute max-w-[220px] truncate rounded-md " +
+        "bg-inverse px-2 py-1 text-center text-on-accent shadow-overlay dark:bg-surface dark:text-primary";
+      this.peekCaption = caption;
+      this.host.appendChild(caption);
+    }
+    const caption = this.peekCaption;
+    caption.textContent = title;
+    caption.style.display = "";
+    caption.style.left = `${Math.max(PEEK_GAP, Math.min(centreX, hostWidth - PEEK_GAP))}px`;
+    caption.style.transform = "translateX(-50%)";
+    caption.style.setProperty("z-index", "var(--z-sticky)");
+    return caption.offsetHeight + PEEK_CAPTION_GAP;
   }
 
   /** Give a page its own box back, after it has been drawn as a peek. */
