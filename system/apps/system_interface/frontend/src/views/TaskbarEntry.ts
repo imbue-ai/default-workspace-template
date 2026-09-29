@@ -63,7 +63,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           "taskbar-entry relative flex h-(--desk-taskbar-entry-size) min-w-(--desk-touch-target) max-w-48 " +
           // 4px all round, but 8 on the right: the name ends where the chip does otherwise, and a
           // title cut off mid-word wants somewhere to stop.
-          "shrink-0 items-center gap-1.5 rounded-xl p-1 pr-2 text-(length:--font-size-body) " +
+          "shrink-0 items-center gap-1.5 rounded-md p-1 pr-2 text-(length:--font-size-body) " +
           "outline-none select-none touch-pan-x focus-visible:ring-2 focus-visible:ring-accent " +
           // The chrome's own two control tints and nothing else: the hover one under the pointer, the
           // active one for the window you are in (and for the entry whose menu is open, which is the

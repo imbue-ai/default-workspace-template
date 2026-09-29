@@ -13,15 +13,23 @@
 
 import m from "mithril";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
-import { menuCardClass, menuDividerClass } from "@imbue/workspace-ui/src/components/menu";
+import {
+  MENU_ROW_FOCUS,
+  MENU_ROW_SLAB,
+  menuCardClass,
+  menuDividerClass,
+} from "@imbue/workspace-ui/src/components/menu";
 import { shortcutKey } from "../model/records";
 import type { LauncherMenuRows, LauncherRow, TextRow } from "../reducers/launcherRows";
 import { isRowEnabled } from "../reducers/launcherRows";
 import { appGlyph, glyph } from "./glyphs";
 
-/** The size every glyph in a row is drawn at: the app's icon, and the built-in glyphs beside it. It
- *  fills the cell that holds it, so an app's tile reads as the tile it wears everywhere else. */
-const GLYPH_SIZE = 24;
+/** An app's icon in a row, filling the cell that holds it, so its tile reads as the tile it wears
+ *  everywhere else. */
+const APP_GLYPH_SIZE = 24;
+/** A mark of the chrome's own in the same cell -- the plus a free-text row wears. Smaller than a
+ *  tile: it is a stroke on the surface, not a picture sitting on it. */
+const MARK_GLYPH_SIZE = 20;
 const NO_MATCH_MESSAGE = "No apps or windows match";
 /** How many words of the typed text a free-text row's caption repeats. */
 const PREVIEW_WORD_COUNT = 4;
@@ -52,12 +60,15 @@ export function textPreview(text: string): string {
   return words.length > PREVIEW_WORD_COUNT ? `${shown}…` : shown;
 }
 
+// The shared menu's own row recipe, taken rather than copied so the two cannot drift: an inset slab
+// with the menu's corner, and its focus ring. The height is this menu's -- its rows carry an app's
+// tile, where a menu row carries a glyph.
 const ROW_CLASS =
-  "launcher-row flex h-10 w-full items-center gap-2 px-3 text-left text-(length:--font-size-body) " +
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent ";
+  `launcher-row flex h-10 items-center gap-2 text-left text-(length:--font-size-body) ` +
+  `${MENU_ROW_SLAB} ${MENU_ROW_FOCUS} `;
 const CAPTION_CLASS = "type-helper shrink-0 truncate text-faint";
 const ENTER_KEY_LABEL = "Enter";
-const NO_MATCH_CLASS = "launcher-no-matches m-0 px-3 py-1 text-(length:--font-size-body) text-faint";
+const NO_MATCH_CLASS = "launcher-no-matches my-0 mx-3 py-1 text-(length:--font-size-body) text-faint";
 
 function rowAttrs(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.Attributes {
   const isEnabled = isRowEnabled(row);
@@ -72,7 +83,8 @@ function rowAttrs(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.
     class:
       ROW_CLASS +
       (isEnabled ? "cursor-pointer text-primary " : "cursor-default text-faint ") +
-      (isHighlighted ? "bg-fill-active" : ""),
+      // The highlight is the menu's hover tint: the arrow keys move the same mark the pointer does.
+      (isHighlighted ? "bg-fill-hover" : ""),
     onpointerenter: isEnabled ? () => attrs.onHighlight(index) : undefined,
     onclick: isEnabled ? () => attrs.onRun(row) : undefined,
   };
@@ -105,7 +117,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.V
         "button",
         { ...rowAttrs(row, index, attrs), "data-launch": shortcutKey(row.app.name, row.launchPath.id) },
         [
-          glyphCell(appGlyph(row.app, GLYPH_SIZE)),
+          glyphCell(appGlyph(row.app, APP_GLYPH_SIZE)),
           m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
           row.caption === null ? null : m("span", { class: CAPTION_CLASS }, row.caption),
           keys,
@@ -120,7 +132,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.V
           "data-minimized": row.isMinimized ? "true" : "false",
         },
         [
-          glyphCell(appGlyph(row.app, GLYPH_SIZE)),
+          glyphCell(appGlyph(row.app, APP_GLYPH_SIZE)),
           m("span", { class: "min-w-0 flex-1 truncate" + (row.isMinimized ? " text-faint" : "") }, row.title),
           m("span", { class: CAPTION_CLASS }, row.app?.display_name ?? row.window.app),
           row.isOnActiveDesktop ? null : m("span", { class: CAPTION_CLASS }, row.desktopName),
@@ -137,7 +149,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.V
           ...hoverTooltipAttrs(row.disabledReason),
         },
         [
-          glyphCell(glyph("plus", GLYPH_SIZE)),
+          glyphCell(glyph("plus", MARK_GLYPH_SIZE)),
           m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
           textRowCaption(row),
           keys,

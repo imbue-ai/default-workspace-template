@@ -22,7 +22,7 @@ const FIELD_GLYPH_SIZE = 14;
 /** The field's own emblem rather than a control beside it: bigger than the glyphs it sits among and
  *  drawn with a heavier stroke, so it reads at a glance as what the box is for. A plus rather than a
  *  magnifier -- the field starts things at least as often as it finds them. */
-const FIELD_MARK_SIZE = 18;
+const FIELD_MARK_SIZE = 20;
 const FIELD_MARK_STROKE = 2.5;
 /** Past this many lines the field scrolls rather than growing. */
 export const MAX_FIELD_LINES = 8;
