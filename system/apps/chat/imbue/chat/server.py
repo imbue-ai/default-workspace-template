@@ -1433,7 +1433,7 @@ def _awaiting_chat_for_empty_list() -> Response:
     provisional = agent_manager.awaiting_chat_for_empty_list()
     response = CreateChatResponse(
         chat_id=provisional.chat_id,
-        name=canonical_agent_name(provisional.name) or provisional.name,
+        name=canonical_agent_name(provisional.name),
         display_name=provisional.name,
     )
     return json_response(response.model_dump())
