@@ -14,8 +14,9 @@ explore:
    the conversation with tool output stripped, and search it for the
    anchor quotes.
 2. Once you have located the relevant region, re-read it in full detail
-   (default format, scoped with `--tail N`) to see exactly which tools
-   ran, with what inputs, and why.
+   (default format with `--full`, scoped with `--tail N`) to see exactly
+   which tools ran, with what inputs, and why. Without `--full`, long tool
+   inputs and outputs are cut short.
 
 The turn that dispatched you is the *most recent* turn in the lead's
 transcript. What your task body describes is always in *earlier* turns --
