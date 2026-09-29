@@ -513,6 +513,30 @@ def test_an_app_registering_after_home_was_seeded_reaches_it_through_a_later_rea
     assert _desktops_updates(client_queue) == []
 
 
+def test_a_desktop_created_before_a_late_app_was_reconciled_leaves_it_offered_on_every_desktop(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A shell whose inventory read the chat's row before the shell listened to it, and before any read of the
+    desktops: creating a desktop, which records the chat as offered, first adds it to the desktops already there."""
+    registry_path = write_registry(tmp_path / "apps.toml", *builtin_rows_toml_before_chat())
+    seeding = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+    (home,) = seeding.list_desktops()
+    assert _apps_on(home) == _APPS_BEFORE_CHAT
+    _register_chat(registry_path)
+    reading = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+
+    work = reading.create_desktop("Work", "#123456", 1)
+
+    stored_home, stored_work = reading.desktops.list_desktops()
+    assert _apps_on(stored_home) == _APPS_WITH_CHAT and _pinned_apps_on(stored_home) == ["chat"]
+    assert stored_work == work and _apps_on(work) == _APPS_WITH_CHAT
+    assert "chat" in json.loads((tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME).read_text())["apps"]
+
+
 def test_a_removed_default_shortcut_stays_removed_across_registrations_and_a_new_shell(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
