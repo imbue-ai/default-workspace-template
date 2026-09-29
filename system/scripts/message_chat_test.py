@@ -39,6 +39,16 @@ class _Tty(io.StringIO):
         return True
 
 
+def _make_the_chat_app_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point the script at a registry whose chat row names a port nothing listens on, so the
+    connection fails outright."""
+    registry = tmp_path / "unreachable-apps.toml"
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
+    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+
+
 def _run(
     *args: str,
     stdin: str = "",
@@ -234,10 +244,7 @@ def test_a_not_ready_answer_that_outlasts_the_window_is_a_failure_not_a_backoff(
 def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_keeps_its_blocked_status(
     fake_mngr: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A registry row pointing at a port nothing listens on: the connection fails outright.
-    registry = tmp_path / "apps.toml"
-    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
-    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    _make_the_chat_app_unreachable(tmp_path, monkeypatch)
     monkeypatch.setenv("FAKE_MNGR_EXIT", "7")
 
     rc, slept = _run("--browser-fleet", "-m", "wake up")
@@ -259,9 +266,7 @@ def test_a_backoff_mngr_that_timed_out_is_a_failure_not_this_scripts_absence(
     understood the request -- what Imbue Studio reads as "this template has no such script"
     before running its own `mngr`. Pass mngr's 2 through and a timed-out backoff create is
     answered with a second create of the same chat."""
-    registry = tmp_path / "apps.toml"
-    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
-    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    _make_the_chat_app_unreachable(tmp_path, monkeypatch)
     monkeypatch.setenv("FAKE_MNGR_EXIT", "2")
 
     rc, _ = _run("-m", "x") if mode == "send" else _run_create("-m", "x")
@@ -273,9 +278,7 @@ def test_a_backoff_mngr_that_timed_out_is_a_failure_not_this_scripts_absence(
 def test_a_backoff_with_no_mngr_on_path_is_a_failure_not_a_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    registry = tmp_path / "apps.toml"
-    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
-    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    _make_the_chat_app_unreachable(tmp_path, monkeypatch)
     empty_bin = tmp_path / "empty-bin"
     empty_bin.mkdir()
     monkeypatch.setenv("PATH", str(empty_bin))
@@ -369,9 +372,7 @@ def test_an_unreachable_chat_app_and_no_agent_by_the_id_is_a_failure_not_a_gone_
 ) -> None:
     """The id names the chat's first agent, which is not the chat once a handoff has retired
     it; with the chat app down, nothing here can say the chat itself is gone."""
-    registry = tmp_path / "apps.toml"
-    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
-    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    _make_the_chat_app_unreachable(tmp_path, monkeypatch)
 
     rc, _ = _run("-m", "hello")
 
@@ -546,9 +547,7 @@ def test_an_unreachable_chat_app_hands_the_create_to_mngr_with_the_same_terms(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    registry = tmp_path / "apps.toml"
-    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
-    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    _make_the_chat_app_unreachable(tmp_path, monkeypatch)
     monkeypatch.setenv(
         "FAKE_MNGR_STDOUT",
         '{"event": "created", "agent_id": "%s", "host_id": "h", "host_name": "ws"}\n'
@@ -744,9 +743,7 @@ def test_a_refused_interrupt_sends_nothing_and_takes_no_backoff(
 def test_an_unreachable_chat_app_hands_the_restart_and_the_message_to_mngr(
     fake_mngr: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    registry = tmp_path / "apps.toml"
-    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
-    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    _make_the_chat_app_unreachable(tmp_path, monkeypatch)
     monkeypatch.setenv("FAKE_MNGR_STDOUT", _START_RESULT_LINE + _MESSAGE_SENT_LINE)
 
     rc, _ = _run("--interrupt", "-m", "you are back")
@@ -776,9 +773,7 @@ def test_a_backoff_restart_that_matched_no_agent_sends_nothing(
     app, too, said it does not know it."""
     fake_chat_app.answers = [(404, {"detail": "Chat 'x' not found"})]
     if not chat_app_reachable:
-        registry = tmp_path / "unreachable-apps.toml"
-        registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
-        monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+        _make_the_chat_app_unreachable(tmp_path, monkeypatch)
 
     rc, _ = _run(
         "--interrupt",
