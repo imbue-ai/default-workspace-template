@@ -39,7 +39,7 @@ Facts this design builds on, as of `main` at `02eb68c02` (2026-09-28).
    The workspace guarantees that every registered loopback URL accepts a connection: while an app is stopped, the shell holds its port.
 2. The manifest field is `stop_when_no_windows`, a boolean, default `false`, and `critical = true` forces it `false`.
    It governs only the automatic stop of Part D; Quit (Part E) is offered for every stoppable app whatever the field says, and a stopped app always wakes through Part B whatever the field says.
-3. Built-in defaults: `files`, `browser`, and `getting-started` declare `true`; `chat`, `terminal`, `terminal-pty`, and `system_interface` are critical.
+3. Built-in defaults: `files` and `getting-started` declare `true`; `browser` declares `false`, since agents drive its browsers with no window at all (the agentic-browser-fleet skill, through the coordinator's CDP proxy) and stopping the coordinator closes every Chromium it runs, while Chromium itself already stops on the close hint; `chat`, `terminal`, `terminal-pty`, and `system_interface` are critical.
    The build-app scaffold writes `stop_when_no_windows = true` into every new manifest, so a user app's manifest states the rule outright.
 4. The grace period before an automatic stop is 60 seconds, cancelled by any window of the app opening; Quit has none.
 5. An app is stopped for having no windows only once a client has arrived at the shell since the shell started.
@@ -93,11 +93,12 @@ The program lines that end in `&& <entry>` without `exec` (`system_interface`, a
 | `terminal` | true | false |
 | `terminal-pty` | true | false |
 | `files` | false | true |
-| `browser` | false | true |
+| `browser` | false | false |
 | `getting-started` | false | true |
 
 `system/test_app_manifests.py` pins the table.
-The browser's manifest keeps its `window_closed_path`: Chromium still stops on the close hint, and the coordinator stops 60 seconds later under Part D.
+The browser's manifest keeps its `window_closed_path`, so Chromium still stops on the close hint, and declares `false`: the coordinator serves browsers that agents drive with no window (decision 3), so Part D must not stop it.
+It is still stoppable (Quit, and the stop route) and parked while stopped.
 
 ### 4.3 The scaffold
 
