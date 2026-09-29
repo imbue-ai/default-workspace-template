@@ -271,15 +271,32 @@ jobs:
           git config user.email "dev@imbue.com"
           git config user.name "imbue-dev"
 
-      # offload exits 2 when only flaky-marked tests failed; that is a pass.
+      # Every suite runs even after an earlier one fails, so one run reports
+      # them all; the outcomes are collected below. offload exits 2 when only
+      # flaky-marked tests failed; that is a pass.
       - name: Run the root suite in the workspace image
+        id: root_suite
+        continue-on-error: true
         run: offload -c offload-modal.toml run --trace || [ $? -eq 2 ]
 
       - name: Run the system/apps/chat suite in the workspace image
+        id: chat_suite
+        continue-on-error: true
         run: offload -c offload-modal-chat.toml run --trace || [ $? -eq 2 ]
 
       - name: Run the system/apps/system_interface suite in the workspace image
+        id: system_interface_suite
+        continue-on-error: true
         run: offload -c offload-modal-system-interface.toml run --trace || [ $? -eq 2 ]
+
+      - name: Fail if any suite failed
+        env:
+          ROOT: ${{ steps.root_suite.outcome }}
+          CHAT: ${{ steps.chat_suite.outcome }}
+          SYSTEM_INTERFACE: ${{ steps.system_interface_suite.outcome }}
+        run: |
+          echo "root: $ROOT, chat: $CHAT, system_interface: $SYSTEM_INTERFACE"
+          [ "$ROOT" = "success" ] && [ "$CHAT" = "success" ] && [ "$SYSTEM_INTERFACE" = "success" ]
 
       - name: Save offload test durations for next run
         if: always()

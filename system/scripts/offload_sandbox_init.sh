@@ -15,6 +15,14 @@ readonly REPO_ROOT="/home/user/workspace"
 
 cd "$REPO_ROOT"
 
+# The build context reaches Modal through its file upload, which copies what a
+# symlink points at in place of the link and leaves out a link whose target is
+# not in the context (docker's COPY keeps both as links). The index in the
+# exported checkout still records every link, so put them back from there.
+git ls-files -s | awk -F'\t' '$1 ~ /^120000/ { print $2 }' > /tmp/offload-symlinks
+git checkout-index -f --stdin < /tmp/offload-symlinks
+rm /tmp/offload-symlinks
+
 # The browser stack, which a workspace installs on first boot rather than in the image.
 ENV_CONVERGE_WORKSPACE_DIR="$REPO_ROOT" bash "$REPO_ROOT/system/scripts/env.d/1000-playwright-fortress.sh"
 
