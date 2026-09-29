@@ -297,9 +297,9 @@ export function appIconMarkup(
   return appName === undefined ? fallbackMarkup : appMonogramMarkup(appName, sizePx);
 }
 
-// The monogram's own colour pair, from the palette in `docs/system/app-icons.md`: Strength under
-// Courage, at 8.12 to 1. Deliberately the set's most neutral pair -- a letter is what an app wears
-// for want of an identity, so it should not claim one of the palette's louder ones.
+// The monogram's own colour pair, from the palette in `docs/system/app-icons.md`. Deliberately the
+// set's most neutral pair -- a letter is what an app wears for want of an identity, so it should
+// not claim one of the palette's louder ones.
 const MONOGRAM_BACKGROUND = "#CFC7B3";
 const MONOGRAM_INK = "#492222";
 
