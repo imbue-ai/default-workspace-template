@@ -69,7 +69,7 @@ CHAT_LIST_RETRY_WINDOW_SECONDS = 60.0
 CHAT_LIST_RETRY_INTERVAL_SECONDS = 2.0
 CHAT_LIST_REQUEST_TIMEOUT_SECONDS = 10.0
 
-RESTART_TIMEOUT_SECONDS = 180.0
+MESSAGE_CHAT_TIMEOUT_SECONDS = 180.0
 
 # How long the self-restart helper waits for the pass's last turn to end.
 SELF_RESTART_DEADLINE_SECONDS = 30 * 60.0
@@ -284,10 +284,10 @@ def _run_message_chat(
             capture_output=True,
             text=True,
             check=False,
-            timeout=RESTART_TIMEOUT_SECONDS,
+            timeout=MESSAGE_CHAT_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        return f"it did not finish within {RESTART_TIMEOUT_SECONDS:g}s"
+        return f"it did not finish within {MESSAGE_CHAT_TIMEOUT_SECONDS:g}s"
     except OSError as exc:
         return f"it could not be run: {exc}"
     if result.returncode != 0:
