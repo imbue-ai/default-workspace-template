@@ -346,7 +346,7 @@ def restart_idle_agents(
 
 
 def compose_self_restart_note(
-    reason: str, left_running: Sequence[Mapping[str, str]]
+    reason: str, not_restarted: Sequence[Mapping[str, str]]
 ) -> str:
     """The note the pass's own chat gets once it is back: all of it for the agent, one line for the user.
 
@@ -362,10 +362,10 @@ def compose_self_restart_note(
         "If you do not remember the update, the earlier conversation could not be resumed: say "
         "so plainly, and do not guess at what was said before.",
     ]
-    if left_running:
-        names = ", ".join(f'"{chat["title"]}"' for chat in left_running)
+    if not_restarted:
+        names = ", ".join(f'"{chat["title"]}"' for chat in not_restarted)
         lines.append(
-            f"These were busy and are still running the previous version: {names}. Ask the user "
+            f"These were not restarted and are still running the previous version: {names}. Ask the user "
             "whether to interrupt and restart them now (`python3 system/scripts/message_chat.py "
             "<chat-id> --interrupt`); their ids are in "
             f"`{AGENT_RESTARTS_REPORT_REL}`. Do not restart them without a yes."
@@ -391,14 +391,14 @@ def compose_self_restart_failure_note(problem: str) -> str:
     )
 
 
-def read_left_running(repo_root: Path) -> list[dict[str, str]]:
-    """The chats ``restart-agents`` left running this pass; none when it has not run or recorded none."""
+def read_chats_not_restarted(repo_root: Path) -> list[dict[str, str]]:
+    """The chats ``restart-agents`` left running or failed to restart this pass; none when it
+    has not run."""
     try:
         report = json.loads((repo_root / AGENT_RESTARTS_REPORT_REL).read_text())
-    except (OSError, ValueError):
+    except FileNotFoundError:
         return []
-    left_running = report.get("left_running") if isinstance(report, dict) else None
-    return list(left_running) if isinstance(left_running, list) else []
+    return [*report["left_running"], *report["failed"]]
 
 
 def start_self_restart(

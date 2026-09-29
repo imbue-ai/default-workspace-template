@@ -167,7 +167,7 @@ from run_in_background import own_chat_id
 from update_agent_restarts import (
     ChatListUnavailableError,
     compose_self_restart_note,
-    read_left_running,
+    read_chats_not_restarted,
     restart_idle_agents,
     restart_self_when_idle,
     start_self_restart,
@@ -540,7 +540,7 @@ def _cmd_restart_self(args: argparse.Namespace) -> int:
     note_path = start_self_restart(
         repo_root,
         chat_id,
-        compose_self_restart_note(args.reason, read_left_running(repo_root)),
+        compose_self_restart_note(args.reason, read_chats_not_restarted(repo_root)),
         os.environ,
         helper_argv=[
             sys.executable,

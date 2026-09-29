@@ -304,7 +304,7 @@ def test_the_pass_waits_for_its_own_turn_to_end_not_a_transcript_that_reads_idle
     assert http.reads == 4
 
 
-def test_the_note_stands_on_its_own_and_carries_the_chats_left_running() -> None:
+def test_the_note_stands_on_its_own_and_carries_the_chats_not_restarted() -> None:
     note = update_agent_restarts.compose_self_restart_note(
         "Claude Code  2.1.300\n",
         [{"chat_id": "agent-working", "title": "Research", "busy_with": "working"}],
@@ -338,7 +338,13 @@ def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
                         "busy_with": "working",
                     }
                 ],
-                "failed": [],
+                "failed": [
+                    {
+                        "chat_id": "agent-failing",
+                        "title": "Budget",
+                        "detail": "the chat is converging",
+                    }
+                ],
             }
         )
     )
@@ -379,6 +385,7 @@ def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
     assert restart_call["agent_id"] is None and note_call["agent_id"] is None
     assert "Claude Code 2.1.300" in note_call["note"]
     assert '"Research"' in note_call["note"]
+    assert '"Budget"' in note_call["note"]
 
 
 def test_a_self_restart_that_is_refused_tells_the_chat_it_did_not_happen(
