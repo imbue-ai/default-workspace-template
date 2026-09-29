@@ -1,5 +1,5 @@
 # offload configuration for running the repo-root pytest suite inside the
-# workspace image on Modal (the test-workspace-image CI job). The two app suites
+# workspace image on Modal (the test-offload CI job). The two app suites
 # have their own configs beside this one, because each runs from its own
 # directory and offload takes one pytest root per config.
 [offload]

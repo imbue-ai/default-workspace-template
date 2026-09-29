@@ -1,5 +1,5 @@
 # offload configuration for the system/apps/chat pytest suite inside the
-# workspace image on Modal (the test-workspace-image CI job); see
+# workspace image on Modal (the test-offload CI job); see
 # offload-modal.toml for the shared shape. The suite runs from its own
 # directory, on the runner for discovery and in the sandbox for execution.
 [offload]

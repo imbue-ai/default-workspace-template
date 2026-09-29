@@ -151,7 +151,7 @@ fail_under = 75
 
 [tool.coverage.paths]
 # Coverage data measured inside the workspace image on Modal (the
-# test-workspace-image CI job) records the sandbox's paths; map them back so
+# test-offload CI job) records the sandbox's paths; map them back so
 # the runner can combine the batches and enforce the floor above.
 source = [
     ".",

@@ -101,7 +101,7 @@ in that app's folder and is named `<app>-<role>`.
 
 `.github/workflows/ci.yml` runs on every PR and push to `main`. The `test`
 job checks the lockfile, the mngr pin and the frontends on a bare runner. The
-Python suites run in the `test-workspace-image` job, inside the workspace
+Python suites run in the `test-offload` job, inside the workspace
 image on Modal through [offload](https://github.com/imbue-ai/offload): one
 config per pytest root at the repo root (`offload-modal.toml`,
 `offload-modal-chat.toml`, `offload-modal-system-interface.toml`). The
