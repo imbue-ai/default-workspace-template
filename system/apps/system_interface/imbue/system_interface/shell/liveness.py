@@ -37,12 +37,14 @@ SUPERVISOR_RUNNING_STATENAME: Final[str] = "RUNNING"
 SUPERVISOR_STARTING_STATENAME: Final[str] = "STARTING"
 SUPERVISOR_BACKOFF_STATENAME: Final[str] = "BACKOFF"
 SUPERVISOR_FATAL_STATENAME: Final[str] = "FATAL"
+# Reached only through stopProcess (a start that fails ends in FATAL, an exit after running in EXITED).
+SUPERVISOR_STOPPED_STATENAME: Final[str] = "STOPPED"
 # The supervisord process states that mean "the program is up (or coming up)".
 # STOPPED / STOPPING / EXITED / BACKOFF / FATAL / UNKNOWN all render as stopped.
 _RUNNING_STATE_NAMES: Final[frozenset[str]] = frozenset({SUPERVISOR_RUNNING_STATENAME, SUPERVISOR_STARTING_STATENAME})
 # The states in which a program is neither up nor about to bind its port again on its own: what the shell parks.
 SUPERVISOR_DOWN_STATENAMES: Final[frozenset[str]] = frozenset(
-    {"STOPPED", "EXITED", SUPERVISOR_FATAL_STATENAME, "UNKNOWN"}
+    {SUPERVISOR_STOPPED_STATENAME, "EXITED", SUPERVISOR_FATAL_STATENAME, "UNKNOWN"}
 )
 
 

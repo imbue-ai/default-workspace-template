@@ -375,13 +375,17 @@ def test_the_wake_budget_refuses_a_fourth_wake_in_the_window(
 def test_a_request_past_the_wake_budget_is_answered_the_failure_page_and_starts_nothing(
     manager: AppLifecycleManager, closed_port: int, supervisor: FakeSupervisor
 ) -> None:
-    """The budget as a request sees it: the fourth wake in the window is answered as a failed start and starts
-    nothing, the port is parked again for the next request, and the window's end lets a request wake the app."""
+    """The budget as a request sees it: once the window's wakes have all ended in FATAL, the next request is
+    answered as a failed start and starts nothing, the port is parked again for the request after it, and the
+    window's end lets a request wake the app."""
     clock = _clock_of(manager)
     manager.sweep_once()
-    for _ in range(WAKE_BUDGET_COUNT):
-        assert b"Starting Docs" in send_raw_get_over_socket(closed_port)
-        supervisor.statename_by_program["docs"] = "STOPPED"
+    for attempt in range(WAKE_BUDGET_COUNT):
+        answer = send_raw_get_over_socket(closed_port)
+        # The first request is answered as starting; each one after a FATAL wake is told of it while waking anyway.
+        assert answer.startswith(b"HTTP/1.1 503") and (b"Starting Docs" in answer) == (attempt == 0)
+        assert len(supervisor.started) == attempt + 1
+        supervisor.statename_by_program["docs"] = "FATAL"
         manager.sweep_once()
         assert manager.is_app_parked("docs")
 
@@ -411,11 +415,34 @@ def test_a_wake_after_which_the_app_runs_spends_none_of_the_budget(
         clock.now += 1
     assert len(supervisor.started) == WAKE_BUDGET_COUNT + 2
 
-    # Wakes the app never came up from still count.
+    # Wakes the app never came up from (its start ended in FATAL) still count.
     for _ in range(WAKE_BUDGET_COUNT):
         assert manager.wake("docs") is ParkedPageKind.STARTING
-        supervisor.statename_by_program["docs"] = "STOPPED"
+        supervisor.statename_by_program["docs"] = "FATAL"
         manager.sweep_once()
+    assert manager.wake("docs") is ParkedPageKind.FAILED
+
+
+def test_a_wake_ended_by_a_deliberate_stop_spends_none_of_the_budget(
+    manager: AppLifecycleManager, supervisor: FakeSupervisor
+) -> None:
+    """A program Quit (or stopped by the stop route or supervisorctl) while still STARTING reads STOPPED, a state
+    only stopProcess reaches: the wake was not a failed start, so it neither counts against the budget nor leaves an
+    outcome awaited (which would hold the sweep at its transition pace). Without a pass to read the stop, the wake
+    still counts, as one with no outcome yet must."""
+    for _ in range(WAKE_BUDGET_COUNT + 1):
+        assert manager.wake("docs") is ParkedPageKind.STARTING
+        manager.stop_app("docs")
+        manager.sweep_once()
+        assert manager.is_app_parked("docs")
+    assert len(supervisor.started) == WAKE_BUDGET_COUNT + 1
+    # With the parked port let go, only a wake still awaiting its outcome would keep the transition pace.
+    manager.stop()
+    assert manager.sweep_interval_seconds() == IDLE_SWEEP_INTERVAL_SECONDS
+
+    for _ in range(WAKE_BUDGET_COUNT):
+        assert manager.wake("docs") is ParkedPageKind.STARTING
+        manager.stop_app("docs")
     assert manager.wake("docs") is ParkedPageKind.FAILED
 
 

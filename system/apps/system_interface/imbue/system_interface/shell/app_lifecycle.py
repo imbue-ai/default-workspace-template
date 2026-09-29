@@ -9,7 +9,8 @@ arrived at the shell since it started (spec section 6: before anyone has looked 
 says nothing about use, and the apps that deliver something on the first visit need to be running for it). A
 wake releases the parker before asking supervisord to start the program, so the app's first bind never collides
 with the shell's listener, and is budgeted so a broken app cannot be restarted by every reload (a wake that brings
-the app up spends nothing, so an app opened and closed a few times in five minutes is not refused). Supervisord
+the app up, or that a deliberate stop ends before it does, spends nothing, so an app opened and closed a few times
+in five minutes is not refused). Supervisord
 access is injectable, and the sweep thread runs (and a POST launch wakes a stopped app) only when the manager is
 enabled: never in a preview shell, whose registry is a copy of the live one, and in tests only when a test says
 so.
@@ -43,6 +44,7 @@ from imbue.system_interface.shell.liveness import SUPERVISOR_DOWN_STATENAMES
 from imbue.system_interface.shell.liveness import SUPERVISOR_FATAL_STATENAME
 from imbue.system_interface.shell.liveness import SUPERVISOR_RUNNING_STATENAME
 from imbue.system_interface.shell.liveness import SUPERVISOR_STARTING_STATENAME
+from imbue.system_interface.shell.liveness import SUPERVISOR_STOPPED_STATENAME
 from imbue.system_interface.shell.liveness import fetch_supervisor_program_statenames
 from imbue.system_interface.shell.liveness import start_supervisor_program
 from imbue.system_interface.shell.liveness import stop_supervisor_program
@@ -57,7 +59,7 @@ from imbue.system_interface.shell.share_grants import GrantedAppsReader
 TRANSITION_SWEEP_INTERVAL_SECONDS: Final[float] = 2.0
 IDLE_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 # How many wakes that do not bring an app up it gets in a window before its page stops asking for more (spec
-# section 5.5); a wake after which the app is seen RUNNING spends nothing.
+# section 5.5); a wake after which the app is seen RUNNING, or STOPPED on purpose, spends nothing.
 WAKE_BUDGET_COUNT: Final[int] = 3
 WAKE_BUDGET_WINDOW_SECONDS: Final[float] = 300.0
 # How long an app must have shown no window before it is stopped (spec section 6.1).
@@ -414,9 +416,19 @@ class AppLifecycleManager(MutableModel):
             return False
         target = parking_target_of(str(entry.row.url))
         with self._lock:
-            if statename == SUPERVISOR_FATAL_STATENAME and app in self._apps_awaiting_wake_outcome:
-                self._failed_apps.add(app)
-                self._apps_awaiting_wake_outcome.discard(app)
+            if app in self._apps_awaiting_wake_outcome:
+                if statename == SUPERVISOR_FATAL_STATENAME:
+                    self._failed_apps.add(app)
+                    self._apps_awaiting_wake_outcome.discard(app)
+                elif statename == SUPERVISOR_STOPPED_STATENAME:
+                    # Only stopProcess reaches STOPPED: the wake was ended on purpose (Quit, the stop route,
+                    # supervisorctl), not by a start that failed, so it spends none of the budget.
+                    self._apps_awaiting_wake_outcome.discard(app)
+                    self._forget_wakes_before(app, states_read_at)
+                else:
+                    # EXITED (a program with autorestart comes back on its own) or UNKNOWN: the outcome is still
+                    # open, and the next pass reads it.
+                    pass
             parked = self._parked_by_app.get(app)
             if parked is not None and parked.target == target:
                 return True
@@ -432,9 +444,10 @@ class AppLifecycleManager(MutableModel):
         return True
 
     def _forget_wakes_before(self, app: str, moment: float) -> None:
-        """The app was running at ``moment``: every wake before it brought the app up and spends none of the budget,
-        which is for an app that cannot come up, not one opened and closed a few times in five minutes. A wake after
-        the reading is kept, both for the budget and for ``_is_woken_since``. Runs under the lock."""
+        """The app was running, or stopped on purpose, at ``moment``: no wake before it is one the app failed to come
+        up from, so none spends the budget, which is for an app that cannot come up, not one opened and closed a
+        few times in five minutes. A wake after the reading is kept, both for the budget and for
+        ``_is_woken_since``. Runs under the lock."""
         wake_times = self._wake_times_by_app.get(app)
         if wake_times:
             self._wake_times_by_app[app] = [wake_time for wake_time in wake_times if wake_time > moment]

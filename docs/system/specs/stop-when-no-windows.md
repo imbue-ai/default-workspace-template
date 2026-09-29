@@ -164,6 +164,7 @@ The existing stop and start routes go through the manager too: a start releases 
 A woken app whose program reaches `FATAL` (supervisord gave up retrying it) is re-parked with the failure page.
 The manager allows at most 3 wake attempts per app in any 5 minutes; past that the parker answers the failure page without starting anything, so a broken app cannot be restarted by every reload.
 Only a wake the app did not come up from counts: a pass that sees the program `RUNNING` forgets the wakes before its reading, so an app opened, closed, and stopped by Part D a few times in five minutes (or used through `mngr forward` without the shell) is woken every time.
+So does a pass that sees it `STOPPED`, a state only `stopProcess` reaches (a start that fails ends in `FATAL`): a wake ended by Quit, the stop route, or `supervisorctl stop` while the program was still starting was not a failed start, and it neither spends the budget nor leaves an outcome awaited.
 The budget is per shell process and resets with it.
 
 ### 5.6 Launches of a stopped app
