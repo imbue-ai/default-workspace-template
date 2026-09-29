@@ -72,7 +72,7 @@ describe("loadAccountsWithRetry", () => {
   });
 });
 
-describe("whenAccountsLoaded", () => {
+describe("whenAccountsReadyToChoose", () => {
   beforeEach(() => {
     mockRequest.mockReset();
   });
@@ -83,7 +83,7 @@ describe("whenAccountsLoaded", () => {
     let answer: (body: typeof ACCOUNTS_BODY) => void = () => {};
     mockRequest.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
     const settled = vi.fn();
-    void providers.whenAccountsLoaded().then(settled);
+    const ready = providers.whenAccountsReadyToChoose().then(settled);
 
     const loading = providers.loadAccounts();
     await Promise.resolve();
@@ -92,15 +92,10 @@ describe("whenAccountsLoaded", () => {
 
     answer(ACCOUNTS_BODY);
     await loading;
-    await providers.whenAccountsLoaded();
+    await ready;
     expect(settled).toHaveBeenCalledOnce();
+    expect(mockRequest).toHaveBeenCalledTimes(1);
     expect(providers.getSelectedAccount()?.id).toBe("acct-1");
-  });
-});
-
-describe("whenAccountsReadyToChoose", () => {
-  beforeEach(() => {
-    mockRequest.mockReset();
   });
 
   it("reads the list again when the first read named no account, so a sign-in on another page counts", async () => {
