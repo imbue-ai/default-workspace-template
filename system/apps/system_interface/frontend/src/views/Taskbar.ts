@@ -33,11 +33,13 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
       "div",
       {
         "data-taskbar": "",
-        class:
-          "taskbar relative flex h-(--desk-taskbar-height) shrink-0 items-center gap-2 border-t border-default " +
-          "bg-(--desk-taskbar-surface) px-2 backdrop-blur-(--desk-taskbar-blur)",
+        // No line along the top and no blur behind it: the surface alone.
+        class: "taskbar relative h-(--desk-taskbar-height) shrink-0 bg-(--desk-taskbar-surface)",
       },
-      [
+      // One element around everything in the bar, holding the row and nothing else -- no colour, no
+      // border, no corner. It is the handle for dressing the bar's contents: give this a background,
+      // a radius, an inset, and the bar's box stays where the geometry expects it.
+      m("div", { "data-taskbar-content": "", class: "taskbar-content flex h-full items-center gap-2 px-2" }, [
         m(LauncherField, attrs.launcher),
         m(
           "div",
@@ -68,7 +70,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
           ),
         ),
         m(SystemTray, attrs.tray),
-      ],
+      ]),
     );
   },
 };

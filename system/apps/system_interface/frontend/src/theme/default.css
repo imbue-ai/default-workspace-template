@@ -34,7 +34,6 @@
   --desk-window-control-size: calc(var(--desk-title-bar-height) - 2 * var(--desk-window-control-inset));
   --desk-window-shadow: var(--shadow-overlay);
   --desk-taskbar-surface: color-mix(in srgb, var(--c-surface) 70%, transparent);
-  --desk-taskbar-blur: 20px;
   --desk-backdrop: var(--c-bg);
   --desk-default-wallpaper: url(/wallpapers/bundled/arcs);
   --desk-icon-size: 48px;
