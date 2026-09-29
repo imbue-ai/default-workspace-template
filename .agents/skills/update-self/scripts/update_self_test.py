@@ -258,7 +258,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
         update_target.fetch_app_template_ref()
     except update_target.AppVersionUnavailableError as exc:
         assert "too old to report its version" in str(exc)
-        assert "Update the minds app itself first" in str(exc)
+        assert "Update the Imbue Studio app itself first" in str(exc)
     else:
         raise AssertionError("expected a 403 to block with the old-app message")
 
@@ -289,7 +289,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_call_fails(
     try:
         update_target.fetch_app_template_ref()
     except update_target.AppVersionUnavailableError as exc:
-        assert "could not reach the minds app" in str(exc)
+        assert "could not reach the Imbue Studio app" in str(exc)
         assert "connection refused" in str(exc)
     else:
         raise AssertionError("expected a transport failure to block")
@@ -438,7 +438,7 @@ def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "could not reach the minds app" in captured.err
+    assert "could not reach the Imbue Studio app" in captured.err
     # A refusal, not a crash: no traceback for the lead to relay.
     assert "Traceback" not in captured.err
 
@@ -883,76 +883,85 @@ def test_classify_merge_refuses_a_local_that_already_contains_the_target(
 
 
 def test_footprint_ranges_hold_after_a_commit_on_top_of_the_merge(
-    tmp_path, capsys
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # The worker may commit a fix after its merge and rerun the footprint
     # block; the ranges must still split the workspace's own change from the
     # update's, where HEAD^1 would then name the merge itself.
     history = _UpdateHistory(tmp_path)
-    history.release("v1")
-    history.commit_file("system/apps/mine/app.py", "local work")
-    merge = history.land("v1")
-    history.commit_file("system/apps/mine/app.toml", "worker fix")
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    merge = _head_sha(history.repo)
+    history.commit("system/apps/mine/app.toml", "worker fix")
 
-    ranges = history.footprint_ranges("v1", capsys)
+    ranges = history.footprint_ranges("minds-v1", capsys)
 
     assert ranges["merge"] == merge
     assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
         "system/apps/mine/app.py"
     ]
-    assert history.changed(ranges["update_base"], ranges["update_ref"]) == ["v1.txt"]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt"
+    ]
 
 
-def test_footprint_ranges_on_a_retry_whose_target_moved(tmp_path, capsys) -> None:
+def test_footprint_ranges_on_a_retry_whose_target_moved(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     # The worker reverts the rollback before merging the newer release, so the
     # merge's first parent already carries v1. The live workspace runs the
     # rolled-back tree, so the update is v1 and v2 together, and the local side
     # is still only the workspace's own file.
     history = _UpdateHistory(tmp_path)
-    history.release("v1")
-    local = history.commit_file("system/apps/mine/app.py", "local work")
-    history.land("v1")
-    rollback = history.roll_back("v1", restore_to=local)
-    history.release("v2")
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    rollback = history.roll_back("minds-v1")
+    history.release("minds-v2")
     history.revert(rollback)
-    history.land("v2")
+    history.land("minds-v2")
 
-    ranges = history.footprint_ranges("v2", capsys)
+    ranges = history.footprint_ranges("minds-v2", capsys)
 
     assert ranges["update_base"] == rollback
     assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
         "system/apps/mine/app.py"
     ]
     assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
-        "v1.txt",
-        "v2.txt",
+        "minds-v1.txt",
+        "minds-v2.txt",
     ]
 
 
-def test_footprint_ranges_on_a_retry_of_the_same_target(tmp_path, capsys) -> None:
+def test_footprint_ranges_on_a_retry_of_the_same_target(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     # Reverting the rollback already brings v1 back, so there is no new merge:
     # the landed attempt's merge is the anchor, the revert is the update, and
     # a local commit made after the rollback counts as the workspace's own.
     history = _UpdateHistory(tmp_path)
-    history.release("v1")
-    local = history.commit_file("system/apps/mine/app.py", "local work")
-    history.land("v1")
-    rollback = history.roll_back("v1", restore_to=local)
-    history.commit_file("system/apps/later/app.py", "local work after the rollback")
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    rollback = history.roll_back("minds-v1")
+    history.commit("system/apps/later/app.py", "local work after the rollback")
     revert = history.revert(rollback)
 
-    ranges = history.footprint_ranges("v1", capsys)
+    ranges = history.footprint_ranges("minds-v1", capsys)
 
     assert ranges["update_ref"] == revert
     assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
         "system/apps/later/app.py",
         "system/apps/mine/app.py",
     ]
-    assert history.changed(ranges["update_base"], ranges["update_ref"]) == ["v1.txt"]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt"
+    ]
 
 
 def test_footprint_ranges_on_a_same_target_retry_after_a_moved_target_retry(
-    tmp_path, capsys
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # v1 landed and was rolled back, the retry to v2 landed and was rolled back
     # too, and this pass retries v2. The landed v2 merge sits on the revert of
@@ -960,104 +969,188 @@ def test_footprint_ranges_on_a_same_target_retry_after_a_moved_target_retry(
     # back to the workspace's own tree from before both attempts: v1 is update,
     # not the workspace's own change.
     history = _UpdateHistory(tmp_path)
-    history.release("v1")
-    local = history.commit_file("system/apps/mine/app.py", "local work")
-    history.land("v1")
-    first_rollback = history.roll_back("v1", restore_to=local)
-    history.release("v2")
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    first_rollback = history.roll_back("minds-v1")
+    history.release("minds-v2")
     history.revert(first_rollback)
-    history.land("v2")
-    history.revert(history.roll_back("v2", restore_to=first_rollback))
+    history.land("minds-v2")
+    history.revert(history.roll_back("minds-v2", restore_to=first_rollback))
 
-    ranges = history.footprint_ranges("v2", capsys)
+    ranges = history.footprint_ranges("minds-v2", capsys)
 
     assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
         "system/apps/mine/app.py"
     ]
     assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
-        "v1.txt",
-        "v2.txt",
+        "minds-v1.txt",
+        "minds-v2.txt",
     ]
 
 
-def test_footprint_ranges_after_reverting_several_rollbacks_in_a_row(
-    tmp_path, capsys
+# Whether the workspace committed on top of v1's rollback before v2 landed over it.
+_IS_WORKED_ON_AFTER_THE_ROLLBACK = pytest.mark.parametrize(
+    "is_worked_on_after_the_rollback", [False, True], ids=["on-rollback", "worked-on"]
+)
+
+
+def _own_files(is_worked_on_after_the_rollback: bool) -> list[str]:
+    """The workspace's own files in :func:`_land_v2_over_v1s_rollback_and_roll_it_back`."""
+    later = ["system/apps/later/app.py"] if is_worked_on_after_the_rollback else []
+    return [*later, "system/apps/mine/app.py"]
+
+
+def _land_v2_over_v1s_rollback_and_roll_it_back(
+    history: _UpdateHistory, is_worked_on_after_the_rollback: bool
+) -> str:
+    """v1 landed and was rolled back, then a pass whose guide predated the revert step
+    landed v2 over that rollback (or over the workspace's own commit on top of it) and
+    v2 was rolled back too, leaving both rollbacks for the next pass to revert. Return
+    v2's rollback: the tree the live workspace runs."""
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    history.roll_back("minds-v1")
+    if is_worked_on_after_the_rollback:
+        history.commit("system/apps/later/app.py", "local work after the rollback")
+    history.release("minds-v2")
+    history.land("minds-v2")
+    return history.roll_back("minds-v2")
+
+
+@_IS_WORKED_ON_AFTER_THE_ROLLBACK
+def test_footprint_ranges_on_a_pass_that_reverted_several_rollbacks(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    is_worked_on_after_the_rollback: bool,
 ) -> None:
-    # A pass whose guide predates the rollback revert landed v2 over v1's rollback,
-    # and v2 was rolled back too, so this pass reverts both rollbacks before merging
-    # v3. The live tree is the newer rollback's: v1 and v2 are update, whichever
-    # of the reverts put them back.
     history = _UpdateHistory(tmp_path)
-    history.release("v1")
-    local = history.commit_file("system/apps/mine/app.py", "local work")
-    history.land("v1")
-    older = history.roll_back("v1", restore_to=local)
-    history.release("v2")
-    history.land("v2")
-    newer = history.roll_back("v2", restore_to=older)
-    history.release("v3")
-    history.revert(newer)
-    history.revert(older)
-    history.land("v3")
+    live = _land_v2_over_v1s_rollback_and_roll_it_back(
+        history, is_worked_on_after_the_rollback
+    )
+    history.release("minds-v3")
+    for rollback in history.pending_rollbacks("minds-v3", capsys):
+        history.revert(rollback)
+    history.land("minds-v3")
 
-    ranges = history.footprint_ranges("v3", capsys)
+    ranges = history.footprint_ranges("minds-v3", capsys)
 
-    assert ranges["update_base"] == newer
-    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
-        "system/apps/mine/app.py"
-    ]
+    assert ranges["update_base"] == live
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == _own_files(
+        is_worked_on_after_the_rollback
+    )
     assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
-        "v1.txt",
-        "v2.txt",
-        "v3.txt",
+        "minds-v1.txt",
+        "minds-v2.txt",
+        "minds-v3.txt",
     ]
 
 
-def test_footprint_ranges_on_a_same_target_retry_after_several_rollbacks(
-    tmp_path, capsys
+@_IS_WORKED_ON_AFTER_THE_ROLLBACK
+def test_footprint_ranges_on_a_same_target_retry_that_reverted_several_rollbacks(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    is_worked_on_after_the_rollback: bool,
 ) -> None:
-    # As above, but the pass retries v2: once both reverts land, merging v2 has
-    # nothing to do, and the two reverts together are the update.
+    # The landed v2 merge sits on v1's rollback (or on a local commit over it), not
+    # on a revert of it, and the workspace's own tree is still the one from before v1.
     history = _UpdateHistory(tmp_path)
-    history.release("v1")
-    local = history.commit_file("system/apps/mine/app.py", "local work")
-    history.land("v1")
-    older = history.roll_back("v1", restore_to=local)
-    history.release("v2")
-    history.land("v2")
-    newer = history.roll_back("v2", restore_to=older)
-    history.revert(newer)
-    history.revert(older)
+    live = _land_v2_over_v1s_rollback_and_roll_it_back(
+        history, is_worked_on_after_the_rollback
+    )
+    for rollback in history.pending_rollbacks("minds-v2", capsys):
+        history.revert(rollback)
 
-    ranges = history.footprint_ranges("v2", capsys)
+    ranges = history.footprint_ranges("minds-v2", capsys)
 
-    assert ranges["local_ref"] == ranges["update_base"] == newer
-    # v2 was merged directly on v1's rollback, so the fork point comes from the
-    # commit that rollback restored, not from the rollback, whose ancestry carries v1.
+    assert ranges["update_base"] == live
+    assert ranges["update_ref"] == _head_sha(history.repo)
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == _own_files(
+        is_worked_on_after_the_rollback
+    )
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt",
+        "minds-v2.txt",
+    ]
+
+
+def test_footprint_ranges_on_a_retry_over_a_rollback_whose_revert_was_reverted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Reverting v1's rollback's revert put the rollback back in force, so the v2
+    # merge was made on top of the rolled-back v1 attempt, and the chain of attempts
+    # starts at v1's merge.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    history.revert(history.revert(history.roll_back("minds-v1")))
+    live = _head_sha(history.repo)
+    history.release("minds-v2")
+    for rollback in history.pending_rollbacks("minds-v2", capsys):
+        history.revert(rollback)
+    history.land("minds-v2")
+    history.revert(history.roll_back("minds-v2", restore_to=live))
+
+    ranges = history.footprint_ranges("minds-v2", capsys)
+
     assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
         "system/apps/mine/app.py"
     ]
     assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
-        "v1.txt",
-        "v2.txt",
+        "minds-v1.txt",
+        "minds-v2.txt",
     ]
 
 
-def test_footprint_ranges_refuses_an_earlier_updates_merge(tmp_path, capsys) -> None:
+@pytest.mark.parametrize("is_retry", [False, True], ids=["first-pass", "retry"])
+def test_footprint_ranges_count_a_restored_app_change_as_the_workspaces_own(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], is_retry: bool
+) -> None:
+    # The user took an app change back and then restored it. The restoring revert
+    # carries the same subject as a revert of an update's rollback, but what it put
+    # back is the workspace's own change, not the update's; on a retry of v2 it is
+    # also where the chain of attempts starts, not a step back to v1's merge.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    history.commit("system/apps/mine/view.py", "app change")
+    history.revert(history.roll_back(None))
+    history.release("minds-v2")
+    history.land("minds-v2")
+    if is_retry:
+        history.revert(history.roll_back("minds-v2"))
+
+    ranges = history.footprint_ranges("minds-v2", capsys)
+
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py",
+        "system/apps/mine/view.py",
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v2.txt"
+    ]
+
+
+def test_footprint_ranges_refuses_an_earlier_updates_merge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     # A workspace updated before carries older merges under the same subject;
     # without this pass's merge the ranges would silently describe that one.
     history = _UpdateHistory(tmp_path)
-    history.release("v1")
-    history.land("v1")
-    history.release("v2")
+    history.release("minds-v1")
+    history.land("minds-v1")
+    history.release("minds-v2")
 
     code = update_self.main(
-        ["footprint-ranges", "--target", "v2", "--repo-root", str(history.repo)]
+        ["footprint-ranges", "--target", "minds-v2", "--repo-root", str(history.repo)]
     )
 
     captured = capsys.readouterr()
     assert code == 1
-    assert "does not merge v2" in captured.err
+    assert "does not merge minds-v2" in captured.err
     assert captured.out == ""
 
 
@@ -2593,16 +2686,7 @@ class _UpdateHistory:
         _git_in(self.repo, "tag", tag)
         _git_in(self.repo, "checkout", "-q", self.local)
 
-    def commit_file(self, rel: str, message: str) -> str:
-        """Commit ``rel`` on the local line, holding ``message``; return the commit."""
-        path = self.repo / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"{message}\n")
-        _git_in(self.repo, "add", "-A")
-        _git_in(self.repo, "commit", "-q", "-m", message)
-        return _head_sha(self.repo)
-
-    def land(self, ref: str, subject: str | None = None) -> str:
+    def land(self, ref: str, subject: str | None = None) -> None:
         _git_in(
             self.repo,
             "merge",
@@ -2612,7 +2696,6 @@ class _UpdateHistory:
             subject or f"update-self: merge upstream template ({ref})",
             ref,
         )
-        return _head_sha(self.repo)
 
     def roll_back(
         self, rolled_back_update: str | None, restore_to: str | None = None
@@ -2636,21 +2719,6 @@ class _UpdateHistory:
         _git_in(self.repo, "revert", "--no-edit", sha)
         return _head_sha(self.repo)
 
-    def changed(self, base: str, ref: str) -> list[str]:
-        diff = _git_in(self.repo, "diff", "--name-only", f"{base}...{ref}")
-        return sorted(update_self._list_names(diff))
-
-    def footprint_ranges(
-        self, target: str, capsys: pytest.CaptureFixture[str]
-    ) -> dict[str, str]:
-        """What the worker reference's footprint block reads: ``footprint-ranges``."""
-        capsys.readouterr()
-        code = update_self.main(
-            ["footprint-ranges", "--target", target, "--repo-root", str(self.repo)]
-        )
-        assert code == 0, capsys.readouterr().err
-        return json.loads(capsys.readouterr().out)
-
     def pending_rollbacks(
         self, target: str, capsys: pytest.CaptureFixture[str]
     ) -> list[str]:
@@ -2661,6 +2729,30 @@ class _UpdateHistory:
         )
         assert code == 0
         return capsys.readouterr().out.split()
+
+    def commit(self, rel: str, message: str) -> str:
+        """Commit a local change that writes ``rel``; return the commit."""
+        path = self.repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{message}\n")
+        _git_in(self.repo, "add", "-A")
+        _git_in(self.repo, "commit", "-q", "-m", message)
+        return _head_sha(self.repo)
+
+    def changed(self, base: str, ref: str) -> list[str]:
+        """The files ``ref`` changed since its fork from ``base``, as the footprint reads a range."""
+        diff = _git_in(self.repo, "diff", "--name-only", f"{base}...{ref}")
+        return sorted(update_self._list_names(diff))
+
+    def footprint_ranges(
+        self, target: str, capsys: pytest.CaptureFixture[str]
+    ) -> dict[str, str]:
+        capsys.readouterr()
+        code = update_self.main(
+            ["footprint-ranges", "--target", target, "--repo-root", str(self.repo)]
+        )
+        assert code == 0, capsys.readouterr().err
+        return json.loads(capsys.readouterr().out)
 
 
 # An update's rollback records the release it rolled back; one made before the apply
@@ -6441,7 +6533,7 @@ def test_ledger_origin_takes_this_workspaces_own_creation_not_an_ancestors(
     """The template repo is itself developed from workspaces.
 
     A full-history clone therefore carries bootstrap markers older than this
-    workspace's own, and seeding from one of those dates the mind to a
+    workspace's own, and seeding from one of those dates the agent to a
     stranger's creation and names the release that stranger started from.
     """
     repo = _make_real_repo(tmp_path)
@@ -7238,7 +7330,7 @@ def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:
     assert calls == 4
 
 
-# run-status (the Mind app's status contract)
+# run-status (the Imbue Studio app's status contract)
 
 
 def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:

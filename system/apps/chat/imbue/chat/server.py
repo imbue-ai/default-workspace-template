@@ -2,7 +2,8 @@
 
 Every chat renders inside an iframe at the registered ``chat`` origin (the desktop interface,
 ``docs/system/blueprint/desktop-interface/``), served by this process at its own port; the shell
-knows the chat only as an app with pages, and reaches it only through the browser-side contract.
+knows the chat only as an app with pages, and reaches it only through the browser-side contract and the messages
+this app's manifest registers for (``focus_chat.py``).
 """
 
 import json
@@ -34,6 +35,7 @@ from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 
 from imbue.chat import accounts_endpoints
+from imbue.chat import focus_chat
 from imbue.chat import latchkey_endpoints
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.accounts import AccountError
@@ -1333,7 +1335,7 @@ def _run_create_chat() -> CreatedChat | Response:
     With ``should_wait`` the answer comes once the create has finished: the chat's identity
     as before when it landed, a 500 carrying the create's own reason when it failed, and a
     504 when it is still running at the wait's ceiling. That is how a caller outside the
-    workspace (the Minds app's assist and update chats, through
+    workspace (the Imbue Studio app's assist and update chats, through
     ``system/scripts/message_chat.py --create``) holds its "starting..." state until the
     chat exists, without polling.
     """
@@ -1387,12 +1389,12 @@ def _create_chat() -> Response:
 
 
 def _seed_chat() -> Response:
-    """``POST /api/chats/seed``: open a chat on the turns the Mind app had before the workspace existed.
+    """``POST /api/chats/seed``: open a chat on the turns the Imbue Studio app had before the workspace existed.
 
     The body is a :class:`SeedChatRequest`. Answers 201 with the chat's id and name pair; the
     chat is listed at once as a provisional chat awaiting the user's first message, with the
     turns as its transcript (``chat_seed.py``). Like every create, 503 until the agent list has
-    been read from mngr once, so the Mind app's seeding retries rather than being refused; a
+    been read from mngr once, so the Imbue Studio app's seeding retries rather than being refused; a
     title with no usable characters answers 400 and one already taken 409, as a launch's
     requested name would.
     """
@@ -2071,6 +2073,7 @@ def create_application(state: ChatAppState) -> Flask:
     auth_endpoints.register_routes(application)
     accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
+    focus_chat.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)
 

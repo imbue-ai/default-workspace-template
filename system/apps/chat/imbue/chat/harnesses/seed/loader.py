@@ -1,4 +1,4 @@
-"""The reader of a chat's seed segment: the turns the Mind app handed over, with nothing watching them.
+"""The reader of a chat's seed segment: the turns the Imbue Studio app handed over, with nothing watching them.
 
 A seed segment never changes once written, so this is a loader primed at build. It is also
 registered as the ``seed`` harness's watcher because the registry requires one per harness;

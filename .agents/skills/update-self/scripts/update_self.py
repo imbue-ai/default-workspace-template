@@ -10,7 +10,7 @@ analysis). This script owns the parts that are *deterministic* and therefore
 belong in tested code rather than agent prose:
 
 ``resolve-target``
-    Resolve the ref to update to. Default is the release the minds app driving
+    Resolve the ref to update to. Default is the release the Imbue Studio app driving
     this workspace was built against -- the ``minds-v*`` tag it names, and only
     that one; an explicit override may name a specific tag, ``main``, or any
     other ref, and is reported back as exceeding the ceiling when it cannot be
@@ -55,8 +55,9 @@ belong in tested code rather than agent prose:
     Name the two commit ranges the worker reads each app's footprint over:
     what the workspace itself changed, and what the update changes in the tree
     the live workspace runs. Anchored on this pass's merge commit, so a fix
-    committed on top of it leaves them unchanged, and shifted for the two kinds
-    of retry after a rolled-back apply (the target moved, or it did not).
+    committed on top of it leaves them unchanged, and shifted past the
+    rollback reverts of a pass after rolled-back updates (whether the target
+    moved or not).
 
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
@@ -70,7 +71,7 @@ belong in tested code rather than agent prose:
 
 ``surface-chat-tab``
     Open this run's own chat window in the workspace UI, so a user sent into the
-    workspace by the minds app lands on the conversation performing the update.
+    workspace by the Imbue Studio app lands on the conversation performing the update.
     The interface can only place a window in front of a client that is connected,
     and the user may still be on their way in, so the command detaches a helper
     that retries ``layout.py open`` until one takes it (or a deadline passes)
@@ -89,6 +90,14 @@ belong in tested code rather than agent prose:
     update flow itself are applied live rather than being gated on the
     possibly-stale local copy. ``differs`` gates only which SKILL.md prose the
     lead follows, not the path.
+
+``bridge-history``
+    Give ``HEAD`` a merge base with the target when the workspace predates the
+    template's history rewrite: a ``git replace`` graft names the workspace's
+    fork point as a parent of its rewritten twin, for as long as the two
+    histories share no commit. A no-op for every other workspace, and the call
+    that drops the graft once a merge has landed. ``--drop`` removes the
+    recorded graft whatever the histories: the pass's teardown.
 
 ``apply``
     Land a prepared merge and make the live workspace consistent with it, as
@@ -127,11 +136,12 @@ The logic lives in the sibling modules, imported by name from this directory
 (the whole ``scripts/`` directory is staged and run as one unit):
 ``update_target`` (which ref to update to), ``update_classification`` (change
 classes and the apply plan), ``update_apply_contract`` (every path, phase,
-verdict and record the Mind app, bootstrap and the system interface read),
+verdict and record the Imbue Studio app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
-``update_environment``, ``update_probes``, ``update_ledger``, and
-``update_apply`` (the apply and recover orchestration). All of it is covered
-by ``update_self_test.py``.
+``update_environment``, ``update_probes``, ``update_ledger``,
+``update_history_bridge``, and ``update_apply`` (the apply and recover
+orchestration). All of it is covered by ``update_self_test.py`` and
+``test_update_history_bridge.py``.
 """
 
 from __future__ import annotations
@@ -149,13 +159,13 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from update_apply import (
-    ROLLBACK_REVERT_SUBJECT_PREFIX,
+    UpdateRollbackHistory,
     apply_update,
     confirm_last,
     pending_update_rollbacks,
     recover,
     rollback_last,
-    rolled_back_to,
+    update_rollback_history,
 )
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
@@ -169,6 +179,12 @@ from update_apply_contract import (
 from update_banding import protect_from_memory_shed
 from update_classification import classify_merge
 from update_environment import default_sweep_homes
+from update_history_bridge import (
+    DEFAULT_STATE_PATH,
+    HistoryBridgeError,
+    bridge_history,
+    drop_history_bridge,
+)
 from update_layout import FRONTEND_BUNDLES
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
@@ -240,8 +256,12 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     if not args.local_tags:
         # ``ls-remote`` lines are ``<sha>\trefs/tags/<tag>``; take the tag.
         tags = [line.rsplit("/", 1)[-1] for line in tags]
-    app_version = args.app_version if args.app_version is not None else fetch_app_template_ref()
-    target = resolve_target(args.override, tags, remote=args.remote, app_version=app_version)
+    app_version = (
+        args.app_version if args.app_version is not None else fetch_app_template_ref()
+    )
+    target = resolve_target(
+        args.override, tags, remote=args.remote, app_version=app_version
+    )
     # Only the default path: an override was asked for by name, and the rule that
     # it is never silently blocked outranks saving a no-op merge.
     if args.override is None and _is_already_merged(target.ref, repo_root):
@@ -345,46 +365,48 @@ def _latest_commit_with_subject(
     return None
 
 
-def _is_rollback_revert(commit: str, repo_root: Path) -> bool:
-    subject = _git(["log", "-1", "--format=%s", commit], repo_root)
-    return subject.startswith(ROLLBACK_REVERT_SUBJECT_PREFIX)
-
-
-def _before_rollback_reverts(commit: str, repo_root: Path) -> str:
-    """The first commit at or below ``commit``, along first parents, that is not
-    the revert of a rollback: the tree the workspace ran before this pass reverted
-    its pending rollbacks, which it does in a row."""
-    while _is_rollback_revert(commit, repo_root):
+def _before_rollback_reverts(
+    commit: str, history: UpdateRollbackHistory, repo_root: Path
+) -> str:
+    """The commit under the run of update-rollback reverts ending at ``commit``
+    (``commit`` itself when it is not one): the tree before the worker's first step."""
+    while commit in history.reverts:
         commit = _commit_sha(f"{commit}^", repo_root)
     return commit
 
 
-def _first_attempt_first_parent(merge: str, repo_root: Path) -> str:
+def _has_update_rolled_back_since(earlier: str, commit: str, repo_root: Path) -> bool:
+    """Whether ``commit``'s history since ``earlier`` holds an update rollback that
+    nothing there has undone."""
+    return bool(pending_update_rollbacks(earlier, commit, repo_root, Runner()))
+
+
+def _first_attempt_first_parent(
+    merge: str, history: UpdateRollbackHistory, repo_root: Path
+) -> str:
     """The first parent of the first merge in ``merge``'s chain of retries.
 
-    A merge whose first parent reverts a rollback was a retry on top of an
-    earlier landed-and-rolled-back merge. So was one made directly on a
-    rollback, by a pass whose guide predates reverting it; that chain goes on
-    from the commit the rollback restored. The chain ends at a merge made on
-    the workspace's own line, whose first parent carries none of those releases.
+    A merge made while an earlier landed merge's rollback was still in force
+    under it -- directly, under the reverts of it that the pass's first step
+    committed, or under the workspace's own later commits -- was made on top
+    of that rolled-back attempt; the chain ends at a merge made on the
+    workspace's own line, whose first parent carries none of those releases.
     """
     first_parent = _commit_sha(f"{merge}^1", repo_root)
     while True:
-        subject = _git(["log", "-1", "--format=%s", first_parent], repo_root)
-        restored = rolled_back_to(subject)
-        if restored is not None:
-            first_parent = _commit_sha(restored, repo_root)
-            continue
-        if not subject.startswith(ROLLBACK_REVERT_SUBJECT_PREFIX):
-            return first_parent
+        before_reverts = _before_rollback_reverts(first_parent, history, repo_root)
         earlier = _latest_commit_with_subject(
-            UPDATE_SELF_MERGE_SUBJECT, f"{first_parent}^", repo_root
+            UPDATE_SELF_MERGE_SUBJECT, before_reverts, repo_root
         )
         if earlier is None:
-            raise NoUpdateMergeError(
-                f"{first_parent} reverts a rollback, but no earlier "
-                f"'{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
-            )
+            if first_parent in history.reverts or first_parent in history.rollbacks:
+                raise NoUpdateMergeError(
+                    f"{first_parent} rolls back an update or reverts its rollback, "
+                    f"but no earlier '{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
+                )
+            return first_parent
+        if not _has_update_rolled_back_since(earlier, before_reverts, repo_root):
+            return first_parent
         first_parent = _commit_sha(f"{earlier}^1", repo_root)
 
 
@@ -397,18 +419,20 @@ def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
     ``update-self: merge upstream template`` commit rather than on ``HEAD``, so
     a fix committed on top of the merge leaves them unchanged.
 
-    A retry after a rolled-back apply shifts the anchors. The worker reverts
-    every pending rollback, in a row, before merging, so on a retry whose target
-    moved, the merge's first parent is the last revert, and the reverts already
-    carry the landed releases: the update range starts at the commit the first
-    revert sits on instead. On a retry of the same target the reverts leave
-    ``git merge`` nothing to do, so the merge found is the landed attempt's own;
-    the reverts are then the whole update, and the local range runs to the
-    commit they sit on, which carries every local commit since that attempt
-    branched. That commit runs the tree from before every rolled-back attempt,
-    so its fork point is taken from the first attempt in the chain rather than
-    from the landed one, which may itself have been a moved-target retry on top
-    of an earlier release.
+    A pass after rolled-back updates shifts the anchors. The worker first reverts
+    every update rollback nothing has undone, so when the target moved, the
+    merge's first parent is the last of those reverts, which already carries the
+    landed releases: the update range starts under the whole run of reverts
+    instead, at the tree the live workspace runs. On a retry of the same target
+    the reverts leave ``git merge`` nothing to do, so the merge found is the
+    landed attempt's own; the reverts are then the whole update, and the local
+    range runs to the commit under them, which carries every local commit since
+    that attempt branched. That commit runs the tree from before every
+    rolled-back attempt, so its fork point is taken from the first attempt in
+    the chain rather than from the landed one, which may itself have been made
+    on top of an earlier release. A user's rollback of an app change, and its
+    revert, carry the same subjects but are the workspace's own history, and
+    shift nothing.
     """
     target_sha = _commit_sha(target, repo_root)
     merge = _latest_commit_with_subject(UPDATE_SELF_MERGE_SUBJECT, "HEAD", repo_root)
@@ -423,18 +447,22 @@ def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
             f"merge {target}; an earlier update's merge carries the same subject"
         )
     first_parent = parents[0]
-    same_target_revert = _latest_commit_with_subject(
-        ROLLBACK_REVERT_SUBJECT_PREFIX, f"{merge}..HEAD", repo_root
+    history = update_rollback_history(target, "HEAD", repo_root, Runner())
+    since_merge = _list_names(
+        _git(["rev-list", "--first-parent", f"{merge}..HEAD"], repo_root)
+    )
+    same_target_revert = next(
+        (commit for commit in since_merge if commit in history.reverts), None
     )
     if same_target_revert is not None:
-        local_fork = _first_attempt_first_parent(merge, repo_root)
+        local_fork = _first_attempt_first_parent(merge, history, repo_root)
         local_ref = update_base = _before_rollback_reverts(
-            same_target_revert, repo_root
+            same_target_revert, history, repo_root
         )
         update_ref = same_target_revert
     else:
         local_fork = local_ref = first_parent
-        update_base = _before_rollback_reverts(first_parent, repo_root)
+        update_base = _before_rollback_reverts(first_parent, history, repo_root)
         update_ref = merge
     local_base = _git(["merge-base", local_fork, target_sha], repo_root)
     return {
@@ -645,6 +673,17 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
             {"skill_dir": str(staged_skill), "differs": differs, "ref": args.ref}
         )
     )
+    return 0
+
+
+def _cmd_bridge_history(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    state = Path(args.state)
+    state = state if state.is_absolute() else repo_root / state
+    if args.drop:
+        print(drop_history_bridge(repo_root, state).to_json())
+        return 0
+    print(bridge_history(repo_root, args.ref, state).to_json())
     return 0
 
 
@@ -869,7 +908,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--ceiling",
         dest="app_version",
         default=None,
-        help="The release to update to, standing in for the running minds app's "
+        help="The release to update to, standing in for the running Imbue Studio app's "
         "own (default: ask the app). A ref that is not a release tag is a fault: "
         "pass --override to say what to take instead.",
     )
@@ -962,6 +1001,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         "data/.tasks/update-self/skill-at-target).",
     )
     bootstrap_parser.set_defaults(func=_cmd_bootstrap_skill)
+
+    bridge_parser = sub.add_parser(
+        "bridge-history",
+        help="Graft a workspace that predates the template's history rewrite onto "
+        "the target's history while they share no commit; drop the graft after.",
+        parents=[common],
+    )
+    bridge_mode = bridge_parser.add_mutually_exclusive_group(required=True)
+    bridge_mode.add_argument("--ref", help="The resolved target ref.")
+    bridge_mode.add_argument(
+        "--drop",
+        action="store_true",
+        help="Only remove a graft this subcommand recorded, whatever the histories.",
+    )
+    bridge_parser.add_argument(
+        "--state",
+        default=DEFAULT_STATE_PATH,
+        help=f"Where the graft is recorded (default: {DEFAULT_STATE_PATH}).",
+    )
+    bridge_parser.set_defaults(func=_cmd_bridge_history)
 
     apply_parser = sub.add_parser(
         "apply",
@@ -1059,7 +1118,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     run_status_parser = sub.add_parser(
         "run-status",
-        help="Record this run for the Mind app (data/.state/update-apply/run.json).",
+        help="Record this run for the Imbue Studio app (data/.state/update-apply/run.json).",
         parents=[common],
     )
     run_status_sub = run_status_parser.add_subparsers(
@@ -1094,7 +1153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     verdict_parser.add_argument(
         "--detail",
         default="",
-        help="One plain-language line for the Mind app's modal.",
+        help="One plain-language line for the Imbue Studio app's modal.",
     )
     verdict_parser.add_argument(
         "--resulting-ref",
@@ -1160,6 +1219,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         AppVersionUnavailableError,
         NoUpdateTargetError,
         ApplyPreconditionError,
+        HistoryBridgeError,
     ) as e:
         # These carry the "why you cannot update right now" explanation the lead
         # relays to the user, so print the message alone: a traceback would bury it

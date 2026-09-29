@@ -1553,7 +1553,7 @@ describe("permission resolutions", () => {
   });
 
   it("hides an id-less notification instead of guessing which card it resolves", () => {
-    // A notice recorded before minds embedded ids attributes nothing: the
+    // A notice recorded before Imbue Studio embedded ids attributes nothing: the
     // arrival-order guess is what used to swap verdicts, and an embedded page
     // recovers the verdict from the response log via the card's hydration
     // query. The notice still acts as the turn boundary it is, with no bubble.
@@ -1790,7 +1790,7 @@ describe("agent switches", () => {
   });
 
   it("marks nothing where the chat's first agent takes over from the seed segment", () => {
-    // The seed segment is the conversation the Mind app wrote before the workspace existed;
+    // The seed segment is the conversation the Imbue Studio app wrote before the workspace existed;
     // nothing was handed off to the first agent, so the switch after it is a turn boundary
     // with no handoff node, and the user's first message opens its own section.
     const events: TranscriptEvent[] = [

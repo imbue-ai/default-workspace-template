@@ -6,7 +6,7 @@
  *
  * One document only: ``cursor`` does not cross a frame boundary, so every page installs this
  * for itself (the shell, the chat page, the chat root, the Getting Started page), as the
- * embedding minds chrome does for its own document.
+ * embedding Imbue Studio chrome does for its own document.
  */
 
 /** The class on <html> while the pointer is hidden. */

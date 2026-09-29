@@ -134,11 +134,11 @@ fi
 ln -sfn /home/user/workspace/system/supervisord.conf /etc/supervisord.conf
 
 # The distro restic (bookworm ships 0.14) predates `restic restore --delete`,
-# which the minds in-place backup restore requires (restic >= 0.17). Install
+# which the Imbue Studio in-place backup restore requires (restic >= 0.17). Install
 # the pinned release (sha256-verified, from the official SHA256SUMS) at
 # /usr/local/bin so it shadows the apt binary and the whole workspace --
 # including the hourly host-backup service -- runs the same pinned version
-# minds bundles on the desktop side. The apt package above stays as a
+# Imbue Studio bundles on the desktop side. The apt package above stays as a
 # fallback for anything resolving /usr/bin/restic explicitly.
 restic_arch="$(uname -m)"
 case "${restic_arch}" in

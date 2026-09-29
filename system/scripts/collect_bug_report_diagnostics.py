@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resident in-workspace collector for bug-report diagnostics.
 
-Invoked by the minds desktop app via a small ``mngr exec`` as
+Invoked by the Imbue Studio desktop app via a small ``mngr exec`` as
 ``python3 system/scripts/collect_bug_report_diagnostics.py [--logs]
 [--transcript] [--scan-timeout=<seconds>]``. Stdlib only (no venv, no
 third-party imports), targeting the container's system python3 (3.11+).

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Initialize this workspace's restic backup repository from its restic.env.
 
-The hosted minds web client provisions backups entirely in the workspace: it
+The hosted Imbue Studio web client provisions backups entirely in the workspace: it
 mints the bucket + S3 key against the connector, writes the canonical
 ``data/.secrets/restic.env`` (via the owner-exec write-file endpoint), then
 runs this script (via owner-exec run) to create the restic repository. The

@@ -1,6 +1,6 @@
 ---
 name: notify-user
-description: "Tell the user, through the Mind app's notification feed (bell, badge, toast, and a system banner when they are away), that work in THIS CHAT has finished. For chat agents only -- never for launch-task workers, whose results reach the user through their parent chat. Use at the end of every turn in which you actually did work, not only after long ones."
+description: "Tell the user, through the Imbue Studio app's notification feed (bell, badge, toast, and a system banner when they are away), that work in THIS CHAT has finished. For chat agents only -- never for launch-task workers, whose results reach the user through their parent chat. Use at the end of every turn in which you actually did work, not only after long ones."
 compatibility: Requires the latchkey gateway env mngr injects into every agent (LATCHKEY_GATEWAY, LATCHKEY_GATEWAY_PASSWORD); python3 only.
 metadata:
   author: imbue
@@ -8,7 +8,7 @@ metadata:
 
 # Notify the user
 
-The Mind app keeps a notification feed: a bell in the titlebar, a badge on the
+The Imbue Studio app keeps a notification feed: a bell in the titlebar, a badge on the
 dock icon, a toast card in every open window, and a system banner when the
 user is looking at something else. This skill posts a message from this chat
 into that feed. Clicking the notification lands the user in this chat.

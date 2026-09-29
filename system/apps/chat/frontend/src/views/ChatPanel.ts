@@ -7,7 +7,7 @@
  * empty transcript (a message typed now is held until the agent lands); failed, it shows the
  * reason and a way to try again over the composer, so a message held through the failure is
  * back in it where it can be seen. The transcript takes over when creation completes. A
- * seeded chat (the Mind app's onboarding conversation, continued here) has a transcript from
+ * seeded chat (the Imbue Studio app's onboarding conversation, continued here) has a transcript from
  * the start, so it renders as one through its wait for the first send and its create; only a
  * failed create shows the provisional screen.
  */

@@ -20,14 +20,14 @@ this section is for a shared path that has no copy here.
 1. **Use `latchkey curl`** calls to communicate with the remote WebDAV server. (They are the same as normal curl calls, just going through the Latchkey Gateway.)
 2. **Check existing access first.** Sometimes important context can be revealed simply by observing which directories or files the user already shared. See the "Check existing access" example below.
 3. **Submit a permission request to the user** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` when the curl request comes back with the "request not permitted by the user" message. See the "Ask for user permission" example below.
-4. **Stop working** in case of upstream connection failures. Those are most likely caused by the user closing their locally running Mind app. Restarting the Mind app should usually help.
+4. **Stop working** in case of upstream connection failures. Those are most likely caused by the user closing their locally running Imbue Studio app. Restarting the Imbue Studio app should usually help.
 
 The base URL is `http://latchkey-self.invalid/minds-api-proxy/api/v1/files`. Only the user's home directory and the user's system temp directory are accessible. MOVE and COPY operations are not supported.
 
 
 ## Folders the user keeps synced
 
-For a shared folder, the user can additionally ask Mind to keep a copy of it
+For a shared folder, the user can additionally ask Imbue Studio to keep a copy of it
 on this machine. When there is one, **use it instead of the WebDAV server
 above**: it is ordinary local files, so your normal tools work on it, there is
 no round trip per file, and it keeps working while the user's computer is
@@ -38,11 +38,11 @@ no copy here.
   folder that is syncing now. So `/Users/kim/notes` from device `host-abc`
   is at `~/synced_folders/host-abc/Users/kim/notes`.
 - `~/inactive_synced_folders/...` holds a copy whose syncing the user turned
-  off. **Treat it as Mind' own.** Do not create, move, or write anything under
-  it: Mind moves folders in and out of it by name, and anything of yours
+  off. **Treat it as Imbue Studio's own.** Do not create, move, or write anything under
+  it: Imbue Studio moves folders in and out of it by name, and anything of yours
   sitting where a folder belongs is deleted when the user turns syncing off
   again. If you need somewhere to put your own files, use your working
-  directory or `/tmp`.
+  directory, or `/tmp` for small files (`/var/tmp` for anything large).
 
 ### Whether your writes reach the user
 
@@ -132,7 +132,7 @@ After posting, wait for an automated system message indicating whether the user 
 
 ### Ask for a synchronized copy
 
-Access through the file server only works while the user's computer is awake and the Mind app is running. If you need a folder to stay reachable while the user's computer is asleep or offline, ask for a synchronized copy of it on this machine in the same request, by adding `sync` to the payload:
+Access through the file server only works while the user's computer is awake and the Imbue Studio app is running. If you need a folder to stay reachable while the user's computer is asleep or offline, ask for a synchronized copy of it on this machine in the same request, by adding `sync` to the payload:
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
@@ -148,4 +148,4 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
 ## Notes
 
 - Users may run macOS or Linux, possible even other OSes.
-- In the permission request dialog that pops up in the Mind app on their machine, users can adjust the path, overriding the originally requested one, and switch the synchronized copy on or off. There are no other sharing settings the user can configure.
+- In the permission request dialog that pops up in the Imbue Studio app on their machine, users can adjust the path, overriding the originally requested one, and switch the synchronized copy on or off. There are no other sharing settings the user can configure.

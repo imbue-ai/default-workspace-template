@@ -80,7 +80,7 @@ class CatalogTemplate(FrozenModel):
     slug: str = Field(min_length=1, description="Unique within the catalog; what a shelf refers to")
     title: str = Field(min_length=1, description="The name a card shows")
     description: str = Field(description="One or two sentences")
-    repository_url: str = Field(min_length=1, description="The repository a mind adopts it from")
+    repository_url: str = Field(min_length=1, description="The repository an agent adopts it from")
     what_it_is: str = Field(default="", description="Several paragraphs, blank-line separated")
     author: str = Field(default="", description="Who published it; empty when unknown")
     thumbnail: str = Field(

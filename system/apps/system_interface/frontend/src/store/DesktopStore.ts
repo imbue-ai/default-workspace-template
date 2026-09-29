@@ -20,7 +20,6 @@ import { StalePlacementsSaveError } from "../model/api";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
-  chatPath,
   draftRowsOf,
   freeTextParams,
   freeTextRowsOf,
@@ -79,7 +78,6 @@ import {
   activeDesktop,
   activeFocusedWindowId,
   appByName,
-  chatApp,
   detachedWindowsOf,
   draftTargetOf,
   effectiveWindow,
@@ -88,12 +86,12 @@ import {
   findWindow,
   initialDesktopState,
   isAppStoppable,
+  isEmbedderMessageHandled,
   isLayoutDirty,
   openableApps,
   pinnedWindowOf,
   reduceDesktopState,
   renderedState,
-  windowShowingChat,
 } from "../reducers/desktopState";
 import type { DesktopEvent, DesktopState, DetachedWindowReport } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
@@ -145,7 +143,11 @@ export interface DesktopApi {
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
   fetchAvatars(): Promise<AvatarCatalog>;
   selectAvatar(design: string): Promise<void>;
+  relayEmbedderMessage(type: string, clientId: string, payload: Readonly<Record<string, unknown>>): Promise<void>;
 }
+
+/** A message the Imbue Studio chrome sent this page: its type and its own fields. */
+export type EmbedderMessage = { readonly type: string } & Readonly<Record<string, unknown>>;
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
 export interface PageDriver {
@@ -153,7 +155,7 @@ export interface PageDriver {
   reload(windowId: string): void;
   /** Reload every page of an app. */
   reloadApp(appName: string): void;
-  /** Send the page ``shell:close-request`` (the minds close chord). */
+  /** Send the page ``shell:close-request`` (the Imbue Studio close chord). */
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
   ownsCloseChord(windowId: string): boolean;
@@ -521,7 +523,7 @@ export class DesktopStore {
 
   /** Resolves once the app list has landed, with the bootstrap's inventory read or the socket's first
    *  ``apps_updated``, whichever comes first. A ``start`` that failed to read the inventory resolves without
-   *  it, so a caller that needs the apps (which app holds chats, which window is pinned) waits on this too. */
+   *  it, so a caller that needs the apps (which of them take the Imbue Studio chrome's messages) waits on this too. */
   whenAppsLoaded(): Promise<void> {
     return this.appsLoaded;
   }
@@ -741,27 +743,23 @@ export class DesktopStore {
     return launched !== null;
   }
 
-  /** ``minds:focus-chat`` from the embedder: show the chat ``chatId``. A window already showing it is
-   *  switched to and raised, wherever it is; otherwise this client's view of the chat app's pinned
-   *  window is pointed at the chat, as a draft is, so the chat lands where this viewer reads chats;
-   *  with no pinned window to take it, the chat opens in a window of its own. False when nothing
-   *  showed it -- this machine has no app that holds chats, or the shell refused the ask. */
-  async focusChat(chatId: string): Promise<boolean> {
-    // A solo shell shows one window and cannot show a chat elsewhere.
-    if (this.soloWindowId !== null) return false;
-    const shown = windowShowingChat(this.state, chatId);
-    if (shown !== null) {
-      if (shown.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(shown.desktop.id);
-      this.restoreWindow(shown.window.id);
-      return true;
+  /** A message from the Imbue Studio chrome: when an app registered for its type, the shell is asked, once, to post it
+   *  there with this client's id (contracts.md section 5.6); the app decides what it means. False when no app
+   *  registered for the type, the shell could not pass it on, this is a preview shell (whose backend refuses
+   *  the relay: the apps it names are the live ones), or this is a solo shell (whose client is the main window's,
+   *  so what an app did with the message would land there). */
+  async relayEmbedderMessage(message: EmbedderMessage): Promise<boolean> {
+    if (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, message.type)) {
+      return false;
     }
-    const app = chatApp(this.state);
-    if (app === null) return false;
-    const pinned = pinnedWindowOf(this.state, app.name);
-    if (pinned === null) return (await this.openWindowAt(app.name, chatPath(chatId), "focus")) !== null;
-    const isTaken = await this.navigateOwnWindow(pinned.id, chatPath(chatId));
-    this.restoreWindow(pinned.id);
-    return isTaken;
+    const { type, ...payload } = message;
+    try {
+      await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload);
+    } catch (error) {
+      console.warn(`[si] could not relay ${type} from the embedder`, error);
+      return false;
+    }
+    return true;
   }
 
   /** Point this client's view of a window at ``path``, the way an agent's ``navigate`` does: the location is
@@ -888,6 +886,15 @@ export class DesktopStore {
       case "reload_system_interface":
         this.deps.reloadInterface();
         return;
+      case "show": {
+        // A pulled-out window the shell left out: its desktop window is raised as the taskbar's "Show" raises it,
+        // by the main window's page (a solo page shares its client).
+        const windowId = event.args.window;
+        if (this.soloWindowId === null && typeof windowId === "string" && windowId !== "") {
+          this.showDetachedWindow(windowId);
+        }
+        return;
+      }
     }
   }
 
@@ -1186,7 +1193,7 @@ export class DesktopStore {
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
   }
 
-  /** The minds close chord: the focused window is told, then closed for everyone; a pinned window, which is never
+  /** The Imbue Studio close chord: the focused window is told, then closed for everyone; a pinned window, which is never
    *  closed, is minimized instead. */
   async closeFocusedWindow(): Promise<void> {
     // In a solo shell the chord belongs to the chrome, which closes the desktop window instead; the focused

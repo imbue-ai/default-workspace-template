@@ -652,7 +652,7 @@ class ProvisionalChat(FrozenModel):
 
 
 class SeedChatRequest(FrozenModel):
-    """Request body for POST /api/chats/seed: the conversation the Mind app had before the workspace existed."""
+    """Request body for POST /api/chats/seed: the conversation the Imbue Studio app had before the workspace existed."""
 
     title: str = Field(default="", description='The chat\'s display name; empty mints the first free "Chat N"')
     turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")
