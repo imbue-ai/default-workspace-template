@@ -256,13 +256,73 @@ def reduce_access_lists(
     return reduced, dropped
 
 
-def parse_plan(plan_text: str, *, reduce_access: bool = False) -> dict[str, object]:
+def schedule_waves(access_by_node: dict[int, list[int]]) -> list[list[int]]:
+    """The groups of nodes that run at the same time, in the order they start.
+
+    This is what the orchestrator's own ``ready`` loop does, replayed ahead of time:
+    take every node whose access list is already done, up to the parallelism cap, run
+    them, then repeat. The cap is why a wave can be smaller than the set of unblocked
+    nodes, and why the leftovers form a wave of their own.
+    """
+    waves: list[list[int]] = []
+    done: set[int] = set()
+    remaining = set(access_by_node)
+    while remaining:
+        unblocked = sorted(
+            idx for idx in remaining if set(access_by_node[idx]) <= done
+        )
+        if not unblocked:
+            raise PlanError(
+                f"the access lists have a cycle among nodes {sorted(remaining)}"
+            )
+        wave = unblocked[:MAX_RUNNING_NODE_COUNT]
+        waves.append(wave)
+        done |= set(wave)
+        remaining -= set(wave)
+    return waves
+
+
+def find_nodes_worth_a_worker(
+    access_by_node: dict[int, list[int]], capabilities: Sequence[str]
+) -> set[int]:
+    """The nodes to launch a worker for: those that run alongside another worker node.
+
+    A node with nothing running beside it gains nothing from a worker. The build still
+    waits for it either way, and a worker adds a git worktree, a `uv sync`, an agent
+    cold start and a merge to a wait the orchestrator could have spent doing the work.
+    So a node alone in its wave is the orchestrator's own to do.
+
+    Interactive nodes never count toward a wave's size, in either direction: one is a
+    conversation the orchestrator is holding, so it cannot be building something else at
+    the same time, and it never had a worker to lose.
+    """
+    is_interactive = [c == INTERACTIVE_CAPABILITY for c in capabilities]
+    worth_it: set[int] = set()
+    for wave in schedule_waves(access_by_node):
+        worker_nodes = [idx for idx in wave if not is_interactive[idx]]
+        if len(worker_nodes) >= 2:
+            worth_it |= set(worker_nodes)
+    return worth_it
+
+
+def parse_plan(
+    plan_text: str,
+    *,
+    reduce_access: bool = False,
+    only_parallel_workers: bool = False,
+) -> dict[str, object]:
     """Turn the planner's output into the validated plan the orchestrator runs.
 
     With ``reduce_access``, an access entry another entry already reaches is
     dropped; without it, the planner's lists are carried through untouched. The
     two are worth comparing on a real build, so this is a switch rather than a
     decision baked into the script.
+
+    ``only_parallel_workers`` is the same kind of switch. Off, every non-interactive
+    node gets a worker, which is what the flow has always done. On, a node that would
+    run with no other worker node beside it is left to the orchestrator: the plan is
+    unchanged and so is the order, but the worktree, sync, cold start and merge that
+    node's worker would have cost are not spent on a wait nobody overlaps.
     """
     output_block = _extract_output_block(plan_text)
     capabilities = _validate_capabilities(
@@ -293,6 +353,17 @@ def parse_plan(plan_text: str, *, reduce_access: bool = False) -> dict[str, obje
         access = planned_access
         dropped_access = {idx: [] for idx in range(node_count)}
 
+    # Which nodes a worker is launched for. The access lists are read after any
+    # reduction, since the reduction is what the orchestrator's ready loop will see.
+    if only_parallel_workers:
+        with_worker = find_nodes_worth_a_worker(access, capabilities)
+    else:
+        with_worker = {
+            idx
+            for idx in range(node_count)
+            if capabilities[idx] != INTERACTIVE_CAPABILITY
+        }
+
     nodes = [
         {
             "index": idx,
@@ -303,7 +374,10 @@ def parse_plan(plan_text: str, *, reduce_access: bool = False) -> dict[str, obje
             # plan.json shows the reduction rather than hiding it; plan.md holds
             # the planner's own words either way.
             "access_dropped": dropped_access[idx],
-            "model": model_for_capability(capabilities[idx]),
+            # False means the orchestrator does this node itself: an interactive node
+            # always, and under `only_parallel_workers` a node nothing runs beside.
+            "has_worker": idx in with_worker,
+            "model": model_for_capability(capabilities[idx]) if idx in with_worker else None,
         }
         for idx in range(node_count)
     ]
@@ -317,9 +391,10 @@ def find_ready_nodes(
 ) -> list[int]:
     """Nodes that can start now, lowest index first.
 
-    Only worker nodes count toward the parallelism cap: an interactive node is a
-    conversation the orchestrator holds, so it starts whenever its dependencies
-    are done and takes no worker slot.
+    Only nodes that get a worker count toward the parallelism cap. A node the
+    orchestrator does itself takes no slot and starts whenever its dependencies are
+    done -- an interactive node (a conversation it holds), and under the plan's
+    ``only_parallel_workers`` setting a node nothing would have run beside.
     """
     nodes = plan["nodes"]
     assert isinstance(nodes, list)
@@ -332,8 +407,13 @@ def find_ready_nodes(
     if unknown:
         raise PlanError(f"no such nodes in the plan: {sorted(unknown)}")
 
-    def is_interactive(node_idx: int) -> bool:
-        return nodes[node_idx]["capability"] == INTERACTIVE_CAPABILITY
+    def has_worker(node_idx: int) -> bool:
+        # A plan written before `has_worker` existed has every non-interactive node
+        # take a slot, which is what it did when it was written.
+        node = nodes[node_idx]
+        if "has_worker" in node:
+            return bool(node["has_worker"])
+        return node["capability"] != INTERACTIVE_CAPABILITY
 
     unblocked = [
         node["index"]
@@ -342,13 +422,13 @@ def find_ready_nodes(
         and node["index"] not in running
         and set(node["access"]) <= done
     ]
-    running_worker_count = sum(1 for idx in running if not is_interactive(idx))
+    running_worker_count = sum(1 for idx in running if has_worker(idx))
     free_worker_slot_count = max(MAX_RUNNING_NODE_COUNT - running_worker_count, 0)
-    ready_workers = [idx for idx in unblocked if not is_interactive(idx)][
+    ready_workers = [idx for idx in unblocked if has_worker(idx)][
         :free_worker_slot_count
     ]
-    ready_interactive = [idx for idx in unblocked if is_interactive(idx)]
-    return sorted(ready_workers + ready_interactive)
+    ready_on_lead = [idx for idx in unblocked if not has_worker(idx)]
+    return sorted(ready_workers + ready_on_lead)
 
 
 def render_node_task(
@@ -432,15 +512,27 @@ def _parse_node_index_list(text: str) -> list[int]:
         ) from None
 
 
-def _run_parse(run_dir: Path, reduce_access: bool) -> int:
+def _run_parse(run_dir: Path, reduce_access: bool, only_parallel_workers: bool) -> int:
     plan = parse_plan(
-        _read_run_file(run_dir / PLAN_MARKDOWN_FILE_NAME), reduce_access=reduce_access
+        _read_run_file(run_dir / PLAN_MARKDOWN_FILE_NAME),
+        reduce_access=reduce_access,
+        only_parallel_workers=only_parallel_workers,
     )
     plan_json_path = run_dir / PLAN_JSON_FILE_NAME
     plan_json_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     print(f"plan_orchestration: wrote {len(plan['nodes'])} nodes to {plan_json_path}")
     nodes = plan["nodes"]
     assert isinstance(nodes, list)
+    on_lead = [
+        node["index"]
+        for node in nodes
+        if not node["has_worker"] and node["capability"] != INTERACTIVE_CAPABILITY
+    ]
+    if on_lead:
+        print(
+            f"plan_orchestration: nodes {on_lead} get no worker -- nothing runs "
+            f"beside them, so do them yourself"
+        )
     for node in nodes:
         if node["access_dropped"]:
             print(
@@ -503,6 +595,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             "dependency covers. Off by default."
         ),
     )
+    parse_parser.add_argument(
+        "--only-parallel-workers",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Launch a worker only for a node that runs beside another worker node. "
+            "A node alone in its wave is left to the orchestrator, which saves that "
+            "node's worktree, sync, cold start and merge on a wait nothing overlaps. "
+            "Off by default."
+        ),
+    )
 
     ready_parser = subparsers.add_parser(
         "ready", help="Print the nodes that can start now, comma-separated."
@@ -525,7 +628,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         match args.command:
             case "parse":
-                return _run_parse(args.run_dir, args.reduce_access)
+                return _run_parse(
+                    args.run_dir, args.reduce_access, args.only_parallel_workers
+                )
             case "ready":
                 return _run_ready(args.run_dir, args.done, args.running)
             case "write-task":

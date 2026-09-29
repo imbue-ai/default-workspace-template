@@ -206,10 +206,17 @@ Repeat until every node is done.
    ```
 
    It prints comma-separated node indices. It never starts more than 5 workers at
-   once, and interactive nodes take no worker slot.
+   once, and a node with `"has_worker": false` takes no worker slot.
 
-2. **Launch each worker node it printed, one node per command.** Never put two
-   launches in one shell command: they run one after the other anyway, and a
+2. **Check each printed node's `has_worker` in `$RUN/plan.json` before launching
+   anything.** `false` means the node is yours: do its subtask in `$BUILD` yourself,
+   commit it, and count it done -- no worker, no worktree, no merge. That is always
+   true of an interactive node, and under `--only-parallel-workers` it is also true of
+   a node nothing else runs beside, where a worker would cost a worktree, a sync, a
+   cold start and a merge on a wait nobody overlaps.
+
+3. **Launch each node whose `has_worker` is true, one node per command.** Never put
+   two launches in one shell command: they run one after the other anyway, and a
    batched launch hides every worker after the first from the evidence an eval
    collects. Look up the node's `model` in `$RUN/plan.json`, then:
 
@@ -236,7 +243,7 @@ Repeat until every node is done.
    **launch, launch, launch, then tidy up while they work**.
 
    The one thing that cannot wait is the merge. When a report lands mid-wave,
-   merge that node's branch (item 5) *before* you run `ready`, because a node
+   merge that node's branch (item 6) *before* you run `ready`, because a node
    launched off an unmerged build branch cannot see the work it depends on.
    Merge, launch whatever that unblocked, then record and destroy while the new
    one runs.
@@ -266,9 +273,9 @@ Repeat until every node is done.
      put a whole build on one model. Write each `--create-arg` joined with `=`, or an
      argument starting with `-` is read as an option of `launch` itself.
 
-3. **Start each interactive node it printed** with Step 5. Add it to `running`.
+4. **Start each interactive node it printed** with Step 5. Add it to `running`.
 
-4. **Wait for the running workers, in the foreground, one at a time.** Take them
+5. **Wait for the running workers, in the foreground, one at a time.** Take them
    in the order you launched them:
 
    ```bash
@@ -294,10 +301,10 @@ Repeat until every node is done.
    answerable between short delegations, while a build is many workers deep and
    an hour long, and each turn it ends costs it a conversation.
 
-5. **Handle each report as its `await` returns.** Follow
+6. **Handle each report as its `await` returns.** Follow
    `.agents/shared/references/lead-proxy.md` for reading the report, diagnosing
    a timeout, and a worker stopped for memory (exit 75) -- everything but its
-   polling advice, which item 4 replaces. The reports dir is
+   polling advice, which item 5 replaces. The reports dir is
    `$RUN/nodes/N/reports/`.
    - **`done`:** leave the report where it is -- later nodes' task files quote
      it. **Merge the node's branch before anything else**, because until you do,
@@ -343,7 +350,7 @@ Repeat until every node is done.
      what the node could not do, in plain terms, and ask how to proceed. Do not
      retry silently.
 
-6. **Nothing to commit.** Each worker commits its own piece, and item 5 merges
+7. **Nothing to commit.** Each worker commits its own piece, and item 6 merges
    it, so the build branch already holds every finished node. Check that is true
    before a review or the final merge -- `git -C "$BUILD" log --oneline` should
    name every node in `done`, and `git -C "$BUILD" status --porcelain` should be
@@ -393,7 +400,7 @@ For a review:
           --name "$APP-node-K" --message-with-mngr -m "<the change>"
       ```
 
-      Then wait on it again (Step 4, item 4). The `await` that printed the
+      Then wait on it again (Step 4, item 5). The `await` that printed the
       builder's last report already archived it, so its next report lands
       cleanly.
    2. When its new report lands, **merge its branch again** -- the change is a
@@ -430,7 +437,7 @@ After the working-site conversation is confirmed and every node is done:
 
 1. **Stop the workers.** Destroy every remaining `$APP-node-*` worker, which
    removes its worktree, and check the build branch has everything (Step 4,
-   item 6).
+   item 7).
 2. **Merge into main** from the main checkout:
    `git merge --no-ff "build-app/$APP"`. Every node was merged into that branch
    as it finished, so this brings the whole build over in one commit. A conflict
@@ -457,7 +464,7 @@ After the working-site conversation is confirmed and every node is done:
 
 - **The planner or plan fails twice:** Step 2.
 - **A worker reports `stuck`, or its worker is gone while you are waiting on it:**
-  Step 4, item 5.
+  Step 4, item 6.
 - **A create failed and cleaned up its worktree:** Step 3. Nothing else was
   touched, so relaunch the node.
 - **A merge conflicts:** two nodes that ran side by side wrote the same file,
