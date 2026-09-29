@@ -1,13 +1,13 @@
 #!/bin/sh
-# Install + enable a systemd path+service pair that relaunches the minds
-# "system-services" agent whenever the Lima VM boots.
+# Install + enable a systemd path+service pair that relaunches the Imbue
+# Studio "system-services" agent whenever the Lima VM boots.
 #
 # In lima mode the agent runs directly in the VM as root (no nested container),
 # and mngr is installed in the VM at /root/.local/bin (by build_workspace.sh).
 # sshd is brought back by the VM's own systemd on boot, but mngr's agent tmux
 # session + supervisord stack are not -- they are only re-established by
 # `mngr start`. This relaunches it on boot so the workspace recovers from a VM
-# reboot even when the minds desktop app is not running.
+# reboot even when the Imbue Studio desktop app is not running.
 #
 # Run once as root during lima provisioning (via the `extra_provision_command`
 # create-template hook). Idempotent: re-running overwrites the units and re-enables.
@@ -33,7 +33,7 @@ START_SCRIPT=/home/user/workspace/system/scripts/minds_start_services_agent.sh
 # exists (i.e. /home/user/.mngr is mounted + symlinked). `bash -lc` gives uv/mngr on PATH.
 cat > "$SERVICE_PATH" <<UNIT
 [Unit]
-Description=Start the minds system-services agent on boot
+Description=Start the Imbue Studio system-services agent on boot
 After=network-online.target
 Wants=network-online.target
 
@@ -47,7 +47,7 @@ UNIT
 # The path watcher: fire the service when the workspace start script appears.
 cat > "$PATH_UNIT" <<UNIT
 [Unit]
-Description=Watch for the minds workspace and start system-services
+Description=Watch for the Imbue Studio workspace and start system-services
 
 [Path]
 PathExists=$START_SCRIPT

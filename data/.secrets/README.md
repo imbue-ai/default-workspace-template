@@ -3,7 +3,7 @@
 Per-secret env files, plus the shared MCP client's credentials. Three kinds
 live here:
 
-- Files the minds app injects (for example `restic.env` for the backup repository
+- Files Imbue Studio injects (for example `restic.env` for the backup repository
   and `share.env` for the sharing stack's materials).
 - Files an agent asked the user for through the chat's secret card (the
   `connect-external-service` skill's `request_secret.py`): `<name>.env`, one line
