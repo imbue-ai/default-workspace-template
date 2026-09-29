@@ -112,10 +112,15 @@ function reportLocation(): void {
 // Whether a chat for the empty list is being asked for, so the list asks once.
 let isOpeningChatForEmptyList = false;
 
+/** The rail's rows in display order, most recent first. */
+function railRows(): ChatRow[] {
+  return groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats()), startedHere);
+}
+
 function slotFillFor(chatId: string | null): SlotFill {
   return slotFill({
     selectedChatId: chatId,
-    chatIds: groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats()), startedHere).map((row) => row.chatId),
+    chatIds: railRows().map((row) => row.chatId),
     isChatListKnown: hasReceivedChatList(),
     isChoosing: pendingToken !== null || pendingPick !== null,
     isCompact: compactQuery.matches,
@@ -314,7 +319,7 @@ function onChatsUpdated(): void {
 
 const ChatRoot: m.Component = {
   view() {
-    const rows = groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats()), startedHere);
+    const rows = railRows();
     const isCompact = compactQuery.matches;
     // On a phone with nothing selected, the list is the whole page.
     const isListOnly = isCompact && selectedChatId === null;
