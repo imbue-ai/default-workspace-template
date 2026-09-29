@@ -3140,9 +3140,10 @@ class AgentManager:
         return next((spare for spare in self._spares if spare.chat_id == chat_id), None)
 
     def _set_spares_locked(self, spares: tuple[SpareChatAgent, ...]) -> None:
-        self._spares = spares
+        """Record the spares on file, then in memory, so a write that fails leaves both as they were."""
         if self._spare_chat_store is not None:
             self._spare_chat_store.write(spares)
+        self._spares = spares
 
     def _set_spare_phase_locked(self, chat_id: ChatId, phase: SpareChatPhase) -> None:
         self._set_spares_locked(
