@@ -18,11 +18,11 @@ An agent's conversation is stored under its state dir as
 whether the agent still exists:
 
 - **Still present** (running, or **STOPPED** but not destroyed):
-  `/home/user/.mngr/agents/<agent_id>/events/*/common_transcript/events.jsonl`.
+  `/home/user/.mngr/agents/<agent_id>/events/<source>/common_transcript/events.jsonl`.
   A finished `launch-task` worker is usually left STOPPED here -- it is **not**
   in `/home/user/.mngr/preserved/` until it is actually destroyed.
 - **Destroyed:**
-  `/home/user/.mngr/preserved/<agent_name>--<agent_id>/events/*/common_transcript/events.jsonl`.
+  `/home/user/.mngr/preserved/<agent_name>--<agent_id>/events/<source>/common_transcript/events.jsonl`.
 
 (Use `$MNGR_HOST_DIR` in place of `/home/user/.mngr` if this host's mngr root is elsewhere.)
 **Always check both** -- a past agent could be in either.
