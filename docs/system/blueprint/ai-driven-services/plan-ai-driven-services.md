@@ -123,9 +123,8 @@ API key is present) or shells out to `claude -p` (when it isn't), and the
     `claude -p --output-format json --model <m> -- <prompt>` (the prompt last,
     after `--`, so one starting with `-` is not read as an option); run the
     subprocess off the event loop (a worker thread) so an async service isn't
-    blocked; raise
-    with the captured stderr on a non-zero exit; parse the JSON result
-    distinguishing the **success arm** (`subtype == "success"`, has `result`)
+    blocked; raise with the captured stderr on a non-zero exit; parse the JSON
+    result distinguishing the **success arm** (`subtype == "success"`, has `result`)
     from the **error arm** (`is_error` true -- e.g. `error_max_turns` -- carrying
     `errors`), raising on the error arm or a missing `result` rather than
     returning empty text; return a small typed result carrying `text`,
