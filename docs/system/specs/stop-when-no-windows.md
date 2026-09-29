@@ -205,7 +205,7 @@ The per-app grants are read by the shell itself (`shell/share_grants.py`), once 
 A missing document grants no app (the desktop writes it before the materials), and so does one the gateway would refuse (which then admits nobody), warned about once per version of the file.
 A granted app that is already parked when the grant is added is woken by the visitor's first request, as any parked app is.
 
-The close hint of window-bound-resources section 4.6 still goes out first, from the close itself, so the browser stops Chromium on the close and the coordinator 60 seconds later; the hint is posted only when the app is running (decision 9).
+The close hint of window-bound-resources section 4.6 still goes out first, from the close itself, so the browser stops Chromium on the close (the coordinator itself keeps running: it declares `false`, decision 3); the hint is posted only when the app is running (decision 9).
 
 ### 6.2 Windows count, not pages
 
