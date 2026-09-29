@@ -41,7 +41,14 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
             "data-taskbar-entries": "",
             // Wider than the chrome's usual gap: the entries are full-bleed tiles of their own
             // colour, and at 4px two bright ones beside each other read as one block.
-            class: "taskbar-entries flex min-w-0 flex-1 items-center gap-2 overflow-x-auto",
+            //
+            // The padding is what the tiles' shadows are drawn into. ``overflow-x`` makes this a
+            // scroll container, which the CSS spec then clips on BOTH axes (there is no scrolling
+            // on one axis and overflow on the other), and the strip's box is exactly a tile -- so
+            // without room inside it every shadow is cut off square at the tile's own edge. The
+            // vertical room it takes is the bar's own; the horizontal is borrowed back with a
+            // negative margin, so the first tile keeps its distance from the field beside it.
+            class: "taskbar-entries -mx-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-1 py-1.5",
           },
           attrs.entries.map((entry) =>
             m(TaskbarEntry, {

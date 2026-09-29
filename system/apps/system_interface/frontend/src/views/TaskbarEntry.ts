@@ -82,7 +82,12 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
               (isAvatar
                 ? "rounded-2xl [&>img]:size-full "
                 : "rounded-[32%] [&>svg]:size-full " +
-                  (entry.isFocused ? "text-primary shadow-overlay " : "text-secondary shadow-raised ")) +
+                  // One step of elevation, not two. The bar leaves 6px around a tile, and the
+                  // --shadow-overlay a floating entry wears reaches 13px below itself: on the
+                  // wallpaper it has the whole backdrop to fall on, here it would be cut off by
+                  // the strip that scrolls. So the focused one is raised and the rest lie flat,
+                  // which is the same relation inside the room there is.
+                  (entry.isFocused ? "text-primary shadow-raised " : "text-secondary ")) +
               (isDimmed ? "opacity-70" : ""),
           },
           image,
