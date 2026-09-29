@@ -62,11 +62,11 @@ Drawn by hand means:
 
 The deviation is slight, and it lives in the shape -- never in the quality of an edge,
 which stays smooth however much the line under it moves. No fray, no chatter, no noise
-along a boundary. Corners stay generous and of roughly one radius each; rounding that
-varies corner to corner reads as sloppy rather than as hand-made. Every cut in one icon is
-drawn to one nominal weight, and that weight is thin against the thing it crosses: a cut
-wide enough to halve the body turns the object into two shapes. How thin is a judgement
-rather than a measurement, and one icon running heavier than the next is no fault.
+along a boundary. Corners stay generous and of roughly one radius each. Every cut in one
+icon is drawn to one nominal weight, and that weight is thin against the thing it
+crosses: a cut wide enough to halve the body turns the object into two shapes. How thin is
+a judgement rather than a measurement, and one icon running heavier than the next is no
+fault.
 
 **Big, simple marks.** The glyph carries one or two kinds of detail at most -- a cut
 stroke *or* a rim, rarely both, never three. When a mark is not reading, make it bigger
