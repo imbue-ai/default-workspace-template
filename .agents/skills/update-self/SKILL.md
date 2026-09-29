@@ -679,7 +679,7 @@ Step 3b set a previous branch aside.
 results message. It detaches a helper
 that waits for this turn to end, restarts this chat, and sends it a note asking
 you to confirm the restart to the user (and to repeat the offer for any chat
-left running). `--reason` is the report's one-line **Agent restarts** summary of
+left running); when the restart does not happen, its note says so instead. `--reason` is the report's one-line **Agent restarts** summary of
 what the restart picks up:
 
 ```bash
