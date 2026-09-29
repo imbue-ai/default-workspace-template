@@ -102,7 +102,6 @@ async def _running_browser(
             bsession.set_proxy_server(None)
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 async def _noop_wake_method(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
     """Stand-in for ``_wake_agent``: skip the real ``message_chat.py`` subprocess in tests."""
 
@@ -251,7 +250,7 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
     # A viewer joining an already-running browser must NOT receive the fleet-level
     # `initializing` banner, even while the whole fleet is still restoring (finding
     # [3-runner]) -- its seed already says lifecycle=running and the live page is there.
-    fake = _install_fake_browser(monkeypatch)  # lifecycle=running
+    _install_fake_browser(monkeypatch)  # lifecycle=running
     runner._init_done.clear()  # the fleet is still restoring
     try:
         with _BootedServer() as server:
@@ -272,8 +271,6 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
         runner._init_done.set()
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pytest.MonkeyPatch) -> None:
     # While the fleet is still restoring, taking ownership returns 503 "initializing", but
     # read-only routes (ls/health) AND create stay open -- the locked "init must not block
@@ -326,7 +323,7 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
     # forgets its persistent profile and drops it from the manifest.
     profile = bsession._profile_dir("riley-jones")
     profile.mkdir(parents=True)
-    fake = _install_fake_browser(monkeypatch, browser_id="riley-jones")
+    _install_fake_browser(monkeypatch, browser_id="riley-jones")
 
     async def fake_close(self: bsession.LiveBrowser) -> None:  # avoid real Chromium teardown
         return None
@@ -612,27 +609,36 @@ class _AutoResumingAgent:
                 await self._send("Runtime.runIfWaitingForDebugger", {}, message["params"]["sessionId"])
 
 
-def _browser_window_count(display: str) -> int:
-    """Mapped top-level browser windows on ``display``, by the window guardian's own rule."""
+def _browser_window_geometries(display: str) -> list[tuple[int, int, int, int]]:
+    """``(x, y, width, height)`` on the root of each mapped top-level browser window on
+    ``display``, by the window guardian's own rule."""
     disp = Display(display)
     try:
         atoms = {
             "window_type": disp.intern_atom("_NET_WM_WINDOW_TYPE"),
             "type_normal": disp.intern_atom("_NET_WM_WINDOW_TYPE_NORMAL"),
         }
-        count = 0
-        for window in disp.screen().root.query_tree().children:
+        root = disp.screen().root
+        geometries: list[tuple[int, int, int, int]] = []
+        for window in root.query_tree().children:
             try:
                 attrs = window.get_attributes()
                 if attrs.map_state != X.IsViewable or attrs.override_redirect:
                     continue
                 if WindowGuardian._is_browser_window(window, atoms):
-                    count += 1
+                    geometry = window.get_geometry()
+                    origin = root.translate_coords(window, 0, 0)
+                    geometries.append((origin.x, origin.y, geometry.width, geometry.height))
             except Xlib.error.BadWindow:
                 continue  # gone between query_tree and the read
-        return count
+        return geometries
     finally:
         disp.close()
+
+
+def _browser_window_count(display: str) -> int:
+    """Mapped top-level browser windows on ``display``, by the window guardian's own rule."""
+    return len(_browser_window_geometries(display))
 
 
 def _held_keycodes(display: str) -> list[int]:
@@ -734,11 +740,16 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
                 assert display is not None
                 loop = asyncio.get_running_loop()
                 session_id = await _only_page_session(browser, f"{pages.origin}/")
-                x, y = await _evaluate(browser, session_id, (
+                client_x, client_y, inner_height = await _evaluate(browser, session_id, (
                     "(() => { const r = document.getElementById('i').getBoundingClientRect();"
-                    " const top = window.screenY + window.outerHeight - window.innerHeight;"
-                    " return [Math.round(window.screenX + r.left + 20), Math.round(top + r.top + r.height / 2)]; })()"
+                    " return [Math.round(r.left + 20), Math.round(r.top + r.height / 2), window.innerHeight]; })()"
                 ))
+                # The page sits at the bottom of the window, below the toolbar. The window's
+                # place and size come from X: the stealth-patched Chromium reports made-up
+                # screenX/outerHeight values, which put a click computed from them anywhere.
+                [(window_x, window_y, _width, window_height)] = _browser_window_geometries(display)
+                x = window_x + client_x
+                y = window_y + window_height - inner_height + client_y
 
                 def run_on_loop(coro: Any) -> Any:
                     return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)
