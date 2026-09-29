@@ -187,8 +187,8 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
 ```
 
 Then background-poll (`create_worker.py await --name update-$TARGET --task-file
-... --timeout 90m`, `run_in_background: true`) and follow
-`.agents/shared/references/lead-proxy.md`.
+... --timeout 90m`, started through `system/scripts/run_in_background.py`) and
+follow `.agents/shared/references/lead-proxy.md`.
 Flow-specific substitutions:
 
 - Worker name: `update-$TARGET`; branch: `mngr/update-$TARGET`

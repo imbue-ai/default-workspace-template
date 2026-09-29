@@ -85,6 +85,7 @@ from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
+from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.model import InvalidModelPickError
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelChoice
@@ -464,6 +465,19 @@ def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str
         "--label",
         f"display_name={name}",
     ]
+
+
+def _queued_message_state(entry: Mapping[str, Any]) -> QueuedMessageState:
+    """One harness's queued entry on the wire, carrying the render decision its content would get in the transcript."""
+    queued = QueuedMessageState.model_validate(entry)
+    decision = classify_user_message(queued.content)
+    if decision is None:
+        return queued
+    return queued.model_copy_update(
+        to_update(queued.field_ref().display, decision.display),
+        to_update(queued.field_ref().display_label, decision.display_label),
+        to_update(queued.field_ref().display_body, decision.display_body),
+    )
 
 
 # AgentMatch requires a host_name, but the send path never reads it -- it groups
@@ -3802,7 +3816,7 @@ class AgentManager:
         post-sweep state. A live mid-turn agent derives non-IDLE (its transcript
         signals are seeded before the watcher starts) and the snapshot stands.
         """
-        queued = tuple(QueuedMessageState.model_validate(entry) for entry in snapshot)
+        queued = tuple(_queued_message_state(entry) for entry in snapshot)
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
@@ -4052,7 +4066,7 @@ class AgentManager:
         # mutation); only the broadcast itself is gated.
         handled_snapshot = queue_handler() if queue_handler is not None else None
         if handled_snapshot is not None:
-            handled_queue = tuple(QueuedMessageState.model_validate(entry) for entry in handled_snapshot)
+            handled_queue = tuple(_queued_message_state(entry) for entry in handled_snapshot)
             with self._lock:
                 handled_agent_state = self._agents.get(agent_id)
                 if handled_agent_state is not None and handled_agent_state.queued_messages != handled_queue:

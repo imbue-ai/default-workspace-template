@@ -339,7 +339,10 @@ git branch -m mngr/update-self "$ARCHIVE" && echo "$ARCHIVE"
 
 Launch with the plain `worker` template, record the hand-off (from here until
 the worker reports this chat is idle, and naming the worker lets the Imbue Studio app
-read the worker's liveness instead of "waiting for you"), then background-poll:
+read the worker's liveness instead of "waiting for you"), then background-poll
+through `run_in_background.py`, which delivers `await`'s result to this chat as
+a message that starts your next turn, whatever your harness. Run the staged
+skill's copy of it: this workspace's own tree may predate the script.
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
@@ -353,15 +356,16 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 ```bash
-# Run with Bash run_in_background: true
-uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
+    --description "Wait for the update's background agent" -- \
+    uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```
 
-Once the poll is armed, **end your turn**; its completion wakes you with the
-report. Never wait on the worker any other way -- no `sleep`, no polling its
-reports directory or its pane -- see "Never sleep on a worker" in
-`.agents/shared/references/lead-proxy.md`.
+Once the poll is armed, **end your turn**; its message wakes you with the
+report. Re-arm with the same command. Never wait on the worker any other way
+-- no `sleep`, no polling its reports directory or its pane -- see "Never sleep
+on a worker" in `.agents/shared/references/lead-proxy.md`.
 
 ## 4. Proxy the `question` gate
 
