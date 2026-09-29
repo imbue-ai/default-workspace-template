@@ -10,11 +10,17 @@
  * What each mode renders:
  *
  *   chooser    the lane rows
- *   menu       a lane's primary method, plus "Other ways to sign in" under it
+ *   relay      "Finish in your browser": the desktop app opened the page and relays its callback
+ *   menu       a lane's method, plus "Other ways to sign in" under it
  *   steps      one browser method, as the numbered 1-2 sequence
  *   apiKey     one paste method: pick a provider, paste the key
  *   verifying  the spinner screen
- *   success    the check screen, with a Done footer
+ *   success    a sign-in that has something to say about itself, with a Done footer
+ *
+ * A browser sign-in first goes to the minds desktop app, which opens the page and relays the
+ * provider's callback into this workspace. When no desktop app answers, the chooser falls back to
+ * a way in that needs no relay. Those ways stay one click away while the browser is out, and after
+ * a sign-in fails, so a browser that never comes back is never a dead end.
  *
  * Two shapes worth knowing about:
  *
@@ -58,12 +64,17 @@ import {
   submitCode,
   submitKey,
 } from "../models/Providers";
+import { requestProviderRelay } from "../models/providerRelay";
 
 export interface ProviderChooserModalAttrs {
   onDismiss: () => void;
 }
 
-type Mode = "chooser" | "menu" | "steps" | "apiKey";
+type Mode = "chooser" | "relay" | "menu" | "steps" | "apiKey";
+
+/** The paste step's label: a relayed sign-in finishes by itself, and neither side can tell in
+ *  advance whether the browser will end on a code instead. */
+export const PASTE_STEP_LABEL = "If the page shows a code, paste it here";
 
 /** The chooser's last scroll offset, so a drill-in and back lands where you were. The
  *  chooser's DOM unmounts while a sign-in is up, so this outlives it at module scope. */
@@ -99,8 +110,14 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   // so `busy` alone leaves a gap where the flow is still pending and nothing marks it. That
   // gap rendered the menu again, which read as being bounced back to the start.
   let awaitingVerdict = false;
+  // The page is being handed to the desktop app, which has yet to answer.
+  let isOpeningBrowser = false;
+  // Set once no desktop app answered a relay, so this chooser stops offering sign-ins that need one.
+  let isRelayUnavailable = false;
   // Bumped by every `begin`, so a request that has been superseded can tell and stand down.
   let generation = 0;
+  // Why the chooser moved the user to another way of signing in, shown above it.
+  let notice: string | null = null;
 
   function reset(): void {
     mode = "chooser";
@@ -117,11 +134,31 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     copied = "";
     copyFailed = false;
     awaitingVerdict = false;
+    isOpeningBrowser = false;
+    notice = null;
     clearFlow();
   }
 
   function isPaste(candidate: LaneMethod): boolean {
     return candidate.shape === "paste";
+  }
+
+  /** A lane's methods this page can offer: a browser-only sign-in needs a relay. */
+  function offeredMethods(candidate: Lane): LaneMethod[] {
+    return candidate.methods.filter((each) => !(isRelayUnavailable && each.shape === "browser"));
+  }
+
+  /** The way into a lane that needs no relay and no pasted key, for a browser-only sign-in that
+   *  nothing will relay; null when the lane has none. */
+  function relaylessFallback(candidate: Lane): LaneMethod | null {
+    return offeredMethods(candidate).find((each) => each.shape !== "browser" && !isPaste(each)) ?? null;
+  }
+
+  /** Hand a started flow's page to the desktop app; whether it is relaying. */
+  async function relay(url: string, flowId: string): Promise<boolean> {
+    const isRelaying = await requestProviderRelay(url, flowId);
+    if (!isRelaying) isRelayUnavailable = true;
+    return isRelaying;
   }
 
   async function copyToClipboard(value: string, kind: "link" | "code"): Promise<void> {
@@ -143,9 +180,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** Open a lane's method. `fromChooser` decides where back goes. */
   async function begin(
     chosen: Lane,
-    chosenMethod: LaneMethod,
-    options: { fromChooser: boolean; accountId?: string },
+    requested: LaneMethod,
+    options: { fromChooser: boolean; accountId?: string; notice?: string; isRelaySkipped?: boolean },
   ): Promise<void> {
+    // A browser-only sign-in nothing will relay would only be started to be thrown away for the
+    // fallback below, so it goes straight to that.
+    const chosenMethod =
+      requested.shape === "browser" && isRelayUnavailable ? (relaylessFallback(chosen) ?? requested) : requested;
     lane = chosen;
     method = chosenMethod;
     cameFromChooser = options.fromChooser;
@@ -158,6 +199,8 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     keyInput = "";
     awaitingVerdict = false;
     reauthAccountId = options.accountId ?? null;
+    isOpeningBrowser = false;
+    notice = options.notice ?? null;
     keyProvider = chosen.key_providers.length === 1 ? chosen.key_providers[0].provider_id : null;
     // A terminal lane spends seconds spawning a CLI and scraping its first screen, so it
     // gets the waiting screen. A paste lane has nothing to wait for -- minting a folder
@@ -172,8 +215,23 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     generation += 1;
     const attempt = generation;
     m.redraw();
+    let fallback: LaneMethod | null = null;
     try {
       await startFlow(chosen.id, chosenMethod.id, options.accountId);
+      if (attempt !== generation) return;
+      const started = getFlow();
+      if (started !== null && started.relay_url !== null && !isRelayUnavailable && !options.isRelaySkipped) {
+        isOpeningBrowser = true;
+        m.redraw();
+        const isRelaying = await relay(started.relay_url, started.flow_id);
+        if (attempt !== generation) return;
+        isOpeningBrowser = false;
+        if (isRelaying) mode = "relay";
+      }
+      if (mode !== "relay" && chosenMethod.shape === "browser") {
+        // This sign-in cannot finish without the relay, so it gives way to one that can.
+        fallback = relaylessFallback(chosen);
+      }
     } catch (e) {
       if (attempt !== generation) return;
       error = errorText(e);
@@ -182,6 +240,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         busy = false;
         m.redraw();
       }
+    }
+    if (fallback !== null && attempt === generation) {
+      await begin(chosen, fallback, options);
     }
   }
 
@@ -207,7 +268,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** Back: a deep screen returns to the menu, an entry screen to the chooser. */
   function back(): void {
     abortFlow();
-    if (mode === "menu" || cameFromChooser || lane === null) {
+    if (mode === "menu" || mode === "relay" || cameFromChooser || lane === null) {
       reset();
       m.redraw();
       return;
@@ -219,6 +280,29 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     // sign-in, gets a second row for the same provider, and the account they were trying to
     // revive is still dead along with every chat bound to it.
     void begin(owner, primary, { fromChooser: true, accountId: reauthAccountId ?? undefined });
+  }
+
+  /** Offer this lane's ways in that need no relay: the code steps for the live Claude sign-in,
+   *  whose pasted code the CLI still takes, or a fresh sign-in that is not handed to the desktop app. */
+  function signInAnotherWay(current: Lane, why: string | null = null): void {
+    const flow = getFlow();
+    if (flow !== null && flow.status.state === "pending" && flow.shape === "url_then_code") {
+      mode = "menu";
+      notice = why;
+      m.redraw();
+      return;
+    }
+    const manual = current.methods.find((each) => each.shape !== "browser" && !isPaste(each)) ?? current.methods[0];
+    void begin(current, manual, {
+      fromChooser: true,
+      accountId: reauthAccountId ?? undefined,
+      notice: why ?? undefined,
+      isRelaySkipped: true,
+    });
+  }
+
+  function hasOtherWays(current: Lane): boolean {
+    return current.methods.length > 1;
   }
 
   function stepBlock(step: 1 | 2, isLast: boolean, children: m.Children): m.Vnode {
@@ -371,31 +455,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             picking && unpickableNote !== null
               ? m("span", { class: unpickableNote.class }, unpickableNote.text)
               : null,
-            m(
-              Button,
-              {
-                variant: "ghost",
-                sm: true,
-                extra: css.ACCOUNT_ACTION,
-                title: "Sign in again, keeping this account and every chat on it",
-                onclick: () => void reauthenticate(account.id, account.lane),
-              },
-              "Sign in again",
-            ),
-            m(
-              Button,
-              {
-                variant: "ghost",
-                sm: true,
-                icon: true,
-                extra: css.ACCOUNT_ACTION,
-                "aria-label": `Remove ${account.label}`,
-                onclick: () => {
-                  confirmingDelete = account.id;
-                },
-              },
-              m.trust(icon("trash", { size: 15 })),
-            ),
+            accountActions(account),
           ]);
         }),
       ),
@@ -412,6 +472,37 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           )
         : null,
     ]);
+  }
+
+  /** "Sign in again" and remove, for someone who may change accounts. */
+  function accountActions(account: ReturnType<typeof getAccounts>[number]): m.Children {
+    return [
+      m(
+        Button,
+        {
+          variant: "ghost",
+          sm: true,
+          extra: css.ACCOUNT_ACTION,
+          title: "Sign in again, keeping this account and every chat on it",
+          onclick: () => void reauthenticate(account.id, account.lane, account.reauth_method),
+        },
+        "Sign in again",
+      ),
+      m(
+        Button,
+        {
+          variant: "ghost",
+          sm: true,
+          icon: true,
+          extra: css.ACCOUNT_ACTION,
+          "aria-label": `Remove ${account.label}`,
+          onclick: () => {
+            confirmingDelete = account.id;
+          },
+        },
+        m.trust(icon("trash", { size: 15 })),
+      ),
+    ];
   }
 
   /** ProviderSignInModal's stepsBlock, step 1, plus the old modal's copy-link fallback. */
@@ -447,7 +538,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** stepsBlock, step 2. */
   function pasteCodeStep(): m.Vnode {
     return stepBlock(2, true, [
-      stepLabel("2", "Approve, then paste the code shown"),
+      stepLabel("2", PASTE_STEP_LABEL),
       m("div", { class: css.FIELD_ROW }, [
         m("input", {
           class: inputClass({ mono: true, extra: "flex-1" }),
@@ -481,6 +572,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           "Verify code",
         ),
       ]),
+      m("p", { class: css.HINT }, "Signed in without a code? This closes by itself."),
     ]);
   }
 
@@ -512,7 +604,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     const lead =
       flow.shape === "code_then_wait"
         ? `Use your ${current.provider_name} account. Open the page below and enter the code we show you.`
-        : `Use your ${current.provider_name} account. Approve access in your browser, copy the code it gives you, then paste it below.`;
+        : `Use your ${current.provider_name} account. Approve access in your browser, and if it gives you a code, paste it below.`;
     return [
       m("p", { class: css.LEAD }, currentMethod.description || lead),
       flow.url !== null ? openLinkStep(flow.url, `Open ${current.provider_name} sign-in page`) : null,
@@ -635,9 +727,10 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   /** The menu: this lane's primary method inline, with its alternates under it. The
    *  the harness's own menu, which is why the section labels read the way they do. */
   function menuBody(current: Lane): m.Children {
-    const primary = current.methods[0];
-    const others = current.methods.slice(1);
+    const primary = method ?? current.methods[0];
+    const others = offeredMethods(current).filter((candidate) => candidate.id !== primary.id);
     return m("div", { class: "flex flex-col" }, [
+      notice !== null ? m("p", { class: css.HINT }, notice) : null,
       m("div", { class: css.SECTION_LABEL }, isPaste(primary) ? "Use an API key" : "Use your subscription"),
       isPaste(primary) ? apiKeyBody(current) : stepsBody(current, primary),
       others.length > 0
@@ -678,11 +771,44 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     ]);
   }
 
-  /** Start this account's own lane's primary sign-in, into the folder it already has. */
-  async function reauthenticate(accountId: string, laneId: string): Promise<void> {
+  /** The desktop app opened the page and relays its callback: all that is left is the browser. */
+  function relayBody(current: Lane): m.Children {
+    const flow = getFlow();
+    return [
+      m("p", { class: css.LEAD }, `Finish signing in to ${current.provider_name} in your browser.`),
+      m("div", { class: css.RELAY_ACTIONS }, [
+        m(
+          Button,
+          {
+            variant: "secondary",
+            "data-e2e": "open-sign-in-again",
+            onclick: () => {
+              if (flow === null || flow.relay_url === null) return;
+              void relay(flow.relay_url, flow.flow_id).then((isRelaying) => {
+                if (!isRelaying)
+                  signInAnotherWay(current, "Imbue Studio couldn't open the sign-in page. Sign in here instead:");
+              });
+            },
+          },
+          "Try again",
+        ),
+        hasOtherWays(current)
+          ? m(
+              Button,
+              { variant: "secondary", "data-e2e": "sign-in-another-way", onclick: () => signInAnotherWay(current) },
+              "Try another way",
+            )
+          : null,
+      ]),
+    ];
+  }
+
+  /** Sign in to this account again, into the folder it already has, the way it signed in before. */
+  async function reauthenticate(accountId: string, laneId: string, methodId: string): Promise<void> {
     const owner = getLanes().find((candidate) => candidate.id === laneId);
     if (owner === undefined) return;
-    await begin(owner, owner.methods[0], { fromChooser: true, accountId });
+    const reauthMethod = owner.methods.find((candidate) => candidate.id === methodId) ?? owner.methods[0];
+    await begin(owner, reauthMethod, { fromChooser: true, accountId });
   }
 
   return {
@@ -693,7 +819,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       const accountId = takeChooserAccountId();
       if (accountId === null) return;
       const account = getAccounts().find((candidate) => candidate.id === accountId);
-      if (account !== undefined) await reauthenticate(account.id, account.lane);
+      if (account !== undefined) await reauthenticate(account.id, account.lane, account.reauth_method);
     },
 
     onremove() {
@@ -737,17 +863,30 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         body = statusScreen(
           "success",
           "All set",
-          reauthAccountId === null
-            ? `Signed in. ${current.provider_name} is ready to use.`
-            : "Signed in again. Every chat on this provider can take a turn once more.",
+          [
+            reauthAccountId === null
+              ? `Signed in. ${current.provider_name} is ready to use.`
+              : "Signed in again. Every chat on this provider can take a turn once more.",
+            flow.status.detail === null ? "" : ` ${flow.status.detail}.`,
+          ].join(""),
           m("div", { class: css.STATUS_MARK }, [m.trust(providerMark(current.id, 18)), current.provider_name]),
         );
       } else if (isFailed || error !== null) {
         body = [
           statusScreen("error", "That didn't work", (isFailed ? flow.status.detail : null) ?? error),
-          m(
-            "div",
-            { class: css.FOOTER_ROW },
+          m("div", { class: css.FOOTER_ROW }, [
+            hasOtherWays(current)
+              ? m(
+                  Button,
+                  {
+                    variant: "secondary",
+                    disabled: busy,
+                    "data-e2e": "sign-in-another-way",
+                    onclick: () => signInAnotherWay(current),
+                  },
+                  "Try another way",
+                )
+              : null,
             m(
               Button,
               {
@@ -761,14 +900,20 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
               },
               "Try again",
             ),
-          ),
+          ]),
         ];
       } else if (isPending) {
         body = statusScreen(
           "pending",
           "Signing in...",
-          awaitingVerdict ? "Checking your code with the provider." : "Preparing your sign-in.",
+          awaitingVerdict
+            ? "Checking your code with the provider."
+            : isOpeningBrowser
+              ? "Opening your browser."
+              : "Preparing your sign-in.",
         );
+      } else if (mode === "relay") {
+        body = relayBody(current);
       } else if (mode === "apiKey") {
         body = apiKeyBody(current);
       } else if (mode === "menu") {

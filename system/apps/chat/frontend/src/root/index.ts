@@ -405,6 +405,7 @@ function bootstrap(): void {
   const shell = connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
+    () => pool?.innerWindows() ?? [],
     (chatId) => select(chatId),
   );
   const rootElement = document.getElementById("app");
