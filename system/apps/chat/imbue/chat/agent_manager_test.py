@@ -4998,6 +4998,23 @@ def _wait_for_ready_spares(manager: AgentManager, count: int) -> list[SpareChatA
     return _ready_spares(manager)
 
 
+def _await_provisional_completions(pushes: queue.Queue[str | None]) -> list[tuple[str, bool]]:
+    """The ``provisional_chat_completed`` pushes as (chat id, success), once one has arrived: a create's settled
+    event, which ``wait_for_chat_creation`` returns on, is set just before that push is broadcast."""
+    received: list[dict[str, Any]] = []
+
+    def has_completion() -> bool:
+        received.extend(_drain(pushes))
+        return any(message.get("type") == "provisional_chat_completed" for message in received)
+
+    wait_until_true(has_completion, timeout_seconds=15.0, what="the provisional chat's completion push")
+    return [
+        (message["chat_id"], message["success"])
+        for message in received
+        if message.get("type") == "provisional_chat_completed"
+    ]
+
+
 def _mark_harness_ready(tmp_path: Path, agent_id: str) -> None:
     (tmp_path / "agents" / agent_id / CLAUDE_STARTUP_READY_MARKER.filename).write_text("")
 
@@ -5207,8 +5224,7 @@ def test_a_new_chat_claims_a_spare_still_starting_and_becomes_it_once_its_harnes
         assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [booting.chat_id]
         assert manager.get_provisional_chat(created.chat_id) is None
         assert sent[0][:2] == (booting.chat_id, "Draft the agenda 5190")
-        completions = [message for message in _drain(pushes) if message.get("type") == "provisional_chat_completed"]
-        assert [(message["chat_id"], message["success"]) for message in completions] == [(booting.chat_id, True)]
+        assert _await_provisional_completions(pushes) == [(booting.chat_id, True)]
         assert [create[3] for create in _mngr_calls(argv_log, "create")][0] == booting.chat_id
         assert booting.chat_id not in [spare.chat_id for spare in manager._spares]
     finally:
@@ -5425,8 +5441,7 @@ def test_a_chat_that_claimed_a_spare_whose_create_fails_is_told_why(
         assert outcome is not None and not outcome.is_created
         assert "mngr create exited with code 1" in outcome.error
         assert ["destroy", starting.chat_id, "--force"] in _mngr_calls(argv_log, "destroy")
-        completions = [message for message in _drain(pushes) if message.get("type") == "provisional_chat_completed"]
-        assert [(message["chat_id"], message["success"]) for message in completions] == [(starting.chat_id, False)]
+        assert _await_provisional_completions(pushes) == [(starting.chat_id, False)]
     finally:
         release.write_text("")
         manager.stop()
@@ -5455,8 +5470,7 @@ def test_a_chat_that_claimed_a_spare_whose_creation_breaks_off_is_answered(
         assert outcome == ChatCreationOutcome(
             is_created=False, error="Starting this chat's agent stopped on an unexpected error"
         )
-        completions = [message for message in _drain(pushes) if message.get("type") == "provisional_chat_completed"]
-        assert [(message["chat_id"], message["success"]) for message in completions] == [(starting.chat_id, False)]
+        assert _await_provisional_completions(pushes) == [(starting.chat_id, False)]
         # The refill the claim started may have recorded a spare of its own before the file broke.
         assert [spare for spare in manager._spares if spare.chat_id == starting.chat_id] == [
             starting.with_phase(SpareChatPhase.DISCARDING)
