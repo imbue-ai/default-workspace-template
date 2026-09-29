@@ -58,7 +58,6 @@ def test_a_rolling_back_record_and_a_settled_one_are_told_apart(tmp_path: Path) 
     assert settled is not None and settled.is_settled and not settled.is_rolling_back
 
 
-@pytest.mark.flaky
 @pytest.mark.timeout(30)
 def test_the_watch_announces_each_distinct_reading_of_the_record(tmp_path: Path) -> None:
     """A record raised, rewritten with progress, and cleared reaches every registered window once each, as

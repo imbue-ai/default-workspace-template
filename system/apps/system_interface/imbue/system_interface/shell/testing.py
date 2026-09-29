@@ -30,6 +30,7 @@ from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
+from imbue.system_interface.shell.state_files import write_json_atomic
 from imbue.system_interface.shell.update_notice import LAST_GOOD_RECORD_REL
 from imbue.system_interface.shell.update_notice import UPDATE_SELF_SCRIPT_REL
 from imbue.system_interface.testing import build_test_state
@@ -146,13 +147,16 @@ def shell_application(
     inventory: AppInventory,
     broadcaster: WebSocketBroadcaster,
     is_preview: bool = False,
+    wallpaper_files_directory: Path | None = None,
     launch_poster: LaunchPoster | None = None,
 ) -> Flask:
     """The shell app over ``inventory``, its state under ``tmp_path/state`` and the update notice's workspace at
     ``tmp_path/repo``, sharing the inventory's broadcaster as in production.
 
     Its bundle directory is ``tmp_path / "static"``, empty until a test fills it, so no route answer depends
-    on whether the frontend has been built in the checkout.
+    on whether the frontend has been built in the checkout. ``wallpaper_files_directory`` is where the
+    workspace's own wallpapers are read from, absolute by default; a relative one names a place under
+    ``tmp_path/repo``, as the shipped default names one under the workspace root.
     """
     state = build_test_state(
         broadcaster=broadcaster,
@@ -161,6 +165,7 @@ def shell_application(
         is_preview=is_preview,
         repo_root=tmp_path / "repo",
         static_directory=tmp_path / "static",
+        wallpaper_files_directory=wallpaper_files_directory,
         launch_poster=launch_poster,
     )
     return create_application(state)
@@ -242,10 +247,15 @@ def window_record(
 
 
 def placement_record(
-    window_id: WindowId, is_minimized: bool = False, state: WindowState = WindowState.NORMAL
+    window_id: WindowId,
+    is_minimized: bool = False,
+    state: WindowState = WindowState.NORMAL,
+    is_detached: bool = False,
 ) -> WindowPlacement:
-    """A placement at the first cascade frame; shown and normal unless told otherwise."""
-    return WindowPlacement(window_id=window_id, frame=cascade_frame(0), state=state, is_minimized=is_minimized)
+    """A placement at the first cascade frame; shown, normal, and on the desktop unless told otherwise."""
+    return WindowPlacement(
+        window_id=window_id, frame=cascade_frame(0), state=state, is_minimized=is_minimized, is_detached=is_detached
+    )
 
 
 def desktop_with_windows(*windows: Window) -> Desktop:
@@ -288,7 +298,9 @@ if sys.argv[1:] == ["confirm-last"]:
 if sys.argv[1:] == ["rollback-last"]:
     current = json.loads(record.read_text())
     current["progress"] = "Reverting the update"
-    record.write_text(json.dumps(current))
+    scratch = record.with_name(record.name + ".tmp")
+    scratch.write_text(json.dumps(current))
+    os.replace(scratch, record)
     threading.Event().wait({rollback_hold_seconds})
 sys.exit(0)
 """
@@ -306,24 +318,22 @@ def write_rollback_point(
     """The record an apply run with ``--keep-rollback-point`` leaves, in the apply's own shape (its extra
     fields included), under ``repo_root``."""
     path = repo_root / LAST_GOOD_RECORD_REL
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "merge_sha": "abc1234abc1234abc1234abc1234abc1234abc12",
-                "rollback_to": "def5678def5678def5678def5678def5678def56",
-                "applied_at": 1_780_000_000.0,
-                "driven_by": "mngr/update-widgets",
-                "snapshots": [
-                    {"name": "bundle", "source": "system/x", "copy": "data/.state/update-apply/snapshots/bundle"}
-                ],
-                "programs": list(programs) if programs is not None else list(apps),
-                "apps": list(apps),
-                "needs_system_services_restart": needs_system_services_restart,
-                "progress": progress,
-                "outcome": outcome,
-            }
-        )
+    write_json_atomic(
+        path,
+        {
+            "merge_sha": "abc1234abc1234abc1234abc1234abc1234abc12",
+            "rollback_to": "def5678def5678def5678def5678def5678def56",
+            "applied_at": 1_780_000_000.0,
+            "driven_by": "mngr/update-widgets",
+            "snapshots": [
+                {"name": "bundle", "source": "system/x", "copy": "data/.state/update-apply/snapshots/bundle"}
+            ],
+            "programs": list(programs) if programs is not None else list(apps),
+            "apps": list(apps),
+            "needs_system_services_restart": needs_system_services_restart,
+            "progress": progress,
+            "outcome": outcome,
+        },
     )
     return path
 

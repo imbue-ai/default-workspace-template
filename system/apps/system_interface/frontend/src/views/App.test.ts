@@ -6,7 +6,7 @@
 import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
@@ -40,11 +40,16 @@ function pressEscape(): void {
   m.redraw.sync();
 }
 
-beforeEach(async () => {
+/** A fresh fake shell whose home desktop holds win-1 (pulled out when ``isDetached``), a store started over it
+ *  (opened to show ``soloWindowId`` alone when given), and the App mounted over the store. */
+async function mountApp(options: { isDetached?: boolean; soloWindowId?: string } = {}): Promise<void> {
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
   api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
-  api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-1")] });
+  api.writeLayout("home", CLIENT, {
+    updated_at: null,
+    placements: [placementRecord("win-1", { is_detached: options.isDetached === true })],
+  });
   store = new DesktopStore({
     clientId: CLIENT,
     api,
@@ -54,10 +59,15 @@ beforeEach(async () => {
     redraw: () => m.redraw(),
     notify: () => undefined,
     reloadInterface: () => undefined,
+    soloWindowId: options.soloWindowId ?? null,
   });
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([appRecord("docs")]);
   mountView(() => m(App, { store, gestures, host: "127.0.0.1:8000", protocol: "http:" }));
+}
+
+beforeEach(async () => {
+  await mountApp();
 });
 
 afterEach(() => {
@@ -164,6 +174,24 @@ describe("a window drag", () => {
     expect(preview.style.display).toBe("none");
   });
 
+  it("is cancelled by Escape, the window back where the drag began, and the pointer's release then ends nothing", async () => {
+    const { listener, element, preview } = beginDrag();
+    m.redraw.sync();
+    listener.onMove(binding, { x: 5, y: 400 }, { x: -95, y: 340 });
+    expect(element.style.left).not.toBe("50px");
+    expect(preview.style.display).toBe("");
+    pressEscape();
+    expect(store.getGesture()).toBeNull();
+    expect(element.style.left).toBe("50px");
+    expect(preview.style.display).toBe("none");
+    listener.onEnd(binding, { x: 5, y: 400 }, { x: -95, y: 340 });
+    m.redraw.sync();
+    expect(element.getAttribute("data-window-state")).toBe("NORMAL");
+    expect(element.style.left).toBe("50px");
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("savePlacements"))).toEqual([]);
+  });
+
   it("hides the preview on a snap release, with no redraw in between", () => {
     const { listener, preview } = beginDrag();
     m.redraw.sync();
@@ -192,6 +220,142 @@ describe("a window drag", () => {
     expect(page.style.pointerEvents).toBe("none");
     listener.onPressEnd(binding);
     expect(page.style.pointerEvents).toBe("auto");
+  });
+
+  it("takes the document's focus back from a page on a press elsewhere, and leaves it on a press of its own window", () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const content = document.querySelector('[data-window-id="win-1"] [data-window-content]') as HTMLElement;
+    content.getBoundingClientRect = () => ({ left: 100, top: 60, width: 500, height: 400 }) as DOMRect;
+    m.redraw.sync();
+    const frame = document.querySelector('iframe[data-live-page="win-1"]') as HTMLIFrameElement;
+    frame.focus();
+    expect(document.activeElement).toBe(frame);
+    const listener = gestureListener as GestureListener;
+    listener.onPressStart(binding);
+    expect(document.activeElement).toBe(frame);
+    listener.onPressEnd(binding);
+    listener.onPressStart({ kind: "shortcut", app: "docs", launch: "open", element: content });
+    expect(document.activeElement).toBe(document.querySelector(".live-pages"));
+    listener.onPressEnd({ kind: "shortcut", app: "docs", launch: "open", element: content });
+  });
+
+  // The chrome's release ends the gesture with no release the pointer source sees (its events stop at the chrome
+  // window's edge), so the redraw must settle the hidden window itself: a return before the cursor is back over
+  // the shell would otherwise show a window whose page stays marked as out.
+  it("shows the page of a window the chrome released out and then returned, with no pointer release seen", async () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const measureContent = (): void => {
+      const content = document.querySelector('[data-window-id="win-1"] [data-window-content]') as HTMLElement | null;
+      if (content !== null) {
+        content.getBoundingClientRect = () => ({ left: 100, top: 60, width: 500, height: 400 }) as DOMRect;
+      }
+    };
+    const pageOf = (): HTMLElement =>
+      document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+    measureContent();
+    m.redraw.sync();
+    expect(pageOf().style.display).toBe("");
+    store.setCanPopOut(true);
+    const listener = gestureListener as GestureListener;
+    listener.onBegin(binding, { x: 100, y: 60 }, { x: 100, y: 60 });
+    store.setTearOut("win-1", "out");
+    m.redraw.sync();
+    expect(pageOf().style.display).toBe("none");
+    store.setTearOut("win-1", "released");
+    m.redraw.sync();
+    expect(store.getGesture()).toBeNull();
+    await store.reattachWindow("win-1", null);
+    m.redraw.sync();
+    measureContent();
+    m.redraw.sync();
+    expect(pageOf().style.display).toBe("");
+  });
+
+  it("turns window motion off for the press and back on when it ends", () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const listener = gestureListener as GestureListener;
+    expect(document.querySelector("[data-window-motion]")).toBeNull();
+    listener.onPressStart(binding);
+    expect(document.querySelector('[data-window-motion="off"]')).not.toBeNull();
+    listener.onPressEnd(binding);
+    expect(document.querySelector("[data-window-motion]")).toBeNull();
+  });
+});
+
+// jsdom raises no transition events of its own, so each travel is driven by hand here.
+describe("a window's travel", () => {
+  let root: HTMLElement;
+  let page: HTMLElement;
+  let travelled = { left: 100, top: 60, width: 500, height: 400 };
+
+  /** Where the travelling chrome's content box measures from here on. */
+  function travelTo(left: number): void {
+    travelled = { ...travelled, left };
+  }
+
+  /** Two frames: one for the follow to run in, one for what it wrote to be readable. */
+  function twoFrames(frame: typeof requestAnimationFrame = requestAnimationFrame): Promise<unknown> {
+    return new Promise((resolve) => frame(() => frame(resolve)));
+  }
+
+  beforeEach(() => {
+    travelled = { left: 100, top: 60, width: 500, height: 400 };
+    store.setBackdropSize({ width: 1000, height: 800 });
+    root = document.querySelector('[data-window-id="win-1"]') as HTMLElement;
+    const content = root.querySelector("[data-window-content]") as HTMLElement;
+    content.getBoundingClientRect = () => travelled as DOMRect;
+    m.redraw.sync();
+    page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+  });
+
+  it("re-places a travelling window's page every frame, and once more where the window landed", async () => {
+    expect(page.style.left).toBe("100px");
+
+    // One transition per property the move changes; the travel is over when the last of them ends.
+    root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
+    root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
+    travelTo(300);
+    await twoFrames();
+    expect(page.style.left).toBe("300px");
+
+    root.dispatchEvent(new Event("transitionend", { bubbles: true }));
+    travelTo(500);
+    await twoFrames();
+    expect(page.style.left).toBe("500px");
+
+    travelTo(640);
+    root.dispatchEvent(new Event("transitionend", { bubbles: true }));
+    expect(page.style.left).toBe("640px");
+
+    // The stop is asserted on the loop rather than on where the page sits: a redraw lays every page over
+    // its window too, so a page that has not moved proves nothing. One frame is still scheduled when the
+    // last property ends; the frame after it finds nothing left.
+    const frame = requestAnimationFrame.bind(globalThis);
+    await twoFrames(frame);
+    const scheduled = vi.spyOn(globalThis, "requestAnimationFrame");
+    await twoFrames(frame);
+    expect(scheduled).not.toHaveBeenCalled();
+    scheduled.mockRestore();
+  });
+
+  it("gives up on a window whose chrome leaves the desktop before it lands", async () => {
+    const frame = requestAnimationFrame.bind(globalThis);
+    root.dispatchEvent(new Event("transitionrun", { bubbles: true }));
+    travelTo(300);
+    await twoFrames(frame);
+    expect(page.style.left).toBe("300px");
+
+    const scheduled = vi.spyOn(globalThis, "requestAnimationFrame");
+    // Out of the document, where the cancelled transition raises its event where the backdrop cannot
+    // hear it: the follow's own frame is what has to notice.
+    root.remove();
+    await twoFrames(frame);
+
+    expect(scheduled).not.toHaveBeenCalled();
+    scheduled.mockRestore();
   });
 });
 
@@ -237,39 +401,39 @@ function pressOn(element: HTMLElement): void {
   m.redraw.sync();
 }
 
+// The pinned app declares a launch path taking a draft, so a draft (the avatar chooser's prompt, an element
+// reference) is launched into this client's view of its window.
+const buddy = appRecord("buddy", {
+  pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" },
+  launch_paths: [
+    launchPathRecord({
+      id: "draft",
+      path: "/api/intake",
+      method: "POST",
+      params: ["message"],
+      presets: { is_draft: "true" },
+      draft_param: "message",
+    }),
+  ],
+});
+
+/** The desktop with buddy's pinned window, its entry in the bar in the avatar style; answers the entry. */
+function pinnedEntry(...apps: readonly ReturnType<typeof appRecord>[]): HTMLElement {
+  offerApps(api, socket, [appRecord("docs"), buddy, ...apps]);
+  api.postLaunchAnswer = "/?chat=agent-1";
+  api.desktops = [
+    desktopRecord("home", {
+      windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
+    }),
+  ];
+  socket.deliver().onDesktopsUpdated(api.desktops);
+  m.redraw.sync();
+  return document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
+}
+
 describe("the avatar chooser", () => {
-  // The pinned app declares a launch path taking a draft, so the chooser's prompt is launched into this client's
-  // view of its window.
-  const buddy = appRecord("buddy", {
-    pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" },
-    launch_paths: [
-      launchPathRecord({
-        id: "draft",
-        path: "/api/intake",
-        method: "POST",
-        params: ["message"],
-        presets: { is_draft: "true" },
-        draft_param: "message",
-      }),
-    ],
-  });
-
-  /** The desktop with buddy's pinned window, its entry in the bar in the avatar style; answers the entry. */
-  function pinnedEntry(...apps: readonly ReturnType<typeof appRecord>[]): HTMLElement {
-    offerApps(api, socket, [appRecord("docs"), buddy, ...apps]);
-    api.postLaunchAnswer = "/?chat=agent-1";
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
-      }),
-    ];
-    socket.deliver().onDesktopsUpdated(api.desktops);
-    m.redraw.sync();
-    return document.querySelector('[data-taskbar-entry="win-9"]') as HTMLElement;
-  }
-
   function openEntryMenuRow(entry: HTMLElement, key: string): void {
-    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
+    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
     m.redraw.sync();
     (document.querySelector(`[data-menu-row="${key}"]`) as HTMLElement).click();
     m.redraw.sync();
@@ -312,6 +476,58 @@ describe("the avatar chooser", () => {
   });
 });
 
+describe("the element menu", () => {
+  function menuRowKeys(): string[] {
+    return Array.from(document.body.querySelectorAll('[data-menu-part="menu"] [data-menu-row]')).map(
+      (row) => row.getAttribute("data-menu-row") ?? "",
+    );
+  }
+
+  it("opens over the shell's own chrome on a right-click the views leave alone, with the reference rows", () => {
+    const area = document.querySelector("[data-backdrop-area]") as HTMLElement;
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
+    area.dispatchEvent(event);
+    m.redraw.sync();
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.body.querySelector(".element-menu")).not.toBeNull();
+    expect(menuRowKeys()).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    pressEscape();
+    expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
+  });
+
+  it("stays closed for a right-click on a window's shield, which is the press that closes the launcher", () => {
+    store.openLauncher();
+    m.redraw.sync();
+    const shield = focusedShield() as HTMLElement;
+    expect(shield).not.toBeNull();
+    shield.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
+    shield.dispatchEvent(event);
+    m.redraw.sync();
+    expect(store.isLauncherOpen()).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.body.querySelector(".element-menu")).toBeNull();
+  });
+
+  it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {
+    pinnedEntry();
+    const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
+    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    m.redraw.sync();
+    const keys = menuRowKeys();
+    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    expect(keys).toContain("close");
+    (document.querySelector('[data-menu-row="explain-element"]') as HTMLElement).click();
+    await settle();
+    const launch = api.calls.find((call) => call.startsWith("launch:home:buddy:draft:")) ?? "";
+    expect(launch).toContain("Explain what I attached in REF-");
+    expect(launch).toContain('\\"window_id\\":null');
+    expect(launch).toContain('\\"data-taskbar-entry\\":\\"win-1\\"');
+    expect(launch).toContain('\\"app\\":\\"system_interface\\"');
+    expect(launch.endsWith(":window:win-9")).toBe(true);
+  });
+});
+
 describe("a press outside what is open", () => {
   it("closes an open menu through its own sheet, with the focused page shielded under it", () => {
     expect(focusedShield()).toBeNull();
@@ -335,5 +551,131 @@ describe("a press outside what is open", () => {
     pressOn(shield as HTMLElement);
     expect(store.isLauncherOpen()).toBe(false);
     expect(focusedShield()).toBeNull();
+  });
+});
+
+describe("a pulled-out window", () => {
+  it("draws a ghost in place of the window, whose Bring back returns the window to the desktop", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector('[data-detached-window="win-1"]')).not.toBeNull();
+    expect(document.querySelector('[data-window-id="win-1"]')).toBeNull();
+    expect(document.querySelector('[data-taskbar-entry="win-1"]')?.getAttribute("data-detached")).toBe("true");
+    (document.querySelector('[data-ghost-action="bring-back"]') as HTMLElement).click();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector('[data-detached-window="win-1"]')).toBeNull();
+    expect(document.querySelector('[data-window-id="win-1"]')).not.toBeNull();
+    expect(document.querySelector('[data-taskbar-entry="win-1"]')?.getAttribute("data-detached")).toBe("false");
+    expect(api.layoutOf("home", CLIENT).placements.find((p) => p.window_id === "win-1")?.is_detached).toBe(false);
+  });
+
+  it("draws the ghost of a window pulled out while maximized at the window's frame, where Bring back lands it", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true, state: "MAXIMIZED" })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const ghost = document.querySelector('[data-detached-window="win-1"]') as HTMLElement;
+    expect([ghost.style.left, ghost.style.width, ghost.style.height]).toEqual(["50px", "600px", "560px"]);
+  });
+});
+
+describe("a hidden ghost", () => {
+  it("goes out of sight from the ghost's Hide and comes back from the taskbar entry, the window staying out", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-elsewhere" });
+    await settle();
+    m.redraw.sync();
+    (document.querySelector('[data-ghost-action="hide"]') as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector('[data-detached-window="win-1"]')).toBeNull();
+    expect(document.querySelector('[data-window-id="win-1"]')).toBeNull();
+    const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
+    expect(entry.getAttribute("data-detached")).toBe("true");
+    expect(entry.getAttribute("data-minimized")).toBe("true");
+    entry.click();
+    m.redraw.sync();
+    expect(document.querySelector('[data-detached-window="win-1"]')).not.toBeNull();
+    expect(document.querySelector('[data-window-id="win-1"]')).toBeNull();
+  });
+});
+
+describe("a solo shell", () => {
+  /** What the App observes for its size, recorded so a test can resize it: under jsdom every box measures as
+   *  empty and the real observer never fires. */
+  const observed: { element: Element; callback: ResizeObserverCallback }[] = [];
+
+  beforeEach(() => {
+    observed.length = 0;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        observe(element: Element): void {
+          observed.push({ element, callback: this.callback });
+        }
+        unobserve(): void {}
+        disconnect(): void {}
+      },
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** Mount the App over a fresh store opened to show win-1 alone, the window pulled out in the stored layout. */
+  async function mountSolo(): Promise<void> {
+    unmountViews();
+    await mountApp({ isDetached: true, soloWindowId: "win-1" });
+  }
+
+  /** Give the host a size and fire the App's observation of it, as a resize of the desktop window does. */
+  function resizeHost(host: HTMLElement, width: number, height: number): void {
+    host.getBoundingClientRect = () => ({ left: 0, top: 0, width, height }) as DOMRect;
+    const watch = observed.find((candidate) => candidate.element === host);
+    if (watch === undefined) throw new Error("the solo host is not observed");
+    watch.callback([], {} as ResizeObserver);
+    m.redraw.sync();
+  }
+
+  it("lays its one page over the whole host, live, and re-lays it as the host's size changes", async () => {
+    await mountSolo();
+    expect(document.querySelector("[data-backdrop-area]")).toBeNull();
+    expect(document.querySelector("[data-taskbar]")).toBeNull();
+    const host = document.querySelector('[data-solo-window="win-1"] .live-pages') as HTMLElement;
+    resizeHost(host, 1000, 800);
+    const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+    expect(page.style.display).toBe("");
+    expect(page.style.pointerEvents).toBe("auto");
+    expect([page.style.left, page.style.top, page.style.width, page.style.height]).toEqual([
+      "0px",
+      "0px",
+      "1000px",
+      "800px",
+    ]);
+    resizeHost(host, 1200, 900);
+    expect([page.style.width, page.style.height]).toEqual(["1200px", "900px"]);
+  });
+
+  it("shows a note in place of the page once its window is gone from the desktop", async () => {
+    await mountSolo();
+    expect(document.querySelector("[data-solo-window-gone]")).toBeNull();
+    socket.deliver().onDesktopsUpdated([desktopRecord("home")]);
+    m.redraw.sync();
+    expect(document.querySelector("[data-solo-window-gone]")).not.toBeNull();
+    expect(document.querySelector('iframe[data-live-page="win-1"]')).toBeNull();
   });
 });

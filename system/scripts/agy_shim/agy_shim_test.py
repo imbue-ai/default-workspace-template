@@ -62,7 +62,7 @@ def test_it_blocks_a_git_history_rewrite() -> None:
 
 
 def test_it_blocks_a_pipe_into_head() -> None:
-    result = _run("-c", "ls | head -5")
+    result = _run("-c", "pytest | head -5")
     assert result.returncode == 2
     assert "tail or head" in result.stderr
 
@@ -103,8 +103,15 @@ def test_a_guard_that_writes_to_stderr_but_exits_zero_stays_silent(
 # --- the rewrite --------------------------------------------------------------------------
 
 
+_PROC_OOM = Path("/proc/self/oom_score_adj")
+
+
+@pytest.mark.skipif(
+    not os.access(_PROC_OOM, os.W_OK),
+    reason=f"{_PROC_OOM} is not writable here; there is no tag for the shim to apply",
+)
 def test_the_oom_tag_is_applied() -> None:
-    result = _run("-c", "cat /proc/self/oom_score_adj")
+    result = _run("-c", f"cat {_PROC_OOM}")
     assert result.returncode == 0
     assert result.stdout.strip() == "900"
 

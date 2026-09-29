@@ -19,3 +19,8 @@ lives in the common dir, which is what a worktree checkout shares -- so the
 worker's run heals the whole workspace, not just its worktree. The snippet
 ships in the target version's copy of the flow, so the heal applies on the
 first update into the release that carried it.
+
+A clone whose shallow boundary predates the template's history rewrite cannot
+be healed: upstream no longer has those commits, so the fetch succeeds and the
+clone stays shallow. Step 3a's `bridge-history` matches that boundary to its
+rewritten twin instead, which is what gives such a workspace its merge base.

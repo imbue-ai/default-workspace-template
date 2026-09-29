@@ -21,7 +21,7 @@ class Config(BaseSettings):
     getting_started_port: int = 8030
     # Where the template catalog is fetched from; empty leaves the page without a templates section. The variable
     # keeps the shell's name so nothing outside the workspace changes when the catalog moved here.
-    # CLEANUP: read a ``GETTING_STARTED_TEMPLATE_CATALOG_URL`` instead once the minds side sets that name.
+    # CLEANUP: read a ``GETTING_STARTED_TEMPLATE_CATALOG_URL`` instead once the Imbue Studio side sets that name.
     system_interface_template_catalog_url: str = DEFAULT_TEMPLATE_CATALOG_URL
 
 

@@ -59,6 +59,13 @@ _ALWAYS_BLOCKED = {
 # Refused only when it would close the browser's last remaining page.
 _LAST_PAGE_GUARDED = {"Target.closeTarget", "Page.close"}
 
+# Forwarded even from a client that no longer holds the lease. Playwright auto-attaches with
+# waitForDebuggerOnStart, so Chromium holds every new tab or popup until that client resumes
+# it -- and after a handoff the agent's socket is still attached. Refusing its resume leaves the
+# target paused, which freezes the page that opened it (they share a renderer). A resume is not
+# the agent acting on a tab, so it does not move the pane either.
+_ALWAYS_FORWARDED = {"Runtime.runIfWaitingForDebugger"}
+
 # Pane-follow debounce. CDP is orders of magnitude chattier than one call per verb, so the
 # "agent acts -> pane follows" foregrounding is coalesced rather than fired per frame.
 _FOLLOW_DEBOUNCE_S = 0.25
@@ -102,7 +109,7 @@ class BrowserProxy:
         self._follow_handle: asyncio.TimerHandle | None = None
         self._attached_once = False
 
-    # --- HTTP discovery ---------------------------------------------------
+    # HTTP discovery
 
     async def rewrite_discovery(self, path: str, token: str) -> Response | None:
         """Serve `/json/version[/]` and `/json/list[/]` with our URLs substituted.
@@ -150,7 +157,7 @@ class BrowserProxy:
         })
         return Response(status, "OK" if status == 200 else "Error", headers, body)
 
-    # --- the websocket path ----------------------------------------------
+    # The websocket path
 
     async def pump(self, client: Any, token: str) -> None:
         """Bridge one agent socket to Chromium, gating every frame the agent sends."""
@@ -215,6 +222,8 @@ class BrowserProxy:
     async def _screen(self, frame: dict[str, Any], token: str) -> str | None:
         """Reason to refuse this frame, or None to forward it."""
         method = frame.get("method", "")
+        if method in _ALWAYS_FORWARDED:
+            return None
         if not await self._is_allowed(token):
             # The lease moved (a human took control, it expired, or another agent holds it).
             # Refuse rather than disconnect: a dropped socket poisons the CLI session forever.
@@ -240,9 +249,11 @@ class BrowserProxy:
 
         `run_action` used to call `_foreground_active()` after every action, and that single
         call is the whole 'agent acts -> pane follows' behavior. Direct CDP has no such hook,
-        and nothing fails without it -- the human's view just silently goes stale.
+        and nothing fails without it -- the human's view just silently goes stale. A resume
+        (`_ALWAYS_FORWARDED`) is not the agent acting on a tab, so it never moves the pane.
         """
-        if not frame.get("method"):
+        method = frame.get("method")
+        if not method or method in _ALWAYS_FORWARDED:
             return
         target = self._sessions.get(frame.get("sessionId", ""))
         loop = asyncio.get_running_loop()

@@ -18,6 +18,7 @@ from app_manifest.registry import RegistryLaunchPath
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from pydantic import field_validator
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -78,6 +79,7 @@ from imbue.system_interface.shell.desktops import resolve_active_desktop
 from imbue.system_interface.shell.desktops import slugify_desktop_name
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
+from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.identity import visiting_user_id
@@ -126,7 +128,7 @@ class ShellState(MutableModel):
         frozen=True, description="The per-client paths and titles of independent windows"
     )
     wallpaper_files_directory: Path = Field(
-        frozen=True, description="Where the workspace's own wallpaper files are read from"
+        frozen=True, description="Where the workspace's own wallpaper files are read from, as an absolute path"
     )
     clients: ClientStore = Field(frozen=True, description="clients.json")
     users: UserStore = Field(frozen=True, description="users.json: the desktop made for each signed-in visitor")
@@ -161,6 +163,14 @@ class ShellState(MutableModel):
 
     _prune_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _prune_thread: threading.Thread | None = PrivateAttr(default=None)
+
+    @field_validator("wallpaper_files_directory")
+    @classmethod
+    def _validate_wallpaper_files_directory(cls, value: Path) -> Path:
+        """Refuse a relative directory, which each reader would resolve against a root of its own."""
+        if not value.is_absolute():
+            raise InvalidShellValueError(f"The wallpaper files directory must be absolute, not {str(value)!r}")
+        return value
 
     def start(self) -> None:
         """Prune stale clients (now, and daily from here on), then start the inventory (registry watch, liveness)
@@ -668,6 +678,17 @@ class ShellState(MutableModel):
         return outcome
 
 
+def _under_repo_root(directory: Path, repo_root: Path) -> Path:
+    """A configured directory as an absolute path, a relative one naming a place under the served tree.
+
+    Every consumer must agree on where a directory is. A relative path does not carry that
+    agreement: ``Path``'s own calls resolve it against the process's working directory, while
+    Flask's ``send_file`` resolves it against the app's root path, so a listing route and a
+    serve route reading one configured directory read two different places.
+    """
+    return directory if directory.is_absolute() else repo_root.resolve() / directory
+
+
 def build_shell_state(
     state_directory: Path,
     registry_path: Path,
@@ -694,7 +715,7 @@ def build_shell_state(
         desktops=DesktopStore(state_directory=state_directory),
         placements=PlacementStore(state_directory=state_directory),
         window_paths=WindowPathStore(state_directory=state_directory),
-        wallpaper_files_directory=wallpaper_files_directory,
+        wallpaper_files_directory=_under_repo_root(wallpaper_files_directory, repo_root),
         clients=ClientStore(state_directory=state_directory),
         users=UserStore(state_directory=state_directory),
         profiles=profiles
@@ -704,7 +725,7 @@ def build_shell_state(
         ),
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),
         broadcaster=broadcaster,
-        avatar_catalog=AvatarCatalogStore(directory=avatar_catalog_directory),
+        avatar_catalog=AvatarCatalogStore(directory=_under_repo_root(avatar_catalog_directory, repo_root)),
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),
         avatar_status=AvatarStatusReader(
             events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),

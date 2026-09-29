@@ -1,0 +1,1 @@
+The e2e test for a chat the root created staying shown through a late socket replay now starts its chat from the root's New chat button instead of loading `/new`, which the chat app no longer serves (it answers 404). It had failed on every run since the two changes met on main.

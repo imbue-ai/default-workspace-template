@@ -1,6 +1,7 @@
 /**
  * The verbs a window's menu, and a taskbar entry's context menu, offer: only what the shell
- * itself can do (concepts.md section 2.2). Refresh reloads the page; Share asks the minds chrome
+ * itself can do (concepts.md section 2.2). Move and resize opens the grid of backdrop zones the
+ * maximize control opens on hover, as a submenu; Share asks the Imbue Studio chrome
  * to open its share settings for the app (never for a critical app); Stop and Start act on the
  * app's supervised program where the workspace can honestly do so; Close removes the window for
  * everyone, and minimizes a pinned window, which is never closed (pinned-taskbar-entries plan
@@ -8,24 +9,40 @@
  */
 
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import { windowSizeSubmenuRow } from "./WindowSizeRow";
+import type { WindowSizeActions } from "./WindowSizeRow";
 import type { AppRecord, EntryMode, PinStyle } from "../model/records";
 import type { EntryLook } from "../reducers/desktopState";
 
 export interface WindowMenuActions {
-  readonly refresh: () => void;
+  /** The zone grid's actions, or null in compact mode, where every window renders maximized. */
+  readonly size: WindowSizeActions | null;
+  /** Run after a size is picked, to take the menu down. */
+  readonly onSized: () => void;
   /** Null when there is no share surface for the app (a critical app). */
   readonly share: (() => void) | null;
   /** Null when the workspace cannot stop or start the app. */
   readonly setAppLifecycle: ((action: "stop" | "start") => void) | null;
+  /** Pull the window out into a desktop window of the embedding chrome's own (the pull-out-window spec); null
+   *  where the chrome cannot (a plain browser, an older chrome, compact mode). */
+  readonly popOut: (() => void) | null;
   /** Close the window for everyone; for a pinned window, which is never closed, this minimizes it instead. */
   readonly close: () => void;
 }
 
 /** The window menu's rows, in display order. */
 export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuActions): MenuRow[] {
-  const rows: MenuRow[] = [
-    { kind: "action", key: "refresh", label: "Refresh", icon: "refresh", onSelect: actions.refresh },
-  ];
+  const rows: MenuRow[] = [];
+  if (actions.size !== null) rows.push(windowSizeSubmenuRow(actions.size, actions.onSized), { kind: "divider" });
+  if (actions.popOut !== null) {
+    rows.push({
+      kind: "action",
+      key: "pop-out",
+      label: "Open in its own window",
+      icon: "external-link",
+      onSelect: actions.popOut,
+    });
+  }
   if (actions.share !== null && app !== undefined) {
     rows.push({
       kind: "action",
@@ -46,10 +63,10 @@ export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuAc
       onSelect: () => setAppLifecycle(action),
     });
   }
-  rows.push(
-    { kind: "divider" },
-    { kind: "action", key: "close", label: "Close", icon: "close", onSelect: actions.close },
-  );
+  // A rule, not a second one, and none at all above the first row: with neither Share nor Stop
+  // between them, the divider under Move and resize is already the one Close needs.
+  if (rows.length > 0 && rows[rows.length - 1]?.kind !== "divider") rows.push({ kind: "divider" });
+  rows.push({ kind: "action", key: "close", label: "Close", icon: "close", onSelect: actions.close });
   return rows;
 }
 
@@ -65,6 +82,14 @@ export interface EntryPresentationActions {
 export interface TaskbarEntryMenuActions {
   readonly isMinimized: boolean;
   readonly isMaximized: boolean;
+  /** Pulled out into a desktop window of the chrome's own: the entry offers to show it and to bring it back. */
+  readonly isDetached: boolean;
+  /** Raise or reopen the window's own desktop window. */
+  readonly show: () => void;
+  /** Show a pulled-out window's ghost again after it was hidden (``minimize`` hides it). */
+  readonly showGhost: () => void;
+  /** Bring a pulled-out window back to the desktop. */
+  readonly bringBack: () => void;
   readonly restore: () => void;
   readonly minimize: () => void;
   readonly maximize: () => void;
@@ -85,16 +110,27 @@ function styleLabel(style: PinStyle): string {
   }
 }
 
-/** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size, then for a pinned entry Float
- *  or Move to taskbar (not in compact mode, where every entry is in the bar), the style to show it in, and the
- *  avatar chooser while it shows the avatar, then Close. */
+/** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size (for a pulled-out window, Show,
+ *  Hide placeholder or Show placeholder, and Bring back to desktop instead of those), then for a pinned entry
+ *  Float or Move to taskbar (not in compact mode, where every entry is in the bar), the style to show it in, and
+ *  the avatar chooser while it shows the avatar, then Close. */
 export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact: boolean): MenuRow[] {
-  const rows: MenuRow[] = [
-    actions.isMinimized
-      ? { kind: "action", key: "restore", label: "Restore", onSelect: actions.restore }
-      : { kind: "action", key: "minimize", label: "Minimize", onSelect: actions.minimize },
-  ];
-  if (!isCompact) {
+  // A pulled-out window's arrangement is the chrome's: the entry shows its window, hides or shows its
+  // placeholder here, or brings it back.
+  const rows: MenuRow[] = actions.isDetached
+    ? [
+        { kind: "action", key: "show", label: "Show", onSelect: actions.show },
+        actions.isMinimized
+          ? { kind: "action", key: "show-ghost", label: "Show placeholder", onSelect: actions.showGhost }
+          : { kind: "action", key: "hide-ghost", label: "Hide placeholder", onSelect: actions.minimize },
+        { kind: "action", key: "bring-back", label: "Bring back to desktop", onSelect: actions.bringBack },
+      ]
+    : [
+        actions.isMinimized
+          ? { kind: "action", key: "restore", label: "Restore", onSelect: actions.restore }
+          : { kind: "action", key: "minimize", label: "Minimize", onSelect: actions.minimize },
+      ];
+  if (!isCompact && !actions.isDetached) {
     rows.push(
       actions.isMaximized
         ? { kind: "action", key: "unmaximize", label: "Restore size", onSelect: actions.unmaximize }

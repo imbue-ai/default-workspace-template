@@ -63,7 +63,7 @@ Recorded here so the implementation need not re-argue them.
 |---|---|---|---|
 | `chat` | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`), then `new` ("New Chat", `/new`, params `account_id`, `message`) | Chat |
 | `terminal` | `{launch = "new", mode = "new"}` | `new` ("Terminal", `/new`, param `workdir`) | Terminal |
-| `files` | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/`, param `path`) | File Viewer |
+| `files` | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, param `path`) | File Viewer |
 | `browser` | `{launch = "new", mode = "focus"}` | `new` ("Browser", `/new`, param `url`) | Browser |
 
 The chat gains a second launch path, `root`, listed first so the launcher's rows show "Chat" before "New Chat".
@@ -190,7 +190,7 @@ Closing a file viewer window destroys nothing.
 The manifest gains an optional `window_closed_path` (a launch-path-shaped value: rooted, no query string).
 `forward_port.py` copies it onto the registry row and `RegistryRow` reads it; a row without it means the app wants no hint.
 
-Whenever a window of an app closes, for any reason (the close control, the window and taskbar menus, the minds close chord, `layout.py close`, a desktop's deletion), the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's registered URL plus its `window_closed_path`, from a daemon thread, with a 2 second timeout, after the close has been written and broadcast.
+Whenever a window of an app closes, for any reason (the close control, the window and taskbar menus, the Imbue Studio close chord, `layout.py close`, a desktop's deletion), the shell POSTs `{"path", "window_id", "desktop_id"}` to the app's registered URL plus its `window_closed_path`, from a daemon thread, with a 2 second timeout, after the close has been written and broadcast.
 A failed post is a debug log; the shell never waits for, retries, or acts on the answer, and the close is complete whether or not the app is up.
 The app's handler marks the resource the body's `path` names window-seen (the post is proof a window showed it), runs a sweep, and answers 204; what is shown now is read from the shell's desktops, never inferred from the body.
 The terminal and the browser declare `window_closed_path = "/api/window-closed"`; the chat and the files app declare none.
@@ -214,7 +214,7 @@ And one relaxation of the targeting rule, for `open` only:
 
 ### 5.2 The fleet CLI and skill
 
-`_open_viewer_window` passes `--minimized`, so the browser appears in the taskbar rather than over what the user is doing, and the fall-back hint goes away (an open with no client now succeeds).
+`_open_viewer_window` passes `--minimized` for `new`, `acquire`, and an agent's first command, so the browser appears in the taskbar rather than over what the user is doing, and the fall-back hint goes away (an open with no client now succeeds). `handoff` opens it without `--minimized`, which restores and raises the window, since the user has to act in it.
 The skill's opening section says: the fleet has one browser; `new` gives it to you (starting it if it was stopped) and opens its window for the user; the browser lives as long as a window shows it, so do not close the user's window and do not expect a browser nobody has a window on to outlive a sweep; `close` deletes the profile and is rarely what you want.
 The `2/2 browsers open` prose goes.
 

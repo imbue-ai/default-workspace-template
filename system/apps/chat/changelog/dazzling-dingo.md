@@ -1,0 +1,3 @@
+A permission request a Codex chat files from a code-mode script now keeps its permission card after the request's result arrives.
+
+When the script printed the whole command result (`text(result)`) rather than just its stdout, the result came back wrapped in a JSON envelope that escaped the request's details, so the chat could not find them. The card showed while the request was pending, then turned into an ordinary tool call once the result landed, even though the request was filed and granted. The envelope is now unwrapped before the request is looked for, the same way task titles already were. The raw output shown on expand is unchanged.

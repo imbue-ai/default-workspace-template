@@ -181,6 +181,7 @@ def build_test_state(
     presence_directory: Path | None = None,
     agent_events_path: Path | None = None,
     profiles: ProfileResolver | None = None,
+    wallpaper_files_directory: Path | None = None,
     launch_poster: LaunchPoster | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
@@ -193,9 +194,10 @@ def build_test_state(
     where the update notice reads its record and finds the update-self script (a fresh temp
     directory by default, so no test reads the real workspace's). ``static_directory`` replaces the
     package's built bundle directory (the frontend bundle and the bundled wallpapers) with one the
-    test fills itself. The avatar's catalog lives under the state directory, and its mood is read
-    from ``agent_events_path`` (a file under the state directory by default, absent until a test
-    writes it).
+    test fills itself, and ``wallpaper_files_directory`` the directory the workspace's own wallpaper
+    files are read from (one under the state directory by default). The avatar's catalog lives under
+    the state directory, and its mood is read from ``agent_events_path`` (a file under the state
+    directory by default, absent until a test writes it).
     ``presence_directory`` is where the presence files go (a fresh temp directory by default), and ``profiles``
     the resolver that names and pictures each account (one that can reach no connector by default, so no test
     fetches anything unless it says so). ``launch_poster`` answers the POST launches the shell would otherwise make
@@ -221,7 +223,9 @@ def build_test_state(
         registry_path=registry_path(),
         broadcaster=resolved_broadcaster,
         inventory=inventory,
-        wallpaper_files_directory=state_directory / "wallpapers",
+        wallpaper_files_directory=wallpaper_files_directory
+        if wallpaper_files_directory is not None
+        else state_directory / "wallpapers",
         avatar_catalog_directory=state_directory / "avatars",
         agent_events_path=agent_events_path
         if agent_events_path is not None

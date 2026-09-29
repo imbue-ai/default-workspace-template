@@ -1,6 +1,6 @@
 """Surfacing a chat created from outside the workspace, once, where the user is.
 
-A chat the Mind app starts -- the welcome chat it seeds, the update run behind "Update now", the
+A chat the Imbue Studio app starts -- the welcome chat it seeds, the update run behind "Update now", the
 help chat behind "Ask an agent" -- carries a label asking to be shown when it appears. The app
 cannot show it itself: it is outside the workspace, and the user may not be looking yet. So the
 chat app reacts to the label on a newly observed agent and asks the shell to show the chat in
@@ -44,7 +44,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 
 logger = _loguru_logger
 
-# ``assist`` is the label the Mind app's help flow has always set; ``auto_open`` is the
+# ``assist`` is the label the Imbue Studio app's help flow has always set; ``auto_open`` is the
 # purpose-neutral form any spawner can set. The app sets both.
 AUTO_OPEN_LABELS: Final[tuple[str, ...]] = ("auto_open", "assist")
 
@@ -171,7 +171,7 @@ class AutoOpenLedger(MutableModel):
         """Take chats as already shown without showing them, and leave a ledger behind either way.
 
         What a first boot with no ledger finds is history this app cannot see: every chat the
-        Mind app ever labeled here, back to the workspace's first day. The file is written
+        Imbue Studio app ever labeled here, back to the workspace's first day. The file is written
         even when there is nothing to adopt, so that its existence is what tells the next boot
         the set it reads is the real one.
         """
@@ -311,8 +311,8 @@ class AutoOpenReactor(MutableModel):
     def request_open(self, chat_id: ChatId) -> None:
         """A chat this app opened on its own (a seeded chat) is owed its window like a labeled one.
 
-        Held and retried the same way, so a chat seeded while nobody was connected (the Mind
-        app seeds the workspace's first chat before its window shows the workspace) gets its
+        Held and retried the same way, so a chat seeded while nobody was connected (the Imbue
+        Studio app seeds the workspace's first chat before its window shows the workspace) gets its
         window when the first client connects.
         """
         if self.ledger.is_delivered(chat_id):

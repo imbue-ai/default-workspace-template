@@ -35,6 +35,7 @@ from werkzeug.exceptions import NotFound
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import latchkey_endpoints
+from imbue.chat import secret_requests_endpoints
 from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
@@ -147,6 +148,9 @@ from imbue.chat.request_helpers import handle_unhandled_exception
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import parse_json_object_body
 from imbue.chat.request_helpers import parse_request_body
+from imbue.chat.secret_requests import ChatLookup
+from imbue.chat.secret_requests import NoticeDeliveryError
+from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.shell_client import post_to_shell
 from imbue.chat.shell_client import shell_base_url
 from imbue.chat.state import ChatAppState
@@ -500,6 +504,25 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     return outcome
 
 
+class _ServerSecretRequestBridge(SecretRequestChatBridge):
+    """The router's side of the secret-request routes: chats resolved, and notices sent through the ordinary send path."""
+
+    def lookup_chat(self, chat_id: str) -> ChatLookup:
+        if not get_state().agent_manager.is_agent_list_known():
+            return ChatLookup.NOT_READY
+        if _find_active_agent(chat_id) is None:
+            return ChatLookup.UNKNOWN
+        return ChatLookup.KNOWN
+
+    def deliver_notice(self, chat_id: str, text: str) -> None:
+        message_id = uuid4().hex
+        accepted = _send_to_chat(
+            get_state(), ChatId(chat_id), SendMessageRequest(message=text, message_id=message_id), message_id
+        )
+        if isinstance(accepted, Response):
+            raise NoticeDeliveryError(accepted.get_json()["detail"])
+
+
 def _build_handoff_capabilities(state: ChatAppState) -> HandoffCapabilities:
     """What the manager's handoffs borrow from the app state and these routes."""
     return HandoffCapabilities(
@@ -520,9 +543,9 @@ class _SendAccepted(FrozenModel):
 def _send_to_chat(
     state: ChatAppState, chat_id: ChatId, send_message_request: SendMessageRequest, message_id: str
 ) -> _SendAccepted | Response:
-    """The ordinary send path, shared by the message route and the intake: hold the send while the chat converges,
-    else deliver it to the active agent; either way record the client's activity and the chat's last message. A
-    send that could not be taken answers the route's own failure response."""
+    """The ordinary send path, shared by the message route, the intake, and the secret-request notice: hold the send
+    while the chat converges, else deliver it to the active agent; either way record the client's activity and the
+    chat's last message. A send that could not be taken answers the route's own failure response."""
     agent_manager: AgentManager = state.agent_manager
     # While the chat converges on a new agent every send is held for it (spec 5.7): accepted,
     # persisted on the record, and delivered in order once the successor runs.
@@ -1310,7 +1333,7 @@ def _run_create_chat() -> CreatedChat | Response:
     With ``should_wait`` the answer comes once the create has finished: the chat's identity
     as before when it landed, a 500 carrying the create's own reason when it failed, and a
     504 when it is still running at the wait's ceiling. That is how a caller outside the
-    workspace (the Minds app's assist and update chats, through
+    workspace (the Imbue Studio app's assist and update chats, through
     ``system/scripts/message_chat.py --create``) holds its "starting..." state until the
     chat exists, without polling.
     """
@@ -1328,8 +1351,8 @@ def _run_create_chat() -> CreatedChat | Response:
     created = _created_chat_or_refusal(
         lambda: agent_manager.create_chat(
             create_request.name,
-            # A client asks for no templates: the manager adds `welcome` and `fast` itself,
-            # from the message and the workspace's fast-mode limit (``launch_role_templates``).
+            # A client asks for no templates: the manager adds `fast` itself, from the
+            # workspace's fast-mode limit (``launch_role_templates``).
             extra_role_templates=(),
             project_id=project_id,
             account_id=create_request.account_id,
@@ -1364,12 +1387,12 @@ def _create_chat() -> Response:
 
 
 def _seed_chat() -> Response:
-    """``POST /api/chats/seed``: open a chat on the turns the Mind app had before the workspace existed.
+    """``POST /api/chats/seed``: open a chat on the turns the Imbue Studio app had before the workspace existed.
 
     The body is a :class:`SeedChatRequest`. Answers 201 with the chat's id and name pair; the
     chat is listed at once as a provisional chat awaiting the user's first message, with the
     turns as its transcript (``chat_seed.py``). Like every create, 503 until the agent list has
-    been read from mngr once, so the Mind app's seeding retries rather than being refused; a
+    been read from mngr once, so the Imbue Studio app's seeding retries rather than being refused; a
     title with no usable characters answers 400 and one already taken 409, as a launch's
     requested name would.
     """
@@ -2048,6 +2071,8 @@ def create_application(state: ChatAppState) -> Flask:
     auth_endpoints.register_routes(application)
     accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
+    state.secret_request_bridge = _ServerSecretRequestBridge()
+    secret_requests_endpoints.register_routes(application)
 
     application.add_url_rule("/<path:path>", view_func=_serve_file_or_document, methods=["GET"])
 

@@ -75,7 +75,7 @@ describe("ShortcutIcon", () => {
     icon.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
     expect(onRun).toHaveBeenCalledTimes(3);
     icon.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 5, clientY: 6 }));
-    expect(onContextMenu).toHaveBeenCalledWith(5, 6);
+    expect(onContextMenu).toHaveBeenCalledWith(5, 6, expect.any(Element));
   });
 
   it("runs on a click when a click is a run (touch), and the double click a double tap adds runs nothing more", () => {

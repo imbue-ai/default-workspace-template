@@ -1,6 +1,6 @@
 """How the workspace's objects get their names.
 
-The naming scheme mirrors how the minds app names hosts: every object wears a
+The naming scheme mirrors how the Imbue Studio app names hosts: every object wears a
 human-readable display name ("Chat 2"), and its true name -- the identifier
 embedded in tmux sessions, paths, and refs -- is a deterministic canonical form
 of that display name ("Chat-2"). The pair is established at create time and

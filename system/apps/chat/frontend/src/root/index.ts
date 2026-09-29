@@ -18,6 +18,10 @@ import m from "mithril";
 import "../style.css";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
+import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
+import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
+import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
+import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import {
@@ -36,7 +40,7 @@ import {
 } from "../models/Chats";
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
-  accountForAgent,
+  accountForFirstSend,
   closeProviderChooser,
   getSelectedAccount,
   isProviderChooserOpen,
@@ -73,6 +77,9 @@ let pendingToken: string | null = null;
 let pendingPick: { token: string; intake: PendingIntake } | null = null;
 // The chats started from this root: on top of the list until their first message.
 const startedHere = new Set<string>();
+// The chats this root created that no push has named yet. The socket's connect-time replay can land after the create
+// returned, with a chat list from before it, and the chat's provisional record only follows that replay.
+const awaitingListing = new Set<string>();
 const compactQuery = window.matchMedia(`(max-width: ${COMPACT_MAX_WIDTH_PX}px)`);
 
 function selectedTitle(): string {
@@ -112,6 +119,7 @@ async function createAndSelect(accountId: string): Promise<void> {
   try {
     const created = await createChat("", accountId);
     startedHere.add(created.chatId);
+    awaitingListing.add(created.chatId);
     select(created.chatId);
   } catch (error) {
     alert(`Failed to create chat: ${(error as Error).message}`);
@@ -138,7 +146,8 @@ function settleIntake(chatId: string | null): void {
 }
 
 /** Put ``text`` in a chat's composer, unsent: the live page's when it is loaded, else where the composer reads
- *  its persisted draft on mount. */
+ *  its persisted draft on mount. Either way an element reference in it is attached as a file (the page's
+ *  ``prependToComposer`` does it, and so does this document's, which the page's store reads on load). */
 function draftInto(chatId: string, text: string): void {
   if (pool?.draftInto(chatId, text) === true) return;
   prependToComposer(chatId, text);
@@ -157,7 +166,7 @@ function launchWithFirstMessage(chatId: string, text: string): void {
     });
   };
   const minted = getProvisionalChats().find((chat) => chat.chat_id === chatId);
-  const account = accountForAgent(minted?.account_id) ?? getSelectedAccount();
+  const account = accountForFirstSend(minted?.account_id);
   if (account !== null) {
     launchOrDraft(account.id);
     return;
@@ -167,6 +176,21 @@ function launchWithFirstMessage(chatId: string, text: string): void {
     return;
   }
   openProviderChooser({ onSignedIn: launchOrDraft, onDismissed: () => draftInto(chatId, text) });
+}
+
+/** A reference drafted from the root's own chrome (the rail, the empty slot): into the selected chat's composer,
+ *  else through the shell, which lands it in the chat on screen (element-reference-menu plan section 3.4). */
+function draftReference(text: string): void {
+  if (selectedChatId !== null) {
+    draftInto(selectedChatId, text);
+    return;
+  }
+  connection?.draftText(text);
+}
+
+/** Whether a reference drafted from the root has somewhere to go: a selected chat, or a shell to ask. */
+function isReferenceDraftAvailable(): boolean {
+  return selectedChatId !== null || (connection?.isFramed ?? false);
 }
 
 /** What an applied intake asks of the root (post-launch-paths plan section 3.6.1): the chat is selected, a draft
@@ -232,13 +256,15 @@ function onChatsUpdated(): void {
   for (const chatId of startedHere) {
     if (rows.some((row) => row.chatId === chatId && row.lastActiveMs !== null)) startedHere.delete(chatId);
   }
+  const listed = new Set(rows.map((row) => row.chatId));
+  for (const chatId of listed) awaitingListing.delete(chatId);
+  const isKept = (chatId: string): boolean => listed.has(chatId) || awaitingListing.has(chatId);
   if (pool !== null) {
-    const listed = new Set(rows.map((row) => row.chatId));
     for (const heldId of pool.heldChatIds()) {
-      if (!listed.has(heldId)) pool.destroy(heldId);
+      if (!isKept(heldId)) pool.destroy(heldId);
     }
   }
-  if (selectedChatId !== null && !rows.some((row) => row.chatId === selectedChatId)) select(null);
+  if (selectedChatId !== null && !isKept(selectedChatId)) select(null);
   else reportLocation();
 }
 
@@ -310,6 +336,9 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     isCompact,
     onPick: (chatId: string) => select(chatId),
     onNew: () => startNewChat(),
+    referenceScope: scopeOfHandshake(handshake),
+    onDraftReference: draftReference,
+    isReferenceDraftAvailable: isReferenceDraftAvailable(),
   };
 }
 
@@ -323,9 +352,9 @@ function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => 
   addChatsUpdatedListener(onceListed);
 }
 
-function connectRootToShell(accountsLoaded: Promise<void>): void {
-  connection = connectToShell({
-    capabilities: { navigation: true },
+function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
+  const shell = connectToShell({
+    capabilities: { navigation: true, closeChord: false },
     onHandshake: (received) => {
       handshake = received;
       adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
@@ -360,9 +389,11 @@ function connectRootToShell(accountsLoaded: Promise<void>): void {
       select(requested);
     },
   });
+  connection = shell;
   // Hidden until the shell says shown: the root can load into a background tab.
-  if (connection.isFramed) isRootShown = false;
-  window.addEventListener("focus", () => connection?.focused());
+  if (shell.isFramed) isRootShown = false;
+  window.addEventListener("focus", () => shell.focused());
+  return shell;
 }
 
 function bootstrap(): void {
@@ -371,7 +402,7 @@ function bootstrap(): void {
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
   compactQuery.addEventListener("change", () => m.redraw());
-  connectRootToShell(accountsLoaded);
+  const shell = connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
     (chatId) => select(chatId),
@@ -381,6 +412,18 @@ function bootstrap(): void {
   selectedChatId = selectionFromSearch(window.location.search);
   pendingToken = intakeTokenFromSearch(window.location.search);
   m.mount(rootElement, ChatRoot);
+  // The element menu over the root's own chrome (element-reference-menu plan section 7.3); the rail's rows append
+  // the reference rows to their own menu instead.
+  installElementContextMenu({
+    connection: shell,
+    handshake: () => handshake,
+    draft: draftReference,
+    isDraftAvailable: isReferenceDraftAvailable,
+    open: createContextMenuOpener().open,
+  });
+  // The pointer hides while text is typed into the root's own fields (the send picker); the inner
+  // chat frame does the same for itself.
+  installCursorHidingWhileTyping(document);
   reportLocation();
   const token = pendingToken;
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));

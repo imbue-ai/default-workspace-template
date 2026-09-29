@@ -41,7 +41,9 @@ observe`, its own supervised service) writes, and serves:
   the queue actions, presence, destroy, rename, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats`, `/api/harnesses`, `/api/uploads`,
-  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, and `/api/latchkey`.
+  `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
+  `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
+  the transcript's secret card submits, declines, and re-reads it).
   `/api/agents` is the plain listing of every mngr agent (the loopback callers'
   view of background agents too); the older `/api/agents/<id>/...` spellings of
   the per-chat routes are gone.
@@ -222,8 +224,23 @@ or a draft into a new chat, mints an unseeded provisional chat in the
 restart of this app drops it); its page shows an empty conversation over the
 composer, and its first send launches it as a seeded chat's does.
 
+An element reference (the right-click menu's description of an element,
+`docs/system/blueprint/element-reference-menu/`) enters a composer as an
+attachment: the reference travels as a fenced `json` block in a draft's text
+until it reaches a chat, and `models/elementReferences.ts` takes each block out
+wherever a draft enters a composer (`prependToComposer`: the root applying a
+pending intake or drafting from its rail, a chat page drafting from its own menu)
+and uploads it as a `REF-<id>.json` file through the ordinary `/api/uploads`
+path, so the composer shows a chip and the sent message names the file on its
+"See attachment here:" line. Ready attachments are persisted to localStorage
+beside the draft text, so a chip survives a reload and a page finds what the
+root staged for it before it loaded. Every chat page and the root draw the
+element context menu; a chat page drafts into its own composer, the root into
+the selected chat's (else through the shell), and a sub-agent view through the
+shell, its `shell:draft-text` relayed by the root.
+
 The create route is likewise how a chat is made from outside the chat page:
-`message_chat.py --create` posts to `/api/chats/create` (the Minds app's assist
+`message_chat.py --create` posts to `/api/chats/create` (the Imbue Studio app's assist
 and update chats go through it, run inside the workspace by `mngr exec`). Beside
 `name`, `account_id`, and `message`, the request takes `labels` for the chat's
 agent (`auto_open=true` has the shell surface its window; the labels the app sets
@@ -240,7 +257,7 @@ the field it does not know (a workspace that has taken a template update and has
 not restarted its chat app yet).
 
 A chat can also start from a conversation that happened before the workspace
-existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
+existed. `POST /api/chats/seed` (`chat_seed.py`; the Imbue Studio app runs
 `system/scripts/seed_welcome_chat.py` through `mngr exec` the moment a
 workspace is ready) takes a title and the turns of the onboarding conversation
 and opens a chat on them: the turns are written as the chat's first segment
@@ -262,16 +279,15 @@ out as typed, since a harness runs a command only when the slash leads the
 message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
-Every chat that starts with no message is greeted: the `welcome` create
-template (`.mngr/settings.toml`) sends `/welcome`, and the skill varies what it
-says by how many times it has run (`system/scripts/welcome_count.py`). Fast mode
-is a per-chat setting with three modes (`chat_fast_mode.py`, kept in the chat's
-folder as `fast_mode.json`, `GET`/`PUT /api/chats/<chat-id>/fast-mode`):
+A chat that starts with no message sends nothing and waits for the user's
+first one. Fast mode is a per-chat setting with three modes
+(`chat_fast_mode.py`, kept in the chat's folder as `fast_mode.json`,
+`GET`/`PUT /api/chats/<chat-id>/fast-mode`):
 **off** (standard speed throughout), **auto** (fast for the first
 `fast_mode_turn_limit` of the user's turns, then standard speed) and **on**
 (fast throughout). A new chat starts in the workspace's default mode
 (`fast_mode_default` in `GET`/`PUT /api/settings`, `chat_settings.py`, stored
-at `data/.apps/chat/settings.json`; auto with a limit of 5 unless changed), and
+at `data/.apps/chat/settings.json`; auto with a limit of 2 unless changed), and
 a chat whose mode calls for it launches through the `fast` create template, a
 handoff's successor included. The model picker's fast row states the chat's
 mode and opens a submenu where the mode, auto's turn limit and the default for
@@ -295,7 +311,7 @@ the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare
-create the Minds app's chats fall back to on a template whose script has no
+create the Imbue Studio app's chats fall back to on a template whose script has no
 create mode -- through `.mngr/settings.local.toml`, mngr's
 git-ignored local config layer (`create_defaults.py`). The account store writes
 it on every index write and at boot: `[commands.create]` with the default
@@ -310,7 +326,7 @@ removed, and a create in the workspace is then refused by
 entry in `.mngr/settings.toml`) with a message that says to sign in.
 
 A chat created from outside the workspace with an `auto_open` or `assist` label
-(the Mind app's update and help chats) has its window surfaced by this app
+(the Imbue Studio app's update and help chats) has its window surfaced by this app
 (`auto_open.py`): when the agent appears, the app asks the shell to point this
 app's pinned window (the avatar's chat) at the chat and show it, in every
 connected client (a desktop with no pinned window gets a chat root window opened
@@ -351,9 +367,10 @@ agent the live chat tracks, but reconciles no accounts, writes no memory scores,
 runs no automatic compaction, resumes no unfinished switch, opens no windows,
 reports no client activity to the shell, and registers nothing. Sends from it are
 real, but a switch to another account is refused, since it would write the chat's
-record into the scratch copy only. Point `CHAT_DATA_DIR` at a scratch copy of
-`data/.apps/chat/` so its writes (the message stamps, settings, and chat records)
-never land in the live chat's data.
+record into the scratch copy only, and so is an answer to a secret card, since the
+answer belongs to the live chat. Point `CHAT_DATA_DIR` at a scratch copy of
+`data/.apps/chat/` so its writes (the message stamps, settings, chat records, and
+secret requests) never land in the live chat's data.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm

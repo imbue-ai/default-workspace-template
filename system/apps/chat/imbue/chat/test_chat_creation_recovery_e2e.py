@@ -7,13 +7,15 @@ agent through that registry, so the panel's first ``/events`` fetch 404s and
 latches into the "No conversation data" view.
 
 The ``provisional_chat_created`` broadcast normally covers that window with the
-"Starting the chat" page, but it is a transient edge event: the frontend holds
+page of a chat being created, but it is a transient edge event: the frontend holds
 the provisional chat only between ``provisional_chat_created`` and
 ``provisional_chat_completed``, so any delivery lag longer than the creation itself
 leaves no render in which the cover is up. These tests pin the two ways that
 happens -- the event missing the window entirely, and the pair arriving
 back-to-back -- and assert the panel recovers on its own once the agent
-resolves, with no reload and no tab switch.
+resolves, with no reload and no tab switch. The chat root has the same window from
+the other side: its socket's replay can land after it created and selected a chat,
+with a chat list that does not name it yet, and the chat must stay shown.
 """
 
 from __future__ import annotations
@@ -21,7 +23,9 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import threading
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from collections.abc import Generator
@@ -81,10 +85,12 @@ _PRIMARY_AGENT_ID = "agent-primary-0001"
 # rather than by the initial load happening to win the race.
 _CREATE_SECONDS = 4
 _RECOVERY_TIMEOUT_MS = 20000
+# How long the held replay waits past the create: ample for the root to have the create's answer and select the chat.
+_ROOT_SELECT_SECONDS = 1.0
 
 
 class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
-    """Withholds ``provisional_chat_created`` so the "Starting the chat" cover never engages.
+    """Withholds ``provisional_chat_created`` so the page of a chat being created never engages.
 
     ``release_on_completion`` chooses which delivery pathology is modelled: when
     False the event is dropped outright (the socket was down for the whole
@@ -128,12 +134,41 @@ class _ReplayHidingAgentManager(AgentManager):
         return []
 
 
+class _LateReplayListAgentManager(AgentManager):
+    """Delivers a socket's connect-time chat list after the create that socket opened before.
+
+    The chat root connects, then creates a chat and selects it; on a loaded machine its replay's
+    chat list lands only after that, naming no such chat, and the chat's provisional record follows
+    the list. The replay is the only caller of ``get_provisional_chats``, so holding it there until a
+    create has minted its chat, and the root has had its answer, delivers the list in that order.
+    """
+
+    def get_provisional_chats(self) -> list[ProvisionalChat]:
+        replayed = AgentManager.get_provisional_chats(self)
+        if not replayed:
+            wait_for(
+                lambda: len(AgentManager.get_provisional_chats(self)) > 0,
+                timeout=15.0,
+                error_message="no chat was created while the replay was held",
+            )
+            threading.Event().wait(_ROOT_SELECT_SECONDS)
+        return replayed
+
+
+def _withholding_broadcaster(release_on_completion: bool) -> WebSocketBroadcaster:
+    broadcaster = _WithholdProtoCreatedBroadcaster()
+    type(broadcaster)._withheld = []
+    type(broadcaster)._release_on_completion = release_on_completion
+    return broadcaster
+
+
 @contextlib.contextmanager
 def _serving_workspace(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     port: int,
-    release_on_completion: bool,
+    broadcaster: WebSocketBroadcaster,
+    manager_class: type[AgentManager],
 ) -> Generator[str, None, None]:
     """Serve the real app with a stand-in ``mngr`` that takes ``_CREATE_SECONDS`` to create."""
     work_dir = tmp_path / "work"
@@ -153,10 +188,6 @@ def _serving_workspace(
     )
     fake_claude.chmod(0o755)
 
-    broadcaster = _WithholdProtoCreatedBroadcaster()
-    type(broadcaster)._withheld = []
-    type(broadcaster)._release_on_completion = release_on_completion
-
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", _PRIMARY_AGENT_ID)
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
@@ -168,7 +199,7 @@ def _serving_workspace(
     account_id, _ = mint_account_dir()
     commit_account(account_id, "anthropic", "Anthropic")
 
-    manager = _ReplayHidingAgentManager.build(
+    manager = manager_class.build(
         broadcaster,
         messenger=RecordingMngrMessenger(),
         mngr_binary=str(fake_mngr),
@@ -183,6 +214,7 @@ def _serving_workspace(
             labels={},
             work_dir=str(work_dir),
         )
+    manager.note_agent_list_known()
 
     config = Config(chat_host="127.0.0.1", chat_port=port)
     app = create_application(build_test_state(config=config, agent_manager=manager))
@@ -251,7 +283,13 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
     in today. It must leave that state on its own -- no reload, no tab switch --
     once ``chats_updated`` names the agent.
     """
-    with _serving_workspace(tmp_path, monkeypatch, port=find_free_port(), release_on_completion=False) as base_url:
+    with _serving_workspace(
+        tmp_path,
+        monkeypatch,
+        port=find_free_port(),
+        broadcaster=_withholding_broadcaster(release_on_completion=False),
+        manager_class=_ReplayHidingAgentManager,
+    ) as base_url:
         # The create minted the first free "Chat N" display name the moment it returned; the
         # machine petname the agent actually runs under was never asked for.
         assert _create_chat_and_open_its_page(page, base_url) == "Chat 1"
@@ -276,7 +314,13 @@ def test_not_found_panel_recovers_when_both_proto_events_arrive_together(
     log never renders and the panel is left on the 404 -- the panel must still
     recover from the agent resolving.
     """
-    with _serving_workspace(tmp_path, monkeypatch, port=find_free_port(), release_on_completion=True) as base_url:
+    with _serving_workspace(
+        tmp_path,
+        monkeypatch,
+        port=find_free_port(),
+        broadcaster=_withholding_broadcaster(release_on_completion=True),
+        manager_class=_ReplayHidingAgentManager,
+    ) as base_url:
         _create_chat_and_open_its_page(page, base_url)
 
         not_found = _shown_chat(page).locator(".message-list-not-found")
@@ -297,7 +341,13 @@ def test_not_found_panel_does_not_poll_the_screen_capture_endpoint(
     has no pane to capture. That feedback loop issued hundreds of requests per
     second, each one shelling out to tmux on a real workspace.
     """
-    with _serving_workspace(tmp_path, monkeypatch, port=find_free_port(), release_on_completion=False) as base_url:
+    with _serving_workspace(
+        tmp_path,
+        monkeypatch,
+        port=find_free_port(),
+        broadcaster=_withholding_broadcaster(release_on_completion=False),
+        manager_class=_ReplayHidingAgentManager,
+    ) as base_url:
         screen_requests: list[str] = []
         page.on(
             "request",
@@ -310,3 +360,35 @@ def test_not_found_panel_does_not_poll_the_screen_capture_endpoint(
 
         # One capture attempt for the agent, however many times the view redrew.
         assert len(screen_requests) <= 2, f"screen capture was polled {len(screen_requests)} times"
+
+
+def _is_chat_listed(base_url: str, chat_id: str) -> bool:
+    with urllib.request.urlopen(f"{base_url}/api/chats", timeout=5) as response:
+        return any(chat["chat_id"] == chat_id for chat in json.loads(response.read())["chats"])
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_chat_the_root_created_stays_shown_when_its_replay_lands_after_the_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: Page
+) -> None:
+    """The root keeps the chat its New chat button created selected and shown through a replayed chat list
+    that predates the create, and the chat's composer is there once the agent registers."""
+    with _serving_workspace(
+        tmp_path,
+        monkeypatch,
+        port=find_free_port(),
+        broadcaster=WebSocketBroadcaster(),
+        manager_class=_LateReplayListAgentManager,
+    ) as base_url:
+        page.goto(f"{base_url}/")
+        page.get_by_role("button", name="New chat").click()
+        expect(page).to_have_url(re.compile(r"\?chat=agent-"), timeout=_RECOVERY_TIMEOUT_MS)
+        chat_id = urllib.parse.parse_qs(urllib.parse.urlparse(page.url).query)["chat"][0]
+        wait_for(
+            lambda: _is_chat_listed(base_url, chat_id),
+            timeout=_RECOVERY_TIMEOUT_MS / 1000,
+            error_message=f"{chat_id} never registered",
+        )
+        shown = page.frame_locator(f'iframe.chat-root-frame[data-chat-id="{chat_id}"]:not([hidden])')
+        expect(shown.locator(".message-input-textbox")).to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
+        expect(page).to_have_url(re.compile(rf"\?chat={chat_id}$"))

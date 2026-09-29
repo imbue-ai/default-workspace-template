@@ -13,7 +13,35 @@ const TOOL_CALL_PREFIX = "Tool call: ";
 
 export function renderMarkdown(source: string): string {
   const rawHtml = marked.parse(source) as string;
-  return DOMPurify.sanitize(rawHtml);
+  const fragment = DOMPurify.sanitize(rawHtml, { RETURN_DOM_FRAGMENT: true });
+  rewritePathLinks(fragment);
+  // The fragment belongs to DOMPurify's inert document. Serializing it through a live-document
+  // element would adopt its <img>s into the page, and an adopted image starts fetching.
+  const container = fragment.ownerDocument.createElement("div");
+  container.append(fragment);
+  return container.innerHTML;
+}
+
+/**
+ * Keep a clicked message link from replacing the conversation.
+ *
+ * A web link is left alone: the desktop app opens external http(s), mailto and
+ * tel links in the browser. An absolute path is a file the chat backend serves
+ * as a download (see the show-files-in-chat skill); ``download`` makes a missing
+ * file fail as a download rather than load an error page over the chat. Anything
+ * else (a relative path, a fragment, another scheme) cannot open anything from
+ * the chat's origin, so it is unwrapped to its text.
+ */
+function rewritePathLinks(root: DocumentFragment): void {
+  for (const anchor of Array.from(root.querySelectorAll("a"))) {
+    const href = anchor.getAttribute("href") ?? "";
+    if (/^(?:https?:|mailto:|tel:|\/\/)/i.test(href)) continue;
+    if (href.startsWith("/")) {
+      anchor.setAttribute("download", "");
+      continue;
+    }
+    anchor.replaceWith(...Array.from(anchor.childNodes));
+  }
 }
 
 /**

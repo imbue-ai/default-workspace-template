@@ -1,0 +1,1 @@
+AGENTS.md now tells agents to write workspace file paths in chat replies in code formatting rather than linking them, and to suggest the File Viewer for files under `data/`: the chat renders only web links and absolute-path download links.

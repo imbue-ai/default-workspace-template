@@ -26,9 +26,9 @@ from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import stamp_user_message_display
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
 from imbue.chat.harnesses.tool_output import error_snippet
-from imbue.chat.harnesses.tool_output import find_permission_request
 from imbue.chat.harnesses.tool_output import is_pure_tk_lifecycle_command
 from imbue.chat.harnesses.tool_output import is_tk_lifecycle_anywhere
+from imbue.chat.harnesses.tool_output import stamp_echoed_requests
 from imbue.chat.harnesses.tool_output import tk_stamp
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -394,7 +394,7 @@ def _parse_assistant_message(
     # A failed turn surfaces as a synthetic assistant message (e.g. "API Error: 529
     # Overloaded", "You've hit your monthly spend limit"). Classify it so the frontend can
     # style it as an error and, for a provider-side failure (5xx / overloaded), add a "not
-    # Mind's fault" note. Gated on the synthetic model: only Claude Code's own
+    # Imbue Studio's fault" note. Gated on the synthetic model: only Claude Code's own
     # framework-generated notices are failures, so a REAL assistant message that quotes
     # "API Error: 500" or an error JSON (routine in a coding chat) is not mistaken for an
     # outage, and an agent helping with a credential does not get its own reply painted as
@@ -488,8 +488,8 @@ def _parse_user_message(
                         "message_uuid": uuid,
                     }
                     # Claude Code's own markers (``isMeta`` for framework-injected,
-                    # model-only messages) are read HERE and become the shared render decision
-                    # -- the raw flags never cross the wire. Explicit detectors win over
+                    # model-only messages) are read HERE and become the shared render decision;
+                    # the raw flags never cross the wire. Explicit detectors win over
                     # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
                     # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
                     stamp_user_message_display(
@@ -533,12 +533,11 @@ def _parse_user_message(
             tool_name = tool_name_by_call_id.get(tool_call_id, "unknown")
 
             # The structured facts lifted from the full output (which itself stays off
-            # the event): the subagent linkage trailer and the permission-request object
-            # the card renders from.
+            # the event): the subagent linkage trailer and the request objects the
+            # permission and secret cards render from.
             extracted_subagent_id: str | None = None
             if tool_name == "Agent":
                 extracted_subagent_id = _extract_subagent_id(structured_agent_id, result_content)
-            permission_request = find_permission_request(result_content)
 
             is_error = bool(block.get("is_error", False))
             event = {
@@ -565,8 +564,7 @@ def _parse_user_message(
 
             if extracted_subagent_id:
                 event["subagent_id"] = extracted_subagent_id
-            if permission_request is not None:
-                event["permission_request"] = permission_request.details
+            stamp_echoed_requests(event, result_content)
 
             existing_event_ids.add(event_id)
             new_events.append((timestamp, event))
@@ -626,7 +624,7 @@ def _parse_queued_command_attachment(
     new_events.append((timestamp, event))
 
 
-# --- On-demand payload reconstruction (the detail endpoint's parse half) ---
+# On-demand payload reconstruction (the detail endpoint's parse half)
 
 
 def parse_line_detail(raw_line: str) -> dict[str, dict[str, Any]]:
@@ -706,7 +704,7 @@ def parse_line_detail(raw_line: str) -> dict[str, dict[str, Any]]:
 # live queue as out-of-band ``queue-operation`` records that carry no ``uuid`` and
 # so are dropped by ``parse_lines`` at the DAG guard. They obey a conservation
 # law: ``enqueue = dequeue + remove + popAll`` -- every parked message leaves the
-# queue through exactly one dequeue/remove/popAll record. In the real Mind flow
+# queue through exactly one dequeue/remove/popAll record. In the real Imbue Studio flow
 # EVERY message is delivered via mngr (typed into the TUI), so a mid-turn message
 # commits as a ``dequeue`` whose ``promptSource`` is "typed" (NOT "queued"), and
 # slash commands / task-notifications also leave via dequeue/remove -- none of

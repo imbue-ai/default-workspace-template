@@ -388,37 +388,47 @@ def test_create_chat_refuses_a_message_beside_a_minted_id(agent_manager: AgentMa
     agent_manager.stop()
 
 
-def test_a_chat_created_with_a_message_starts_on_it_rather_than_on_welcome(
+def test_a_chat_created_with_a_message_starts_on_it(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    """A chat created with its own first message carries it; ``/welcome`` is only for a chat
-    that starts with nothing to say (``launch_role_templates``)."""
+    """A chat created with its own first message carries it on its provisional record."""
     q = broadcaster.register()
 
-    seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Mind")
+    seeded = agent_manager.create_chat("seeded-chat", message="Teach me about Imbue Studio")
     agent_manager.stop()
 
     raw = q.get_nowait()
     assert raw is not None
     proto_msg = json.loads(raw)
     assert proto_msg["chat_id"] == seeded.chat_id
-    assert proto_msg["message"] == "Teach me about Mind"
+    assert proto_msg["message"] == "Teach me about Imbue Studio"
 
 
-@pytest.mark.parametrize(
-    ("message", "is_fast", "expected"),
-    [
-        ("", True, ("welcome", "fast")),
-        ("", False, ("welcome",)),
-        ("Teach me about Mind", True, ("fast",)),
-        ("Teach me about Mind", False, ()),
-    ],
-)
-def test_launch_role_templates_follow_the_message_and_the_chats_fast_mode(
-    message: str, is_fast: bool, expected: tuple[str, ...]
+@pytest.mark.parametrize(("is_fast", "expected"), [(True, ("fast",)), (False, ())])
+def test_launch_role_templates_follow_the_chats_fast_mode(is_fast: bool, expected: tuple[str, ...]) -> None:
+    """A chat starts fast when its fast mode calls for it; nothing else rides the templates."""
+    assert launch_role_templates(is_fast) == expected
+
+
+def test_a_chat_created_with_nothing_to_say_is_created_without_a_first_message(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every chat that starts silent is greeted; a chat starts fast when its fast mode calls for it."""
-    assert launch_role_templates(message, is_fast) == expected
+    """No greeting rides a silent create: the chat waits for the user's first message."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        created = manager.create_chat("")
+        wait_until_true(
+            lambda: manager.get_provisional_chat(created.chat_id) is None, 10, "the provisional chat's completion"
+        )
+    finally:
+        manager.stop()
+
+    (argv_line,) = argv_log.read_text().splitlines()
+    assert "--message" not in argv_line
+    assert "--template welcome" not in argv_line
 
 
 def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_folder(
@@ -509,7 +519,7 @@ def _seed_manager(
 def test_seed_chat_opens_a_provisional_chat_awaiting_its_first_send_on_the_seeded_turns(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """The Mind app's conversation becomes the chat's first segment: the record names the seed
+    """The Imbue Studio app's conversation becomes the chat's first segment: the record names the seed
     as its only member, the seed file holds the turns, and the chat is listed awaiting the user."""
     manager, store = _seed_manager(broadcaster, tmp_path)
     q = broadcaster.register()
@@ -548,7 +558,7 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
 ) -> None:
     """The user's first message launches the chat's first real agent: a fresh id under the
     chat's, joining the record as its second member, with the membership labels a handoff's
-    successor carries, the message it was sent, and no ``/welcome``."""
+    successor carries, and the message it was sent."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
@@ -577,7 +587,7 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
     assert templates == ["chat", "fast"]
     assert f"chat_id={seeded.chat_id}" in argv and "chat_seq=2" in argv
-    assert "Let's" in argv_line and "/welcome" not in argv_line
+    assert "Let's" in argv_line
 
 
 def test_a_seeded_chats_launch_carries_the_conversation_the_chat_opened_on(
@@ -1623,8 +1633,8 @@ def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
 
 
 def test_chat_create_argv_carries_a_seeded_first_message_only_when_given() -> None:
-    """The seeded message rides the create as ``--message`` (delivered once the harness is ready,
-    like ``/welcome``); a plain chat's argv carries no ``--message`` at all."""
+    """The seeded message rides the create as ``--message`` (delivered once the harness is ready);
+    a plain chat's argv carries no ``--message`` at all."""
     seeded = _chat_create_argv(initial_message="/use-template https://github.com/example/a-template")
     assert_mngr_argv_valid(seeded)
     assert seeded[seeded.index("--message") + 1] == "/use-template https://github.com/example/a-template"
@@ -1675,7 +1685,7 @@ def test_chat_create_argv_carries_no_launch_settings() -> None:
 
 
 def test_chat_create_argv_carries_a_callers_labels_and_the_version_check_waiver() -> None:
-    """A create from outside the workspace (the Minds app's assist and update chats, through
+    """A create from outside the workspace (the Imbue Studio app's assist and update chats, through
     ``message_chat.py --create``) rides its labels and the claude version-check waiver on the
     same argv the app's own creates use."""
     argv = _chat_create_argv(
@@ -1688,15 +1698,15 @@ def test_chat_create_argv_carries_a_callers_labels_and_the_version_check_waiver(
 
 
 def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
-    """The launch templates (`welcome`, `fast`) stack via extra_role_templates; the
-    resulting argv must resolve against the live CLI."""
+    """The launch template (`fast`) stacks via extra_role_templates; the resulting argv must
+    resolve against the live CLI."""
     argv = _chat_create_argv(
         harness=HarnessType.CODEX,
-        extra_role_templates=("welcome", "fast"),
+        extra_role_templates=("fast",),
     )
     assert_mngr_argv_valid(argv)
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
-    assert templates == ["chat", "welcome", "fast"]
+    assert templates == ["chat", "fast"]
 
 
 # the chat's originating project (the mngr ``project`` label)
@@ -1863,7 +1873,7 @@ def test_rename_chat_refuses_the_primary_agent(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
-    """The services agent's name belongs to the minds app, not to a chat."""
+    """The services agent's name belongs to the Imbue Studio app, not to a chat."""
     manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
     try:
         with manager._lock:
@@ -2251,12 +2261,15 @@ def test_observer_dying_mid_run_keeps_the_last_list_and_reports_degraded(
 
 
 def test_secondary_manager_never_writes_chat_memory_scores(broadcaster: WebSocketBroadcaster) -> None:
-    """A second chat beside the live one is handed no capability to re-tag chats' scores."""
-    manager = AgentManager.build(broadcaster, is_secondary=True)
+    """A second chat beside the live one gets a prioritizer with no writer, and the live one gets the real one."""
+    secondary = AgentManager.build(broadcaster, is_secondary=True)
+    live = AgentManager.build(broadcaster)
     try:
-        assert manager._oom_prioritizer._set_adj(os.getpid(), 0) is False
+        assert secondary._oom_prioritizer._set_adj is None
+        assert live._oom_prioritizer._set_adj is bands.set_oom_score_adj
     finally:
-        manager.stop()
+        secondary.stop()
+        live.stop()
 
 
 # Activity-state integration
@@ -2672,6 +2685,41 @@ def test_working_to_idle_drains_the_queue_via_the_registered_handler(
         agent_manager.stop()
 
 
+def test_idle_to_working_folds_the_busy_handlers_snapshot(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """An IDLE->working transition with something queued invokes the watcher's busy handler, so
+    what an idle reading marked as being sent goes back to plain queued for the turn."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    sending = [{"queued_id": "q2", "content": "second", "timestamp": "t", "is_sending": True}]
+    busy_calls: list[bool] = []
+
+    def _busy_handler() -> list[dict[str, Any]] | None:
+        busy_calls.append(True)
+        return [{**sending[0], "is_sending": False}]
+
+    agent_manager.register_queue_idle_handler("agent-1", lambda: sending)
+    agent_manager.register_queue_busy_handler("agent-1", _busy_handler)
+    try:
+        # The snapshot a dequeue pushes arrives while the agent still reads IDLE: the idle
+        # backstop marks what is left.
+        agent_manager.update_queued_messages("agent-1", [{**sending[0], "is_sending": False}])
+        with agent_manager._lock:
+            assert [message.is_sending for message in agent_manager._agents["agent-1"].queued_messages] == [True]
+        assert busy_calls == []
+
+        # The dequeued prompt is folded in: the agent reads THINKING and the mark is undone.
+        agent_manager.update_session_events("agent-1", [{"type": "user_message", "content": "first"}])
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+            assert [message.is_sending for message in agent_manager._agents["agent-1"].queued_messages] == [False]
+        assert busy_calls == [True]
+    finally:
+        agent_manager.stop()
+
+
 def test_idle_agent_with_a_stale_queue_is_swept_without_a_transition(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
@@ -2878,23 +2926,26 @@ def test_running_mid_turn_codex_snapshot_passes_through_unchanged(
 
 
 def test_stop_activity_tracking_clears_queued_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
-    """Stopping tracking drops the queued snapshot and idle handler alongside activity state."""
+    """Stopping tracking drops the queued snapshot and both queue handlers alongside activity state."""
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
     agent_manager._ensure_activity_tracking("agent-1")
     agent_manager.register_queue_idle_handler("agent-1", lambda: [])
+    agent_manager.register_queue_busy_handler("agent-1", lambda: None)
     agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
 
     with agent_manager._lock:
         assert "agent-1" in agent_manager._queued_messages_by_agent
         assert "agent-1" in agent_manager._queue_idle_handler_by_agent
+        assert "agent-1" in agent_manager._queue_busy_handler_by_agent
 
     agent_manager._stop_activity_tracking("agent-1")
 
     with agent_manager._lock:
         assert "agent-1" not in agent_manager._queued_messages_by_agent
         assert "agent-1" not in agent_manager._queue_idle_handler_by_agent
+        assert "agent-1" not in agent_manager._queue_busy_handler_by_agent
 
 
 def test_provider_snapshot_preserves_queued_messages_for_tracked_agent(

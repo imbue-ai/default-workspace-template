@@ -21,6 +21,8 @@ const STROKE_PATHS = {
   // The single canonical "x".
   close: '<path d="M18 6L6 18"/><path d="M6 6l12 12"/>',
   file: '<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/>',
+  pointer:
+    '<path d="M9 9l5 12 1.8-5.2L21 14z"/><path d="M7.2 2.2l.6 2.4"/><path d="M2.2 7.2l2.4.6"/><path d="M3.6 3.6l1.7 1.7"/>',
   send: '<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
   trash:
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
@@ -37,7 +39,7 @@ const STROKE_PATHS = {
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   // The key that heads a permission request, and the cube that stands in for a
   // app with no bundled brand mark. Both are lucide (`key-round`, `box`) --
-  // the same two glyphs the minds app draws on its own permission surfaces, so
+  // the same two glyphs Imbue Studio draws on its own permission surfaces, so
   // the in-chat card and the review popup agree.
   key: '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>',
   box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',

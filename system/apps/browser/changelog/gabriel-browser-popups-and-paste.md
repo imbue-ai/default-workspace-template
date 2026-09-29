@@ -1,0 +1,5 @@
+Signing in through a pop-up now works in the browser pane. A page's `window.open` pop-up (the "Continue with Google" kind) used to open a second window, which the pane closed with "multiple windows are not supported". It now opens as a tab in the same window and keeps its link back to the page that opened it, so the sign-in can finish and close itself.
+
+A page no longer freezes when it opens a tab after an agent hands the browser to you. The agent's browser connection stays open after a handoff, and new tabs wait for that connection to let them start. The fleet refused that message because the agent no longer held control, so the new tab never started and the page that opened it showed "paused in debugger" and stopped responding to clicks. That one message now always goes through.
+
+Paste is reliable. In testing, 2 to 6 pastes in 20 showed "Pasted" but never reached the page, and a paste could leave Ctrl held down in the browser, which made scrolling zoom and turned clicks into Ctrl+clicks. The pasted keystrokes are now fully delivered before their connection closes.

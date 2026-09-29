@@ -34,10 +34,11 @@ export interface UserMessageClass {
  * Map a user_message's backend render decision onto a `UserMessageKind`.
  * Grouping and rendering both call this and act on the kind alone.
  *
- * A `permission_resolution` deliberately maps to `UserPrompt` here: the verdict
- * only suppresses the bubble when the timeline walk correlates it to an earlier,
- * still-pending permission card (see `resolutionOf` + turn-grouping); an
- * uncorrelated one renders as an ordinary message.
+ * A `permission_resolution` (and a `secret_resolution`) deliberately maps to
+ * `UserPrompt` here: the verdict only suppresses the bubble when the timeline walk
+ * correlates it to an earlier, still-pending card (see `resolutionOf`,
+ * `secretResolutionOf` + turn-grouping); an uncorrelated one renders as an
+ * ordinary message.
  */
 export function classifyUserMessage(event: ClassifiableUserMessage): UserMessageClass {
   const content = event.content || "";
@@ -73,14 +74,14 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
   }
 }
 
-// --- Thin semantic helpers over classifyUserMessage -------------------------
+// Thin semantic helpers over classifyUserMessage
 // Kept as named predicates because callers ask a specific structural question;
 // all derive from the single classification above.
 
 /**
- * True for a user_message that is NOT a genuine human turn and so must not be
- * treated as a turn boundary -- folding one of these into the running turn keeps
- * a single logical turn from being split into several visible ones.
+ * True for a user_message that does NOT open a new section of the progress
+ * timeline: a skill expansion or a hidden framework injection, which renders no
+ * row of its own there.
  */
 export function isNonBoundaryUserMessage(event: ClassifiableUserMessage): boolean {
   // Derived from the KIND_SPEC registry (its `boundary` column) so the boundary
@@ -88,8 +89,14 @@ export function isNonBoundaryUserMessage(event: ClassifiableUserMessage): boolea
   return !KIND_SPEC[classifyUserMessage(event).kind].boundary;
 }
 
-/** True when the message folds into the current turn as a collapsed chip (rather
- *  than being dropped): the SystemChip kinds. */
+/** True for a user_message that is a turn of the conversation (the registry's `isTurn`
+ *  column). */
+export function isTurnUserMessage(event: ClassifiableUserMessage): boolean {
+  return KIND_SPEC[classifyUserMessage(event).kind].isTurn;
+}
+
+/** True when the message shows as a collapsed chip (rather than being dropped):
+ *  the SystemChip kinds. */
 export function isSystemChipUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.SystemChip;
 }
@@ -136,7 +143,7 @@ export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean
   return content === HANDOFF_SUMMARY_COMMAND || content.startsWith(`${HANDOFF_SUMMARY_COMMAND} `);
 }
 
-// --- Permission REQUEST (a tool call) ---------------------------------------
+// Permission REQUEST (a tool call)
 
 /** True when a tool call is an agent permission request (a POST to the reserved
  *  latchkey host). The backend recognises it from the UNTRUNCATED input the
@@ -146,7 +153,7 @@ export function isPermissionRequestCall(tc: ToolCall): boolean {
   return tc.display === "permission_request";
 }
 
-// --- Permission RESOLUTION (a user_message verdict) -------------------------
+// Permission RESOLUTION (a user_message verdict)
 
 /** The outcome of a permission request, once it has been resolved:
  *   - "granted"/"denied": the user made a decision.
@@ -175,4 +182,54 @@ export function resolutionRequestIdOf(event: Pick<UserMessageEvent, "display" | 
     return null;
   }
   return event.request_id ?? null;
+}
+
+// Secret REQUEST (a tool call)
+
+/** True when a tool call is a secret request (the connect-external-service skill's
+ *  `request_secret.py`). Recognised by the backend from the untruncated input, so
+ *  the card shows while the request is still pending. */
+export function isSecretRequestCall(tc: ToolCall): boolean {
+  return tc.display === "secret_request";
+}
+
+// Secret RESOLUTION (a user_message notice)
+
+/** The outcome of a secret request: the user stored the values, declined (with an
+ *  optional note), or a newer request for the same file replaced it. */
+export type SecretResolution = "stored" | "declined" | "superseded";
+
+/** Any card verdict the walk keys by request id. */
+export type RequestResolution = PermissionResolution | SecretResolution;
+
+/** The verdict a secret notice carries, or null when the message is not one. The
+ *  backend stamps `display: "secret_resolution"` + `resolution` off the notice's
+ *  machine tag; the walk writes the verdict onto the earlier secret card. */
+export function secretResolutionOf(event: Pick<UserMessageEvent, "display" | "resolution">): SecretResolution | null {
+  if (event.display !== "secret_resolution") {
+    return null;
+  }
+  const verdict = event.resolution;
+  return verdict === "stored" || verdict === "declined" || verdict === "superseded" ? verdict : null;
+}
+
+/** The id of the request a secret notice resolves; a secret notice always carries one. */
+export function secretResolutionRequestIdOf(event: Pick<UserMessageEvent, "display" | "request_id">): string | null {
+  if (event.display !== "secret_resolution") {
+    return null;
+  }
+  return event.request_id ?? null;
+}
+
+/** The user's note on a declined secret request: whatever follows the machine tag. */
+const SECRET_TAG_RE = /\(secret:\s*(?:stored|declined|superseded),\s*request_id:\s*[^)\s]+\)\s*/;
+
+export function secretResolutionNoteOf(event: Pick<UserMessageEvent, "display" | "content">): string | null {
+  if (event.display !== "secret_resolution") {
+    return null;
+  }
+  const match = SECRET_TAG_RE.exec(event.content);
+  if (match === null) return null;
+  const note = event.content.slice(match.index + match[0].length).trim();
+  return note === "" ? null : note;
 }

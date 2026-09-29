@@ -92,8 +92,9 @@ class QueuedSet:
 
         Used by a harness whose leave records name the message by a stable id
         (codex's ``queued_committed`` / ``queued_retracted`` carry the ``queued_id``),
-        which is exact and content-free, correct even for duplicate content. A
-        resolve of an unknown id is a harmless no-op.
+        which is exact and content-free, correct even for duplicate content. Claude's
+        idle backstop also uses it, to drop an entry still queued past its delivery grace.
+        A resolve of an unknown id is a harmless no-op.
         """
         self.pending = [message for message in self.pending if message.queued_id != queued_id]
 

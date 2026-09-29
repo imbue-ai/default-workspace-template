@@ -1,9 +1,13 @@
 from pathlib import Path
 from uuid import uuid4
 
+from imbue.chat.harnesses.claude.session_files import MissingSessionScanSchedule
 from imbue.chat.harnesses.claude.session_files import claude_session_ids
+from imbue.chat.harnesses.claude.session_files import expected_session_file
+from imbue.chat.harnesses.claude.session_files import find_session_file
 from imbue.chat.harnesses.claude.session_files import move_claude_sessions
 from imbue.mngr.primitives import AgentId
+from imbue.mngr_claude.claude_config import encode_claude_project_dir_name
 
 
 def test_session_ids_are_the_agents_uuid_then_the_history_in_first_mention_order(tmp_path: Path) -> None:
@@ -72,3 +76,59 @@ def test_a_session_already_at_the_destination_is_left_alone(tmp_path: Path) -> N
     assert [path.name for path in moved] == [session_id]
     assert (target / "projects" / "-home-user-workspace" / f"{session_id}.jsonl").read_text() == "kept\n"
     assert (source / "projects" / "-home-user-workspace" / f"{session_id}.jsonl").exists()
+
+
+def test_a_session_filed_under_its_work_dir_is_found_at_the_expected_path(tmp_path: Path) -> None:
+    work_dir = tmp_path / "workspace"
+    work_dir.mkdir()
+    session_id = uuid4().hex
+    session_file = _session(tmp_path / "config", encode_claude_project_dir_name(work_dir), session_id)
+
+    assert expected_session_file(tmp_path / "config" / "projects", session_id, str(work_dir)) == session_file
+    assert expected_session_file(tmp_path / "config" / "projects", uuid4().hex, str(work_dir)) is None
+
+
+def test_a_work_dir_reached_through_a_symlink_finds_the_session_claude_filed_under_its_real_path(
+    tmp_path: Path,
+) -> None:
+    real_work_dir = tmp_path / "real-workspace"
+    real_work_dir.mkdir()
+    linked_work_dir = tmp_path / "linked-workspace"
+    linked_work_dir.symlink_to(real_work_dir)
+    session_id = uuid4().hex
+    session_file = _session(tmp_path / "config", encode_claude_project_dir_name(real_work_dir.resolve()), session_id)
+
+    assert expected_session_file(tmp_path / "config" / "projects", session_id, str(linked_work_dir)) == session_file
+
+
+def test_the_scan_finds_a_session_in_any_project_dir(tmp_path: Path) -> None:
+    for index in range(5):
+        _session(tmp_path / "config", f"-some-other-project-{index}", uuid4().hex)
+    session_id = uuid4().hex
+    session_file = _session(tmp_path / "config", "-where-claude-filed-it", session_id)
+
+    assert find_session_file(tmp_path / "config" / "projects", session_id) == session_file
+    assert find_session_file(tmp_path / "config" / "projects", uuid4().hex) is None
+    assert find_session_file(tmp_path / "missing-config" / "projects", session_id) is None
+
+
+def test_a_missing_session_is_scanned_for_at_once_then_after_doubling_delays_up_to_the_ceiling() -> None:
+    schedule = MissingSessionScanSchedule.build(first_delay_seconds=1.0, max_delay_seconds=60.0)
+    session_id = uuid4().hex
+    now = 5000.0
+
+    assert schedule.is_scan_due(session_id, now)
+    delays = []
+    for _ in range(9):
+        assert schedule.is_scan_due(session_id, now)
+        delay = schedule.record_miss(session_id, now)
+        delays.append(delay)
+        assert not schedule.is_scan_due(session_id, now + delay - 0.01)
+        now += delay
+    assert delays == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0, 60.0, 60.0]
+
+    # Another id has its own schedule, and a found (forgotten) id starts over.
+    assert schedule.is_scan_due(uuid4().hex, now - 100.0)
+    schedule.forget(session_id)
+    assert schedule.is_scan_due(session_id, now - 100.0)
+    assert schedule.record_miss(session_id, now) == 1.0

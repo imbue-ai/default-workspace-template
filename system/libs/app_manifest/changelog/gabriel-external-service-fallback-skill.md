@@ -1,0 +1,1 @@
+An app declares the secret files it runs under in `app.toml`: `[[secrets]]` entries with `file` (the `<file>` of `data/.secrets/<file>.env`), `variables` (at least one POSIX identifier), and an optional one-line `note` for the adopter. `publish-template` aggregates the declarations into a template's `[[requirements.secret]]`. Two entries may not name the same file.

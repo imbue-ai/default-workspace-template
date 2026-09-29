@@ -166,6 +166,7 @@ describe("opens and closes this client made", () => {
       frame: cascadeFrame(1),
       state: "NORMAL",
       is_minimized: false,
+      is_detached: false,
     });
     expect(isLayoutDirty(state)).toBe(false);
   });

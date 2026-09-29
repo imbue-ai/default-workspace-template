@@ -182,6 +182,10 @@ def browser_context_args(
     # pytest raises ScopeMismatch at setup time for every test that uses
     # `page` / `context` (i.e. the entire system_interface e2e suite).
     context_args: dict[str, Any] = {}
+    # Reduced motion for every context, which is the switch a person has rather than a hook for tests:
+    # a window then lands at its new rectangle outright, so a box can be read the moment a state does.
+    # The travel has its own test, which opts a context back in.
+    context_args["reduced_motion"] = "reduce"
     if device:
         context_args.update(playwright.devices[device])
     if base_url:

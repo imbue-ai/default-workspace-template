@@ -358,9 +358,9 @@ The module stays `system/libs/workspace_ui/src/app_contract.ts`, built into the 
 Trust: a page accepts only `window.parent`; the shell accepts only frames it created, and from those only messages whose origin is in the workspace origin family or is the origin the shell itself pointed the frame at (an app on its own loopback port, outside the family).
 The messages, exactly, are contracts.md section 7; in brief:
 
-Shell to page: `shell:handshake {clientId, windowId, desktopId, path}` after every load and when the window's desktop changes; `shell:shown`, `shell:hidden`; `shell:close-request`; `shell:navigate {path}`.
+Shell to page: `shell:handshake {clientId, windowId, desktopId, app, path}` after every load and when the window's desktop changes; `shell:shown`, `shell:hidden`; `shell:close-request`; `shell:navigate {path}`.
 
-Page to shell: `shell:capabilities {navigation: bool}` once after connecting; `shell:location {path, title}`; `shell:focused`; `shell:open {path, ifPresent}` to open another window of the same app on this desktop.
+Page to shell: `shell:capabilities {navigation: bool}` once after connecting; `shell:location {path, title}`; `shell:focused`; `shell:open {path, ifPresent}` to open another window of the same app on this desktop; `shell:start-with-text {text}` and `shell:draft-text {text}` to send or draft a text into a chat without naming the chat app (the element-reference-menu plan, whose element context menu every page draws, drafts through the second).
 
 The `connectToShell` signature gains `onNavigate` and a `capabilities` argument, `location(path, title)` takes the title, and `openPath(path, ifPresent)` sends the path form of `shell:open` beside `open(address)`, which sends the address form until phase 6 deletes it.
 A page that gives no `onNavigate` is reloaded by `src` when it must follow.

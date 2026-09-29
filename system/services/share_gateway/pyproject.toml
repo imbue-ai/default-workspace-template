@@ -8,6 +8,7 @@ dependencies = [
     "cryptography>=42",
     "flask>=3.0",
     "httpx>=0.27",
+    "inotify_simple>=2.0.0",
     "pyjwt>=2.8",
     "werkzeug>=3.1",
 ]

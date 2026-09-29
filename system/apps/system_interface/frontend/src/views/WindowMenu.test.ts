@@ -15,17 +15,21 @@ function rowOf(rows: MenuRow[], key: string): ActionRow {
   return row;
 }
 
+const size = { setState: vi.fn(), setFrame: vi.fn() };
+
 describe("windowMenuRows", () => {
-  it("offers Refresh, Share, Stop or Start, and Close for an ordinary running app", () => {
+  it("offers Move and resize, Share, Stop or Start, and Close for an ordinary running app", () => {
     const app = appRecord("docs");
     const setAppLifecycle = vi.fn();
     const rows = windowMenuRows(app, {
-      refresh: vi.fn(),
+      size,
+      onSized: vi.fn(),
       share: vi.fn(),
       setAppLifecycle,
+      popOut: null,
       close: vi.fn(),
     });
-    expect(keysOf(rows)).toEqual(["refresh", "share", "stop", "|", "close"]);
+    expect(keysOf(rows)).toEqual(["size", "|", "share", "stop", "|", "close"]);
     const stop = rowOf(rows, "stop");
     expect(stop.label).toBe("Stop Docs");
     stop.onSelect();
@@ -35,42 +39,86 @@ describe("windowMenuRows", () => {
   it("offers Start instead of Stop for a stopped app", () => {
     const stopped = appRecord("docs", { is_running: false });
     expect(
-      keysOf(windowMenuRows(stopped, { refresh: vi.fn(), share: null, setAppLifecycle: vi.fn(), close: vi.fn() })),
-    ).toEqual(["refresh", "start", "|", "close"]);
+      keysOf(
+        windowMenuRows(stopped, {
+          size,
+          onSized: vi.fn(),
+          share: null,
+          setAppLifecycle: vi.fn(),
+          popOut: null,
+          close: vi.fn(),
+        }),
+      ),
+    ).toEqual(["size", "|", "start", "|", "close"]);
   });
 
   it("offers neither Share nor Stop where the caller gives none (a critical app, one the workspace cannot stop)", () => {
     expect(
       keysOf(
-        windowMenuRows(appRecord("docs"), { refresh: vi.fn(), share: null, setAppLifecycle: null, close: vi.fn() }),
+        windowMenuRows(appRecord("docs"), {
+          size,
+          onSized: vi.fn(),
+          share: null,
+          setAppLifecycle: null,
+          popOut: null,
+          close: vi.fn(),
+        }),
       ),
-    ).toEqual(["refresh", "|", "close"]);
+    ).toEqual(["size", "|", "close"]);
+  });
+
+  it("drops Move and resize where the caller gives none (compact, where every window is maximized)", () => {
+    expect(
+      keysOf(
+        windowMenuRows(appRecord("docs"), {
+          size: null,
+          onSized: vi.fn(),
+          share: null,
+          setAppLifecycle: null,
+          popOut: null,
+          close: vi.fn(),
+        }),
+      ),
+    ).toEqual(["close"]);
   });
 
   it("offers Close whatever the caller does with it (a pinned window's minimizes)", () => {
     const close = vi.fn();
     const rows = windowMenuRows(appRecord("docs"), {
-      refresh: vi.fn(),
+      size,
+      onSized: vi.fn(),
       share: null,
       setAppLifecycle: null,
+      popOut: null,
       close,
     });
-    expect(keysOf(rows)).toEqual(["refresh", "|", "close"]);
+    expect(keysOf(rows)).toEqual(["size", "|", "close"]);
     rowOf(rows, "close").onSelect();
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("offers only Refresh and Close for a window of an app the shell no longer lists", () => {
+  it("offers only Move and resize and Close for a window of an app the shell no longer lists", () => {
     expect(
       keysOf(
-        windowMenuRows(undefined, { refresh: vi.fn(), share: vi.fn(), setAppLifecycle: vi.fn(), close: vi.fn() }),
+        windowMenuRows(undefined, {
+          size,
+          onSized: vi.fn(),
+          share: vi.fn(),
+          setAppLifecycle: vi.fn(),
+          popOut: null,
+          close: vi.fn(),
+        }),
       ),
-    ).toEqual(["refresh", "|", "close"]);
+    ).toEqual(["size", "|", "close"]);
   });
 });
 
 describe("taskbarEntryMenuRows", () => {
   const actions = {
+    isDetached: false,
+    show: vi.fn(),
+    showGhost: vi.fn(),
+    bringBack: vi.fn(),
     restore: vi.fn(),
     minimize: vi.fn(),
     maximize: vi.fn(),
@@ -147,5 +195,63 @@ describe("taskbarEntryMenuRows", () => {
       "|",
       "close",
     ]);
+  });
+
+  it("offers a pulled-out window's entry Show, Hide placeholder, and Bring back in place of the arrangement verbs", () => {
+    const show = vi.fn();
+    const minimize = vi.fn();
+    const bringBack = vi.fn();
+    const rows = taskbarEntryMenuRows(
+      { ...actions, isDetached: true, show, minimize, bringBack, isMinimized: false, isMaximized: false },
+      false,
+    );
+    expect(keysOf(rows)).toEqual(["show", "hide-ghost", "bring-back", "|", "close"]);
+    rowOf(rows, "show").onSelect();
+    rowOf(rows, "hide-ghost").onSelect();
+    rowOf(rows, "bring-back").onSelect();
+    expect(show).toHaveBeenCalledTimes(1);
+    expect(minimize).toHaveBeenCalledTimes(1);
+    expect(bringBack).toHaveBeenCalledTimes(1);
+    expect(rowOf(rows, "hide-ghost").label).toBe("Hide placeholder");
+    expect(rowOf(rows, "bring-back").label).toBe("Bring back to desktop");
+  });
+
+  it("offers Show placeholder instead once a pulled-out window's ghost is hidden", () => {
+    const showGhost = vi.fn();
+    const rows = taskbarEntryMenuRows(
+      { ...actions, isDetached: true, showGhost, isMinimized: true, isMaximized: false },
+      false,
+    );
+    expect(keysOf(rows)).toEqual(["show", "show-ghost", "bring-back", "|", "close"]);
+    rowOf(rows, "show-ghost").onSelect();
+    expect(showGhost).toHaveBeenCalledTimes(1);
+    expect(rowOf(rows, "show-ghost").label).toBe("Show placeholder");
+  });
+});
+
+describe("the pull-out row", () => {
+  it("offers Open in its own window ahead of Share where the chrome can pull a window out, and nothing otherwise", () => {
+    const popOut = vi.fn();
+    const rows = windowMenuRows(appRecord("docs"), {
+      size,
+      onSized: vi.fn(),
+      share: vi.fn(),
+      setAppLifecycle: vi.fn(),
+      popOut,
+      close: vi.fn(),
+    });
+    expect(keysOf(rows)).toEqual(["size", "|", "pop-out", "share", "stop", "|", "close"]);
+    expect(rowOf(rows, "pop-out").label).toBe("Open in its own window");
+    rowOf(rows, "pop-out").onSelect();
+    expect(popOut).toHaveBeenCalledTimes(1);
+    const without = windowMenuRows(appRecord("docs"), {
+      size,
+      onSized: vi.fn(),
+      share: null,
+      setAppLifecycle: null,
+      popOut: null,
+      close: vi.fn(),
+    });
+    expect(keysOf(without)).toEqual(["size", "|", "close"]);
   });
 });

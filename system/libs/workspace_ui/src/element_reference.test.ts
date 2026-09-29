@@ -1,0 +1,240 @@
+// @vitest-environment jsdom
+/**
+ * The element reference, built from a real (jsdom) document: what it captures of an element and
+ * the page; the selector's uniqueness check; the reference id, the file it names, and the block.
+ */
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  ELEMENT_REFERENCE_KEY,
+  REFERENCE_ID_PATTERN,
+  describeElement,
+  elementOfTarget,
+  isEditableElement,
+  mintReferenceId,
+  referenceBlock,
+  referenceEnvelopeOf,
+  referenceFileNameOf,
+  referenceFileText,
+  referenceSummaryOf,
+  scopeOfHandshake,
+  uniqueSelectorFor,
+} from "./element_reference";
+
+const CLICK = { clientX: 10, clientY: 20, pageX: 10, pageY: 220 };
+const SCOPE = { app: "chat", windowId: "win-1", desktopId: "home", clientId: "client-1" };
+
+function render(html: string): void {
+  document.body.innerHTML = html;
+}
+
+function byId(id: string): Element {
+  const found = document.getElementById(id);
+  if (found === null) throw new Error(`no #${id}`);
+  return found;
+}
+
+afterEach(() => {
+  document.body.innerHTML = "";
+  document.title = "";
+});
+
+describe("describeElement", () => {
+  it("captures the element, the page, and the scope, under a fresh reference id", () => {
+    document.title = "Plan the launch";
+    render(
+      '<div class="message-list"><div id="evt-1" class="message-user selected" data-chat-id="agent-1" style="color: red">' +
+        '<a href="/docs/intro">Read  the\n intro</a></div></div>',
+    );
+    const link = document.querySelector("a") as Element;
+    const reference = describeElement(link, CLICK, SCOPE);
+
+    expect(reference.reference_id).toMatch(REFERENCE_ID_PATTERN);
+    expect(reference.app).toBe("chat");
+    expect(reference.window_id).toBe("win-1");
+    expect(reference.desktop_id).toBe("home");
+    expect(reference.client_id).toBe("client-1");
+    expect(reference.page_title).toBe("Plan the launch");
+    expect(reference.page_origin).toBe(window.location.origin);
+    expect(reference.pointer).toEqual({ client_x: 10, client_y: 20, page_x: 10, page_y: 220 });
+    expect(reference.tag).toBe("a");
+    expect(reference.id).toBeNull();
+    expect(reference.classes).toEqual([]);
+    expect(reference.attributes).toEqual({ href: "/docs/intro" });
+    expect(reference.link_href).toBe(`${window.location.origin}/docs/intro`);
+    expect(reference.image_src).toBeNull();
+    expect(reference.input_value).toBeNull();
+    expect(reference.selector).toBe("#evt-1 > a");
+    expect(reference).not.toHaveProperty("text");
+    expect(reference).not.toHaveProperty("outer_html");
+    expect(reference).not.toHaveProperty("ancestors");
+    expect(reference.selection_text).toBe("");
+    expect(reference.selection_box).toBeNull();
+    expect(Object.keys(reference.bounding_box)).toEqual(["x", "y", "width", "height"]);
+  });
+
+  it("reads a field's value, its editability, and an image's source, and never a password", () => {
+    render(
+      '<input id="name" value="Ada"><textarea id="notes">hi</textarea><img id="pic" src="/a.png"><button id="go">Go</button>' +
+        '<input id="secret" type="password" value="hunter2">',
+    );
+    expect(describeElement(byId("name"), CLICK, SCOPE).input_value).toBe("Ada");
+    expect(describeElement(byId("notes"), CLICK, SCOPE).input_value).toBe("hi");
+    const secret = describeElement(byId("secret"), CLICK, SCOPE);
+    expect(secret.input_value).toBeNull();
+    // Nor its default: the value attribute is the secret in plain text too.
+    expect(secret.attributes).toEqual({ type: "password" });
+    expect(describeElement(byId("pic"), CLICK, SCOPE).image_src).toBe(`${window.location.origin}/a.png`);
+    expect(isEditableElement(byId("name"))).toBe(true);
+    expect(isEditableElement(byId("notes"))).toBe(true);
+    expect(isEditableElement(byId("go"))).toBe(false);
+    expect(isEditableElement(byId("pic"))).toBe(false);
+  });
+
+  it("carries the selection and its box when text is selected", () => {
+    render('<p id="para">Some words here</p>');
+    const paragraph = byId("para");
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    document.getSelection()?.addRange(range);
+    const reference = describeElement(paragraph, CLICK, SCOPE);
+    expect(reference.selection_text).toBe("Some words here");
+    // jsdom lays nothing out, so the range has no box; a browser gives one.
+    expect(reference.selection_box).toBeNull();
+    document.getSelection()?.removeAllRanges();
+  });
+
+  it("has an empty scope on a top-level visit", () => {
+    render('<p id="para">x</p>');
+    const reference = describeElement(byId("para"), CLICK, scopeOfHandshake(null));
+    expect(reference.app).toBeNull();
+    expect(reference.window_id).toBeNull();
+    expect(reference.client_id).toBeNull();
+    expect(scopeOfHandshake({ clientId: "c", windowId: "", desktopId: "home" })).toEqual({
+      app: null,
+      windowId: null,
+      desktopId: "home",
+      clientId: "c",
+    });
+  });
+});
+
+describe("elementOfTarget", () => {
+  it("answers the element, a text node's parent, and the root for anything else", () => {
+    render('<p id="para">words</p>');
+    const paragraph = byId("para");
+    expect(elementOfTarget(paragraph, document)).toBe(paragraph);
+    expect(elementOfTarget(paragraph.firstChild, document)).toBe(paragraph);
+    expect(elementOfTarget(null, document)).toBe(document.documentElement);
+    expect(elementOfTarget(document, document)).toBe(document.documentElement);
+  });
+});
+
+describe("uniqueSelectorFor", () => {
+  it("stops at an id and indexes a row among lookalike siblings", () => {
+    render('<ul id="list"><li class="row">a</li><li class="row">b</li><li class="row other">c</li></ul>');
+    const rows = document.querySelectorAll("li");
+    expect(uniqueSelectorFor(rows[0])).toBe("#list > li.row:nth-of-type(1)");
+    expect(uniqueSelectorFor(rows[1])).toBe("#list > li.row:nth-of-type(2)");
+    // Its classes tell it from its siblings, so no index is needed.
+    expect(uniqueSelectorFor(rows[2])).toBe("#list > li.row.other");
+    for (const row of Array.from(rows)) {
+      expect(document.querySelector(uniqueSelectorFor(row) as string)).toBe(row);
+    }
+    // A sibling with the same classes and more is matched by the step too, so it counts as a lookalike.
+    render('<ul id="list"><li class="row">a</li><li class="row other">c</li></ul>');
+    const [plain, decorated] = Array.from(document.querySelectorAll("li"));
+    expect(uniqueSelectorFor(plain)).toBe("#list > li.row:nth-of-type(1)");
+    expect(uniqueSelectorFor(decorated)).toBe("#list > li.row.other");
+  });
+
+  it("walks up to the body when nothing on the way carries an id", () => {
+    render('<div class="a"><div class="b"><span>x</span></div></div>');
+    const span = document.querySelector("span") as Element;
+    expect(uniqueSelectorFor(span)).toBe("body > div.a > div.b > span");
+  });
+
+  it("answers null when the best try matches more than one element, or none", () => {
+    // Two identical subtrees under lookalike roots: the root gets an index, so the selector stays unique.
+    render('<div class="a"><span>x</span></div><div class="a"><span>y</span></div>');
+    const spans = document.querySelectorAll("span");
+    expect(uniqueSelectorFor(spans[0])).toBe("body > div.a:nth-of-type(1) > span");
+    // A duplicated id: the walk stops at it, and "#dup > span" matches both spans.
+    render('<div id="dup"><span>x</span></div><div id="dup"><span>y</span></div>');
+    const underDuplicateIds = document.querySelectorAll("span");
+    expect(document.querySelectorAll("#dup > span")).toHaveLength(2);
+    expect(uniqueSelectorFor(underDuplicateIds[0])).toBeNull();
+    expect(uniqueSelectorFor(underDuplicateIds[1])).toBeNull();
+    render("<p>x</p>");
+    const detached = document.createElement("span");
+    expect(uniqueSelectorFor(detached)).toBeNull();
+  });
+
+  it("escapes an id or class the selector syntax would misread", () => {
+    render('<div id="a.b"><span class="x:y">t</span></div>');
+    const span = document.querySelector("span") as Element;
+    expect(uniqueSelectorFor(span)).toBe("#a\\.b > span.x\\:y");
+    expect(document.querySelector(uniqueSelectorFor(span) as string)).toBe(span);
+  });
+});
+
+describe("the reference id and its file", () => {
+  it("mints ids of the one shape that never repeat", () => {
+    const ids = new Set(Array.from({ length: 200 }, () => mintReferenceId()));
+    expect(ids.size).toBe(200);
+    for (const id of ids) expect(id).toMatch(REFERENCE_ID_PATTERN);
+  });
+
+  it("names the file after the id", () => {
+    const id = mintReferenceId();
+    expect(referenceFileNameOf(id)).toBe(`${id}.json`);
+  });
+
+  it("writes the file pretty-printed with a final newline", () => {
+    render('<p id="para">x</p>');
+    const built = describeElement(byId("para"), CLICK, SCOPE);
+    const text = referenceFileText({ [ELEMENT_REFERENCE_KEY]: built });
+    expect(text.endsWith("}\n")).toBe(true);
+    expect(text.split("\n").length).toBeGreaterThan(10);
+    expect(JSON.parse(text)).toEqual({ [ELEMENT_REFERENCE_KEY]: built });
+  });
+
+  it("summarises a reference as the element and where it is", () => {
+    render('<button id="save" class="btn primary wide extra">Save</button><p>plain</p>');
+    const button = describeElement(byId("save"), CLICK, SCOPE);
+    expect(referenceSummaryOf(button)).toBe(`button#save.btn.primary.wide in chat ${button.page_path}`);
+    const paragraph = describeElement(document.querySelector("p") as Element, CLICK, scopeOfHandshake(null));
+    expect(referenceSummaryOf(paragraph)).toBe(`p in ${paragraph.page_path}`);
+  });
+});
+
+describe("the block", () => {
+  it("fences the envelope on one line, and parses back to it", () => {
+    render('<p id="para">x</p>');
+    const built = describeElement(byId("para"), CLICK, SCOPE);
+    const block = referenceBlock(built);
+    expect(block.startsWith("```json\n{")).toBe(true);
+    expect(block.endsWith("}\n```")).toBe(true);
+    expect(block.split("\n")).toHaveLength(3);
+    const json = block.split("\n")[1];
+    expect(referenceEnvelopeOf(json)).toEqual({ [ELEMENT_REFERENCE_KEY]: built });
+  });
+
+  it("recognises only a reference under the one key as an envelope", () => {
+    render('<p id="para">x</p>');
+    const built = describeElement(byId("para"), CLICK, SCOPE);
+    const withFields = (fields: Record<string, unknown>): string =>
+      JSON.stringify({ [ELEMENT_REFERENCE_KEY]: { ...built, ...fields } });
+    expect(referenceEnvelopeOf("not json")).toBeNull();
+    expect(referenceEnvelopeOf('{"other": {}}')).toBeNull();
+    expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": {}, "extra": 1}`)).toBeNull();
+    expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": "text"}`)).toBeNull();
+    // What a chat reads off a reference has to be there, in shape: the id names the file, the rest is the summary.
+    expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": {}}`)).toBeNull();
+    expect(referenceEnvelopeOf(`{"${ELEMENT_REFERENCE_KEY}": {"tag": "p"}}`)).toBeNull();
+    expect(referenceEnvelopeOf(withFields({ reference_id: "REF-short" }))).toBeNull();
+    expect(referenceEnvelopeOf(withFields({ classes: "lead" }))).toBeNull();
+    expect(referenceEnvelopeOf(withFields({ id: 7 }))).toBeNull();
+    expect(referenceEnvelopeOf(withFields({ app: undefined }))).toBeNull();
+    expect(referenceEnvelopeOf(withFields({}))).toEqual({ [ELEMENT_REFERENCE_KEY]: built });
+  });
+});

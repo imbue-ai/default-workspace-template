@@ -16,6 +16,12 @@ export DEBIAN_FRONTEND=noninteractive
 . "$(dirname "$0")/_tool_env.sh"
 tool_env_pin
 
+# The pin may name the private mngr repo; each uv command below that fetches
+# mngr runs with the credential delivered to this build, if any, and nothing
+# else does (see _mngr_git_auth.sh). The asset fetch the frontend build runs
+# scopes its own git fetch the same way.
+. "$(dirname "$0")/_mngr_git_auth.sh"
+
 # NOTE: intentionally NOT guarded by the provisioning skip cache -- this produces
 # in-repo outputs (frontend dist, .venv) that the create's git-mirror landing does
 # not carry, so it must run on every create to regenerate them (fast via the baked
@@ -62,13 +68,13 @@ git config --global --add safe.directory "$REPO_ROOT"
 # reads the same table, so a release adding a plugin
 # registers it in existing workspaces as well as here. mngr_modal is intentionally
 # not registered (providers.modal.is_enabled=false).
-python3 "$REPO_ROOT/system/scripts/install_mngr.py" --repo-root "$REPO_ROOT"
+mngr_git_auth_run python3 "$REPO_ROOT/system/scripts/install_mngr.py" --repo-root "$REPO_ROOT"
 
 for app_dir in "$REPO_ROOT"/system/apps/*/; do
     [ -f "$app_dir/pyproject.toml" ] && [ -f "$app_dir/app.toml" ] || continue
     app_name="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["name"])' "$app_dir/app.toml")"
     mapfile -t APP_PLUGIN_ARGS < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool "$app_name" --repo-root "$REPO_ROOT")
-    uv tool install -e "$app_dir" "${APP_PLUGIN_ARGS[@]}"
+    mngr_git_auth_run uv tool install -e "$app_dir" "${APP_PLUGIN_ARGS[@]}"
 done
 
 # Drop an mngr install left under a different $HOME by a create that ran before the pin
@@ -79,7 +85,7 @@ python3 "$REPO_ROOT/system/scripts/tool_env.py" drop-shadowing-mngr
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen
 # asserts the lockfile is canonical so the pre-warmed cache is not bypassed.
-uv sync --all-packages --frozen
+mngr_git_auth_run uv sync --all-packages --frozen
 
 # Expose the vendored tk ticket tracker on PATH. The target resolves once
 # /home/user/workspace is in place (on docker, after the first-boot seed).

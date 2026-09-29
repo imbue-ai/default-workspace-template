@@ -1,6 +1,5 @@
 import ast
 import io
-import os
 import re
 import subprocess
 import tokenize
@@ -129,26 +128,40 @@ def test_all_test_ratchets_files_have_same_tests() -> None:
 
 
 def _find_bash_scripts_without_strict_mode() -> list[str]:
-    """Find bash scripts missing 'set -euo pipefail', excluding vendored and venv code.
+    """Find bash scripts missing 'set -euo pipefail', excluding vendored code.
 
-    Walks with os.walk and prunes excluded directories in place (system/vendor,
-    .git, virtualenvs, node_modules) rather than rglob-ing the whole tree.
+    Only scripts git would consider count (tracked, or untracked but not
+    ignored), for the same reason :func:`_live_prose_files` asks git: in a live
+    workspace ``data/`` accumulates generated machine state, and the terminal
+    app writes shell scripts into it. Those are gitignored, not the template's
+    code, and their style is not this ratchet's business. Asking git also drops
+    the non-source trees that hold no template code (virtualenvs, node_modules,
+    git internals), all of which are gitignored.
     """
+    candidates = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "*.sh",
+        ],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     violations: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(_REPO_ROOT):
-        current_dir = Path(dirpath)
-        dirnames[:] = [
-            d
-            for d in dirnames
-            if d not in _PRUNED_DIR_NAMES and current_dir / d != _VENDORED_DIR
-        ]
-        for filename in filenames:
-            if not filename.endswith(".sh"):
-                continue
-            script = current_dir / filename
-            content = script.read_text(errors="replace")
-            if re.search(r"^#!/.*bash", content) and "set -euo pipefail" not in content:
-                violations.append(str(script.relative_to(_REPO_ROOT)))
+    for rel in filter(None, candidates.stdout.split("\0")):
+        script = _REPO_ROOT / rel
+        if _VENDORED_DIR in script.parents or not script.is_file():
+            continue
+        content = script.read_text(errors="replace")
+        if re.search(r"^#!/.*bash", content) and "set -euo pipefail" not in content:
+            violations.append(rel)
     return sorted(violations)
 
 
@@ -407,7 +420,7 @@ def test_prevent_application_terminology() -> None:
 # identifiers that still say "service" so the count never grows.
 # Identifiers only, never prose: Python names come from the tokenizer (so
 # docstrings and comments do not count), TypeScript names from the source with
-# its comments and string literals blanked. The remainder is the minds embed
+# its comments and string literals blanked. The remainder is the Imbue Studio embed
 # contract's own vocabulary, which the shell speaks but does not own: the
 # ``serviceName`` payload key of ``minds:open-share-settings`` (its vendored
 # declaration file is skipped whole), and one HTTP status name.

@@ -53,9 +53,10 @@ export interface ToolCall {
   subagent_type?: string;
   subagent_metadata?: SubagentMetadata;
   // The backend's render decision for this call: "hidden" (a tk lifecycle call --
-  // a structural marker consumed by the step timeline, not work to render) or
-  // "permission_request" (render the rich permission card). Absent = normal row.
-  display?: "hidden" | "permission_request";
+  // a structural marker consumed by the step timeline, not work to render),
+  // "permission_request" (render the rich permission card), or "secret_request"
+  // (render the secret card with its password inputs). Absent = normal row.
+  display?: "hidden" | "permission_request" | "secret_request";
 }
 
 /**
@@ -94,18 +95,28 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // Absent = the baseline user bubble. The raw harness markers (claude's isMeta /
   // sentinel tags) never reach the wire -- the decision does.
   display?:
-    "hidden" | "chip" | "skill_expansion" | "permission_resolution" | "status" | "notice" | "prompt_with_context";
+    | "hidden"
+    | "chip"
+    | "skill_expansion"
+    | "permission_resolution"
+    | "secret_resolution"
+    | "status"
+    | "notice"
+    | "prompt_with_context";
   // Chip title ("Stop hook feedback", "Background task", ...) or skill name.
 
   display_label?: string;
   // The body to display when a wrapper sentinel was stripped (a fleet nudge), or when a
   // machine-written context block was (a seeded chat's first send: the user's own words).
   display_body?: string;
-  // permission_resolution only: the verdict written onto the earlier card.
-  resolution?: "granted" | "denied" | "error";
-  // permission_resolution only: the resolved request's own id, when the notice
-  // carries one (absent for a notice recorded before request-id embedding shipped,
-  // which the walk instead correlates by arrival order -- see turn-grouping.ts).
+  // permission_resolution / secret_resolution only: the verdict written onto the
+  // earlier card (granted / denied / error for a permission card; stored / declined /
+  // superseded for a secret card).
+  resolution?: "granted" | "denied" | "error" | "stored" | "declined" | "superseded";
+  // permission_resolution / secret_resolution only: the resolved request's own id,
+  // when the notice carries one (absent for a permission notice recorded before
+  // request-id embedding shipped, which the walk instead correlates by arrival
+  // order -- see turn-grouping.ts; a secret notice always carries one).
   request_id?: string;
   // The activity path's signal that no model reply follows this message (model-bar
   // traffic, framework injections). Read by the backend's own activity derivation;
@@ -143,7 +154,7 @@ export interface AssistantMessageEvent extends BaseTranscriptEvent {
   // is carried for wording only, and never gates whether the error renders.
   api_error_kind: string | null;
   // True when the API error is the model provider's fault (a 5xx / overloaded)
-  // rather than our request -- these get the "not Mind's fault" note.
+  // rather than our request -- these get the "not Imbue Studio's fault" note.
   is_provider_fault: boolean;
   // True when the harness recorded READABLE reasoning for this turn (codex summaries,
   // pi thinking blocks, agy step reasoning; never claude, whose thinking is encrypted).
@@ -174,6 +185,9 @@ export interface ToolResultEvent extends BaseTranscriptEvent {
   // The permission request a latchkey creation POST echoed on stdout, parsed whole by
   // the backend off the full output; the permission card renders from this field.
   permission_request?: Record<string, unknown>;
+  // The secret request the request script echoed on stdout, parsed the same way; the
+  // secret card renders from this field.
+  secret_request?: Record<string, unknown>;
   // NEVER on the wire: only the frontend-synthesized skill-expansion results (see
   // buildToolResultsWithSkillExpansions) carry inline output.
   output?: string;
@@ -200,7 +214,7 @@ export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
 }
 
 /** The ``source`` of the events of a seeded chat's seed segment (the backend's ``SEED_SOURCE``):
- *  the turns the Mind app wrote before the workspace had any agent. */
+ *  the turns the Imbue Studio app wrote before the workspace had any agent. */
 export const SEED_SOURCE = "seed";
 
 /** The pseudo-harness a seed segment reads as (the backend's ``HarnessType.SEED``). */

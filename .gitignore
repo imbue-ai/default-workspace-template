@@ -296,7 +296,7 @@ marimo/_lsp/
 **/frontend-dist/
 
 # Frontend build artifacts and binary assets of the shell and the chat app
-# (built fresh on mind creation via `cd system && npm ci && npm run build`)
+# (built fresh on workspace creation via `cd system && npm ci && npm run build`)
 system/apps/system_interface/imbue/system_interface/static/
 system/apps/chat/imbue/chat/static/
 system/apps/getting_started/src/getting_started/static/
@@ -344,7 +344,7 @@ system/scripts/notify_user.local.sh
 **/test-results
 **/current.tar.gz
 
-# Mind deploy-time build artifacts
+# Imbue Studio deploy-time build artifacts
 **/.minds/
 
 # Autofix session artifacts

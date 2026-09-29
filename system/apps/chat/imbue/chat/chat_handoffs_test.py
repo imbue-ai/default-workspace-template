@@ -637,7 +637,7 @@ def test_the_prompt_names_an_earlier_predecessor_by_the_archival_name_it_was_giv
 
 
 def test_the_prompt_leaves_out_a_seeded_chats_seed_segment(tmp_path: Path) -> None:
-    """A seeded chat's first member is the seed the Mind app wrote, not an agent mngr knows: it has no
+    """A seeded chat's first member is the seed the Imbue Studio app wrote, not an agent mngr knows: it has no
     state dir and no transcript to read, so the predecessors the successor is pointed at start with the
     chat's first real agent."""
     workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)

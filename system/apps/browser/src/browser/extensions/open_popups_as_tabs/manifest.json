@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Open pop-ups as tabs",
+  "version": "1.0",
+  "description": "Opens window.open pop-ups as tabs in the same window, keeping window.opener.",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["open_popups_as_tabs.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true,
+      "world": "MAIN"
+    }
+  ]
+}

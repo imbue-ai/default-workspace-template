@@ -1,12 +1,12 @@
 """Verify that ``.mngr/settings.toml`` create-templates compose as expected.
 
-The minds/DEFAULT_WORKSPACE_TEMPLATE setup runs ``mngr create --template main --template <mode>``
+The Imbue Studio DEFAULT_WORKSPACE_TEMPLATE setup runs ``mngr create --template main --template <mode>``
 and relies on the fact that tuple-typed options (e.g. ``extra_provision_command``)
 concatenate when multiple templates stack, while scalar-typed options (e.g.
 ``provider``) get overridden by the latter template.
 
 If that behaviour ever regresses in mngr, the per-mode provisioning
-on minds hosts silently loses either the shared ``main`` setup (e.g. the
+on Imbue Studio hosts silently loses either the shared ``main`` setup (e.g. the
 default tmux config) or the mode-specific commands. These tests pin the
 contract.
 """
@@ -206,7 +206,7 @@ def test_chat_template_marks_the_agent_role() -> None:
     They stay silent for anything else, so a chat that stopped carrying the
     role would simply never remind its agent to tell the user it finished --
     a silent loss, which is what this pins. The role also has to survive the
-    `welcome` and `fast` templates the chat app stacks on top.
+    `fast` template the chat app stacks on top.
     """
     assert "MNGR_AGENT_ROLE=chat" in _apply(("chat",))["env"]
-    assert "MNGR_AGENT_ROLE=chat" in _apply(("chat", "welcome", "fast"))["env"]
+    assert "MNGR_AGENT_ROLE=chat" in _apply(("chat", "fast"))["env"]
