@@ -669,7 +669,7 @@ mv data/.tasks/update-self/reports/report.md \
 mngr stop update-self
 ```
 
-Release the leases and close the ticket last, each as its own tool call: `tk
+Then release the leases and close the ticket, each as its own tool call: `tk
 close` each `editing critical app <name>` lease 5b took, then the
 `updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
 finished."`), then `tk close <ticket-id> "Updated to <ref> -- worker branch
