@@ -237,6 +237,9 @@ SPARE_CHAT_BOOT_POLL_SECONDS: Final[float] = 0.5
 # How long the spares are left alone after a create or a destroy failed, so a workspace where mngr
 # keeps refusing does not run a create every sweep.
 SPARE_CHAT_RETRY_BACKOFF_SECONDS: Final[float] = 300.0
+# The reason a chat that claimed a spare is given when the spare's creation stopped on an unexpected
+# error (its traceback is in the log).
+_SPARE_CREATION_BROKE_OFF_ERROR: Final[str] = "Starting this chat's agent stopped on an unexpected error"
 
 
 # The create template a chat's launch stacks on ``chat`` (``.mngr/settings.toml``) when the chat's
@@ -3338,6 +3341,50 @@ class AgentManager:
         return False
 
     def _run_spare_creation(self, spare: SpareChatAgent, harness: HarnessType, work_dir: Path) -> None:
+        """The spare's creation thread: ``_create_spare``, then ``_abandon_spare_left_starting``.
+
+        The thread runs with ``is_checked=False``, which logs whatever escapes and nothing more,
+        so a spare an exception left being created is abandoned here: a chat that claimed it
+        would otherwise wait at "creating" for good, a phase its page cannot discard.
+        """
+        try:
+            self._create_spare(spare, harness, work_dir)
+        finally:
+            self._abandon_spare_left_starting(spare.chat_id)
+
+    def _abandon_spare_left_starting(self, chat_id: ChatId) -> None:
+        """Hand a spare still being created or claimed to the sweep's destroy, failing and answering a chat that
+        claimed it. A no-op once ``_create_spare`` has run to its end, which leaves the spare in neither phase."""
+        with self._lock:
+            spare = self._spare_locked(chat_id)
+            if spare is None or spare.phase not in (SpareChatPhase.CREATING, SpareChatPhase.CLAIMED):
+                return
+            self._spare_claim_by_chat.pop(chat_id, None)
+            self._spare_retry_not_before = time.monotonic() + SPARE_CHAT_RETRY_BACKOFF_SECONDS
+            discarding = tuple(
+                other.with_phase(SpareChatPhase.DISCARDING) if other.chat_id == chat_id else other
+                for other in self._spares
+            )
+            try:
+                self._set_spares_locked(discarding)
+            except OSError as e:
+                # A restart discards a spare the file still has being created or claimed, so memory alone is enough.
+                _loguru_logger.warning("Could not record spare agent {} as discarded: {}", chat_id, e)
+                self._spares = discarding
+            provisional = self._provisional_chats.get(chat_id)
+            is_claim_waiting = provisional is not None and provisional.phase is ProvisionalChatPhase.CREATING
+            if is_claim_waiting:
+                self._mark_creation_failed_locked(chat_id, _SPARE_CREATION_BROKE_OFF_ERROR)
+            settled = self._creation_settled_by_chat.get(chat_id) if is_claim_waiting else None
+        _loguru_logger.warning("Starting spare agent {} broke off; the sweep destroys it", chat_id)
+        if is_claim_waiting:
+            if settled is not None:
+                settled.set()
+            self._broadcaster.broadcast_provisional_chat_completed(
+                chat_id=chat_id, success=False, error=_SPARE_CREATION_BROKE_OFF_ERROR
+            )
+
+    def _create_spare(self, spare: SpareChatAgent, harness: HarnessType, work_dir: Path) -> None:
         """Create a spare silently, on its terms, under the name it reserved, and wait for its harness to come up.
 
         A spare nothing claimed becomes ready; one a new chat claimed meanwhile becomes that chat,
@@ -3415,8 +3462,10 @@ class AgentManager:
             self.ensure_spare_chat()
         elif claim is not None:
             _loguru_logger.warning("Could not start spare agent {} for its chat: {}", agent_id, error)
-            self._discard_spare(spare.chat_id)
-            self._settle_claimed_spare(spare.chat_id, claim, settled, error)
+            try:
+                self._discard_spare(spare.chat_id)
+            finally:
+                self._settle_claimed_spare(spare.chat_id, claim, settled, error)
         else:
             _loguru_logger.warning("Could not start spare agent {}: {}", agent_id, error)
             self._discard_spare(spare.chat_id)

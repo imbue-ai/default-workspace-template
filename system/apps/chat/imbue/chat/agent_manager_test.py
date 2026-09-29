@@ -5380,6 +5380,50 @@ def test_a_chat_that_claimed_a_spare_whose_create_fails_is_told_why(
         manager.stop()
 
 
+def test_a_chat_that_claimed_a_spare_whose_creation_breaks_off_is_answered(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    argv_log = tmp_path / "mngr-argv.log"
+    release = tmp_path / "release-create"
+    mngr_binary = tmp_path / "held-create-mngr"
+    mngr_binary.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> "{argv_log}"\n'
+        '[ "$1" = create ] || exit 0\n'
+        f'while [ ! -e "{release}" ]; do sleep 0.05; done\n'
+    )
+    mngr_binary.chmod(0o755)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, str(mngr_binary), 1)
+    pushes = broadcaster.register()
+    try:
+        manager.ensure_spare_chat()
+        wait_until_true(
+            lambda: len(_mngr_calls(argv_log, "create")) == 1, timeout_seconds=15.0, what="the spare's create starting"
+        )
+        (starting,) = manager._spares
+        created = manager.create_chat("")
+        assert created.chat_id == starting.chat_id
+        # The spares file can no longer be written, so settling the claimed spare raises.
+        (tmp_path / "spare_chat.json.tmp").mkdir()
+
+        release.write_text("")
+
+        outcome = manager.wait_for_chat_creation(created.chat_id, timeout=15.0)
+        assert outcome == ChatCreationOutcome(
+            is_created=False, error="Starting this chat's agent stopped on an unexpected error"
+        )
+        completions = [message for message in _drain(pushes) if message.get("type") == "provisional_chat_completed"]
+        assert [(message["chat_id"], message["success"]) for message in completions] == [(starting.chat_id, False)]
+        # The refill the claim started may have recorded a spare of its own before the file broke.
+        assert [spare for spare in manager._spares if spare.chat_id == starting.chat_id] == [
+            starting.with_phase(SpareChatPhase.DISCARDING)
+        ]
+        assert manager._spare_retry_not_before > time.monotonic()
+    finally:
+        release.write_text("")
+        manager.stop()
+
+
 def test_a_manager_with_no_spares_store_starts_no_spare(agent_manager: AgentManager) -> None:
     agent_manager.note_agent_list_known()
 
