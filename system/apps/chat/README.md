@@ -22,7 +22,10 @@ observe`, its own supervised service) writes, and serves:
   ordered by recency, with rename, stop and restart, and delete) beside an inner
   frame of the selected chat's page. The selection is the `chat` query parameter,
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
-  chat's title. The page is pure: nothing is created or sent by loading it. An
+  chat's title. Loading the page sends and writes nothing. With nothing selected it
+  shows the most recent chat, and with no chats one awaiting its first send
+  (`POST /api/chats/awaiting`, held in memory until that send launches it); on a
+  phone the list alone is the page until a chat is picked. An
   `intake` query parameter names a pending intake (below) the root applies once
   (`docs/system/blueprint/post-launch-paths/`): the text goes into a composer,
   unsent, a chat is picked from a picker the root opens over the list, or a chat
