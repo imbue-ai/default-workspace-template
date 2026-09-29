@@ -32,7 +32,6 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
-from imbue.chat.agent_manager import SPARE_CHAT_POOL_SIZE
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
@@ -4948,8 +4947,9 @@ def _spare_manager(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     mngr_binary: str,
+    pool_size: int,
 ) -> tuple[AgentManager, SpareChatStore]:
-    """A manager that keeps spares, recorded in a file, with its agent list known and the sweep not running."""
+    """A manager that keeps ``pool_size`` spares, recorded in a file, with its agent list known and the sweep not running."""
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
@@ -4960,6 +4960,7 @@ def _spare_manager(
         chat_files_root=tmp_path / "chats",
         messenger=RecordingMngrMessenger(),
         spare_chat_store=spare_store,
+        spare_chat_pool_size=pool_size,
     )
     manager.note_agent_list_known()
     return manager, spare_store
@@ -5001,20 +5002,20 @@ def _mark_harness_ready(tmp_path: Path, agent_id: str) -> None:
     (tmp_path / "agents" / agent_id / CLAUDE_STARTUP_READY_MARKER.filename).write_text("")
 
 
-def test_the_pool_fills_with_two_silent_spares_on_the_default_account_that_no_listing_shows(
-    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("pool_size", [1, 2])
+def test_the_pool_fills_with_silent_spares_on_the_default_account_that_no_listing_shows(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pool_size: int
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary)
+    manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, pool_size)
     default_account_id = read_index().accounts[0].id
     try:
         manager.ensure_spare_chat()
-        spares = _wait_for_ready_spares(manager, SPARE_CHAT_POOL_SIZE)
+        spares = _wait_for_ready_spares(manager, pool_size)
 
         creates = _mngr_calls(argv_log, "create")
         assert [(create[1], create[3]) for create in creates] == [
-            ("Chat-1", spares[0].chat_id),
-            ("Chat-2", spares[1].chat_id),
+            (f"Chat-{number}", spare.chat_id) for number, spare in enumerate(spares, start=1)
         ]
         for create, spare in zip(creates, spares, strict=True):
             assert f"MINDS_CHAT_ID={spare.chat_id}" in create
@@ -5032,11 +5033,34 @@ def test_the_pool_fills_with_two_silent_spares_on_the_default_account_that_no_li
         manager.stop()
 
 
-def test_a_new_chat_is_handed_a_ready_spare_and_the_pool_is_topped_up_once_the_delay_has_passed(
+def test_a_new_chat_is_handed_the_ready_spare_and_a_pool_of_one_is_topped_up_at_once(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+
+        created = manager.create_chat("")
+
+        assert (created.chat_id, created.display_name, created.name) == (spare.chat_id, "Chat 1", "Chat-1")
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [spare.chat_id]
+        assert manager.wait_for_chat_creation(created.chat_id, timeout=1.0) == ChatCreationOutcome(is_created=True)
+        assert manager.get_provisional_chat(created.chat_id) is None
+        (next_spare,) = _wait_for_ready_spares(manager, 1)
+        assert next_spare.display_name == "Chat 2"
+        assert [call[3] for call in _mngr_calls(argv_log, "create")] == [spare.chat_id, next_spare.chat_id]
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [spare.chat_id]
+    finally:
+        manager.stop()
+
+
+def test_a_pool_of_two_is_topped_up_only_once_the_delay_after_a_hand_over_has_passed(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 2)
     try:
         manager.ensure_spare_chat()
         first, second = _wait_for_ready_spares(manager, 2)
@@ -5067,12 +5091,12 @@ def test_a_new_chat_that_brings_a_message_sends_it_to_the_handed_spare(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     sent: list[tuple[str, str, str]] = []
     manager.set_handoff_capabilities(_handoff_capabilities(sent))
     try:
         manager.ensure_spare_chat()
-        first, _second = _wait_for_ready_spares(manager, 2)
+        (first,) = _wait_for_ready_spares(manager, 1)
 
         created = manager.create_chat("", message="Plan my week 4471")
 
@@ -5088,7 +5112,7 @@ def test_a_spare_is_not_ready_until_its_harness_says_it_accepts_input(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = _write_booting_mngr_binary(tmp_path)
-    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
         manager.ensure_spare_chat()
         wait_until_true(
@@ -5115,7 +5139,7 @@ def test_a_new_chat_claims_a_spare_still_starting_and_becomes_it_once_its_harnes
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = _write_booting_mngr_binary(tmp_path)
-    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     sent: list[tuple[str, str, str]] = []
     manager.set_handoff_capabilities(_handoff_capabilities(sent))
     pushes = broadcaster.register()
@@ -5155,10 +5179,10 @@ def test_a_new_chat_the_spares_do_not_fit_is_created_and_the_spares_are_kept(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
         manager.ensure_spare_chat()
-        spares = _wait_for_ready_spares(manager, 2)
+        spares = _wait_for_ready_spares(manager, 1)
 
         if kind == "another account":
             created = manager.create_chat("", account_id=_openai_account())
@@ -5175,11 +5199,7 @@ def test_a_new_chat_the_spares_do_not_fit_is_created_and_the_spares_are_kept(
             timeout_seconds=15.0,
             what="the new chat's create finishing",
         )
-        assert [call[3] for call in _mngr_calls(argv_log, "create")] == [
-            spares[0].chat_id,
-            spares[1].chat_id,
-            created.chat_id,
-        ]
+        assert [call[3] for call in _mngr_calls(argv_log, "create")] == [spares[0].chat_id, created.chat_id]
         assert list(manager._spares) == spares
         assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [created.chat_id]
     finally:
@@ -5190,10 +5210,10 @@ def test_spares_on_an_account_that_is_no_longer_the_default_are_replaced(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
         manager.ensure_spare_chat()
-        stale_spares = _wait_for_ready_spares(manager, 2)
+        stale_spares = _wait_for_ready_spares(manager, 1)
         openai_account_id = _openai_account()
         set_default_account(openai_account_id, is_default=True)
 
@@ -5201,7 +5221,7 @@ def test_spares_on_an_account_that_is_no_longer_the_default_are_replaced(
 
         wait_until_true(
             lambda: [(spare.terms.account_id, spare.phase) for spare in manager._spares]
-            == [(openai_account_id, SpareChatPhase.READY)] * 2,
+            == [(openai_account_id, SpareChatPhase.READY)],
             timeout_seconds=15.0,
             what="the pool moving to the new default account",
         )
@@ -5219,19 +5239,18 @@ def test_a_spare_whose_process_died_is_not_handed_over_and_is_replaced(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
         manager.ensure_spare_chat()
-        dead_spare, live_spare = _wait_for_ready_spares(manager, 2)
+        (dead_spare,) = _wait_for_ready_spares(manager, 1)
         seed_agent_state(manager, dead_spare.chat_id, name="Chat-1", state="STOPPED")
 
-        assert manager.create_chat("").chat_id == live_spare.chat_id
-        manager._spare_replenish_not_before = 0.0
+        assert manager.create_chat("").chat_id != dead_spare.chat_id
         manager.ensure_spare_chat()
 
         wait_until_true(
             lambda: _mngr_calls(argv_log, "destroy") == [["destroy", dead_spare.chat_id, "--force"]]
-            and len(_ready_spares(manager)) == 2,
+            and len(_ready_spares(manager)) == 1,
             timeout_seconds=15.0,
             what="the dead spare being replaced",
         )
@@ -5251,11 +5270,11 @@ def test_a_spare_whose_create_a_restart_cut_short_is_destroyed_and_replaced(
         phase=SpareChatPhase.CREATING,
     )
     SpareChatStore(path=tmp_path / "spare_chat.json").write((cut_short,))
-    manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary)
+    manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
         manager.ensure_spare_chat()
 
-        replacements = _wait_for_ready_spares(manager, 2)
+        replacements = _wait_for_ready_spares(manager, 1)
         wait_until_true(
             lambda: spare_store.read() == tuple(replacements),
             timeout_seconds=15.0,
@@ -5274,7 +5293,7 @@ def test_a_spare_whose_create_fails_is_destroyed_and_the_next_waits_out_the_back
     mngr_binary = tmp_path / "failing-create-mngr"
     mngr_binary.write_text(f'#!/bin/sh\necho "$*" >> "{argv_log}"\n[ "$1" != create ]\n')
     mngr_binary.chmod(0o755)
-    manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, str(mngr_binary))
+    manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, str(mngr_binary), 1)
     try:
         manager.ensure_spare_chat()
         wait_until_true(

@@ -223,9 +223,10 @@ DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
 FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO: Final[int] = 2
 
 
-# How many spare agents (``spare_chat.py``) are kept started for new chats. Two, so the chat after
-# one that took a spare finds another already up while the pool is topped up.
-SPARE_CHAT_POOL_SIZE: Final[int] = 2
+# How many idle spare agents (``spare_chat.py``) are kept started for new chats: the default for
+# ``AgentManager.build``. Each costs one idle harness process (for claude, about 140 MB of its own).
+# Raise it so a burst of new chats each finds one already up.
+SPARE_CHAT_POOL_SIZE: Final[int] = 1
 # How long after a hand-over the pool is left short when another spare is still ready: long enough
 # for the chat that took one to get through its first turn before the next spare's boot competes
 # with it for the host's CPUs.
@@ -868,6 +869,8 @@ class AgentManager:
     _spare_claim_by_chat: dict[ChatId, _SpareClaim]
     # ``time.monotonic()`` before which the pool is not topped up while a spare is ready (a hand-over).
     _spare_replenish_not_before: float
+    # How many idle spares the pool is kept at.
+    _spare_chat_pool_size: int
     # The spares whose ``mngr destroy`` is running, so a sweep does not start a second one.
     _spare_ids_being_discarded: set[ChatId]
     # ``time.monotonic()`` before which no spare is created or destroyed, set when one failed.
@@ -989,6 +992,7 @@ class AgentManager:
         autocompactor: ChatAutoCompactor | None = None,
         is_secondary: bool = False,
         spare_chat_store: SpareChatStore | None = None,
+        spare_chat_pool_size: int = SPARE_CHAT_POOL_SIZE,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
@@ -1012,7 +1016,7 @@ class AgentManager:
         resumption of unfinished switches, all of which belong to the live chat alone, and
         refuses every switch (a handoff or a rebind), since its chat records are a scratch copy.
         ``spare_chat_store`` records the spare agents a new chat is handed (``spare_chat.py``);
-        None keeps none.
+        None keeps none. ``spare_chat_pool_size`` is how many idle spares it keeps.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -1034,6 +1038,7 @@ class AgentManager:
         manager._spare_retry_not_before = 0.0
         manager._spare_claim_by_chat = {}
         manager._spare_replenish_not_before = 0.0
+        manager._spare_chat_pool_size = spare_chat_pool_size
         manager._chat_files_root = chat_files_root
         manager._prompt_template_path = prompt_template_path
         manager._handoff_capabilities = None
@@ -3230,7 +3235,7 @@ class AgentManager:
 
         A ready spare whose terms went stale (the default account, the project, or the fast
         mode a new chat starts in changed) or whose process died is destroyed, and a spare is
-        started while the pool holds fewer than ``SPARE_CHAT_POOL_SIZE``, one at a time (mngr's
+        started while the pool holds fewer than its size, one at a time (mngr's
         host lock runs creates one at a time anyway). Nothing happens without a spares store,
         before the agent list is known, with no account to start one on, or during the backoff
         after a spare's create or destroy failed. The mngr commands run on threads of their
@@ -3270,7 +3275,7 @@ class AgentManager:
                 terms is not None
                 and work_dir is not None
                 and not is_one_being_created
-                and len(pooled) < SPARE_CHAT_POOL_SIZE
+                and len(pooled) < self._spare_chat_pool_size
                 and (not is_one_ready or now >= self._spare_replenish_not_before)
             ):
                 new_spare = SpareChatAgent(
