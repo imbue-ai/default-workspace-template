@@ -5252,13 +5252,14 @@ def test_a_spare_whose_process_died_is_not_handed_over_and_is_replaced(
         assert manager.create_chat("").chat_id != dead_spare.chat_id
         manager.ensure_spare_chat()
 
+        # The spare leaves the spares only once its destroy has returned, after mngr logged the call.
         wait_until_true(
-            lambda: _mngr_calls(argv_log, "destroy") == [["destroy", dead_spare.chat_id, "--force"]]
+            lambda: dead_spare.chat_id not in [spare.chat_id for spare in manager._spares]
             and len(_ready_spares(manager)) == 1,
             timeout_seconds=15.0,
             what="the dead spare being replaced",
         )
-        assert dead_spare.chat_id not in [spare.chat_id for spare in manager._spares]
+        assert _mngr_calls(argv_log, "destroy") == [["destroy", dead_spare.chat_id, "--force"]]
     finally:
         manager.stop()
 
