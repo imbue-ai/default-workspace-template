@@ -513,10 +513,10 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         m.redraw();
 
         try {
-          // A chat awaiting its first send (a seeded one, or one an intake minted) has no agent
-          // yet, and this send is what launches one: on the account it was minted for, else the
-          // signed-in one, else the one the chooser produces. The message rides the launch as
-          // the agent's first, so nothing is sent after it lands.
+          // A chat awaiting its first send (a seeded one, one an intake minted, or the one an empty
+          // chat list opens on) has no agent yet, and this send is what launches one: on the account
+          // it was minted for, else the signed-in one, else the one the chooser produces. The
+          // message rides the launch as the agent's first, so nothing is sent after it lands.
           const awaiting = getProvisionalChat(chatId);
           if (awaiting?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
             const accountId = await chooseAccountForFirstSend(awaiting);
