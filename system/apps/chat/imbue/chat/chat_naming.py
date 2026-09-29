@@ -32,6 +32,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.models import AgentRenameError
+from imbue.chat.models import ChatAccountBinding
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.primitives import ChatId
@@ -122,6 +123,15 @@ class ChatNamer(MutableModel):
     get_active_agent_info: Callable[[ChatId], AgentInfo | None] = Field(
         frozen=True, description="The agent a chat runs on, once it is listed"
     )
+    resolve_chat_account_binding: Callable[[ChatId], ChatAccountBinding | None] = Field(
+        frozen=True, description="The harness and account a chat runs on, known from the moment its create starts"
+    )
+    show_automatic_title: Callable[[ChatId, str], None] = Field(
+        frozen=True, description="Shows a name for the chat at once, ahead of the rename that makes it its name"
+    )
+    clear_automatic_title: Callable[[ChatId], None] = Field(
+        frozen=True, description="Stops showing a name the rename did not carry"
+    )
     has_placeholder_name: Callable[[ChatId], bool] = Field(
         frozen=True, description='Whether a chat still wears a name nobody chose ("Chat N", or its seed title)'
     )
@@ -168,22 +178,24 @@ class ChatNamer(MutableModel):
                 self._in_flight_chat_ids.discard(chat_id)
 
     def _name_chat(self, chat_id: ChatId, message: str) -> None:
-        # A chat created with its first message is listed only once its create lands
-        agent_info = self._wait_for_active_agent(chat_id)
-        if agent_info is None:
-            logger.debug("Skipped naming chat {}: it did not come up", chat_id)
+        # Known as soon as the create starts, so the model is asked while the chat is still coming up
+        binding = self.resolve_chat_account_binding(chat_id)
+        if binding is None:
+            logger.debug("Skipped naming chat {}: no account to ask on", chat_id)
             return
         chat_dir = self.chat_files_root / chat_id
         if not self.has_placeholder_name(chat_id):
             write_chat_naming_state(chat_dir, ChatNamingState(is_settled=True))
             return
-        completion = self.build_one_shot_completion(agent_info.harness)
+        completion = self.build_one_shot_completion(binding.harness)
         if completion is None:
             return
 
         # Ask for a name; a failed call or a message with no subject yet costs one attempt
         try:
-            answer = completion.complete(agent_info, CHAT_NAMING_SYSTEM_PROMPT, message[:_MAX_PROMPT_CHARACTERS])
+            answer = completion.complete(
+                binding.account_dir, CHAT_NAMING_SYSTEM_PROMPT, message[:_MAX_PROMPT_CHARACTERS]
+            )
         except OneShotCompletionError as e:
             logger.warning("Failed to generate a name for chat {}: {}", chat_id, e)
             self._record_attempt(chat_dir)
@@ -194,13 +206,22 @@ class ChatNamer(MutableModel):
             self._record_attempt(chat_dir)
             return
 
-        # Apply it, unless the chat was named some other way meanwhile
+        # Show it at once; the rename that makes it the chat's name follows once the chat is listed
+        self.show_automatic_title(chat_id, name)
+        is_renamed = False
         try:
+            if self._wait_for_active_agent(chat_id) is None:
+                logger.debug("Left chat {} unnamed: it did not come up", chat_id)
+                self._record_attempt(chat_dir)
+                return
             is_renamed = self.rename_placeholder_named_chat(chat_id, name)
         except (AgentRenameError, ChatConvergingError) as e:
             logger.warning("Failed to name chat {} {!r}: {}", chat_id, name, e)
             self._record_attempt(chat_dir)
             return
+        finally:
+            if not is_renamed:
+                self.clear_automatic_title(chat_id)
         write_chat_naming_state(chat_dir, ChatNamingState(is_settled=True))
         if is_renamed:
             logger.info("Named chat {} {!r}", chat_id, name)

@@ -9,8 +9,7 @@ its own.
 
 from abc import ABC
 from abc import abstractmethod
-
-from imbue.chat.agent_discovery import AgentInfo
+from pathlib import Path
 
 
 class OneShotCompletionError(RuntimeError):
@@ -18,8 +17,8 @@ class OneShotCompletionError(RuntimeError):
 
 
 class OneShotCompletion(ABC):
-    """Answers one prompt with a small model on the account an agent runs on, with no tools and no session left behind."""
+    """Answers one prompt with the harness's smallest model on an account, with no tools and no session left behind."""
 
     @abstractmethod
-    def complete(self, agent_info: AgentInfo, system_prompt: str, prompt: str) -> str:
+    def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
         """The model's answer text. Raises ``OneShotCompletionError`` when the call fails."""

@@ -13,7 +13,6 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import ValidationError
 
-from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.claude.account_binding import ClaudeAccountBinding
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.one_shot import OneShotCompletion
@@ -79,6 +78,9 @@ def claude_one_shot_env(ambient_env: Mapping[str, str], config_dir: Path) -> dic
         if key not in MANAGED_AUTH_ENV_KEYS and key not in _SESSION_ENV_KEYS
     }
     env.update(ClaudeAccountBinding().account_env(config_dir))
+    # An account that thinks by default spends most of a short answer's time thinking: measured
+    # on Haiku, about 3s with thinking against under 1s without, for the same name.
+    env["MAX_THINKING_TOKENS"] = "0"
     return env
 
 
@@ -97,8 +99,8 @@ def parse_claude_print_result(stdout: str) -> str:
 class ClaudeOneShotCompletion(OneShotCompletion):
     """Runs ``claude -p`` from an empty directory, so no project instructions or hooks reach the answer."""
 
-    def complete(self, agent_info: AgentInfo, system_prompt: str, prompt: str) -> str:
-        env = claude_one_shot_env(os.environ, agent_info.claude_config_dir)
+    def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
+        env = claude_one_shot_env(os.environ, account_dir)
         started_at = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="chat_one_shot_") as isolated_dir:
             try:

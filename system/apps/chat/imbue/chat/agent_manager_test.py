@@ -76,6 +76,7 @@ from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
+from imbue.chat.models import ChatAccountBinding
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffFailedStep
@@ -1960,6 +1961,68 @@ def test_a_seeded_chat_still_wearing_its_seed_title_is_renamed_like_a_minted_one
         assert not manager.has_placeholder_name(chat_id)
     finally:
         manager.stop()
+
+
+def test_an_automatic_title_is_shown_over_a_chat_being_created_until_it_is_cleared(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    minted = agent_manager.mint_awaiting_chat("acct-1")
+    q = broadcaster.register()
+
+    agent_manager.show_automatic_title(minted.chat_id, "Rome trip: plan five days")
+
+    broadcast = json.loads(q.get_nowait() or "")
+    assert broadcast["type"] == "provisional_chat_created"
+    assert broadcast["name"] == "Rome trip: plan five days"
+    assert [chat.name for chat in agent_manager.get_provisional_chats_as_shown()] == ["Rome trip: plan five days"]
+    # Shown, not given: the chat still wears its minted name, so the rename that follows may replace it
+    assert agent_manager.has_placeholder_name(minted.chat_id)
+
+    agent_manager.clear_automatic_title(minted.chat_id)
+
+    assert [chat.name for chat in agent_manager.get_provisional_chats_as_shown()] == [minted.name]
+
+
+def test_renaming_a_chat_drops_the_automatic_title_shown_over_it(
+    broadcaster: WebSocketBroadcaster,
+    true_binary: str,
+) -> None:
+    manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
+    try:
+        _tracked_chat(manager, "agent-7", "Chat-2", display_name="Chat 2")
+        manager.show_automatic_title(ChatId("agent-7"), "Rome trip: plan five days")
+        assert [snapshot.title for snapshot in manager.get_chat_snapshots()] == ["Rome trip: plan five days"]
+
+        manager.rename_chat("agent-7", "Planning notes")
+
+        assert [snapshot.title for snapshot in manager.get_chat_snapshots()] == ["Planning notes"]
+    finally:
+        manager.stop()
+
+
+def test_resolve_chat_account_binding_names_the_account_a_chat_is_created_on_and_the_one_it_runs_on(
+    agent_manager: AgentManager,
+) -> None:
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    creating = agent_manager.mint_awaiting_chat(account_id)
+    _tracked_chat(agent_manager, "agent-7", "Chat-2", display_name="Chat 2")
+    with agent_manager._lock:
+        tracked = agent_manager._agents["agent-7"]
+        agent_manager._agents["agent-7"] = tracked.model_copy_update(
+            to_update(tracked.field_ref().labels, {**tracked.labels, "account": account_id})
+        )
+
+    expected = ChatAccountBinding(harness=HarnessType.CLAUDE, account_dir=account_dir(account_id))
+    assert agent_manager.resolve_chat_account_binding(creating.chat_id) == expected
+    assert agent_manager.resolve_chat_account_binding(ChatId("agent-7")) == expected
+    assert agent_manager.resolve_chat_account_binding(agent_manager.mint_awaiting_chat("").chat_id) is None
+    assert agent_manager.resolve_chat_account_binding(ChatId("agent-nowhere")) is None
+
+    delete_account(account_id)
+
+    assert agent_manager.resolve_chat_account_binding(creating.chat_id) is None
+    assert agent_manager.resolve_chat_account_binding(ChatId("agent-7")) is None
 
 
 def _finished_rename(returncode: int, stderr: str, is_timed_out: bool = False) -> FinishedProcess:

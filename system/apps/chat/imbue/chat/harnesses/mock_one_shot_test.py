@@ -1,4 +1,5 @@
-from imbue.chat.agent_discovery import AgentInfo
+from pathlib import Path
+
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 
@@ -10,7 +11,7 @@ class ScriptedOneShotCompletion(OneShotCompletion):
         self.answers = answers
         self.prompts: list[str] = []
 
-    def complete(self, agent_info: AgentInfo, system_prompt: str, prompt: str) -> str:
+    def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
         self.prompts.append(prompt)
         answer = self.answers.pop(0)
         if isinstance(answer, OneShotCompletionError):

@@ -581,6 +581,9 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
     namer = ChatNamer(
         chat_files_root=tmp_path / "chats",
         get_active_agent_info=manager.get_active_agent_info,
+        resolve_chat_account_binding=manager.resolve_chat_account_binding,
+        show_automatic_title=manager.show_automatic_title,
+        clear_automatic_title=manager.clear_automatic_title,
         has_placeholder_name=manager.has_placeholder_name,
         rename_placeholder_named_chat=lambda chat_id, name: (renames.append((chat_id, name)), True)[1],
         build_one_shot_completion=lambda _harness: completion,

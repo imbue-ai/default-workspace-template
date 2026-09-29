@@ -18,6 +18,7 @@ from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.models import AgentNameConflictError
+from imbue.chat.models import ChatAccountBinding
 from imbue.chat.primitives import ChatId
 
 _CHAT_ID = ChatId("agent-4f1c2a9e7b6d4c3a8e5f0b1d2c3e4f5a")
@@ -32,7 +33,7 @@ class _InlineExecutor(Executor):
         return future
 
 
-def _agent_info(display_name: str, tmp_path: Path, harness: HarnessType = HarnessType.CLAUDE) -> AgentInfo:
+def _agent_info(display_name: str, tmp_path: Path) -> AgentInfo:
     return AgentInfo(
         id=str(_CHAT_ID),
         name=display_name.replace(" ", "-"),
@@ -40,7 +41,7 @@ def _agent_info(display_name: str, tmp_path: Path, harness: HarnessType = Harnes
         agent_state_dir=tmp_path / "state",
         claude_config_dir=tmp_path / "account",
         labels={"display_name": display_name},
-        harness=harness,
+        harness=HarnessType.CLAUDE,
     )
 
 
@@ -49,8 +50,14 @@ class _NamingHarness:
 
     def __init__(self, tmp_path: Path, display_name: str, answers: list[str | OneShotCompletionError]) -> None:
         self.agent_info: AgentInfo | None = _agent_info(display_name, tmp_path)
+        self.binding: ChatAccountBinding | None = ChatAccountBinding(
+            harness=HarnessType.CLAUDE, account_dir=tmp_path / "account"
+        )
         self.completion = ScriptedOneShotCompletion(answers)
         self.renames: list[str] = []
+        # The name the chat list shows over the chat's own, as the manager would hold it
+        self.shown_title: str | None = None
+        self.shown_titles: list[str] = []
         self.rename_error: Exception | None = None
         # Whether the chat still wears a name nobody chose, as the manager would answer.
         self.is_placeholder_named = True
@@ -58,6 +65,9 @@ class _NamingHarness:
         self.namer = ChatNamer(
             chat_files_root=self.chat_files_root,
             get_active_agent_info=lambda _chat_id: self.agent_info,
+            resolve_chat_account_binding=lambda _chat_id: self.binding,
+            show_automatic_title=self._show_title,
+            clear_automatic_title=self._clear_title,
             has_placeholder_name=lambda _chat_id: self.is_placeholder_named,
             rename_placeholder_named_chat=self._rename,
             build_one_shot_completion=self._build_completion,
@@ -65,9 +75,18 @@ class _NamingHarness:
             executor=_InlineExecutor(),
         )
 
+    def _show_title(self, _chat_id: ChatId, title: str) -> None:
+        self.shown_title = title
+        self.shown_titles.append(title)
+
+    def _clear_title(self, _chat_id: ChatId) -> None:
+        self.shown_title = None
+
     def _rename(self, _chat_id: ChatId, name: str) -> bool:
         if self.rename_error is not None:
             raise self.rename_error
+        # The name is on screen before the rename that makes it the chat's own is asked for
+        assert self.shown_title == name
         self.renames.append(name)
         return True
 
@@ -156,22 +175,37 @@ def test_a_chat_named_any_other_way_is_left_alone_without_asking_the_model(tmp_p
 
 def test_a_harness_with_no_one_shot_completion_keeps_its_minted_name(tmp_path: Path) -> None:
     harness = _NamingHarness(tmp_path, "Chat 3", [])
-    harness.agent_info = _agent_info("Chat 3", tmp_path, harness=HarnessType.CODEX)
+    harness.binding = ChatAccountBinding(harness=HarnessType.CODEX, account_dir=tmp_path / "account")
 
     harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome")
 
     assert harness.renames == []
+    assert harness.shown_titles == []
     assert not (harness.chat_files_root / _CHAT_ID / CHAT_NAMING_FILENAME).exists()
 
 
-def test_a_chat_that_never_comes_up_is_not_named(tmp_path: Path) -> None:
+def test_a_chat_with_no_account_to_ask_on_is_not_named(tmp_path: Path) -> None:
     harness = _NamingHarness(tmp_path, "Chat 3", ["Rome trip: plan five days in May"])
-    harness.agent_info = None
+    harness.binding = None
 
     harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome")
 
     assert harness.completion.prompts == []
     assert harness.naming_state() == ChatNamingState()
+
+
+def test_the_name_is_asked_for_before_the_chat_comes_up_and_shown_at_once(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", ["Rome trip: plan five days in May"])
+    harness.agent_info = None
+
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome")
+
+    assert harness.completion.prompts == ["Help me plan 5 days in Rome"]
+    assert harness.shown_titles == ["Rome trip: plan five days in May"]
+    # A chat that never came up keeps no name it was never given, and the attempt is spent
+    assert harness.shown_title is None
+    assert harness.renames == []
+    assert harness.naming_state() == ChatNamingState(attempt_count=1, is_settled=False)
 
 
 def test_a_refused_rename_costs_an_attempt(tmp_path: Path) -> None:
@@ -180,6 +214,7 @@ def test_a_refused_rename_costs_an_attempt(tmp_path: Path) -> None:
 
     harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome")
 
+    assert harness.shown_title is None
     assert harness.naming_state() == ChatNamingState(attempt_count=1, is_settled=False)
 
 

@@ -159,6 +159,9 @@ def build_production_state(
         else ChatNamer(
             chat_files_root=chat_records_root,
             get_active_agent_info=agent_manager.get_active_agent_info,
+            resolve_chat_account_binding=agent_manager.resolve_chat_account_binding,
+            show_automatic_title=agent_manager.show_automatic_title,
+            clear_automatic_title=agent_manager.clear_automatic_title,
             has_placeholder_name=agent_manager.has_placeholder_name,
             rename_placeholder_named_chat=agent_manager.rename_placeholder_named_chat,
             build_one_shot_completion=build_one_shot_completion,

@@ -40,7 +40,7 @@ def test_claude_one_shot_env_runs_on_the_chats_account_not_the_servers_credentia
 
     env = claude_one_shot_env(ambient, Path("/accounts/acct-5813"))
 
-    assert env == {"PATH": "/usr/bin", "CLAUDE_CONFIG_DIR": "/accounts/acct-5813"}
+    assert env == {"PATH": "/usr/bin", "CLAUDE_CONFIG_DIR": "/accounts/acct-5813", "MAX_THINKING_TOKENS": "0"}
 
 
 def test_parse_claude_print_result_returns_the_answer_text() -> None:

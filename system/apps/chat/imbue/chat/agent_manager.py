@@ -118,6 +118,7 @@ from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
+from imbue.chat.models import ChatAccountBinding
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatCreationOutcome
 from imbue.chat.models import ChatSegmentInfo
@@ -791,6 +792,9 @@ class AgentManager:
     _match_by_agent_id: dict[str, AgentMatch]
     # The chats minted here whose first agent mngr does not know yet, by chat id.
     _provisional_chats: dict[ChatId, ProvisionalChat]
+    # A name shown for a chat before its rename lands: the automatic name, from the moment the
+    # model answers until ``mngr rename`` (seconds of CLI startup) has carried it.
+    _title_override_by_chat: dict[ChatId, str]
     # The records of the chats that have run on more than one agent, read from the store at
     # build (and on ``refresh_chat_records``); a chat with no record is its one agent.
     _chat_record_store: ChatRecordStore
@@ -949,6 +953,7 @@ class AgentManager:
         manager._chat_record_store = chat_record_store if chat_record_store is not None else InMemoryChatRecordStore()
         manager._chat_record_by_id = manager._chat_record_store.read_all()
         manager._provisional_chats = seeded_provisional_chats(manager._chat_record_by_id)
+        manager._title_override_by_chat = {}
         manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
         manager._chat_files_root = chat_files_root
         manager._prompt_template_path = prompt_template_path
@@ -1110,6 +1115,44 @@ class AgentManager:
         """Push every chat's snapshot to every WebSocket client."""
         self._broadcaster.broadcast_chats_updated(self.get_chat_snapshots())
 
+    def _broadcast_provisional(self, provisional: ProvisionalChat) -> None:
+        """Push a provisional chat to every client, under the name it is shown by."""
+        self._broadcaster.broadcast_provisional_chat_created(self._provisional_as_shown(provisional))
+
+    def _provisional_as_shown(self, provisional: ProvisionalChat) -> ProvisionalChat:
+        with self._lock:
+            title = self._title_override_by_chat.get(provisional.chat_id)
+        if title is None:
+            return provisional
+        return provisional.model_copy_update(to_update(provisional.field_ref().name, title))
+
+    def _snapshot_as_shown(self, snapshot: ChatSnapshot) -> ChatSnapshot:
+        with self._lock:
+            title = self._title_override_by_chat.get(snapshot.chat_id)
+        if title is None:
+            return snapshot
+        return snapshot.model_copy_update(to_update(snapshot.field_ref().title, title))
+
+    def show_automatic_title(self, chat_id: ChatId, title: str) -> None:
+        """Show ``title`` for the chat at once, ahead of the rename that will make it its name."""
+        with self._lock:
+            self._title_override_by_chat[chat_id] = title
+            provisional = self._provisional_chats.get(chat_id)
+        if provisional is not None:
+            self._broadcast_provisional(provisional)
+        self._broadcast_chats_updated()
+
+    def clear_automatic_title(self, chat_id: ChatId) -> None:
+        """Stop showing a title the rename did not carry; the chat reads as its own name again."""
+        with self._lock:
+            removed = self._title_override_by_chat.pop(chat_id, None)
+            provisional = self._provisional_chats.get(chat_id)
+        if removed is None:
+            return
+        if provisional is not None:
+            self._broadcast_provisional(provisional)
+        self._broadcast_chats_updated()
+
     # Agent-level: the tracked agents.
 
     def get_agents(self) -> list[AgentStateItem]:
@@ -1219,19 +1262,26 @@ class AgentManager:
             }
         last_messaged = self._message_stamps.read()
         return [
-            chat_snapshot_for_active_agent(
-                agent,
-                chat,
-                pending_by_agent[agent.id],
-                self._shoulder_tap_available(agent),
-                connecting_by_agent[agent.id],
-                last_messaged.get(chat.chat_id),
+            self._snapshot_as_shown(
+                chat_snapshot_for_active_agent(
+                    agent,
+                    chat,
+                    pending_by_agent[agent.id],
+                    self._shoulder_tap_available(agent),
+                    connecting_by_agent[agent.id],
+                    last_messaged.get(chat.chat_id),
+                )
             )
             for agent, chat in listed
         ]
 
     def get_chat_snapshot(self, chat_ref: str) -> ChatSnapshot | None:
         """One chat's snapshot, or None when no listed chat has that id (a provisional chat included)."""
+        snapshot = self._chat_snapshot_by_its_own_name(chat_ref)
+        return None if snapshot is None else self._snapshot_as_shown(snapshot)
+
+    def _chat_snapshot_by_its_own_name(self, chat_ref: str) -> ChatSnapshot | None:
+        """``get_chat_snapshot`` under the chat's own name, ignoring a title shown ahead of its rename."""
         parsed = parse_chat_ref(chat_ref)
         if parsed is None:
             return None
@@ -2551,18 +2601,56 @@ class AgentManager:
                     to_update(renamed.field_ref().name, new_canonical_name),
                     to_update(renamed.field_ref().labels, {**renamed.labels, "display_name": display_name}),
                 )
+            if chat is not None:
+                self._title_override_by_chat.pop(chat.chat_id, None)
         self._broadcast_chats_updated()
 
     def has_placeholder_name(self, chat_id: ChatId) -> bool:
         """Whether a chat still wears a name nobody chose for it: a minted "Chat N", or the title it was seeded with
-        (the Mind app's "Welcome")."""
-        snapshot = self.get_chat_snapshot(chat_id)
-        if snapshot is None:
-            return False
+        (the Mind app's "Welcome"). A chat still being created counts by the name it was minted with."""
         with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
             record = self._chat_record_by_id.get(chat_id)
-        is_seed_title = record is not None and record.seed_title == snapshot.title
-        return is_minted_chat_name(snapshot.title) or is_seed_title
+        if provisional is not None:
+            title = provisional.name
+        else:
+            snapshot = self._chat_snapshot_by_its_own_name(chat_id)
+            if snapshot is None:
+                return False
+            title = snapshot.title
+        is_seed_title = record is not None and record.seed_title == title
+        return is_minted_chat_name(title) or is_seed_title
+
+    def resolve_chat_account_binding(self, chat_id: ChatId) -> ChatAccountBinding | None:
+        """The harness and account folder a chat runs on, or is being created on; None for a chat this app does
+        not know, or whose account is gone.
+
+        Known as soon as a create starts, before mngr lists the agent, so a question about the
+        chat can go to its account while the create is still running.
+        """
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+        if provisional is not None:
+            return self._account_binding(chat_id, provisional.account_id)
+        agent_info = self.get_active_agent_info(chat_id)
+        if agent_info is None:
+            return None
+        account_id = agent_info.labels.get("account", "")
+        if not account_id:
+            # A chat from before accounts runs on the config dir its env file names.
+            return ChatAccountBinding(harness=agent_info.harness, account_dir=agent_info.claude_config_dir)
+        return self._account_binding(chat_id, account_id)
+
+    def _account_binding(self, chat_id: ChatId, account_id: str) -> ChatAccountBinding | None:
+        if not account_id:
+            return None
+        try:
+            account = resolve_account(account_id)
+        except AccountError as e:
+            _loguru_logger.debug("Could not resolve the account of chat {}: {}", chat_id, e)
+            return None
+        harness = harness_for(account)
+        return None if harness is None else ChatAccountBinding(harness=harness, account_dir=account_dir(account.id))
 
     def rename_placeholder_named_chat(self, chat_id: ChatId, display_name: str) -> bool:
         """Rename a chat that still wears a placeholder name, as ``rename_chat`` would; False, running nothing,
@@ -2639,6 +2727,10 @@ class AgentManager:
         """The provisional chats: minted here and not yet agents, in every phase."""
         with self._lock:
             return list(self._provisional_chats.values())
+
+    def get_provisional_chats_as_shown(self) -> list[ProvisionalChat]:
+        """``get_provisional_chats`` under the names they are shown by, for a client catching up."""
+        return [self._provisional_as_shown(provisional) for provisional in self.get_provisional_chats()]
 
     def get_provisional_chat(self, chat_id: str) -> ProvisionalChat | None:
         parsed = parse_chat_ref(chat_id)
@@ -2733,7 +2825,7 @@ class AgentManager:
                 is_seeded=True,
             )
             self._provisional_chats[chat_id] = provisional
-        self._broadcaster.broadcast_provisional_chat_created(provisional)
+        self._broadcast_provisional(provisional)
         self._auto_open.request_open(chat_id)
         return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
 
@@ -2756,7 +2848,7 @@ class AgentManager:
                 phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
             )
             self._provisional_chats[chat_id] = provisional
-        self._broadcaster.broadcast_provisional_chat_created(provisional)
+        self._broadcast_provisional(provisional)
         return provisional
 
     def get_fast_mode_state(self, chat_id: ChatId) -> ChatFastModeState:
@@ -3006,7 +3098,7 @@ class AgentManager:
             settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING] if is_installation_check_skipped else [],
         )
 
-        self._broadcaster.broadcast_provisional_chat_created(provisional)
+        self._broadcast_provisional(provisional)
 
         # Mirror the labels the created mngr agent will carry (see
         # ``_build_chat_create_command``), so the pre-observe AgentStateItem below

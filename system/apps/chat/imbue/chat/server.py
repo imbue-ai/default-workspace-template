@@ -633,12 +633,14 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
     message_id = send_message_request.message_id or uuid4().hex
+    # Alongside the delivery rather than after it, which can take seconds: the name should land
+    # while the agent is still answering.
+    _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
     accepted = _send_to_chat(
         state, ChatId(chat_id), send_message_request, message_id, is_refused_on_signed_out_account=True
     )
     if isinstance(accepted, Response):
         return accepted
-    _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.
     if accepted.held_phase is not None:
@@ -1514,11 +1516,9 @@ def _deliver_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeReq
     send_message_request = SendMessageRequest(
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
     )
-    accepted = _send_to_chat(state, chat_id, send_message_request, message_id, is_refused_on_signed_out_account=True)
-    if isinstance(accepted, Response):
-        return accepted
     _consider_naming_chat(state, chat_id, intake.message)
-    return None
+    accepted = _send_to_chat(state, chat_id, send_message_request, message_id, is_refused_on_signed_out_account=True)
+    return accepted if isinstance(accepted, Response) else None
 
 
 def _log_undelivered_intake_send(
@@ -1988,7 +1988,7 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
         # list. The list comes last on purpose -- it is how a page knows the replay is over,
         # so a record it still holds that this process did not replay (a create the previous
         # process was running) can be dropped rather than waited on forever.
-        for provisional in agent_manager.get_provisional_chats():
+        for provisional in agent_manager.get_provisional_chats_as_shown():
             websocket.send(json.dumps(provisional_chat_created_message(provisional)))
         websocket.send(json.dumps(chats_updated_message(agent_manager.get_chat_snapshots())))
         shutdown = False

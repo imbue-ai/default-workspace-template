@@ -297,12 +297,17 @@ over the model bar explains it.
 
 ## Chat names
 
-A new chat is minted as "Chat N". Its first message is then sent, in the
-background and outside the chat, to a small model on the account the chat runs
-on (`chat_naming.py`, through the harness's `OneShotCompletion`: `claude -p` on
-Haiku, from an empty directory, with no tools and no session kept), and the
-answer, in the form "Short name: brief description", renames the chat the way
-the rail's rename does. The name is set once and does not follow the chat as its
+A new chat is minted as "Chat N". Its first message is sent, in the background
+and outside the chat, to a small model on the account the chat runs on
+(`chat_naming.py`, through the harness's `OneShotCompletion`: `claude -p` on
+Haiku with thinking off, from an empty directory, with no tools and no session
+kept), and the answer, in the form "Short name: brief description", renames the
+chat the way the rail's rename does. The question goes out alongside the send,
+not after it: the account is known from the moment a create starts
+(`resolve_chat_account_binding`), so a chat still coming up is asked about too.
+The answer is shown in the chat list as soon as it arrives
+(`show_automatic_title`), ahead of the slower `mngr rename` that makes it the
+chat's own name; a rename that does not land takes the shown name back. The name is set once and does not follow the chat as its
 topic drifts. An opening with no clear subject ("hi") leaves "Chat N" and the
 next message is tried, up to three messages. Only a chat still wearing a name
 nobody chose is renamed: exactly "Chat N", or a seeded chat's seed title (the
