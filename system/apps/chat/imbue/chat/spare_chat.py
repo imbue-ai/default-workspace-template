@@ -75,7 +75,7 @@ class SpareChatAgent(FrozenModel):
 
 
 class SpareChatStore(MutableModel):
-    """The spares file: read once at build, written whole on every change."""
+    """The spares file: read by the live chat at build and by a secondary on every sweep, written whole on every change."""
 
     path: Path | None = Field(frozen=True, description="The spares file, or None for memory only (tests)")
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
