@@ -35,7 +35,9 @@ CHAT_APP_NAME = "chat"
 CHATS_PATH = "/api/chats"
 MESSAGE_CHAT_REL = Path("system") / "scripts" / "message_chat.py"
 # The staged copy of the flow the pass ran from, which it leaves in place.
-RESTART_AGENTS_COMMAND_REL = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
+STAGED_UPDATE_SELF_SCRIPT_REL = Path(
+    "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
+)
 
 # The flow's worker, which the pass stops itself once it has consumed the worker's report.
 UPDATE_WORKER_NAME = "update-self"
@@ -257,7 +259,7 @@ def compose_self_restart_note(
         lines.append(
             "Restarting the workspace's other chats did not run, so they may all still be on the "
             "previous version. Tell the user, and offer to restart the idle ones now (`python3 "
-            f"{RESTART_AGENTS_COMMAND_REL} restart-agents`); do not run it without a yes."
+            f"{STAGED_UPDATE_SELF_SCRIPT_REL} restart-agents`); do not run it without a yes."
         )
     else:
         not_restarted = [
