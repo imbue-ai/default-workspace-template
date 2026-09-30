@@ -119,8 +119,9 @@ def build_production_state(
 
     Everything the chat keeps about the user's things lands under ``config.chat_data_dir``, so a
     secondary chat pointed at a scratch copy never writes the live chat's data; the spare agents'
-    record is machine state, under ``config.chat_state_dir``, which a secondary only reads. A secondary also
-    opens no windows: the auto-open ledger and the shell it would drive belong to the live chat.
+    record is machine state, under ``config.chat_state_dir``, which a secondary only reads. A
+    secondary also opens no windows: the auto-open ledger and the shell it would drive belong to
+    the live chat.
     """
     broadcaster = WebSocketBroadcaster()
     data_dir = config.chat_data_dir
