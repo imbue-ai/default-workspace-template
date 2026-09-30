@@ -14,8 +14,7 @@ from typing import Any
 
 import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid
-
-from conftest import message_chat
+from script_modules_testing import message_chat
 
 _CHAT_ID = "agent-0123456789abcdef0123456789abcdef"
 

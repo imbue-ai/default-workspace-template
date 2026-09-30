@@ -81,7 +81,10 @@ message or `mngr start` does not relaunch a shed agent), then nudge it to
 continue with `create_worker.py reply --task-file <TASK_FILE> -m continue`. You
 do not need to resend the task: it survives in the worker's conversation
 history, and a SessionStart hook already tells the revived worker it was paused,
-so it re-checks state before continuing.
+so it re-checks state before continuing. Before reviving it, and whenever a
+worker's `question` gate reports that a test command was shed, free memory
+with the user per `.agents/shared/references/freeing-memory.md`: a revival or
+rerun into the same pressure is shed again.
 
 ## Diagnose worker liveness before invoking failure flow
 
@@ -240,7 +243,19 @@ or supersede the pass per `.agents/shared/references/harden-contention.md`.
 
 On `type: status`:
 
-- `name: done` -- merge the worker's branch:
+- `name: done` -- read its `Undeclared couplings:` and `Flaky tests:` lines
+  from its body, or, when that body is only "Committed on branch" or
+  "Verified on branch", from the worker's last `final-creation` gate (under
+  `<REPORTS_DIR>/consumed/`), which carries them instead. If it lists
+  `Undeclared couplings:`, they are built-in defects (a built-in suite
+  observes a path nothing declares, so the test selector missed it): add them
+  to the pass's single report per
+  `.agents/shared/references/report-built-in-issues.md`. If it lists
+  `Flaky tests:`, the worker left them unfixed: a test of a built-in suite is
+  a built-in defect and goes in that same report; a test of a creation the
+  workspace built goes in a regular ticket (`tk create`), so it is fixed later
+  rather than lost with the report.
+  Then merge the worker's branch:
   ```bash
   git merge --no-ff <WORKER_BRANCH>
   ```

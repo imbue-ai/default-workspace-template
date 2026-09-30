@@ -18,7 +18,6 @@ import asyncio
 import contextlib
 import http.server
 import json
-import os
 import socket
 import threading
 import time
@@ -40,17 +39,6 @@ from browser.xinput import InputRouter
 from playwright.async_api import Error as PlaywrightError
 from Xlib import X
 from Xlib.display import Display
-
-# Real Chromium launches but its CDP connection never completes on the GitHub Actions
-# runner -- the launch hangs (manifesting as a pytest-timeout + a NoneType CDP-session
-# error), even though `playwright install` put the binary there and even with the sandbox
-# off. It is not a product issue: the fleet runs fine on real workspaces (docker / Lima /
-# cloud, all verified). So skip the real-Chromium tests in GH CI; they still run locally
-# and on offload, where a real browser actually comes up.
-_SKIP_REAL_CHROMIUM_IN_GH_CI = pytest.mark.skipif(
-    os.environ.get("GITHUB_ACTIONS") == "true",
-    reason="real Chromium can't start under the GitHub Actions runner; runs locally / on offload",
-)
 
 
 def _require_running(browser: "bsession.LiveBrowser") -> None:
@@ -313,9 +301,22 @@ def test_startup_opens_gate_even_if_restore_fails(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(bsession.BrowserSessionManager, "restore", boom)
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    # The real starters would leave the shared manager's checkpoint and window-sweep loops
+    # running on the session-wide bridge loop through every later test, sweeping against
+    # the live shell's windows.
+    started: list[str] = []
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager, "start_checkpointing", lambda _self: started.append("checkpointing")
+    )
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager,
+        "start_window_sweeping",
+        lambda _self, *_args: started.append("window sweeping"),
+    )
     runner._init_done.clear()
     runner.bridge.run(runner._startup())  # the loop runs the same startup coroutine
     assert runner._init_done.is_set()
+    assert started == ["checkpointing", "window sweeping"]
 
 
 def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -340,7 +341,7 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
 # Persistence, the core promise, against real Chromium.
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(120)
 def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
     # The whole handover in one pass against a real browser: Chromium launches without
@@ -373,7 +374,7 @@ def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest
     asyncio.run(go())
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(120)
 def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
     # The lifecycle hole this design had to close: crash detection must NOT depend on an
@@ -394,7 +395,7 @@ def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
     asyncio.run(go())
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(120)
 def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch) -> None:
     # The whole point of persistence: a cookie set in one daemon "session" is still
@@ -650,7 +651,7 @@ def _held_keycodes(display: str) -> list[int]:
         disp.close()
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(120)
 def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> None:
     # A window.open with a features string asks for a popup, which would be a second
@@ -690,7 +691,7 @@ def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> Non
             asyncio.run(go())
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(120)
 def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
     # Playwright auto-attaches with waitForDebuggerOnStart, so Chromium holds every new tab
@@ -723,7 +724,7 @@ def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkey
         asyncio.run(go())
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(180)
 def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
     # Paste-in presses Ctrl+V in the shown tab over CDP after setting the X clipboard. The

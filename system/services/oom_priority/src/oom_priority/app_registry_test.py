@@ -35,3 +35,15 @@ def test_registry_path_honours_the_environment_override(monkeypatch: pytest.Monk
 
     monkeypatch.setenv(app_registry.ENV_APPS_FILE, "/elsewhere/apps.toml")
     assert app_registry.registry_path() == Path("/elsewhere/apps.toml")
+
+
+def test_read_app_url_finds_the_named_rows_url(tmp_path: Path) -> None:
+    registry = tmp_path / "apps.toml"
+    registry.write_text(
+        '[[apps]]\nname = "files"\nurl = "http://localhost:8300"\n'
+        '[[apps]]\nname = "browser"\nurl = "http://localhost:8081/"\nprogram = "browser"\n'
+    )
+
+    assert app_registry.read_app_url(registry, "browser") == "http://localhost:8081"
+    assert app_registry.read_app_url(registry, "news") is None
+    assert app_registry.read_app_url(tmp_path / "missing.toml", "browser") is None

@@ -80,8 +80,7 @@ supervisord program blocks that run it, in the files that declare them),
 drives it, a script, a doc), `context` (paths to read but never change),
 `conventions`, `exclude` (a hard denylist of globs), and `diff` (the branch's
 changed files, split into those inside the footprint and `outside_footprint`).
-Two consumers read it: the test selection in `type-app.md`, and the freshness
-check the lead runs before merging
+The freshness check the lead runs before merging reads it
 (`.agents/shared/references/harden-contention.md`). Regenerate it whenever the
 footprint moves under you -- when you register a `[[references]]` entry, or
 when you add a supervisord section -- and once more immediately before your
@@ -118,12 +117,12 @@ lead, merge exactly one level with `--no-ff`, destroy a merged sibling and stop
 a stuck one, and await it with `--timeout 60m`.
 
 - Each sibling's task file carries the same `operation` and `type` as yours plus
-  its boundary in prose; when your run carries a scope file, give the sibling its
-  own `scope_file` path beside its task file and your `diff_base`, since Step 1
-  fails loudly without them. Say in the body that it runs only its scope's tests and
-  **skips the "Review gates" section below**, because you run that verification
-  once on the merged result, and that a small out-of-scope edit is allowed but
-  must be listed in its `done` report.
+  its boundary in prose, and your `diff_base`; when your run carries a scope
+  file, also give the sibling its own `scope_file` path beside its task file,
+  since Step 1 fails loudly without them. Say in the body that it runs only its
+  scope's tests and **skips the "Review gates" section below**, because you run
+  that verification once on the merged result, and that a small out-of-scope
+  edit is allowed but must be listed in its `done` report.
 - When a sibling's `question` decides a shared interface, use your judgement per
   case; the default is to message the affected sibling with the decision
   immediately (`mngr message`) rather than let it find out at merge time.
@@ -244,45 +243,105 @@ evicts is not hardened, no matter how well-tested its happy path is.
 ## Review gates
 
 1. Ensure all in-flight changes have settled and are committed
-2. Run the scoped test set below and fix what it flags with narrowly targeted
+2. Run the test gate below and fix what it flags with narrowly targeted
    changes
 
-### The scoped test set
+### The test gate
 
-Three parts, in order, **each its own `pytest` invocation** -- passing two of
-these path sets to one command makes `conftest` resolve to whichever it reaches
-first and dies during collection. A bare `uv run pytest` from the repo root is
-not one of them: it collects the whole monorepo -- on this workspace about 2,500
-tests and several minutes -- to check a change that usually touches a handful of
-files.
+The gate is whatever the change can reach, and a command prints it. From the
+repo root, after committing everything (the selector reads commits, like the
+scope file, and refuses to run while the working tree holds an uncommitted or
+untracked change, naming it):
 
-1. **The creation's own suite**, as your `type-<TYPE>.md` defines it.
+```bash
+uv run app-manifest select-tests --diff-base "$DIFF_BASE"
+```
 
-2. **The repo guards** -- the cross-cutting checks no creation owns: manifest
-   and registry consistency, template stacking, hook wiring, the meta-ratchets.
-   Run them whatever you touched:
+It prints shell lines, each under a comment naming the changed paths behind
+it. Run every line, in order, each as its own command: they include the
+frontend build the browser tests need, and passing two pytest roots to one
+invocation breaks collection. What it selects, and why, is in
+`system/libs/app_manifest/README.md` ("Selecting tests"): the repo guards, the
+changed packages' and skills' own suites with their ratchets, the suites of
+whatever declares a dependency on them, the browser tests too of an app whose
+Python changed, only the `browser` and `frontend` tests of the chat app or the
+shell when its frontend alone changed (any other app runs whole), each changed
+test file of those two on its own, and the frontend checks. A changed path outside every package and skill, or in a
+package the root project depends on, brings in the full root suite; that is
+the gate working, not a gap. Do not drop any line of it.
 
-   ```bash
-   uv run pytest system/*.py system/scripts
-   ```
+**A failing test.** Rerun only the tests that failed (their node ids, from the
+same directory the line ran in) before anything else. Add `--no-cov` when the
+line's run reported coverage (the chat app's, the shell's and Getting
+Started's do): a run of only some tests fails the coverage floor. In the chat
+app's or the shell's suite add `-m ''` too, or a browser test named in it is
+deselected (AGENTS.md). A test that passes on that rerun without any change of
+yours is flaky, not broken: name it on your report's `Flaky tests:` line
+(your lead reports or tickets it) and move on, without rerunning its suite.
+Check the shed ledger for its run first (below): a failure the ledger shows
+was shed is a shed, handled as one, not a flaky test. Other than a shed
+command's rerun, a suite runs whole again only after you commit a fix, and
+then as whatever the fix reaches:
+`select-tests --diff-base <the commit before the fix>`.
 
-   A few hundred tests, well under a minute. This is what catches a change that
-   breaks a contract the rest of the tree depends on, which part 1 by
-   construction cannot see.
+**A suite the selector left out.** The selector reads only declarations:
+`pyproject.toml` and `package.json` dependencies, `uv.lock`, the programs in
+supervisord blocks, and app manifests' `[[references]]`. A coupling none of
+those shows is invisible to it. When you have a concrete reason to think a
+suite it left out can observe your change (it runs your script as a
+subprocess, calls your service over HTTP, reads a file your change writes),
+run that suite too. When that suite is an app the workspace built and the path
+lies outside the app, declare the coupling as part of your change: add the
+path to the app's `app.toml` as a `[[references]]` entry, so the next change
+to it selects the app without anyone having to notice. When the suite is
+built-in, leave its declarations alone: a local edit to a built-in file only
+makes divergence for the next update, and a reference would widen a built-in
+app's footprint into other units' files. Such a coupling is a built-in defect
+(AGENTS.md, "Updates"): name the suite and the path it observes in your `done`
+report under `Undeclared couplings:`, and your lead includes it in its report
+of built-in issues for the pass.
 
-3. **The full suite, only when the change left the footprint.** Regenerate the
-   scope file, then read `diff.outside_footprint`. Empty means parts 1 and 2
-   cover the change. Non-empty means it reached code outside the creation, and
-   whatever depends on that code is in neither set:
+**A regression the gate let through.** When your task fixes something an
+earlier change broke, and a test catches the break (one that already existed,
+or the one you add), check whether the selector picks that test for the
+earlier change:
 
-   ```bash
-   jq -e '.diff.outside_footprint | length == 0' "$SCOPE_FILE" >/dev/null \
-       || echo "changed files outside the footprint -- run the full suite"
-   ```
+```bash
+uv run app-manifest select-tests --diff-base <breaking commit>^ --diff-ref <breaking commit>
+```
 
-A run that carries no scope file -- a pre-manifest app, a standalone service,
-the system interface, per "The scope file" above -- cannot make that check, so
-it runs parts 1 and 2 and then the full suite once.
+If the test's suite is not among the lines, declare the coupling that would
+have selected it, the same way.
+
+**A command that dies from a signal.** Exit status 137 or 143, or `Killed`
+with no failure output, is not a test failure until the shed ledger says it is
+not a shed. Note the time before each command (`date -u
++%Y-%m-%dT%H:%M:%S`), and on a signal death look for sheds since then, with
+the time you noted written into the lookup (a shell variable does not survive
+from one command to the next):
+
+```bash
+STARTED_AT=2026-09-24T11:00:00  # the time you noted before the command
+jq -c --arg since "$STARTED_AT" \
+    'select(.type == "process_shed" and .timestamp >= $since)' \
+    /home/user/workspace/data/.state/oom_priority/events/shed.jsonl
+```
+
+A record whose `pid` or `comm` is the command or one of its children (pytest,
+an xdist worker, node, a browser) means the command was shed for memory
+pressure: that is a shed, never a failure to fix in the code. A shed child can
+also surface as ordinary test errors (a browser that vanished mid-test), so
+run the same check when failures look unrelated to your change. Then judge
+whether a rerun would be shed again, from the ledger (are shed records still
+arriving, for processes other than yours?) and from `/proc/meminfo` (is
+`MemAvailable` recovering since the shed, or still falling?). If things are
+settling, rerun the shed command. If they are not, or the rerun is shed too,
+ask your lead with a `question` gate (`worker-reporting.md`) naming the
+command, the ledger records, and the free memory you saw; your lead frees
+memory with the user, and answers when you can rerun.
+
+Memory pressure is never a reason to skip a command of the gate, or to report
+`done` without it.
 
 If your own task file says your lead runs this verification on the merged
 result -- the scoped-sibling case above -- run your own scope's tests and skip
