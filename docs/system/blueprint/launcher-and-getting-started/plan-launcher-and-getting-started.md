@@ -394,5 +394,5 @@ Each step leaves the tree green; the whole is one pull request per repository.
 - Ordering apps by recent use; the shell has no activity data.
 - ~~The idempotency key for launch paths on linked windows (issue #646)~~: resolved by the post-launch-paths plan, which made every launch path that creates something a POST.
 - A first-visit window on later desktops, for later clients, or a per-user first visit; a manifest-declared first window the shell would seed itself.
-- Hover-revealed row actions (add to desktop, open in a new window); "Add to desktop" leaves with the tiles and returns when a row menu is designed.
+- Hover-revealed row actions (add to desktop, open in a new window); "Add to desktop" is offered from the right-click menu of the row of an app's desktop shortcut instead (section 4.2).
 - The chat shortcut opening a second chat list while a pinned one exists.
