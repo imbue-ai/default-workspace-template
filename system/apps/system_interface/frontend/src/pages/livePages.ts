@@ -254,7 +254,9 @@ export class LivePagesLayer implements PageDriver {
     const shownIds = new Set<string>();
     placements.forEach((placement, index) => {
       const found = windowsById.get(placement.window_id);
-      if (found === undefined || desktop === null || placement.is_minimized) return;
+      if (found === undefined || desktop === null) return;
+      // A minimized window has no chrome to lie under: its page is hidden until it is restored.
+      if (placement.is_minimized) return;
       // A pulled-out window's page is shown in the chrome's own desktop window; one being pulled out right now
       // is already drawn there under the cursor.
       if (placement.is_detached || placement.window_id === this.tornOutWindowId) return;

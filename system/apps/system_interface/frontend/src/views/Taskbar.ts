@@ -1,7 +1,7 @@
 /**
  * The taskbar (plan section 4.10), left to right: the launcher field, one entry per window of
  * the active desktop in opening order, the system tray. Always visible in V1; in compact mode
- * it takes the compact height and shows icons only.
+ * it takes the compact height.
  */
 
 import m from "mithril";
@@ -15,7 +15,6 @@ import { TaskbarEntry } from "./TaskbarEntry";
 export interface TaskbarAttrs {
   readonly entries: readonly TaskbarEntryRecord[];
   readonly avatar: AvatarState;
-  readonly isCompact: boolean;
   readonly openEntryMenuWindowId: string | null;
   readonly launcher: LauncherFieldAttrs;
   readonly tray: SystemTrayAttrs;
@@ -30,24 +29,34 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
       "div",
       {
         "data-taskbar": "",
-        class:
-          "taskbar relative flex h-(--desk-taskbar-height) shrink-0 items-center gap-2 border-t border-default " +
-          "bg-(--desk-taskbar-surface) px-2 backdrop-blur-(--desk-taskbar-blur)",
+        // No line along the top and no blur behind it: the surface alone.
+        class: "taskbar relative h-(--desk-taskbar-height) shrink-0 bg-(--desk-taskbar-surface)",
       },
-      [
+      // One element around everything in the bar, holding the row and nothing else -- no colour, no
+      // border, no corner. It is the handle for dressing the bar's contents: give this a background,
+      // a radius, an inset, and the bar's box stays where the geometry expects it.
+      m("div", { "data-taskbar-content": "", class: "taskbar-content flex h-full items-center gap-2 px-2" }, [
         m(LauncherField, attrs.launcher),
         m(
           "div",
           {
             "data-taskbar-entries": "",
-            class: "taskbar-entries flex min-w-0 flex-1 items-center gap-1 overflow-x-auto",
+            // Wider than the chrome's usual gap: every entry carries a full-bleed icon tile of
+            // its own colour, and at 4px two bright ones beside each other read as one block.
+            //
+            // The padding is the room the icons' casts are drawn into. ``overflow-x`` makes this a
+            // scroll container, which the CSS spec then clips on BOTH axes (there is no scrolling
+            // on one axis and overflow on the other), so without that room every cast is cut off
+            // square at the strip's edge. The vertical room is the bar's own; the horizontal is
+            // borrowed back with a negative margin, so the first entry keeps its distance from the
+            // field beside it.
+            class: "taskbar-entries -mx-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-1 py-1.5",
           },
           attrs.entries.map((entry) =>
             m(TaskbarEntry, {
               key: entry.window.id,
               entry,
               avatar: attrs.avatar,
-              isCompact: attrs.isCompact,
               isMenuOpen: attrs.openEntryMenuWindowId === entry.window.id,
               onClick: () => attrs.onEntryClick(entry.window.id),
               onContextMenu: (x, y, target) => attrs.onEntryContextMenu(entry.window.id, x, y, target),
@@ -55,7 +64,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
           ),
         ),
         m(SystemTray, attrs.tray),
-      ],
+      ]),
     );
   },
 };

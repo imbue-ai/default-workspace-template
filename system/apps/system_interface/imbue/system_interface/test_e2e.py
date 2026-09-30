@@ -114,6 +114,8 @@ _CELL_WIDTH = 96
 _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
+# --desk-touch-target under [data-touch], which a taskbar entry takes there.
+_TOUCH_TARGET = 44
 _GEOMETRY_TOLERANCE_PX = 4
 
 
@@ -1376,8 +1378,7 @@ def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tm
 
         page.mouse.up()
         wait_for(
-            lambda: _shortcut_cells(server.base_url)
-            == {_STUB_SHORTCUT_KEY: (1, 2), _SECOND_SHORTCUT_KEY: (2, 2)},
+            lambda: _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (1, 2), _SECOND_SHORTCUT_KEY: (2, 2)},
             timeout=15.0,
             poll_interval=0.1,
             error_message="the drop did not keep the room that was made for it",
@@ -1927,11 +1928,14 @@ _MOBILE_CONTEXT_ARGS: dict[str, Any] = {
 
 
 @pytest.mark.timeout(90, func_only=False)
-def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server: E2EServer, page: Page) -> None:
+def test_phone_shows_every_window_maximized_with_finger_sized_taskbar_entries(
+    e2e_server: E2EServer, page: Page
+) -> None:
     """On a phone the shell is compact and touch: a tap on the shortcut opens the window, every window fills the
-    backdrop with no resize edges or maximize controls, the taskbar shows icons only, the launcher field is a
-    button that opens the overlay, and the stored placement is the client's own (still a normal frame, since
-    compactness is how this client renders, not what it saves)."""
+    backdrop with no resize edges or maximize controls, the taskbar's entries grow to the finger's touch target
+    (this is the client where an entry has to be reachable by thumb), the launcher field is a button that opens
+    the overlay, and the stored placement is the client's own (still a normal frame, since compactness is how
+    this client renders, not what it saves)."""
     with _second_client(page, e2e_server, **_MOBILE_CONTEXT_ARGS) as phone_page:
         expect(phone_page.locator("html")).to_have_attribute("data-compact", "")
         expect(phone_page.locator("html")).to_have_attribute("data-touch", "")
@@ -1945,7 +1949,13 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         backdrop = _box(phone_page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
         _assert_same_box(_box(window), backdrop, "phone window")
         expect(_taskbar_entry(phone_page, window_id)).to_be_visible()
-        expect(phone_page.locator(".taskbar-entry-title")).to_have_count(0)
+        # As tall as the finger's target, with the window's name on it: --desk-taskbar-entry-size takes
+        # --desk-touch-target here, and the chip is the whole of the target rather than a tile inside one.
+        entry_box = _box(_taskbar_entry(phone_page, window_id))
+        assert entry_box["height"] >= _TOUCH_TARGET - 1, entry_box
+        expect(_taskbar_entry(phone_page, window_id).locator(".taskbar-entry-title")).to_have_text(
+            f"Stub {_STUB_LAUNCH_PATH}"
+        )
         assert _placements(e2e_server.base_url, _client_id(phone_page))[window_id]["state"] == "NORMAL"
         frame = _page_frame(phone_page, window_id)
         assert frame.url == f"{e2e_server.stub_url}{_STUB_LAUNCH_PATH}"
