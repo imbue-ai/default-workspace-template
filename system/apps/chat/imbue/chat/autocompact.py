@@ -131,16 +131,19 @@ class ChatAutoCompactor:
             logger.warning("Failed to run autocompact for {}: {}", described_agents, e)
             return None
 
-        if result.returncode == 1:
-            # mngr's own errors (a target that is not running, say) exit 1.
-            logger.debug("Failed to run autocompact for {}: {}", described_agents, result.stderr)
-        elif result.returncode != 0:
-            logger.warning(
-                "Failed to run autocompact for {}: return code {}, stderr: {}",
-                described_agents,
-                result.returncode,
-                result.stderr,
-            )
+        match result.returncode:
+            case 0:
+                pass
+            case 1:
+                # mngr's own errors (a target that is not running, say) exit 1.
+                logger.debug("Failed to run autocompact for {}: {}", described_agents, result.stderr)
+            case _:
+                logger.warning(
+                    "Failed to run autocompact for {}: return code {}, stderr: {}",
+                    described_agents,
+                    result.returncode,
+                    result.stderr,
+                )
         return result
 
     def _is_autocompact_enabled(self) -> bool:
