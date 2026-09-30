@@ -224,7 +224,7 @@ def _start_new_chat(page: Page, server: RunningWorkspace) -> FrameLocator:
     """Run the chat app's ``new`` launch path from the launcher's menu (its primary free-text row, run with nothing
     typed): the shell posts the intake and points the window at the chat it answers; return that chat's frame."""
     _land(page, server)
-    page.locator("[data-launcher-field] textarea").click()
+    page.locator("[data-launcher-start]").click()
     menu = page.locator("[data-launcher-overlay]")
     expect(menu).to_be_visible(timeout=10000)
     menu.locator(f'[data-launch="{CHAT_APP_NAME}:new"]').click()
