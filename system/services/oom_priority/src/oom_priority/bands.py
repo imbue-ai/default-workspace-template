@@ -51,7 +51,7 @@ AGENT_SUBPROCESS: Final[int] = 900
 # A spare chat agent: started ahead of the next new chat (the chat app's ``spare_chat.py``) and
 # used by no one yet. At the ceiling, beside the browser's renderers (``SHARED_BROWSER``) and
 # above every agent's subprocesses: shedding it loses no work, and the chat app starts another
-# once memory allows.
+# after its retry backoff.
 # The chat app tags it; once a chat takes it, the chat prioritizer moves it into the chat band.
 SPARE_AGENT: Final[int] = 1000
 
