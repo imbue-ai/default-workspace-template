@@ -11,10 +11,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from script_modules_testing import load_script_module
 
-from conftest import _load_script_module
-
-checker = _load_script_module(
+checker = load_script_module(
     "agent_secrets_guard_check_for_tests", "agent_secrets_guard_check.py"
 )
 

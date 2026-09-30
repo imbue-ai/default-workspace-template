@@ -16,7 +16,8 @@ has been reused or is simply gone) are pruned best-effort by writers.
 
 One agent can register more than one pid: codex runs both a visible ``--remote`` TUI
 and an ``app-server`` daemon from the same launch command, so both are recorded under
-its id. ``lookup_pid_by_agent_id`` returns the first live match.
+its id. ``lookup_pid_by_agent_id`` returns the first live match;
+``live_pids_by_agent_id`` returns them all.
 
 Stdlib-only (see ``paths``): imported by the launch wrapper and the kill hook
 under a plain ``python3``.
@@ -78,19 +79,17 @@ def lookup_agent(pid: int) -> dict | None:
     return data
 
 
-def lookup_pid_by_agent_id(agent_id: str, is_alive: Callable[[int], bool] = is_process_alive) -> int | None:
-    """Return the live main-process pid recorded for ``agent_id``, or None.
+def live_pids_by_agent_id(is_alive: Callable[[int], bool] = is_process_alive) -> dict[str, list[int]]:
+    """Every live registered pid, grouped by the ``agent_id`` recorded with it.
 
-    Scans the registry for an entry whose ``agent_id`` matches and whose pid is
-    still a running process, so a consumer holding only the id (the OOM
-    prioritizer) can re-tag that agent's ``oom_score_adj``. Returns None when no
-    live entry matches -- e.g. a dormant chat with no running process, an id
-    recorded before ``agent_id`` was captured, or a stale entry whose pid has
-    exited. ``is_alive`` is injectable for testing without a real process tree.
+    An agent can hold more than one (codex's TUI and its app-server daemon). Entries
+    recorded without an ``agent_id``, unreadable ones, and ones whose pid has exited
+    are left out. ``is_alive`` is injectable for testing without a real process tree.
     """
     directory = agent_pids_dir()
     if not directory.is_dir():
-        return None
+        return {}
+    pids_by_agent_id: dict[str, list[int]] = {}
     for entry in directory.iterdir():
         if entry.suffix != ".json" or not entry.stem.isdigit():
             continue
@@ -98,12 +97,25 @@ def lookup_pid_by_agent_id(agent_id: str, is_alive: Callable[[int], bool] = is_p
             data = json.loads(entry.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        if not isinstance(data, dict) or data.get("agent_id") != agent_id:
+        if not isinstance(data, dict):
             continue
+        agent_id = data.get("agent_id")
         pid = int(entry.stem)
-        if is_alive(pid):
-            return pid
-    return None
+        if isinstance(agent_id, str) and agent_id and is_alive(pid):
+            pids_by_agent_id.setdefault(agent_id, []).append(pid)
+    return pids_by_agent_id
+
+
+def lookup_pid_by_agent_id(agent_id: str, is_alive: Callable[[int], bool] = is_process_alive) -> int | None:
+    """Return the live main-process pid recorded for ``agent_id``, or None.
+
+    So a consumer holding only the id (the OOM prioritizer) can re-tag that
+    agent's ``oom_score_adj``. Returns None when no live entry matches -- e.g. a
+    dormant chat with no running process, an id recorded before ``agent_id`` was
+    captured, or a stale entry whose pid has exited.
+    """
+    pids = live_pids_by_agent_id(is_alive).get(agent_id)
+    return pids[0] if pids else None
 
 
 def prune_dead_pids(is_alive: Callable[[int], bool] = is_process_alive) -> None:
