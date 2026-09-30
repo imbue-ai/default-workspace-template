@@ -113,7 +113,7 @@ A shortcut is `{target, mode, cell}` where `target` is `{kind: "launch", app, la
 A desktop holds at most one shortcut per `(app, launch)`.
 
 Every registered, non-internal app has at most one default shortcut, and never of a launch path that takes typed or drafted text (one declaring a `text_param` or `draft_param`): its manifest's `default_shortcut` when it declares one (none when that names a launch path the app does not offer, or one that takes text); otherwise, when its row names a `program`, its first launch path that takes no text, in `focus` mode.
-A row naming no program and declaring no `default_shortcut` has none: it is a preview frame or an isolated test server rather than an app a supervisord program runs, while an app built from a manifest names one, and so does an app registered before manifests existed.
+A row naming no program and declaring no `default_shortcut` has none: such a row is a preview frame, an isolated test server, or an app registered before manifests without `forward_port.py --program`, while an app built from a manifest names one, and so does an app registered before manifests with `--program`.
 A new desktop is seeded from every app's default shortcut, in launcher order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
 An app that registers after a desktop was made is added to it as 3.2 says.
 The grid is `columns = max(1, floor((width - inset) / cell_width))` by `rows = max(1, floor((height - inset) / cell_height))` over the backdrop, with the cell size and inset from the theme (contracts.md section 10).
