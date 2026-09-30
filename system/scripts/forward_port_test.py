@@ -901,6 +901,11 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_p
             id="message-handler-showing-not-an-array",
         ),
         pytest.param(
+            '[[message_handlers]]\ntype = "open:file"\npath = "/api/open"\nshowing = ["{path}/"]\n',
+            "a message handler gives 'showing' only beside 'show'",
+            id="message-handler-showing-beside-a-path",
+        ),
+        pytest.param(
             '[pin]\nstyle = "avatar"\n',
             "pin must be a table with a string 'path'",
             id="pin-without-a-path",

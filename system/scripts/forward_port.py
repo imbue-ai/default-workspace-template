@@ -732,10 +732,12 @@ def _copied_message_handler(
             None,
             f"manifest {str(path)!r}: every message handler needs exactly one of a string 'path' or 'show'",
         )
+    showing = handler.get("showing")
     if is_path_given:
+        if showing is not None:
+            return None, f"manifest {str(path)!r}: a message handler gives 'showing' only beside 'show'"
         return {"type": handler["type"], "path": handler["path"]}, None
     copied: dict[str, object] = {"type": handler["type"], "show": handler["show"]}
-    showing = handler.get("showing")
     if showing is not None:
         if not (isinstance(showing, list) and all(isinstance(page, str) for page in showing)):
             return None, f"manifest {str(path)!r}: a message handler's showing must be an array of strings"
