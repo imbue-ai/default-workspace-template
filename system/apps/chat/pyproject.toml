@@ -43,6 +43,9 @@ dev = [
     "mngr-cli-contract",
     # Keeps tmp_path somewhere a stub executable can run (a workspace container mounts /tmp noexec).
     "pytest-executable-tmp",
+    # Fails a test that skips where the environment is meant to be complete
+    # (the CI job that runs the suites inside the workspace image).
+    "pytest-workspace-env",
     # The shell, for the two-process fixture the e2e suite and the system tests boot (the
     # chat is framed by the shell, so a chat page can only be driven through it).
     "system-interface",
@@ -145,3 +148,12 @@ known-first-party = [
 
 [tool.coverage.report]
 fail_under = 75
+
+[tool.coverage.paths]
+# Coverage data measured inside the workspace image on Modal (the
+# test-offload CI job) records the sandbox's paths; map them back so
+# the runner can combine the batches and enforce the floor above.
+source = [
+    ".",
+    "/home/user/workspace/system/apps/chat/",
+]

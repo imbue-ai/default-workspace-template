@@ -74,6 +74,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # The Python suites run here only where the test-offload job below
+      # cannot: a repo without the TEST_IN_WORKSPACE_IMAGE variable (a workspace
+      # repo made from the template) or a fork PR (no Vault, so no Modal token).
+      # Everywhere else that job runs them inside the workspace image instead,
+      # and this job keeps the lockfile, pin and frontend checks.
+      - name: Decide where the Python suites run
+        id: python_suites
+        env:
+          IN_WORKSPACE_IMAGE: ${{ vars.TEST_IN_WORKSPACE_IMAGE }}
+          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          if [ "$IN_WORKSPACE_IMAGE" = "true" ] && [ "$IS_FORK_PR" != "true" ]; then
+            echo "on_runner=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "on_runner=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -112,6 +129,7 @@ jobs:
         run: uv sync --all-packages
 
       - name: Install Playwright browsers
+        if: steps.python_suites.outputs.on_runner == 'true'
         run: uv run playwright install --with-deps chromium
 
       # workspace_ui has no build script, so its typecheck runs on its own here;
@@ -131,6 +149,7 @@ jobs:
       # without this a pytest root that fails to load pytest-executable-tmp would pass
       # here and break there. uv and the runner keep their state under $RUNNER_TEMP.
       - name: Mount /tmp noexec, as a workspace container has it
+        if: steps.python_suites.outputs.on_runner == 'true'
         run: |
           sudo mount -t tmpfs -o noexec,nosuid,nodev,mode=1777 tmpfs /tmp
           printf '#!/bin/sh\nexit 0\n' > /tmp/exec-probe
@@ -142,14 +161,178 @@ jobs:
           rm /tmp/exec-probe
 
       - name: Run root tests
+        if: steps.python_suites.outputs.on_runner == 'true'
         run: uv run pytest
 
       # -m '' replaces the pyproject's default `-m "not browser and not real_claude"`, so
       # CI also runs the browser and real-claude tests a plain `uv run pytest` skips.
       - name: Run system/apps/system_interface tests
+        if: steps.python_suites.outputs.on_runner == 'true'
         working-directory: system/apps/system_interface
         run: uv run pytest -m ''
 
       - name: Run system/apps/chat tests
+        if: steps.python_suites.outputs.on_runner == 'true'
         working-directory: system/apps/chat
         run: uv run pytest -m ''
+
+  # The three pytest roots inside the workspace image on Modal, through offload
+  # (offload-modal*.toml at the repo root). The bare runner above has none of
+  # what a workspace has (Fortress, Xvfb, claude, mngr, tmux, jq, restic, ...),
+  # so the tests that need them skip there; here they run, and any test that
+  # skips fails the job (pytest-workspace-env).
+  #
+  # Opt-in through the TEST_IN_WORKSPACE_IMAGE repository variable, like
+  # check-changelog: workspace repos made from the template inherit this
+  # workflow but hold no Modal token. Fork PRs cannot reach Vault, so they are
+  # skipped too (the test job runs the suites on the runner for both).
+  test-offload:
+    runs-on: ubuntu-latest
+    if: >-
+      vars.TEST_IN_WORKSPACE_IMAGE == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    timeout-minutes: 90
+    permissions:
+      # offload pushes its image-cache notes (refs/notes/offload-images).
+      contents: write
+      id-token: write
+    env:
+      # The runner's offload and the one built into the image (OFFLOAD_VERSION in
+      # system/scripts/offload_sandbox_init.sh) talk to each other, so they stay
+      # in lockstep; system/test_offload_configs.py checks that.
+      OFFLOAD_VERSION: "0.9.14"
+    steps:
+      - name: Fetch the Modal token from Vault
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: dwt_ci_gh
+          secrets: |
+            mngr/ci/MODAL_TOKEN_ID
+            mngr/ci/MODAL_TOKEN_SECRET
+
+      - uses: actions/checkout@v6
+
+      # offload picks the checkpoint commit as the nearest ancestor touching a
+      # build input, so it needs the branch's history.
+      - name: Deepen current-branch history for offload
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --no-tags --unshallow origin "$(git rev-parse HEAD)"
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Refuse a private mngr pin (this CI has no credential for it, by design)
+        run: python3 system/scripts/set_mngr_pin.py --require-public
+
+      # Test discovery runs on the runner (`pytest --collect-only` per root);
+      # execution happens in the image.
+      - name: Install Python dependencies
+        run: uv sync --all-packages
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the offload binary
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/offload
+          key: cargo-offload-${{ env.OFFLOAD_VERSION }}-${{ runner.os }}
+
+      - name: Install offload
+        run: |
+          if ! command -v offload &> /dev/null || ! offload --version | grep -q "$OFFLOAD_VERSION"; then
+            cargo install "offload@$OFFLOAD_VERSION" --force
+          fi
+
+      - name: Restore offload test durations from previous run
+        uses: actions/cache/restore@v5
+        with:
+          path: test-results/*/junit.xml
+          key: offload-durations-${{ github.ref }}-${{ github.run_id }}
+          restore-keys: offload-durations-${{ github.ref }}-
+
+      - name: Fetch offload image-cache git notes
+        run: git fetch origin 'refs/notes/*:refs/notes/*' || true
+
+      - name: Configure git identity for image-cache note writes
+        run: |
+          git config user.email "dev@imbue.com"
+          git config user.name "imbue-dev"
+
+      # Every suite runs even after an earlier one fails, so one run reports
+      # them all; the outcomes are collected below. offload exits 2 when only
+      # flaky-marked tests failed; that is a pass.
+      - name: Run the root tests via offload
+        id: root_suite
+        continue-on-error: true
+        run: offload -c offload-modal.toml run --trace || [ $? -eq 2 ]
+
+      - name: Run the system/apps/chat tests via offload
+        id: chat_suite
+        continue-on-error: true
+        run: offload -c offload-modal-chat.toml run --trace || [ $? -eq 2 ]
+
+      - name: Run the system/apps/system_interface tests via offload
+        id: system_interface_suite
+        continue-on-error: true
+        run: offload -c offload-modal-system-interface.toml run --trace || [ $? -eq 2 ]
+
+      - name: Fail if any suite failed
+        env:
+          ROOT: ${{ steps.root_suite.outcome }}
+          CHAT: ${{ steps.chat_suite.outcome }}
+          SYSTEM_INTERFACE: ${{ steps.system_interface_suite.outcome }}
+        run: |
+          echo "root: $ROOT, chat: $CHAT, system_interface: $SYSTEM_INTERFACE"
+          [ "$ROOT" = "success" ] && [ "$CHAT" = "success" ] && [ "$SYSTEM_INTERFACE" = "success" ]
+
+      - name: Save offload test durations for next run
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: test-results/*/junit.xml
+          key: offload-durations-${{ github.ref }}-${{ github.run_id }}
+
+      # Each batch measured its own coverage (--cov-fail-under=0 there); the
+      # floor in each app's pyproject applies once, to the combined data.
+      - name: Combine coverage and check each app's floor
+        run: |
+          set -euo pipefail
+          failed=""
+          for app in chat system_interface; do
+            i=0
+            for data_file in $(find "test-results/$app" -name '.coverage*' -type f); do
+              cp "$data_file" "system/apps/$app/.coverage.$i"
+              i=$((i + 1))
+            done
+            echo "=== $app: $i coverage data files"
+            (cd "system/apps/$app" && uv run coverage combine .coverage.* && uv run coverage report) || failed="$failed $app"
+          done
+          if [ -n "$failed" ]; then
+            echo "FAILED coverage floors:$failed" >&2
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-offload
+          path: test-results/
+          if-no-files-found: ignore
+          # The sandboxes' .coverage* files and .test_output/ trees (download_globs)
+          # are hidden paths, which upload-artifact drops by default.
+          include-hidden-files: true
+          retention-days: 30
