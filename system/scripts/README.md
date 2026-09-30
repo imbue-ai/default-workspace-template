@@ -25,9 +25,8 @@ Provisioning and utility scripts:
   the worker's disabled review/CI/fetch gates are unchanged. mngr's existing
   workspace-trust consent governs hook execution.
 - Claude status line: `claude_status_line.sh`, wired in `.claude/settings.json`.
-- Utility scripts: `forward_port.py` (port registry), `layout.py` (the
-  desktop's window and shortcut ops), `message_chat.py` (send a message to a chat by its id through
-  the chat app, with `mngr message` as the backoff; the in-workspace
+- Utility scripts: `forward_port.py` (port registry), `message_chat.py` (send a
+  message to a chat by its id through the chat app, with `mngr message` as the backoff; the in-workspace
   replacement for `mngr message <agent>`; `--create` makes a new chat there
   the same way, with `mngr create` as the backoff), `run_in_background.py` (run a
   command detached and, when it exits, send its exit code and output to the

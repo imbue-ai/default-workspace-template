@@ -82,7 +82,7 @@ def resolve_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
         # Held to the client id rule before it names a layout file.
         client_id = ClientId(explicit)
         if not is_known_client(shell, client_id):
-            raise ClientNotFoundError(f"No client {client_id!r}: see `layout.py context` for the known clients")
+            raise ClientNotFoundError(f"No client {client_id!r}: see `workspace-layout context` for the known clients")
         return client_id
     # Only a requester with a marker has a client that last messaged it; a bare app names none.
     if requester is not None and requester.marker:
@@ -106,6 +106,6 @@ def require_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
     )
     raise NoTargetClientError(
         "Could not tell which client this op is for: no client has messaged the requesting agent and "
-        f"{len(connected_clients)} client(s) are connected. Pass --client <id> (see `layout.py context`). "
+        f"{len(connected_clients)} client(s) are connected. Pass --client <id> (see `workspace-layout context`). "
         f"Connected clients: {client_summary}."
     )

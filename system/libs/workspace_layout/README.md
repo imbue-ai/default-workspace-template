@@ -49,8 +49,32 @@ answer shapes live in one place the shell and its callers share.
   `read_app_window_paths(shell_url, app)` (every window path of the app, or
   None when the shell could not be read, never "no windows"),
   `window_paths_of_app`, and `window_query_value`.
+- `workspace_layout.cli`: the `workspace-layout` console script (below).
 - `workspace_layout.testing`: `FakeShell`, an in-memory `ShellLayoutInterface`
   that records every request and answers or refuses as a test sets it;
   `LoopbackShell`, a stand-in for the shell's routes over loopback that reads
   every op body as the shell does (`describe_op_body_problem`) and refuses one
   it would refuse; and wire-shaped `desktop_answer` and `window_json` builders.
+
+## The `workspace-layout` command
+
+`uv run workspace-layout <subcommand>`, from the repo root, is how an agent
+reads and arranges the desktop; the `manage-desktop` skill is its guide and
+`uv run workspace-layout --help` its reference. Every subcommand posts one op
+to the shell's op route under the calling agent's own chat as the requester
+(`MINDS_CHAT_ID`, else `MNGR_AGENT_ID`), except `desktops` and `list`, which
+read `GET /api/inventory`. Descriptions go to stderr; stdout carries only a
+window id (`open`, `show`), the JSON of the read commands, and a desktop's
+shortcuts after a `shortcut` write. Exit codes are `0` (done), `1` (refused or
+unreachable), and `3` (the shell or an app cannot act right now: retry).
+
+`show <app> --path P [--showing P ...] [--repoint PAGE ...]` runs the shell's
+`show` op: it raises a window already at the path (or at a `--showing` path),
+else points an on-screen window on one of the `--repoint` pages at it, else the
+app's pinned window, else opens one.
+
+The command replaced `system/scripts/layout.py`, keeping its subcommands,
+flags, output, and exit codes; the hints for retired verbs and spellings name
+`uv run workspace-layout`. Unlike the script it runs in the root venv, so it
+shares the request models the shell reads and the app name rule of
+`app_manifest`.

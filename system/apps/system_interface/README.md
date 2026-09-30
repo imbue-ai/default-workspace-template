@@ -85,7 +85,7 @@ Its state lives under `data/.state/system_interface/`: `desktops.json`,
 `placements/<desktop>/<client>.json`, `window_paths/<client>.json` (a client's
 own paths for independent windows), `clients.json`, `users.json` (the desktop
 made for each visiting user), `avatar_selection.json`, and the client-activity
-event log (`events/client_activity/events.jsonl`, what `layout.py context`
+event log (`events/client_activity/events.jsonl`, what `workspace-layout context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
 `data/.apps/system_interface/wallpapers/` (files the user adds); avatar designs
 an agent registers live in `data/.apps/system_interface/avatars/catalog.json`
@@ -358,18 +358,18 @@ that, tokens or not.
 ## Driving the desktop from an agent
 
 An agent inside the workspace arranges the desktop through
-`system/scripts/layout.py` (`context / desktops / list / load / open / focus /
+`uv run workspace-layout` (`context / desktops / list / load / open / show / focus /
 minimize / restore / maximize / place / close / navigate / refresh / shortcuts /
 shortcut set / shortcut move / shortcut remove / wallpaper`), which names apps
 and windows (desktop-interface contracts.md section 8):
 
 ```bash
-python3 system/scripts/layout.py desktops
-python3 system/scripts/layout.py context
-python3 system/scripts/layout.py open files --path /home/user/workspace/data/notes/ --desktop Research
-python3 system/scripts/layout.py open terminal
-python3 system/scripts/layout.py place self --zone left
-python3 system/scripts/layout.py navigate win-0123456789abcdef /other/
+uv run workspace-layout desktops
+uv run workspace-layout context
+uv run workspace-layout open files --path /home/user/workspace/data/notes/ --desktop Research
+uv run workspace-layout open terminal
+uv run workspace-layout place self --zone left
+uv run workspace-layout navigate win-0123456789abcdef /other/
 ```
 
 The document ops are applied by the shell to the desktop and to the target

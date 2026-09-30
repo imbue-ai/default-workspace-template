@@ -239,7 +239,7 @@ sub-workers it split its pass across are already gone with it):
   `data/.tasks/harden/crystallize-$NAME/ticket_id.txt`. Commit consumer changes as a
   separate commit.
 - **service**: refresh its window so the user sees the merged build
-  (`python3 system/scripts/layout.py refresh --app <service-name>`), then close the ticket.
+  (`uv run workspace-layout refresh --app <service-name>`), then close the ticket.
 
 ## Guidelines
 

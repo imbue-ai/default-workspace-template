@@ -1,5 +1,47 @@
-#!/usr/bin/env python3
-"""Agent-facing helper for the workspace desktop: read what is open, open and arrange windows, edit a desktop.
+import argparse
+import json
+import sys
+import tomllib
+from collections.abc import Callable
+from collections.abc import Mapping
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+from typing import Final
+from typing import NoReturn
+
+import click
+from app_manifest.primitives import MAX_APP_NAME_LENGTH
+from app_manifest.primitives import describe_app_name_problem
+from app_manifest.registry import registry_path
+from imbue.imbue_common.frozen_model import FrozenModel
+from loguru import logger
+from pydantic import Field
+from tenacity import Retrying
+from tenacity import retry_if_result
+from tenacity import stop_after_delay
+from tenacity import wait_fixed
+
+from workspace_layout.client import request_shell
+from workspace_layout.client import requester_from_environment
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.errors import ShellUnreachableError
+from workspace_layout.ops import CONTEXT_OP
+from workspace_layout.ops import LOAD_OP
+from workspace_layout.ops import OPEN_OP
+from workspace_layout.ops import PINNED_WINDOW
+from workspace_layout.ops import REFRESH_OP
+from workspace_layout.ops import SELF_WINDOW
+from workspace_layout.ops import SHOW_OP
+from workspace_layout.ops import OpRequester
+from workspace_layout.ops import op_request_body
+from workspace_layout.primitives import WindowId
+from workspace_layout.shell_url import INVENTORY_ROUTE
+from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_layout.shell_url import shell_base_url
+
+_CLI_DESCRIPTION: Final[str] = """\
+Agent-facing helper for the workspace desktop: read what is open, open and arrange windows, edit a desktop.
 
 Subcommands:
     context                             Show each browser client: its active desktop, connection state, recent messages.
@@ -10,6 +52,10 @@ Subcommands:
                                         Open a window of an app (a bare https:// URL opens a new browser on that page).
     open ... --beside [window]          ... and lay it beside that window (your own chat by default): that one
                                         snapped to the left half, the opened one to the right half and on top.
+    show <app> --path P [--showing P ...] [--repoint PAGE ...]
+                                        Put a page of an app on screen: raise a window already showing it, else point
+                                        an on-screen window at one of the --repoint pages, else the app's pinned
+                                        window, else open a new one.
     focus <window>                      Restore and raise a window.
     minimize <window>                   Put a window out of sight (its frame is kept).
     restore <window>                    Bring a minimized or maximized window back to its frame.
@@ -58,6 +104,11 @@ absolute); the ``path`` launch parameter (``open files --param path=/home/user/w
 lands in the same folder but as a window at ``/home/user/workspace/?path=...``, and a window is
 focused only when its path matches exactly, so use one form per folder.
 
+``show`` chooses the window itself and never points a window at another page of the app unless
+that page is named with ``--repoint``: ``--showing`` names the app's other paths that count as
+already showing the page. The window's id is printed to stdout, and how it was shown (raised,
+navigated, pinned, opened) to stderr.
+
 Every op POSTs one body ``{op, args, requester}`` to a loopback-only endpoint on the shell:
 ``requester`` is the caller's own chat, ``{"app": "chat", "marker": $MINDS_CHAT_ID}`` (the chat
 app sets ``MINDS_CHAT_ID`` on every agent it creates; ``MNGR_AGENT_ID`` stands in for an agent
@@ -67,11 +118,8 @@ client (the one that last messaged that chat). ``desktops`` and ``list`` read ``
 
 The read commands print JSON, indented, in the shell's own order (windows in opening
 order). Descriptions of what an op did go to stderr; stdout carries only the window id of an
-``open``, the JSON of the read commands, and the desktop's shortcuts as they stand after a
-``shortcut`` write.
-
-Only the standard library is imported: inside a workspace the script runs under the system
-``python3``, which has none of the root venv's packages.
+``open`` or a ``show``, the JSON of the read commands, and the desktop's shortcuts as they stand
+after a ``shortcut`` write.
 
 Retired verbs (``split``, ``move``, ``rename``, ``delete``, ``stop``, ``start``,
 ``replace-url``, ``inspect``, ``where``, ``views``) and the old ``app:``, ``chat:``,
@@ -79,41 +127,20 @@ Retired verbs (``split``, ``move``, ``rename``, ``delete``, ``stop``, ``start``,
 refused with the verb or form to use instead.
 """
 
-import argparse
-import json
-import os
-import re
-import sys
-import time
-import tomllib
-import urllib.error
-import urllib.parse
-import urllib.request
-from pathlib import Path
-from typing import Any, Callable, NoReturn
-
-DEFAULT_APPS_FILE = "data/.state/apps.toml"
-ENV_APPS_FILE = "MINDS_APPS_FILE"
-DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
-ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
-ENV_MINDS_CHAT_ID = "MINDS_CHAT_ID"
-ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
-
-# The requester every op carries is the caller's own chat: the chat app's name, and the chat
-# id its window's path carries.
-REQUESTER_APP = "chat"
+# How the hints name this command: agents run it from the repo root through the root venv.
+_COMMAND: Final[str] = "uv run workspace-layout"
 
 # A bare URL opens a new browser on that page: the browser app's ``new`` launch path with the
 # URL as its ``url`` parameter (system/apps/browser/app.toml).
-_BROWSER_APP_NAME = "browser"
-_BROWSER_NEW_LAUNCH = "new"
-_BROWSER_URL_PARAM = "url"
-_EXTERNAL_URL_PREFIXES = ("https://", "http://")
+_BROWSER_APP_NAME: Final[str] = "browser"
+_BROWSER_NEW_LAUNCH: Final[str] = "new"
+_BROWSER_URL_PARAM: Final[str] = "url"
+_EXTERNAL_URL_PREFIXES: Final[tuple[str, ...]] = ("https://", "http://")
 
 # The retired spellings, refused by name with the form to use instead, so an agent
 # working from an old note is told what to type rather than waiting on a registration that
 # never comes.
-_RETIRED_PREFIXES = (
+_RETIRED_PREFIXES: Final[tuple[str, ...]] = (
     "app:",
     "chat-terminal:",
     "chat:",
@@ -123,7 +150,7 @@ _RETIRED_PREFIXES = (
     "subagent:",
 )
 # The retired verbs, each with its replacement.
-_RETIRED_VERBS = {
+RETIRED_VERBS: Final[Mapping[str, str]] = {
     "split": "'place' sets where a window sits (--zone left|right|maximized, or --frame x,y,w,h); 'open' puts a new window on the desktop",
     "move": "'place' sets where a window sits (--zone left|right|maximized, or --frame x,y,w,h)",
     "rename": "a title belongs to the app that owns the page: the chat's POST /api/chats/<id>/rename (the terminal offers no rename route yet)",
@@ -136,78 +163,71 @@ _RETIRED_VERBS = {
     "views": "'desktops' lists every desktop and which clients are on each",
 }
 
-# A bare word that may name an app: the registry's name rule (``forward_port.py``'s
-# ``NAME_PATTERN``, ``MAX_SERVICE_NAME_LENGTH``, ``RESERVED_NAMES``, and
-# ``RESERVED_NAME_PREFIXES``), so a name the registry could never hold is refused here rather
-# than waited for.
-_APP_NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
-_MAX_APP_NAME_LENGTH = 32
-_RESERVED_APP_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
-_RESERVED_APP_NAME_PREFIXES = ("host-", "agent-")
-# A window id as the shell mints it.
-_WINDOW_ID_PATTERN = re.compile(r"^win-[0-9a-f]{16}$")
-
 # How long ``open`` waits for a freshly-registered app to appear before giving up. The
-# supervisord-managed forward_port.py call races with the agent invoking this script right
+# supervisord-managed forward_port.py call races with the agent invoking this command right
 # after build-app, so a brief window where the row is not yet visible is fine.
-_REGISTRATION_TIMEOUT_SECONDS = 5.0
-_REGISTRATION_POLL_INTERVAL_SECONDS = 0.25
+REGISTRATION_TIMEOUT_SECONDS: Final[float] = 5.0
+_REGISTRATION_POLL_INTERVAL_SECONDS: Final[float] = 0.25
 
-_ZONES = ("left", "right", "maximized")
-_SHORTCUT_MODES = ("focus", "new")
-_IF_PRESENT_CHOICES = ("focus", "new")
-_WALLPAPER_KINDS = ("bundled", "file")
-_NO_WALLPAPER = "none"
+_ZONES: Final[tuple[str, ...]] = ("left", "right", "maximized")
+_SHORTCUT_MODES: Final[tuple[str, ...]] = ("focus", "new")
+_IF_PRESENT_CHOICES: Final[tuple[str, ...]] = ("focus", "new")
+_WALLPAPER_KINDS: Final[tuple[str, ...]] = ("bundled", "file")
+_NO_WALLPAPER: Final[str] = "none"
 
 # A read answers from memory and the state files; an ``open`` waits on nothing slower than a
 # file write either, but keeps a wider bound for a shell busy with a client's save.
-_READ_TIMEOUT_SECONDS = 10.0
-_OP_TIMEOUT_SECONDS = 30.0
+READ_TIMEOUT_SECONDS: Final[float] = 10.0
+OP_TIMEOUT_SECONDS: Final[float] = 30.0
 
 # Exit codes: 0 / 1 / 3. Agents branch on "did it work"; the one distinct code worth its own
 # slot is a shell or app that cannot act right now (a 409 or a 503), where retry-with-backoff
 # is the right response. Slot 2 is left to argparse's usage exit.
-EXIT_OK = 0
-EXIT_ERROR = 1
-EXIT_CONFLICT = 3
+EXIT_OK: Final[int] = 0
+EXIT_ERROR: Final[int] = 1
+EXIT_CONFLICT: Final[int] = 3
 
-# The caller's own chat window. Valid wherever a window is named; the shell resolves it from
-# the op's ``requester`` (and refuses it with a 400 when the op carries none).
-_SELF_REF = "self"
-# The caller's app's pinned window on the target desktop (the chat's root window), resolved from the
-# op's ``requester`` too (a 400 with none, a 404 when the app has no pinned window there).
-_PINNED_REF = "pinned"
+# The status an answer that never came is reported with, beside the real statuses.
+_UNREACHABLE_STATUS: Final[int] = -1
+
+_ShellAnswer = tuple[int, dict[str, Any] | str]
 
 
-def _workspace_base_url() -> str:
-    return os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL).rstrip("/")
+class LayoutCliContext(FrozenModel):
+    """Where the command reaches the shell and the registry, who it says is asking, and how long it waits."""
+
+    shell_url: str = Field(description="The shell's base URL, without a trailing slash")
+    apps_file: Path = Field(description="The app registry (data/.state/apps.toml)")
+    requester: OpRequester | None = Field(description="The caller's own chat, or None outside an agent")
+    registration_timeout_seconds: float = Field(description="How long an open waits for its app's registry row")
+    read_timeout_seconds: float = Field(description="How long a read or a transient op may take")
+    op_timeout_seconds: float = Field(description="How long an op the shell writes files for may take")
 
 
-def _own_chat_id() -> str:
-    """The caller's chat id: ``MINDS_CHAT_ID`` from the chat app that created the agent, else the
-    agent's own id (an agent created any other way is its own chat), else "" outside an agent."""
-    return os.environ.get(ENV_MINDS_CHAT_ID, "") or os.environ.get(ENV_MNGR_AGENT_ID, "")
+def context_from_environment() -> LayoutCliContext:
+    return LayoutCliContext(
+        shell_url=shell_base_url(),
+        apps_file=registry_path(),
+        requester=requester_from_environment(),
+        registration_timeout_seconds=REGISTRATION_TIMEOUT_SECONDS,
+        read_timeout_seconds=READ_TIMEOUT_SECONDS,
+        op_timeout_seconds=OP_TIMEOUT_SECONDS,
+    )
 
 
-def _requester() -> dict[str, str] | None:
-    """The caller's own chat as the op route's requester, or None outside an agent: what ``self``
-    names and what every op carries so the shell knows who asked."""
-    chat_id = _own_chat_id()
-    if not chat_id:
-        return None
-    return {"app": REQUESTER_APP, "marker": chat_id}
+def _write_stdout(text: str) -> None:
+    click.echo(text, nl=False)
 
 
-def _apps_file() -> Path:
-    """Path to the app registry: ``data/.state/apps.toml`` relative to cwd (the repo root), or ``MINDS_APPS_FILE``."""
-    return Path(os.environ.get(ENV_APPS_FILE, DEFAULT_APPS_FILE))
+def _write_stderr(text: str) -> None:
+    click.echo(text, nl=False, err=True)
 
 
 # Names
 
 
 def _fail(message: str) -> NoReturn:
-    sys.stderr.write(f"error: {message}\n")
+    _write_stderr(f"error: {message}\n")
     raise SystemExit(EXIT_ERROR)
 
 
@@ -219,28 +239,34 @@ def _retired_spelling_message(value: str) -> str:
         if query.startswith("instance="):
             hint = (
                 f"a window is named by its id (see 'desktops'); to open one, give the app and the path of its page: "
-                f"'layout.py open {name or '<app>'} --path <path>'"
+                f"'{_COMMAND} open {name or '<app>'} --path <path>'"
             )
         else:
-            hint = f"give the app name on its own: 'layout.py open {name or '<app>'}'"
+            hint = f"give the app name on its own: '{_COMMAND} open {name or '<app>'}'"
     elif prefix == "chat:":
-        hint = "a chat's window is the chat app at its page: 'layout.py open chat --path \"/?chat=<chat-id>\"'"
+        hint = f"a chat's window is the chat app at its page: '{_COMMAND} open chat --path \"/?chat=<chat-id>\"'"
     elif prefix == "chat-terminal:":
-        hint = "an agent's terminal is the back face of its chat: open the chat's page, 'layout.py open chat --path \"/?chat=<chat-id>\"'"
+        hint = (
+            f"an agent's terminal is the back face of its chat: open the chat's page, "
+            f"'{_COMMAND} open chat --path \"/?chat=<chat-id>\"'"
+        )
     elif prefix == "terminal:":
-        hint = f"a terminal's window is the terminal app at its page: 'layout.py open terminal --path \"/?session={remainder or '<session>'}\"'"
+        hint = (
+            f"a terminal's window is the terminal app at its page: "
+            f"'{_COMMAND} open terminal --path \"/?session={remainder or '<session>'}\"'"
+        )
     elif prefix == "service:":
         name, _, query = remainder.partition("?")
-        hint = f"give the app name on its own: 'layout.py open {name or '<app>'}'" + (
-            f" (with --path \"/?{query}\" for one page of it)" if query else ""
+        hint = f"give the app name on its own: '{_COMMAND} open {name or '<app>'}'" + (
+            f' (with --path "/?{query}" for one page of it)' if query else ""
         )
     elif prefix == "url:":
-        hint = "pass the URL itself: 'layout.py open https://...' opens it in a new browser"
+        hint = f"pass the URL itself: '{_COMMAND} open https://...' opens it in a new browser"
     else:
-        hint = "a subagent's view is a page of the chat app: 'layout.py open chat --path <the subagent view's path>'"
+        hint = f"a subagent's view is a page of the chat app: '{_COMMAND} open chat --path <the subagent view's path>'"
     return (
         f"{value!r} is not how the desktop names things: give an app name and a path. {hint}; "
-        f"'layout.py desktops' lists every window with its id"
+        f"'{_COMMAND} desktops' lists every window with its id"
     )
 
 
@@ -248,13 +274,12 @@ def _is_external_url(value: str) -> bool:
     return any(value.startswith(prefix) for prefix in _EXTERNAL_URL_PREFIXES)
 
 
-def _is_app_name(value: str) -> bool:
-    return (
-        len(value) <= _MAX_APP_NAME_LENGTH
-        and _APP_NAME_PATTERN.fullmatch(value) is not None
-        and value not in _RESERVED_APP_NAMES
-        and not value.startswith(_RESERVED_APP_NAME_PREFIXES)
-    )
+def _is_window_id(value: str) -> bool:
+    try:
+        WindowId(value)
+    except InvalidLayoutValueError:
+        return False
+    return True
 
 
 def _refuse_retired_spelling(value: str) -> None:
@@ -262,22 +287,24 @@ def _refuse_retired_spelling(value: str) -> None:
         _fail(_retired_spelling_message(value))
 
 
-def _app_name(value: str) -> str:
+def app_name_argument(value: str) -> str:
     """An argument that must name an app; the retired spellings and a URL are refused by name."""
     _refuse_retired_spelling(value)
     if _is_external_url(value):
         _fail(f"{value!r} is a URL: only 'open' takes one (it opens the page in a new browser)")
-    if not _is_app_name(value):
-        _fail(f"{value!r} is not an app name (lowercase words joined by single dashes, at most {_MAX_APP_NAME_LENGTH} characters)")
+    if describe_app_name_problem(value) is not None:
+        _fail(
+            f"{value!r} is not an app name (lowercase words joined by single dashes, at most {MAX_APP_NAME_LENGTH} characters)"
+        )
     return value
 
 
-def _window_ref(value: str) -> str:
+def window_argument(value: str) -> str:
     """An argument that names a window: a window id, ``self``, ``pinned`` (your app's pinned window), or an app name."""
-    if value in (_SELF_REF, _PINNED_REF) or _WINDOW_ID_PATTERN.fullmatch(value):
+    if value in (SELF_WINDOW, PINNED_WINDOW) or _is_window_id(value):
         return value
     _refuse_retired_spelling(value)
-    if not _is_app_name(value):
+    if describe_app_name_problem(value) is not None:
         _fail(
             f"{value!r} is not a window: give a window id (win-<hex>, from 'desktops'), 'self', 'pinned', or an app name"
         )
@@ -287,38 +314,38 @@ def _window_ref(value: str) -> str:
 # The registry
 
 
-def _read_registry_rows(path: Path) -> list[dict[str, Any]]:
+def _read_registry_names(path: Path) -> list[str]:
     if not path.exists():
         return []
     with open(path, "rb") as f:
-        doc = tomllib.load(f)
+        document = tomllib.load(f)
     return [
-        app
-        for app in doc.get("apps", [])
+        app["name"]
+        for app in document.get("apps", [])
         if isinstance(app, dict) and isinstance(app.get("name"), str) and app.get("name")
     ]
 
 
-def _is_app_registered(name: str) -> bool:
-    return any(row.get("name") == name for row in _read_registry_rows(_apps_file()))
+def _is_app_registered(name: str, apps_file: Path) -> bool:
+    return name in _read_registry_names(apps_file)
 
 
-def _wait_for_registration(name: str, timeout: float) -> bool:
-    deadline = time.monotonic() + timeout
-    while True:
-        if _is_app_registered(name):
-            return True
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(_REGISTRATION_POLL_INTERVAL_SECONDS)
+def _wait_for_registration(name: str, apps_file: Path, timeout_seconds: float) -> bool:
+    retrying = Retrying(
+        stop=stop_after_delay(timeout_seconds),
+        wait=wait_fixed(_REGISTRATION_POLL_INTERVAL_SECONDS),
+        retry=retry_if_result(lambda is_registered: not is_registered),
+        retry_error_callback=lambda retry_state: False,
+    )
+    return retrying(_is_app_registered, name, apps_file)
 
 
-def _require_registered(app: str) -> int | None:
-    if _wait_for_registration(app, _REGISTRATION_TIMEOUT_SECONDS):
+def _require_registered(context: LayoutCliContext, app: str) -> int | None:
+    if _wait_for_registration(app, context.apps_file, context.registration_timeout_seconds):
         return None
-    sys.stderr.write(
-        f"error: app {app!r} is not registered in {_apps_file()} after waiting "
-        f"{_REGISTRATION_TIMEOUT_SECONDS:.0f}s. Did you forward_port.py / start the app?\n"
+    _write_stderr(
+        f"error: app {app!r} is not registered in {context.apps_file} after waiting "
+        f"{context.registration_timeout_seconds:.0f}s. Did you forward_port.py / start the app?\n"
     )
     return EXIT_ERROR
 
@@ -326,81 +353,53 @@ def _require_registered(app: str) -> int | None:
 # Transport
 
 
-def _request_json(
-    method: str,
-    url: str,
-    body: dict[str, Any] | None = None,
-    timeout: float = _READ_TIMEOUT_SECONDS,
-) -> tuple[int, dict[str, Any] | str]:
-    data = None if body is None else json.dumps(body).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+def _request(method: str, url: str, body: Mapping[str, Any] | None, timeout_seconds: float) -> _ShellAnswer:
+    """One request to the shell as (status, the body as a JSON object or else its text); an answer that never came
+    is (-1, why)."""
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-            return response.status, _maybe_parse_json(raw)
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
-        return e.code, _maybe_parse_json(raw)
-    except urllib.error.URLError as e:
-        return -1, str(e.reason)
-    except OSError as e:
-        # A read timeout is a TimeoutError rather than a URLError; the shell is as gone either way.
-        return -1, str(e)
+        response = request_shell(method, url, body, timeout_seconds)
+    except ShellUnreachableError as e:
+        return _UNREACHABLE_STATUS, str(e)
+    return response.status_code, response.body
 
 
-def _post_layout(
-    op: str, args: dict[str, Any], timeout: float = _READ_TIMEOUT_SECONDS
-) -> tuple[int, dict[str, Any] | str]:
-    """POST {op, args, requester} to /api/layout/broadcast and return (status, parsed_or_raw)."""
-    return _request_json(
-        "POST",
-        f"{_workspace_base_url()}/api/layout/broadcast",
-        {"op": op, "args": args, "requester": _requester()},
-        timeout=timeout,
+def _post_layout(context: LayoutCliContext, op: str, args: Mapping[str, Any], timeout_seconds: float) -> _ShellAnswer:
+    """POST {op, args, requester} to the op route and return (status, parsed_or_raw)."""
+    return _request(
+        "POST", f"{context.shell_url}{LAYOUT_OP_ROUTE}", op_request_body(op, args, context.requester), timeout_seconds
     )
-
-
-def _maybe_parse_json(text: str) -> dict[str, Any] | str:
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return text
-    if isinstance(parsed, dict):
-        return parsed
-    return text
 
 
 def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
     """Translate (status, body) into a stderr message + exit code; only a 409 or a 503 (the shell or an app cannot do it right now) has its own code."""
-    if status == -1:
-        sys.stderr.write(f"error: could not reach the workspace shell: {body}\n")
+    if status == _UNREACHABLE_STATUS:
+        _write_stderr(f"error: could not reach the workspace shell: {body}\n")
         return EXIT_ERROR
     detail: str = ""
     if isinstance(body, dict):
         detail = str(body.get("detail", body))
         if status == 412:
-            sys.stderr.write(f"error: {op!r} has no client to apply it to (HTTP 412): {detail}\n")
+            _write_stderr(f"error: {op!r} has no client to apply it to (HTTP 412): {detail}\n")
             return EXIT_ERROR
         if status in (409, 503):
             # The shell or the app cannot do it right now (a save in flight, an app still starting up): retry later.
-            sys.stderr.write(f"error: {op!r} rejected (HTTP {status}): {detail}\n")
+            _write_stderr(f"error: {op!r} rejected (HTTP {status}): {detail}\n")
             return EXIT_CONFLICT
         if status == 404:
-            sys.stderr.write(f"error: {op!r} target not found (HTTP 404): {detail}\n")
+            _write_stderr(f"error: {op!r} target not found (HTTP 404): {detail}\n")
             return EXIT_ERROR
         if status == 400:
-            sys.stderr.write(f"error: {op!r} rejected (HTTP 400): {detail}\n")
+            _write_stderr(f"error: {op!r} rejected (HTTP 400): {detail}\n")
             return EXIT_ERROR
     else:
         detail = body
-    sys.stderr.write(f"error: {op!r} failed (HTTP {status}): {detail}\n")
+    _write_stderr(f"error: {op!r} failed (HTTP {status}): {detail}\n")
     return EXIT_ERROR
 
 
 def _emit_structured(data: Any) -> None:
-    sys.stdout.write(json.dumps(data, indent=2))
-    sys.stdout.write("\n")
+    _write_stdout(json.dumps(data, indent=2))
+    _write_stdout("\n")
 
 
 # Targeting and answers
@@ -441,43 +440,44 @@ def _describe_target(answer: dict[str, Any]) -> str:
 
 
 def _run_desktop_op(
+    context: LayoutCliContext,
     op: str,
-    args: dict[str, Any],
+    args: Mapping[str, Any],
     describe: Callable[[dict[str, Any]], str],
-    emit: Callable[[dict[str, Any]], None] | None = None,
+    emit: Callable[[dict[str, Any]], None] | None,
 ) -> int:
     """Post one op the shell applies to the files; it answers with the desktop and the client's placements.
 
     ``describe`` renders the one-line stderr summary from the answer; ``emit``, when given, writes what the
     verb prints on stdout from it.
     """
-    status, body = _post_layout(op, args, timeout=_OP_TIMEOUT_SECONDS)
+    status, body = _post_layout(context, op, args, context.op_timeout_seconds)
     if status != 200 or not isinstance(body, dict):
         return _report_failure(op, status, body)
-    sys.stderr.write(describe(body) + "\n")
+    _write_stderr(describe(body) + "\n")
     if emit is not None:
         emit(body)
     return EXIT_OK
 
 
-def _run_transient_op(op: str, args: dict[str, Any]) -> int:
+def _run_transient_op(context: LayoutCliContext, op: str, args: Mapping[str, Any]) -> int:
     """Post one of the verbs with nothing to store (refresh); the target client's windows apply it."""
-    status, body = _post_layout(op, args)
+    status, body = _post_layout(context, op, args, context.read_timeout_seconds)
     if status != 200:
         return _report_failure(op, status, body)
     target = body.get("target_client_id") if isinstance(body, dict) else None
     where = f"client {target}" if target else "every client"
-    sys.stderr.write(f"(sent {op} to {where})\n")
+    _write_stderr(f"(sent {op} to {where})\n")
     return EXIT_OK
 
 
 # The read commands
 
 
-def _fetch_inventory() -> dict[str, Any] | None:
-    status, body = _request_json("GET", f"{_workspace_base_url()}/api/inventory")
+def _fetch_inventory(context: LayoutCliContext) -> dict[str, Any] | None:
+    status, body = _request("GET", f"{context.shell_url}{INVENTORY_ROUTE}", None, context.read_timeout_seconds)
     if status != 200 or not isinstance(body, dict):
-        sys.stderr.write(f"error: could not read the inventory (HTTP {status}): {body}\n")
+        _write_stderr(f"error: could not read the inventory (HTTP {status}): {body}\n")
         return None
     return body
 
@@ -505,7 +505,9 @@ def _listed_desktops(inventory: dict[str, Any]) -> list[dict[str, Any]]:
                 "name": desktop.get("name"),
                 "wallpaper": desktop.get("wallpaper"),
                 "shortcuts": desktop.get("shortcuts", []),
-                "windows": [_listed_window(window) for window in desktop.get("windows", []) or [] if isinstance(window, dict)],
+                "windows": [
+                    _listed_window(window) for window in desktop.get("windows", []) or [] if isinstance(window, dict)
+                ],
             }
         )
     return listed
@@ -554,24 +556,24 @@ def _listed_apps(inventory: dict[str, Any]) -> list[dict[str, Any]]:
     return listed
 
 
-def _cmd_context(args: argparse.Namespace) -> int:
-    status, body = _post_layout("context", {})
+def _cmd_context(args: argparse.Namespace, context: LayoutCliContext) -> int:
+    status, body = _post_layout(context, CONTEXT_OP, {}, context.read_timeout_seconds)
     if status != 200 or not isinstance(body, dict):
-        return _report_failure("context", status, body)
+        return _report_failure(CONTEXT_OP, status, body)
     _emit_structured(body.get("clients", []))
     return EXIT_OK
 
 
-def _cmd_desktops(args: argparse.Namespace) -> int:
-    inventory = _fetch_inventory()
+def _cmd_desktops(args: argparse.Namespace, context: LayoutCliContext) -> int:
+    inventory = _fetch_inventory(context)
     if inventory is None:
         return EXIT_ERROR
     _emit_structured({"desktops": _listed_desktops(inventory), "clients": _listed_clients(inventory)})
     return EXIT_OK
 
 
-def _cmd_list(args: argparse.Namespace) -> int:
-    inventory = _fetch_inventory()
+def _cmd_list(args: argparse.Namespace, context: LayoutCliContext) -> int:
+    inventory = _fetch_inventory(context)
     if inventory is None:
         return EXIT_ERROR
     _emit_structured(
@@ -584,18 +586,20 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _cmd_load(args: argparse.Namespace) -> int:
+def _cmd_load(args: argparse.Namespace, context: LayoutCliContext) -> int:
     return _run_desktop_op(
-        "load",
+        context,
+        LOAD_OP,
         _target_args(args.desktop, args.client),
         lambda answer: f"switched client {answer.get('client_id')} onto desktop {answer.get('desktop_id')}",
+        None,
     )
 
 
-# open
+# open and show
 
 
-def _parse_params(raw_params: list[str] | None) -> dict[str, str]:
+def _parse_params(raw_params: Sequence[str] | None) -> dict[str, str]:
     """``--param name=value`` pairs as a launch path's query parameters."""
     params: dict[str, str] = {}
     for raw in raw_params or []:
@@ -617,10 +621,12 @@ def _open_arguments(args: argparse.Namespace) -> dict[str, Any]:
         if args.path or args.launch or params:
             _fail("a URL is opened in a new browser; --path, --launch, and --param do not apply to it")
         return {"app": _BROWSER_APP_NAME, "launch": _BROWSER_NEW_LAUNCH, "params": {_BROWSER_URL_PARAM: target}}
-    op_args: dict[str, Any] = {"app": _app_name(target)}
+    op_args: dict[str, Any] = {"app": app_name_argument(target)}
     if args.path:
         if args.launch or params:
-            _fail("--path names the page to open; --launch and --param choose a launch path instead. Pass one or the other")
+            _fail(
+                "--path names the page to open; --launch and --param choose a launch path instead. Pass one or the other"
+            )
         if not args.path.startswith("/"):
             _fail(f"--path takes a path under the app's origin, starting with '/', not {args.path!r}")
         op_args["path"] = args.path
@@ -631,54 +637,100 @@ def _open_arguments(args: argparse.Namespace) -> dict[str, Any]:
     return op_args
 
 
-def _cmd_open(args: argparse.Namespace) -> int:
+def _cmd_open(args: argparse.Namespace, context: LayoutCliContext) -> int:
     op_args = _open_arguments(args)
-    if (err := _require_registered(op_args["app"])) is not None:
+    if (err := _require_registered(context, op_args["app"])) is not None:
         return err
     if args.if_present:
         op_args["if_present"] = args.if_present
     if args.minimized and args.beside is not None:
-        _fail("--minimized puts the window out of sight and --beside puts it on half the screen; pass one or the other")
+        _fail(
+            "--minimized puts the window out of sight and --beside puts it on half the screen; pass one or the other"
+        )
     if args.minimized:
         op_args["minimized"] = True
     beside = ""
     if args.beside is not None:
-        beside = _window_ref(args.beside)
+        beside = window_argument(args.beside)
         op_args["beside"] = beside
     op_args.update(_target_args(args.desktop, args.client))
     alongside = f" beside {beside}" if beside else ""
     return _run_desktop_op(
-        "open",
+        context,
+        OPEN_OP,
         op_args,
-        lambda answer: f"opened window {_describe_window(answer, answer.get('window_id'))}{alongside} "
-        f"on {_describe_target(answer)}",
-        emit=_print_window_id,
+        lambda answer: (
+            f"opened window {_describe_window(answer, answer.get('window_id'))}{alongside} "
+            f"on {_describe_target(answer)}"
+        ),
+        _print_window_id,
     )
 
 
 def _print_window_id(answer: dict[str, Any]) -> None:
     window_id = answer.get("window_id")
     if isinstance(window_id, str) and window_id:
-        sys.stdout.write(f"{window_id}\n")
+        _write_stdout(f"{window_id}\n")
+
+
+def _show_arguments(args: argparse.Namespace) -> dict[str, Any]:
+    """The ``show`` op's arguments: the app, its page, the other paths that count as showing it, and the pages whose
+    windows the shell may point at it."""
+    op_args: dict[str, Any] = {"app": app_name_argument(args.app)}
+    showing: list[str] = args.showing or []
+    repoint: list[str] = args.repoint or []
+    for flag, path in (("--path", args.path), *(("--showing", value) for value in showing)):
+        if not path.startswith("/"):
+            _fail(f"{flag} takes a path under the app's origin, starting with '/', not {path!r}")
+    for page in repoint:
+        if not page.startswith("/") or "?" in page or "#" in page:
+            _fail(f"--repoint takes a page of the app, a path starting with '/' with no query string, not {page!r}")
+    op_args["path"] = args.path
+    if showing:
+        op_args["showing"] = showing
+    if repoint:
+        op_args["repoint"] = repoint
+    return op_args
+
+
+def _cmd_show(args: argparse.Namespace, context: LayoutCliContext) -> int:
+    op_args = _show_arguments(args)
+    if (err := _require_registered(context, op_args["app"])) is not None:
+        return err
+    op_args.update(_target_args(args.desktop, args.client))
+    return _run_desktop_op(
+        context,
+        SHOW_OP,
+        op_args,
+        lambda answer: (
+            f"{answer.get('shown')} window {_describe_window(answer, answer.get('window_id'))} "
+            f"on {_describe_target(answer)}"
+        ),
+        _print_window_id,
+    )
 
 
 # The window verbs
 
 
-def _window_op(op: str, past_tense: str) -> Callable[[argparse.Namespace], int]:
-    def run(args: argparse.Namespace) -> int:
-        window = _window_ref(args.window)
+def _window_op(op: str, past_tense: str) -> Callable[[argparse.Namespace, LayoutCliContext], int]:
+    def run(args: argparse.Namespace, context: LayoutCliContext) -> int:
+        window = window_argument(args.window)
         return _run_desktop_op(
+            context,
             op,
             {"window": window, **_target_args(args.desktop, args.client)},
-            lambda answer: f"{past_tense} window {_describe_window(answer, answer.get('window_id'))} on {_describe_target(answer)}",
+            lambda answer: (
+                f"{past_tense} window {_describe_window(answer, answer.get('window_id'))} on {_describe_target(answer)}"
+            ),
+            None,
         )
 
     return run
 
 
-def _cmd_place(args: argparse.Namespace) -> int:
-    window = _window_ref(args.window)
+def _cmd_place(args: argparse.Namespace, context: LayoutCliContext) -> int:
+    window = window_argument(args.window)
     if bool(args.zone) == bool(args.frame):
         _fail("place takes exactly one of --zone (left, right, maximized) or --frame x,y,width,height")
     op_args: dict[str, Any] = {"window": window, **_target_args(args.desktop, args.client)}
@@ -689,32 +741,44 @@ def _cmd_place(args: argparse.Namespace) -> int:
         op_args["frame"] = args.frame
         what = f"at frame {args.frame}"
     return _run_desktop_op(
+        context,
         "place",
         op_args,
-        lambda answer: f"placed window {_describe_window(answer, answer.get('window_id'))} {what} on {_describe_target(answer)}",
+        lambda answer: (
+            f"placed window {_describe_window(answer, answer.get('window_id'))} {what} on {_describe_target(answer)}"
+        ),
+        None,
     )
 
 
-def _cmd_navigate(args: argparse.Namespace) -> int:
-    window = _window_ref(args.window)
+def _cmd_navigate(args: argparse.Namespace, context: LayoutCliContext) -> int:
+    window = window_argument(args.window)
     if not args.path.startswith("/"):
         _fail(f"navigate takes a path under the window's app, starting with '/', not {args.path!r}")
     return _run_desktop_op(
+        context,
         "navigate",
         {"window": window, "path": args.path, **_target_args(args.desktop, args.client)},
-        lambda answer: f"pointed window {_describe_window(answer, answer.get('window_id'))} at {args.path} on {_describe_target(answer)}",
+        lambda answer: (
+            f"pointed window {_describe_window(answer, answer.get('window_id'))} at {args.path} on {_describe_target(answer)}"
+        ),
+        None,
     )
 
 
-def _cmd_refresh(args: argparse.Namespace) -> int:
+def _cmd_refresh(args: argparse.Namespace, context: LayoutCliContext) -> int:
     if bool(args.window) == bool(args.app):
-        _fail("refresh takes a window (a window id, 'self', 'pinned', or an app name) or --app <name> for every page of an app")
+        _fail(
+            "refresh takes a window (a window id, 'self', 'pinned', or an app name) or --app <name> for every page of an app"
+        )
     if args.app:
         if args.client or args.desktop:
-            _fail("refresh --app reloads every page of the app on every client; --client and --desktop do not apply to it")
-        return _run_transient_op("refresh", {"app": _app_name(args.app)})
+            _fail(
+                "refresh --app reloads every page of the app on every client; --client and --desktop do not apply to it"
+            )
+        return _run_transient_op(context, REFRESH_OP, {"app": app_name_argument(args.app)})
     return _run_transient_op(
-        "refresh", {"window": _window_ref(args.window), **_target_args(args.desktop, args.client)}
+        context, REFRESH_OP, {"window": window_argument(args.window), **_target_args(args.desktop, args.client)}
     )
 
 
@@ -728,48 +792,53 @@ def _shortcuts_document(answer: dict[str, Any]) -> dict[str, Any]:
     return {"desktop": answer.get("desktop_id"), "shortcuts": shortcuts}
 
 
-def _run_shortcut_write(op: str, op_args: dict[str, Any], done: str) -> int:
+def _run_shortcut_write(context: LayoutCliContext, op: str, op_args: dict[str, Any], done: str) -> int:
     """Post one shortcut write and print the desktop's shortcuts as they stand after it."""
     return _run_desktop_op(
+        context,
         op,
         op_args,
         lambda answer: f"{done} on {_describe_target(answer)}",
-        emit=lambda answer: _emit_structured(_shortcuts_document(answer)),
+        lambda answer: _emit_structured(_shortcuts_document(answer)),
     )
 
 
-def _cmd_shortcuts(args: argparse.Namespace) -> int:
-    status, body = _post_layout("shortcuts", _target_args(args.desktop, args.client))
+def _cmd_shortcuts(args: argparse.Namespace, context: LayoutCliContext) -> int:
+    status, body = _post_layout(
+        context, "shortcuts", _target_args(args.desktop, args.client), context.read_timeout_seconds
+    )
     if status != 200 or not isinstance(body, dict):
         return _report_failure("shortcuts", status, body)
     _emit_structured(_shortcuts_document(body))
     return EXIT_OK
 
 
-def _cmd_shortcut_set(args: argparse.Namespace) -> int:
-    app = _app_name(args.app)
+def _cmd_shortcut_set(args: argparse.Namespace, context: LayoutCliContext) -> int:
+    app = app_name_argument(args.app)
     op_args: dict[str, Any] = {"app": app, "launch": args.launch, "mode": args.mode}
     if args.cell:
         op_args["cell"] = args.cell
     op_args.update(_target_args(args.desktop, args.client))
-    return _run_shortcut_write("shortcut_set", op_args, f"set shortcut {app} {args.launch} ({args.mode})")
+    return _run_shortcut_write(context, "shortcut_set", op_args, f"set shortcut {app} {args.launch} ({args.mode})")
 
 
-def _cmd_shortcut_move(args: argparse.Namespace) -> int:
-    app = _app_name(args.app)
+def _cmd_shortcut_move(args: argparse.Namespace, context: LayoutCliContext) -> int:
+    app = app_name_argument(args.app)
     op_args: dict[str, Any] = {"app": app, "launch": args.launch, "cell": args.cell}
     op_args.update(_target_args(args.desktop, args.client))
-    return _run_shortcut_write("shortcut_move", op_args, f"moved shortcut {app} {args.launch} to cell {args.cell}")
+    return _run_shortcut_write(
+        context, "shortcut_move", op_args, f"moved shortcut {app} {args.launch} to cell {args.cell}"
+    )
 
 
-def _cmd_shortcut_remove(args: argparse.Namespace) -> int:
-    app = _app_name(args.app)
+def _cmd_shortcut_remove(args: argparse.Namespace, context: LayoutCliContext) -> int:
+    app = app_name_argument(args.app)
     op_args: dict[str, Any] = {"app": app, "launch": args.launch}
     op_args.update(_target_args(args.desktop, args.client))
-    return _run_shortcut_write("shortcut_remove", op_args, f"removed shortcut {app} {args.launch}")
+    return _run_shortcut_write(context, "shortcut_remove", op_args, f"removed shortcut {app} {args.launch}")
 
 
-def _cmd_wallpaper(args: argparse.Namespace) -> int:
+def _cmd_wallpaper(args: argparse.Namespace, context: LayoutCliContext) -> int:
     if args.kind == _NO_WALLPAPER:
         if args.name:
             _fail("'wallpaper none' takes no name")
@@ -781,24 +850,24 @@ def _cmd_wallpaper(args: argparse.Namespace) -> int:
         wallpaper = {"kind": args.kind, "name": args.name}
         done = f"set the wallpaper to {args.kind} {args.name}"
     op_args: dict[str, Any] = {"wallpaper": wallpaper, **_target_args(args.desktop, args.client)}
-    return _run_desktop_op("wallpaper", op_args, lambda answer: f"{done} on {_describe_target(answer)}")
+    return _run_desktop_op(context, "wallpaper", op_args, lambda answer: f"{done} on {_describe_target(answer)}", None)
 
 
 # The retired verbs
 
 
-def _cmd_retired(args: argparse.Namespace) -> int:
-    _fail(f"'{args.verb}' is not a desktop verb: {_RETIRED_VERBS[args.verb]}")
+def _cmd_retired(args: argparse.Namespace, context: LayoutCliContext) -> int:
+    _fail(f"'{args.verb}' is not a desktop verb: {RETIRED_VERBS[args.verb]}")
 
 
 # The parser
 
 
-_CLIENT_HELP = (
+_CLIENT_HELP: Final[str] = (
     "The client whose desktop the op targets (an id from ``context``). Defaults to the client that "
     "most recently messaged you, else the one connected client; refused when that settles nothing."
 )
-_DESKTOP_HELP = (
+_DESKTOP_HELP: Final[str] = (
     "The desktop to edit, by name or id. Defaults to the target client's active desktop; naming "
     "another edits that one and switches the client to it."
 )
@@ -813,7 +882,9 @@ def _add_json_argument(subparser: argparse.ArgumentParser) -> None:
     # CLEANUP: drop --json once every workspace runs a release where JSON is the only output
     # (it became so in September 2026); it is accepted so instructions written for the YAML
     # default keep working.
-    subparser.add_argument("--json", action="store_true", help="Accepted for compatibility: the output is JSON either way")
+    subparser.add_argument(
+        "--json", action="store_true", help="Accepted for compatibility: the output is JSON either way"
+    )
 
 
 def _add_window_verb(subparsers: Any, verb: str, help_text: str, past_tense: str) -> None:
@@ -823,8 +894,10 @@ def _add_window_verb(subparsers: Any, verb: str, help_text: str, past_tense: str
     subparser.set_defaults(func=_window_op(verb, past_tense))
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=_CLI_DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_context = subparsers.add_parser(
@@ -833,7 +906,9 @@ def main(argv: list[str] | None = None) -> int:
     _add_json_argument(p_context)
     p_context.set_defaults(func=_cmd_context)
 
-    p_desktops = subparsers.add_parser("desktops", help="List every desktop with its windows and shortcuts, and every client")
+    p_desktops = subparsers.add_parser(
+        "desktops", help="List every desktop with its windows and shortcuts, and every client"
+    )
     _add_json_argument(p_desktops)
     p_desktops.set_defaults(func=_cmd_desktops)
 
@@ -886,7 +961,7 @@ def main(argv: list[str] | None = None) -> int:
     p_open.add_argument(
         "--beside",
         nargs="?",
-        const=_SELF_REF,
+        const=SELF_WINDOW,
         default=None,
         metavar="WINDOW",
         help="Lay the opened window beside this one (bare, your own chat): that window snapped to the left half, "
@@ -894,6 +969,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_target_arguments(p_open)
     p_open.set_defaults(func=_cmd_open)
+
+    p_show = subparsers.add_parser(
+        "show", help="Put a page of an app on screen, raising a window already showing it rather than opening another"
+    )
+    p_show.add_argument("app", help="The app whose page to show")
+    p_show.add_argument("--path", required=True, help="The page to show, a path under the app's origin")
+    p_show.add_argument(
+        "--showing",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="Another path of the app that counts as already showing the page (repeatable)",
+    )
+    p_show.add_argument(
+        "--repoint",
+        action="append",
+        default=None,
+        metavar="PAGE",
+        help="A page of the app (a path with no query string) whose on-screen window may be pointed at the path "
+        "(repeatable); without it no window is pointed elsewhere",
+    )
+    _add_target_arguments(p_show)
+    p_show.set_defaults(func=_cmd_show)
 
     _add_window_verb(subparsers, "focus", "Restore and raise a window", "focused")
     _add_window_verb(subparsers, "minimize", "Put a window out of sight", "minimized")
@@ -917,7 +1015,9 @@ def main(argv: list[str] | None = None) -> int:
     p_navigate.set_defaults(func=_cmd_navigate)
 
     p_refresh = subparsers.add_parser("refresh", help="Reload one window's page, or every page of an app")
-    p_refresh.add_argument("window", nargs="?", default=None, help="A window id (win-<hex>), 'self', 'pinned', or an app name")
+    p_refresh.add_argument(
+        "window", nargs="?", default=None, help="A window id (win-<hex>), 'self', 'pinned', or an app name"
+    )
     p_refresh.add_argument("--app", default=None, help="Reload every page of this app, on every client")
     _add_target_arguments(p_refresh)
     p_refresh.set_defaults(func=_cmd_refresh)
@@ -938,7 +1038,9 @@ def main(argv: list[str] | None = None) -> int:
         default="focus",
         help="focus: raise the app's most recent window, opening one only when it has none; new: always open one",
     )
-    p_shortcut_set.add_argument("--cell", default=None, metavar="COLUMN,ROW", help="The grid cell; the next free one by default")
+    p_shortcut_set.add_argument(
+        "--cell", default=None, metavar="COLUMN,ROW", help="The grid cell; the next free one by default"
+    )
     _add_target_arguments(p_shortcut_set)
     p_shortcut_set.set_defaults(func=_cmd_shortcut_set)
     p_shortcut_move = shortcut_subparsers.add_parser("move", help="Move a shortcut to another cell")
@@ -959,14 +1061,22 @@ def main(argv: list[str] | None = None) -> int:
     _add_target_arguments(p_wallpaper)
     p_wallpaper.set_defaults(func=_cmd_wallpaper)
 
-    for verb in _RETIRED_VERBS:
+    for verb in RETIRED_VERBS:
         p_retired = subparsers.add_parser(verb)
         p_retired.add_argument("rest", nargs=argparse.REMAINDER)
         p_retired.set_defaults(func=_cmd_retired, verb=verb)
 
-    args = parser.parse_args(argv)
-    return args.func(args)
+    return parser
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def run_layout_cli(argv: Sequence[str], context: LayoutCliContext) -> int:
+    """Run one subcommand against the shell and registry ``context`` names; the exit code."""
+    args = _build_parser().parse_args(list(argv))
+    return args.func(args, context)
+
+
+def main() -> int:
+    # The command reports everything it has to say itself, on the lines its callers parse; the library's own logs
+    # would add lines to stderr that no caller expects.
+    logger.remove()
+    return run_layout_cli(sys.argv[1:], context_from_environment())

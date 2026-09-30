@@ -15,7 +15,7 @@ import tomllib
 from pathlib import Path
 from typing import Final
 
-# The registry's location, exactly as forward_port.py and layout.py resolve it:
+# The registry's location, exactly as forward_port.py and workspace-layout resolve it:
 # relative to the cwd (the repo root under supervisord) unless MINDS_APPS_FILE
 # points elsewhere.
 DEFAULT_APPS_FILE: Final[str] = "data/.state/apps.toml"

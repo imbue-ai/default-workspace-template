@@ -52,7 +52,7 @@ background agent, which is its own chat -- or the human).
   installed; a refusal carries its reason as `{"detail"}`, which the shell passes on
   to whoever ran the launch). `POST /browsers` with no name answers the same browser; with a name
   it is a create (409 for a duplicate or a full fleet). The shell opens a browser
-  window at the launch path (`layout.py open browser`); everything else about a
+  window at the launch path (`workspace-layout open browser`); everything else about a
   browser it learns from the page itself through the app contract. The `/browsers`
   routes serve the CLI and the viewer. Every browser
   can be stopped: `POST /browsers/<name>/stop` ends its Chromium (refreshing its tab

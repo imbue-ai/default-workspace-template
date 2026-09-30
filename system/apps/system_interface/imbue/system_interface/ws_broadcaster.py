@@ -215,7 +215,7 @@ class WebSocketBroadcaster(MutableModel):
         """Send a transient ``layout_op`` (refresh, the interface reload, a pulled-out window's show) to the browser
         (desktop contracts.md section 8).
 
-        ``requester`` is the app and marker of the chat that invoked ``system/scripts/layout.py``, spelled
+        ``requester`` is the app and marker of the chat that invoked ``workspace-layout``, spelled
         ``<app>:<marker>``. ``target_client_id`` names the client whose windows apply the op; None reaches
         every window (``refresh`` of a whole app, ``reload_system_interface``).
         """

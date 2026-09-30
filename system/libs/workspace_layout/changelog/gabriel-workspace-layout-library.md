@@ -5,3 +5,5 @@ New library `workspace_layout`: the shell's layout routes (the op route, the des
 - The op route's request models (`DesktopOpArguments`, `OpRequester`, the op names), the ids the wire carries, and the window readers an app with window-bound resources sweeps against now live here, so the shell and its callers read one definition.
 
 - `FakeShell` and `LoopbackShell` are the shared test stand-ins; `LoopbackShell` refuses any op body the shell itself would refuse.
+
+- The agent-facing desktop command is now `uv run workspace-layout`, this library's console script, replacing `python3 system/scripts/layout.py`. Every subcommand, flag, output line, and exit code is unchanged (the hints for retired verbs and spellings name the new command), and a new `show <app> --path P [--showing P ...] [--repoint PAGE ...]` runs the shell's `show` op: it raises a window already showing the page rather than opening another.

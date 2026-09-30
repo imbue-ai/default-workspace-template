@@ -83,7 +83,7 @@ def _desktop_windows(client: FlaskClient) -> list[dict[str, Any]]:
 
 
 def _op(client: FlaskClient, op: str, args: dict[str, Any], requester: dict[str, str] | None) -> Any:
-    """Post an op the way ``layout.py`` does."""
+    """Post an op the way ``workspace-layout`` does."""
     return client.post("/api/layout/broadcast", json={"op": op, "args": args, "requester": requester})
 
 

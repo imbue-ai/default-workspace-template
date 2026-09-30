@@ -901,6 +901,7 @@ dependencies = [
     { name = "share-gateway" },
     { name = "tk-command-parsing" },
     { name = "tomlkit" },
+    { name = "workspace-layout" },
 ]
 
 [package.dev-dependencies]
@@ -937,6 +938,7 @@ requires-dist = [
     { name = "share-gateway", editable = "system/services/share_gateway" },
     { name = "tk-command-parsing", editable = "system/libs/tk_command_parsing" },
     { name = "tomlkit", specifier = ">=0.12" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [package.metadata.requires-dev]

@@ -54,6 +54,8 @@ FAKE_DESKTOP_ID: Final[DesktopId] = DesktopId("home")
 # What the refusal of a client the fake shell does not know says, as the shell's 404 would.
 _REFUSED_STATUS: Final[int] = 404
 
+_SERVE_POLL_INTERVAL_SECONDS: Final[float] = 0.01
+
 
 def connected_client(client_id: str) -> ConnectedClient:
     """A client holding the socket, on no desktop yet."""
@@ -302,7 +304,10 @@ class LoopbackShell(MutableModel):
                     self._respond(404, {"detail": f"No such API route: {self.path}"})
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        # A short poll keeps ``close`` (which waits out one poll) from dominating a test.
+        thread = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": _SERVE_POLL_INTERVAL_SECONDS}, daemon=True
+        )
         thread.start()
         self._server = server
         self._thread = thread

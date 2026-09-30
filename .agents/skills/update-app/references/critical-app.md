@@ -147,7 +147,7 @@ same app is up rather than hijacking it; surface that and coordinate.
 Only once it is up, open its window:
 
 ```bash
-python3 system/scripts/layout.py open <name>-preview
+uv run workspace-layout open <name>-preview
 ```
 
 **That `open` is the hand-off, not setup.** It puts the window on the user's
@@ -187,7 +187,7 @@ registrations, same wrapper page -- and only the window comes and goes. Close it
 first, so the user is not watching a half-built round land:
 
 ```bash
-python3 system/scripts/layout.py close <name>-preview
+uv run workspace-layout close <name>-preview
 ```
 
 (A `close` with no connected client answers the same `HTTP 412` an `open` does;
@@ -213,7 +213,7 @@ Then edit, and refresh the preview in place:
   user never sees the broken round.
 
 Check the round on the preview's own port while the window is still closed, then
-`layout.py open <name>-preview` again. That re-open is the round's hand-off,
+`workspace-layout open <name>-preview` again. That re-open is the round's hand-off,
 exactly as the first one was.
 
 **Commit before each surface**, so branch `HEAD` always equals what the user is
@@ -247,7 +247,7 @@ shapes.
 worktrees, so before creating the worker, release your hold on it:
 
 ```bash
-python3 system/scripts/layout.py close <name>-preview
+uv run workspace-layout close <name>-preview
 uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
 git worktree remove "data/.tasks/critical-live/update-$SLUG"
 ```
@@ -302,7 +302,7 @@ WORK_DIR=$(mngr ls --include "name == \"update-$SLUG\"" --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
     --app <name> --worktree "$WORK_DIR" [--with <sibling>]... [--instance-key <key>]
-python3 system/scripts/layout.py open <name>-preview
+uv run workspace-layout open <name>-preview
 ```
 
 A fix whose effect the user cannot trigger on demand gives them nothing to look
@@ -397,7 +397,7 @@ another critical app may have applied since you branched.
    ticket, and release the leases:
 
    ```bash
-   python3 system/scripts/layout.py close <name>-preview
+   uv run workspace-layout close <name>-preview
    uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
    ```
 

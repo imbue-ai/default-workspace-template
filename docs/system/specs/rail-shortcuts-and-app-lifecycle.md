@@ -125,7 +125,7 @@ Future shortcut kinds extend the same map with richer entries (a `kind` field pl
 ### Agent-facing surface
 
 Shortcut configuration is not user-only state: agents may read and change it.
-`system/scripts/layout.py` grows a `shortcuts` query (the active or named view's effective shortcut list: id, pinned, mode) and a `shortcut set` verb (`--pin/--unpin`, `--mode focus|new`) that calls the same endpoint the UI uses, so both writers share one validation path.
+`uv run workspace-layout` grows a `shortcuts` query (the active or named view's effective shortcut list: id, pinned, mode) and a `shortcut set` verb (`--pin/--unpin`, `--mode focus|new`) that calls the same endpoint the UI uses, so both writers share one validation path.
 The `manage-projects` skill documents the new verbs alongside its existing membership coverage.
 This ships with the storage phase (see Phasing), so the agent surface and the UI surface appear together.
 
@@ -215,7 +215,7 @@ Each phase is independently shippable, in order:
 1. Registry `program` field, `forward_port.py --program`, `build-app` and browser-block updates.
 2. Liveness in `AgentManager`, `AppEntry.is_running`, dimmed rendering and the stopped-tab placeholder.
 3. Stop/Start endpoints, verb swap, UI deregister removal, README and verb-table updates.
-4. Shortcut storage (`shortcut_overrides`, legacy read, API extension) plus the agent-facing surface (`layout.py` verbs, `manage-projects` skill update).
+4. Shortcut storage (`shortcut_overrides`, legacy read, API extension) plus the agent-facing surface (`workspace-layout` verbs, `manage-projects` skill update).
 5. Shortcut modes, labels, the shortcut menu, per-kind "new" paths, the create guard, and the chat default flip.
 
 ## Out of scope

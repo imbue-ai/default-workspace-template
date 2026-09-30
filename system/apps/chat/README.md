@@ -222,7 +222,7 @@ the `window_path` the text was typed into, else the most recently messaged chat;
 sender's `client_id` and `desktop_id` for the shell's activity log. The chat's
 manifest declares the desktop's `new`, `send`, and `draft` launch paths as POSTs
 onto it with those fields preset, so the launcher's rows, the Getting Started
-tiles, the avatar dialog's "Design your own...", and `layout.py open chat
+tiles, the avatar dialog's "Design your own...", and `workspace-layout open chat
 --launch new --param message=...` all arrive here through the shell. The route
 answers the pure path the shell opens or navigates a window at: `/?chat=<id>` for
 a send or a create it finished on the server (a send is delivered in the
@@ -316,7 +316,7 @@ signed-in provider account plus an index, minted by the sign-in flows
 (`harnesses/auth_flows.py`) the chat page's provider chooser drives. A chat
 binds to an account when it is created and moves to another only through a
 switch (a handoff or a rebind, above). A launch that names no account (the
-launcher, a desktop shortcut, `layout.py open chat`) goes to the account the user
+launcher, a desktop shortcut, `workspace-layout open chat`) goes to the account the user
 pinned as the default in a chat's provider menu, else to the most recently used
 one (the account of the latest sign-in, chat create, or switch); pressing
 another account in that menu switches the chat to it (through the dialog, or at

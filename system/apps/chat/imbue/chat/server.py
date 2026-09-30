@@ -655,7 +655,7 @@ def record_client_message_activity(
     shell: ShellLayoutInterface, chat_id: ChatId, send_message_request: SendMessageRequest, is_secondary: bool
 ) -> None:
     """Tell the shell which client (and desktop) a message came from, so agents can attribute requests through
-    ``layout.py context``. Callers naming no client or no desktop are not recorded, and neither is anything a
+    ``workspace-layout context``. Callers naming no client or no desktop are not recorded, and neither is anything a
     secondary chat (a preview) hears: the shell's activity log is the live chat's. Reported on its own thread:
     the shell is a separate app, and a send must not wait on it."""
     if is_secondary or not is_client_activity_reportable(send_message_request):

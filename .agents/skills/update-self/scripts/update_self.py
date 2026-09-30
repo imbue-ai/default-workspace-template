@@ -66,7 +66,7 @@ belong in tested code rather than agent prose:
     workspace by the Imbue Studio app lands on the conversation performing the update.
     The interface can only place a window in front of a client that is connected,
     and the user may still be on their way in, so the command detaches a helper
-    that retries ``layout.py open`` until one takes it (or a deadline passes)
+    that retries ``workspace-layout open`` until one takes it (or a deadline passes)
     and returns at once; the open focuses a window that is already there.
 
 ``bootstrap-skill``
@@ -418,17 +418,25 @@ def wait_and_open_chat_tab(
         sleep(retry_seconds)
 
 
+# CLEANUP: drop the script form once every workspace an update starts from ships the
+# workspace-layout command. This flow runs from the target's copy of the skill, so the
+# first update onto the release that replaced system/scripts/layout.py starts from a
+# workspace that has only the script.
+_LEGACY_LAYOUT_SCRIPT = "system/scripts/layout.py"
+
+
+def _open_chat_tab_argv(repo_root: Path, chat_id: str) -> list[str]:
+    """The desktop's ``open`` of the chat's page, in the form the workspace at ``repo_root`` has."""
+    open_chat = ["open", "chat", "--path", f"/?chat={chat_id}"]
+    if (repo_root / _LEGACY_LAYOUT_SCRIPT).is_file():
+        return [sys.executable, _LEGACY_LAYOUT_SCRIPT, *open_chat]
+    return ["uv", "run", "workspace-layout", *open_chat]
+
+
 def _try_open_chat_tab(repo_root: Path, chat_id: str, runner: Runner) -> bool:
     """One attempt at opening the chat's window through the desktop's ``open`` op; whether the shell took it."""
     result = runner.run(
-        [
-            sys.executable,
-            "system/scripts/layout.py",
-            "open",
-            "chat",
-            "--path",
-            f"/?chat={chat_id}",
-        ],
+        _open_chat_tab_argv(repo_root, chat_id),
         cwd=repo_root,
         capture_output=True,
     )

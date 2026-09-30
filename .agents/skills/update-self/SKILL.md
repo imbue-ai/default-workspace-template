@@ -610,7 +610,7 @@ one; the careful flow refuses its next pass on that app while one is), tear it
 down with the preview script and close its window:
 
 ```bash
-python3 system/scripts/layout.py close <name>-preview
+uv run workspace-layout close <name>-preview
 uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
 ```
 
