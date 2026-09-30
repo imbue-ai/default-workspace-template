@@ -255,6 +255,29 @@ describe("hoverTooltipAttrs", () => {
     elsewhere.remove();
   });
 
+  it("hangs the bubble off the trigger's top edge when it asks to sit above", () => {
+    vi.useFakeTimers();
+    // jsdom measures every element as zero-sized, so the trigger's box is stubbed and the bubble's
+    // stays empty: the two placements then differ only in which edge they hang the 6px gap off,
+    // which is exactly the wiring under test.
+    const box = { left: 400, top: 300, bottom: 320, width: 40, height: 20 } as DOMRect;
+    m.render(root, m("button", { ...hoverTooltipAttrs("Plan", "above") }, m("span", "Go")));
+    const button = root.firstElementChild as HTMLElement;
+    button.getBoundingClientRect = () => box;
+    hoverTooltip(button);
+    const bubble = document.querySelector<HTMLElement>(".hover-tooltip")!;
+    expect(bubble.style.top).toBe("294px");
+    unhoverTooltip(button);
+
+    // The default is unchanged: under the trigger, same gap.
+    m.render(root, m("button", { ...hoverTooltipAttrs("Plan") }, m("span", "Go")));
+    const belowTrigger = root.firstElementChild as HTMLElement;
+    belowTrigger.getBoundingClientRect = () => box;
+    hoverTooltip(belowTrigger);
+    expect(bubble.style.top).toBe("326px");
+    unhoverTooltip(belowTrigger);
+  });
+
   it("stops offering a tooltip an imperative caller takes back", () => {
     vi.useFakeTimers();
     const button = document.createElement("button");

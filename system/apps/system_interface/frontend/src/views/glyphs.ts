@@ -3,6 +3,9 @@
  * window controls (minimize, maximize, restore), the kebab, the size menu's zone pictograms,
  * and the launcher's plus and app fallback. Same Feather-style 24x24 frame as ``icons.ts``,
  * produced as SVG strings for ``m.trust``.
+ *
+ * Some of these are Lucide's own shapes as well as its frame -- the plus, the minus the minimize
+ * control draws -- copied rather than imported; its notice is in THIRD_PARTY_NOTICES.md at the root.
  */
 
 import { appIconMarkupForApp } from "./components/appIcon";
