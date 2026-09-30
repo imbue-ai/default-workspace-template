@@ -3,6 +3,9 @@
  * window controls (minimize, maximize, restore), the kebab, the size menu's zone pictograms,
  * and the launcher's plus and app fallback. Same Feather-style 24x24 frame as ``icons.ts``,
  * produced as SVG strings for ``m.trust``.
+ *
+ * The glyphs named for Lucide are that project's path data, copied rather than imported; its ISC
+ * notice is in THIRD_PARTY_NOTICES.md at the repo root.
  */
 
 import { appIconMarkupForApp } from "./components/appIcon";

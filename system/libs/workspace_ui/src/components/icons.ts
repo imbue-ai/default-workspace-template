@@ -11,6 +11,10 @@
 // differs, so it lives in STROKE_PATHS and `icon()` wraps it. Filled or
 // otherwise non-standard glyphs (stop, warning, the Claude logo, the progress
 // status badges, the login spinner) have their own builders below.
+//
+// The glyphs named for Lucide below are that project's path data, copied rather
+// than imported; its ISC notice is in THIRD_PARTY_NOTICES.md at the repo root,
+// and a glyph added from there belongs to it too.
 
 const XMLNS = "http://www.w3.org/2000/svg";
 
