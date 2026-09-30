@@ -1,10 +1,11 @@
 /**
  * The theme's metrics as behaviour reads them (desktop-interface plan section 6.6): every pixel
- * value the geometry and the gestures need is a token in ``theme/default.css``, read from the
- * root element's computed style once at boot and again whenever the render mode changes, and
- * handed on as one frozen record. No metric is a literal in TypeScript (``test_project_ratchets``
- * holds that for the views and the reducers); the compact breakpoint is the one exception in the
- * other direction, a TypeScript constant applied as a media query that sets ``data-compact``.
+ * value the geometry and the gestures need is a token in ``theme/default.css`` (a retro theme may
+ * redeclare one), read from the root element's computed style once at boot and again whenever the
+ * render mode or the chrome's UI theme changes, and handed on as one frozen record. No metric is a
+ * literal in TypeScript (``test_project_ratchets`` holds that for the views and the reducers); the
+ * compact breakpoint is the one exception in the other direction, a TypeScript constant applied as
+ * a media query that sets ``data-compact``.
  */
 
 /** The viewport width under which the desktop renders in compact mode (contracts.md section 11). */
