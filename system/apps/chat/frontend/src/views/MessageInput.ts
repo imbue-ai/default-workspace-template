@@ -1207,16 +1207,20 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
                       {
                         variant: "secondary",
                         sm: true,
+                        icon: true,
                         extra: "message-input-cancel-switch-button shrink-0",
                         readonly: isCancelSwitchInFlight,
                         ...hoverTooltipAttrs(
-                          "Keep this chat on its current agent; your message comes back here",
+                          isCancelSwitchInFlight
+                            ? "Cancelling the switch…"
+                            : "Cancel switch: keep this chat on its current agent; your message comes back here",
                           "above",
                         ),
                         "aria-label": "Cancel switch",
                         onclick: () => void handleCancelSwitch(),
                       },
-                      isCancelSwitchInFlight ? "Cancelling…" : "Cancel switch",
+                      // A glyph rather than words, so the composer's button row stays short.
+                      m.trust(icon("close", { size: 14, strokeWidth: 2.5 })),
                     )
                   : null,
                 isStopButtonVisible
