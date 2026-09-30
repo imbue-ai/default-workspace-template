@@ -97,6 +97,10 @@ class ChatAppState(MutableModel):
     )
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    # Watchers whose start has not returned, by id() (identity, not equality). Stop is not safe
+    # beside start, so a release that pops one of these leaves stopping it to the
+    # get_or_create_watcher starting it.
+    _starting_watchers: dict[int, AgentSessionWatcher] = PrivateAttr(default_factory=dict)
     _latchkey_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _is_shut_down: bool = PrivateAttr(default=False)
 
@@ -160,6 +164,7 @@ class ChatAppState(MutableModel):
                 lambda: self.agent_manager.is_agent_alive(agent_info.id),
             )
             self.watchers[agent_info.id] = watcher
+            self._starting_watchers[id(watcher)] = watcher
 
         # Seed transcript-derived activity signals BEFORE starting the watcher
         # thread (seeding needs no running thread -- ``get_all_events`` reads
@@ -170,14 +175,15 @@ class ChatAppState(MutableModel):
         # Seeding also keeps the indicator from lagging a turn behind on first
         # connect. Done outside the watchers lock to avoid holding it across the
         # agent manager's own lock.
-        self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
-        watcher.start()
-        # An eviction that popped the watcher before it started stopped nothing (stop is a
-        # no-op until start), so the thread just started would run with nobody left to stop it.
-        with self._watchers_lock:
-            is_evicted = self.watchers.get(agent_info.id) is not watcher
-        if is_evicted:
-            watcher.stop()
+        try:
+            self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
+            watcher.start()
+        finally:
+            with self._watchers_lock:
+                del self._starting_watchers[id(watcher)]
+                is_evicted = self.watchers.get(agent_info.id) is not watcher
+            if is_evicted:
+                watcher.stop()
         return watcher
 
     def get_or_create_loader(self, agent_info: AgentInfo) -> TranscriptLoader:
@@ -253,9 +259,11 @@ class ChatAppState(MutableModel):
         with self._watchers_lock:
             watcher = self.watchers.pop(agent_id, None)
             loader = self.loaders.pop(agent_id, None)
+            is_watcher_starting = id(watcher) in self._starting_watchers
         if watcher is not None:
             logger.debug("Evicting the session watcher for agent {}", agent_id)
-            watcher.stop()
+            if not is_watcher_starting:
+                watcher.stop()
         if loader is not None:
             logger.debug("Evicting the loaded transcript of agent {}", agent_id)
             loader.close()
@@ -277,7 +285,8 @@ class ChatAppState(MutableModel):
     def stop_all_watchers(self) -> None:
         with self._watchers_lock:
             for watcher in self.watchers.values():
-                watcher.stop()
+                if id(watcher) not in self._starting_watchers:
+                    watcher.stop()
             self.watchers.clear()
             for loader in self.loaders.values():
                 loader.close()

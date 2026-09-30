@@ -522,6 +522,35 @@ def test_a_watcher_released_before_it_starts_leaves_no_watch_thread_running(tmp_
         state.shutdown()
 
 
+def test_a_watcher_released_while_it_starts_is_stopped_once_after_its_start() -> None:
+    state = build_test_state()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    calls: list[str] = []
+
+    def start_while_released() -> None:
+        calls.append("start")
+        state.release_unviewed_stopped_transcripts()
+        calls.append("started")
+
+    fake_watcher = SimpleNamespace(
+        set_queue_snapshot_callback=lambda _callback: None,
+        notify_idle=lambda: [],
+        notify_busy=lambda: None,
+        set_flush_hooks=lambda _send, _is_alive: None,
+        get_all_events=lambda: [],
+        start=start_while_released,
+        stop=lambda: calls.append("stop"),
+    )
+    try:
+        with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
+            state.get_or_create_watcher(_agent_info(agent_id="stopped-agent"))
+
+        assert state.watchers == {}
+        assert calls == ["start", "started", "stop"]
+    finally:
+        state.shutdown()
+
+
 def test_get_events_caps_initial_load_to_tail(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
     """The no-`before` events response is capped to the most recent N events,
     and older events remain reachable via the `before` backfill branch."""
