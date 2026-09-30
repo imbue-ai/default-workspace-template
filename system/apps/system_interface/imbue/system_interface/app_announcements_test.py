@@ -170,7 +170,7 @@ def test_an_oversized_stream_is_archived_out_of_the_replay_and_restarted_fresh(
     ]
     wait_for(
         lambda: [path.suffix for path in _stream_neighbours(announcement_writer)] == [".gz"],
-        timeout=30.0,
+        timeout=5.0,
         error_message="the staged stream was never compressed",
     )
     (archive,) = _stream_neighbours(announcement_writer)
