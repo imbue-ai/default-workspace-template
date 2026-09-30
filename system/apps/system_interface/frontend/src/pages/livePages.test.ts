@@ -307,17 +307,28 @@ describe("creating and positioning", () => {
     expect(wrapperOf("win-1").style.display).toBe("");
   });
 
-  it("hides a stopped app's page and reloads it at the window's stored path once the app runs again", async () => {
+  it("hides the page of a stopped app nothing brings back, and reloads it at the window's stored path once the app runs again", async () => {
+    await navigateInPage("win-1", "/?doc=2");
+    const reloads = spyOnSrc("win-1");
+    socket.deliver().onAppsUpdated([{ ...docs, is_running: false, program: "" }, notes]);
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.display).toBe("none");
+    expect(reloads).toEqual([]);
+    socket.deliver().onAppsUpdated([{ ...docs, program: "" }, notes]);
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.display).toBe("");
+    expect(reloads).toEqual(["http://127.0.0.1:7001/?doc=2"]);
+  });
+
+  it("keeps a stoppable app's page while it is stopped: the shell's parker answers it", async () => {
     await navigateInPage("win-1", "/?doc=2");
     const reloads = spyOnSrc("win-1");
     socket.deliver().onAppsUpdated([{ ...docs, is_running: false }, notes]);
     layer.reconcile();
-    expect(wrapperOf("win-1").style.display).toBe("none");
-    expect(reloads).toEqual([]);
+    expect(wrapperOf("win-1").style.display).toBe("");
     socket.deliver().onAppsUpdated([docs, notes]);
     layer.reconcile();
-    expect(wrapperOf("win-1").style.display).toBe("");
-    expect(reloads).toEqual(["http://127.0.0.1:7001/?doc=2"]);
+    expect(reloads).toEqual([]);
   });
 });
 
@@ -641,6 +652,25 @@ describe("the contract", () => {
     store.restoreWindow("win-1");
     layer.reconcile();
     expect(document.activeElement).toBe(host);
+  });
+
+  it("takes the document's focus off a page whose window another window is raised over, however it was raised", () => {
+    frameOf("win-1").focus();
+    // A raise that no press on a handle made.
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    expect(document.activeElement).toBe(host);
+  });
+
+  it("leaves the document's focus in a page that reported taking it", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    frameOf("win-1").focus();
+    messageFromPage("win-1", { type: SHELL_FOCUSED });
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(document.activeElement).toBe(frameOf("win-1"));
   });
 
   it("leaves the dragged window on top when another page says it took focus mid-drag", () => {

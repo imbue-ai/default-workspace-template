@@ -30,12 +30,20 @@ class UnknownAppError(ShellError, LookupError):
     """No registered app has the given name."""
 
 
+class NoMessageHandlerError(ShellError, LookupError):
+    """No registered app handles the relayed message's type (answered 404)."""
+
+
 class AppLifecycleRefusedError(ShellError, ValueError):
     """The app cannot be stopped or started through the workspace."""
 
 
 class SupervisorProgramActionError(ShellError, RuntimeError):
     """Supervisord refused, or could not be reached for, a stop or start."""
+
+
+class ShareGrantsError(ShellError, ValueError):
+    """The share grants document is one the gateway would refuse (it then admits nobody)."""
 
 
 class DesktopNotFoundError(ShellError, LookupError):
@@ -102,3 +110,11 @@ class UpdateNoticeRefusedError(ShellError, ValueError):
 
 class UpdateNoticeCommandError(ShellError, RuntimeError):
     """The update-self script behind a notice verb could not be run, or failed."""
+
+
+class PortParkingError(ShellError, OSError):
+    """A stopped app's port could not be parked."""
+
+
+class PortInUseError(PortParkingError):
+    """Something already listens on the port the shell meant to park (the app itself, most likely)."""

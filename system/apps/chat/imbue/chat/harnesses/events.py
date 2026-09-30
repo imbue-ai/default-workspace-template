@@ -96,7 +96,8 @@ class DisplayKind(StrEnum):
     # tool_call only: render the secret card (password inputs) instead of a tool row.
     SECRET_REQUEST = "secret_request"
     # user_message only: the chat app's stored / declined / superseded notice -- no row; the
-    # ``resolution`` field is written onto the earlier secret card.
+    # ``resolution`` field is written onto the earlier secret card. ``display_body`` is the
+    # notice alone when a harness flushed background-task reports into the same message.
     SECRET_RESOLUTION = "secret_resolution"
     # A subtle inline status message (e.g. "Context was compacted").
     STATUS = "status"
@@ -104,7 +105,8 @@ class DisplayKind(StrEnum):
     # the plain summary (``display_body``). For a message the agent is told about rather
     # than one the user sent -- a background task finishing.
     NOTICE = "notice"
-    # user_message only: a genuine human turn the chat app prefixed with machine context (a
-    # seeded chat's first send, which carries the conversation the chat opened on). The baseline
-    # bubble, drawn from ``display_body`` -- the user's own words -- rather than the whole content.
+    # user_message only: a genuine human turn carrying machine context beside the user's words (a
+    # seeded chat's first send, which carries the conversation the chat opened on, or background-task
+    # reports a harness flushed from its queue into the same turn). The baseline bubble, drawn from
+    # ``display_body`` -- the user's own words -- rather than the whole content.
     PROMPT_WITH_CONTEXT = "prompt_with_context"

@@ -4,8 +4,9 @@ Each process is assigned to one band by writing its ``oom_score_adj`` once at
 startup. The workspace runs the imbue-ai fork of earlyoom, which picks its
 victim by the kernel's badness computed from each process's ``oom_score_adj``
 and memory -- ``VmRSS + VmSwap + VmPTE + oom_score_adj * (MemTotal + SwapTotal)
-/ 1000`` -- rather than reading ``/proc/<pid>/oom_score``, which gVisor serves
-as 0 for every process. So a higher band makes a process more likely to be shed
+/ 1000``, with the smaps Anonymous total in place of VmRSS under gVisor --
+rather than reading ``/proc/<pid>/oom_score``, which gVisor serves as 0 for
+every process. So a higher band makes a process more likely to be shed
 first, under gVisor and runc alike: one band point is worth MemTotal/1000 of
 memory.
 
@@ -189,8 +190,8 @@ def chat_agent_oom_score_adj(
 # hurts: the two authority paths into the workspace (owner-exec, then the
 # terminal) come first, then the UI and the chat app, then the sharing stack,
 # then the runtime-state sync (github-sync, opt-in) and the host backup, then
-# the job scheduler and the app-watcher, then the browser stack (its X display,
-# then the coordinator), and last the file viewer.
+# the job scheduler, then the browser stack (its X display, then the
+# coordinator), and last the file viewer.
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
@@ -253,7 +254,6 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # command is the stock ``/usr/sbin/cron`` binary, not a workspace entry
     # point), so this band reaches it via the backstop listener instead.
     "cron": 55,
-    "app-watcher": 60,
     # The shared X display Chromium renders into. Losing it breaks the browser
     # subsystem, so it is *less* expendable than the coordinator below -- whose
     # death Chromium survives -- but more so than the workspace's own services:

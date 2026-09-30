@@ -9,7 +9,7 @@ transient cases, capped at 15 minutes -- and a refusal the connector marks as
 permanent halts retries until the share materials change (a re-share).
 
 Every outcome is written to ``data/.state/share_gateway/status.json`` so the
-minds desktop client can tell the owner why a share is not live yet instead
+Imbue Studio desktop client can tell the owner why a share is not live yet instead
 of showing a spinner forever.
 """
 
@@ -92,7 +92,7 @@ def write_gateway_status(
     next_retry_in_seconds: int | None,
     now: datetime,
 ) -> None:
-    """Atomically write the status document the minds desktop client reads."""
+    """Atomically write the status document the Imbue Studio desktop client reads."""
     next_retry_at = now + timedelta(seconds=next_retry_in_seconds) if next_retry_in_seconds is not None else None
     payload = {
         "state": state,

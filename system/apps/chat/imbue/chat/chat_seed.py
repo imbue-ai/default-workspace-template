@@ -1,6 +1,6 @@
-"""The seed segment: a chat's opening turns written by the Mind app rather than by a harness.
+"""The seed segment: a chat's opening turns written by the Imbue Studio app rather than by a harness.
 
-The Mind app's onboarding is a conversation (the "what is honest software" exchange, the
+The Imbue Studio app's onboarding is a conversation (the "what is honest software" exchange, the
 questions about where to run the workspace, the setup and ready lines). Once the workspace
 exists that conversation continues inside it as the workspace's first chat, so the app hands
 the turns over and the chat app keeps them as the chat's first segment: a file of events in
@@ -54,7 +54,7 @@ class SeedRole(LowerCaseStrEnum):
 
 
 class SeedTurn(FrozenModel):
-    """One turn of the conversation the Mind app hands over: who said it, and the markdown they said."""
+    """One turn of the conversation the Imbue Studio app hands over: who said it, and the markdown they said."""
 
     role: SeedRole = Field(description="The side of the conversation the turn belongs to")
     text: str = Field(description="The turn's text, as markdown")
@@ -166,7 +166,7 @@ def read_seed_events(chat_dir: Path) -> list[dict[str, Any]]:
 def seed_transcript(events: list[dict[str, Any]]) -> str:
     """The seed segment's turns as the conversation they were: one tagged block per turn, in order.
 
-    The turns are markdown the Mind app wrote, so they are quoted whole rather than summarised.
+    The turns are markdown the Imbue Studio app wrote, so they are quoted whole rather than summarised.
     A closing context tag inside a turn is broken up, so the block the page strips always ends
     where this builder put its end.
     """

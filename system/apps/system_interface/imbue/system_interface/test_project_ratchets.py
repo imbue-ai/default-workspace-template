@@ -255,3 +255,4 @@ def test_the_shell_names_no_app() -> None:
     assert offenders == [], (
         _SHELL_NAMES_THE_CHAT_RULE.rule_description + "\n" + "\n".join(f"  - {line}" for line in offenders)
     )
+

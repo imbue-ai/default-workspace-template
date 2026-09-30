@@ -1,6 +1,6 @@
 """Share gateway runner: the supervisord entrypoint that manages the whole share stack.
 
-Watches ``data/.secrets/share.env`` (the share materials the minds app injects)
+Watches ``data/.secrets/share.env`` (the share materials Imbue Studio injects)
 plus ``data/.state/apps.toml`` (the service registry). While materials are
 present it keeps the stack up: TLS key/CSR/cert via the connector, the
 rendered Caddyfile, caddy, the gateway Flask server caddy's forward_auth
@@ -79,8 +79,7 @@ _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
 def _try_setup_inotify(paths: list[Path]) -> object | None:
     """Watch the parent directories of every gating file; None when inotify is unavailable.
 
-    Uses inotify_simple (pure Python, Linux only), the same library the
-    app_watcher service watches with.
+    Uses inotify_simple (pure Python, Linux only).
     """
     try:
         inotify = INotify()

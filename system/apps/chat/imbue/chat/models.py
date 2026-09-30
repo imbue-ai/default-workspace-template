@@ -10,6 +10,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_settings import ChatSettings
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
@@ -276,6 +277,15 @@ class QueuedMessageState(FrozenModel):
             "False for an ordinary parked queue chip."
         ),
     )
+    display: DisplayKind | None = Field(
+        default=None,
+        description=(
+            "The render decision the content would get as a transcript user_message "
+            "(``harnesses.message_display``); None for a plain message"
+        ),
+    )
+    display_label: str | None = Field(default=None, description="The decision's chip or notice label")
+    display_body: str | None = Field(default=None, description="The decision's body, when it is not the content")
 
 
 class AgentStateItem(FrozenModel):
@@ -660,7 +670,7 @@ class ProvisionalChat(FrozenModel):
 
 
 class SeedChatRequest(FrozenModel):
-    """Request body for POST /api/chats/seed: the conversation the Mind app had before the workspace existed."""
+    """Request body for POST /api/chats/seed: the conversation the Imbue Studio app had before the workspace existed."""
 
     title: str = Field(default="", description='The chat\'s display name; empty mints the first free "Chat N"')
     turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")

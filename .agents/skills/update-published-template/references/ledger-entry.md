@@ -15,7 +15,7 @@ changed>"`, and `SOURCE_SHA` = the current `/home/user/workspace` HEAD the updat
 (the source anchor for v(n+1) -- NOT `BASE_REF`, NOT `PUBLISHED_TIP`, NOT anything
 from `$WT`).
 
-- The slug's `### <slug>  --  <repo-url>` heading already exists (this mind
+- The slug's `### <slug>  --  <repo-url>` heading already exists (this agent
   published v1 through `publish-template`). In the unlikely event
   `docs/VERSION_HISTORY.md` is missing, recreate the shipped four-section
   starter (`## Workspace`, `## Migrations`, `## Templates`, `## Adopted

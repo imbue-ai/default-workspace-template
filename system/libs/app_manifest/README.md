@@ -4,10 +4,12 @@ The models behind a workspace app's two descriptions:
 
 - **The manifest**, `system/apps/<package>/app.toml`: an app's static
   declarations (name, display name, icon, its memory-shedding priority, whether
-  it is critical, its supervisord program, the launch paths the desktop opens
-  windows at, the shortcut a new desktop is seeded with, and what it owns
-  outside its own directory). The schema is `contracts.md` section 2 of the
-  desktop interface (`docs/system/blueprint/desktop-interface/`), which carries
+  it is critical, whether it stops once no window shows it, its supervisord
+  program, the launch paths the desktop opens windows at, the shortcut a new
+  desktop is seeded with, the messages from the Imbue Studio chrome it takes,
+  and what it owns outside its own directory). The schema is `contracts.md`
+  section 2 of the desktop interface (`docs/system/blueprint/desktop-interface/`),
+  which carries
   section 2 of the workspace app model
   (`docs/system/blueprint/workspace-app-model/`) forward without its instance
   fields.
@@ -29,6 +31,9 @@ The models behind a workspace app's two descriptions:
   shell's launch envelope and can name neither a param nor a preset; `open` is
   reserved for the root launch path the shell synthesizes for an app that
   declares none), `LaunchPathMethod`,
+  `MessageHandler` (`type`, a `MessageType`: `minds:` and a lowercase kebab-case
+  name, unique within the manifest; `path`, the route under the app's origin the
+  shell posts each message of that type to, shaped like a launch path),
   `DefaultShortcut`
   (`launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
@@ -79,7 +84,7 @@ The models behind a workspace app's two descriptions:
   raises `ScopeComputationError` rather than reporting an empty diff.
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `LaunchPathId`, `LaunchParamName`, `LaunchPathValue` (rooted with one
-  slash, no query string or fragment, nothing a URL would escape),
+  slash, no query string or fragment, nothing a URL would escape), `MessageType`,
   `PriorityName`, `ProgramName`,
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
   gitignore negation would re-include a built-in exclude), `ReferenceNote`) and
@@ -100,8 +105,8 @@ test, freshness, or publish pass may treat as that creation's own. Every path in
 it is repo-root-relative, and `--repo-root` (default: the current directory, the
 same convention `registry_path()` follows) is what they are relative to.
 
-    app-manifest footprint <manifest> [--repo-root DIR] [--diff-base REF] [--out FILE]
-    app-manifest footprint --for-path <path> [--repo-root DIR] [--diff-base REF] [--out FILE]
+    app-manifest footprint <manifest> [--repo-root DIR] [--diff-base REF [--diff-ref REF]] [--out FILE]
+    app-manifest footprint --for-path <path> [--repo-root DIR] [--diff-base REF [--diff-ref REF]] [--out FILE]
     app-manifest references --for-path <path> [--repo-root DIR]
 
 The positional manifest and `--for-path` are alternatives: the first describes
@@ -149,12 +154,16 @@ goes to stdout; with it, the parent directories are created.
   existence.
 - `exclude` is the built-in globs followed by the manifest's own, deduplicated.
 - `diff` is null unless `--diff-base` is given, and then reports the base's full
-  sha, every file the diff changed (from the three-dot form, so what the base
-  branch did after the fork is not the creation's change), and
-  `outside_footprint`: the changed files that are neither under a `primary` path,
-  nor a `wiring` file, nor under a reference, nor a `context` entry's
-  `app.toml`, nor matched by `exclude`. A non-empty `outside_footprint` means either a missing
-  reference or a change that does not belong on the branch.
+  sha, the full sha of the `ref` the diff runs to (HEAD, or what `--diff-ref`
+  names, so one tree can answer for a range that ends elsewhere -- what a merge
+  commit's first parent changed since the fork, say), every file the diff
+  changed (from the three-dot form, so what the base branch did after the fork
+  is not the creation's change), and that list split in two:
+  `inside_footprint`, the changed files under a `primary` path, a `wiring`
+  file, a reference, or a `context` entry's `app.toml`, and `outside_footprint`,
+  the changed files under none of those. A file matched by `exclude` is in
+  neither. A non-empty `outside_footprint` means either a missing reference or a
+  change that does not belong on the branch.
 
 `app-manifest references --for-path <path>` prints one JSON object per line
 (`app`, `manifest`, `path`, `note`) for every app whose manifest claims that

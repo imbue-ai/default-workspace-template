@@ -108,19 +108,19 @@ describe("classifyUserMessage", () => {
 });
 
 describe("semantic helpers", () => {
-  it("isNonBoundaryUserMessage is true only for the kinds that render no timeline row", () => {
+  it("isNonBoundaryUserMessage is true for kinds that do not open a new section", () => {
     expect(isNonBoundaryUserMessage({ content: "x", display: "chip", display_label: "Stop hook feedback" })).toBe(
       false,
     );
-    expect(isNonBoundaryUserMessage({ content: "x", display: "status" })).toBe(false);
+    expect(isNonBoundaryUserMessage({ content: "x", display: "status" })).toBe(true);
     expect(isNonBoundaryUserMessage({ content: "x", display: "skill_expansion" })).toBe(true);
     expect(isNonBoundaryUserMessage({ content: "/welcome", display: "hidden" })).toBe(true);
     expect(isNonBoundaryUserMessage({ content: "a normal message" })).toBe(false);
   });
 
-  it("isTurnUserMessage is true only for a message the user sent and a status line", () => {
+  it("isTurnUserMessage is true only for a message the user sent", () => {
     expect(isTurnUserMessage({ content: "a normal message" })).toBe(true);
-    expect(isTurnUserMessage({ content: "x", display: "status" })).toBe(true);
+    expect(isTurnUserMessage({ content: "x", display: "status" })).toBe(false);
     expect(isTurnUserMessage({ content: "x", display: "chip", display_label: "Stop hook feedback" })).toBe(false);
     expect(isTurnUserMessage({ content: "x", display: "notice" })).toBe(false);
     expect(isTurnUserMessage({ content: "/welcome", display: "hidden" })).toBe(false);
@@ -232,5 +232,16 @@ describe("secret requests and their resolutions", () => {
     expect(resolutionOf(declined)).toBeNull();
     // Still a UserPrompt for the classifier: only the walk suppresses the bubble.
     expect(classifyUserMessage(declined).kind).toBe(UserMessageKind.UserPrompt);
+  });
+
+  it("reads a decline note from the notice the backend separated from a report flushed with it", () => {
+    const notice =
+      "Secret declined: data/.secrets/svc.env (A) (secret: declined, request_id: secret-1) use the other account";
+    const flushed = {
+      content: `${notice}\n<background-task-report>\n<summary>Build (finished)</summary>\nbuilt\n</background-task-report>`,
+      display: "secret_resolution" as const,
+      display_body: notice,
+    };
+    expect(secretResolutionNoteOf(flushed)).toBe("use the other account");
   });
 });

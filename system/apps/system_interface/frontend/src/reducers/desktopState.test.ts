@@ -18,6 +18,7 @@ import {
   entryLook,
   floatingEntries,
   initialDesktopState,
+  isAppShownStopped,
   isAppStoppable,
   isLayoutDirty,
   pinnedWindowOf,
@@ -390,7 +391,7 @@ describe("selectors", () => {
     ]);
   });
 
-  it("offers stop and start only for a supervised, non-critical app outside a critical program", () => {
+  it("counts as stoppable, Quit offered and woken by the parker, only a supervised, non-critical app outside a critical program", () => {
     const state = reduceDesktopState(initialDesktopState("c", MODES), {
       type: "apps_updated",
       apps: [
@@ -404,5 +405,24 @@ describe("selectors", () => {
     expect(isAppStoppable(state, state.apps[1])).toBe(false);
     expect(isAppStoppable(state, state.apps[2])).toBe(false);
     expect(isAppStoppable(state, state.apps[3])).toBe(true);
+  });
+
+  it("shows a stopped app as stopped only when nothing brings it back on a request", () => {
+    const state = reduceDesktopState(initialDesktopState("c", MODES), {
+      type: "apps_updated",
+      apps: [
+        appRecord("shell", { critical: true, program: "shell", is_running: false }),
+        appRecord("helper", { program: "shell", is_running: false }),
+        appRecord("loose", { program: "", is_running: false }),
+        appRecord("docs", { is_running: false }),
+        appRecord("notes", { is_running: true }),
+      ],
+    });
+    // A critical app, a row inside its program, and an unsupervised row are honestly down.
+    expect(state.apps.slice(0, 3).map((app) => isAppShownStopped(state, app))).toEqual([true, true, true]);
+    // A stoppable app's stopped state is the parker answering for it; a running app and no app are not stopped.
+    expect(isAppShownStopped(state, state.apps[3])).toBe(false);
+    expect(isAppShownStopped(state, state.apps[4])).toBe(false);
+    expect(isAppShownStopped(state, undefined)).toBe(false);
   });
 });

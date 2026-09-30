@@ -1,7 +1,7 @@
 """Grants evaluation: who may visit which service of this shared workspace.
 
-The grants document is a TOML file the workspace owner edits through the minds
-app. Workspace-level grants admit a user to every service; per-service grants
+The grants document is a TOML file the workspace owner edits through Imbue
+Studio. Workspace-level grants admit a user to every service; per-service grants
 admit it to exactly that service's origin. A malformed grants file fails
 closed: nobody is admitted until it parses again.
 
@@ -20,7 +20,7 @@ first. An ``emails`` entry is an invitation: once a visitor with that verified
 email is admitted, the gateway rewrites the document to hold their user id
 instead (``upgrade_invites``), so a later email change on their account never
 revokes what the owner granted. Every writer of the file -- this gateway, the
-minds desktop through ``mngr exec`` -- holds the same ``flock`` on the sibling
+Imbue Studio desktop through ``mngr exec`` -- holds the same ``flock`` on the sibling
 ``.lock`` file around its read-modify-write and replaces the file atomically.
 """
 
@@ -155,7 +155,7 @@ def _render_grant_list(grant_list: GrantList) -> list[str]:
 
 
 def render_grants(grants: Grants) -> str:
-    """Render a grants document in the shape ``parse_grants`` reads (the minds desktop writes the same shape)."""
+    """Render a grants document in the shape ``parse_grants`` reads (the Imbue Studio desktop writes the same shape)."""
     lines = ["[workspace]", *_render_grant_list(grants.workspace)]
     for service_name in sorted(grants.services):
         lines.extend(["", f"[services.{_toml_key(service_name)}]", *_render_grant_list(grants.services[service_name])])
@@ -204,7 +204,7 @@ def write_grants_atomic(grants_path: Path, text: str) -> None:
 def upgrade_invites_in_file(grants_path: Path, email: str, user_id: str) -> bool:
     """Rewrite the grants document so ``email``'s invitations become ``user_id`` grants; True when it changed.
 
-    The document is re-read under the lock so a concurrent edit (the minds
+    The document is re-read under the lock so a concurrent edit (the Imbue Studio
     desktop saving a whole document) is never torn or overwritten with a
     stale copy. Raises GrantsError when the file is missing or malformed.
     """

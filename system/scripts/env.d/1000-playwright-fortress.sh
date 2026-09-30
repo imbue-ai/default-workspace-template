@@ -20,7 +20,7 @@ _log() {
     printf '[env.d/playwright-fortress] %s\n' "$*"
 }
 
-# Environments that never use the browser stack (e.g. the minds CI snapshot
+# Environments that never use the browser stack (e.g. the Imbue Studio CI snapshot
 # producer) opt out of the whole unit -- most importantly the hundreds-of-MB
 # Fortress download -- by setting DWT_SKIP_BROWSER_UNIT=1 in the agent
 # environment. An env var rather than a marker file keeps the env.d contract:

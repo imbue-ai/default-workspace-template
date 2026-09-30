@@ -1,6 +1,6 @@
 # The version ceiling
 
-The default update target **is** the release the **Mind app driving this
+The default update target **is** the release the **Imbue Studio app driving this
 workspace** was built against, which `resolve-target` reads from the app itself
 (`GET /api/v1/app/version` through the latchkey gateway; `ceiling` in the
 output). The template carries the code that app talks to, so only that pairing
@@ -17,7 +17,7 @@ user, never a version the script picks.
   running one knows which ref they want: take it from them as an `--override`.
 
 Releases above the app's are treated as if they do not exist: never name one
-the user did not ask for, or suggest updating the app to reach it. The Mind app
+the user did not ask for, or suggest updating the app to reach it. The Imbue Studio app
 announces its own updates, on the user's release channel.
 
 ## At the ceiling vs behind it
@@ -33,7 +33,7 @@ are told apart by whether the resolved ref is already an ancestor of `HEAD`.
 app cannot vouch for -- newer than the app, or a branch or commit whose version
 cannot be compared. Do not dispatch the worker on it silently. Tell the user
 plainly what they asked for and what it risks ("that version is newer than your
-Mind app, so parts of your workspace may stop working until you update the
+Imbue Studio app, so parts of your workspace may stop working until you update the
 app itself") and get an explicit go-ahead. This is the one confirmation the
 otherwise-unattended flow keeps: it fires at launch, while the user is present,
 and asks whether to *attempt* an unsupported version at all -- a question no

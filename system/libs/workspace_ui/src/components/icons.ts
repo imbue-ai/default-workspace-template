@@ -11,6 +11,9 @@
 // differs, so it lives in STROKE_PATHS and `icon()` wraps it. Filled or
 // otherwise non-standard glyphs (stop, warning, the Claude logo, the progress
 // status badges, the login spinner) have their own builders below.
+//
+// The glyphs named for Lucide below are that project's path data, copied rather
+// than imported; its notice is in THIRD_PARTY_NOTICES.md at the repo root.
 
 const XMLNS = "http://www.w3.org/2000/svg";
 
@@ -39,7 +42,7 @@ const STROKE_PATHS = {
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   // The key that heads a permission request, and the cube that stands in for a
   // app with no bundled brand mark. Both are lucide (`key-round`, `box`) --
-  // the same two glyphs the minds app draws on its own permission surfaces, so
+  // the same two glyphs Imbue Studio draws on its own permission surfaces, so
   // the in-chat card and the review popup agree.
   key: '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>',
   box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',

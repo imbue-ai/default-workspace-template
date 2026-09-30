@@ -64,7 +64,6 @@ RESERVED_NAMES = frozenset(
         "system_interface",
         "share-gateway",
         "share_gateway",
-        "app-watcher",
         "bootstrap",
         "github-sync",
         "host-backup",
@@ -542,17 +541,25 @@ def _write_lib(
 
 # The manifest (system/apps/<package>/app.toml; see system/libs/app_manifest).
 # ``priority = "user"`` is what puts a user-built app in the user band the
-# ``oom_tag_service.py user`` prefix below also names. No launch paths: the
-# shell offers ``open`` at the app's root. No ``default_shortcut``: an app
-# pins itself to a desktop's backdrop only when the user asks. The ``[preview]``
-# table is the library's default for the name spelled out, so an edit to the
-# runner's env names has the table to keep in step beside it.
+# ``oom_tag_service.py user`` prefix below also names. ``stop_when_no_windows``
+# is stated outright so the rule an app runs under is in its own manifest. No
+# launch paths: the shell offers ``open`` at the app's root. No
+# ``default_shortcut``: an app pins itself to a desktop's backdrop only when the
+# user asks. The ``[preview]`` table is the library's default for the name
+# spelled out, so an edit to the runner's env names has the table to keep in
+# step beside it.
 _MANIFEST_TEMPLATE = """\
 name = "{name}"
 display_name = "{display_name}"
 icon = "icon.svg"
 priority = "user"
 program = "{name}"
+# The shell stops the app once no window shows it (a minute after the last one
+# closes) and starts it again on the next request; false keeps it running for
+# the life of the workspace. Set false if the app does work between requests
+# (a background thread, a poller, a scheduled refresh, a subscription to an
+# outside service, a job that outlives the window): a stop loses that work.
+stop_when_no_windows = true
 
 # How update-app boots a throwaway preview of this app: on a free port, over a
 # scratch copy of its data (see .agents/skills/update-app/scripts/preview_app.py).
@@ -571,7 +578,7 @@ copies = {{data = "data/.apps/{name}"}}
 # workspace: 46,939 restarts in one day).
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {entry_point}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && exec {entry_point}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true

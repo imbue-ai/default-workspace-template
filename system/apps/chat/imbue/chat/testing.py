@@ -85,6 +85,13 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
+from imbue.chat.shell_client import DisconnectedShell
+from imbue.chat.shell_client import ShellLayoutClient
+from imbue.chat.shell_client import ShellLayoutInterface
+from imbue.chat.shell_client import ShellOpError
+from imbue.chat.shell_client import ShellRefusedOpError
+from imbue.chat.shell_client import ShowAnswer
+from imbue.chat.shell_client import ShowRequest
 from imbue.chat.state import ChatAppState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
@@ -93,6 +100,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import release_observe_lock
+from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import SystemInterfaceState
@@ -440,21 +448,42 @@ class SummaryWritingMngrMessenger(RecordingMngrMessenger):
         return super().send_to_agent(agent_id, message, known_locations)
 
 
-class RecordingShell(MutableModel):
-    """A shell for the auto-open reactor whose connected clients a test sets, recording every open it is asked for."""
+class VanishedAgentMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger whose agent is destroyed before the send reaches it.
 
-    model_config = {"extra": "forbid", "frozen": False}
+    The real messenger's fallback discovery then raises, as mngr's does for an id it no longer
+    lists.
+    """
+
+    def send_to_agent(
+        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
+    ) -> SendFailure | None:
+        super().send_to_agent(agent_id, message, known_locations)
+        raise AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}")
+
+
+class RecordingShell(MutableModel):
+    """A shell whose connected clients a test sets, recording every show it is asked for and answering each with
+    ``answer``: refused for a client in ``refused_client_ids``, and failing with ``error`` for everyone while set."""
+
+    model_config = {"extra": "forbid", "frozen": False, "arbitrary_types_allowed": True}
 
     client_ids: list[str] = []
     refused_client_ids: list[str] = []
-    opens: list[tuple[str, str]] = []
+    error: ShellOpError | None = None
+    answer: ShowAnswer = ShowAnswer(shown="opened", window_id="win-0123456789abcdef")
+    shows: list[ShowRequest] = []
 
     def connected_client_ids(self) -> list[str]:
         return list(self.client_ids)
 
-    def open_chat(self, chat_id: ChatId, client_id: str) -> bool:
-        self.opens.append((chat_id, client_id))
-        return client_id not in self.refused_client_ids
+    def show(self, request: ShowRequest) -> ShowAnswer:
+        self.shows.append(request)
+        if self.error is not None:
+            raise self.error
+        if request.client_id in self.refused_client_ids:
+            raise ShellRefusedOpError(f"The shell refused the show (412): no client {request.client_id!r}")
+        return self.answer
 
 
 def read_create_defaults_type(path: Path) -> str | None:
@@ -482,6 +511,22 @@ class RecordingClientActivityShell:
         return "", 204
 
 
+class RecordingLayoutOpShell:
+    """A stand-in shell that records every op posted to ``/api/layout/broadcast`` and answers each with one
+    status and body."""
+
+    def __init__(self, status: int, body: str) -> None:
+        self.received: list[dict[str, Any]] = []
+        self.status = status
+        self.body = body
+        self.application = Flask("recording-op-shell")
+        self.application.add_url_rule("/api/layout/broadcast", view_func=self._accept, methods=["POST"], endpoint="op")
+
+    def _accept(self) -> tuple[str, int]:
+        self.received.append(request.get_json())
+        return self.body, self.status
+
+
 def build_temporary_secret_request_store() -> SecretRequestStore:
     """A store rooted in a fresh temporary directory, laid out like the workspace's data/."""
     root = Path(tempfile.mkdtemp(prefix="chat-secret-requests-"))
@@ -497,6 +542,8 @@ def build_test_state(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
+    is_secondary: bool = False,
+    shell: ShellLayoutInterface | None = None,
     secret_requests: SecretRequestStore | None = None,
     chat_namer: ChatNamer | None = None,
 ) -> ChatAppState:
@@ -529,6 +576,8 @@ def build_test_state(
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
+        is_secondary=is_secondary,
+        shell=shell if shell is not None else DisconnectedShell(),
         # Never the production directories: a test that files a request must not write
         # under this package's own data/. A test that reads the files back injects a store
         # rooted in its tmp_path.
@@ -901,7 +950,8 @@ def running_workspace(
     is bound to, so a create starts at once; without one a create is refused, and the chat
     root offers the provider chooser instead. ``additional_accounts`` sign further
     accounts in (a chat switches harness to one of them); ``messenger`` replaces the recording
-    messenger the manager sends through.
+    messenger the manager sends through. The chat's layout client is the served shell, so a route that asks the
+    shell for a window lands it there.
     """
     shell_url = f"http://127.0.0.1:{shell_port}"
     chat_url = f"http://127.0.0.1:{chat_port}"
@@ -1003,7 +1053,11 @@ def running_workspace(
         for info in agents:
             manager._ensure_activity_tracking(info.id)
         manager.note_agent_list_known()
-        chat_state = build_test_state(config=Config(chat_host="127.0.0.1", chat_port=chat_port), agent_manager=manager)
+        chat_state = build_test_state(
+            config=Config(chat_host="127.0.0.1", chat_port=chat_port),
+            agent_manager=manager,
+            shell=ShellLayoutClient(shell_url=shell_url),
+        )
         chat_app = create_application(chat_state)
         chat_server = make_threaded_server("127.0.0.1", chat_port, chat_app)
         chat_thread = threading.Thread(target=chat_server.serve_forever, daemon=True)

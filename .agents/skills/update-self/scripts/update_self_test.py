@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -258,7 +259,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_denies_the_route(
         update_target.fetch_app_template_ref()
     except update_target.AppVersionUnavailableError as exc:
         assert "too old to report its version" in str(exc)
-        assert "Update the minds app itself first" in str(exc)
+        assert "Update the Imbue Studio app itself first" in str(exc)
     else:
         raise AssertionError("expected a 403 to block with the old-app message")
 
@@ -289,7 +290,7 @@ def test_fetch_app_template_ref_blocks_when_the_gateway_call_fails(
     try:
         update_target.fetch_app_template_ref()
     except update_target.AppVersionUnavailableError as exc:
-        assert "could not reach the minds app" in str(exc)
+        assert "could not reach the Imbue Studio app" in str(exc)
         assert "connection refused" in str(exc)
     else:
         raise AssertionError("expected a transport failure to block")
@@ -438,9 +439,150 @@ def test_resolve_target_cli_exits_nonzero_with_a_readable_message_when_blocked(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "could not reach the minds app" in captured.err
+    assert "could not reach the Imbue Studio app" in captured.err
     # A refusal, not a crash: no traceback for the lead to relay.
     assert "Traceback" not in captured.err
+
+
+def _clone_workspace_with_upstream_branch(
+    tmp_path: Path, branch: str
+) -> tuple[Path, Path]:
+    """An upstream template carrying ``branch``, and a workspace cloned from it.
+
+    The workspace fetched ``branch`` (so ``upstream/<branch>`` exists) but never
+    checked it out, as on a real workspace: there is no local branch of that name.
+    ``branch`` carries a different copy of the update-self skill from ``main``'s.
+    """
+    upstream = tmp_path / "upstream"
+    _init_repo_with_skill(upstream, skill_body="MAIN FLOW\n")
+    _git_in(upstream, "branch", "-M", "main")
+    _git_in(upstream, "checkout", "-q", "-b", branch)
+    (upstream / update_self.SKILL_DIR_REL / "SKILL.md").write_text(
+        "BRANCH FLOW\n", encoding="utf-8"
+    )
+    _git_in(upstream, "commit", "-q", "-am", "fix the flow on the branch")
+    _git_in(upstream, "checkout", "-q", "main")
+    workspace = tmp_path / "workspace"
+    subprocess.run(
+        ["git", "clone", "-q", "-o", "upstream", str(upstream), str(workspace)],
+        check=True,
+        capture_output=True,
+    )
+    _git_in(workspace, "config", "user.email", "test@example.com")
+    _git_in(workspace, "config", "user.name", "test")
+    return upstream, workspace
+
+
+def _resolve_override(workspace: Path, override: str, capsys) -> dict:
+    # ``--ceiling`` stands in for the app, so no gateway is reached.
+    assert (
+        update_self.main(
+            [
+                "resolve-target",
+                "--local-tags",
+                "--ceiling",
+                "minds-v1.0.0",
+                "--override",
+                override,
+                "--repo-root",
+                str(workspace),
+            ]
+        )
+        == 0
+    )
+    return json.loads(capsys.readouterr().out)
+
+
+def test_a_branch_override_the_workspace_only_has_upstream_resolves_and_hands_off(
+    tmp_path, capsys
+) -> None:
+    """The branch the user picked resolves everywhere the pass uses ``$REF``.
+
+    A bare name with no local branch behind it resolves nowhere, so handing it
+    back verbatim would make the hand-off quietly keep the workspace's own copy
+    of the flow instead of the branch's.
+    """
+    upstream, workspace = _clone_workspace_with_upstream_branch(
+        tmp_path, "electric-husky"
+    )
+
+    target = _resolve_override(workspace, "electric-husky", capsys)
+
+    ref = target["ref"]
+    assert ref == "upstream/electric-husky"
+    assert target["exceeds_ceiling"] is True
+    assert _git_in(workspace, "rev-parse", f"{ref}^{{commit}}") == _git_in(
+        upstream, "rev-parse", "electric-husky"
+    )
+
+    # Step 2a stages the branch's own flow.
+    staging = tmp_path / "staging"
+    assert (
+        update_self.main(
+            [
+                "bootstrap-skill",
+                "--ref",
+                ref,
+                "--dest",
+                str(staging),
+                "--repo-root",
+                str(workspace),
+            ]
+        )
+        == 0
+    )
+    staged = json.loads(capsys.readouterr().out)
+    assert staged["differs"] is True
+    assert Path(staged["skill_dir"], "SKILL.md").read_text() == "BRANCH FLOW\n"
+
+    # Step 3a's re-check hands the qualified ref back unchanged.
+    assert _resolve_override(workspace, ref, capsys)["ref"] == ref
+
+    # The worker merges it from its own worktree of the same repo.
+    worker = tmp_path / "worker"
+    _git_in(workspace, "worktree", "add", "-q", "-b", "mngr/update-self", str(worker))
+    _git_in(worker, "merge", "-q", "--no-edit", ref)
+    assert (worker / update_self.SKILL_DIR_REL / "SKILL.md").read_text() == (
+        "BRANCH FLOW\n"
+    )
+
+
+def test_a_bare_branch_override_takes_the_remote_over_a_stale_local_branch(
+    tmp_path, capsys
+) -> None:
+    # A local branch of the same name is a copy the fetch never advances, so
+    # the remote is what was picked.
+    upstream, workspace = _clone_workspace_with_upstream_branch(
+        tmp_path, "electric-husky"
+    )
+    _git_in(workspace, "branch", "electric-husky", "upstream/electric-husky")
+    _git_in(upstream, "checkout", "-q", "electric-husky")
+    _git_in(upstream, "commit", "-q", "--allow-empty", "-m", "a later fix")
+    _git_in(workspace, "fetch", "-q", "upstream")
+
+    ref = _resolve_override(workspace, "electric-husky", capsys)["ref"]
+
+    assert _git_in(workspace, "rev-parse", ref) == _git_in(
+        upstream, "rev-parse", "electric-husky"
+    )
+
+
+def test_an_override_the_remote_has_no_branch_for_is_kept_as_given(
+    tmp_path, capsys
+) -> None:
+    _, workspace = _clone_workspace_with_upstream_branch(tmp_path, "electric-husky")
+    _git_in(workspace, "branch", "my-local-work")
+    sha = _git_in(workspace, "rev-parse", "HEAD")
+
+    # The clone's ``upstream/HEAD`` is a symref, not a branch to qualify onto.
+    for override in (
+        sha,
+        "upstream/electric-husky",
+        "my-local-work",
+        "HEAD",
+        "no-such-ref",
+    ):
+        assert _resolve_override(workspace, override, capsys)["ref"] == override
 
 
 # classify_path
@@ -452,7 +594,7 @@ def test_classify_path_reveal_classes() -> None:
         "system/supervisord.conf": update_classification.CLASS_SERVICE,
         # A program's own drop-in is a service change like the main config is:
         # it needs the same services-agent restart to take effect.
-        "system/supervisord.conf.d/app-watcher.conf": update_classification.CLASS_SERVICE,
+        "system/supervisord.conf.d/host-backup.conf": update_classification.CLASS_SERVICE,
         "system/libs/bootstrap/src/bootstrap/main.py": update_classification.CLASS_SERVICE,
         "system/scripts/forward_port.py": update_classification.CLASS_SHARED_RUNTIME,
         ".agents/skills/update-self/SKILL.md": update_classification.CLASS_SHARED_RUNTIME,
@@ -879,6 +1021,281 @@ def test_classify_merge_refuses_a_local_that_already_contains_the_target(
     assert [entry["path"] for entry in result["pulled_in"]] == ["upstream.txt"]
 
 
+# footprint-ranges
+
+
+def test_footprint_ranges_hold_after_a_commit_on_top_of_the_merge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The worker may commit a fix after its merge and rerun the footprint
+    # block; the ranges must still split the workspace's own change from the
+    # update's, where HEAD^1 would then name the merge itself.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    merge = _head_sha(history.repo)
+    history.commit("system/apps/mine/app.toml", "worker fix")
+
+    ranges = history.footprint_ranges("minds-v1", capsys)
+
+    assert ranges["merge"] == merge
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt"
+    ]
+
+
+def test_footprint_ranges_on_a_retry_whose_target_moved(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The worker reverts the rollback before merging the newer release, so the
+    # merge's first parent already carries v1. The live workspace runs the
+    # rolled-back tree, so the update is v1 and v2 together, and the local side
+    # is still only the workspace's own file.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    rollback = history.roll_back("minds-v1")
+    history.release("minds-v2")
+    history.revert(rollback)
+    history.land("minds-v2")
+
+    ranges = history.footprint_ranges("minds-v2", capsys)
+
+    assert ranges["update_base"] == rollback
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt",
+        "minds-v2.txt",
+    ]
+
+
+def test_footprint_ranges_on_a_retry_of_the_same_target(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Reverting the rollback already brings v1 back, so there is no new merge:
+    # the landed attempt's merge is the anchor, the revert is the update, and
+    # a local commit made after the rollback counts as the workspace's own.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    rollback = history.roll_back("minds-v1")
+    history.commit("system/apps/later/app.py", "local work after the rollback")
+    revert = history.revert(rollback)
+
+    ranges = history.footprint_ranges("minds-v1", capsys)
+
+    assert ranges["update_ref"] == revert
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/later/app.py",
+        "system/apps/mine/app.py",
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt"
+    ]
+
+
+def test_footprint_ranges_on_a_same_target_retry_after_a_moved_target_retry(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # v1 landed and was rolled back, the retry to v2 landed and was rolled back
+    # too, and this pass retries v2. The landed v2 merge sits on the revert of
+    # the v1 rollback, so its ancestry carries v1, but the live tree was put
+    # back to the workspace's own tree from before both attempts: v1 is update,
+    # not the workspace's own change.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    first_rollback = history.roll_back("minds-v1")
+    history.release("minds-v2")
+    history.revert(first_rollback)
+    history.land("minds-v2")
+    history.revert(history.roll_back("minds-v2", restore_to=first_rollback))
+
+    ranges = history.footprint_ranges("minds-v2", capsys)
+
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt",
+        "minds-v2.txt",
+    ]
+
+
+# Whether the workspace committed on top of v1's rollback before v2 landed over it.
+_IS_WORKED_ON_AFTER_THE_ROLLBACK = pytest.mark.parametrize(
+    "is_worked_on_after_the_rollback", [False, True], ids=["on-rollback", "worked-on"]
+)
+
+
+def _own_files(is_worked_on_after_the_rollback: bool) -> list[str]:
+    """The workspace's own files in :func:`_land_v2_over_v1s_rollback_and_roll_it_back`."""
+    later = ["system/apps/later/app.py"] if is_worked_on_after_the_rollback else []
+    return [*later, "system/apps/mine/app.py"]
+
+
+def _land_v2_over_v1s_rollback_and_roll_it_back(
+    history: _UpdateHistory, is_worked_on_after_the_rollback: bool
+) -> str:
+    """v1 landed and was rolled back, then a pass whose guide predated the revert step
+    landed v2 over that rollback (or over the workspace's own commit on top of it) and
+    v2 was rolled back too, leaving both rollbacks for the next pass to revert. Return
+    v2's rollback: the tree the live workspace runs."""
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    history.roll_back("minds-v1")
+    if is_worked_on_after_the_rollback:
+        history.commit("system/apps/later/app.py", "local work after the rollback")
+    history.release("minds-v2")
+    history.land("minds-v2")
+    return history.roll_back("minds-v2")
+
+
+@_IS_WORKED_ON_AFTER_THE_ROLLBACK
+def test_footprint_ranges_on_a_pass_that_reverted_several_rollbacks(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    is_worked_on_after_the_rollback: bool,
+) -> None:
+    history = _UpdateHistory(tmp_path)
+    live = _land_v2_over_v1s_rollback_and_roll_it_back(
+        history, is_worked_on_after_the_rollback
+    )
+    history.release("minds-v3")
+    for rollback in history.pending_rollbacks("minds-v3", capsys):
+        history.revert(rollback)
+    history.land("minds-v3")
+
+    ranges = history.footprint_ranges("minds-v3", capsys)
+
+    assert ranges["update_base"] == live
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == _own_files(
+        is_worked_on_after_the_rollback
+    )
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt",
+        "minds-v2.txt",
+        "minds-v3.txt",
+    ]
+
+
+@_IS_WORKED_ON_AFTER_THE_ROLLBACK
+def test_footprint_ranges_on_a_same_target_retry_that_reverted_several_rollbacks(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    is_worked_on_after_the_rollback: bool,
+) -> None:
+    # The landed v2 merge sits on v1's rollback (or on a local commit over it), not
+    # on a revert of it, and the workspace's own tree is still the one from before v1.
+    history = _UpdateHistory(tmp_path)
+    live = _land_v2_over_v1s_rollback_and_roll_it_back(
+        history, is_worked_on_after_the_rollback
+    )
+    for rollback in history.pending_rollbacks("minds-v2", capsys):
+        history.revert(rollback)
+
+    ranges = history.footprint_ranges("minds-v2", capsys)
+
+    assert ranges["update_base"] == live
+    assert ranges["update_ref"] == _head_sha(history.repo)
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == _own_files(
+        is_worked_on_after_the_rollback
+    )
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt",
+        "minds-v2.txt",
+    ]
+
+
+def test_footprint_ranges_on_a_retry_over_a_rollback_whose_revert_was_reverted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Reverting v1's rollback's revert put the rollback back in force, so the v2
+    # merge was made on top of the rolled-back v1 attempt, and the chain of attempts
+    # starts at v1's merge.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    history.revert(history.revert(history.roll_back("minds-v1")))
+    live = _head_sha(history.repo)
+    history.release("minds-v2")
+    for rollback in history.pending_rollbacks("minds-v2", capsys):
+        history.revert(rollback)
+    history.land("minds-v2")
+    history.revert(history.roll_back("minds-v2", restore_to=live))
+
+    ranges = history.footprint_ranges("minds-v2", capsys)
+
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt",
+        "minds-v2.txt",
+    ]
+
+
+@pytest.mark.parametrize("is_retry", [False, True], ids=["first-pass", "retry"])
+def test_footprint_ranges_count_a_restored_app_change_as_the_workspaces_own(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], is_retry: bool
+) -> None:
+    # The user took an app change back and then restored it. The restoring revert
+    # carries the same subject as a revert of an update's rollback, but what it put
+    # back is the workspace's own change, not the update's; on a retry of v2 it is
+    # also where the chain of attempts starts, not a step back to v1's merge.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    history.land("minds-v1")
+    history.commit("system/apps/mine/view.py", "app change")
+    history.revert(history.roll_back(None))
+    history.release("minds-v2")
+    history.land("minds-v2")
+    if is_retry:
+        history.revert(history.roll_back("minds-v2"))
+
+    ranges = history.footprint_ranges("minds-v2", capsys)
+
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py",
+        "system/apps/mine/view.py",
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v2.txt"
+    ]
+
+
+def test_footprint_ranges_refuses_an_earlier_updates_merge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A workspace updated before carries older merges under the same subject;
+    # without this pass's merge the ranges would silently describe that one.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.land("minds-v1")
+    history.release("minds-v2")
+
+    code = update_self.main(
+        ["footprint-ranges", "--target", "minds-v2", "--repo-root", str(history.repo)]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "does not merge minds-v2" in captured.err
+    assert captured.out == ""
+
+
 # bootstrap-skill
 
 
@@ -1042,6 +1459,34 @@ def test_bootstrap_skill_stages_local_copy_when_ref_predates_skill(
     # The staged copy is the local working-tree flow, present and runnable.
     assert staged_skill.joinpath("SKILL.md").read_text() == "LOCAL FLOW\n"
     assert staged_skill.joinpath("scripts", "update_self.py").exists()
+
+
+def test_bootstrap_skill_refuses_a_ref_that_does_not_resolve(tmp_path, capsys) -> None:
+    # Staging the local copy here would report ``differs: false`` and the lead
+    # would follow its own, older flow for a target it never looked at.
+    repo = tmp_path / "repo"
+    _init_repo_with_skill(repo, skill_body="LOCAL FLOW\n")
+    staging = tmp_path / "staging"
+
+    code = update_self.main(
+        [
+            "bootstrap-skill",
+            "--ref",
+            "electric-husky",
+            "--dest",
+            str(staging),
+            "--repo-root",
+            str(repo),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert not staging.exists()
+    assert captured.err.startswith("error: ")
+    assert "electric-husky" in captured.err
+    assert "Traceback" not in captured.err
 
 
 # a prerelease ceiling
@@ -1247,10 +1692,11 @@ def _finish_npm_install(node_modules: Path) -> None:
 
 
 def _make_apply_repo(tmp_path: Path) -> Path:
-    """A repo root shaped like the live tree: the npm workspace at ``system/`` over the shell's frontend."""
+    """A repo root shaped like the live tree: the npm workspace at ``system/`` over every app's frontend."""
     repo_root = tmp_path / "repo"
-    (repo_root / update_layout.FRONTEND_DIR).mkdir(parents=True)
-    (repo_root / update_layout.FRONTEND_DIR / "package.json").write_text("{}")
+    for bundle in update_layout.FRONTEND_BUNDLES:
+        (repo_root / bundle.frontend_dir).mkdir(parents=True)
+        (repo_root / bundle.frontend_dir / "package.json").write_text("{}")
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").write_text("{}")
     # A live workspace has its dependencies installed; a tree without them is the
     # exception, and the tests that want it remove this.
@@ -2454,6 +2900,30 @@ class _UpdateHistory:
         )
         assert code == 0
         return capsys.readouterr().out.split()
+
+    def commit(self, rel: str, message: str) -> str:
+        """Commit a local change that writes ``rel``; return the commit."""
+        path = self.repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{message}\n")
+        _git_in(self.repo, "add", "-A")
+        _git_in(self.repo, "commit", "-q", "-m", message)
+        return _head_sha(self.repo)
+
+    def changed(self, base: str, ref: str) -> list[str]:
+        """The files ``ref`` changed since its fork from ``base``, as the footprint reads a range."""
+        diff = _git_in(self.repo, "diff", "--name-only", f"{base}...{ref}")
+        return sorted(update_self._list_names(diff))
+
+    def footprint_ranges(
+        self, target: str, capsys: pytest.CaptureFixture[str]
+    ) -> dict[str, str]:
+        capsys.readouterr()
+        code = update_self.main(
+            ["footprint-ranges", "--target", target, "--repo-root", str(self.repo)]
+        )
+        assert code == 0, capsys.readouterr().err
+        return json.loads(capsys.readouterr().out)
 
 
 # An update's rollback records the release it rolled back; one made before the apply
@@ -5715,10 +6185,11 @@ def test_a_rollback_rebuild_into_a_tree_with_no_node_modules_installs_first(
 
 def _make_pre_split_tree(repo_root: Path) -> None:
     """Shape the tree like one without the npm workspace: no ``system/package.json`` and no
-    chat bundle, just the shell's frontend directory."""
+    other app's frontend or bundle, just the shell's frontend directory."""
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").unlink()
     for bundle in update_layout.FRONTEND_BUNDLES:
         if bundle.frontend_dir != update_layout.FRONTEND_DIR:
+            shutil.rmtree(repo_root / bundle.frontend_dir)
             shutil.rmtree(repo_root / bundle.static_dir, ignore_errors=True)
 
 
@@ -5804,6 +6275,95 @@ def test_a_rollback_into_a_pre_split_tree_removes_the_chat_bundle_the_forward_bu
     assert code == 2
     assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
     assert not (apply_repo / update_layout.CHAT_STATIC_DIR).exists()
+
+
+def test_a_rollback_into_a_tree_from_before_an_apps_frontend_does_not_rebuild_its_bundle(
+    apply_repo: Path,
+) -> None:
+    # testtest, 2026-09-27: the restored tree has the npm workspace but predates the
+    # getting_started app, so its bundle was never built and had no copy to put back.
+    # Counting it as one of the restored tree's bundles sent recovery into a rebuild
+    # that cannot write it, and the rollback ended in an emergency over a bundle that
+    # tree never had -- where restoring the shell's and chat's copies was the whole job.
+    getting_started = next(
+        bundle
+        for bundle in update_layout.FRONTEND_BUNDLES
+        if bundle.app == "getting_started"
+    )
+    shutil.rmtree(apply_repo / getting_started.static_dir)
+    runner = _apply_runner(
+        _FRONTEND_DIFF + f"A\t{getting_started.frontend_dir}/package.json\n", apply_repo
+    )
+    runner.respond(
+        ("npm", "run", "build"), [_Result(returncode=1, stderr="boom"), _Result()]
+    )
+
+    def remove_on_restore(argv: list[str]) -> None:
+        if argv[:2] == ["git", "rm"] and argv[-1].startswith(
+            getting_started.frontend_dir
+        ):
+            shutil.rmtree(apply_repo / getting_started.frontend_dir)
+            runner.unwritten_bundle_apps = frozenset({getting_started.app})
+
+    runner.on_command = remove_on_restore
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 2
+    assert (
+        len(runner.argvs_starting("npm", "run", "build")) == 1
+    )  # the forward build only
+    assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
+    assert (apply_repo / update_layout.CHAT_FRONTEND_BUILD_INDEX).exists()
+    assert not (apply_repo / getting_started.static_dir).exists()
+
+
+@pytest.mark.parametrize(
+    "is_script_in_restored_tree",
+    [
+        pytest.param(False, id="tree-from-before-the-fetch"),
+        pytest.param(True, id="tree-that-fetches-them-too"),
+    ],
+)
+def test_a_rollback_removes_the_mngr_assets_only_from_a_tree_that_does_not_fetch_them(
+    apply_repo: Path, is_script_in_restored_tree: bool
+) -> None:
+    # The forward refresh fetches the mngr assets into a directory the merged tree
+    # ignores. A restored tree from before the fetch script neither tracks nor ignores
+    # it, so left standing it is an untracked file that refuses every later apply. A
+    # restored tree that fetches them too keeps them: they are its own ignored output.
+    (apply_repo / ".venv").mkdir()
+    script = apply_repo / update_layout.MNGR_ASSETS_SCRIPT
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("")
+    assets = apply_repo / update_layout.MNGR_ASSETS_DIR
+    script_status = "M" if is_script_in_restored_tree else "A"
+    runner = _apply_runner(
+        _BACKEND_MANIFEST_DIFF
+        + f"{script_status}\t{update_layout.MNGR_ASSETS_SCRIPT}\n",
+        apply_repo,
+    )
+
+    def fetch_and_restore(argv: list[str]) -> None:
+        if argv == ["bash", str(script)]:
+            (assets / "apps").mkdir(parents=True, exist_ok=True)
+            (assets / ".commit").write_text(f"{_MNGR_REV} 0123456789ab\n")
+        if argv[:2] == ["git", "rm"] and argv[-1] == update_layout.MNGR_ASSETS_SCRIPT:
+            script.unlink()
+
+    runner.on_command = fetch_and_restore
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    assert runner.ran("bash", str(script))
+    assert assets.exists() == is_script_in_restored_tree
 
 
 def test_a_rollback_into_a_pre_split_tree_rebuilds_at_the_shell_frontend(
@@ -5920,6 +6480,169 @@ def test_a_rollback_restores_the_tool_env_the_last_resort_reinstalled(
     # Put back by copy, so recovery needed no reinstall of its own: the untagged
     # calls (recovery's) hold no mngr install.
     assert [c for c in runner.raw_calls if c[: len(mngr_install)] == mngr_install] == []
+
+
+@dataclass
+class _FakeUvToolInstall:
+    """What ``uv tool install -e <app> --reinstall`` does to the disk for one tool, as
+    uv's ``finalize_tool_install`` does it: unlink the entrypoints the existing receipt
+    lists, rebuild the environment, then refuse -- removing the new environment -- when
+    any entrypoint's path already exists (following the link, so one that dangled into
+    the old environment exists again once the new one has its script); otherwise link
+    each ``[project.scripts]`` entry into the bin directory and write the receipt.
+
+    Installed as the runner's ``on_command``; ``is_failing_next`` makes the next install
+    die after the old one is gone, as a failed resolve does.
+    """
+
+    runner: _RecordingRunner
+    repo_root: Path
+    tool_name: str
+    home: Path
+    is_failing_next: bool = False
+
+    @property
+    def environment(self) -> Path:
+        return tool_env.tools_dir(self.home) / self.tool_name
+
+    @property
+    def bin_dir(self) -> Path:
+        return tool_env.bin_dir(self.home)
+
+    def install(self, scripts: Sequence[str]) -> None:
+        """Lay the tool down with ``scripts`` as its entrypoints, as a clean install does."""
+        shutil.rmtree(self.environment, ignore_errors=True)
+        (self.environment / "bin").mkdir(parents=True)
+        self.bin_dir.mkdir(parents=True, exist_ok=True)
+        for script in scripts:
+            (self.environment / "bin" / script).write_text(
+                f"#!{self.environment}/bin/python3\nimport sys\n"
+            )
+            (self.bin_dir / script).symlink_to(self.environment / "bin" / script)
+        entrypoints = "".join(
+            f'    {{ name = "{script}", install-path = "{self.bin_dir / script}", '
+            f'from = "{self.tool_name}" }},\n'
+            for script in scripts
+        )
+        (self.environment / update_layout.RECEIPT).write_text(
+            f"[tool]\nrequirements = []\nentrypoints = [\n{entrypoints}]\n"
+        )
+
+    def __call__(self, argv: list[str]) -> None:
+        if argv[:3] != ["uv", "tool", "install"]:
+            return
+        self.runner.respond(("uv", "tool", "install"), _Result())
+        if "-e" not in argv:
+            return
+        project = self.repo_root / argv[argv.index("-e") + 1]
+        pyproject = tomllib.loads((project / "pyproject.toml").read_text())["project"]
+        if pyproject["name"] != self.tool_name:
+            return
+        receipt = self.environment / update_layout.RECEIPT
+        if receipt.is_file():
+            for entrypoint in tomllib.loads(receipt.read_text())["tool"]["entrypoints"]:
+                Path(entrypoint["install-path"]).unlink(missing_ok=True)
+        shutil.rmtree(self.environment, ignore_errors=True)
+        scripts = sorted(pyproject.get("scripts", {}))
+        if self.is_failing_next:
+            self.is_failing_next = False
+            self._refuse("error: Failed to resolve")
+            return
+        (self.environment / "bin").mkdir(parents=True)
+        for script in scripts:
+            (self.environment / "bin" / script).write_text("")
+        existing = [script for script in scripts if (self.bin_dir / script).exists()]
+        if existing:
+            self._refuse(f"error: Executable already exists: {', '.join(existing)}")
+            return
+        self.install(scripts)
+
+    def _refuse(self, stderr: str) -> None:
+        shutil.rmtree(self.environment, ignore_errors=True)
+        self.runner.respond(
+            ("uv", "tool", "install"), _Result(returncode=2, stderr=stderr)
+        )
+
+    def entrypoints_into_environment(self) -> dict[str, bool]:
+        """Every bin-directory link into the tool's environment, by name: whether it
+        reaches a script."""
+        return {
+            link.name: link.exists()
+            for link in sorted(self.bin_dir.iterdir())
+            if link.is_symlink()
+            and Path(os.readlink(link)).parent.parent == self.environment
+        }
+
+
+_PTY_SCRIPT = "system-interface-pty"
+
+
+def _shell_tool_with_scripts(
+    apply_repo: Path, tmp_path: Path, runner: _RecordingRunner
+) -> _FakeUvToolInstall:
+    """The shell's tool installed with its one entrypoint, under a merged tree whose
+    pyproject declares a second one -- the terminal's ``terminal-pty`` on testtest."""
+    (apply_repo / update_layout.SYSTEM_INTERFACE_DIR / "pyproject.toml").write_text(
+        '[project]\nname = "system-interface"\nversion = "0.1.0"\n\n[project.scripts]\n'
+        'system-interface = "system_interface.main:main"\n'
+        f'{_PTY_SCRIPT} = "system_interface.pty_main:main"\n'
+    )
+    uv = _FakeUvToolInstall(runner, apply_repo, "system-interface", tmp_path / "root")
+    uv.install(["system-interface"])
+    runner.executables[update_layout.TOOL_NAME] = str(uv.bin_dir / "system-interface")
+    runner.on_command = uv
+    return uv
+
+
+@pytest.mark.parametrize(
+    "is_install_failing",
+    [
+        # The 2026-09-26 apply: the reinstall linked the new entrypoint, the apply failed later.
+        pytest.param(False, id="install-landed"),
+        # The 2026-09-27 apply: uv unlinked the old entrypoints, then the install died.
+        pytest.param(True, id="install-died"),
+    ],
+)
+def test_a_rollback_puts_a_restored_tools_entrypoints_back_to_the_pre_apply_set(
+    apply_repo: Path, tmp_path: Path, is_install_failing: bool
+) -> None:
+    # The tool's environment is copied aside and restored, but its entrypoints live in
+    # the bin directory beside every other tool's. Restoring the directory alone leaves
+    # the entrypoint the apply added dangling into it (and every later reinstall refused
+    # over it), and after an install that died, none of the old ones at all.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    uv = _shell_tool_with_scripts(apply_repo, tmp_path, runner)
+    uv.is_failing_next = is_install_failing
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    assert uv.entrypoints_into_environment() == {"system-interface": True}
+
+
+def test_a_reinstall_clears_an_entrypoint_an_earlier_rollback_left_dangling(
+    apply_repo: Path, tmp_path: Path
+) -> None:
+    # A workspace an older rollback already left with a link into the tool that its
+    # receipt does not list: uv refuses to overwrite it once the rebuilt environment
+    # has its script again, so every apply failed until the link was deleted by hand.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    uv = _shell_tool_with_scripts(apply_repo, tmp_path, runner)
+    (uv.bin_dir / _PTY_SCRIPT).symlink_to(uv.environment / "bin" / _PTY_SCRIPT)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert uv.entrypoints_into_environment() == {
+        "system-interface": True,
+        _PTY_SCRIPT: True,
+    }
 
 
 def test_a_rollback_leaves_the_tool_of_an_app_the_merge_added_alone(
@@ -6234,7 +6957,7 @@ def test_ledger_origin_takes_this_workspaces_own_creation_not_an_ancestors(
     """The template repo is itself developed from workspaces.
 
     A full-history clone therefore carries bootstrap markers older than this
-    workspace's own, and seeding from one of those dates the mind to a
+    workspace's own, and seeding from one of those dates the agent to a
     stranger's creation and names the release that stranger started from.
     """
     repo = _make_real_repo(tmp_path)
@@ -7031,7 +7754,7 @@ def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:
     assert calls == 4
 
 
-# run-status (the Mind app's status contract)
+# run-status (the Imbue Studio app's status contract)
 
 
 def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
@@ -7578,6 +8301,47 @@ def test_rolling_back_restores_the_copies_and_restarts_exactly_the_recorded_prog
     assert _rollback(_rollback_runner(apply_repo), apply_repo) == 1
     assert update_apply.confirm_last(apply_repo) == 0
     assert _rollback_point(apply_repo) is None
+
+
+def test_rolling_back_removes_what_the_update_generated_that_the_previous_version_does_not(
+    apply_repo: Path,
+) -> None:
+    """The revert takes back the update's tracked files, but not the getting_started
+    bundle its build wrote nor the mngr assets its refresh fetched. A previous version
+    with neither the app nor the fetch script tracks or ignores neither, so left
+    standing they keep the tree dirty and refuse the next apply."""
+    getting_started = next(
+        bundle
+        for bundle in update_layout.FRONTEND_BUNDLES
+        if bundle.app == "getting_started"
+    )
+    script = apply_repo / update_layout.MNGR_ASSETS_SCRIPT
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("")
+    assets = apply_repo / update_layout.MNGR_ASSETS_DIR
+    apply_runner = _apply_runner(_FRONTEND_DIFF + _BACKEND_MANIFEST_DIFF, apply_repo)
+
+    def fetch(argv: list[str]) -> None:
+        if argv == ["bash", str(script)]:
+            (assets / "apps").mkdir(parents=True, exist_ok=True)
+
+    apply_runner.on_command = fetch
+    assert _apply_keeping_the_rollback_point(apply_runner, apply_repo) == 0
+    assert assets.exists() and (apply_repo / getting_started.index_path).exists()
+    runner = _rollback_runner(apply_repo)
+
+    def revert(argv: list[str]) -> None:
+        if argv[:2] == ["git", "revert"]:
+            script.unlink()
+            (apply_repo / getting_started.frontend_dir / "package.json").unlink()
+
+    runner.on_command = revert
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert not assets.exists()
+    assert not (apply_repo / getting_started.static_dir).exists()
+    assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
 
 
 @pytest.mark.parametrize(

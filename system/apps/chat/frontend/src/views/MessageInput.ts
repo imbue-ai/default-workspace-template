@@ -21,7 +21,13 @@ import type { ProviderAccount } from "../models/Providers";
 import { beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
-import { accountForFirstSend, isAccountSignedOut, loadAccounts, openProviderChooser } from "../models/Providers";
+import {
+  accountForFirstSend,
+  isAccountSignedOut,
+  loadAccounts,
+  openProviderChooser,
+  whenAccountsReadyToChoose,
+} from "../models/Providers";
 import type { ProvisionalChat } from "../models/Chats";
 import {
   ensureHarnessCatalogs,
@@ -533,10 +539,10 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         m.redraw();
 
         try {
-          // A chat awaiting its first send (a seeded one, or one an intake minted) has no agent
-          // yet, and this send is what launches one: on the account it was minted for, else the
-          // signed-in one, else the one the chooser produces. The message rides the launch as
-          // the agent's first, so nothing is sent after it lands.
+          // A chat awaiting its first send (a seeded one, one an intake minted, or the one an empty
+          // chat list opens on) has no agent yet, and this send is what launches one: on the account
+          // it was minted for, else the signed-in one, else the one the chooser produces. The
+          // message rides the launch as the agent's first, so nothing is sent after it lands.
           const awaiting = getProvisionalChat(chatId);
           if (awaiting?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
             const accountId = await chooseAccountForFirstSend(awaiting);
@@ -604,10 +610,11 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
        * names one (an intake's), else the signed-in one when there is one, else whatever the
        * provider chooser produces, or null when it is dismissed instead.
        */
-      function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | null> {
+      async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | null> {
+        await whenAccountsReadyToChoose();
         const account = accountForFirstSend(provisional.account_id);
         if (account !== null) {
-          return Promise.resolve(account.id);
+          return account.id;
         }
         return new Promise((resolve) => {
           openProviderChooser({ onSignedIn: (accountId) => resolve(accountId), onDismissed: () => resolve(null) });

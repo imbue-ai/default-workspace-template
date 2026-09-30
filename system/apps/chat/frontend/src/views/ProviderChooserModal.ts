@@ -562,7 +562,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
 
     const savedAs =
       selected !== null && selected.env_var !== ""
-        ? m("p", { class: css.HINT }, `Saved as ${selected.env_var} for this mind.`)
+        ? m("p", { class: css.HINT }, `Saved as ${selected.env_var} for this agent.`)
         : null;
 
     if (!withPicker) {
@@ -625,7 +625,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
           "p",
           { class: css.HINT },
           selected !== null && selected.env_var !== ""
-            ? `Saved as ${selected.env_var} for this mind.`
+            ? `Saved as ${selected.env_var} for this agent.`
             : "Pick a provider to see where the key is saved.",
         ),
       ]),

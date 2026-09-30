@@ -28,7 +28,7 @@ Users make "creations". There are conventions for the common kinds:
   traffic, so registered app names must be DNS-safe hostname labels
   (lowercase letters/digits with single hyphens, not `localhost`, not
   starting with `host-` or `agent-`).
-- a **skill**: teaches the mind how to do work the user cares about (including
+- a **skill**: teaches the agent how to do work the user cares about (including
   scripts and CLI tools, which ship inside the skill that knows how to use
   them). A skill that is automatically run on a schedule is called an
   "automation" -- the machinery that runs automations lives in
@@ -63,9 +63,8 @@ in that app's folder and is named `<app>-<role>`.
   Python app with a manifest is installed as its own uv tool and is also a
   member of the uv workspace via the `system/apps/*` glob; an app with no
   manifest runs from the root venv)
-- `system/services/` - Standalone background services (`app_watcher/`,
-  `caretaker/`, `share_gateway/`, `host_backup/`, `env_converge/`,
-  `oom_priority/`)
+- `system/services/` - Standalone background services (`caretaker/`,
+  `share_gateway/`, `host_backup/`, `env_converge/`, `oom_priority/`)
 - `system/libs/` - Support libraries, including `bootstrap/` (first-boot
   setup, then launches supervisord to supervise the apps and services),
   `app_manifest/` (the manifest and registry models), and `automations/`

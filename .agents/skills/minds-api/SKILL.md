@@ -1,21 +1,21 @@
 ---
 name: minds-api
-description: "Use to act on OTHER Mind workspaces on the user's behalf -- list them, create a fresh one, SSH into one, read or export its backups, start/stop/destroy/recover it, or change its settings and service sharing. Reached through the latchkey gateway's minds-api-proxy; most routes need a per-workspace permission grant. For bringing another workspace's content into this one, use the migrate-workspace skill, which drives these routes as part of a much larger flow."
+description: "Use to act on OTHER Imbue Studio workspaces on the user's behalf -- list them, create a fresh one, SSH into one, read or export its backups, start/stop/destroy/recover it, or change its settings and service sharing. Reached through the latchkey gateway's minds-api-proxy; most routes need a per-workspace permission grant. For bringing another workspace's content into this one, use the migrate-workspace skill, which drives these routes as part of a much larger flow."
 compatibility: Requires latchkey (the standard agent gateway) and curl; ssh/ssh-keygen for the SSH capability. mngr for handing tasks to another workspace's agent.
 metadata:
   author: imbue
 ---
 
-# Mind API
+# Imbue Studio API
 
-Mind exposes a small HTTP API that lets an agent in one workspace act on *other*
+Imbue Studio exposes a small HTTP API that lets an agent in one workspace act on *other*
 workspaces through the hub: list them, read detail/version/backups, create new
 ones, destroy/start/stop them, export backups, establish SSH access, update
 settings, and run health/restart recovery.
 
 You never hold a token. Every call goes through the **latchkey gateway's
 `minds-api-proxy`** on the reserved gateway-self host `latchkey-self.invalid`;
-the gateway injects the central Mind API key and forwards to the desktop
+the gateway injects the central Imbue Studio API key and forwards to the desktop
 client. So always use **`latchkey curl`** (not plain `curl`), and address the
 proxy like this:
 
@@ -48,7 +48,7 @@ appears in `GET /api/v1/workspaces` if you need to self-reference.
 ## Getting access for a specific workspace (latchkey permissions)
 
 Only two endpoints are allowed by default: the schema above, and `GET
-/api/v1/app/version` (the newest workspace-template ref the running Mind app
+/api/v1/app/version` (the newest workspace-template ref the running Imbue Studio app
 supports -- what `update-self` caps itself against). Every
 `/api/v1/workspaces/...`
 call is gated by the `minds-workspaces` detent scope, with one permission per
@@ -68,7 +68,7 @@ to one specific workspace at a time.
 | `minds-workspaces-sharing` | view/change service sharing | yes |
 
 When a call comes back rejected (a "not permitted by the user" message / 403),
-file a permission request and wait for the user to approve it. Mind uses a
+file a permission request and wait for the user to approve it. Imbue Studio uses a
 dedicated `type: "workspace"` request (distinct from the predefined-service
 requests in `.agents/skills/connect-external-service/references/latchkey.md`).
 It goes in a tool call of its own, with nothing else in it and its output
@@ -111,7 +111,7 @@ the body only when that header is set).
 ```bash
 latchkey curl .../api/v1/workspaces | jq '.workspaces[] | {agent_id, name, host_state, provider_name}'
 latchkey curl .../api/v1/workspaces/<id>            # one workspace's detail
-latchkey curl .../api/v1/workspaces/<id>/version    # minds version + upgrade history
+latchkey curl .../api/v1/workspaces/<id>/version    # Imbue Studio version + upgrade history
 ```
 
 The listing includes destroyed-but-still-backed-up workspaces, so you can find
@@ -138,7 +138,7 @@ latchkey curl .../api/v1/workspaces/operations/create/$OP | jq '{status, is_done
 latchkey curl -N .../api/v1/workspaces/operations/create/$OP/logs
 ```
 
-`git_url` is required (typically the template repo a fresh mind is built from).
+`git_url` is required (typically the template repo a fresh agent is built from).
 
 **From the workspace template, always send `branch`, read from `GET
 /api/v1/app/version`** -- the release this app was built against. Omitted, the
@@ -157,9 +157,9 @@ with `{error, field}` means a field-level problem; a `422`
 field unset (the default is `backup_provider=CONFIGURE_LATER`). Configuring
 backups can involve the user's storage credentials (`backup_api_key_env`),
 which are secrets you must NEVER ask the user for and never send through this
-API -- the user enables backups themselves from the minds desktop app
+API -- the user enables backups themselves from the Imbue Studio desktop app
 afterwards. (The user's *master password* is likewise never yours to handle;
-newer minds versions use it only inside the desktop app to protect
+newer Imbue Studio versions use it only inside the desktop app to protect
 cross-device sync, and it does not appear in this API at all.)
 
 ### SSH into another workspace (`minds-workspaces-ssh`)
@@ -196,8 +196,9 @@ ssh -i /tmp/mind_key -p "$(echo "$CONN" | jq -r .port)" \
 latchkey curl .../api/v1/workspaces/<id>/backups \
   | jq '{is_backing_up, snapshots: [.snapshots[] | {short_id, time, total_size_bytes}]}'
 
-# Export one snapshot as a zip (binary stream -> save with -o):
-latchkey curl -o /tmp/restore.zip \
+# Export one snapshot as a zip (binary stream -> save with -o). Save it under
+# /var/tmp, which is disk: an export can run to many GB, and /tmp is memory.
+latchkey curl -o /var/tmp/restore.zip \
   -XPOST .../api/v1/workspaces/<id>/backups/<snapshot_id>/export
 ```
 
@@ -241,7 +242,7 @@ Which side you are on decides what you do:
 
 If the old workspace cannot be started at all, the live-session flow does not
 apply. Export its newest snapshot (`GET .../<OLD>/backups`, then
-`POST .../<OLD>/backups/<snapshot_id>/export -o /tmp/old.zip`) and work through
+`POST .../<OLD>/backups/<snapshot_id>/export -o /var/tmp/old.zip`) and work through
 the contents with the user by hand.
 
 Throughout: request only the per-workspace permissions each step needs, with a
@@ -259,5 +260,5 @@ retrying a gated call.
   terms of "your workspaces".
 - For general latchkey usage and the predefined-service permission flow, see
   `.agents/skills/connect-external-service/references/latchkey.md`; this skill
-  only adds the Mind-specific `type: "workspace"` permission request and the
+  only adds the `type: "workspace"` permission request specific to Imbue Studio and the
   workspace routes.

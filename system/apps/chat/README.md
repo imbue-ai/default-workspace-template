@@ -22,7 +22,10 @@ observe`, its own supervised service) writes, and serves:
   ordered by recency, with rename, stop and restart, and delete) beside an inner
   frame of the selected chat's page. The selection is the `chat` query parameter,
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
-  chat's title. The page is pure: nothing is created or sent by loading it. An
+  chat's title. Loading the page sends and writes nothing. With nothing selected it
+  shows the most recent chat, and with no chats one awaiting its first send
+  (`POST /api/chats/awaiting`, held in memory until that send launches it); on a
+  phone the list alone is the page until a chat is picked. An
   `intake` query parameter names a pending intake (below) the root applies once
   (`docs/system/blueprint/post-launch-paths/`): the text goes into a composer,
   unsent, a chat is picked from a picker the root opens over the list, or a chat
@@ -40,7 +43,8 @@ observe`, its own supervised service) writes, and serves:
 - Every `/api/chats/<chat-id>/...` route (events, streams, sends, model choice,
   the queue actions, presence, destroy, rename, start, stop; the subagent reads under
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
-  `/api/chats/create`, `/api/chats`, `/api/harnesses`, `/api/uploads`,
+  `/api/chats/create`, `/api/chats/awaiting` (the chat an empty chat list opens on), `/api/chats`,
+  `/api/harnesses`, `/api/uploads`,
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
   the transcript's secret card submits, declines, and re-reads it).
@@ -52,6 +56,14 @@ observe`, its own supervised service) writes, and serves:
   its last message as `last_messaged_at`, which the chat root's list orders on)
   and the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`).
+- `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
+  chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
+  message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
+  (`focus_chat.py`) to put the chat root with the chat selected (`/?chat=<chat-id>`) on that client's
+  screen, the chat's own page (`/<chat-id>`) counting as already showing it and a subagent view not,
+  and a chat root window (`/`) on screen allowed to be moved to it. The shell picks the window. It
+  answers the shell's `shown` and window id; `400` for a chat id of the wrong shape, `403` in a
+  secondary chat, and `502` when the shell cannot be reached, refuses, or answers something else.
 - `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
   the update apply polls on the `--preflight` boot and on every critical app
   after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
@@ -73,9 +85,12 @@ serving its last known list and reports degraded; the returning observer's
 opening snapshot replaces the folded view and the health recovers.
 
 The chat page talks to the shell only through the browser-side contract
-(`shell:open`, `shell:focused`, the handshake); the shell never calls the chat.
+(`shell:open`, `shell:focused`, the handshake); the shell calls the chat only to
+post the messages its manifest registers for (`minds:focus-chat`).
 Sends are reported to the shell's client-activity route (`shell_client.py`) so
-agents can attribute a request to a client. A chat's status (`ChatStatus` in
+agents can attribute a request to a client, and the app asks the shell for
+windows through the one layout client there (`ShellLayoutClient`), which the
+auto-open reactor and the focus-chat route share. A chat's status (`ChatStatus` in
 `primitives.py`: working, idle, attention, stopped, or error) comes from its
 active agent's activity state, a pending permission request, and the lifecycle,
 and rides the `chats_updated` snapshots the chat root's list draws its status
@@ -192,7 +207,9 @@ from the agent's terminal.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
-wake-ups, a lead's replies to a worker, the automation runner) and falls back
+wake-ups, a lead's replies to a worker, the automation runner, and the
+`<background-task-report>` that `system/scripts/run_in_background.py` sends when
+a command it ran exits, which the page shows as a one-line notice) and falls back
 to `mngr message` only when the chat app cannot be reached or does not know the
 chat. A send that names no client (no `client_id` or `desktop_id`) posts no
 client-activity report. The route answers 503 until
@@ -240,7 +257,7 @@ the selected chat's (else through the shell), and a sub-agent view through the
 shell, its `shell:draft-text` relayed by the root.
 
 The create route is likewise how a chat is made from outside the chat page:
-`message_chat.py --create` posts to `/api/chats/create` (the Minds app's assist
+`message_chat.py --create` posts to `/api/chats/create` (the Imbue Studio app's assist
 and update chats go through it, run inside the workspace by `mngr exec`). Beside
 `name`, `account_id`, and `message`, the request takes `labels` for the chat's
 agent (`auto_open=true` has the shell surface its window; the labels the app sets
@@ -257,7 +274,7 @@ the field it does not know (a workspace that has taken a template update and has
 not restarted its chat app yet).
 
 A chat can also start from a conversation that happened before the workspace
-existed. `POST /api/chats/seed` (`chat_seed.py`; the Mind app runs
+existed. `POST /api/chats/seed` (`chat_seed.py`; the Imbue Studio app runs
 `system/scripts/seed_welcome_chat.py` through `mngr exec` the moment a
 workspace is ready) takes a title and the turns of the onboarding conversation
 and opens a chat on them: the turns are written as the chat's first segment
@@ -336,10 +353,10 @@ binds to an account when it is created and moves to another only through a
 switch (a handoff or a rebind, above). A launch that names no account (the
 launcher, a desktop shortcut, `layout.py open chat`) goes to the account the user
 pinned as the default in a chat's provider menu, else to the most recently used
-one; pressing another account in that menu switches the chat to it (through
-the dialog, or at once for a chat with nothing to hand over -- see the switch
-above). `system/scripts/migrate_claude_auth.py` imports this package from
-the root venv.
+one (the account of the latest sign-in, chat create, or switch); pressing
+another account in that menu switches the chat to it (through the dialog, or at
+once for a chat with nothing to hand over -- see the switch above).
+`system/scripts/migrate_claude_auth.py` imports this package from the root venv.
 
 Removing (signing out of) an account deletes its credential files and its index
 row; its chats keep running, since their harness already holds the credential,
@@ -352,7 +369,7 @@ the agent's own secret request still goes through.
 
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare
-create the Minds app's chats fall back to on a template whose script has no
+create the Imbue Studio app's chats fall back to on a template whose script has no
 create mode -- through `.mngr/settings.local.toml`, mngr's
 git-ignored local config layer (`create_defaults.py`). The account store writes
 it on every index write and at boot: `[commands.create]` with the default
@@ -367,11 +384,12 @@ removed, and a create in the workspace is then refused by
 entry in `.mngr/settings.toml`) with a message that says to sign in.
 
 A chat created from outside the workspace with an `auto_open` or `assist` label
-(the Mind app's update and help chats) has its window surfaced by this app
-(`auto_open.py`): when the agent appears, the app asks the shell to point this
-app's pinned window (the avatar's chat) at the chat and show it, in every
-connected client (a desktop with no pinned window gets a chat root window opened
-instead), holds the request until a client is connected if none is, and records
+(the Imbue Studio app's update and help chats) has its window surfaced by this app
+(`auto_open.py`): when the agent appears, the app asks the shell's `show` op for
+the chat root on the chat in every connected client, allowing no other window to
+be moved to it, so the shell raises a window already showing the chat, else
+points this app's pinned window (the avatar's chat) at it, else opens a chat root
+window. It holds the request until a client is connected if none is, and records
 the delivery under
 `data/.apps/chat/auto_opened_chats.json` so a restart never re-pops a window.
 The open is held for as long as the chat exists, so a chat started while nobody

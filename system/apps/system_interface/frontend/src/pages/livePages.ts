@@ -46,6 +46,7 @@ import {
   effectiveWindow,
   effectiveWindowTitle,
   findWindow,
+  isAppShownStopped,
 } from "../reducers/desktopState";
 import type { DesktopState } from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
@@ -140,11 +141,10 @@ export class LivePagesLayer implements PageDriver {
     return this.pages.has(windowId);
   }
 
-  /** A press on a handle of ``windowId`` (null for a handle of no window: a shortcut, an entry) takes the
-   *  document's focus back from any other window's page that holds it, as the browser would have on a press
-   *  whose default the gesture source did not prevent. Left in that page, the focus would come back to it with
-   *  the chrome window's (a tear-out drag returning, a switch to another application and back), and the page
-   *  would report it and be raised over the window the user chose. The pressed window's own page keeps it. */
+  /** Take the document's focus back from any page other than ``windowId``'s (null: from every page) that holds
+   *  it. Left in that page, the focus would come back to it with the chrome window's (a tear-out drag returning,
+   *  a switch to another application and back), and the page would report it and be raised over the window the
+   *  user chose. */
   takeFocusFromOtherPages(windowId: string | null): void {
     const active = document.activeElement;
     if (!(active instanceof HTMLIFrameElement)) return;
@@ -254,7 +254,9 @@ export class LivePagesLayer implements PageDriver {
     const shownIds = new Set<string>();
     placements.forEach((placement, index) => {
       const found = windowsById.get(placement.window_id);
-      if (found === undefined || desktop === null || placement.is_minimized) return;
+      if (found === undefined || desktop === null) return;
+      // A minimized window has no chrome to lie under: its page is hidden until it is restored.
+      if (placement.is_minimized) return;
       // A pulled-out window's page is shown in the chrome's own desktop window; one being pulled out right now
       // is already drawn there under the cursor.
       if (placement.is_detached || placement.window_id === this.tornOutWindowId) return;
@@ -301,10 +303,11 @@ export class LivePagesLayer implements PageDriver {
     this.focusIfChanged(soloWindowId);
   }
 
-  /** Whether a page about to be shown can be: a stopped app's page is hidden and held (false), and a held page
-   *  is reloaded once its app runs again. */
+  /** Whether a page about to be shown can be: the page of an app that is stopped and that nothing brings back on
+   *  a request is hidden and held (false), and a held page is reloaded once its app runs again. A stoppable app's
+   *  page stays: the shell's parker answers it with a loading page until the app is up. */
   private prepareShownPage(page: LivePage, app: AppRecord): boolean {
-    if (!app.is_running) {
+    if (isAppShownStopped(this.store.getState(), app)) {
       page.isHeldForStop = true;
       this.hide(page);
       return false;
@@ -333,10 +336,12 @@ export class LivePagesLayer implements PageDriver {
     this.follow(windowsById);
   }
 
-  /** Give the focused window's page the frame focus once, when the focused window changes. */
+  /** When the focused window changes, however it was raised, take the document's focus off every other window's
+   *  page and give the focused window's page the frame focus once. */
   private focusIfChanged(focused: string | null): void {
     if (focused === this.lastFocusedWindowId) return;
     this.lastFocusedWindowId = focused;
+    this.takeFocusFromOtherPages(focused);
     const page = focused === null ? undefined : this.pages.get(focused);
     if (page !== undefined) requestFrameFocus(page.wrapper);
   }

@@ -187,6 +187,7 @@ vi.mock("../models/Providers", () => ({
   isAccountSignedOut: (accountId: string | null | undefined) =>
     !!accountId && mocks.signedOutAccountIds.has(accountId),
   loadAccounts: () => mocks.loadAccounts(),
+  whenAccountsReadyToChoose: () => Promise.resolve(),
 }));
 
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";

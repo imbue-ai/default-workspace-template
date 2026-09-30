@@ -137,6 +137,15 @@ class WindowPath(str):
         return _string_schema(cls, handler)
 
 
+class WindowPage(WindowPath):
+    """A page under an app's origin: a window path with no query string or fragment."""
+
+    def __new__(cls, value: str) -> Self:
+        if "?" in value or "#" in value:
+            raise InvalidShellValueError(f"invalid page {value!r}: a page has no query string or fragment")
+        return super().__new__(cls, value)
+
+
 class WindowTitle(str):
     """What a page last reported as its title, trimmed, at most 256 characters; empty means the app's display name."""
 
@@ -189,6 +198,16 @@ class IfPresent(LowerCaseStrEnum):
 
     FOCUS = auto()
     NEW = auto()
+
+
+class ShowOutcome(LowerCaseStrEnum):
+    """How a ``show`` op put the path on screen (a wire value): a window already showing it raised, a window on the
+    same page navigated, the app's pinned window navigated, or a new window opened."""
+
+    RAISED = auto()
+    NAVIGATED = auto()
+    PINNED = auto()
+    OPENED = auto()
 
 
 class ShortcutTargetKind(LowerCaseStrEnum):

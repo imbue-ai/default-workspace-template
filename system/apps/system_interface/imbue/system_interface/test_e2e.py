@@ -46,6 +46,7 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.testing import identity_headers
+from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
@@ -113,6 +114,8 @@ _CELL_WIDTH = 96
 _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
+# --desk-touch-target under [data-touch], which a taskbar entry takes there.
+_TOUCH_TARGET = 44
 _GEOMETRY_TOLERANCE_PX = 4
 
 
@@ -148,6 +151,8 @@ def _running_e2e_server(
     is_second_app_offered: bool = False,
     # The pinned stub's ``[pin]`` as ``(style, scope, default_mode)``; None offers no pinned app.
     pin: tuple[str, str, str] | None = None,
+    # Further registry rows, for apps a test serves itself.
+    extra_rows: tuple[str, ...] = (),
 ) -> Generator[E2EServer, None, None]:
     """Run the shell on a free port over the stub app (and the second one when asked).
 
@@ -220,7 +225,7 @@ def _running_e2e_server(
                     },
                 )
             )
-        write_registry(registry_path, *rows)
+        write_registry(registry_path, *rows, *extra_rows)
         monkeypatch.setenv("MINDS_APPS_FILE", str(registry_path))
         monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
         state_dir = tmp_path / "shell-state"
@@ -569,6 +574,25 @@ def _move_window_off_the_shortcuts(page: Page, window_id: str) -> None:
     _drag_title_bar(page, window_id, 500, 350)
 
 
+def _open_a_second_window_over_the_first(page: Page, server: E2EServer) -> tuple[str, str]:
+    """Open a window clear of the shortcuts, then a second from the shortcut's menu; answers (first, second) once
+    the second is focused."""
+    first = _open_via_shortcut(page, server)
+    _move_window_off_the_shortcuts(page, first)
+    page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').click(button="right")
+    page.locator('[data-menu-row="open-new"]').click()
+    windows = _wait_for_window_count(server.base_url, 2)
+    (second,) = [window["id"] for window in windows if window["id"] != first]
+    expect(_window(page, second)).to_have_attribute("data-focused", "true", timeout=15000)
+    return first, second
+
+
+def _press_shield(page: Page, window_id: str) -> None:
+    """A press on a lower window's content, which its shield takes, near the shield's bottom-left corner."""
+    shield_box = _box(_window(page, window_id).locator("[data-window-shield]"))
+    page.mouse.click(shield_box["x"] + 20, shield_box["y"] + shield_box["height"] - 20)
+
+
 def _assert_close(actual: float, expected: float, what: str) -> None:
     assert abs(actual - expected) <= _GEOMETRY_TOLERANCE_PX, f"{what}: {actual} is not within tolerance of {expected}"
 
@@ -665,7 +689,7 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     assert (
         page.locator(".app-layout")
         .evaluate("(el) => getComputedStyle(el).backgroundImage")
-        .endswith('/wallpapers/bundled/dawn")')
+        .endswith('/wallpapers/bundled/arcs")')
     )
     client_id = _client_id(page)
     wait_for(
@@ -1198,19 +1222,12 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
     raises it (the shield takes the press), after which a real click into its content reaches its page through the
     transparent chrome, and the stack order is what the placement file says."""
     _land(page, e2e_server)
-    first = _open_via_shortcut(page, e2e_server)
-    _move_window_off_the_shortcuts(page, first)
-    page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').click(button="right")
-    page.locator('[data-menu-row="open-new"]').click()
-    windows = _wait_for_window_count(e2e_server.base_url, 2)
-    (second,) = [window["id"] for window in windows if window["id"] != first]
-    expect(_window(page, second)).to_have_attribute("data-focused", "true", timeout=15000)
+    first, second = _open_a_second_window_over_the_first(page, e2e_server)
     expect(_window(page, first)).to_have_attribute("data-focused", "false")
     expect(_window(page, first).locator("[data-window-shield]")).to_have_count(1)
     expect(_window(page, second).locator("[data-window-shield]")).to_have_count(0)
 
-    shield_box = _box(_window(page, first).locator("[data-window-shield]"))
-    page.mouse.click(shield_box["x"] + 20, shield_box["y"] + shield_box["height"] - 20)
+    _press_shield(page, first)
     expect(_window(page, first)).to_have_attribute("data-focused", "true")
     expect(_window(page, second)).to_have_attribute("data-focused", "false")
     expect(_window(page, first).locator("[data-window-shield]")).to_have_count(0)
@@ -1226,6 +1243,28 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
         return list(_stored_placements(e2e_server.state_dir, client_id))[-1:] == [first]
 
     wait_for(_first_on_top, timeout=15.0, poll_interval=0.1, error_message="the raise never reached the file")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_raising_a_window_by_its_content_takes_the_focus_off_the_window_now_under_it(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """A press on a lower window's content raises it without the press reaching any page; the page that held the
+    keyboard (the one typed in last) must lose it, or keys go to a window the user can no longer see, and the
+    browser hands that page the focus back when the user returns from another application, which raises it again."""
+    _land(page, e2e_server)
+    first, second = _open_a_second_window_over_the_first(page, e2e_server)
+    second_frame = _page_frame(page, second)
+    second_frame.click("#held")
+    page.keyboard.type("typed")
+    assert second_frame.input_value("#held") == "typed"
+
+    _press_shield(page, first)
+    expect(_window(page, first)).to_have_attribute("data-focused", "true")
+    page.keyboard.type(" stray")
+
+    assert second_frame.input_value("#held") == "typed"
+    assert page.evaluate(f"() => document.activeElement?.getAttribute('data-live-page') !== {json.dumps(second)}")
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -1307,15 +1346,16 @@ def test_close_removes_the_window_for_every_client_and_the_close_chord_closes_th
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupant(tmp_path: Path, page: Page) -> None:
-    """Dragging a shortcut to an empty cell moves it there for everyone; dropping one on an occupied cell takes the
-    cell and moves the occupant to the nearest free one, so no two shortcuts share a cell."""
+def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tmp_path: Path, page: Page) -> None:
+    """Dragging a shortcut to an empty cell moves it there for everyone and moves nothing else; held over an
+    occupied cell the occupant steps aside under the hand, before the drop, and the drop keeps it there."""
     with _running_e2e_server(tmp_path, is_second_app_offered=True) as server:
         _land(page, server)
-        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0), _SECOND_SHORTCUT_KEY: (0, 1)}
+        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0), _SECOND_SHORTCUT_KEY: (1, 0)}
         backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
 
         docs = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
+        notes = page.locator(f'[data-shortcut="{_SECOND_SHORTCUT_KEY}"]')
         _drag(page, _center(_box(docs)), _cell_center(backdrop, 2, 2))
         wait_for(
             lambda: _shortcut_cells(server.base_url)[_STUB_SHORTCUT_KEY] == (2, 2),
@@ -1324,19 +1364,27 @@ def test_shortcut_drag_lands_in_a_free_cell_and_a_collision_displaces_the_occupa
             error_message="the shortcut never moved to (2, 2)",
         )
         expect(docs).to_have_attribute("data-cell", "2,2")
+        # An empty cell needs nothing stepping aside: the other shortcut stayed where it was.
+        assert _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (1, 0)
 
-        notes = page.locator(f'[data-shortcut="{_SECOND_SHORTCUT_KEY}"]')
-        _drag(page, _center(_box(notes)), _cell_center(backdrop, 2, 2))
+        # Held over the cell docs is in, without releasing: docs has already stepped aside to (1, 2), the
+        # nearest free cell to the one it is being displaced from, and notes is the icon in the hand.
+        _drag(page, _center(_box(notes)), _cell_center(backdrop, 2, 2), is_released=False)
+        expect(notes).to_have_attribute("data-lifted", "true")
+        expect(notes).to_have_attribute("data-cell", "2,2")
+        expect(docs).to_have_attribute("data-cell", "1,2")
+        # Nothing is written until the drop: the step aside is the desktop showing where the icon would land.
+        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (2, 2), _SECOND_SHORTCUT_KEY: (1, 0)}
+
+        page.mouse.up()
         wait_for(
-            lambda: _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (2, 2),
+            lambda: _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (1, 2), _SECOND_SHORTCUT_KEY: (2, 2)},
             timeout=15.0,
             poll_interval=0.1,
-            error_message="the dropped shortcut never took the occupied cell",
+            error_message="the drop did not keep the room that was made for it",
         )
-        # The nearest free cell, ties by lower column then lower row (contracts.md section 10).
-        displaced = _shortcut_cells(server.base_url)[_STUB_SHORTCUT_KEY]
-        assert displaced == (1, 2)
         expect(notes).to_have_attribute("data-cell", "2,2")
+        expect(notes).not_to_have_attribute("data-lifted", "true")
         expect(docs).to_have_attribute("data-cell", "1,2")
 
 
@@ -1434,6 +1482,15 @@ def _pinned_window(base_url: str, desktop_id: str = _HOME_DESKTOP_ID) -> dict[st
 
 def _pinned_entry(page: Page) -> Locator:
     return page.locator(f'[data-pinned-entry="{_PINNED_APP_NAME}"]')
+
+
+def _resting_box(page: Page, entry: Locator) -> FloatRect:
+    """A floating entry's box with the pointer off it and its tile at rest. Under the pointer the tile grows by a
+    tenth about its centre, through a transition reduced motion leaves on, so a box read there is anywhere between
+    its place and its place grown."""
+    page.mouse.move(0, 0)
+    page.wait_for_function("(element) => element.getAnimations().length === 0", arg=entry.element_handle())
+    return _box(entry)
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -1637,12 +1694,12 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         expect(entry).to_have_attribute("data-minimized", "true")
 
         backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
-        before = _box(entry)
+        before = _resting_box(page, entry)
         # The default corner: bottom right of the backdrop, inset by the theme's tokens.
         _assert_close(before["x"] + before["width"], backdrop["x"] + backdrop["width"] - 16, "default x")
         _assert_close(before["y"] + before["height"], backdrop["y"] + backdrop["height"] - 12, "default y")
         _drag(page, _center(before), (_center(before)[0] - 300, _center(before)[1] - 200))
-        moved = _box(entry)
+        moved = _resting_box(page, entry)
         _assert_close(moved["x"], before["x"] - 300, "dragged x")
         _assert_close(moved["y"], before["y"] - 200, "dragged y")
         stored = _wait_for_client_entry(
@@ -1660,7 +1717,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
 
         page.reload()
         expect(_pinned_entry(page)).to_be_visible(timeout=15000)
-        _assert_same_box(_box(_pinned_entry(page)), moved, "after reload")
+        _assert_same_box(_resting_box(page, _pinned_entry(page)), moved, "after reload")
 
         menu = _open_entry_menu(page, _pinned_entry(page))
         expect(menu.locator('[data-menu-row="close"]')).to_have_count(1)
@@ -1677,7 +1734,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         _open_entry_menu(page, _taskbar_entry(page, pinned["id"])).locator('[data-menu-row="float"]').click()
         expect(page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(1, timeout=10000)
         # The position it was dragged to is kept across the trip through the bar.
-        _assert_same_box(_box(_pinned_entry(page)), moved, "back afloat")
+        _assert_same_box(_resting_box(page, _pinned_entry(page)), moved, "back afloat")
 
 
 def _avatar_image_source(entry: Locator) -> str:
@@ -1871,11 +1928,14 @@ _MOBILE_CONTEXT_ARGS: dict[str, Any] = {
 
 
 @pytest.mark.timeout(90, func_only=False)
-def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server: E2EServer, page: Page) -> None:
+def test_phone_shows_every_window_maximized_with_finger_sized_taskbar_entries(
+    e2e_server: E2EServer, page: Page
+) -> None:
     """On a phone the shell is compact and touch: a tap on the shortcut opens the window, every window fills the
-    backdrop with no resize edges or maximize controls, the taskbar shows icons only, the launcher field is a
-    button that opens the overlay, and the stored placement is the client's own (still a normal frame, since
-    compactness is how this client renders, not what it saves)."""
+    backdrop with no resize edges or maximize controls, the taskbar's entries grow to the finger's touch target
+    (this is the client where an entry has to be reachable by thumb), the launcher field is a button that opens
+    the overlay, and the stored placement is the client's own (still a normal frame, since compactness is how
+    this client renders, not what it saves)."""
     with _second_client(page, e2e_server, **_MOBILE_CONTEXT_ARGS) as phone_page:
         expect(phone_page.locator("html")).to_have_attribute("data-compact", "")
         expect(phone_page.locator("html")).to_have_attribute("data-touch", "")
@@ -1889,7 +1949,13 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         backdrop = _box(phone_page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
         _assert_same_box(_box(window), backdrop, "phone window")
         expect(_taskbar_entry(phone_page, window_id)).to_be_visible()
-        expect(phone_page.locator(".taskbar-entry-title")).to_have_count(0)
+        # As tall as the finger's target, with the window's name on it: --desk-taskbar-entry-size takes
+        # --desk-touch-target here, and the chip is the whole of the target rather than a tile inside one.
+        entry_box = _box(_taskbar_entry(phone_page, window_id))
+        assert entry_box["height"] >= _TOUCH_TARGET - 1, entry_box
+        expect(_taskbar_entry(phone_page, window_id).locator(".taskbar-entry-title")).to_have_text(
+            f"Stub {_STUB_LAUNCH_PATH}"
+        )
         assert _placements(e2e_server.base_url, _client_id(phone_page))[window_id]["state"] == "NORMAL"
         frame = _page_frame(phone_page, window_id)
         assert frame.url == f"{e2e_server.stub_url}{_STUB_LAUNCH_PATH}"
@@ -2017,3 +2083,71 @@ def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_
 
     expect(page.locator(".update-notice-banner")).to_have_count(0, timeout=15000)
     assert _get_json(f"{e2e_server.base_url}/api/updates/pending") is None
+
+
+# The Imbue Studio chrome, played by a page on its own origin: it frames the shell, waits for the shell's
+# ``minds:workspace-ready``, and then posts the chat notification's ask down to it, as the Imbue Studio app does.
+_CHROME_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Chrome</title></head><body>
+<iframe id="workspace" src="__SHELL_URL__/" style="width: 1200px; height: 800px"></iframe>
+<script>
+window.__readyCount = 0;
+window.addEventListener("message", (event) => {
+  const frame = document.getElementById("workspace");
+  if (event.source !== frame.contentWindow || event.data?.type !== "minds:workspace-ready") return;
+  window.__readyCount += 1;
+  frame.contentWindow.postMessage({ type: "minds:focus-chat", chatId: "__CHAT_ID__" }, "*");
+});
+</script></body></html>"""
+
+_FOCUS_CHAT_TYPE = "minds:focus-chat"
+_FOCUS_CHAT_HANDLER_PATH = "/api/focus-chat"
+_FOCUSED_CHAT_ID = "agent-5f0c2e7a"
+
+
+def _chrome_app(shell_url: str) -> Flask:
+    app = Flask("chrome")
+    page = _CHROME_PAGE_TEMPLATE.replace("__SHELL_URL__", shell_url).replace("__CHAT_ID__", _FOCUSED_CHAT_ID)
+    app.add_url_rule("/", view_func=lambda: Response(page, mimetype="text/html"), endpoint="chrome")
+    return app
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_type_once_with_the_client(
+    tmp_path: Path, page: Page
+) -> None:
+    """The shell framed by the Imbue Studio chrome relays ``minds:focus-chat`` to the app whose registry row registers the
+    type: the app's handler route is posted the message once, with the client id of the shell page that received
+    it, and the shell reads nothing of it itself."""
+    received: list[dict[str, Any]] = []
+    with serve_app(message_handling_app(received, _FOCUS_CHAT_HANDLER_PATH, 200)) as handler_app:
+        handler_row = registry_row_toml(
+            "helper",
+            handler_app.http_url,
+            display_name="Helper",
+            message_handlers=[(_FOCUS_CHAT_TYPE, _FOCUS_CHAT_HANDLER_PATH)],
+        )
+        with _running_e2e_server(tmp_path, extra_rows=(handler_row,)) as server:
+            port = find_free_port()
+            chrome_server = make_threaded_server("127.0.0.1", port, _chrome_app(server.base_url))
+            chrome_thread = threading.Thread(target=chrome_server.serve_forever, daemon=True)
+            chrome_thread.start()
+            try:
+                page.goto(f"http://127.0.0.1:{port}/")
+                shell_frame = page.frame_locator("#workspace")
+                expect(shell_frame.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible(timeout=15000)
+                page.wait_for_function("() => window.__readyCount === 1", timeout=15000)
+                wait_for(
+                    lambda: len(received) >= 1,
+                    timeout=15.0,
+                    poll_interval=0.1,
+                    error_message="the app registered for minds:focus-chat was never posted the message",
+                )
+                page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+                shell = next(frame for frame in page.frames if frame.url.startswith(f"{server.base_url}/"))
+                client_id = shell.evaluate("() => localStorage.getItem('si-client-id')")
+            finally:
+                chrome_server.shutdown()
+                chrome_thread.join(timeout=5.0)
+                chrome_server.server_close()
+    assert isinstance(client_id, str) and client_id
+    assert received == [{"type": _FOCUS_CHAT_TYPE, "client_id": client_id, "chatId": _FOCUSED_CHAT_ID}]

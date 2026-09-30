@@ -8,7 +8,6 @@
  */
 
 import type {
-  AppLifecycleAction,
   LaunchOutcome,
   LaunchRequest,
   LaunchTarget,
@@ -20,7 +19,6 @@ import { StalePlacementsSaveError } from "../model/api";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
-  chatPath,
   draftRowsOf,
   freeTextParams,
   freeTextRowsOf,
@@ -54,7 +52,7 @@ import type {
   WindowRecord,
   WindowState,
 } from "../model/records";
-import { isSameWindowPaths } from "../model/records";
+import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { SaveIdMinter } from "../model/saveIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
@@ -72,14 +70,20 @@ import {
 } from "../geometry/frames";
 import type { PixelPoint, PixelRect, PixelSize, ResizeEdge } from "../geometry/frames";
 import { defaultFloatingPosition, floatingEntryRect, floatingPositionFromPixels } from "../geometry/floating";
-import { cellAtPoint, gridDimensions } from "../geometry/grid";
-import type { GridDimensions } from "../geometry/grid";
+import {
+  cellAtPoint,
+  cellRect,
+  gridDimensions,
+  placeShortcuts,
+  placedShortcutKey,
+  withRoomMadeFor,
+} from "../geometry/grid";
+import type { GridDimensions, PlacedShortcut } from "../geometry/grid";
 import { placementOf } from "../geometry/stack";
 import {
   activeDesktop,
   activeFocusedWindowId,
   appByName,
-  chatApp,
   detachedWindowsOf,
   draftTargetOf,
   effectiveWindow,
@@ -88,12 +92,12 @@ import {
   findWindow,
   initialDesktopState,
   isAppStoppable,
+  isEmbedderMessageHandled,
   isLayoutDirty,
   openableApps,
   pinnedWindowOf,
   reduceDesktopState,
   renderedState,
-  windowShowingChat,
 } from "../reducers/desktopState";
 import type { DesktopEvent, DesktopState, DetachedWindowReport } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
@@ -141,11 +145,15 @@ export interface DesktopApi {
   savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null>;
   arriveClient(clientId: string): Promise<ClientArrival>;
   fetchClients(): Promise<ClientRecord[]>;
-  setAppLifecycle(appName: string, action: AppLifecycleAction): Promise<void>;
+  quitApp(appName: string): Promise<void>;
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
   fetchAvatars(): Promise<AvatarCatalog>;
   selectAvatar(design: string): Promise<void>;
+  relayEmbedderMessage(type: string, clientId: string, payload: Readonly<Record<string, unknown>>): Promise<void>;
 }
+
+/** A message the Imbue Studio chrome sent this page: its type and its own fields. */
+export type EmbedderMessage = { readonly type: string } & Readonly<Record<string, unknown>>;
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
 export interface PageDriver {
@@ -153,7 +161,7 @@ export interface PageDriver {
   reload(windowId: string): void;
   /** Reload every page of an app. */
   reloadApp(appName: string): void;
-  /** Send the page ``shell:close-request`` (the minds close chord). */
+  /** Send the page ``shell:close-request`` (the Imbue Studio close chord). */
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
   ownsCloseChord(windowId: string): boolean;
@@ -268,9 +276,12 @@ export interface ShortcutGesture {
   readonly kind: "shortcut";
   readonly app: string;
   readonly launch: string;
-  /** Where the lifted icon is drawn (the pointer, less the grab offset). */
-  readonly iconPosition: PixelPoint;
-  readonly grabOffset: PixelPoint;
+  /** The cell it was lifted from: the box it is drawn in for the whole drag, which the lift translates
+   *  rather than moves, so the icon stays exactly where it was grabbed under the hand. */
+  readonly originCell: GridCell;
+  /** How far the pointer has travelled since the press: what the lifted icon is translated by. */
+  readonly lift: PixelPoint;
+  /** The cell the pointer is over: where the icon would land, and what the shortcut in it steps aside from. */
   readonly targetCell: GridCell;
 }
 
@@ -280,6 +291,13 @@ export interface FloatingEntryGesture {
   readonly app: string;
   readonly grabOffset: PixelPoint;
   readonly currentRect: PixelRect;
+}
+
+/** A shortcut and the cell it should take: what an optimistic write of the desktop names, one per shortcut. */
+interface ShortcutCellUpdate {
+  readonly app: string;
+  readonly launch: string;
+  readonly cell: GridCell;
 }
 
 export type ActiveGesture = MoveGesture | ResizeGesture | ShortcutGesture | FloatingEntryGesture;
@@ -521,7 +539,7 @@ export class DesktopStore {
 
   /** Resolves once the app list has landed, with the bootstrap's inventory read or the socket's first
    *  ``apps_updated``, whichever comes first. A ``start`` that failed to read the inventory resolves without
-   *  it, so a caller that needs the apps (which app holds chats, which window is pinned) waits on this too. */
+   *  it, so a caller that needs the apps (which of them take the Imbue Studio chrome's messages) waits on this too. */
   whenAppsLoaded(): Promise<void> {
     return this.appsLoaded;
   }
@@ -741,27 +759,23 @@ export class DesktopStore {
     return launched !== null;
   }
 
-  /** ``minds:focus-chat`` from the embedder: show the chat ``chatId``. A window already showing it is
-   *  switched to and raised, wherever it is; otherwise this client's view of the chat app's pinned
-   *  window is pointed at the chat, as a draft is, so the chat lands where this viewer reads chats;
-   *  with no pinned window to take it, the chat opens in a window of its own. False when nothing
-   *  showed it -- this machine has no app that holds chats, or the shell refused the ask. */
-  async focusChat(chatId: string): Promise<boolean> {
-    // A solo shell shows one window and cannot show a chat elsewhere.
-    if (this.soloWindowId !== null) return false;
-    const shown = windowShowingChat(this.state, chatId);
-    if (shown !== null) {
-      if (shown.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(shown.desktop.id);
-      this.restoreWindow(shown.window.id);
-      return true;
+  /** A message from the Imbue Studio chrome: when an app registered for its type, the shell is asked, once, to post it
+   *  there with this client's id (contracts.md section 5.6); the app decides what it means. False when no app
+   *  registered for the type, the shell could not pass it on, this is a preview shell (whose backend refuses
+   *  the relay: the apps it names are the live ones), or this is a solo shell (whose client is the main window's,
+   *  so what an app did with the message would land there). */
+  async relayEmbedderMessage(message: EmbedderMessage): Promise<boolean> {
+    if (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, message.type)) {
+      return false;
     }
-    const app = chatApp(this.state);
-    if (app === null) return false;
-    const pinned = pinnedWindowOf(this.state, app.name);
-    if (pinned === null) return (await this.openWindowAt(app.name, chatPath(chatId), "focus")) !== null;
-    const isTaken = await this.navigateOwnWindow(pinned.id, chatPath(chatId));
-    this.restoreWindow(pinned.id);
-    return isTaken;
+    const { type, ...payload } = message;
+    try {
+      await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload);
+    } catch (error) {
+      console.warn(`[si] could not relay ${type} from the embedder`, error);
+      return false;
+    }
+    return true;
   }
 
   /** Point this client's view of a window at ``path``, the way an agent's ``navigate`` does: the location is
@@ -888,6 +902,15 @@ export class DesktopStore {
       case "reload_system_interface":
         this.deps.reloadInterface();
         return;
+      case "show": {
+        // A pulled-out window the shell left out: its desktop window is raised as the taskbar's "Show" raises it,
+        // by the main window's page (a solo page shares its client).
+        const windowId = event.args.window;
+        if (this.soloWindowId === null && typeof windowId === "string" && windowId !== "") {
+          this.showDetachedWindow(windowId);
+        }
+        return;
+      }
     }
   }
 
@@ -963,36 +986,58 @@ export class DesktopStore {
     }
   }
 
-  /** Move a shortcut to a cell, showing it there at once and putting it back if the shell refuses:
-   *  a drop that waited on the round trip would draw the icon in the cell it came from meanwhile.
+  /** Drop a dragged shortcut into ``cell``, showing the arrangement the drag drew at once and putting the
+   *  cells back if the shell refuses: a drop that waited on the round trip would draw the shortcuts in the
+   *  cells they came from meanwhile.
    *
-   *  Both writes move the ONE shortcut in whatever the desktop is by then, rather than restoring a
-   *  snapshot taken before the request: a later drop, or a broadcast that landed in between, is
-   *  someone else's edit and is not this refusal's to undo. */
-  async moveShortcut(app: string, launch: string, cell: GridCell): Promise<void> {
+   *  Only the dragged shortcut is named: the shell displaces whatever was in the cell by the same rule and
+   *  its answer is what stands. It searches the unbounded plane where the drag searched the grid, so on a
+   *  desktop with no free cell near the target the shortcut settles where the shell put it rather than
+   *  where the drag drew it (contracts.md section 10).
+   *
+   *  Both writes move the shortcuts of whatever the desktop is by then, rather than restoring a snapshot
+   *  taken before the request: a later drop, or a broadcast that landed in between, is someone else's edit
+   *  and is not this refusal's to undo. */
+  private async dropShortcut(
+    app: string,
+    launch: string,
+    cell: GridCell,
+    shown: readonly PlacedShortcut[],
+  ): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
-    const from = desktop.shortcuts.find(
-      (shortcut) => shortcut.target.app === app && shortcut.target.launch === launch,
-    )?.cell;
-    this.withShortcutAt(app, launch, cell);
+    // What the room made moved, against the cells the shortcuts were already drawn in: a drop that moved
+    // nothing (back into the cell it came from) is not worth a round trip, and a cell the placement re-fitted
+    // is where that shortcut was drawn all along rather than anything this drag decided.
+    const restingCellByKey = new Map(this.restingShortcuts().map((entry) => [placedShortcutKey(entry), entry.cell]));
+    const changes = shown.flatMap((entry) => {
+      const resting = restingCellByKey.get(placedShortcutKey(entry));
+      if (resting === undefined || isSameCell(entry.cell, resting)) return [];
+      const target = entry.shortcut.target;
+      return [{ app: target.app, launch: target.launch, cell: entry.cell, storedCell: entry.shortcut.cell }];
+    });
+    if (changes.length === 0) return;
+    this.withShortcutCells(changes);
     try {
       this.takeDesktop(await this.deps.api.moveDesktopShortcut(desktop.id, app, launch, cell));
     } catch (error) {
-      if (from !== undefined) this.withShortcutAt(app, launch, from);
+      this.withShortcutCells(changes.map((entry) => ({ ...entry, cell: entry.storedCell })));
       this.deps.notify(`Could not move the shortcut: ${(error as Error).message}`);
     }
   }
 
-  /** The active desktop with one shortcut's cell rewritten, taken as the desktop of record. */
-  private withShortcutAt(app: string, launch: string, cell: GridCell): void {
+  /** The active desktop with the named shortcuts' cells rewritten, taken as the desktop of record. */
+  private withShortcutCells(cells: readonly ShortcutCellUpdate[]): void {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
     this.takeDesktop({
       ...desktop,
-      shortcuts: desktop.shortcuts.map((shortcut) =>
-        shortcut.target.app === app && shortcut.target.launch === launch ? { ...shortcut, cell } : shortcut,
-      ),
+      shortcuts: desktop.shortcuts.map((shortcut) => {
+        const wanted = cells.find(
+          (entry) => entry.app === shortcut.target.app && entry.launch === shortcut.target.launch,
+        );
+        return wanted === undefined ? shortcut : { ...shortcut, cell: wanted.cell };
+      }),
     });
   }
 
@@ -1186,7 +1231,7 @@ export class DesktopStore {
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
   }
 
-  /** The minds close chord: the focused window is told, then closed for everyone; a pinned window, which is never
+  /** The Imbue Studio close chord: the focused window is told, then closed for everyone; a pinned window, which is never
    *  closed, is minimized instead. */
   async closeFocusedWindow(): Promise<void> {
     // In a solo shell the chord belongs to the chrome, which closes the desktop window instead; the focused
@@ -1364,11 +1409,11 @@ export class DesktopStore {
     return true;
   }
 
-  async setAppLifecycle(appName: string, action: AppLifecycleAction): Promise<void> {
+  async quitApp(appName: string): Promise<void> {
     try {
-      await this.deps.api.setAppLifecycle(appName, action);
+      await this.deps.api.quitApp(appName);
     } catch (error) {
-      this.deps.notify(`Failed to ${action} ${appName}: ${(error as Error).message}`);
+      this.deps.notify(`Failed to quit ${appName}: ${(error as Error).message}`);
     }
   }
 
@@ -1502,42 +1547,80 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
-  /** A shortcut's icon was lifted; ``grabOffset`` is where inside its cell the pointer pressed. */
-  beginShortcutDrag(app: string, launch: string, pointer: PixelPoint, grabOffset: PixelPoint): void {
+  /** A shortcut's icon was lifted out of the cell it is drawn in. */
+  beginShortcutDrag(app: string, launch: string, pointer: PixelPoint): void {
+    const key = shortcutKey(app, launch);
+    const origin = this.placedShortcuts().find((entry) => placedShortcutKey(entry) === key);
+    if (origin === undefined) return;
     this.gesture = {
       kind: "shortcut",
       app,
       launch,
-      grabOffset,
-      iconPosition: { x: pointer.x - grabOffset.x, y: pointer.y - grabOffset.y },
+      originCell: origin.cell,
+      lift: { x: 0, y: 0 },
       targetCell: cellAtPoint(pointer, this.metrics, this.gridDimensions()),
     };
     this.notifyListeners();
   }
 
-  updateShortcutDrag(pointer: PixelPoint): void {
+  /** The pointer moved during a shortcut drag. Only a new cell under it redraws: the room made is the same
+   *  until then, and the lift itself is painted straight onto the icon (``paintShortcut``), a frame at a time. */
+  updateShortcutDrag(pointer: PixelPoint, lift: PixelPoint): void {
     const gesture = this.gesture;
     if (gesture === null || gesture.kind !== "shortcut") return;
-    this.gesture = {
-      ...gesture,
-      iconPosition: { x: pointer.x - gesture.grabOffset.x, y: pointer.y - gesture.grabOffset.y },
-      targetCell: cellAtPoint(pointer, this.metrics, this.gridDimensions()),
-    };
-    this.notifyListeners();
+    const targetCell = cellAtPoint(pointer, this.metrics, this.gridDimensions());
+    const isSameTarget = isSameCell(targetCell, gesture.targetCell);
+    this.gesture = { ...gesture, lift, targetCell };
+    if (!isSameTarget) this.notifyListeners();
   }
 
-  endShortcutDrag(pointer: PixelPoint): void {
+  endShortcutDrag(pointer: PixelPoint, lift: PixelPoint): void {
     const gesture = this.gesture;
     if (gesture === null || gesture.kind !== "shortcut") return;
-    this.updateShortcutDrag(pointer);
+    this.updateShortcutDrag(pointer, lift);
     const settled = this.gesture;
     this.gesture = null;
-    // The move goes in BEFORE the redraw: with the gesture gone and the shortcut still recorded
-    // in the cell it was lifted from, a redraw here draws the icon back where it started.
+    // The arrangement goes in BEFORE the redraw: with the gesture gone and the shortcuts still recorded
+    // in the cells they were in, a redraw here would put them both back for a frame.
     if (settled !== null && settled.kind === "shortcut") {
-      void this.moveShortcut(settled.app, settled.launch, settled.targetCell);
+      void this.dropShortcut(settled.app, settled.launch, settled.targetCell, this.shortcutArrangement(settled));
     }
     this.notifyListeners();
+  }
+
+  /** Where the shortcuts sit right now: their placement over the current grid, with the room made for the
+   *  one in the hand while a drag holds it over a cell. What the backdrop draws and what a drop commits. */
+  placedShortcuts(): readonly PlacedShortcut[] {
+    const gesture = this.gesture;
+    if (gesture !== null && gesture.kind === "shortcut") return this.shortcutArrangement(gesture);
+    return this.restingShortcuts();
+  }
+
+  /** Where the shortcuts sit with nothing in the hand: their placement over the current grid. */
+  private restingShortcuts(): readonly PlacedShortcut[] {
+    const desktop = activeDesktop(this.state);
+    if (desktop === null) return [];
+    return placeShortcuts(desktop.shortcuts, this.gridDimensions());
+  }
+
+  /** The box of the cell a shortcut is placed in, or null when the desktop holds no such shortcut: what the
+   *  paint of a drop writes, as ``windowRect`` is for a window. For the one a drag holds this is the cell it
+   *  would land in rather than the box it draws in, which its lift carries it out of. */
+  shortcutRect(app: string, launch: string): PixelRect | null {
+    const key = shortcutKey(app, launch);
+    const entry = this.placedShortcuts().find((candidate) => placedShortcutKey(candidate) === key);
+    return entry === undefined ? null : cellRect(entry.cell, this.metrics);
+  }
+
+  /** The arrangement ``gesture`` has made: the placement with the held shortcut in the cell under the pointer
+   *  and the shortcut that was in it stepped aside. */
+  private shortcutArrangement(gesture: ShortcutGesture): readonly PlacedShortcut[] {
+    return withRoomMadeFor(
+      this.restingShortcuts(),
+      shortcutKey(gesture.app, gesture.launch),
+      gesture.targetCell,
+      this.gridDimensions(),
+    );
   }
 
   /** A floating entry was lifted; ``grabOffset`` is where inside its box the pointer pressed. Nothing moves

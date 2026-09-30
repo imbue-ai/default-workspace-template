@@ -49,6 +49,7 @@ from imbue.chat.harnesses.codex.model import read_codex_model_options
 from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
+from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
@@ -74,6 +75,7 @@ from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingMngrMessenger
+from imbue.chat.testing import VanishedAgentMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import drain_is_connecting_pushes
@@ -90,9 +92,11 @@ from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.polling import wait_for
+from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
 
 # Generous: the first receive can take several seconds on a loaded machine even
@@ -660,6 +664,22 @@ def test_a_chat_on_a_signed_in_account_still_takes_messages(tmp_path: Path, monk
     assert messenger.sent == [(agent_id, "hello")]
 
 
+def test_send_message_to_an_agent_destroyed_mid_send_answers_not_found() -> None:
+    """A chat destroyed while a send to it is in flight answers 404, which an in-workspace
+    sender (``message_chat.py``) reads as a chat that no longer exists; it reads a 500 as a refusal
+    and retries."""
+    agent_id = "agent-00000000000000000000000000000003"
+    agent_info = _agent_info(agent_id=agent_id, name="destroyed-agent")
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=VanishedAgentMngrMessenger())
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "report"})
+
+    assert response.status_code == 404
+    assert response.get_json()["detail"] == f"Chat '{agent_id}' not found"
+
+
 def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     """mngr's send auto-starts a stopped claude/pi agent, and the observe stream sees the revival
     only on its full snapshot; a delivered send flips the tracked lifecycle at once, so the UI
@@ -1020,6 +1040,71 @@ def test_drain_to_composer_codex_returns_the_ledger_block(tmp_path: Path) -> Non
         response = client.post(f"/api/chats/{agent_id}/drain-to-composer")
     assert response.status_code == 200
     assert response.get_json()["block"] == "bring me back to edit"
+
+
+_QUEUED_REPORT = (
+    f"<{BACKGROUND_TASK_REPORT_TAG}>\n<summary>Wait for the worker (finished)</summary>\n"
+    f"Exit code: 0\n</{BACKGROUND_TASK_REPORT_TAG}>"
+)
+
+
+class _RefusingCodexLedger(_FakeCodexLedger):
+    """A ledger whose daemon refuses every send."""
+
+    def send(self, text: str, client_id: str | None = None) -> str:
+        raise CodexAppServerError("the daemon refused the message")
+
+
+def test_drain_to_composer_sends_a_queued_report_back_to_the_agent_and_keeps_the_users_text(
+    tmp_path: Path,
+) -> None:
+    """A report is the agent's, not the user's: left in the composer it would never reach the agent."""
+    agent_id = "codex-agent-8"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    ledger = _FakeCodexLedger(interrupt_block=f"fix the header\n\n{_QUEUED_REPORT}")
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/drain-to-composer")
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "fix the header"
+    assert [text for text, _client_id in ledger.sent] == [_QUEUED_REPORT]
+
+
+def test_drain_to_composer_hands_a_report_the_agent_refused_to_the_composer(tmp_path: Path) -> None:
+    """The report is the only copy of its command's result, so a failed re-send keeps it in view."""
+    agent_id = "codex-agent-9"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    ledger = _RefusingCodexLedger(interrupt_block=f"fix the header\n{_QUEUED_REPORT}")
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/drain-to-composer")
+    assert response.status_code == 200
+    assert response.get_json()["block"] == f"{_QUEUED_REPORT}\nfix the header"
+
+
+def test_drain_to_composer_hands_a_report_to_an_agent_destroyed_meanwhile_to_the_composer(tmp_path: Path) -> None:
+    """An agent destroyed between the drain and the report's re-send still leaves the user their queued text."""
+    agent_id = "codex-agent-10"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    ledger = _FakeCodexLedger(interrupt_block=f"fix the header\n{_QUEUED_REPORT}")
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
+        patch(
+            "imbue.chat.server._deliver_message",
+            side_effect=AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}"),
+        ),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/drain-to-composer")
+    assert response.status_code == 200
+    assert response.get_json()["block"] == f"{_QUEUED_REPORT}\nfix the header"
 
 
 def test_drain_to_composer_codex_no_ledger_returns_empty_block(tmp_path: Path) -> None:
@@ -2375,14 +2460,14 @@ def test_create_chat_refuses_a_message_beside_a_minted_id(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
     agent_manager: AgentManager = state_of(app).agent_manager
-    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", message="Teach me about Mind")
+    failed = seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", message="Teach me about Imbue Studio")
 
     response = client.post("/api/chats/create", json={"chat_id": failed.chat_id, "message": "other"})
 
     assert response.status_code == 400
     assert "first message" in response.get_json()["detail"]
     failed_proto = agent_manager.get_provisional_chat(failed.chat_id)
-    assert failed_proto is not None and failed_proto.message == "Teach me about Mind"
+    assert failed_proto is not None and failed_proto.message == "Teach me about Imbue Studio"
 
 
 def _seed_body() -> dict[str, Any]:
@@ -2396,7 +2481,7 @@ def _seed_body() -> dict[str, Any]:
 
 
 def test_seeding_a_chat_lists_it_awaiting_its_first_send_with_the_turns_as_its_transcript(tmp_path: Path) -> None:
-    """The Mind app's onboarding conversation arrives whole: the chat is created (201) as a
+    """The Imbue Studio app's onboarding conversation arrives whole: the chat is created (201) as a
     provisional chat awaiting the user, and its events route reads the seeded turns."""
     agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
     agent_manager.note_agent_list_known()
@@ -2434,6 +2519,28 @@ def test_seeding_a_chat_is_refused_until_the_agent_list_is_known() -> None:
     client = create_application(build_test_state()).test_client()
     response = client.post("/api/chats/seed", json=_seed_body())
     assert response.status_code == 503
+
+
+def test_an_empty_chat_list_gets_one_chat_awaiting_its_first_send(tmp_path: Path) -> None:
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+    first = client.post("/api/chats/awaiting")
+    second = client.post("/api/chats/awaiting")
+
+    assert first.status_code == 200
+    assert second.get_json() == first.get_json()
+    provisional = agent_manager.get_provisional_chat(first.get_json()["chat_id"])
+    assert provisional is not None
+    assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+    assert provisional.account_id == ""
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_empty_chat_list_chat_is_refused_until_the_agent_list_is_known() -> None:
+    client = create_application(build_test_state()).test_client()
+    assert client.post("/api/chats/awaiting").status_code == 503
 
 
 def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: FlaskClient) -> None:
@@ -2570,7 +2677,7 @@ def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) ->
     """``system/scripts/message_chat.py --create`` is standard-library only and cannot import this
     package, so its copy of the route's path, its waiver setting, and the fields it posts are
     pinned here. ``CreateChatRequest`` forbids unknown fields, and the script reads that refusal as
-    a chat app from before them: a rename on this side would send every Minds-app chat back to the
+    a chat app from before them: a rename on this side would send every Imbue Studio chat back to the
     bare ``mngr create`` without a single failing test."""
     script = Path(__file__).resolve().parents[4] / "scripts" / "message_chat.py"
     spec = importlib.util.spec_from_file_location("message_chat_for_create_pin", script)

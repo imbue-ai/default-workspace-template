@@ -238,7 +238,54 @@ def test_footprint_with_a_diff_base_separates_the_changes_outside_the_footprint(
         "docs/system/unrelated.md",
         "system/apps/news/runner.py",
     ]
+    assert diff["inside_footprint"] == ["system/apps/news/runner.py"]
     assert diff["outside_footprint"] == ["docs/system/unrelated.md"]
+
+
+def test_footprint_diffs_to_the_ref_named_by_diff_ref_instead_of_head(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
+    init_git_repository(tmp_path)
+    base_sha = commit_everything(tmp_path, "base")
+    write_repo_file(tmp_path, "system/apps/news/runner.py", "ROUTES = ('/api/entries',)\n")
+    middle_sha = commit_everything(tmp_path, "the workspace's own change")
+    write_repo_file(tmp_path, "system/scripts/run_news.sh", "#!/bin/sh\nexit 1\n")
+    commit_everything(tmp_path, "a later change HEAD carries")
+
+    result = _run_cli(
+        [
+            "footprint",
+            "system/apps/news/app.toml",
+            "--repo-root",
+            str(tmp_path),
+            "--diff-base",
+            base_sha,
+            "--diff-ref",
+            middle_sha,
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    diff = json.loads(result.output)["diff"]
+    assert diff["ref"] == middle_sha
+    assert diff["files"] == ["system/apps/news/runner.py"]
+
+
+def test_footprint_refuses_a_diff_ref_without_a_diff_base(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
+
+    result = _run_cli(
+        [
+            "footprint",
+            "system/apps/news/app.toml",
+            "--repo-root",
+            str(tmp_path),
+            "--diff-ref",
+            "HEAD",
+        ]
+    )
+
+    assert result.exit_code != 0
+    assert "--diff-base" in result.output
 
 
 def test_references_prints_one_json_object_per_app_that_owns_the_path(tmp_path: Path) -> None:

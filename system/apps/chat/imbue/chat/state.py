@@ -26,6 +26,7 @@ from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
+from imbue.chat.shell_client import ShellLayoutInterface
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
@@ -81,6 +82,10 @@ class ChatAppState(MutableModel):
     auth_flows: AuthFlowService
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
+    shell: ShellLayoutInterface = Field(
+        description="The shell's layout, for the routes that put a window on a client's screen; the auto-open "
+        "reactor is handed the same one"
+    )
     # The secret requests agents file and the env files their answers are written to, and
     # the router's bridge the routes reach the chats through (attached by ``create_application``).
     secret_requests: SecretRequestStore
