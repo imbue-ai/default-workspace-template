@@ -57,8 +57,9 @@ docker, lima), earlyoom logs that once and uses `/proc/meminfo` alone.
   user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
   (600) < agent subprocess (900) < Chromium's own processes (910-1000, renderers
   at the ceiling) and a spare chat agent (`SPARE_AGENT`, 1000: an agent the chat
-  app started ahead of the next new chat, which no one uses yet). Chat agents occupy a *dynamic* range that straddles the worker
-  band: `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
+  app started ahead of the next new chat, which no one uses yet). Chat agents
+  occupy a *dynamic* range that straddles the worker band: `CHAT_AGENT_FLOOR`
+  (300, a chat being engaged with right now) through
   `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
   `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).
   The chat app's prioritizer moves a chat within that range from live
