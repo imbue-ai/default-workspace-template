@@ -2089,12 +2089,14 @@ def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_
 # (``SOLO_HEAL_GRACE_MS`` in DesktopStore.ts): long enough for a pop-out that was going to write it to have.
 _PAST_SOLO_HEAL_GRACE_MS = 2000
 
-# Records, in the page it is added to, every ``minds:detached-windows`` report the page's shell sends its
-# embedder: a top-level page is its own parent, so it hears its own reports.
+# Records, in the page it is added to, every ``minds:detached-windows`` report and ``minds:pop-out-window`` ask the
+# page's shell sends its embedder: a top-level page is its own parent, so it hears its own messages.
 _RECORD_DETACHED_REPORTS_SCRIPT = """
 window.__detachedReports = [];
+window.__popOutAsks = [];
 window.addEventListener("message", (event) => {
   if (event.data?.type === "minds:detached-windows") window.__detachedReports.push(event.data.windows);
+  if (event.data?.type === "minds:pop-out-window") window.__popOutAsks.push(event.data.windowId);
 });
 """
 
@@ -2166,6 +2168,47 @@ def test_a_pop_out_reopened_at_launch_over_a_window_brought_back_closes_rather_t
     assert pop_out.evaluate("() => window.__detachedReports") == [[]]
     assert _stored_placements(e2e_server.state_dir, client_id)[window_id]["is_detached"] is False
     expect(_window(page, window_id)).to_be_visible()
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_agent_ops_raise_a_pop_out_in_its_own_window_refuse_to_move_it_and_bring_it_back_when_forced(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """``focus``, and an ``open`` that finds the window, ask the pop-out's own page to raise its window and leave it
+    popped out; ``restore`` is refused without ``force``; with it the window is back on the desktop, and the
+    pop-out's page reports it back, which is what closes its window."""
+    _land(page, e2e_server)
+    client_id = _client_id(page)
+    window_id = _broadcast_op(e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id})[
+        "window_id"
+    ]
+    pop_out = _pop_out(page, e2e_server, window_id)
+    _wait_for_stored_placement(e2e_server, client_id, window_id, lambda placement: placement["is_detached"], "detach")
+
+    focused = _broadcast_op(e2e_server.base_url, "focus", {"window": window_id, "client": client_id})
+    assert focused["is_raised_in_own_window"] is True
+    pop_out.wait_for_function(f"() => window.__popOutAsks.includes({json.dumps(window_id)})", timeout=15000)
+    found = _broadcast_op(e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id})
+    assert (found["window_id"], found["is_raised_in_own_window"]) == (window_id, True)
+    pop_out.wait_for_function("() => window.__popOutAsks.length >= 2", timeout=15000)
+    assert _stored_placements(e2e_server.state_dir, client_id)[window_id]["is_detached"] is True
+    expect(_window(page, window_id)).to_have_count(0)
+
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        _post_json(
+            f"{e2e_server.base_url}/api/layout/broadcast",
+            {"op": "restore", "args": {"window": window_id, "client": client_id}, "requester": None},
+        )
+    assert refused.value.code == 423
+    assert _stored_placements(e2e_server.state_dir, client_id)[window_id]["is_detached"] is True
+
+    restored = _broadcast_op(e2e_server.base_url, "restore", {"window": window_id, "client": client_id, "force": True})
+    assert restored["is_brought_back"] is True
+    expect(_window(page, window_id)).to_be_visible(timeout=15000)
+    pop_out.wait_for_function(
+        "() => { const last = window.__detachedReports.at(-1); return last !== undefined && last.length === 0; }",
+        timeout=15000,
+    )
 
 
 # The Imbue Studio chrome, played by a page on its own origin: it frames the shell, waits for the shell's

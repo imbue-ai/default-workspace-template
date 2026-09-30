@@ -26,12 +26,14 @@ from workspace_layout.answers import parse_listing
 from workspace_layout.answers import quote_answer
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.errors import ShellUnreachableError
+from workspace_layout.errors import WindowPoppedOutError
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.ops import CLOSE_OP
 from workspace_layout.ops import FOCUS_OP
 from workspace_layout.ops import NAVIGATE_OP
 from workspace_layout.ops import OPEN_OP
 from workspace_layout.ops import PLACE_OP
+from workspace_layout.ops import POPPED_OUT_REFUSAL_STATUS
 from workspace_layout.ops import REFRESH_OP
 from workspace_layout.ops import SHOW_OP
 from workspace_layout.ops import ClientActivityReport
@@ -155,7 +157,10 @@ class ShellLayoutClient(ShellLayoutInterface):
         if elapsed > SHELL_REQUEST_SLOW_SECONDS:
             logger.warning("Asked the shell for the {} slowly, in {:.1f}s", described, elapsed)
         if not response.is_success:
-            raise ShellRefusedOpError(
+            refusal = (
+                WindowPoppedOutError if response.status_code == POPPED_OUT_REFUSAL_STATUS else ShellRefusedOpError
+            )
+            raise refusal(
                 f"The shell refused the {described} ({response.status_code}): {quote_answer(response.body)}",
                 status_code=response.status_code,
             )

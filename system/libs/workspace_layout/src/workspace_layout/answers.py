@@ -30,6 +30,24 @@ class DesktopOpAnswer(FrozenModel):
     desktop_id: DesktopId = Field(description="The desktop the op edited")
     client_id: ClientId | None = Field(description="The client the op targeted; None for an unplaced open")
     window_id: WindowId | None = Field(description="The window the op acted on, when it names one")
+    # What the answer says about the client's popped-out windows (plan-popped-out-layout-ops.md); a shell older than
+    # the rules answers none of it.
+    is_raised_in_own_window: bool = Field(
+        default=False, description="The window is popped out, so its own window was raised and it stayed out"
+    )
+    is_brought_back: bool = Field(
+        default=False,
+        description="The op brought a pulled-out window back onto the desktop (forced, or for a client that is not "
+        "connected)",
+    )
+    unpaired_beside: WindowId | None = Field(
+        default=None, description="The popped-out window an open's ``beside`` named, which the open did not pair with"
+    )
+    has_no_desktop_window: bool = Field(
+        default=False,
+        description="The client's only open windows are pop-outs, so the window the op put on the desktop shows when "
+        "a desktop window opens",
+    )
 
 
 class OpenAnswer(DesktopOpAnswer):

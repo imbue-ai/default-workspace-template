@@ -44,6 +44,10 @@ KNOWN_OPS: Final[frozenset[str]] = (
     frozenset({CONTEXT_OP, LOAD_OP, SHOW_OP, OPEN_OP}) | INVENTORY_OPS | WINDOW_OPS | SHORTCUT_OPS | TRANSIENT_OPS
 )
 
+# The status the op route refuses an op with when it would change where a window the target client has popped out
+# into its own window sits, and the op did not carry ``force`` (plan-popped-out-layout-ops.md).
+POPPED_OUT_REFUSAL_STATUS: Final[int] = 423
+
 # The one non-id a window argument accepts: the requester's own window, which the op's ``requester`` names.
 SELF_WINDOW: Final[str] = "self"
 # The requester's app's pinned window on the target desktop (pinned-taskbar-entries plan section 4.8).
@@ -137,6 +141,11 @@ class DesktopOpArguments(FrozenModel):
     mode: ShortcutMode = Field(default=ShortcutMode.FOCUS, description="A shortcut's mode for ``shortcut_set``")
     cell: str = Field(default="", description="``column,row`` for ``shortcut_set`` and ``shortcut_move``")
     wallpaper: Wallpaper | None = Field(default=None, description="The wallpaper reference for ``wallpaper``")
+    force: bool = Field(
+        default=False,
+        description="Apply an op that would bring a window the target client has popped out back onto the desktop, "
+        "rather than being refused; ignored by an op that refuses nothing",
+    )
 
 
 class ClientActivityReport(FrozenModel):
@@ -196,6 +205,11 @@ class PlaceRequest(WindowRequest):
     """A ``place`` of one window at a frame."""
 
     frame: str = Field(description="``x,y,width,height`` in fractions of the backdrop")
+    is_forced: bool = Field(
+        default=False,
+        description="Whether to place a window the client has popped out into its own window anyway, bringing it "
+        "back onto the desktop; without it the shell refuses (WindowPoppedOutError)",
+    )
 
 
 @pure
@@ -248,5 +262,8 @@ def navigate_op_arguments(request: NavigateRequest) -> dict[str, Any]:
 
 @pure
 def place_op_arguments(request: PlaceRequest) -> dict[str, Any]:
-    arguments = DesktopOpArguments(window=request.window, frame=request.frame)
+    if request.is_forced:
+        arguments = DesktopOpArguments(window=request.window, frame=request.frame, force=True)
+    else:
+        arguments = DesktopOpArguments(window=request.window, frame=request.frame)
     return _with_target(arguments, request.client_id, request.desktop)

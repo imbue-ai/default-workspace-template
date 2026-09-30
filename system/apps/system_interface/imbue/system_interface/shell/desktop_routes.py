@@ -1,6 +1,7 @@
 """The desktop's routes (desktop-interface contracts.md sections 5 and 8): desktops, windows, placements, wallpapers,
 and the verbs of the op route."""
 
+from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
@@ -20,10 +21,13 @@ from pydantic import Field
 from pydantic import ValidationError
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.ops import DesktopOpArguments
+from workspace_layout.ops import FOCUS_OP
 from workspace_layout.ops import INVENTORY_OPS
 from workspace_layout.ops import LOAD_OP
+from workspace_layout.ops import OPEN_OP
 from workspace_layout.ops import OpRequester
 from workspace_layout.ops import PINNED_WINDOW
+from workspace_layout.ops import PLACE_OP
 from workspace_layout.ops import RELOAD_SYSTEM_INTERFACE_OP
 from workspace_layout.ops import SELF_WINDOW
 from workspace_layout.ops import SHORTCUT_OPS
@@ -38,6 +42,7 @@ from workspace_layout.primitives import WallpaperName
 from workspace_layout.primitives import WindowId
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.clients import client_wire_json
@@ -60,6 +65,7 @@ from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.desktop_document import choose_show_target
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
 from imbue.system_interface.shell.desktop_document import effective_placements
+from imbue.system_interface.shell.desktop_document import find_window_at
 from imbue.system_interface.shell.desktop_document import frame_for_state
 from imbue.system_interface.shell.desktop_document import most_recently_focused_window_of_app
 from imbue.system_interface.shell.desktop_document import next_shortcut_cell
@@ -69,6 +75,7 @@ from imbue.system_interface.shell.desktop_document import placement_of
 from imbue.system_interface.shell.desktop_document import require_window
 from imbue.system_interface.shell.desktop_document import with_window_frame
 from imbue.system_interface.shell.desktop_document import with_window_minimized
+from imbue.system_interface.shell.desktop_document import with_window_minimized_on_desktop
 from imbue.system_interface.shell.desktop_document import with_window_raised
 from imbue.system_interface.shell.desktop_document import with_window_restored
 from imbue.system_interface.shell.desktop_document import with_window_state
@@ -79,6 +86,7 @@ from imbue.system_interface.shell.errors import LayoutOpError
 from imbue.system_interface.shell.errors import NoRequesterWindowError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
+from imbue.system_interface.shell.errors import WindowPoppedOutError
 from imbue.system_interface.shell.primitives import ShowOutcome
 from imbue.system_interface.shell.primitives import WindowPage
 from imbue.system_interface.shell.primitives import WindowPath
@@ -106,6 +114,13 @@ _ZONE_STATES: Final[dict[str, WindowState]] = {
     "right": WindowState.SNAPPED_RIGHT,
     "maximized": WindowState.MAXIMIZED,
 }
+# The window verbs that would change where a popped-out window sits, refused on one unless the op carries ``force``
+# (plan-popped-out-layout-ops.md): each shows the window on the desktop, or, for ``minimize``, puts it out of sight.
+_POP_OUT_REFUSING_OPS: Final[frozenset[str]] = frozenset({"minimize", "restore", "maximize", PLACE_OP})
+# The ops whose outcome is a window shown on the desktop, which a client with only pop-outs open cannot show yet.
+_DESKTOP_SURFACING_OPS: Final[frozenset[str]] = frozenset(
+    {OPEN_OP, FOCUS_OP, SHOW_OP, "restore", "maximize", PLACE_OP}
+)
 _FRAME_COMPONENT_COUNT: Final[int] = 4
 _CELL_COMPONENT_COUNT: Final[int] = 2
 
@@ -359,21 +374,45 @@ def resolved_client_wire_json(record: ClientRecord, is_connected: bool, desktops
     return _client_wire_json_on(record, is_connected, resolve_active_desktop(record, desktops))
 
 
+@pure
+def _popped_out_wire_json(desktop: Desktop, layout: DesktopLayout) -> list[dict[str, Any]]:
+    """The client's popped-out windows of one desktop, each with whether the user hid its ghost."""
+    return [
+        {
+            "window_id": str(placement.window_id),
+            "desktop_id": str(desktop.id),
+            "is_ghost_hidden": placement.is_minimized,
+        }
+        for placement in effective_placements(layout, desktop)
+        if placement.is_detached
+    ]
+
+
 def inventory_document_json(shell: ShellState) -> dict[str, Any]:
     """The one document of desktop contracts.md section 5.5: whether a preview shell answered, every desktop, every
-    app, and every known client with ``shown``, the windows of its active desktop that its layout does not minimize."""
+    app, and every known client with ``shown``, the windows of its active desktop that its layout does not minimize,
+    and ``popped_out``, the windows its layouts of every desktop say it popped out into their own windows."""
     desktops = shell.list_desktops()
-    desktops_by_id = {desktop.id: desktop for desktop in desktops}
     connected = shell.broadcaster.connected_client_ids()
     clients: list[dict[str, Any]] = []
     for record in shell.clients.list_clients():
         active = resolve_active_desktop(record, desktops)
         shown: list[str] = []
-        if active is not None:
-            desktop = desktops_by_id[active]
-            layout = shell.placements.read_layout(active, str(record.id), {window.id for window in desktop.windows})
-            shown = _shown_window_ids(desktop, layout)
-        clients.append({**_client_wire_json_on(record, str(record.id) in connected, active), "shown": shown})
+        popped_out: list[dict[str, Any]] = []
+        for desktop in desktops:
+            layout = shell.placements.read_layout(
+                desktop.id, str(record.id), {window.id for window in desktop.windows}
+            )
+            if desktop.id == active:
+                shown = _shown_window_ids(desktop, layout)
+            popped_out.extend(_popped_out_wire_json(desktop, layout))
+        clients.append(
+            {
+                **_client_wire_json_on(record, str(record.id) in connected, active),
+                "shown": shown,
+                "popped_out": popped_out,
+            }
+        )
     return {
         "is_preview": get_state().is_preview,
         "desktops": shell.desktops_wire_json(desktops),
@@ -465,6 +504,40 @@ class _DesktopOpTarget(FrozenModel):
 
     client_id: ClientId = Field(description="The one client the op targets")
     desktop: Desktop = Field(description="The desktop the op edits (the client's active one, or ``args.desktop``)")
+    is_switch_asked: bool = Field(
+        default=False,
+        description="Whether ``args.desktop`` names a desktop other than the client's active one, which the op "
+        "switches the client to once it has been applied",
+    )
+
+
+class _PopOutNotes(FrozenModel):
+    """What an op's answer says about the target client's popped-out windows (plan-popped-out-layout-ops.md)."""
+
+    is_raised_in_own_window: bool = Field(
+        default=False, description="The window was popped out, so its own window was raised and it stayed out"
+    )
+    is_brought_back: bool = Field(
+        default=False,
+        description="The op brought a pulled-out window back onto the desktop (forced, or for a client that is not "
+        "connected)",
+    )
+    unpaired_beside: WindowId | None = Field(
+        default=None, description="The popped-out window an ``open --beside`` named, which the open did not pair with"
+    )
+    has_no_desktop_window: bool = Field(
+        default=False,
+        description="The client's only open windows are pop-outs, so the window the op shows on the desktop is "
+        "stored for when a desktop window opens",
+    )
+
+    def wire_json(self) -> dict[str, Any]:
+        return {
+            "is_raised_in_own_window": self.is_raised_in_own_window,
+            "is_brought_back": self.is_brought_back,
+            "unpaired_beside": str(self.unpaired_beside) if self.unpaired_beside is not None else None,
+            "has_no_desktop_window": self.has_no_desktop_window,
+        }
 
 
 def _parse_desktop_arguments(args_raw: Mapping[str, Any]) -> DesktopOpArguments:
@@ -480,8 +553,9 @@ def _requested_desktop(args_raw: Mapping[str, Any]) -> str | None:
 
 
 def _resolve_target(shell: ShellState, args_raw: Mapping[str, Any], requester: OpRequester | None) -> _DesktopOpTarget:
-    """The client and desktop an op targets: ``args.desktop`` (by name or id, switching the client to it), else the
-    client's active desktop by the rule of desktop contracts.md section 4.3."""
+    """The client and desktop an op targets: ``args.desktop`` (by name or id), else the client's active desktop by the
+    rule of desktop contracts.md section 4.3. The switch ``args.desktop`` asks for is left to ``_switch_as_asked``,
+    once the op has been applied, so an op refused on the way leaves the client where it was."""
     client_id = require_client(shell, args_raw, requester)
     desktops = shell.list_desktops()
     requested = _requested_desktop(args_raw)
@@ -489,13 +563,51 @@ def _resolve_target(shell: ShellState, args_raw: Mapping[str, Any], requester: O
         desktop = find_desktop_by_name_or_id(desktops, requested)
         if desktop is None:
             raise DesktopNotFoundError(requested)
-        if shell.active_desktop_of_client(client_id) != desktop.id:
-            shell.set_client_active_desktop(client_id, desktop.id)
-        return _DesktopOpTarget(client_id=client_id, desktop=desktop)
+        is_switch_asked = shell.active_desktop_of_client(client_id) != desktop.id
+        return _DesktopOpTarget(client_id=client_id, desktop=desktop, is_switch_asked=is_switch_asked)
     active = shell.active_desktop_of_client(client_id)
     if active is None:
         raise LayoutOpError("there is no desktop to edit yet")
     return _DesktopOpTarget(client_id=client_id, desktop=shell.get_desktop(active))
+
+
+def _switch_as_asked(shell: ShellState, target: _DesktopOpTarget) -> None:
+    """Switch the client to the desktop ``args.desktop`` named, when it named another than the client's active one."""
+    if target.is_switch_asked:
+        shell.set_client_active_desktop(target.client_id, target.desktop.id)
+
+
+def _is_popped_out(shell: ShellState, desktop: Desktop, client_id: ClientId, window_id: WindowId) -> bool:
+    """Whether the client has the window popped out into its own window: the client's own placement says so, and the
+    client is connected. A disconnected client's placement is only a record, which the pop-out reopened at its next
+    launch reconciles with whatever an op made of it."""
+    return _is_detached_while_connected(
+        shell, client_id, placement_of(shell.read_desktop_layout(desktop, client_id), window_id).is_detached
+    )
+
+
+def _is_detached_while_connected(shell: ShellState, client_id: ClientId, is_detached: bool) -> bool:
+    return is_detached and str(client_id) in shell.broadcaster.connected_client_ids()
+
+
+def _has_no_desktop_window(shell: ShellState, client_id: ClientId) -> bool:
+    """Whether the client is connected only through pop-outs: a window shown on its desktop waits for a desktop
+    window to open."""
+    client = str(client_id)
+    return client in shell.broadcaster.connected_client_ids() and client not in (
+        shell.broadcaster.desktop_connected_client_ids()
+    )
+
+
+def _raise_in_own_window(
+    shell: ShellState, window_id: WindowId, client_id: ClientId, requester: OpRequester | None
+) -> None:
+    """Ask the client's windows to raise a popped-out window's own desktop window, leaving its placement as it stands:
+    only the client's pages can bring that window forward, and raising the placement would pull the window back onto
+    the desktop instead."""
+    shell.broadcaster.broadcast_layout_op(
+        SHOW_OP, {"window": str(window_id)}, requester=_requester_wire(requester), target_client_id=str(client_id)
+    )
 
 
 @pure
@@ -652,7 +764,9 @@ def _open_unplaced(
     )
 
 
-def _answer_document(shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | None) -> dict[str, Any]:
+def _answer_document(
+    shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | None, notes: _PopOutNotes
+) -> dict[str, Any]:
     desktop = shell.get_desktop(target.desktop.id)
     return {
         "ok": True,
@@ -661,11 +775,14 @@ def _answer_document(shell: ShellState, target: _DesktopOpTarget, window_id: Win
         "desktop": shell.desktop_wire_json(desktop),
         "layout": _layout_wire_json(shell, desktop, target.client_id),
         "window_id": str(window_id) if window_id is not None else None,
+        **notes.wire_json(),
     }
 
 
-def _answer(shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | None) -> ResponseReturnValue:
-    return jsonify(_answer_document(shell, target, window_id))
+def _answer(
+    shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | None, notes: _PopOutNotes
+) -> ResponseReturnValue:
+    return jsonify(_answer_document(shell, target, window_id, notes))
 
 
 @pure
@@ -709,30 +826,23 @@ def _op_shortcuts(shell: ShellState, op: str, arguments: DesktopOpArguments, tar
     shell.broadcast_desktops_updated()
 
 
-def _op_window(
-    shell: ShellState, op: str, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
-) -> WindowId:
-    desktop = target.desktop
-    layout = shell.read_desktop_layout(desktop, target.client_id)
-    seen_windows = shell.windows_for_client(desktop, target.client_id)
-    window = _resolve_window(desktop, seen_windows, layout, arguments.window, requester)
+_LayoutEdit = Callable[[DesktopLayout], DesktopLayout]
+
+
+def _placement_edit(op: str, arguments: DesktopOpArguments, window_id: WindowId, is_detached: bool) -> _LayoutEdit:
+    """The edit one of the verbs that set a window's placement makes; its arguments are checked here, before any
+    rule about the window is. A pulled-out window a ``minimize`` takes out of sight (forced, or for a client not
+    connected) comes back onto the desktop minimized, since minimizing it where it stands would only hide its ghost
+    and leave its own window up."""
     match op:
-        case "focus":
-            shell.edit_desktop_layout(
-                desktop, target.client_id, lambda current: with_window_raised(current, window.id)
-            )
         case "minimize":
-            shell.edit_desktop_layout(
-                desktop, target.client_id, lambda current: with_window_minimized(current, window.id)
-            )
+            if is_detached:
+                return lambda current: with_window_minimized_on_desktop(current, window_id)
+            return lambda current: with_window_minimized(current, window_id)
         case "restore":
-            shell.edit_desktop_layout(
-                desktop, target.client_id, lambda current: with_window_restored(current, window.id)
-            )
+            return lambda current: with_window_restored(current, window_id)
         case "maximize":
-            shell.edit_desktop_layout(
-                desktop, target.client_id, lambda current: with_window_state(current, window.id, WindowState.MAXIMIZED)
-            )
+            return lambda current: with_window_state(current, window_id, WindowState.MAXIMIZED)
         case "place":
             if arguments.zone and arguments.frame:
                 raise LayoutOpError("place takes a zone or a frame, not both")
@@ -740,16 +850,43 @@ def _op_window(
                 state = _ZONE_STATES.get(arguments.zone)
                 if state is None:
                     raise LayoutOpError(f"a zone is one of {sorted(_ZONE_STATES)}, not {arguments.zone!r}")
-                shell.edit_desktop_layout(
-                    desktop, target.client_id, lambda current: with_window_state(current, window.id, state)
-                )
-            elif arguments.frame:
+                return lambda current: with_window_state(current, window_id, state)
+            if arguments.frame:
                 frame = _parse_frame(arguments.frame)
-                shell.edit_desktop_layout(
-                    desktop, target.client_id, lambda current: with_window_frame(current, window.id, frame)
-                )
-            else:
-                raise LayoutOpError("place needs a zone (left, right, maximized) or a frame (x,y,width,height)")
+                return lambda current: with_window_frame(current, window_id, frame)
+            raise LayoutOpError("place needs a zone (left, right, maximized) or a frame (x,y,width,height)")
+        case _:
+            raise LayoutOpError(f"Op {op!r} sets no placement")
+
+
+def _op_window(
+    shell: ShellState, op: str, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
+) -> tuple[WindowId, _PopOutNotes]:
+    """Apply one of the window verbs, refusing to move a window the client has popped out unless the op is forced
+    (``focus`` raises the pop-out instead, and ``close`` and ``navigate`` never ask). A pulled-out window the op
+    does move (forced, or the client's while it is not connected) comes back onto the desktop, and the answer says
+    so."""
+    desktop = target.desktop
+    layout = shell.read_desktop_layout(desktop, target.client_id)
+    seen_windows = shell.windows_for_client(desktop, target.client_id)
+    window = _resolve_window(desktop, seen_windows, layout, arguments.window, requester)
+    is_detached = placement_of(layout, window.id).is_detached
+    is_popped_out = _is_detached_while_connected(shell, target.client_id, is_detached)
+    match op:
+        case "focus":
+            if is_popped_out:
+                _raise_in_own_window(shell, window.id, target.client_id, requester)
+                return window.id, _PopOutNotes(is_raised_in_own_window=True)
+            shell.edit_desktop_layout(
+                desktop, target.client_id, lambda current: with_window_raised(current, window.id)
+            )
+            return window.id, _PopOutNotes(is_brought_back=is_detached)
+        case _ if op in _POP_OUT_REFUSING_OPS:
+            edit = _placement_edit(op, arguments, window.id, is_detached)
+            if is_popped_out and not arguments.force:
+                raise WindowPoppedOutError(op, str(window.id))
+            shell.edit_desktop_layout(desktop, target.client_id, edit)
+            return window.id, _PopOutNotes(is_brought_back=is_detached)
         case "close":
             if window.is_pinned:
                 raise LayoutOpError(f"window {window.id} is pinned and cannot be closed; minimize it instead")
@@ -764,7 +901,7 @@ def _op_window(
             )
         case _:
             raise LayoutOpError(f"Op {op!r} has no window handler")
-    return window.id
+    return window.id, _PopOutNotes()
 
 
 def _client_desktop_view(shell: ShellState, desktop: Desktop, client_id: ClientId) -> ClientDesktopView:
@@ -797,6 +934,7 @@ def _show(
         _client_desktop_view(shell, target.desktop, client_id), others, app, path, showing, repoint
     )
     desktop = shell.get_desktop(choice.desktop_id)
+    is_raised_in_own_window = False
     if choice.window is None:
         request = WindowOpenRequest(app=app, path=path, client_id=client_id, if_present=IfPresent.NEW)
         window_id = shell.open_window(desktop.id, request, is_minimized=False).window.id
@@ -805,20 +943,17 @@ def _show(
         if choice.outcome is not ShowOutcome.RAISED:
             # As a ``navigate`` does: an independent window moves for this client alone, a linked one for everyone.
             shell.report_window_location(desktop.id, window_id, client_id, path, choice.window.title)
-        if placement_of(shell.read_desktop_layout(desktop, client_id), window_id).is_detached:
-            # Its desktop window is the chrome's, which only the client's page can bring forward; raising the
-            # placement would pull the window back onto the desktop instead.
-            shell.broadcaster.broadcast_layout_op(
-                SHOW_OP,
-                {"window": str(window_id)},
-                requester=_requester_wire(requester),
-                target_client_id=str(client_id),
-            )
+        is_raised_in_own_window = placement_of(shell.read_desktop_layout(desktop, client_id), window_id).is_detached
+        if is_raised_in_own_window:
+            _raise_in_own_window(shell, window_id, client_id, requester)
         else:
             shell.edit_desktop_layout(desktop, client_id, lambda current: with_window_raised(current, window_id))
-            # Switched after the raise, so the layout the client fetches on arriving already has the window on top.
-            if desktop.id != target.desktop.id:
-                shell.set_client_active_desktop(client_id, desktop.id)
+    # Switched after the raise, so the layout the client fetches on arriving already has the window on top; a window
+    # raised in its own window leaves the client where ``args.desktop`` put it.
+    if not is_raised_in_own_window and desktop.id != target.desktop.id:
+        shell.set_client_active_desktop(client_id, desktop.id)
+    else:
+        _switch_as_asked(shell, target)
     logger.info(
         "layout op={} requester={} desktop={} client={} app={} path={} shown={}",
         SHOW_OP,
@@ -830,7 +965,11 @@ def _show(
         choice.outcome.value,
     )
     shown_on = _DesktopOpTarget(client_id=client_id, desktop=desktop)
-    return jsonify({**_answer_document(shell, shown_on, window_id), "shown": choice.outcome.value})
+    notes = _PopOutNotes(
+        is_raised_in_own_window=is_raised_in_own_window,
+        has_no_desktop_window=not is_raised_in_own_window and _has_no_desktop_window(shell, client_id),
+    )
+    return jsonify({**_answer_document(shell, shown_on, window_id, notes), "shown": choice.outcome.value})
 
 
 def _beside_anchor(
@@ -890,7 +1029,8 @@ def _pair_beside(shell: ShellState, target: _DesktopOpTarget, anchor: Window | N
     """Lay the window an ``open`` landed on beside ``anchor``, for the target client alone, at the frames
     ``paired_frames`` gives: the opened one against the anchor and on top of the stack, and the anchor wherever the
     rule leaves it, which is usually exactly where it was. An ``open`` that answered the anchor itself has nothing
-    to pair it with."""
+    to pair it with. An anchor out of sight (minimized, or pulled out, which only a forced open pairs with) is
+    shown where it stands."""
     if anchor is None or anchor.id == window_id:
         return
     # The desktop as the open left it: an edit reads the layout against the windows its desktop holds, and the
@@ -899,12 +1039,50 @@ def _pair_beside(shell: ShellState, target: _DesktopOpTarget, anchor: Window | N
     placement = placement_of(shell.read_desktop_layout(desktop, target.client_id), anchor.id)
     standing = frame_for_state(placement.frame, placement.state)
     kept, opened = paired_frames(standing)
+    is_anchor_hidden = placement.is_minimized or placement.is_detached
     shell.edit_desktop_layout(
         desktop,
         target.client_id,
         lambda current: _with_pair_placed(
-            current, anchor.id, kept if kept != standing else None, placement.is_minimized, window_id, opened
+            current, anchor.id, kept if kept != standing else None, is_anchor_hidden, window_id, opened
         ),
+    )
+
+
+def _open(
+    shell: ShellState, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
+) -> tuple[WindowId, _PopOutNotes]:
+    """The ``open`` op for a settled client: a window found at the path that the client has popped out is raised in
+    its own window rather than pulled back; a ``beside`` naming a popped-out window opens the window unpaired unless
+    the open is forced, which brings that window back to pair with."""
+    anchor = _beside_anchor(shell, arguments, target, requester)
+    unpaired_beside: WindowId | None = None
+    is_anchor_detached = anchor is not None and (
+        placement_of(shell.read_desktop_layout(target.desktop, target.client_id), anchor.id).is_detached
+    )
+    if (
+        anchor is not None
+        and _is_detached_while_connected(shell, target.client_id, is_anchor_detached)
+        and not arguments.force
+    ):
+        unpaired_beside = anchor.id
+        anchor = None
+    request = _open_request(shell, arguments, target.client_id, target.desktop.id)
+    found = (
+        find_window_at(target.desktop, request.app, request.path)
+        if request.if_present is IfPresent.FOCUS and not arguments.minimized
+        else None
+    )
+    if found is not None and _is_popped_out(shell, target.desktop, target.client_id, found.id):
+        _raise_in_own_window(shell, found.id, target.client_id, requester)
+        return found.id, _PopOutNotes(is_raised_in_own_window=True, unpaired_beside=unpaired_beside)
+    window_id = shell.open_window(target.desktop.id, request, arguments.minimized).window.id
+    _pair_beside(shell, target, anchor, window_id)
+    _switch_as_asked(shell, target)
+    return window_id, _PopOutNotes(
+        is_brought_back=anchor is not None and anchor.id != window_id and is_anchor_detached,
+        unpaired_beside=unpaired_beside,
+        has_no_desktop_window=not arguments.minimized and _has_no_desktop_window(shell, target.client_id),
     )
 
 
@@ -934,26 +1112,30 @@ def dispatch_desktop_op(
         return _open_unplaced(shell, arguments, args_raw, requester)
     target = _resolve_target(shell, args_raw, requester)
     window_id: WindowId | None = None
+    notes = _PopOutNotes()
     match op:
         case "load":
-            # Resolving the target already switched the client to ``args.desktop``.
-            pass
+            _switch_as_asked(shell, target)
         case "open":
-            anchor = _beside_anchor(shell, arguments, target, requester)
-            window_id = shell.open_window(
-                target.desktop.id,
-                _open_request(shell, arguments, target.client_id, target.desktop.id),
-                arguments.minimized,
-            ).window.id
-            _pair_beside(shell, target, anchor, window_id)
+            window_id, notes = _open(shell, arguments, target, requester)
         case "refresh":
+            _switch_as_asked(shell, target)
             return _refresh_window(shell, arguments, target, requester)
         case "show":
             return _show(shell, arguments, target, requester)
         case _ if op in SHORTCUT_OPS:
+            _switch_as_asked(shell, target)
             _op_shortcuts(shell, op, arguments, target)
         case _:
-            window_id = _op_window(shell, op, arguments, target, requester)
+            window_id, notes = _op_window(shell, op, arguments, target, requester)
+            # A window raised in its own window, or brought back from it, stays on its own desktop: the client's
+            # desktop window keeps the desktop it shows.
+            if not notes.is_raised_in_own_window and not notes.is_brought_back:
+                _switch_as_asked(shell, target)
+            if op in _DESKTOP_SURFACING_OPS and not notes.is_raised_in_own_window:
+                notes = notes.model_copy_update(
+                    to_update(notes.field_ref().has_no_desktop_window, _has_no_desktop_window(shell, target.client_id))
+                )
     logger.info(
         "layout op={} requester={} desktop={} client={} args={}",
         op,
@@ -962,7 +1144,7 @@ def dispatch_desktop_op(
         target.client_id,
         args_raw,
     )
-    return _answer(shell, target, window_id)
+    return _answer(shell, target, window_id, notes)
 
 
 @pure

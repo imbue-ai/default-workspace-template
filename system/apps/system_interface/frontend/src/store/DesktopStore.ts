@@ -909,12 +909,12 @@ export class DesktopStore {
         this.deps.reloadInterface();
         return;
       case "show": {
-        // A pulled-out window the shell left out: its desktop window is raised as the taskbar's "Show" raises it,
-        // by the main window's page (a solo page shares its client).
+        // A pulled-out window the shell left out: its desktop window is raised as the taskbar's "Show" raises it. The
+        // main window's page asks for any window; a solo page asks for its own, so the raise works with the main
+        // window closed (the chrome raises an existing desktop window on the ask, whoever sends it).
         const windowId = event.args.window;
-        if (this.soloWindowId === null && typeof windowId === "string" && windowId !== "") {
-          this.showDetachedWindow(windowId);
-        }
+        if (typeof windowId !== "string" || windowId === "") return;
+        if (this.soloWindowId === null || windowId === this.soloWindowId) this.showDetachedWindow(windowId);
         return;
       }
     }

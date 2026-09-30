@@ -126,6 +126,12 @@ class WebSocketBroadcaster(MutableModel):
         with self._lock:
             return {info.client_id for info in self._client_info_by_queue_id.values()}
 
+    def desktop_connected_client_ids(self) -> set[str]:
+        """The ids of every registered client with a desktop window open: a client whose only open windows are
+        pop-outs is connected, but has nowhere to show a desktop window."""
+        with self._lock:
+            return {info.client_id for info in self._client_info_by_queue_id.values() if not info.is_pop_out}
+
     def broadcast(self, message: dict[str, Any]) -> None:
         """Serialize and send a message to all connected clients. Thread-safe."""
         self._broadcast_to_matching(message, target_client_id=None)
