@@ -709,11 +709,12 @@ def with_default_shortcuts_offered(
         return desktop
     if desktop.shortcuts == seed_desktop_shortcuts([row for row in rows if row.name in offered_apps]):
         return desktop.model_copy_update(to_update(desktop.field_ref().shortcuts, seed_desktop_shortcuts(rows)))
-    added: list[DesktopShortcut] = []
+    extended = desktop
     for shortcut in missing:
-        cell = _first_free_cell_in_reading_order(_occupied_cells((*desktop.shortcuts, *added)), SEED_GRID_COLUMNS)
-        added.append(shortcut.model_copy_update(to_update(shortcut.field_ref().cell, cell)))
-    return desktop.model_copy_update(to_update(desktop.field_ref().shortcuts, (*desktop.shortcuts, *added)))
+        extended = with_shortcut(
+            extended, shortcut.model_copy_update(to_update(shortcut.field_ref().cell, next_shortcut_cell(extended)))
+        )
+    return extended
 
 
 # Layouts: placements
