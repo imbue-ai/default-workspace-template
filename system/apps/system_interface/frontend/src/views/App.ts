@@ -907,7 +907,7 @@ export function App(): m.Component<AppAttrs> {
           if (classifyLink(anchor.href, window.location.host).kind === "external") {
             window.open(anchor.href, "_blank", "noopener");
           } else {
-            void current.openLink(anchor.href, window.location.host);
+            void current.openLink(anchor.href, window.location.host, SHELL_APP_NAME);
           }
         },
         scope: (target) => shellReferenceScope(current, target.element),

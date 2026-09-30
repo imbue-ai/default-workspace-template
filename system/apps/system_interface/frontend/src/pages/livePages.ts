@@ -590,13 +590,14 @@ export class LivePagesLayer implements PageDriver {
   /** ``shell:open-link {url}`` from a page: a link to another app's address (or another workspace's), which the
    *  shell opens as that app's window, or refuses with a notice. The frame has to be one the shell created. */
   private takeOpenLink(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    if (this.pageOfFrame(frame) === undefined) return;
+    const page = this.pageOfFrame(frame);
+    if (page === undefined) return;
     const url = payload.url;
     if (typeof url !== "string" || url === "") {
       console.warn(`[si] shell:open-link ignored: it carried no url (${JSON.stringify(payload)})`);
       return;
     }
-    void this.store.openLink(url, window.location.host);
+    void this.store.openLink(url, window.location.host, page.app);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

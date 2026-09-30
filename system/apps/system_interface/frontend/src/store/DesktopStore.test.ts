@@ -1367,7 +1367,7 @@ describe("links Imbue Studio hands over", () => {
   it("opens a local URL in the workspace's browser through open:url, sent as the embedder's", async () => {
     const store = await startedStore();
 
-    await store.openLink("http://localhost:3000/app?x=1", SHELL_HOST);
+    await store.openLink("http://localhost:3000/app?x=1", SHELL_HOST, null);
 
     expect(api.relayedMessages).toEqual([
       { type: "open:url", clientId: CLIENT, payload: { url: "http://localhost:3000/app?x=1" }, sender: "embedder" },
@@ -1378,7 +1378,7 @@ describe("links Imbue Studio hands over", () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), FILES_APP]);
 
-    await store.openLink(`http://files-ab12cd34.${COORDINATE}/home/user/?view`, SHELL_HOST);
+    await store.openLink(`http://files-ab12cd34.${COORDINATE}/home/user/?view`, SHELL_HOST, null);
 
     expect(api.calls).toContain("openWindow:home:files:/home/user/?view:focus");
     expect(api.relayedMessages).toEqual([]);
@@ -1388,10 +1388,14 @@ describe("links Imbue Studio hands over", () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), FILES_APP]);
 
-    await store.openLink("http://files-ab12cd34.host-fedcba9876543210fedcba9876543210.localhost:8421/", SHELL_HOST);
-    await store.openLink(`http://gone-zz99yy88.${COORDINATE}/`, SHELL_HOST);
+    await store.openLink(
+      "http://files-ab12cd34.host-fedcba9876543210fedcba9876543210.localhost:8421/",
+      SHELL_HOST,
+      null,
+    );
+    await store.openLink(`http://gone-zz99yy88.${COORDINATE}/`, SHELL_HOST, null);
     // The workspace's own bare address, which names no app; the desktop app forwards it like an app address.
-    await store.openLink(`http://${COORDINATE}/`, SHELL_HOST);
+    await store.openLink(`http://${COORDINATE}/`, SHELL_HOST, null);
 
     expect(notices).toEqual([
       OTHER_WORKSPACE_LINK_NOTICE,
@@ -1405,7 +1409,7 @@ describe("links Imbue Studio hands over", () => {
     const store = await startedStore();
     api.refusal = "browser did not take it: Chromium is not installed";
 
-    await store.openLink("http://localhost:3000/", SHELL_HOST);
+    await store.openLink("http://localhost:3000/", SHELL_HOST, null);
 
     expect(notices).toEqual(["browser did not take it: Chromium is not installed"]);
   });

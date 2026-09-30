@@ -131,7 +131,7 @@ function bootstrap(): void {
     if (isPreviewShell()) return;
     const url = message.url;
     if (typeof url !== "string" || url === "") return;
-    void desktopStore.openLink(url, window.location.host);
+    void desktopStore.openLink(url, window.location.host, null);
   });
   setEmbedderMessageHandler(TEAR_OUT, (message) => {
     const windowId = message.windowId;

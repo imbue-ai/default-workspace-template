@@ -715,12 +715,12 @@ describe("the contract", () => {
     warn.mockRestore();
   });
 
-  it("opens a page's shell:open-link where the store opens a link, and warns about one with no url", async () => {
+  it("opens a page's shell:open-link where the store opens a link, as sent by its app, and warns about one with no url", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     messageFromPage("win-1", { type: SHELL_OPEN_LINK, url: "http://localhost:3000/preview" });
     await settle();
     expect(api.relayedMessages).toEqual([
-      { type: "open:url", clientId: "client-1", payload: { url: "http://localhost:3000/preview" }, sender: "embedder" },
+      { type: "open:url", clientId: "client-1", payload: { url: "http://localhost:3000/preview" }, sender: "docs" },
     ]);
     messageFromPage("win-1", { type: SHELL_OPEN_LINK });
     await settle();
