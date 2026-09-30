@@ -51,7 +51,11 @@ SELF_RESTART_LOG_NAME = "helper.log"
 AGENT_ID_ENV = "MNGR_AGENT_ID"
 
 STOPPED_CHAT_STATUS = "stopped"
-# What the chat app's 409 for a chat mid-handoff carries instead of ``busy_with``.
+# Cross-layer contract with the chat app's interrupt route (its ``InterruptAgentRequest`` and its
+# 409 answers); ``system/apps/chat``'s server tests pin these against it.
+INTERRUPT_IF_IDLE_REQUEST: Mapping[str, object] = {"only_if_idle": True}
+BUSY_WITH_FIELD = "busy_with"
+# What the chat app's 409 for a chat mid-handoff carries instead of ``BUSY_WITH_FIELD``.
 HANDOFF_PHASE_FIELD = "phase"
 
 # How long the chat list is retried while the chat app is unreachable or not ready: the apply
@@ -163,7 +167,7 @@ def interrupt_if_idle(
         )
     page = http.post_json(
         f"{base_url.rstrip('/')}{CHATS_PATH}/{chat_id}/interrupt",
-        {"only_if_idle": True},
+        INTERRUPT_IF_IDLE_REQUEST,
         INTERRUPT_REQUEST_TIMEOUT_SECONDS,
     )
     if page is None:
@@ -183,7 +187,7 @@ def interrupt_if_idle(
         if HANDOFF_PHASE_FIELD in body:
             return InterruptOutcome(InterruptVerdict.BUSY, "switching to another agent")
         return InterruptOutcome(
-            InterruptVerdict.BUSY, str(body.get("busy_with") or "working")
+            InterruptVerdict.BUSY, str(body.get(BUSY_WITH_FIELD) or "working")
         )
     return InterruptOutcome(
         InterruptVerdict.FAILED,

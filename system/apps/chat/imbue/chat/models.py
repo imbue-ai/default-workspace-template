@@ -177,6 +177,10 @@ class InterruptAgentRequest(FrozenModel):
         default=False,
         description="Restart only a chat that has ended its turn; a busy one is refused with 409 and what it is doing",
     )
+    keep_queue: bool = Field(
+        default=False,
+        description="Resend the messages queued for the agent as one turn after the restart, instead of dropping them",
+    )
 
 
 class InterruptAgentResponse(FrozenModel):

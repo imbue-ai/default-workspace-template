@@ -911,7 +911,9 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     message. Returns 404 if the agent is unknown, 400 if the agent carries the
     ``is_primary=true`` label, 500 if the restart command fails, 200 otherwise.
     With ``only_if_idle`` a chat that has not ended its turn is left alone and
-    answered 409, its ``busy_with`` saying what it is doing.
+    answered 409, its ``busy_with`` saying what it is doing. With ``keep_queue``
+    the messages queued for the agent are resent to it as one turn after the
+    restart, as the flush does, instead of dying with the process.
 
     Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and restarting it would stop the
@@ -944,6 +946,9 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
                 {"detail": f"Chat '{chat_id}' is {busy_with}; it was not restarted", "busy_with": busy_with},
                 status_code=409,
             )
+
+    if interrupt_request.keep_queue:
+        return _restart_and_resend_queue(agent_info, *_interrupt_capabilities(agent_info))
 
     agent_name = agent_info.name
 
@@ -1043,6 +1048,16 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
     if not watcher.get_queued_block():
         return json_response(SendMessageResponse(status="ok").model_dump())
 
+    return _restart_and_resend_queue(agent_info, watcher, restart_process, settle_activity)
+
+
+def _restart_and_resend_queue(
+    agent_info: AgentInfo,
+    watcher: AgentSessionWatcher,
+    restart_process: Callable[[], tuple[bool, str]],
+    settle_activity: Callable[[], None],
+) -> Response:
+    """Restart the agent, then resend whatever was queued as one turn: 500 if either fails, 200 otherwise."""
     try:
         block = restart_drain(agent_info, watcher, restart_process, settle_activity)
     except AgentRestartError as e:

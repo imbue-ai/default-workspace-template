@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import sys
 from collections.abc import Callable
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -57,6 +58,7 @@ from imbue.chat.models import AgentStateItem
 from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import InterruptAgentRequest
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
@@ -1794,6 +1796,68 @@ def test_interrupt_only_if_idle_restarts_an_idle_chat_and_leaves_a_busy_one(
     assert mock_run.called is is_restart_expected
     if expected_status == 409:
         assert response.get_json()["busy_with"] == "working"
+
+
+@pytest.mark.parametrize("queued_block", ["first message\nsecond message", ""])
+def test_interrupt_keep_queue_restarts_and_resends_what_was_queued(client: FlaskClient, queued_block: str) -> None:
+    """Unlike the flush, an empty queue still restarts: the caller asked for the restart itself."""
+    fake_watcher = _fake_queue_watcher(queued_block)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=_agent_info()),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent", return_value=None) as mock_send,
+    ):
+        response = client.post("/api/chats/agent-123/interrupt", json={"keep_queue": True})
+
+    assert response.status_code == 200
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "claude-agent", "--restart", "--no-resume"]
+    assert [call.args[1] for call in mock_send.call_args_list] == ([queued_block] if queued_block else [])
+    assert fake_watcher.clear_calls == [True]
+
+
+def _load_script(path: Path, module_name: str) -> Any:
+    """Import a standard-library-only script that cannot import this package, with its own directory on the path."""
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # Registered while it runs: a dataclass resolves its string annotations through its module.
+    sys.modules[module_name] = module
+    sys.path.insert(0, str(path.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(path.parent))
+        del sys.modules[module_name]
+    return module
+
+
+def test_the_restart_clients_ask_for_what_the_interrupt_route_takes_and_read_what_it_answers(
+    client: FlaskClient, app: Flask
+) -> None:
+    """update-self's agent restarts and ``message_chat.py --interrupt`` are standard-library only and
+    carry their own copies of the route's request fields and its 409 field; a rename here would
+    leave update-self restarting busy chats, or ``--interrupt`` dropping their queues, with no
+    failing test."""
+    workspace_root = Path(__file__).resolve().parents[5]
+    restarts = _load_script(
+        workspace_root / ".agents" / "skills" / "update-self" / "scripts" / "update_agent_restarts.py",
+        "update_agent_restarts_for_interrupt_pin",
+    )
+    messenger = _load_script(
+        workspace_root / "system" / "scripts" / "message_chat.py", "message_chat_for_interrupt_pin"
+    )
+
+    assert InterruptAgentRequest.model_validate(restarts.INTERRUPT_IF_IDLE_REQUEST).only_if_idle is True
+    assert InterruptAgentRequest.model_validate(messenger.INTERRUPT_REQUEST).keep_queue is True
+    agent_id = f"agent-{uuid4().hex}"
+    _register_agent(app, agent_id, "claude-agent", "RUNNING")
+    with patch("imbue.chat.server.run_local_command_modern_version") as mock_run:
+        refused = client.post(f"/api/chats/{agent_id}/interrupt", json=dict(restarts.INTERRUPT_IF_IDLE_REQUEST))
+    assert refused.status_code == 409
+    assert refused.get_json()[restarts.BUSY_WITH_FIELD] == "working"
+    mock_run.assert_not_called()
 
 
 def test_shoulder_tap_atomic_returns_404_for_unknown_agent(client: FlaskClient) -> None:
