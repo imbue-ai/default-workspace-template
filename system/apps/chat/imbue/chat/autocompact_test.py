@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
+from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.autocompact import is_proactive_autocompact_enabled
 from imbue.concurrency_group.errors import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.utils.polling import poll_until
-from imbue.chat.autocompact import ChatAutoCompactor
-from imbue.chat.autocompact import is_proactive_autocompact_enabled
 
 
 def _make_finished_process(
@@ -34,9 +34,7 @@ def test_check_agent_success() -> None:
     def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
         recorded_commands.append(list(command))
         recorded_kwargs.update(kwargs)
-        return _make_finished_process(
-            command=command, returncode=0, stdout="No agents require compaction."
-        )
+        return _make_finished_process(command=command, returncode=0, stdout="No agents require compaction.")
 
     compactor = ChatAutoCompactor.build(
         list_running_chat_agent_names=lambda: ["chat-1"],
@@ -52,9 +50,7 @@ def test_check_agent_success() -> None:
 
 
 def test_check_agent_exit_code_1_logged_as_debug(loguru_records: list[str]) -> None:
-    def fake_runner(
-        command: Sequence[str], is_checked: bool = False, **kwargs: object
-    ) -> FinishedProcess:
+    def fake_runner(command: Sequence[str], is_checked: bool = False, **kwargs: object) -> FinishedProcess:
         return _make_finished_process(
             command=command,
             returncode=1,
@@ -76,9 +72,7 @@ def test_check_agent_exit_code_1_logged_as_debug(loguru_records: list[str]) -> N
 
 
 def test_check_agent_other_nonzero_exit_logged_as_warning(loguru_records: list[str]) -> None:
-    def fake_runner(
-        command: Sequence[str], is_checked: bool = False, **kwargs: object
-    ) -> FinishedProcess:
+    def fake_runner(command: Sequence[str], is_checked: bool = False, **kwargs: object) -> FinishedProcess:
         return _make_finished_process(
             command=command,
             returncode=2,
