@@ -1,7 +1,7 @@
 /**
  * A menu's rows as the phone layout shows them: one card whose submenus slide in over its own
- * rows on a two-pane track, rather than flying out beside it. A phone has no room beside a
- * 300px card, and no hover to open a flyout with.
+ * rows on a two-pane track, rather than flying out beside it. A phone has no room beside the
+ * card, and no hover to open a flyout with.
  *
  * It takes the same `MenuRow`s the workspace `Menu` does and is drawn inside that menu's card
  * (as its one `custom` row), so opening, placing, the sheet under the card and Escape stay the

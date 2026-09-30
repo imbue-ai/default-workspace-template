@@ -100,7 +100,7 @@ export const SLIDER =
 export const SETTINGS_BUTTON =
   "flex h-11 w-10 shrink-0 items-center justify-center rounded-xl text-secondary transition-colors " +
   "hover:bg-fill-hover hover:text-primary aria-expanded:bg-fill-hover aria-expanded:text-primary cursor-pointer";
-/** The effort segments' row: the label over the segments, since four levels side by side need
+/** The effort segments' row: the label over the segments, since the levels side by side need
  *  the card's whole width. */
 export const EFFORT_SEGMENTS_ROW = "flex flex-col items-stretch gap-2 px-3 pt-1 pb-2";
 /** The segments' well, on which the chosen one sits raised. */

@@ -590,7 +590,7 @@ export class DesktopStore {
     await this.runLaunch(app.name, launch, "new");
   }
 
-  /** Close every window but the pinned one, one after another (the windows sheet's Close all). */
+  /** Close every window but the pinned one, one after another. */
   async closeAllWindows(): Promise<void> {
     const windows = this.state.desktops.flatMap((desktop) => desktop.windows.filter((window) => !window.is_pinned));
     for (const window of windows) await this.closeWindow(window.id);

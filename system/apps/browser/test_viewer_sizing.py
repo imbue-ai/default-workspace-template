@@ -20,7 +20,7 @@ _VIEWER_URL: Final[str] = "http://localhost/?session=browser-1"
 _STREAM_URL: Final[str] = "ws://localhost/browsers/browser-1/stream?**"
 _POLL_MS: Final[int] = 50
 _POLL_ATTEMPTS: Final[int] = 100
-# Longer than the viewer's resize debounce (150ms), so a size it was going to send has been sent.
+# Longer than the viewer's resize debounce, so a size it was going to send has been sent.
 _SETTLE_MS: Final[int] = 600
 
 

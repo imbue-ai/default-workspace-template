@@ -210,7 +210,7 @@ def test_the_frame_is_nudged_after_it_loads_and_after_the_visual_viewport_resize
     phone_context: BrowserContext,
 ) -> None:
     page, frame = _open(phone_context, _RECORDING_PTY_PAGE)
-    # The load nudges land at 500ms and 2s; each shrinks the frame a pixel and restores it.
+    # Each load nudge shrinks the frame a pixel and restores it.
     _wait_for(frame, "resizes >= 4")
     settled = frame.evaluate("resizes")
     height = frame.evaluate("innerHeight")

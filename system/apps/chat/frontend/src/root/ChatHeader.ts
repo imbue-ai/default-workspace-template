@@ -1,8 +1,7 @@
 /**
  * The chat root's header in the phone layout: a list button that opens the chats' drawer, the
- * title of the chat on screen, and a kebab offering that chat's verbs (rename, stop or restart,
- * delete), the same rows its row in the list offers. A rename from here is typed in place of
- * the title.
+ * title of the chat on screen, and a kebab offering that chat's verbs, the same rows its row in
+ * the list offers. A rename from here is typed in place of the title.
  */
 
 import m from "mithril";

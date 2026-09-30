@@ -32,8 +32,8 @@ export interface WindowMenuActions {
   readonly close: () => void;
 }
 
-/** Ask the Imbue Studio chrome to open its share settings for ``app`` (the Share row of either layout's menu); the
- *  embed contract names the app by the key it gives it. */
+/** Ask the Imbue Studio chrome to open its share settings for ``app``; the embed contract names the app by the
+ *  key it gives it. */
 export function openShareSettings(app: AppRecord): void {
   sendToEmbedder(OPEN_SHARE_SETTINGS, { serviceName: app.name });
 }

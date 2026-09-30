@@ -58,8 +58,7 @@ def inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
     return inject_meta_tag(html_content, BASE_PATH_META_NAME, root_path)
 
 
-# The shell's page background (``--c-bg`` in ``system/libs/workspace_ui/src/base.css``): the browser chrome's colour
-# around the page, the manifest's splash colour, and the home-screen icon's tile.
+# The shell's page background (``--c-bg`` in ``system/libs/workspace_ui/src/base.css``).
 SHELL_BACKGROUND_COLOR: Final[str] = "#fafaf8"
 
 VIEWPORT_META_NAME: Final[str] = "viewport"

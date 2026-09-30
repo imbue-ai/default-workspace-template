@@ -1,9 +1,7 @@
 /**
- * What the phone layout reads off the desktop's state (plan-phone-interface.md), as pure selectors: where a
- * load lands, the windows sheet's rows and their order, the home grid's apps, which window a home tile shows,
- * the pinned chat window, and what the pill says. Desktops are not a phone concept, so every selector but the
- * pinned window's reads every desktop's windows as one list; the client's active desktop only decides which of
- * several candidates the phone prefers.
+ * What the phone layout reads off the desktop's state (plan-phone-interface.md), as pure selectors. Desktops are
+ * not a phone concept, so every selector but the pinned window's reads every desktop's windows as one list; the
+ * client's active desktop only decides which of several candidates the phone prefers.
  */
 
 import { mostRecentlyFocusedWindowOfApp } from "../geometry/stack";

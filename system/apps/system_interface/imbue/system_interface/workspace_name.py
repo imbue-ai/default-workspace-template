@@ -1,9 +1,9 @@
-"""The workspace's name, as the page's title, its home-screen tile, and the inventory show it.
+"""The workspace's name.
 
 The first of: the ``SYSTEM_INTERFACE_WORKSPACE_NAME`` setting; the ``workspace_display_name`` label minds puts on
 the workspace's services agent (the agent whose environment supervisord, and so the shell, inherits), which a rename
 in minds rewrites; the host's name in mngr's host record; and ``Workspace``. The two records are read with plain
-JSON parsing and no mngr import, as the avatar's mood reads mngr's event file.
+JSON parsing and no mngr import.
 """
 
 import json

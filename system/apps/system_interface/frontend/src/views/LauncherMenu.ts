@@ -209,7 +209,7 @@ function launcherSections(attrs: LauncherSectionsAttrs): m.Children {
   ];
 }
 
-/** The sections alone, for a surface that frames them itself (the phone's start sheet). */
+/** The sections alone, for a surface that frames them itself. */
 export const LauncherSections: m.Component<LauncherSectionsAttrs> = {
   view: (vnode) => launcherSections(vnode.attrs),
 };

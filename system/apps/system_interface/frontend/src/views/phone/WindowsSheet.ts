@@ -2,7 +2,8 @@
  * The phone's windows sheet (plan-phone-interface.md): every window of every desktop as one list, icon and title
  * only, in the order ``reducers/phone`` gives. A tap shows the window; each row's X closes it for everyone (the
  * pinned window has none, since it is never closed) and its kebab opens the window's menu. "Close all" closes
- * every other window after the owner confirms; past six windows a field filters the rows by title and app.
+ * every other window after the owner confirms; past ``WINDOW_SEARCH_THRESHOLD`` windows a field filters the rows
+ * by title and app.
  */
 
 import m from "mithril";

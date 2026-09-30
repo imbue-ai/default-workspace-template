@@ -45,7 +45,7 @@ class SystemInterfaceState(MutableModel):
     presence_sweep: PresenceSweep
     # Each account's display name and avatar, from imbue_cloud through the on-disk cache.
     profiles: ProfileResolver
-    # The workspace's name for the page's title, its home-screen tile, and the inventory.
+    # The workspace's name, from the config or the workspace's mngr records.
     workspace_name: WorkspaceNameSource
     # Captures the tree HEAD this process started from, so the app shell can
     # say when the served tree has moved under it (see update_staleness.py).

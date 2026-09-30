@@ -227,7 +227,7 @@ export interface Inventory {
   readonly desktops: readonly Desktop[];
   readonly apps: readonly AppRecord[];
   readonly clients: readonly ClientRecord[];
-  /** What the workspace is called: the phone's home grid names it. */
+  /** What the workspace is called. */
   readonly workspace_name: string;
 }
 

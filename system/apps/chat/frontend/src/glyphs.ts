@@ -1,8 +1,6 @@
 /**
- * The glyphs the chat app draws that the shared icon set (workspace-ui ``components/icons``) does not carry: a bare
- * plus, the kebab that opens a row's verbs, the list the phone header opens the chats with, and the sliders that
- * open the composer's settings. Drawn on the shared set's 24px grid with its round-capped stroke, so they sit beside
- * its icons as one family.
+ * The glyphs the chat app draws that the shared icon set (workspace-ui ``components/icons``) does not carry. Drawn
+ * on the shared set's 24px grid with its round-capped stroke, so they sit beside its icons as one family.
  */
 
 import m from "mithril";

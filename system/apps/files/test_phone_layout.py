@@ -1,6 +1,6 @@
 """The file viewer's phone layout (assets/phone.js), driven in a real browser.
 
-Under 700px the vendored dufs frontend shows one row per entry instead of its table, and every
+At a phone's width the vendored dufs frontend shows one row per entry instead of its table, and every
 action on a row or in the header goes through dufs's own handlers: the requests asserted here
 are the ones dufs itself makes, recorded by the stub the `open_files_page` fixture puts over
 the page's fetch.

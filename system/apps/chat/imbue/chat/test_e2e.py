@@ -1388,7 +1388,7 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         expect(provider_row).not_to_contain_text("next:")
 
 
-# the phone layout (plan-phone-interface.md, "The chat app"): the chat app's own width under 700px
+# the phone layout (plan-phone-interface.md, "The chat app")
 
 
 _PHONE_VIEWPORT: ViewportSize = {"width": 393, "height": 852}

@@ -30,9 +30,9 @@ import type {
   UpdateNoticeWire,
 } from "../model/records";
 
-/** The ops that reach the browser as messages: the transient ones, and the ``show``, ``open``, and ``focus`` that
- *  put a window on this client's screen (applied to the files too; a phone shows the window, and a desktop acts
- *  only on a ``show`` of a pulled-out window). */
+/** The ops that reach the browser as messages: the transient ones, and those that put a window on this client's
+ *  screen (applied to the files too; a phone shows the window, and a desktop acts only on a ``show`` of a
+ *  pulled-out window). */
 export type LayoutOpName = "refresh" | "reload_system_interface" | "show" | "open" | "focus";
 
 export interface LayoutOpEvent {

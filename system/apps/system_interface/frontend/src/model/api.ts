@@ -96,7 +96,7 @@ export interface WindowOpenRequest {
   readonly path: string;
   readonly clientId: string;
   readonly ifPresent: IfPresent;
-  /** Placed out of sight for this client, so no other client finds it placed either (the phone's opens). */
+  /** Placed out of sight for this client, so no other client finds it placed either. */
   readonly isMinimized: boolean;
 }
 
@@ -129,7 +129,7 @@ export interface LaunchRequest {
   readonly params: Readonly<Record<string, string>>;
   readonly clientId: string;
   readonly target: LaunchTarget;
-  /** A window the launch opens is placed out of sight for this client (the phone's launches). */
+  /** A window the launch opens is placed out of sight for this client. */
   readonly isMinimized: boolean;
 }
 

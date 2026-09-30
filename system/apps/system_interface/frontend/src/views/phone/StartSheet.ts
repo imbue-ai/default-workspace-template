@@ -1,8 +1,8 @@
 /**
  * The phone's start sheet (plan-phone-interface.md): the launcher's menu made tappable. The field takes the
  * launcher's placeholder and is not focused on open (a keyboard rising over the rows would hide them); its rows
- * are the launcher's own, from ``reducers/launcherRows``, with the free-text rows ("Send to chat...", "Draft into
- * chat") tapped rather than chorded. Enter runs the highlighted row, as the launcher's field does.
+ * are the launcher's own, from ``reducers/launcherRows``, with the free-text rows tapped rather than chorded.
+ * Enter runs the highlighted row, as the launcher's field does.
  */
 
 import m from "mithril";

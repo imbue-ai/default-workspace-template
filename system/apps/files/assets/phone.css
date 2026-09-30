@@ -1,5 +1,5 @@
 /* minds patch: the phone layout's styles (phone.js). Every rule is scoped to the attribute
-   phone.js sets on <html> under 700px, so the desktop table is untouched. Measurements follow
+   phone.js sets on <html> in the phone layout, so the desktop table is untouched. Measurements follow
    docs/system/blueprint/desktop-interface/phone-mock/mock.html. */
 
 html[data-files-phone] {

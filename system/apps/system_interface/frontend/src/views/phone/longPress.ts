@@ -1,8 +1,8 @@
 /**
- * A tap that can also be held (plan-phone-interface.md: a home tile's launch menu, the pill's window menu): the
- * attributes to spread onto the element. A press held still for the long-press time runs ``onLongPress`` and
- * swallows the click that follows its release; a press that moves past the drag threshold is a scroll and runs
- * neither. The browser's own long-press menu is kept off the element.
+ * A tap that can also be held (plan-phone-interface.md): the attributes to spread onto the element. A press
+ * held still for the long-press time runs ``onLongPress`` and swallows the click that follows its release; a
+ * press that moves past the drag threshold is a scroll and runs neither. The browser's own long-press menu is
+ * kept off the element.
  *
  * The press is kept by element rather than in the attributes' closure: mithril redraws after every handler and
  * spreads fresh attributes, so a closure's timer would be lost between the press and its release.

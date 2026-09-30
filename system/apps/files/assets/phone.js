@@ -1,15 +1,12 @@
 // minds patch: the phone layout (docs/system/blueprint/desktop-interface/plan-phone-interface.md,
-// "The file viewer"). Under 700px of the frame's own width, the Name / Last Modified / Size /
-// Actions table and the toolbox head give way to a header (up, the folder's name, search, and a
-// kebab holding the toolbox verbs), a scrollable breadcrumb strip, sort keys, and one row per
-// entry with that entry's actions behind a kebab. The editor page gets the same header with a
-// Save button and the file's kebab.
+// "The file viewer"). On a phone-width frame, the table and the toolbox head give way to a header
+// (up, the folder's name, search, and a kebab holding the toolbox verbs), a scrollable breadcrumb
+// strip, sort keys, and one row per entry with that entry's actions behind a kebab. The editor
+// page gets the same header with a Save button and the file's kebab.
 //
-// Everything runs on dufs's own state and functions -- DATA, PARAMS, newUrl, movePath,
-// deletePath, saveChange, the toolbox controls and their handlers, the breadcrumb and search
-// bar it built -- so the rows and the table always agree, and dufs's own prompts and confirms
-// are the ones the user answers. This file and phone.css are the whole patch: index.html only
-// includes them, so a dufs bump re-applies two lines.
+// Everything runs on dufs's own state and functions, so the rows and the table always agree, and
+// dufs's own prompts and confirms are the ones the user answers. This file and phone.css are the
+// whole patch: index.html only includes them, so a dufs bump re-applies just those includes.
 
 const PHONE_QUERY = window.matchMedia("(max-width: 700px)");
 // On <html>, valued with DATA.kind so phone.css can lay the editor page out as a column.

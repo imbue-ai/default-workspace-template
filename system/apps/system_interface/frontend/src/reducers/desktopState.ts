@@ -157,7 +157,7 @@ export type DesktopEvent =
       readonly desktopId: string;
       readonly window: WindowRecord;
       readonly isNew: boolean;
-      /** The shell placed a new window out of sight for this client (the phone's opens). */
+      /** The shell placed a new window out of sight for this client. */
       readonly isMinimized: boolean;
     }
   | { readonly type: "window_closed_here"; readonly desktopId: string; readonly windowId: string }

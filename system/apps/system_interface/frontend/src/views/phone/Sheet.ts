@@ -1,8 +1,8 @@
 /**
  * A phone sheet (plan-phone-interface.md): a panel risen from the foot of the screen over a scrim, a grab handle
- * and a heading row at its top. Tapping the scrim dismisses it, and so does dragging its head down past a
- * quarter of its height; a shorter drag springs back. The drag moves the panel straight in the DOM, as a window
- * drag does on the desktop, so nothing redraws per pointer move.
+ * and a heading row at its top. Tapping the scrim dismisses it, and so does dragging its head down far enough;
+ * a shorter drag springs back. The drag moves the panel straight in the DOM, as a window drag does on the
+ * desktop, so nothing redraws per pointer move.
  */
 
 import m from "mithril";

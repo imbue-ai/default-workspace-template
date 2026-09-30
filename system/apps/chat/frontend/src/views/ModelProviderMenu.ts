@@ -176,7 +176,6 @@ export interface ModelProviderMenuAttrs {
   sourceView?: SourceViewSwitch | null;
 }
 
-/** Effort segments: the same `in_picker` levels the slider offers, in the same order. */
 interface EffortControlOptions {
   efforts: readonly { level: string; in_picker: boolean }[];
   current: string | null;
@@ -407,7 +406,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
 
   /** The effort in the phone layout: a segment per level rather than a slider, whose thumb is too small a target
    *  for a finger. A press commits the level at once, as a slider's release does. An agent on a level the picker does
-   *  not offer (claude's `ultra`) lights no segment, which is the truth about it. */
+   *  not offer lights no segment. */
   function effortSegments(opts: EffortControlOptions): m.Children {
     const shown = opts.efforts.filter((effort) => effort.in_picker);
     if (shown.length < 2) return null;

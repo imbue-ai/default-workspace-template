@@ -90,7 +90,7 @@ function beginRename(row: ChatRow): void {
   rename = { chatId: row.chatId, draft: row.title, error: null };
 }
 
-/** Whether ``chatId`` is being renamed, so a surface other than the list (the phone header) shows the field. */
+/** Whether ``chatId`` is being renamed. */
 export function isRenaming(chatId: string): boolean {
   return rename !== null && rename.chatId === chatId;
 }
@@ -395,7 +395,7 @@ function rowKebab(row: ChatRow): m.Vnode {
   );
 }
 
-/** The field a rename is typed into: in the list's row, and in the phone header for the chat on screen. */
+/** The field a rename is typed into. */
 export function renameField(row: ChatRow): m.Vnode {
   const state = rename;
   if (state === null) throw new Error("renameField rendered with no rename in progress");

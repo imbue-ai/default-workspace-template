@@ -2,8 +2,7 @@
 
 The wrapper page (``pages.py``) is on another origin than ttyd, so its key strip can only ``postMessage`` into the
 pty frame. The patched web client the imbue-mngr-ttyd package ships exposes its xterm terminal as ``window.term``;
-this script, inserted into that client when it is installed (``dispatch.install_ttyd_web_client``), listens for the
-wrapper's messages and feeds xterm:
+this script, inserted into that client when it is installed, listens for the wrapper's messages and feeds xterm:
 
 - ``{type: "terminal:key", key, ctrl}`` sends ``key`` (``Escape``, ``Tab``, or an arrow) as the escape sequence
   xterm itself sends for it, honoring the application cursor mode for arrows and ``ctrl`` as xterm's Ctrl modifier.
