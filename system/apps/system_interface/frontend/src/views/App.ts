@@ -400,6 +400,7 @@ export function App(): m.Component<AppAttrs> {
       onPressStart: (binding) => {
         const pressedWindowId =
           binding.kind === "window-move" || binding.kind === "window-resize" ? binding.windowId : null;
+        // What the browser would have done with a press whose default the gesture source did not prevent.
         pages?.takeFocusFromOtherPages(pressedWindowId);
         pages?.setGestureActive(true);
         root.setAttribute(WINDOW_MOTION_ATTRIBUTE, "off");

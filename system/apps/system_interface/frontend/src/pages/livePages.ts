@@ -141,11 +141,10 @@ export class LivePagesLayer implements PageDriver {
     return this.pages.has(windowId);
   }
 
-  /** A press on a handle of ``windowId`` (null for a handle of no window: a shortcut, an entry) takes the
-   *  document's focus back from any other window's page that holds it, as the browser would have on a press
-   *  whose default the gesture source did not prevent. Left in that page, the focus would come back to it with
-   *  the chrome window's (a tear-out drag returning, a switch to another application and back), and the page
-   *  would report it and be raised over the window the user chose. The pressed window's own page keeps it. */
+  /** Take the document's focus back from any page other than ``windowId``'s (null: from every page) that holds
+   *  it. Left in that page, the focus would come back to it with the chrome window's (a tear-out drag returning,
+   *  a switch to another application and back), and the page would report it and be raised over the window the
+   *  user chose. */
   takeFocusFromOtherPages(windowId: string | null): void {
     const active = document.activeElement;
     if (!(active instanceof HTMLIFrameElement)) return;
@@ -335,10 +334,12 @@ export class LivePagesLayer implements PageDriver {
     this.follow(windowsById);
   }
 
-  /** Give the focused window's page the frame focus once, when the focused window changes. */
+  /** When the focused window changes, however it was raised, take the document's focus off every other window's
+   *  page and give the focused window's page the frame focus once. */
   private focusIfChanged(focused: string | null): void {
     if (focused === this.lastFocusedWindowId) return;
     this.lastFocusedWindowId = focused;
+    this.takeFocusFromOtherPages(focused);
     const page = focused === null ? undefined : this.pages.get(focused);
     if (page !== undefined) requestFrameFocus(page.wrapper);
   }
