@@ -590,9 +590,8 @@ def test_a_wave_is_capped_at_the_parallelism_limit() -> None:
 
     This pins the known inaccuracy `schedule_waves` documents rather than endorsing it:
     the live loop starts the sixth as soon as a slot frees, so it really does run beside
-    the others, and `--only-parallel-workers` takes its worker away anyway. Accepted
-    because it needs six nodes unblocked at once, and because a node running with four
-    others already has every slot the cap allows."""
+    the others. Accepted because it needs six nodes unblocked at once, and because a node
+    running with four others already has every slot the cap allows."""
     access = {idx: [] for idx in range(6)}
     waves = plan_orchestration.schedule_waves(access)
     assert waves == [[0, 1, 2, 3, 4], [5]]
@@ -604,63 +603,50 @@ def test_waves_refuse_a_cycle() -> None:
         plan_orchestration.schedule_waves({0: [1], 1: [0]})
 
 
-def test_only_parallel_workers_leaves_the_solo_nodes_to_the_orchestrator() -> None:
-    """The flag's whole purpose, on the DAG it was designed against."""
-    nodes = plan_orchestration.parse_plan(_FAN_OUT_PLAN, only_parallel_workers=True)[
-        "nodes"
-    ]
-    assert [node["index"] for node in nodes if node["has_worker"]] == [1, 2, 3]
-    assert [node["index"] for node in nodes if not node["has_worker"]] == [0, 4, 5]
+# Two questions in a row, each feeding the next, with a worker node either side. The
+# orchestrator keeps nodes 1 and 2 because they are interactive, which is what gives these
+# tests a run of its own nodes to group and a dependency on a node no worker reports.
+_OWN_RUN_PLAN = _plan_text(
+    '["high", "interactive", "interactive", "medium"]',
+    '["build the page", "ask about the colours", "ask about the labels", "polish"]',
+    "[[], [0], [1], [2]]",
+)
 
 
-def test_off_by_default_every_node_still_gets_a_worker() -> None:
-    """The flag off is the flow as it has always run, so nothing moves without it."""
+def test_every_non_interactive_node_gets_a_worker() -> None:
+    """The one rule left: a worker for every node but a question."""
     nodes = plan_orchestration.parse_plan(_FAN_OUT_PLAN)["nodes"]
     assert all(node["has_worker"] for node in nodes)
+
+    nodes = plan_orchestration.parse_plan(_OWN_RUN_PLAN)["nodes"]
+    assert [n["index"] for n in nodes if not n["has_worker"]] == [1, 2]
 
 
 def test_a_node_with_no_worker_has_no_model() -> None:
     """A model is what a worker is launched with, so a node without one asks for none."""
-    nodes = plan_orchestration.parse_plan(_FAN_OUT_PLAN, only_parallel_workers=True)[
-        "nodes"
-    ]
+    nodes = plan_orchestration.parse_plan(_OWN_RUN_PLAN)["nodes"]
     for node in nodes:
         assert (node["model"] is not None) == node["has_worker"], node["index"]
-
-
-def test_an_interactive_node_never_counts_as_company() -> None:
-    """An interactive node is the orchestrator talking, so it cannot be building
-    something else at the same time -- a worker node beside one is still alone."""
-    plan = _plan_text(
-        '["high", "interactive", "medium"]',
-        '["build", "ask the user", "finish"]',
-        "[[], [], [0, 1]]",
-    )
-    nodes = plan_orchestration.parse_plan(plan, only_parallel_workers=True)["nodes"]
-    assert not any(node["has_worker"] for node in nodes)
 
 
 def test_a_node_the_orchestrator_runs_takes_no_worker_slot() -> None:
     """A node with no worker must not consume one of the five worker slots: it is the
     orchestrator's own turn, not an agent occupying a slot."""
-    # Six nodes waiting on nothing: five fill the cap and get workers, the sixth is
-    # alone in the next wave and so is the orchestrator's.
     plan = plan_orchestration.parse_plan(
         _plan_text(
-            '["high", "high", "high", "high", "high", "high"]',
-            '["a", "b", "c", "d", "e", "f"]',
+            '["high", "high", "high", "high", "high", "interactive"]',
+            '["a", "b", "c", "d", "e", "ask the user"]',
             "[[], [], [], [], [], []]",
         ),
-        only_parallel_workers=True,
     )
     assert [node["index"] for node in plan["nodes"] if not node["has_worker"]] == [5]
     # All five slots are busy, and node 5 is still offered because it needs none.
     assert plan_orchestration.find_ready_nodes(plan, [], [0, 1, 2, 3, 4]) == [5]
 
 
-def test_a_plan_written_before_the_flag_still_schedules() -> None:
-    """find_ready_nodes reads plan.json from disk, and a build in flight when this
-    shipped has nodes with no `has_worker` key at all."""
+def test_a_plan_with_no_has_worker_key_still_schedules() -> None:
+    """find_ready_nodes reads plan.json from disk, and a build in flight when `has_worker`
+    shipped has nodes with no such key at all."""
     plan = plan_orchestration.parse_plan(_FAN_OUT_PLAN)
     for node in plan["nodes"]:
         del node["has_worker"]
@@ -668,11 +654,11 @@ def test_a_plan_written_before_the_flag_still_schedules() -> None:
 
 
 def test_consecutive_orchestrator_nodes_become_one_piece_of_work() -> None:
-    """Nodes 4 and 5 run back to back with nobody else involved, so splitting them
+    """Nodes 1 and 2 run back to back with nobody else involved, so splitting them
     divides work between one agent and itself."""
-    plan = plan_orchestration.parse_plan(_FAN_OUT_PLAN, only_parallel_workers=True)
-    assert plan["own_groups"] == [[0], [4, 5]]
-    assert [node["own_group"] for node in plan["nodes"]] == [0, None, None, None, 1, 1]
+    plan = plan_orchestration.parse_plan(_OWN_RUN_PLAN)
+    assert plan["own_groups"] == [[1, 2]]
+    assert [node["own_group"] for node in plan["nodes"]] == [None, 0, 0, None]
 
 
 def test_an_interactive_node_stays_inside_a_run() -> None:
@@ -680,14 +666,13 @@ def test_an_interactive_node_stays_inside_a_run() -> None:
     does not divide the work -- it only fixes an order inside the run."""
     plan = plan_orchestration.parse_plan(
         _plan_text(
-            '["high", "medium", "medium", "interactive", "high", "low"]',
-            '["open", "a", "b", "ask the user", "join", "finish"]',
-            "[[], [0], [0], [1, 2], [3], [4]]",
-        ),
-        only_parallel_workers=True,
+            '["high", "interactive", "interactive", "medium"]',
+            '["open", "ask a", "ask b", "finish"]',
+            "[[], [0], [0], [1, 2]]",
+        )
     )
-    # 1 and 2 run together so they keep their workers; everything after is one run.
-    assert plan["own_groups"] == [[0], [3, 4, 5]]
+    # The two questions share a wave and are both the orchestrator's, so they are one run.
+    assert plan["own_groups"] == [[1, 2]]
 
 
 def test_a_worker_node_ends_a_run_of_the_orchestrators_own() -> None:
@@ -698,7 +683,7 @@ def test_a_worker_node_ends_a_run_of_the_orchestrators_own() -> None:
     assert groups == [[0], [3]]
 
 
-def test_with_the_flag_off_the_orchestrator_owns_only_interactive_nodes() -> None:
+def test_the_orchestrator_owns_only_interactive_nodes() -> None:
     plan = plan_orchestration.parse_plan(
         _plan_text(
             '["high", "interactive", "medium"]',
@@ -711,7 +696,7 @@ def test_with_the_flag_off_the_orchestrator_owns_only_interactive_nodes() -> Non
 
 def test_every_orchestrator_node_lands_in_exactly_one_group() -> None:
     """A node the orchestrator owns but no group names would silently never be done."""
-    plan = plan_orchestration.parse_plan(_FAN_OUT_PLAN, only_parallel_workers=True)
+    plan = plan_orchestration.parse_plan(_OWN_RUN_PLAN)
     grouped = [idx for group in plan["own_groups"] for idx in group]
     assert sorted(grouped) == sorted(
         node["index"] for node in plan["nodes"] if not node["has_worker"]
@@ -722,23 +707,23 @@ def test_every_orchestrator_node_lands_in_exactly_one_group() -> None:
 def test_a_worker_after_an_orchestrator_node_needs_that_node_reported(
     tmp_path: Path,
 ) -> None:
-    """The flag's own DAG, end to end. Nodes 1-3 wait on node 0, which the orchestrator does
-    itself -- so their task files quote node 0's report, and `write-task` fails until the
-    orchestrator has written one. That failure is the flag's sharpest edge: a node done but
-    left unreported blocks every node depending on it."""
-    plan = plan_orchestration.parse_plan(_FAN_OUT_PLAN, only_parallel_workers=True)
-    assert not plan["nodes"][0]["has_worker"]
+    """Node 3 waits on node 2, which the orchestrator does itself -- so node 3's task file
+    quotes node 2's report, and `write-task` fails until the orchestrator has written one.
+    That is the sharpest edge here: a node done but left unreported blocks every node
+    depending on it."""
+    plan = plan_orchestration.parse_plan(_OWN_RUN_PLAN)
+    assert not plan["nodes"][2]["has_worker"]
 
-    report_path = tmp_path / "nodes" / "1" / "reports" / "report.md"
+    report_path = tmp_path / "nodes" / "3" / "reports" / "report.md"
     with pytest.raises(plan_orchestration.PlanError, match="has_worker false"):
-        plan_orchestration.render_node_task(plan, 1, report_path, {})
+        plan_orchestration.render_node_task(plan, 3, report_path, {})
 
     # Once the orchestrator reports its own node, the dependent worker's task renders.
     task = plan_orchestration.render_node_task(
-        plan, 1, report_path, {0: "Set up the package and the data loader."}
+        plan, 3, report_path, {2: "The user picked the compact labels."}
     )
-    assert "Set up the package and the data loader." in task
-    assert "### Node 0" in task
+    assert "The user picked the compact labels." in task
+    assert "### Node 2" in task
 
 
 _TIERED_PLAN = _plan_text(
@@ -758,7 +743,6 @@ def test_by_default_every_node_has_an_agent_of_its_own() -> None:
     assert plan["settings"] == {
         "shared_worktree": False,
         "tier_agents": False,
-        "only_parallel_workers": False,
         "reduce_access": False,
     }
 

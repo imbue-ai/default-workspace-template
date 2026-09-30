@@ -269,12 +269,6 @@ def schedule_waves(access_by_node: dict[int, list[int]]) -> list[list[int]]:
     reported as a wave of five and a wave of two, when in the build the sixth and
     seventh start alongside whichever of the first five are still going.
 
-    The consequence for ``find_nodes_worth_a_worker`` is that a leftover wave of exactly
-    one is called solo and loses its worker, though in the build it would have had
-    company. A plan holds at most ``MAX_NODE_COUNT`` nodes, so this needs six or more
-    nodes unblocked at the same time to bite. Accepted rather than fixed: the cap is
-    worth having, and a node that runs with four others already has all the parallelism
-    the cap allows.
     """
     waves: list[list[int]] = []
     done: set[int] = set()
@@ -292,29 +286,6 @@ def schedule_waves(access_by_node: dict[int, list[int]]) -> list[list[int]]:
         done |= set(wave)
         remaining -= set(wave)
     return waves
-
-
-def find_nodes_worth_a_worker(
-    access_by_node: dict[int, list[int]], capabilities: Sequence[str]
-) -> set[int]:
-    """The nodes to launch a worker for: those that run alongside another worker node.
-
-    A node with nothing running beside it gains nothing from a worker. The build still
-    waits for it either way, and a worker adds a git worktree, a `uv sync`, an agent
-    cold start and a merge to a wait the orchestrator could have spent doing the work.
-    So a node alone in its wave is the orchestrator's own to do.
-
-    Interactive nodes never count toward a wave's size, in either direction: one is a
-    conversation the orchestrator is holding, so it cannot be building something else at
-    the same time, and it never had a worker to lose.
-    """
-    is_interactive = [c == INTERACTIVE_CAPABILITY for c in capabilities]
-    worth_it: set[int] = set()
-    for wave in schedule_waves(access_by_node):
-        worker_nodes = [idx for idx in wave if not is_interactive[idx]]
-        if len(worker_nodes) >= 2:
-            worth_it |= set(worker_nodes)
-    return worth_it
 
 
 def group_orchestrator_nodes(
@@ -356,7 +327,6 @@ def parse_plan(
     plan_text: str,
     *,
     reduce_access: bool = False,
-    only_parallel_workers: bool = False,
     shared_worktree: bool = False,
     tier_agents: bool = False,
 ) -> dict[str, object]:
@@ -378,11 +348,6 @@ def parse_plan(
     They are independent. Shared folders with per-node agents still pay the cold starts;
     tier agents in separate worktrees still pay the syncs.
 
-    ``only_parallel_workers`` is the same kind of switch. Off, every non-interactive
-    node gets a worker, which is what the flow has always done. On, a node that would
-    run with no other worker node beside it is left to the orchestrator: the plan is
-    unchanged and so is the order, but the worktree, sync, cold start and merge that
-    node's worker would have cost are not spent on a wait nobody overlaps.
     """
     output_block = _extract_output_block(plan_text)
     capabilities = _validate_capabilities(
@@ -413,16 +378,11 @@ def parse_plan(
         access = planned_access
         dropped_access = {idx: [] for idx in range(node_count)}
 
-    # Which nodes a worker is launched for. The access lists are read after any
-    # reduction, since the reduction is what the orchestrator's ready loop will see.
-    if only_parallel_workers:
-        with_worker = find_nodes_worth_a_worker(access, capabilities)
-    else:
-        with_worker = {
-            idx
-            for idx in range(node_count)
-            if capabilities[idx] != INTERACTIVE_CAPABILITY
-        }
+    # Which nodes a worker is launched for: every node but an interactive one, which is a
+    # conversation the orchestrator holds itself.
+    with_worker = {
+        idx for idx in range(node_count) if capabilities[idx] != INTERACTIVE_CAPABILITY
+    }
 
     # The runs of nodes the orchestrator does itself, each to be done in one go.
     own_groups = group_orchestrator_nodes(schedule_waves(access), with_worker)
@@ -442,8 +402,8 @@ def parse_plan(
             # plan.json shows the reduction rather than hiding it; plan.md holds
             # the planner's own words either way.
             "access_dropped": dropped_access[idx],
-            # False means the orchestrator does this node itself: an interactive node
-            # always, and under `only_parallel_workers` a node nothing runs beside.
+            # False means the orchestrator does this node itself, which is an interactive
+            # node and nothing else.
             "has_worker": idx in with_worker,
             # The agent that runs this node, named without the app prefix the orchestrator
             # adds. With tier agents it is one long-lived agent per capability, so several
@@ -469,7 +429,6 @@ def parse_plan(
         "settings": {
             "shared_worktree": shared_worktree,
             "tier_agents": tier_agents,
-            "only_parallel_workers": only_parallel_workers,
             "reduce_access": reduce_access,
         },
     }
@@ -482,10 +441,9 @@ def find_ready_nodes(
 ) -> list[int]:
     """Nodes that can start now, lowest index first.
 
-    Only nodes that get a worker count toward the parallelism cap. A node the
-    orchestrator does itself takes no slot and starts whenever its dependencies are
-    done -- an interactive node (a conversation it holds), and under the plan's
-    ``only_parallel_workers`` setting a node nothing would have run beside.
+    Only nodes that get a worker count toward the parallelism cap. An interactive node is
+    a conversation the orchestrator holds itself, so it takes no slot and starts whenever
+    its dependencies are done.
     """
     nodes = plan["nodes"]
     assert isinstance(nodes, list)
@@ -619,14 +577,12 @@ def _run_models() -> int:
 def _run_parse(
     run_dir: Path,
     reduce_access: bool,
-    only_parallel_workers: bool,
     shared_worktree: bool,
     tier_agents: bool,
 ) -> int:
     plan = parse_plan(
         _read_run_file(run_dir / PLAN_MARKDOWN_FILE_NAME),
         reduce_access=reduce_access,
-        only_parallel_workers=only_parallel_workers,
         shared_worktree=shared_worktree,
         tier_agents=tier_agents,
     )
@@ -740,18 +696,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             "start per node and carries what the agent learned into the next. Off by default."
         ),
     )
-    parse_parser.add_argument(
-        "--only-parallel-workers",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Launch a worker only for a node that runs beside another worker node. "
-            "A node alone in its wave is left to the orchestrator, which saves that "
-            "node's worktree, sync, cold start and merge on a wait nothing overlaps. "
-            "Off by default."
-        ),
-    )
-
     subparsers.add_parser(
         "models",
         help="Print each worker capability and its model, one per line, for the skill's "
@@ -782,7 +726,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return _run_parse(
                     args.run_dir,
                     args.reduce_access,
-                    args.only_parallel_workers,
                     args.shared_worktree,
                     args.tier_agents,
                 )
