@@ -9,9 +9,9 @@ Taskbar and launcher refresh.
 - The bar itself is solid, with no line along its top and no blur behind it, and
   everything in it sits in one element that can be dressed on its own.
 
-- Icons in the bar and on the desktop carry a cast of their own and a hairline of
-  relief: light along the top edge, shade along the bottom, so a flat tile reads
-  as a face rather than a sticker on any colour the palette offers.
+- Icons carry a cast sized for where they sit: a tighter, darker one for the
+  desktop's tiles, which fall on the bar's white as often as on a photograph, and
+  a quieter one again for the row of them in the bar.
 
 - The launcher field wears a plus rather than a magnifier, asks to "Open an app
   or send a message", takes body text, and is rounded to match the card above

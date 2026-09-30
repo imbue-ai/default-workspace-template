@@ -1055,7 +1055,6 @@ export function App(): m.Component<AppAttrs> {
             entries: barEntries(state),
             avatar: state.avatar,
             openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
-
             launcher: {
               query: launcherQuery,
               isOpen: isLauncherOpen,
