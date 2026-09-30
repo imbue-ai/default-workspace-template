@@ -24,7 +24,6 @@ from workspace_layout.ops import DesktopOpArguments
 from workspace_layout.ops import FOCUS_OP
 from workspace_layout.ops import INVENTORY_OPS
 from workspace_layout.ops import LOAD_OP
-from workspace_layout.ops import OPEN_OP
 from workspace_layout.ops import OpRequester
 from workspace_layout.ops import PINNED_WINDOW
 from workspace_layout.ops import PLACE_OP
@@ -117,10 +116,9 @@ _ZONE_STATES: Final[dict[str, WindowState]] = {
 # The window verbs that would change where a popped-out window sits, refused on one unless the op carries ``force``
 # (plan-popped-out-layout-ops.md): each shows the window on the desktop, or, for ``minimize``, puts it out of sight.
 _POP_OUT_REFUSING_OPS: Final[frozenset[str]] = frozenset({"minimize", "restore", "maximize", PLACE_OP})
-# The ops whose outcome is a window shown on the desktop, which a client with only pop-outs open cannot show yet.
-_DESKTOP_SURFACING_OPS: Final[frozenset[str]] = frozenset(
-    {OPEN_OP, FOCUS_OP, SHOW_OP, "restore", "maximize", PLACE_OP}
-)
+# The window verbs whose outcome is a window shown on the desktop, which a client with only pop-outs open cannot show
+# yet (``open`` and ``show`` say so for themselves).
+_DESKTOP_SURFACING_WINDOW_OPS: Final[frozenset[str]] = frozenset({FOCUS_OP, "restore", "maximize", PLACE_OP})
 _FRAME_COMPONENT_COUNT: Final[int] = 4
 _CELL_COMPONENT_COUNT: Final[int] = 2
 
@@ -531,14 +529,6 @@ class _PopOutNotes(FrozenModel):
         "stored for when a desktop window opens",
     )
 
-    def wire_json(self) -> dict[str, Any]:
-        return {
-            "is_raised_in_own_window": self.is_raised_in_own_window,
-            "is_brought_back": self.is_brought_back,
-            "unpaired_beside": str(self.unpaired_beside) if self.unpaired_beside is not None else None,
-            "has_no_desktop_window": self.has_no_desktop_window,
-        }
-
 
 def _parse_desktop_arguments(args_raw: Mapping[str, Any]) -> DesktopOpArguments:
     try:
@@ -775,7 +765,7 @@ def _answer_document(
         "desktop": shell.desktop_wire_json(desktop),
         "layout": _layout_wire_json(shell, desktop, target.client_id),
         "window_id": str(window_id) if window_id is not None else None,
-        **notes.wire_json(),
+        **notes.model_dump(mode="json"),
     }
 
 
@@ -1132,7 +1122,7 @@ def dispatch_desktop_op(
             # desktop window keeps the desktop it shows.
             if not notes.is_raised_in_own_window and not notes.is_brought_back:
                 _switch_as_asked(shell, target)
-            if op in _DESKTOP_SURFACING_OPS and not notes.is_raised_in_own_window:
+            if op in _DESKTOP_SURFACING_WINDOW_OPS and not notes.is_raised_in_own_window:
                 notes = notes.model_copy_update(
                     to_update(notes.field_ref().has_no_desktop_window, _has_no_desktop_window(shell, target.client_id))
                 )
