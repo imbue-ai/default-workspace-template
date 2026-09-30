@@ -1003,11 +1003,12 @@ export class DesktopStore {
     });
   }
 
+  /** Replace a shortcut the desktop holds, as the shortcut menu's mode flip does. */
   async setShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<void> {
     try {
       this.takeDesktop(await this.deps.api.setDesktopShortcut(desktopId, shortcut));
     } catch (error) {
-      this.deps.notify(`Could not add the shortcut: ${(error as Error).message}`);
+      this.deps.notify(`Could not change the shortcut: ${(error as Error).message}`);
     }
   }
 
