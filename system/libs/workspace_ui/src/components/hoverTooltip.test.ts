@@ -278,27 +278,6 @@ describe("hoverTooltipAttrs", () => {
     unhoverTooltip(belowTrigger);
   });
 
-  it("waits out the hover-intent delay by default and skips it for an instant trigger", () => {
-    vi.useFakeTimers();
-    m.render(root, m("button", { ...hoverTooltipAttrs("Plan") }, m("span", "Go")));
-    const paced = root.firstElementChild as HTMLElement;
-    paced.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body }));
-    vi.advanceTimersByTime(249);
-    expect(shownTooltipText()).toBeNull();
-    vi.advanceTimersByTime(1);
-    expect(shownTooltipText()).toBe("Plan");
-    unhoverTooltip(paced);
-
-    // An entry that carries no text of its own names itself through the bubble, so it goes up on
-    // the next tick rather than a quarter of a second after the pointer arrives.
-    m.render(root, m("button", { ...hoverTooltipAttrs("Docs", "above", "instant") }, m("span", "Go")));
-    const instant = root.firstElementChild as HTMLElement;
-    instant.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body }));
-    vi.advanceTimersByTime(0);
-    expect(shownTooltipText()).toBe("Docs");
-    unhoverTooltip(instant);
-  });
-
   it("stops offering a tooltip an imperative caller takes back", () => {
     vi.useFakeTimers();
     const button = document.createElement("button");

@@ -102,9 +102,8 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
         {
           "data-launcher-field": "",
           class:
-            // Fully round, and padded so its mark lands under the mark of the menu row above it: the
-            // card insets its rows by 4 and pads them by 8 around a 24 cell, which puts a row's glyph
-            // centre 14px inside the card's border -- so the field's 20px mark wants 14 of its own.
+            // Fully round, and padded so its mark lands under the mark of the menu row above it: a
+            // card row's glyph sits 14px inside the card's border, so the field's mark wants 14 too.
             "launcher-field absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-full " +
             // A heavier edge than a panel seam: this is a control you type into, and it has to read
             // as one against a bar of the same colour. Open is a ring OUTSIDE that edge rather than

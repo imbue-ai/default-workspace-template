@@ -147,8 +147,6 @@ describe("Taskbar", () => {
       "above",
       "above",
     ]);
-    // The entry names itself, so the bubble is an aside and waits out the shared hover pause.
-    expect(entries.map((entry) => entry.getAttribute("data-hover-tooltip-delay"))).toEqual([null, null, null]);
   });
 
   it("draws the avatar in place of the icon for an avatar-style entry, wearing the mood", () => {

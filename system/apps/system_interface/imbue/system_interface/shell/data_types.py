@@ -175,9 +175,8 @@ class ClientReportOutcome(FrozenModel):
 
 # The launch path every app that declares none has, at its root, synthesized by the shell (desktop
 # contracts.md section 2). Its ``label`` is the app's display name, filled in by
-# ``effective_launch_paths``: it stands in a list beside rows an app labelled for itself, and every
-# app that bothers to label one calls it by its name -- so a verb here reads as a different KIND of
-# row rather than as the same row with a word in front of it.
+# ``effective_launch_paths``: the row stands in a list beside rows an app labelled for itself, where
+# a verb reads as a different KIND of row rather than as the same row with a word in front of it.
 OPEN_LAUNCH_PATH_VALUE: Final[LaunchPathValue] = LaunchPathValue("/")
 
 

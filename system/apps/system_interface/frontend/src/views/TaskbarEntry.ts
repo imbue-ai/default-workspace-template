@@ -59,8 +59,8 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         // there is one, so a reader is told what a looker can see.
         "aria-label": tooltip,
         class:
-          // A labelled chip rather than a bare tile: the icon and the name sit in it, and the chip is
-          // what carries the states. Body text -- this is a name being read, not a dense list.
+          // A labelled chip: the icon and the name sit in it, and the chip is what carries the
+          // states. Body text -- this is a name being read, not a dense list.
           "taskbar-entry group relative flex h-(--desk-taskbar-entry-size) min-w-(--desk-touch-target) max-w-48 " +
           // 4px all round, but 8 on the right: the name ends where the chip does otherwise, and a
           // title cut off mid-word wants somewhere to stop.
@@ -75,7 +75,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           // merely not in front -- and it lifts under the pointer, which is the one moment the entry
           // is being read rather than scanned.
           (isDimmed ? "text-faint hover:text-primary " : "text-primary "),
-        // The bubble is an aside -- the whole of a truncated title -- so it takes the shared pause.
+        // The bubble carries the whole of a title the chip had to cut short.
         ...hoverTooltipAttrs(tooltip, "above"),
         onclick: onClick,
         oncontextmenu: (event: MouseEvent) => {
@@ -89,8 +89,8 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           {
             // The icon brings its own tile (`docs/system/app-icons.md`), so this box paints nothing
             // and pads nothing: a surface behind it would frame the tile in a second one, and the
-            // corner is the tile's own 32 per cent. The chip around it carries the states now; what
-            // is left here is the fade for a window that is out of sight.
+            // corner is the tile's own 32 per cent. The chip around it carries the states; what is
+            // left here is the fade for a window that is out of sight.
             class:
               "taskbar-entry-tile relative flex size-(--desk-taskbar-entry-icon) shrink-0 items-center " +
               // The bar's own quieter cast, the same in every state, selected included: the tint
@@ -108,7 +108,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         ),
         m("span", { class: "taskbar-entry-title min-w-0 truncate" }, entry.title),
         // The mark of a window shown in its own desktop window, so the dimmed entry is not read as
-        // minimized. Beside the name, where there is room for it again.
+        // minimized.
         entry.isDetached
           ? m(
               "span",
