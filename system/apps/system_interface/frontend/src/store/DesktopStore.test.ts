@@ -1298,51 +1298,64 @@ describe("desktops and shortcuts", () => {
 describe("embedder messages", () => {
   /** An app registered for ``minds:focus-chat``, as its manifest's ``[[message_handlers]]`` declares. */
   const HANDLING_APP = appRecord("buddy", {
-    message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat" }],
+    message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat", show: null }],
   });
 
-  it("relays a message an app registered for once, with this client and the message's own fields", async () => {
+  it("relays a chrome message an app registered for once, with this client and the message's own fields", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), HANDLING_APP]);
 
-    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(true);
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(true);
 
     expect(api.relayedMessages).toEqual([
-      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-7" } },
+      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-7" }, sender: "embedder" },
     ]);
   });
 
-  it("relays nothing from a solo shell, whose client is the main window's", async () => {
+  it("relays no chrome message from a solo shell, whose client is the main window's", async () => {
     api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
     const store = makeStore(() => undefined, { soloWindowId: "win-1" });
     await store.start(NO_LINK);
 
-    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(false);
 
     expect(api.relayedMessages).toEqual([]);
   });
 
-  it("relays nothing for a type no app registered for", async () => {
+  it("relays an app's message from a solo shell too, with the app as its sender", async () => {
+    api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await store.start(NO_LINK);
+
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "chat")).toBe(true);
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:file", clientId: CLIENT, payload: { path: "/home/user/plan.md" }, sender: "chat" },
+    ]);
+  });
+
+  it("relays no chrome message of a type no app registered for", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), HANDLING_APP]);
 
-    expect(await store.relayEmbedderMessage({ type: "minds:close-active-tab" })).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "minds:close-active-tab" }, null)).toBe(false);
 
     expect(api.relayedMessages).toEqual([]);
   });
 
-  it("answers false and says why when the shell could not pass the message on", async () => {
+  it("tells the user why, in the relay's words, when a message did not reach every app", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([HANDLING_APP]);
-    api.refusal = "buddy did not take it";
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.refusal = "Nothing in this workspace handles 'open:url'";
 
-    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3000/" }, "chat")).toBe(false);
+    api.refusal = "buddy did not take it: could not be reached";
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(false);
 
-    expect(warn.mock.calls.map((call) => String(call[0]))).toEqual([
-      "[si] could not relay minds:focus-chat from the embedder",
+    expect(notices).toEqual([
+      "Nothing in this workspace handles 'open:url'",
+      "buddy did not take it: could not be reached",
     ]);
-    warn.mockRestore();
   });
 });
 

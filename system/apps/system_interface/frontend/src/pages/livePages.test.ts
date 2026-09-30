@@ -18,6 +18,7 @@ import {
   SHELL_HIDDEN,
   SHELL_LOCATION,
   SHELL_NAVIGATE,
+  SHELL_MESSAGE,
   SHELL_OPEN,
   SHELL_SHOWN,
   SHELL_START_WITH_TEXT,
@@ -696,6 +697,20 @@ describe("the contract", () => {
     messageFromPage("win-1", { type: SHELL_OPEN, address: "app:docs?instance=x" });
     await settle();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:open ignored"));
+    warn.mockRestore();
+  });
+
+  it("relays a page's shell:message with its app as the sender, and warns about one with no typed message", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    messageFromPage("win-1", { type: SHELL_MESSAGE, message: { type: "open:file", path: "/home/user/plan.md" } });
+    await settle();
+    expect(api.relayedMessages).toEqual([
+      { type: "open:file", clientId: "client-1", payload: { path: "/home/user/plan.md" }, sender: "docs" },
+    ]);
+    messageFromPage("win-1", { type: SHELL_MESSAGE, message: { path: "/home/user/plan.md" } });
+    await settle();
+    expect(api.relayedMessages).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:message ignored"));
     warn.mockRestore();
   });
 

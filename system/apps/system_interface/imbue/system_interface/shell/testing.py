@@ -72,6 +72,8 @@ def registry_row_toml(
     stop_when_no_windows: bool = False,
     # Each message handler as ``(type, path)``.
     message_handlers: Sequence[tuple[str, str]] = (),
+    # Each ``show`` message handler as ``(type, show, showing)``.
+    shown_message_handlers: Sequence[tuple[str, str, Sequence[str]]] = (),
 ) -> str:
     """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads.
     ``default_shortcut`` is ``(launch, mode)``."""
@@ -98,9 +100,12 @@ def registry_row_toml(
         )
     if window_closed_path is not None:
         lines.append(f'window_closed_path = "{window_closed_path}"')
-    if message_handlers:
-        handlers = ", ".join(f'{{ type = "{kind}", path = "{path}" }}' for kind, path in message_handlers)
-        lines.append(f"message_handlers = [{handlers}]")
+    if message_handlers or shown_message_handlers:
+        handlers = [f'{{ type = "{kind}", path = "{path}" }}' for kind, path in message_handlers]
+        for kind, show, showing in shown_message_handlers:
+            pages = ", ".join(f'"{page}"' for page in showing)
+            handlers.append(f'{{ type = "{kind}", show = "{show}", showing = [{pages}] }}')
+        lines.append(f"message_handlers = [{', '.join(handlers)}]")
     for launch_id, launch_label, launch_path in launch_paths:
         lines.append("[[apps.launch_paths]]")
         lines.append(f'id = "{launch_id}"')

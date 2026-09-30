@@ -6,6 +6,7 @@ from typing import Final
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import EntryMode
 from app_manifest.manifest import LocationScope
+from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import OPEN_LAUNCH_PATH_ID
 from app_manifest.manifest import Pin
 from app_manifest.manifest import PinStyle
@@ -124,6 +125,17 @@ def pin_wire_json(pin: Pin | None) -> dict[str, str] | None:
 
 
 @pure
+def message_handler_wire_json(handler: MessageHandler) -> dict[str, Any]:
+    """One registered message handler as the app records carry it: its type, and its route or its page templates."""
+    return {
+        "type": str(handler.type),
+        "path": str(handler.path) if handler.path is not None else None,
+        "show": str(handler.show) if handler.show is not None else None,
+        "showing": [str(template) for template in handler.showing],
+    }
+
+
+@pure
 def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
     """The ``app`` object of desktop contracts.md section 5.5."""
     row = entry.row
@@ -141,9 +153,7 @@ def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
         "default_shortcut": default_shortcut_wire_json(row.default_shortcut),
         "launcher_rank": row.launcher_rank,
         "pin": pin_wire_json(row.pin),
-        "message_handlers": [
-            {"type": str(handler.type), "path": str(handler.path)} for handler in row.message_handlers
-        ],
+        "message_handlers": [message_handler_wire_json(handler) for handler in row.message_handlers],
         "is_running": entry.is_running,
     }
 

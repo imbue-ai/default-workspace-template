@@ -113,7 +113,7 @@ function bootstrap(): void {
   initEmbedderRelay();
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, () => void desktopStore.closeFocusedWindow());
   // Every message the chrome sends also goes, its payload unread, to the apps registered for its type.
-  setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message));
+  setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message, null));
   // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     desktopStore.setCanPopOut(message.canPopOut === true);

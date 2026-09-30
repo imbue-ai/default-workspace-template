@@ -1344,7 +1344,10 @@ def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row
     registry_path = write_two_app_registry(
         tmp_path,
         registry_row_toml(
-            "buddy", "http://localhost:7002", message_handlers=[("minds:focus-chat", "/api/focus-chat")]
+            "buddy",
+            "http://localhost:7002",
+            message_handlers=[("minds:focus-chat", "/api/focus-chat")],
+            shown_message_handlers=[("open:file", "{path}?view", ("{path}/",))],
         ),
     )
     client_queue = broadcaster.register()
@@ -1354,7 +1357,10 @@ def test_every_app_record_the_browser_reads_carries_the_message_handlers_its_row
     expected = {
         "terminal": [],
         "files": [],
-        "buddy": [{"type": "minds:focus-chat", "path": "/api/focus-chat"}],
+        "buddy": [
+            {"type": "minds:focus-chat", "path": "/api/focus-chat", "show": None, "showing": []},
+            {"type": "open:file", "path": None, "show": "{path}?view", "showing": ["{path}/"]},
+        ],
     }
     listed = client.get("/api/inventory").get_json()["apps"]
     assert {app["name"]: app["message_handlers"] for app in listed} == expected

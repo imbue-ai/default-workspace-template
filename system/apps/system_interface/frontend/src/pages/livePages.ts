@@ -15,8 +15,8 @@
  * of plan section 4.6 after every desktops update and every layout load (``shell:navigate`` for a
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
- * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, and
- * ``shell:start-with-text``. Messages cross through ``relay.ts``.
+ * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``, and
+ * ``shell:message``. Messages cross through ``relay.ts``.
  */
 
 import {
@@ -27,6 +27,7 @@ import {
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
   SHELL_LOCATION,
+  SHELL_MESSAGE,
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_SHOWN,
@@ -50,7 +51,7 @@ import {
 } from "../reducers/desktopState";
 import type { DesktopState } from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
-import type { DesktopStore, PageDriver } from "../store/DesktopStore";
+import type { DesktopStore, EmbedderMessage, PageDriver } from "../store/DesktopStore";
 
 export const LIVE_PAGE_ATTRIBUTE = "data-live-page";
 /** The element of a window's chrome the page is laid over. */
@@ -131,6 +132,7 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
     setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
+    setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
@@ -567,6 +569,20 @@ export class LivePagesLayer implements PageDriver {
       return null;
     }
     return text;
+  }
+
+  /** ``shell:message {message}`` from a page: a message of the page's own (a ``type`` and its fields, such as
+   *  ``open:file``), delivered to the apps registered for its type, with the page's app as its sender. The frame has
+   *  to be one the shell created. */
+  private takeMessage(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const page = this.pageOfFrame(frame);
+    if (page === undefined) return;
+    const message = payload.message;
+    if (message === null || typeof message !== "object" || typeof (message as { type?: unknown }).type !== "string") {
+      console.warn(`[si] shell:message ignored: it carried no message with a type (${JSON.stringify(payload)})`);
+      return;
+    }
+    void this.store.relayEmbedderMessage(message as EmbedderMessage, page.app);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

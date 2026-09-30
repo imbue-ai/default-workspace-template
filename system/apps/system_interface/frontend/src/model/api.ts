@@ -287,12 +287,14 @@ export async function quitApp(appName: string): Promise<void> {
   await postJson<void>(apiUrl(`/api/apps/${encodeURIComponent(appName)}/quit`), {});
 }
 
-/** Ask the shell to post a message the Imbue Studio chrome sent this client's page to the apps registered for its type
- *  (contracts.md section 5.6); throws with the shell's detail when an app did not take it. */
+/** Ask the shell to deliver a message this client's page received, from the Imbue Studio chrome or from an app's frame
+ *  (``sender`` says which: ``embedder`` or the app), to the apps registered for its type (contracts.md section 5.6);
+ *  throws with the shell's detail when an app did not take it. */
 export async function relayEmbedderMessage(
   type: string,
   clientId: string,
   payload: Readonly<Record<string, unknown>>,
+  sender: string,
 ): Promise<void> {
-  await postJson<unknown>(apiUrl("/api/embedder-messages"), { type, client_id: clientId, payload });
+  await postJson<unknown>(apiUrl("/api/embedder-messages"), { type, client_id: clientId, payload, sender });
 }

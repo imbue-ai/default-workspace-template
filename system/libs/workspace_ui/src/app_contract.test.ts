@@ -13,6 +13,7 @@ import {
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
   SHELL_LOCATION,
+  SHELL_MESSAGE,
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_SHOWN,
@@ -164,7 +165,7 @@ describe("connectToShell", () => {
     expect(onNavigate.mock.calls).toEqual([["/?chat=agent-2"]]);
   });
 
-  it("posts focused, location, openPath, and draftText to the parent with the contract shapes", () => {
+  it("posts focused, location, openPath, draftText, and sendMessage to the parent with the contract shapes", () => {
     const parent = framed();
     connection = connectToShell({});
 
@@ -173,6 +174,7 @@ describe("connectToShell", () => {
     connection.openPath("/?chat=agent-3", "focus");
     connection.openPath("/new", "new");
     connection.draftText("Explain this element:");
+    connection.sendMessage("open:file", { path: "/home/user/plan.md", type: "ignored" });
 
     expect(sentAfterConnect(parent)).toEqual([
       [{ type: SHELL_FOCUSED }, "*"],
@@ -180,6 +182,7 @@ describe("connectToShell", () => {
       [{ type: SHELL_OPEN, path: "/?chat=agent-3", ifPresent: "focus" }, "*"],
       [{ type: SHELL_OPEN, path: "/new", ifPresent: "new" }, "*"],
       [{ type: SHELL_DRAFT_TEXT, text: "Explain this element:" }, "*"],
+      [{ type: SHELL_MESSAGE, message: { type: "open:file", path: "/home/user/plan.md" } }, "*"],
     ]);
   });
 

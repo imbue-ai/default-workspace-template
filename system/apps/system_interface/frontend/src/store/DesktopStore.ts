@@ -149,11 +149,19 @@ export interface DesktopApi {
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
   fetchAvatars(): Promise<AvatarCatalog>;
   selectAvatar(design: string): Promise<void>;
-  relayEmbedderMessage(type: string, clientId: string, payload: Readonly<Record<string, unknown>>): Promise<void>;
+  relayEmbedderMessage(
+    type: string,
+    clientId: string,
+    payload: Readonly<Record<string, unknown>>,
+    sender: string,
+  ): Promise<void>;
 }
 
-/** A message the Imbue Studio chrome sent this page: its type and its own fields. */
+/** A message this page received, from the Imbue Studio chrome or from an app's frame: its type and its own fields. */
 export type EmbedderMessage = { readonly type: string } & Readonly<Record<string, unknown>>;
+
+/** The sender the relay names for a message the Imbue Studio chrome sent (contracts.md section 5.6). */
+export const EMBEDDER_SENDER = "embedder";
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
 export interface PageDriver {
@@ -759,20 +767,28 @@ export class DesktopStore {
     return launched !== null;
   }
 
-  /** A message from the Imbue Studio chrome: when an app registered for its type, the shell is asked, once, to post it
-   *  there with this client's id (contracts.md section 5.6); the app decides what it means. False when no app
-   *  registered for the type, the shell could not pass it on, this is a preview shell (whose backend refuses
-   *  the relay: the apps it names are the live ones), or this is a solo shell (whose client is the main window's,
-   *  so what an app did with the message would land there). */
-  async relayEmbedderMessage(message: EmbedderMessage): Promise<boolean> {
-    if (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, message.type)) {
+  /** A message this page received, from the Imbue Studio chrome (``senderApp`` null) or from the frame of an app's
+   *  page (``senderApp`` that app): the shell is asked, once, to deliver it with this client's id to the apps
+   *  registered for its type (contracts.md section 5.6); the apps decide what it means. When it did not reach
+   *  every app, the user is told why in the relay's words. False when nothing was delivered.
+   *
+   *  A chrome message is relayed only when an app registered for its type, and never from a preview shell (whose
+   *  backend refuses the relay: the apps it names are the live ones) or a solo shell (whose client is the main
+   *  window's, which relays the chrome's messages itself). An app's message is always relayed, from a solo shell
+   *  too: what it shows lands on this client's desktop, in the main window. */
+  async relayEmbedderMessage(message: EmbedderMessage, senderApp: string | null): Promise<boolean> {
+    const isFromEmbedder = senderApp === null;
+    if (
+      isFromEmbedder &&
+      (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, message.type))
+    ) {
       return false;
     }
     const { type, ...payload } = message;
     try {
-      await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload);
+      await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, senderApp ?? EMBEDDER_SENDER);
     } catch (error) {
-      console.warn(`[si] could not relay ${type} from the embedder`, error);
+      this.deps.notify((error as Error).message);
       return false;
     }
     return true;

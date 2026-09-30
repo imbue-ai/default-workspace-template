@@ -65,7 +65,8 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         "launcher_rank = 20\n"
         'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
         'window_closed_path = "/api/window-closed"\n'
-        'message_handlers = [{type = "minds:focus-chat", path = "/api/focus-chat"}]\n'
+        'message_handlers = [{type = "minds:focus-chat", path = "/api/focus-chat"}, '
+        '{type = "open:file", show = "{path}?view", showing = ["{path}", "{path}/"]}]\n'
     )
 
     rows = read_registry(registry)
@@ -75,8 +76,9 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     assert row.icon == APP_ICON_MARKUP
     assert row.window_closed_path == "/api/window-closed"
     assert row.stop_when_no_windows is True
-    assert [(handler.type, handler.path) for handler in row.message_handlers] == [
-        ("minds:focus-chat", "/api/focus-chat")
+    assert [(handler.type, handler.path, handler.show, handler.showing) for handler in row.message_handlers] == [
+        ("minds:focus-chat", "/api/focus-chat", None, ()),
+        ("open:file", None, "{path}?view", ("{path}", "{path}/")),
     ]
     assert row.display_name == "File Viewer"
     assert row.priority == "files"

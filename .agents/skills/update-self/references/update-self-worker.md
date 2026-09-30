@@ -129,6 +129,22 @@ is in the merge. **Do not touch `docs/VERSION_HISTORY.md`**: the entry records
 the merge commit sha, which does not exist until the lead lands your branch,
 so the apply writes it.
 
+### 3a. Drop the retired `[handles]` table from app manifests
+
+Manifests no longer have a `[handles]` table (it was reserved, and could only
+ever be empty): a manifest that still carries one fails to load, so its app
+would stop registering once the apply lands. After the merge commit, find
+every app manifest that still has the table:
+
+```bash
+git grep -l '^\[handles\]' -- 'system/apps/*/app.toml'
+```
+
+In each one, delete the `[handles]` line (it has no keys under it), and commit
+the edits together as `Drop the retired [handles] table from app manifests`.
+Name each app you edited in the report's **Customization survival** item.
+Nothing to find is the common case; say so there too.
+
 ## 4. Classify and validate the merged set
 
 ```bash
