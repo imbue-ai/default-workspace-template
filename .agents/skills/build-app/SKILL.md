@@ -130,51 +130,48 @@ seconds reading 8 files before it wrote anything, and its sibling spent 24 more.
 
 `references/tier-agent-priming.md` is their first task: read `worker-node.md`,
 `app-building-guidance.md`, `worker-reporting.md` and the scaffolder, report ready, and
-wait. Give each its own runtime dir so their reports do not collide:
+wait. Give each its own runtime dir so their reports do not collide.
 
-**Write each agent's name out in full, and never behind a loop variable.** Both the
-eval's evidence capture and anyone reading the transcript later find a worker by the
-literal name in the command that launched it, so `--name "$APP-low"` is findable and
-`--name "$APP-$NAME"` inside a `for` loop is not: it records one worker called
-`$APP-$NAME` and loses all three. The rule holds for every `create_worker.py` call in
-every step -- `launch`, `reply`, `await`, `destroy`. Three spelled-out commands, and no
-redirecting their output.
+**Build every `--name` out of variables the same command assigns.** A worker is found
+afterwards only by the name in the command that launched it, read out of your command's
+text -- so a `$VAR` the command sets itself resolves, and one it gets from a `for` or a
+`while` does not. Launching the three from a loop over their names records one worker
+called `$APP-$NAME` and loses all three, which is what happened the first time this ran.
+So: one `create_worker.py` command per agent, each assigning `$APP` itself, and no
+redirecting the output. Loops are fine for anything that is not a `--name` -- the `mkdir`
+and `cp` below use one.
 
-The models come from the table, so they are not written out here:
+Prepare all three runtime dirs in one command:
 
 ```bash
-MODELS=$(python3 .agents/skills/build-app/scripts/plan_orchestration.py models)
-tier_model() { echo "$MODELS" | awk -v c="$1" '$1 == c { print $2 }'; }
-for NAME in low medium high; do
-    mkdir -p "$RUN/agents/$NAME/reports"
-    cp .agents/skills/build-app/references/tier-agent-priming.md "$RUN/agents/$NAME/task.md"
+APP=<your app slug>; RUN="$PWD/data/.tasks/build-app/$APP"
+for T in low medium high; do
+    mkdir -p "$RUN/agents/$T/reports"
+    cp .agents/skills/build-app/references/tier-agent-priming.md "$RUN/agents/$T/task.md"
 done
 ```
 
-Then, as three separate commands:
+Then one command per agent. Each re-assigns `$APP` because a shell variable does not
+survive to your next command, and each reads its own model from the table so no model is
+written down here:
 
 ```bash
+APP=<your app slug>; RUN="$PWD/data/.tasks/build-app/$APP"; BUILD="$HOME/worktrees/build-app-$APP"
+MODEL=$(python3 .agents/skills/build-app/scripts/plan_orchestration.py models \
+    | awk '$1 == "low" { print $2 }')
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
-    --name "$APP-low" --template shared_worker --work-folder "$BUILD" \
-    --runtime-dir "$RUN/agents/low/" --task-file "$RUN/agents/low/task.md" \
+    --name "$APP-low" \
+    --template shared_worker \
+    --work-folder "$BUILD" \
+    --runtime-dir "$RUN/agents/low/" \
+    --task-file "$RUN/agents/low/task.md" \
     --create-arg=-S \
-    --create-arg=agent_types.claude.settings_overrides.model="$(tier_model low)" \
-    --message-with-mngr
-
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
-    --name "$APP-medium" --template shared_worker --work-folder "$BUILD" \
-    --runtime-dir "$RUN/agents/medium/" --task-file "$RUN/agents/medium/task.md" \
-    --create-arg=-S \
-    --create-arg=agent_types.claude.settings_overrides.model="$(tier_model medium)" \
-    --message-with-mngr
-
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
-    --name "$APP-high" --template shared_worker --work-folder "$BUILD" \
-    --runtime-dir "$RUN/agents/high/" --task-file "$RUN/agents/high/task.md" \
-    --create-arg=-S \
-    --create-arg=agent_types.claude.settings_overrides.model="$(tier_model high)" \
+    --create-arg=agent_types.claude.settings_overrides.model="$MODEL" \
     --message-with-mngr
 ```
+
+Run that twice more with `low` replaced by `medium` and then by `high`, in all four places
+it appears: the `awk` test, the `--name`, the `--runtime-dir` and the `--task-file`.
 
 Do not wait for their ready reports. They read while you clarify, and Step 4 sends the
 first node to an agent that is already warm -- `launch` there becomes a `reply`, since
@@ -291,10 +288,8 @@ Repeat until every node is done.
 
 2. **Check each printed node's `has_worker` in `$RUN/plan.json` before launching
    anything.** `false` means the node is yours: do its subtask in `$BUILD` yourself,
-   commit it, and count it done -- no worker, no worktree, no merge. That is always
-   true of an interactive node, and under `--only-parallel-workers` it is also true of
-   a node nothing else runs beside, where a worker would cost a worktree, a sync, a
-   cold start and a merge on a wait nobody overlaps.
+   commit it, and count it done -- no worker, no worktree, no merge. An interactive node is
+   the only kind that is yours, since it is a question you put to the user.
 
    **Write a report for each node you do**, at `$RUN/nodes/N/reports/report.md`, exactly
    as an interactive node does (Step 5, item 3). A later node's task file quotes the report
@@ -302,8 +297,7 @@ Repeat until every node is done.
    node you did yourself and left unreported blocks every node that depends on it.
 
    **Do a whole run of your own nodes at once.** `plan.json`'s `own_groups` lists them
-   already grouped: `[[0], [4, 5]]` means node 0 stands alone, and nodes 4 and 5 are one
-   piece of work. When `ready` prints the first node of such a group, write all of it in
+   already grouped: `[[1, 2]]` means nodes 1 and 2 are one piece of work. When `ready` prints the first node of such a group, write all of it in
    one go -- one design, one set of files, one commit -- then write each node's report and
    count every node in the group done. Those nodes are consecutive and all yours, so keeping them apart divides
    the work between you and yourself, and each split invites another pass over the same
@@ -620,12 +614,10 @@ live comes first and the teardown happens afterwards, while the user already has
    That single hardening pass is the only thorough test-and-review run the app
    gets; no worker ran one. It runs in a worker of its own, so start it before the
    teardown rather than after it.
-5. **Stop the workers.** Destroy every worker still running, one spelled-out
-   `destroy --name` command each and no loop over a glob, for the reason Step 1
-   gives: the literal name is how the run's evidence capture finds the worker
-   afterwards. With `settings.tier_agents` that is `$APP-low`, `$APP-medium` and
-   `$APP-high`; otherwise it is one per `$APP-node-N` you launched, and the
-   destroy also removes that worker's worktree.
+5. **Stop the workers.** Destroy every worker still running, naming each one.
+   With `settings.tier_agents` that is `$APP-low`, `$APP-medium` and `$APP-high`;
+   otherwise it is one per `$APP-node-N` you launched, and the destroy also
+   removes that worker's worktree.
 6. **Remove the folders.** List `$BUILD` first (`git -C "$BUILD" status
    --porcelain` must be empty, since every node was committed and merged), then
    `git worktree remove "$BUILD"` and `git worktree prune` to clear out the
