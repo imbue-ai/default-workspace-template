@@ -134,6 +134,7 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 | What is inside an app, and its own verbs on those things | The app, in its pages |
 | Desktops: name, colour, glyph, wallpaper, shortcuts and cells | Shell, shared |
 | Which desktop was made for which user | Shell, in `users.json` |
+| Which apps' default shortcuts have been offered | Shell, in `default_shortcuts_offered.json` |
 | Which windows a desktop holds; each window's path and title | Shell, shared; the page reports path and title |
 | Each client's placements and stacking order; the active desktop | Shell, per client |
 | Taskbar entries, tray widgets, the launcher's contents | Derived in the browser |
