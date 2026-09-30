@@ -48,6 +48,7 @@ latchkey CLI being on the PATH of whatever tool environment runs it.
 from __future__ import annotations
 
 import argparse
+import http.client
 import importlib.util
 import json
 import os
@@ -95,13 +96,13 @@ class HttpClient:
             return None, str(exc)
 
     def get(self, url: str, timeout: float) -> tuple[int | None, str]:
-        """GET a URL; return ``(status, response text)``, status ``None`` if unreachable or too slow."""
+        """GET a URL; return ``(status, response text)``, status ``None`` if unreachable, too slow, or garbled."""
         try:
             with urllib.request.urlopen(url, timeout=timeout) as response:
                 return int(response.status), response.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as exc:
             return int(exc.code), exc.read().decode("utf-8", "replace")
-        except (urllib.error.URLError, OSError) as exc:
+        except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
             return None, str(exc)
 
 

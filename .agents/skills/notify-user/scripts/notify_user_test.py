@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import socket
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -193,6 +194,46 @@ def test_a_chat_app_that_never_answers_delays_the_notification_by_the_watcher_ti
     assert http.posts == [{"message": "Done."}]
     assert 1.5 < elapsed < 6.0
     assert _WATCH_WARNING in capsys.readouterr().err
+
+
+@pytest.fixture
+def garbled_chat_app(
+    environ: dict[str, str], tmp_path: Path
+) -> Iterator[dict[str, str]]:
+    """A chat app address that answers the watcher question with something that is not HTTP."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+
+    def answer_once() -> None:
+        connection, _address = listener.accept()
+        with connection:
+            connection.recv(65536)
+            connection.sendall(b"NOT-HTTP\r\n\r\n")
+
+    answering = threading.Thread(target=answer_once, daemon=True)
+    answering.start()
+    registry = tmp_path / "garbled_apps.toml"
+    registry.write_text(
+        f'[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:{listener.getsockname()[1]}"\n'
+    )
+    try:
+        yield {**environ, "MINDS_APPS_FILE": str(registry)}
+    finally:
+        listener.close()
+        answering.join(timeout=5.0)
+
+
+def test_a_garbled_watcher_answer_still_sends_the_notification(
+    garbled_chat_app: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    http = _RecordingPostHttp()
+
+    is_accepted = notify_user.notify("Done.", None, http=http, environ=garbled_chat_app)
+
+    assert is_accepted is True
+    assert http.posts == [{"message": "Done."}]
+    assert f"{_WATCH_WARNING}the chat app did not answer: " in capsys.readouterr().err
 
 
 def test_carries_the_optional_title_and_the_permissions_override_when_present(
