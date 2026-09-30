@@ -45,7 +45,6 @@ from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.close_hints import post_window_closed_hint
 from imbue.system_interface.shell.close_hints import window_closed_hint
 from imbue.system_interface.shell.data_types import AppInventoryEntry
-from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import ClientArrivalOutcome
 from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import ClientReportOutcome
@@ -53,7 +52,6 @@ from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
 from imbue.system_interface.shell.data_types import DesktopLayout
-from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import LaunchOutcome
 from imbue.system_interface.shell.data_types import LaunchRequest
@@ -69,6 +67,7 @@ from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.data_types import effective_window
 from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.data_types import window_wire_json
+from imbue.system_interface.shell.desktop_document import apps_with_their_default_shortcut_on
 from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import find_window
 from imbue.system_interface.shell.desktop_document import find_window_at
@@ -91,6 +90,7 @@ from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.errors import PinnedWindowError
+from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.identity import visiting_user_id
 from imbue.system_interface.shell.inventory import AppInventory
@@ -137,7 +137,7 @@ class ShellState(MutableModel):
     lifecycle: AppLifecycleManager = Field(
         frozen=True, description="Parks, wakes, starts, and stops the stoppable apps (the stop-when-no-windows spec)"
     )
-    desktops: DesktopStore = Field(frozen=True, description="desktops.json")
+    desktops: DesktopStore = Field(frozen=True, description="desktops.json and default_shortcuts_offered.json")
     placements: PlacementStore = Field(frozen=True, description="The per-client layouts of each desktop")
     window_paths: WindowPathStore = Field(
         frozen=True, description="The per-client paths and titles of independent windows"
@@ -236,28 +236,55 @@ class ShellState(MutableModel):
     def list_desktops(self) -> list[Desktop]:
         """Every desktop, the default one created on the first read after the inventory has read the registry once,
         so its shortcuts are seeded from the apps that are actually registered (desktop plan section 3.2), and every
-        desktop holding one pinned window per pinned app (pinned-taskbar-entries plan section 3.2). A reconcile
-        that wrote is announced once, after the read, so nothing here recurses into itself."""
+        desktop reconciled with the registry (``_reconcile_desktops_with``)."""
         if not self.inventory.is_registry_read:
             return self.desktops.list_desktops()
-        self.desktops.ensure_default(self.seed_shortcuts)
-        outcome = self.desktops.ensure_pinned_windows(self.pinned_apps(), datetime.now(timezone.utc))
-        if outcome.is_written:
-            self.broadcaster.broadcast_desktops_updated(self.desktops_wire_json(outcome.desktops))
-        return list(outcome.desktops)
+        with STATE_FILES_LOCK:
+            rows = self._registry_rows()
+            self.desktops.ensure_default(lambda: seed_desktop_shortcuts(rows))
+            return list(self._reconcile_desktops_with(rows))
 
-    def seed_shortcuts(self) -> tuple[DesktopShortcut, ...]:
-        return seed_desktop_shortcuts([entry.row for entry in self.inventory.entries()])
+    def reconcile_desktops_with_registry(self) -> None:
+        """Reconcile every desktop with the registry as it reads now: what the inventory calls after a read that
+        changed the rows. It seeds no default desktop, which only a read of the desktops creates. A state file that
+        cannot be written is logged, and the next read of the desktops reconciles again."""
+        try:
+            with STATE_FILES_LOCK:
+                self._reconcile_desktops_with(self._registry_rows())
+        except ShellStateError as e:
+            logger.opt(exception=e).error("Failed to reconcile the desktops with the changed app registry")
 
-    def pinned_apps(self) -> tuple[AppPin, ...]:
-        return pinned_apps([entry.row for entry in self.inventory.entries()])
+    def _registry_rows(self) -> list[RegistryRow]:
+        return [entry.row for entry in self.inventory.entries()]
+
+    def _reconcile_desktops_with(self, rows: Sequence[RegistryRow]) -> tuple[Desktop, ...]:
+        """Every desktop holding the default shortcut of each registered app not yet offered (desktop plan section
+        3.2) and one pinned window per pinned app (pinned-taskbar-entries plan section 3.2). A reconcile that wrote
+        is announced once, after it, so nothing here recurses into itself. Callers hold the state lock and read
+        ``rows`` under it."""
+        shortcuts_outcome = self.desktops.ensure_default_shortcuts_offered(rows)
+        pinned_outcome = self.desktops.ensure_pinned_windows(pinned_apps(rows), datetime.now(timezone.utc))
+        if shortcuts_outcome.is_written or pinned_outcome.is_written:
+            self.broadcaster.broadcast_desktops_updated(self.desktops_wire_json(pinned_outcome.desktops))
+        return pinned_outcome.desktops
 
     def create_desktop(self, name: str, color: str, glyph: int) -> Desktop:
-        """Register a desktop born with its seeded shortcuts and one pinned window per pinned app, and tell everyone."""
+        """Register a desktop born with its seeded shortcuts and one pinned window per pinned app, and tell everyone.
+        The other desktops are reconciled with the same rows first, under the same lock, so a default shortcut the
+        new desktop is seeded with is offered on every desktop."""
         now = datetime.now(timezone.utc)
-        desktop = self.desktops.create_desktop(
-            name, color, glyph, self.seed_shortcuts(), [pinned_window(app_pin, now) for app_pin in self.pinned_apps()]
-        )
+        with STATE_FILES_LOCK:
+            is_registry_read = self.inventory.is_registry_read
+            rows = self._registry_rows() if is_registry_read else []
+            if is_registry_read:
+                self._reconcile_desktops_with(rows)
+            desktop = self.desktops.create_desktop(
+                name,
+                color,
+                glyph,
+                seed_desktop_shortcuts(rows),
+                [pinned_window(app_pin, now) for app_pin in pinned_apps(rows)],
+            )
         self.broadcast_desktops_updated()
         return desktop
 
@@ -676,7 +703,7 @@ class ShellState(MutableModel):
             [mint_window_id() for _ in source.windows],
             now,
         )
-        created = self.desktops.add_desktop(seeded)
+        created = self.desktops.add_desktop(seeded, apps_with_their_default_shortcut_on(seeded, self._registry_rows()))
         logger.info(
             "Seeded desktop {!r} for user {} from {!r} ({} shortcut(s), {} window(s))",
             created.name,
@@ -754,8 +781,9 @@ def build_shell_state(
 ) -> ShellState:
     """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests (and
     ``on_registry_read``, what the built inventory tells every registry read, is the production shell's services
-    event writer), and ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to
-    the one the environment names; ``repo_root`` (the workspace the update notice's record and script, and the
+    event writer), and either way the shell's desktop reconcile listens to its registry changes;
+    ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) defaults to the one the
+    environment names; ``repo_root`` (the workspace the update notice's record and script, and the
     share materials the lifecycle manager reads the per-app grants from, live under) is the served tree by
     default; ``profiles`` (the resolver the composition root shares with presence) defaults to one that can reach
     no connector, so a shell built without one names visitors by email; ``launch_poster`` (how a POST launch path
@@ -773,7 +801,7 @@ def build_shell_state(
         share_env_path=_under_repo_root(DEFAULT_SHARE_ENV_PATH, repo_root),
         share_grants_path=_under_repo_root(DEFAULT_SHARE_GRANTS_PATH, repo_root),
     )
-    return ShellState(
+    shell = ShellState(
         state_directory=state_directory,
         inventory=resolved_inventory,
         lifecycle=build_app_lifecycle_manager(
@@ -806,3 +834,5 @@ def build_shell_state(
         update_notice=UpdateNoticeWatch(repo_root=repo_root, broadcaster=broadcaster),
         launch_poster=launch_poster if launch_poster is not None else post_launch,
     )
+    resolved_inventory.add_registry_change_listener(shell.reconcile_desktops_with_registry)
+    return shell

@@ -1055,7 +1055,6 @@ export function App(): m.Component<AppAttrs> {
           m(Taskbar, {
             entries: barEntries(state),
             avatar: state.avatar,
-            isCompact: state.modes.isCompact,
             openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
             launcher: {
               query: launcherQuery,

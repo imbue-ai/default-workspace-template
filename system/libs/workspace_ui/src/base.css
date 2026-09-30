@@ -54,6 +54,9 @@
   --c-text-faint: #8c8c8c;
   --c-border: #e4e3df;
   --c-border-faint: #efeeeb;
+  /* A step up from the default edge, for a control that has to read as one you type into rather than
+     as a panel seam: still lighter than the faintest text, so it draws a box without drawing a rule. */
+  --c-border-strong: #cfcdc7;
   --c-border-code: #e0e0e0;
   --c-accent: #2f6b4f;
   --c-accent-hover: #24573f;
@@ -132,9 +135,10 @@
   --color-secondary: var(--c-text-secondary);
   --color-faint: var(--c-text-faint);
   --color-on-accent: var(--c-text-on-accent);
-  /* borders: border-default / border-subtle */
+  /* borders: border-default / border-subtle / border-strong */
   --color-default: var(--c-border);
   --color-subtle: var(--c-border-faint);
+  --color-strong: var(--c-border-strong);
   /* surfaces: bg-page / -sidebar / -chat / -composer / -code / -user-bubble /
      -surface / -surface-secondary / -inverse / -inverse-hover */
   --color-page: var(--c-bg);

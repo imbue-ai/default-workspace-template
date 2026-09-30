@@ -114,6 +114,8 @@ _CELL_WIDTH = 96
 _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
+# --desk-touch-target under [data-touch], which a taskbar entry takes there.
+_TOUCH_TARGET = 44
 _GEOMETRY_TOLERANCE_PX = 4
 
 
@@ -1376,8 +1378,7 @@ def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tm
 
         page.mouse.up()
         wait_for(
-            lambda: _shortcut_cells(server.base_url)
-            == {_STUB_SHORTCUT_KEY: (1, 2), _SECOND_SHORTCUT_KEY: (2, 2)},
+            lambda: _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (1, 2), _SECOND_SHORTCUT_KEY: (2, 2)},
             timeout=15.0,
             poll_interval=0.1,
             error_message="the drop did not keep the room that was made for it",
@@ -1481,6 +1482,15 @@ def _pinned_window(base_url: str, desktop_id: str = _HOME_DESKTOP_ID) -> dict[st
 
 def _pinned_entry(page: Page) -> Locator:
     return page.locator(f'[data-pinned-entry="{_PINNED_APP_NAME}"]')
+
+
+def _resting_box(page: Page, entry: Locator) -> FloatRect:
+    """A floating entry's box with the pointer off it and its tile at rest. Under the pointer the tile grows by a
+    tenth about its centre, through a transition reduced motion leaves on, so a box read there is anywhere between
+    its place and its place grown."""
+    page.mouse.move(0, 0)
+    page.wait_for_function("(element) => element.getAnimations().length === 0", arg=entry.element_handle())
+    return _box(entry)
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -1684,12 +1694,12 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         expect(entry).to_have_attribute("data-minimized", "true")
 
         backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
-        before = _box(entry)
+        before = _resting_box(page, entry)
         # The default corner: bottom right of the backdrop, inset by the theme's tokens.
         _assert_close(before["x"] + before["width"], backdrop["x"] + backdrop["width"] - 16, "default x")
         _assert_close(before["y"] + before["height"], backdrop["y"] + backdrop["height"] - 12, "default y")
         _drag(page, _center(before), (_center(before)[0] - 300, _center(before)[1] - 200))
-        moved = _box(entry)
+        moved = _resting_box(page, entry)
         _assert_close(moved["x"], before["x"] - 300, "dragged x")
         _assert_close(moved["y"], before["y"] - 200, "dragged y")
         stored = _wait_for_client_entry(
@@ -1707,7 +1717,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
 
         page.reload()
         expect(_pinned_entry(page)).to_be_visible(timeout=15000)
-        _assert_same_box(_box(_pinned_entry(page)), moved, "after reload")
+        _assert_same_box(_resting_box(page, _pinned_entry(page)), moved, "after reload")
 
         menu = _open_entry_menu(page, _pinned_entry(page))
         expect(menu.locator('[data-menu-row="close"]')).to_have_count(1)
@@ -1724,7 +1734,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         _open_entry_menu(page, _taskbar_entry(page, pinned["id"])).locator('[data-menu-row="float"]').click()
         expect(page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(1, timeout=10000)
         # The position it was dragged to is kept across the trip through the bar.
-        _assert_same_box(_box(_pinned_entry(page)), moved, "back afloat")
+        _assert_same_box(_resting_box(page, _pinned_entry(page)), moved, "back afloat")
 
 
 def _avatar_image_source(entry: Locator) -> str:
@@ -1918,11 +1928,14 @@ _MOBILE_CONTEXT_ARGS: dict[str, Any] = {
 
 
 @pytest.mark.timeout(90, func_only=False)
-def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server: E2EServer, page: Page) -> None:
+def test_phone_shows_every_window_maximized_with_finger_sized_taskbar_entries(
+    e2e_server: E2EServer, page: Page
+) -> None:
     """On a phone the shell is compact and touch: a tap on the shortcut opens the window, every window fills the
-    backdrop with no resize edges or maximize controls, the taskbar shows icons only, the launcher field is a
-    button that opens the overlay, and the stored placement is the client's own (still a normal frame, since
-    compactness is how this client renders, not what it saves)."""
+    backdrop with no resize edges or maximize controls, the taskbar's entries grow to the finger's touch target
+    (this is the client where an entry has to be reachable by thumb), the launcher field is a button that opens
+    the overlay, and the stored placement is the client's own (still a normal frame, since compactness is how
+    this client renders, not what it saves)."""
     with _second_client(page, e2e_server, **_MOBILE_CONTEXT_ARGS) as phone_page:
         expect(phone_page.locator("html")).to_have_attribute("data-compact", "")
         expect(phone_page.locator("html")).to_have_attribute("data-touch", "")
@@ -1936,7 +1949,13 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         backdrop = _box(phone_page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
         _assert_same_box(_box(window), backdrop, "phone window")
         expect(_taskbar_entry(phone_page, window_id)).to_be_visible()
-        expect(phone_page.locator(".taskbar-entry-title")).to_have_count(0)
+        # As tall as the finger's target, with the window's name on it: --desk-taskbar-entry-size takes
+        # --desk-touch-target here, and the chip is the whole of the target rather than a tile inside one.
+        entry_box = _box(_taskbar_entry(phone_page, window_id))
+        assert entry_box["height"] >= _TOUCH_TARGET - 1, entry_box
+        expect(_taskbar_entry(phone_page, window_id).locator(".taskbar-entry-title")).to_have_text(
+            f"Stub {_STUB_LAUNCH_PATH}"
+        )
         assert _placements(e2e_server.base_url, _client_id(phone_page))[window_id]["state"] == "NORMAL"
         frame = _page_frame(phone_page, window_id)
         assert frame.url == f"{e2e_server.stub_url}{_STUB_LAUNCH_PATH}"
