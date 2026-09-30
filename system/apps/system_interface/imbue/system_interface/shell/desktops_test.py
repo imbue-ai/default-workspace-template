@@ -114,9 +114,7 @@ def test_a_late_apps_default_shortcut_is_offered_once_on_every_desktop_and_a_rem
     assert "chat" not in shortcut_apps_on(store.list_desktops()[0])
 
 
-@pytest.mark.parametrize(
-    "offered_record_text", [None, '{"version": 2, "apps": []}', '{"version": 1}', "not json"]
-)
+@pytest.mark.parametrize("offered_record_text", [None, '{"version": 2, "apps": []}', '{"version": 1}', "not json"])
 def test_a_desktops_file_with_no_usable_offered_record_counts_its_shortcuts_as_offered(
     tmp_path: Path, offered_record_text: str | None
 ) -> None:
