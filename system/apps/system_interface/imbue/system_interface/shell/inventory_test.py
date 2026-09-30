@@ -1,6 +1,7 @@
 """Tests for the inventory: the registry read, liveness, the registry watch, and the diffed broadcast."""
 
 import os
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -174,6 +175,39 @@ def test_every_registry_read_is_handed_to_the_hook(tmp_path: Path, broadcaster: 
 
     # An unreadable registry keeps the last read and hands nothing on.
     assert handed == [["terminal", "files"], ["files"]]
+
+
+def test_a_registry_change_listener_hears_each_read_that_changed_the_rows_with_no_inventory_lock_held(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    inventory = AppInventory(
+        registry_path=registry_path, broadcaster=broadcaster, liveness_prober=FakeLivenessProber()
+    )
+    heard: list[list[str]] = []
+
+    def listen() -> None:
+        # Reading the inventory, and even reading the registry again, would deadlock under one of its locks.
+        inventory.reload_registry()
+        heard.append([str(entry.row.name) for entry in inventory.entries()])
+
+    inventory.add_registry_change_listener(listen)
+
+    def read_the_registry_as_it_changes() -> None:
+        inventory.reload_registry()
+        inventory.reload_registry()
+        write_registry(registry_path, registry_row_toml("files", TEST_FILES_URL, program="files"))
+        inventory.reload_registry()
+        registry_path.write_text("[[apps]\nname = ")
+        inventory.reload_registry()
+
+    reader = threading.Thread(target=read_the_registry_as_it_changes, daemon=True)
+    reader.start()
+    reader.join(timeout=5.0)
+
+    assert not reader.is_alive(), "a listener ran under one of the inventory's locks"
+    # The first read and the one that dropped a row changed the rows; the unchanged and the unreadable ones did not.
+    assert heard == [["terminal", "files"], ["files"]]
 
 
 def test_the_sweep_re_reads_a_registry_whose_mtime_moved(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:

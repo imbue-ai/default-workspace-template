@@ -668,6 +668,55 @@ def seed_desktop_shortcuts(rows: Sequence[RegistryRow]) -> tuple[DesktopShortcut
     return tuple(shortcuts)
 
 
+@pure
+def apps_with_a_default_shortcut(rows: Sequence[RegistryRow]) -> frozenset[AppName]:
+    """The apps a desktop is seeded with a shortcut of: the registered, non-internal ones whose default shortcut names
+    a launch path they offer."""
+    return frozenset(shortcut.target.app for shortcut in seed_desktop_shortcuts(rows))
+
+
+@pure
+def apps_with_a_shortcut_on(desktops: Sequence[Desktop]) -> frozenset[AppName]:
+    return frozenset(shortcut.target.app for desktop in desktops for shortcut in desktop.shortcuts)
+
+
+@pure
+def apps_with_their_default_shortcut_on(desktop: Desktop, rows: Sequence[RegistryRow]) -> frozenset[AppName]:
+    """The apps whose default shortcut the desktop holds: a shortcut of the app's default ``(app, launch)`` target."""
+    return frozenset(
+        shortcut.target.app
+        for shortcut in seed_desktop_shortcuts(rows)
+        if _find_shortcut(desktop, shortcut.target.app, shortcut.target.launch) is not None
+    )
+
+
+@pure
+def with_default_shortcuts_offered(
+    desktop: Desktop, rows: Sequence[RegistryRow], offered_apps: AbstractSet[AppName]
+) -> Desktop:
+    """The desktop holding the default shortcut of every registered app not in ``offered_apps`` (desktop plan section
+    3.2): none is added for a target the desktop already holds; a desktop whose shortcuts are exactly the seed of the
+    offered apps is seeded again from every registered app, so it stands in launcher order however late each app
+    registered; any other desktop gets each missing shortcut, in launcher order, at the next free cell in reading
+    order, with nothing it holds moved. The same object when nothing is missing."""
+    offering = seed_desktop_shortcuts([row for row in rows if row.name not in offered_apps])
+    missing = [
+        shortcut
+        for shortcut in offering
+        if _find_shortcut(desktop, shortcut.target.app, shortcut.target.launch) is None
+    ]
+    if not missing:
+        return desktop
+    if desktop.shortcuts == seed_desktop_shortcuts([row for row in rows if row.name in offered_apps]):
+        return desktop.model_copy_update(to_update(desktop.field_ref().shortcuts, seed_desktop_shortcuts(rows)))
+    extended = desktop
+    for shortcut in missing:
+        extended = with_shortcut(
+            extended, shortcut.model_copy_update(to_update(shortcut.field_ref().cell, next_shortcut_cell(extended)))
+        )
+    return extended
+
+
 # Layouts: placements
 
 

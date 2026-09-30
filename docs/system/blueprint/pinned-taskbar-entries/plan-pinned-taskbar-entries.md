@@ -72,10 +72,10 @@ The human-facing controls keep their shape so habit is not punished: the title b
 Deleting a desktop still deletes its pinned windows with it.
 
 The shell reconciles pinned windows on read, extending the rule that creates the `Home` desktop.
-Every read of the desktops after the inventory has read the registry ensures that each desktop holds one pinned window per pinned app: it adopts the earliest-opened window of that app whose path equals the home path, marking it pinned, setting its scope, and clearing its shared title when the scope is independent, and creates one when there is none.
+Every read of the desktops after the inventory has read the registry, and every read of the registry that changes its rows, ensures that each desktop holds one pinned window per pinned app: it adopts the earliest-opened window of that app whose path equals the home path, marking it pinned, setting its scope, and clearing its shared title when the scope is independent, and creates one when there is none.
 A write happens only when something was missing, and it broadcasts `desktops_updated` once, after the read that made it, never from inside it.
 Desktop creation runs the same ensure before answering, so a new desktop is born with its pinned windows.
-An app registered later is reconciled on the next read after the registry change.
+An app registered later is reconciled as soon as the registry change is read.
 When a pin is withdrawn, its windows stay as ordinary windows, `is_pinned` false, and can be closed like any other.
 
 A pinned window has no placement in a client's layout until the client touches it; the shell's layout answer places it for the client at the pinned frame (the right half of the backdrop, a margin in: `x 0.46, y 0.05, width 0.5, height 0.9`), normal and minimized, below every stored placement.

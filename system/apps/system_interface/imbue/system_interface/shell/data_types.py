@@ -310,6 +310,15 @@ class DesktopsDocument(FrozenModel):
     desktops: tuple[Desktop, ...] = Field(description="Every desktop, in creation order; the first is the fallback")
 
 
+class DefaultShortcutsOfferedDocument(FrozenModel):
+    """The whole of ``default_shortcuts_offered.json``: the apps whose default shortcut the shell has offered."""
+
+    version: int = Field(description="The file format version")
+    apps: tuple[AppName, ...] = Field(
+        description="Every app whose default shortcut the shell has put on a desktop or found there, sorted"
+    )
+
+
 class WindowPlacement(FrozenModel):
     """Where one client keeps one window: its frame, state, and whether it is minimized."""
 
