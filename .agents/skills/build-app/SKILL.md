@@ -282,6 +282,11 @@ Repeat until every node is done.
    ```bash
    python3 .agents/skills/build-app/scripts/plan_orchestration.py write-task \
        --run-dir "$RUN" --node N
+   # `launch` syncs the node folder into the worker for you; `reply` sends text and nothing
+   # else, so put the folder where the task file says it is before sending it. Without this
+   # the worker is told to write its report into a directory that is not there.
+   mkdir -p "$BUILD/$RUN/nodes/N/reports"
+   cp "$RUN/nodes/N/task.md" "$BUILD/$RUN/nodes/N/task.md"
    uv run .agents/skills/launch-task/scripts/create_worker.py reply \
        --name "$APP-<agent>" \
        --task-file "$RUN/nodes/N/task.md" \
@@ -292,6 +297,18 @@ Repeat until every node is done.
    The task file is named twice on purpose: `--message-file` is what the agent receives, and
    `--task-file` is the required argument `reply` normally reads a worker id out of, which
    `--message-with-mngr` addresses by name instead.
+
+   **Read the report from `$BUILD`, not from `$RUN`.** A tier agent writes to the copy you
+   made, so `await` has to look there:
+
+   ```bash
+   uv run .agents/skills/launch-task/scripts/create_worker.py await \
+       --name "$APP-<agent>" --task-file "$BUILD/$RUN/nodes/N/task.md" --timeout 9m
+   # `await` archives the report under the copy it read. Put it back where `write-task`
+   # looks, or the next node that depends on this one cannot have its task written at all.
+   mkdir -p "$RUN/nodes/N/reports/consumed"
+   cp "$BUILD/$RUN/nodes/N/reports/consumed/"* "$RUN/nodes/N/reports/consumed/"
+   ```
 
    One agent does its nodes **one at a time**, so two nodes of the same capability never run
    at once; nodes of different capabilities still do. Send a node only once every node in its
