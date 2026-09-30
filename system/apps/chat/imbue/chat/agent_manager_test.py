@@ -5045,14 +5045,19 @@ def _wait_for_created_spare(manager: AgentManager) -> SpareChatAgent:
     return spare
 
 
+def _default_account_spare(chat_id: ChatId, display_name: str, phase: SpareChatPhase) -> SpareChatAgent:
+    """A spare on the default account's terms, as the live chat records one."""
+    return SpareChatAgent(
+        chat_id=chat_id,
+        display_name=display_name,
+        terms=SpareChatTerms(account_id=read_index().accounts[0].id, project_label="", is_fast=True),
+        phase=phase,
+    )
+
+
 def _record_cut_short_spare(tmp_path: Path) -> SpareChatAgent:
     """A spare on the default account left being created in the spares file, as a restart finds one."""
-    cut_short = SpareChatAgent(
-        chat_id=ChatId(f"agent-{uuid4().hex}"),
-        display_name="Chat 1",
-        terms=SpareChatTerms(account_id=read_index().accounts[0].id, project_label="", is_fast=True),
-        phase=SpareChatPhase.CREATING,
-    )
+    cut_short = _default_account_spare(ChatId(f"agent-{uuid4().hex}"), "Chat 1", SpareChatPhase.CREATING)
     SpareChatStore(path=tmp_path / "spare_chat.json").write((cut_short,))
     return cut_short
 
@@ -5579,16 +5584,10 @@ def test_a_secondary_chat_hides_the_live_spares_follows_their_changes_and_never_
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    account_id = read_index().accounts[0].id
     first_id, second_id = ChatId(f"agent-{uuid4().hex}"), ChatId(f"agent-{uuid4().hex}")
 
     def live_spare(chat_id: ChatId) -> SpareChatAgent:
-        return SpareChatAgent(
-            chat_id=chat_id,
-            display_name="Chat 7",
-            terms=SpareChatTerms(account_id=account_id, project_label="", is_fast=True),
-            phase=SpareChatPhase.READY,
-        )
+        return _default_account_spare(chat_id, "Chat 7", SpareChatPhase.READY)
 
     # The live chat's record, which the secondary reads when it is built.
     SpareChatStore(path=tmp_path / "spare_chat.json").write((live_spare(first_id),))
@@ -5626,16 +5625,7 @@ def test_a_secondary_chat_hides_a_live_spare_the_stream_reports_before_its_next_
     mngr_binary, _ = write_recording_mngr_binary(tmp_path)
     manager, live_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1, is_secondary=True)
     spare_id = MngrAgentId()
-    live_store.write(
-        (
-            SpareChatAgent(
-                chat_id=ChatId(str(spare_id)),
-                display_name="Chat 3",
-                terms=SpareChatTerms(account_id=read_index().accounts[0].id, project_label="", is_fast=True),
-                phase=SpareChatPhase.CREATING,
-            ),
-        )
-    )
+    live_store.write((_default_account_spare(ChatId(str(spare_id)), "Chat 3", SpareChatPhase.CREATING),))
     try:
         manager._handle_observe_event(
             make_agent_state_event(
