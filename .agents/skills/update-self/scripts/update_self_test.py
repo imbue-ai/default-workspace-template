@@ -8625,3 +8625,51 @@ def test_agent_restart_verdict_names_what_a_running_harness_would_miss(
 
     assert verdict.triggers == expected_triggers
     assert verdict.is_needed is bool(expected_triggers)
+
+
+def test_agent_restart_verdict_cli_reads_both_trees_from_git(tmp_path, capsys) -> None:
+    # The settings file is absent from the tree the agents started from, so its pin reads as unset.
+    def _git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    def _write(rel: str, text: str) -> None:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    _git("init", "-q")
+    _git("config", "user.email", "test@example.com")
+    _git("config", "user.name", "test")
+    _write(update_layout.PROVISIONER_SCRIPT, _SETUP_BEFORE)
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "before")
+    _write(
+        update_layout.PROVISIONER_SCRIPT,
+        _SETUP_BEFORE.replace("2.1.269", "2.1.280"),
+    )
+    _write(update_classification.MNGR_SETTINGS_PATH, _SETTINGS_BEFORE)
+    _write(".pi/extensions/policy_guards.ts", "export default () => {};\n")
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "after")
+
+    code = update_self.main(
+        [
+            "agent-restart-verdict",
+            "--before",
+            "HEAD^1",
+            "--after",
+            "HEAD",
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert code == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "needed": True,
+        "triggers": [
+            "CLAUDE_CODE_VERSION: 2.1.269 -> 2.1.280",
+            "agent_types.claude.version: unset -> 2.1.269",
+            "harness extension: .pi/extensions/policy_guards.ts",
+        ],
+    }
