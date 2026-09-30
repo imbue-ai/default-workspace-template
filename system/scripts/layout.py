@@ -518,6 +518,7 @@ def _listed_clients(inventory: dict[str, Any]) -> list[dict[str, Any]]:
             "active_desktop": client.get("active_desktop"),
             "is_connected": client.get("is_connected"),
             "shown": client.get("shown", []),
+            "shown_history": client.get("shown_history", []),
             "last_seen": client.get("last_seen"),
         }
         for client in inventory.get("clients", []) or []

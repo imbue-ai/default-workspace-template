@@ -35,7 +35,7 @@ Windows are positioned boxes that a separate live-page layer mirrors; they are n
 | System tray | -- | The taskbar's right end, a row of tray widgets | Taskbar | status area |
 | Tray widget | -- | One self-contained thing in the tray; V1 ships Desktops | Taskbar | applet, indicator |
 | Theme | design system tokens | The token table every component reads: colours, type, radii, metrics | Build-time file in V1 | skin |
-| Compact mode, touch mode | device kind `mobile` | Two render policies, from viewport width and from pointer type | Derived at render time | mobile mode |
+| Phone layout, touch mode | device kind `mobile` | Two render policies, from the viewport's shorter side and from pointer type | Derived at render time | mobile mode |
 
 The sections below define each one.
 
@@ -110,7 +110,7 @@ A pinned window keeps its close control and its menus' Close, and each minimizes
 
 The taskbar is the bar along the bottom of the viewport.
 Left to right: the **launcher field**; one **taskbar entry** per window of the active desktop, in the order the windows were opened, minimized and pulled-out ones marked; then the **system tray**.
-An entry shows the app icon and the title (icon only in compact mode).
+An entry shows the app icon and the title.
 A pinned window's entry is always there, and a client may draw it in the bar in a style (the app's icon, or the workspace's avatar) or floating above the windows (pinned-taskbar-entries plan section 4.2).
 Clicking an entry restores a minimized window and raises it, shows a pulled-out window's own desktop window (or, when its ghost is hidden, the ghost), minimizes the top window, or raises any other window.
 
@@ -135,12 +135,12 @@ Every component styles itself from tokens and semantic utilities only.
 The metrics behaviour needs are read once from the computed tokens by one function, so no number lives in two places.
 V1 ships one theme; switching themes is deferred.
 
-### 2.11 Compact mode and touch mode
+### 2.11 The phone layout and touch mode
 
 Two independent render policies, each from a live media query, neither stored.
-Compact mode (viewport width under the compact breakpoint): windows render maximized whatever their placement says, the taskbar shows icons only and a collapsed launcher field, the grid uses the compact cell size, and window drag, resize, and snapping are off.
+The phone layout (the viewport's shorter side under the phone breakpoint): a bar, a home grid, and one window at a time instead of the desktop, over the same windows and desktops (`plan-phone-interface.md`).
 Touch mode (coarse pointer): larger hit targets, long-press instead of right-click, no hover-revealed controls, no resize handles.
-A phone is both; a narrow desktop window is compact only; a touch laptop is touch only.
+A phone is both; a desktop window under the breakpoint on either side is phone only; a touch laptop or a tablet is touch only.
 Nothing branches on a stored device kind, and the client record no longer carries one.
 
 ## 3. How they relate
@@ -223,7 +223,7 @@ Recorded here so the spec need not re-argue them.
 7. The launcher is a text field and the menu it opens, never a window.
 8. The shell has no instance layer; apps own their things, and the chat app lists its chats inside its own page with an inner frame per selected chat, keeping its single-chat page for direct launches.
 9. A window's close removes it for everyone; minimize is the per-client way to get it out of sight. Whether the app keeps what the window showed is the app's rule (decision 16).
-10. Compact and touch are render policies from media queries, and mobile is in scope for V1.
+10. The phone layout and touch are render policies from media queries, and mobile is in scope for V1.
 11. The `{tab}` placeholder, tab ids on the wire, and the rebind route go.
 12. Agent verbs are window and desktop verbs only; `split` and `move` become `place`.
 13. Every desktop is shared; there is no sharing mode. A visiting user gets a desktop of their own on arrival instead.

@@ -1,6 +1,6 @@
 # The workspace on a phone
 
-Status: proposed. Supersedes `plan-desktop-interface.md` section 4.12 (compact mode); touch mode stays as that section describes it. Contracts this plan changes are called out against `contracts.md` by section. The interactive mock the layout was iterated in lives beside this plan at `phone-mock/mock.html`; it is the reference for measurements, spacing and copy this plan does not restate, and where the two disagree, this plan wins.
+Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compact mode); touch mode stays as that section describes it. Contracts this plan changes are called out against `contracts.md` by section. The interactive mock the layout was iterated in lives beside this plan at `phone-mock/mock.html`; it is the reference for measurements, spacing and copy this plan does not restate, and where the two disagree, this plan wins.
 
 ## Overview
 
@@ -175,11 +175,15 @@ Status: proposed. Supersedes `plan-desktop-interface.md` section 4.12 (compact m
 - **Device checks (not automated)**: iOS Safari standalone and Android Chrome: safe areas, keyboard and bar, rotation, return from background, home-screen tile.
 - Both browser suites keep their coverage floors; new browser tests carry the `browser` mark.
 
-## Open questions
+## Decisions
 
-- **Workspace name source.** The shell has no setting for it today. Options: a `SYSTEM_INTERFACE_WORKSPACE_NAME` env set by supervisord from the workspace's identity, or reading the hostname. Falls back to "Workspace".
-- **Touch icon rasterization.** iOS needs a PNG. Candidates: `resvg` via `resvg-py`, or `cairosvg`. Pick by what the image already has installed.
-- **ttyd page customization.** The key strip must reach xterm inside the pty origin's page. ttyd supports a custom index (`-I`); confirm how `terminal_pty` launches ttyd and whether a listener can be added there, else fall back to focusing the frame and synthesizing keys through the wrapper's own hidden input.
-- **Focus target across desktops.** This plan reads "the desktop rule" as the active desktop's stack top, else the newest window elsewhere, since the phone only holds the active desktop's layout. Confirm.
-- **Recording "home".** Done through the same route with `window_id: null`; if that complicates the record, landing falls back to the last window.
+The questions this plan left open, as they were settled:
+
+- **Workspace name source.** The first of: the `SYSTEM_INTERFACE_WORKSPACE_NAME` setting; the `workspace_display_name` label minds puts on the workspace's services agent (whose environment supervisord, and so the shell, inherits), read afresh on each request so a rename in minds shows on the next load; the host's name in mngr's host record; "Workspace".
+- **Touch icon rasterization.** `resvg-py`: the image has neither rasterizer, and resvg ships self-contained wheels for every platform the workspace and a laptop run, where cairosvg needs the system's cairo.
+- **ttyd page customization.** ttyd already serves the patched client the terminal installs (`-I`), so the listener is a script the terminal adds to that client as it installs it. The same script focuses xterm from a tap in its own frame, the one focus iOS raises the keyboard for.
+- **Focus target across desktops.** As read above: the active desktop's stack top, else the app's newest window anywhere.
+- **Recording "home".** Through the same route with `window_id: null`.
+- **Agent ops a phone follows.** The shell announces every targeted `show`, placed `open`, and `focus` to the target client as a `layout_op` naming the window (contracts.md section 6), which is how a phone learns what an agent put on its screen.
+- **The terminal's key strip** shows on the same shorter-side rule as the shell's layout, so a phone on its side keeps it.
 - **Follow-ups deliberately deferred**: browser-history integration for the back gesture; touch input and tab close for the browser app; agent notifications on phone browsers; a phone kind visible to agents; WebKit e2e; the avatar chooser and desktop settings on the phone; per-window status in the sheet and pill.
