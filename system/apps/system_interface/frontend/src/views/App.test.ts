@@ -495,6 +495,34 @@ describe("the element menu", () => {
     expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
   });
 
+  it("opens a chrome link to a local address inside the workspace, and an external one in the browser", async () => {
+    const opened = vi.spyOn(window, "open").mockImplementation(() => null);
+    const area = document.querySelector("[data-backdrop-area]") as HTMLElement;
+    for (const href of ["http://localhost:3000/preview", "https://example.com/help"]) {
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.textContent = href;
+      area.append(anchor);
+      anchor.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 }),
+      );
+      m.redraw.sync();
+      (document.querySelector('[data-menu-row="open-link"]') as HTMLElement).click();
+      await settle();
+      anchor.remove();
+    }
+    expect(api.relayedMessages).toEqual([
+      {
+        type: "open:url",
+        clientId: CLIENT,
+        payload: { url: "http://localhost:3000/preview" },
+        sender: "system_interface",
+      },
+    ]);
+    expect(opened.mock.calls).toEqual([["https://example.com/help", "_blank", "noopener"]]);
+    opened.mockRestore();
+  });
+
   it("stays closed for a right-click on a window's shield, which is the press that closes the launcher", () => {
     store.openLauncher();
     m.redraw.sync();
