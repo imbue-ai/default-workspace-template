@@ -12,6 +12,7 @@ from loguru import logger
 from terminal_app.data_types import TerminalPaths
 from terminal_app.errors import UnsafeDispatchPathError
 from terminal_app.primitives import TERMINAL_SESSION_BAND_KEY
+from terminal_app.pty_page import add_pty_page_script
 
 # The dispatch scripts the ttyd dispatch snippet runs by URL key: ``?arg=_&arg=<key>&arg=...``
 # runs ``<commands_dir>/<key>.sh`` with the remaining arguments.
@@ -220,15 +221,21 @@ def load_ttyd_web_client(override: Path | None) -> bytes | None:
 
 
 def install_ttyd_web_client(compressed_client: bytes, destination: Path) -> bool:
-    """Decompress the ttyd web client to ``destination``, reporting whether it is there to serve.
+    """Decompress the ttyd web client to ``destination`` with the phone-key script added, reporting whether it is
+    there to serve.
 
     When the archive will not decompress, ttyd falls back to its stock client so the terminal
-    still starts.
+    still starts. A client with no closing body tag to add the script before is installed as it
+    is: the terminal works, without the wrapper's phone keys.
     """
     # gzip.decompress raises EOFError for a truncated stream and zlib.error for corrupt data; a
     # stream that is not gzip at all is a BadGzipFile, which is an OSError.
     try:
-        destination.write_bytes(gzip.decompress(compressed_client))
+        client_html = gzip.decompress(compressed_client)
+        with_script = add_pty_page_script(client_html)
+        if with_script is None:
+            logger.warning("The ttyd web client has no closing body tag; serving it without the phone keys")
+        destination.write_bytes(client_html if with_script is None else with_script)
     except (OSError, EOFError, zlib.error) as e:
         logger.warning("Failed to decompress the ttyd web client: {}; using the stock client", e)
         destination.unlink(missing_ok=True)

@@ -77,15 +77,30 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>__TITLE__</title>
 <style>
-  html, body { height: 100%; margin: 0; background: #000; color: #ddd; font-family: system-ui, sans-serif; }
-  iframe { display: block; width: 100%; height: 100%; border: 0; }
-  #empty { display: flex; height: 100%; align-items: center; justify-content: center; font-size: 14px; color: #888; }
+  html { height: 100%; }
+  body { display: flex; flex-direction: column; height: 100%; height: 100dvh; margin: 0; background: #000; color: #ddd; font-family: system-ui, sans-serif; }
+  iframe { display: block; flex: 1 1 0; min-height: 0; width: 100%; border: 0; }
+  #empty { display: flex; flex: 1 1 0; align-items: center; justify-content: center; font-size: 14px; color: #888; }
+  /* The phone's key strip: the keys a soft keyboard lacks, under the terminal and so above the keyboard. */
+  #keys { display: none; flex: none; gap: 6px; padding: 6px; background: #111; border-top: 1px solid #262626; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+  #keys button { flex: 1 1 0; min-width: 0; height: 36px; padding: 0; border: 1px solid #333; border-radius: 6px; background: #1c1c1c; color: #ddd; font: 13px system-ui, sans-serif; }
+  #keys button[aria-pressed="true"] { background: #ddd; border-color: #ddd; color: #000; }
+  @media (max-width: 700px), (max-height: 700px) { #keys { display: flex; } }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <iframe id="pty" title="Terminal" hidden sandbox="allow-scripts allow-same-origin allow-forms allow-popups" allow="clipboard-read; clipboard-write"></iframe>
 <div id="empty" hidden></div>
+<div id="keys" role="toolbar" aria-label="Terminal keys" hidden>
+  <button type="button" data-key="Escape">Esc</button>
+  <button type="button" data-key="Tab">Tab</button>
+  <button type="button" data-ctrl aria-pressed="false">Ctrl</button>
+  <button type="button" data-key="ArrowLeft" aria-label="Left">&larr;</button>
+  <button type="button" data-key="ArrowUp" aria-label="Up">&uarr;</button>
+  <button type="button" data-key="ArrowDown" aria-label="Down">&darr;</button>
+  <button type="button" data-key="ArrowRight" aria-label="Right">&rarr;</button>
+</div>
 <script type="application/json" id="__CONFIG_ID__">__CONFIG__</script>
 <script type="module">
   // The page is plain HTML served by the terminal app: the contract module comes from this
@@ -97,6 +112,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   const RETRY_MS = 2000;
   const frame = document.getElementById("pty");
   const empty = document.getElementById("empty");
+  const keys = document.getElementById("keys");
+  const ctrlKey = keys.querySelector("[data-ctrl]");
   let current = config.session;
   let connection = null;
 
@@ -118,6 +135,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 
   function showEmpty(message) {
     frame.hidden = true;
+    keys.hidden = true;
     empty.textContent = message;
     empty.hidden = false;
   }
@@ -130,14 +148,25 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   const NUDGE_DELAYS_MS = [500, 2000];
   let nudgeTimers = [];
   function nudgeFrameSize() {
-    frame.style.height = "calc(100% - 1px)";
-    requestAnimationFrame(() => { frame.style.height = ""; });
+    frame.style.marginBottom = "1px";
+    // Lay the shrunk frame out now: restored before the next layout, the frame never changes size.
+    void frame.offsetHeight;
+    requestAnimationFrame(() => { frame.style.marginBottom = ""; });
   }
   function scheduleRefitNudges() {
     nudgeTimers.forEach(clearTimeout);
     nudgeTimers = NUDGE_DELAYS_MS.map((delay) => setTimeout(nudgeFrameSize, delay));
   }
   frame.addEventListener("load", scheduleRefitNudges);
+
+  // A soft keyboard opening or closing resizes the visual viewport; once it settles, nudge the
+  // frame so ttyd refits its grid to whatever the page now gives it.
+  const VIEWPORT_SETTLE_MS = 150;
+  let viewportNudgeTimer = null;
+  window.visualViewport?.addEventListener("resize", () => {
+    clearTimeout(viewportNudgeTimer);
+    viewportNudgeTimer = setTimeout(nudgeFrameSize, VIEWPORT_SETTLE_MS);
+  });
 
   function pointFrameAt(src) {
     if (frame.src !== src) frame.src = src;
@@ -152,6 +181,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     } else {
       empty.hidden = true;
       frame.hidden = false;
+      keys.hidden = false;
       // A navigate to the session already framed re-points at the same target: assigning the
       // same src again would reload the frame and drop the live ttyd connection.
       pointFrameAt(originFor(page.pty_label) + page.pty_path);
@@ -198,15 +228,51 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     void refresh(session);
   }
 
-  function focusPty() {
-    frame.contentWindow?.postMessage({ type: "ttyd-focus" }, "*");
+  function postToPty(message) {
+    frame.contentWindow?.postMessage(message, "*");
   }
 
-  // The shell grants focus to the frame it created, which is this page: pass it on to ttyd.
+  function focusPty() {
+    postToPty({ type: "ttyd-focus" });
+  }
+
+  // The strip's keys go to the script dwt adds to ttyd's page (terminal_app/pty_page.py). Ctrl
+  // is one-shot: it rides on the next strip key, or the pty page applies it to the next key
+  // typed and posts back that it was used.
+  let isCtrlArmed = false;
+  function setCtrlArmed(armed) {
+    isCtrlArmed = armed;
+    ctrlKey.setAttribute("aria-pressed", String(armed));
+  }
+  function pressKey(button) {
+    if (button === ctrlKey) {
+      setCtrlArmed(!isCtrlArmed);
+      postToPty({ type: "terminal:ctrl", armed: isCtrlArmed });
+    } else {
+      postToPty({ type: "terminal:key", key: button.dataset.key, ctrl: isCtrlArmed });
+      setCtrlArmed(false);
+    }
+  }
+  // A key acts on press and never takes focus, so the terminal keeps it and the soft keyboard
+  // stays up; a press anywhere else on the strip just hands focus back to the terminal.
+  for (const type of ["touchstart", "mousedown"]) {
+    keys.addEventListener(type, (event) => event.preventDefault(), { passive: false });
+  }
+  keys.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    if (event.button !== 0) return;
+    const button = event.target.closest("button");
+    if (button !== null) pressKey(button);
+    focusPty();
+  });
+  frame.addEventListener("load", () => setCtrlArmed(false));
+
   window.addEventListener("message", (event) => {
-    if (event.source !== window.parent) return;
     const data = event.data;
-    if (data !== null && typeof data === "object" && data.type === "ttyd-focus") focusPty();
+    if (data === null || typeof data !== "object") return;
+    // The shell grants focus to the frame it created, which is this page: pass it on to ttyd.
+    if (event.source === window.parent && data.type === "ttyd-focus") focusPty();
+    if (event.source === frame.contentWindow && data.type === "terminal:ctrl") setCtrlArmed(data.armed === true);
   });
   window.addEventListener("focus", () => connection?.focused());
 
