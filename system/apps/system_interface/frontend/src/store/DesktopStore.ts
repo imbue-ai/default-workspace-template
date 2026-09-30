@@ -194,7 +194,7 @@ export type TearOutPhase = "out" | "in" | "released";
 export interface PopOutBridge {
   requestPopOut(request: PopOutRequest): void;
   beginWindowDrag(request: WindowDragRequest): void;
-  endWindowDrag(windowId: string, isDetached: boolean): void;
+  endWindowDrag(windowId: string, isDetached: boolean, isCancelled: boolean): void;
   reportDetachedWindows(windows: readonly DetachedWindowReport[]): void;
 }
 
@@ -302,6 +302,14 @@ interface ShortcutCellUpdate {
 
 export type ActiveGesture = MoveGesture | ResizeGesture | ShortcutGesture | FloatingEntryGesture;
 
+/** A watched drag this shell ended on its own release, whose last word from the chrome may still be on its way. */
+interface ReleasedWatchedDrag {
+  readonly windowId: string;
+  readonly isDetached: boolean;
+  /** The window's placement as the drag began, which a late pull-out puts back before detaching it. */
+  readonly placementAtStart: Placement;
+}
+
 type Listener = () => void;
 
 export class DesktopStore {
@@ -309,6 +317,7 @@ export class DesktopStore {
   private metrics: ThemeMetrics;
   private backdrop: PixelSize = { width: 0, height: 0 };
   private gesture: ActiveGesture | null = null;
+  private releasedWatchedDrag: ReleasedWatchedDrag | null = null;
   private isLauncherOpenNow = false;
   // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
   private replacedDesktop: ReplacedDesktop | null = null;
@@ -398,7 +407,11 @@ export class DesktopStore {
    *  during a drag; the chrome's window only reads. */
   setTearOut(windowId: string, phase: TearOutPhase): void {
     const gesture = this.moveGestureOf(windowId);
-    if (gesture === null || !gesture.isWatched) return;
+    if (gesture === null) {
+      this.takeLateTearOut(windowId, phase);
+      return;
+    }
+    if (!gesture.isWatched) return;
     if (phase === "released") {
       if (!gesture.isTearingOut) return;
       this.gesture = null;
@@ -418,6 +431,28 @@ export class DesktopStore {
   private detachDraggedWindow(windowId: string): void {
     this.dispatch({ type: "window_detached", windowId });
     void this.flushPendingSave();
+  }
+
+  /** The chrome's word on a watched drag this shell already ended on its own release, which reached it first. The
+   *  chrome's word stands: "released" after a release inside means the chrome kept the window it pulled out, so
+   *  this one goes out too, from the placement the drag began at, as if "out" had come in time; "in" after a
+   *  release outside means the chrome dropped its window, so this one comes back. A late "out" alone changes
+   *  nothing: the chrome follows it with "released" when it keeps its window. */
+  private takeLateTearOut(windowId: string, phase: TearOutPhase): void {
+    const released = this.releasedWatchedDrag;
+    if (released === null || released.windowId !== windowId) return;
+    if (phase === "released" && !released.isDetached) {
+      const start = released.placementAtStart;
+      this.dispatch({ type: "window_frame_set", windowId, frame: start.frame });
+      if (start.state !== "NORMAL") this.dispatch({ type: "window_state_set", windowId, state: start.state });
+      this.detachDraggedWindow(windowId);
+    } else if (phase === "in" && released.isDetached) {
+      this.bringBackDraggedWindow(windowId);
+    } else {
+      return;
+    }
+    this.releasedWatchedDrag = null;
+    this.notifyListeners();
   }
 
   /** Back inside, or cancelled while out: the window is on the desktop again, raised (its state kept, so a
@@ -1436,6 +1471,7 @@ export class DesktopStore {
     const startRect = this.renderedRect(placement);
     // A solo shell shows one window edge to edge; there is no desktop to pull a window out of.
     const isWatched = this.canPopOut && this.soloWindowId === null;
+    this.releasedWatchedDrag = null;
     this.gesture = {
       kind: "move",
       windowId,
@@ -1494,7 +1530,14 @@ export class DesktopStore {
     this.gesture = null;
     if (settled === null || settled.kind !== "move") return;
     const placement = placementOf(this.state.layout, settled.windowId);
-    if (settled.isWatched) this.popOut.endWindowDrag(settled.windowId, settled.isTearingOut);
+    if (settled.isWatched) {
+      this.popOut.endWindowDrag(settled.windowId, settled.isTearingOut, false);
+      this.releasedWatchedDrag = {
+        windowId: settled.windowId,
+        isDetached: settled.isTearingOut,
+        placementAtStart: placement,
+      };
+    }
     if (settled.isTearingOut) {
       // Released outside, and this shell saw the release itself (a pointer that does leave the chrome's window):
       // the window was detached and saved as it went out, so the gesture only ends.
@@ -1673,7 +1716,7 @@ export class DesktopStore {
     // A watched drag cancelled mid-way (Escape, the browser): the chrome drops any window it was dragging, and
     // one that was out comes back to the desktop.
     if (cancelled.kind === "move" && cancelled.isWatched) {
-      this.popOut.endWindowDrag(cancelled.windowId, false);
+      this.popOut.endWindowDrag(cancelled.windowId, false, true);
       if (cancelled.isTearingOut) this.bringBackDraggedWindow(cancelled.windowId);
     }
     this.notifyListeners();

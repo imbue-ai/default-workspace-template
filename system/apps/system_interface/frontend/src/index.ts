@@ -78,7 +78,8 @@ function frameFromMessage(value: unknown): Frame | null {
 const popOutBridge: PopOutBridge = {
   requestPopOut: (request) => sendToEmbedder(POP_OUT_WINDOW, { ...request }),
   beginWindowDrag: (request) => sendToEmbedder(WINDOW_DRAG_STARTED, { ...request }),
-  endWindowDrag: (windowId, isDetached) => sendToEmbedder(WINDOW_DRAG_ENDED, { windowId, isDetached }),
+  endWindowDrag: (windowId, isDetached, isCancelled) =>
+    sendToEmbedder(WINDOW_DRAG_ENDED, { windowId, isDetached, isCancelled }),
   reportDetachedWindows: (windows) => sendToEmbedder(DETACHED_WINDOWS, { windows: [...windows] }),
 };
 
