@@ -7,7 +7,7 @@ import pytest
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_settings import SETTINGS_FILENAME
-from imbue.chat.config import CHAT_STATE_DIR
+from imbue.chat.config import DEFAULT_CHAT_STATE_DIR
 from imbue.chat.config import Config
 from imbue.chat.main import MANIFEST_PATH
 from imbue.chat.main import _parse_args
@@ -89,7 +89,7 @@ def test_the_spares_record_is_in_the_configured_state_dir_whatever_the_data_dir(
 ) -> None:
     """A secondary reads the live chat's spares, to hide them, rather than its scratch copy's: a
     preview runs from a worktree, so its manifest names the live state dir outright."""
-    assert Config().chat_state_dir == CHAT_STATE_DIR
+    assert Config().chat_state_dir == DEFAULT_CHAT_STATE_DIR
     live_state_dir = tmp_path / "live-state"
     state = build_production_state(
         Config(chat_data_dir=tmp_path / "scratch", chat_state_dir=live_state_dir), is_secondary=is_secondary

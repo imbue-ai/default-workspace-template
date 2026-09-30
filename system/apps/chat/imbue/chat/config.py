@@ -13,7 +13,7 @@ DEFAULT_CHAT_PORT: Final[int] = 8010
 DEFAULT_CHAT_DATA_DIR: Final[Path] = Path("data/.apps/chat")
 # Where the chat keeps what it knows about this machine rather than the user's things (the spare
 # agents it started, ``spare_chat.py``; contracts.md section 17), relative to the repo root.
-CHAT_STATE_DIR: Final[Path] = Path("data/.state/chat")
+DEFAULT_CHAT_STATE_DIR: Final[Path] = Path("data/.state/chat")
 
 
 class DuplicateStaticBasenameError(ValueError):
@@ -34,7 +34,7 @@ class Config(BaseSettings):
     chat_data_dir: Path = Field(default=DEFAULT_CHAT_DATA_DIR)
     # A secondary chat runs from a worktree, where the relative default names no file, so its
     # manifest points this at the live chat's state dir, which it only reads.
-    chat_state_dir: Path = Field(default=CHAT_STATE_DIR)
+    chat_state_dir: Path = Field(default=DEFAULT_CHAT_STATE_DIR)
 
     @field_validator("chat_javascript_plugins", "chat_static_paths", mode="before")
     @classmethod
