@@ -35,6 +35,7 @@ from imbue.imbue_common.event_envelope import EventSource
 from imbue.imbue_common.event_envelope import EventType
 from imbue.imbue_common.event_envelope import IsoTimestamp
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.logging import generate_rotation_timestamp
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 
@@ -128,8 +129,9 @@ def stage_oversized_announcements(events_path: Path) -> bool:
         return False
     if stream_size <= ANNOUNCEMENTS_ARCHIVE_THRESHOLD_BYTES:
         return False
-    rotation_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
-    events_path.rename(events_path.with_name(f"{events_path.name}.{rotation_timestamp}{_STAGED_ANNOUNCEMENTS_SUFFIX}"))
+    events_path.rename(
+        events_path.with_name(f"{events_path.name}.{generate_rotation_timestamp()}{_STAGED_ANNOUNCEMENTS_SUFFIX}")
+    )
     return True
 
 
