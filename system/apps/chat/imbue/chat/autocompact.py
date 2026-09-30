@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Final
 
 from loguru import logger
+from pydantic import ValidationError
 
 from imbue.chat.agent_discovery import read_plugin_config
 from imbue.concurrency_group.errors import ProcessError
@@ -149,7 +150,7 @@ class ChatAutoCompactor:
     def _is_autocompact_enabled(self) -> bool:
         try:
             return self._is_enabled()
-        except (MngrError, OSError) as e:
+        except (MngrError, OSError, ValidationError) as e:
             # The command reads the same config and decides for itself, so an unreadable
             # config costs a launch rather than silently turning compaction off.
             logger.warning("Could not read the autocompact mode from the mngr config, checking anyway: {}", e)

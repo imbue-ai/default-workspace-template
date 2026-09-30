@@ -288,13 +288,36 @@ def test_the_mode_is_read_the_way_the_workspace_mngr_reads_it(
     settings: str, is_enabled: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Loaded through mngr's own loader, so the sweep runs exactly when `mngr autocompact run` would act."""
+    _use_mngr_settings(settings, tmp_path, monkeypatch)
+
+    assert is_proactive_autocompact_enabled() is is_enabled
+
+
+def test_an_invalid_mode_in_the_settings_file_still_runs_the_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, loguru_records: list[str]
+) -> None:
+    """mngr's loader rejects an unknown mode with a pydantic error, which must not end the sweep."""
+    _use_mngr_settings('[plugins.autocompact]\nmode = "bogus"\n', tmp_path, monkeypatch)
+    recorded_commands: list[list[str]] = []
+
+    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
+        recorded_commands.append(list(command))
+        return _make_finished_process(command=command, returncode=0)
+
+    compactor = ChatAutoCompactor.build(list_running_chat_agent_names=lambda: ["chat-alpha"], runner=fake_runner)
+    compactor.sweep()
+
+    assert recorded_commands == [["mngr", "autocompact", "run", "chat-alpha"]]
+    warning_logs = [log for log in loguru_records if log.startswith("WARNING") and "autocompact mode" in log]
+    assert len(warning_logs) == 1
+
+
+def _use_mngr_settings(settings: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir = tmp_path / ".mngr"
     config_dir.mkdir()
     (config_dir / "settings.toml").write_text("is_allowed_in_pytest = true\n" + settings)
     monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
-
-    assert is_proactive_autocompact_enabled() is is_enabled
 
 
 def test_start_and_stop_lifecycle() -> None:
