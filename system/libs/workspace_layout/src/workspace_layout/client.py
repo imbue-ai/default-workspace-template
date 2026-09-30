@@ -114,7 +114,7 @@ def request_shell(method: str, url: str, body: Mapping[str, Any] | None, timeout
     """One request to a shell route, answered as it came; raises ShellUnreachableError when it could not be made
     (refused, timed out, or cut off)."""
     # The stdlib rather than httpx: the workspace-layout command starts once per agent action, and importing httpx
-    # (which loads rich and pygments for its own CLI) was a large share of that startup.
+    # (which loads rich and pygments for its own CLI) would be a large share of that startup.
     data = None if body is None else json.dumps(dict(body)).encode("utf-8")
     headers = {} if data is None else {"Content-Type": "application/json"}
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
