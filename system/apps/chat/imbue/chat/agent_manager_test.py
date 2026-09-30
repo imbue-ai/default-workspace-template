@@ -4829,28 +4829,47 @@ def test_status_mapping_follows_the_chat_row(
 
 
 @pytest.mark.parametrize(
-    ("lifecycle", "activity", "is_permission_pending", "is_connecting", "has_queued", "expected"),
+    ("lifecycle", "activity", "is_marker_present", "is_permission_pending", "is_connecting", "has_queued", "expected"),
     [
-        ("WAITING", ActivityState.IDLE, False, False, False, None),
-        ("WAITING", None, False, False, False, None),
+        ("WAITING", ActivityState.IDLE, False, False, False, False, None),
+        ("WAITING", None, False, False, False, False, None),
         # The transcript reads idle between an assistant message and its next tool call.
-        ("RUNNING", ActivityState.IDLE, False, False, False, "working"),
-        ("RUNNING", ActivityState.TOOL_RUNNING, False, False, False, "working"),
-        ("UNKNOWN", ActivityState.IDLE, False, False, False, "working"),
-        ("WAITING", ActivityState.IDLE, True, False, False, "waiting on a dialog"),
-        ("WAITING", ActivityState.IDLE, False, True, False, "receiving a message"),
-        ("WAITING", ActivityState.IDLE, False, False, True, "holding queued messages"),
+        ("RUNNING", ActivityState.IDLE, False, False, False, False, "working"),
+        # A turn the observe-reported lifecycle has not caught up with yet.
+        ("WAITING", ActivityState.IDLE, True, False, False, False, "working"),
+        ("RUNNING", ActivityState.TOOL_RUNNING, True, False, False, False, "working"),
+        ("UNKNOWN", ActivityState.IDLE, False, False, False, False, "working"),
+        ("WAITING", ActivityState.IDLE, True, True, False, False, "waiting on a dialog"),
+        ("WAITING", ActivityState.IDLE, False, False, True, False, "receiving a message"),
+        ("WAITING", ActivityState.IDLE, False, False, False, True, "holding queued messages"),
     ],
 )
 def test_only_a_chat_whose_harness_ended_its_turn_is_free_to_restart(
     lifecycle: str,
     activity: ActivityState | None,
+    is_marker_present: bool,
     is_permission_pending: bool,
     is_connecting: bool,
     has_queued: bool,
     expected: str | None,
 ) -> None:
-    assert restart_busy_reason(lifecycle, activity, is_permission_pending, is_connecting, has_queued) == expected
+    assert (
+        restart_busy_reason(lifecycle, activity, is_marker_present, is_permission_pending, is_connecting, has_queued)
+        == expected
+    )
+
+
+def test_a_turn_the_lifecycle_has_not_caught_up_with_is_read_off_the_active_marker(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", state="WAITING")
+    agent_manager._ensure_activity_tracking("agent-1")
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-1")) is None
+
+    (state_dir / "active").touch()
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-1")) == "working"
 
 
 # Unseeded chats awaiting their first send (post-launch-paths plan section 3.7)
