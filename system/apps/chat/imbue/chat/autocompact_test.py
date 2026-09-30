@@ -1,12 +1,14 @@
-import inspect
 import threading
 from collections.abc import Sequence
+from pathlib import Path
+
+import pytest
 
 from imbue.concurrency_group.errors import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.utils.polling import poll_until
-from imbue.chat.autocompact import _DEFAULT_CHECK_CONCURRENCY
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.autocompact import is_proactive_autocompact_enabled
 
 
 def _make_finished_process(
@@ -23,12 +25,6 @@ def _make_finished_process(
         is_timed_out=False,
         is_output_already_logged=False,
     )
-
-
-def test_default_check_concurrency() -> None:
-    compactor = ChatAutoCompactor.build(list_running_chat_agent_names=lambda: [])
-    assert compactor._max_concurrency == _DEFAULT_CHECK_CONCURRENCY
-    assert _DEFAULT_CHECK_CONCURRENCY == 4
 
 
 def test_check_agent_success() -> None:
@@ -121,67 +117,111 @@ def test_check_agent_process_setup_error_handled_gracefully(loguru_records: list
     assert len(warning_logs) == 1
 
 
-def test_sweep_checks_all_running_chat_agents() -> None:
+def test_sweep_launches_nothing_while_autocompact_is_disabled() -> None:
+    """With the mode off every `mngr autocompact run` is a no-op, so the sweep must not pay for one."""
     recorded_commands: list[list[str]] = []
-    lock = threading.Lock()
 
     def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
-        with lock:
-            recorded_commands.append(list(command))
+        recorded_commands.append(list(command))
         return _make_finished_process(command=command, returncode=0)
 
-    running_chats = ["chat-alpha", "chat-beta", "chat-gamma"]
     compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: running_chats,
+        list_running_chat_agent_names=lambda: ["chat-alpha", "chat-beta"],
+        is_enabled=lambda: False,
         runner=fake_runner,
-        mngr_binary="mngr",
+    )
+
+    assert compactor.sweep() == []
+    assert recorded_commands == []
+
+
+def test_sweep_checks_every_running_chat_in_one_command() -> None:
+    recorded_commands: list[list[str]] = []
+
+    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
+        recorded_commands.append(list(command))
+        return _make_finished_process(command=command, returncode=0)
+
+    compactor = ChatAutoCompactor.build(
+        list_running_chat_agent_names=lambda: ["chat-alpha", "chat-beta", "chat-gamma"],
+        is_enabled=lambda: True,
+        runner=fake_runner,
     )
     results = compactor.sweep()
 
-    assert len(results) == 3
-    assert sorted(recorded_commands) == [
+    assert len(results) == 1
+    assert recorded_commands == [["mngr", "autocompact", "run", "chat-alpha", "chat-beta", "chat-gamma"]]
+
+
+def test_a_failed_batch_is_retried_one_chat_at_a_time() -> None:
+    """One chat the batch cannot resolve (stopped since it was listed) fails the whole command;
+    the others must still be checked, as they were when each chat had its own command."""
+    recorded_commands: list[list[str]] = []
+
+    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
+        recorded_commands.append(list(command))
+        is_stopped_chat_named = "chat-stopped" in command
+        return _make_finished_process(command=command, returncode=1 if is_stopped_chat_named else 0)
+
+    compactor = ChatAutoCompactor.build(
+        list_running_chat_agent_names=lambda: ["chat-alpha", "chat-stopped", "chat-gamma"],
+        is_enabled=lambda: True,
+        runner=fake_runner,
+    )
+    results = compactor.sweep()
+
+    assert recorded_commands == [
+        ["mngr", "autocompact", "run", "chat-alpha", "chat-stopped", "chat-gamma"],
         ["mngr", "autocompact", "run", "chat-alpha"],
-        ["mngr", "autocompact", "run", "chat-beta"],
+        ["mngr", "autocompact", "run", "chat-stopped"],
         ["mngr", "autocompact", "run", "chat-gamma"],
     ]
+    assert [result is not None for result in results] == [True, False, True]
 
 
-def test_sweep_runs_concurrently() -> None:
-    barrier = threading.Barrier(3)
-
-    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
-        barrier.wait(timeout=2.0)
-        return _make_finished_process(command=command, returncode=0)
-
-    compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: ["chat-1", "chat-2", "chat-3"],
-        runner=fake_runner,
-        max_concurrency=3,
-    )
-    results = compactor.sweep()
-    assert len(results) == 3
-
-
-def test_sweep_stops_early_if_stop_event_set() -> None:
+def test_the_one_chat_retry_stops_early_if_stop_event_set() -> None:
     recorded_commands: list[list[str]] = []
 
     compactor: ChatAutoCompactor
 
     def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
         recorded_commands.append(list(command))
-        compactor._stop_event.set()
-        return _make_finished_process(command=command, returncode=0)
+        if len(recorded_commands) == 2:
+            compactor._stop_event.set()
+        return _make_finished_process(command=command, returncode=1)
 
-    running_chats = ["chat-1", "chat-2", "chat-3"]
     compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: running_chats,
+        list_running_chat_agent_names=lambda: ["chat-1", "chat-2", "chat-3"],
+        is_enabled=lambda: True,
         runner=fake_runner,
-        max_concurrency=1,
     )
-    results = compactor.sweep()
+    compactor.sweep()
 
-    assert len(results) == 1
-    assert recorded_commands == [["mngr", "autocompact", "run", "chat-1"]]
+    assert recorded_commands == [
+        ["mngr", "autocompact", "run", "chat-1", "chat-2", "chat-3"],
+        ["mngr", "autocompact", "run", "chat-1"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("settings", "is_enabled"),
+    [
+        ("", False),
+        ('[plugins.autocompact]\nmode = "on_next_prompt"\n', False),
+        ('[plugins.autocompact]\nmode = "proactive_timer"\n', True),
+    ],
+)
+def test_the_mode_is_read_the_way_the_workspace_mngr_reads_it(
+    settings: str, is_enabled: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Loaded through mngr's own loader, so the sweep runs exactly when `mngr autocompact run` would act."""
+    config_dir = tmp_path / ".mngr"
+    config_dir.mkdir()
+    (config_dir / "settings.toml").write_text("is_allowed_in_pytest = true\n" + settings)
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
+
+    assert is_proactive_autocompact_enabled() is is_enabled
 
 
 def test_start_and_stop_lifecycle() -> None:
@@ -193,6 +233,7 @@ def test_start_and_stop_lifecycle() -> None:
 
     compactor = ChatAutoCompactor.build(
         list_running_chat_agent_names=lambda: ["test-chat"],
+        is_enabled=lambda: True,
         runner=fake_runner,
         interval_seconds=0.01,
     )
