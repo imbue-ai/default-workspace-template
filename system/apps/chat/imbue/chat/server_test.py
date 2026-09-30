@@ -616,6 +616,20 @@ def test_a_chat_whose_account_was_signed_out_takes_no_more_messages(
     assert messenger.sent == []
 
 
+def test_a_secret_request_notice_still_reaches_a_chat_whose_account_was_signed_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000734"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8813")
+    bridge = state_of(client.application).secret_request_bridge
+    assert bridge is not None
+
+    with client.application.app_context():
+        bridge.deliver_notice(agent_id, "The secret you asked for is ready.")
+
+    assert messenger.sent == [(agent_id, "The secret you asked for is ready.")]
+
+
 def test_a_chat_on_a_signed_in_account_still_takes_messages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     account_id, _account_path = mint_account_dir()
     commit_account(account_id, "openai", "OpenAI")
