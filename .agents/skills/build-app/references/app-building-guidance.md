@@ -132,9 +132,10 @@ Record your stated defaults -- they are the architecture you build once. Hold ba
 whatever the mock could still reshape, and build the rest whenever you like: a
 storage layer, a data model or a call contract the look-and-feel cannot change is
 work the mock conversation is not waiting on, and doing it during that
-conversation costs nothing. What you must not do is build the *look* twice. Do not wait for approval of a plan before starting: the mock
-is the user's first checkpoint, and `SKILL.md` names it as the only one before
-the working site.
+conversation costs nothing. What you must not do is build the *look* twice.
+
+Do not wait for approval of a plan before starting: the mock is the user's first
+checkpoint, and `SKILL.md` names it as the only one before the working site.
 
 ### Which path: author routes or wrap a server
 
