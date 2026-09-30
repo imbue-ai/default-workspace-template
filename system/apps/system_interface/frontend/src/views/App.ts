@@ -144,6 +144,10 @@ function isApplePlatform(): boolean {
   return /Mac|iPhone|iPad|iPod/.test(navigator.platform) || /Mac OS/.test(navigator.userAgent);
 }
 
+/** Whether resting the pointer on a window's maximize control opens its size menu (the window menu still
+ *  offers it under Move and resize). */
+const IS_SIZE_MENU_OPENED_ON_HOVER = false;
+
 export function App(): m.Component<AppAttrs> {
   let openMenu: OpenMenu | null = null;
   let settingsDialog: SettingsDialogState | null = null;
@@ -543,6 +547,7 @@ export function App(): m.Component<AppAttrs> {
 
   /** Spread onto a window's maximize control: resting on it opens that window's size menu. */
   function sizeMenuTrigger(windowId: string): m.Attributes {
+    if (!IS_SIZE_MENU_OPENED_ON_HOVER) return {};
     return menu.hoverTriggerAttrs(() => {
       openMenu = { kind: "size", windowId };
     });

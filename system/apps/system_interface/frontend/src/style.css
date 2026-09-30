@@ -101,3 +101,25 @@
   box-shadow: var(--desk-icon-highlight);
   pointer-events: none;
 }
+
+/* A user who arrives pops into the presence strip from below, with a little overshoot; the second
+   one a beat after the first, since both are recorded at about the same moment when a workspace
+   is first shared. */
+@keyframes presence-pop {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.presence-strip [data-presence-user] {
+  animation: presence-pop 420ms cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
+}
+
+.presence-strip [data-presence-user]:nth-child(2) {
+  animation-delay: 160ms;
+}

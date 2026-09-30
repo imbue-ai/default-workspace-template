@@ -41,6 +41,7 @@ function picture(user: PresentUser, isOwn: boolean): m.Children {
   return m(
     "span",
     {
+      key: user.user_id,
       class: PICTURE_CLASS + (isOwn ? OWN_PICTURE_CLASS : ""),
       title: isOwn ? `${presenceTitle(user)} (you)` : presenceTitle(user),
       "data-presence-user": user.user_id,
