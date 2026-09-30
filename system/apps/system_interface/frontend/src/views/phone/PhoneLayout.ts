@@ -76,7 +76,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
 
   function fitToVisualViewport(): void {
     const viewport = window.visualViewport;
-    if (root === null || viewport === null) return;
+    if (root === null || !viewport) return;
     root.style.top = `${viewport.offsetTop}px`;
     root.style.height = `${viewport.height}px`;
   }
