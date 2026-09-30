@@ -3774,6 +3774,17 @@ def test_a_recorded_chat_lists_once_under_its_first_agent_with_its_members_in_or
         manager.stop()
 
 
+def test_a_moved_chat_is_marked_read_in_the_app_as_the_agent_it_runs_on_now(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    try:
+        assert manager.current_agent_id_of_chat(ChatId(first)) == second
+        assert manager.current_agent_id_of_chat(ChatId(second)) is None
+    finally:
+        manager.stop()
+
+
 def test_a_recorded_chats_segments_follow_the_record_and_skip_an_agent_mngr_no_longer_lists(
     broadcaster: WebSocketBroadcaster,
 ) -> None:
@@ -3973,6 +3984,7 @@ def test_a_recorded_chat_whose_active_agent_is_unknown_lists_nothing(
         assert manager.get_chat_snapshots() == []
         assert manager.get_chat_snapshot(first) is None
         assert manager.get_chat_ids() == []
+        assert manager.current_agent_id_of_chat(ChatId(first)) is None
     finally:
         manager.stop()
 
