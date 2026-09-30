@@ -3379,10 +3379,14 @@ class AgentManager:
             return
         with self._lock:
             spare_ids = [spare.chat_id for spare in pooled_spares(self._spares)]
-        for spare_id in spare_ids:
-            pid = self._resolve_agent_pid(str(spare_id))
-            if pid is not None:
-                writer(pid, SPARE_AGENT)
+        pid_by_spare_id = {spare_id: self._resolve_agent_pid(str(spare_id)) for spare_id in spare_ids}
+        # Written under the lock, and only for a spare still pooled: a hand-over takes the spare under
+        # it and moves it into the chat band after, so this write can never land on a chat.
+        with self._lock:
+            pooled_ids = {spare.chat_id for spare in pooled_spares(self._spares)}
+            for spare_id, pid in pid_by_spare_id.items():
+                if pid is not None and spare_id in pooled_ids:
+                    writer(pid, SPARE_AGENT)
 
     def _follow_live_spares(self, live_spare_store: SpareChatStore) -> None:
         """A secondary chat's view of the live chat's spares: re-read on every sweep, so a spare the
