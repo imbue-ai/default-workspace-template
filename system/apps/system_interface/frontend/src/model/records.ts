@@ -10,6 +10,8 @@
  * ``WireShapeError`` rather than read as an empty one: an empty desktop list would be believed.
  */
 
+import { DEFAULT_UI_THEME, isUiTheme, type UiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
+
 export type WindowState = "NORMAL" | "SNAPPED_LEFT" | "SNAPPED_RIGHT" | "MAXIMIZED";
 
 export const WINDOW_STATES: readonly WindowState[] = ["NORMAL", "SNAPPED_LEFT", "SNAPPED_RIGHT", "MAXIMIZED"];
@@ -77,6 +79,8 @@ export interface Desktop {
   readonly color: string;
   readonly glyph: number;
   readonly wallpaper: Wallpaper | null;
+  /** The look the desktop wears (Desktop settings). */
+  readonly theme: UiTheme;
   readonly shortcuts: readonly DesktopShortcut[];
   readonly windows: readonly WindowRecord[];
 }
@@ -374,6 +378,8 @@ export function parseDesktop(raw: unknown): Desktop {
     color: asString(record.color, "desktop.color"),
     glyph: asNumber(record.glyph, "desktop.glyph"),
     wallpaper: parseWallpaper(record.wallpaper),
+    // A shell from before themes sends none; a newer shell's theme this build does not know reads as the default.
+    theme: isUiTheme(record.theme) ? record.theme : DEFAULT_UI_THEME,
     shortcuts: asArray(record.shortcuts, "desktop.shortcuts").map(parseShortcut),
     windows: asArray(record.windows, "desktop.windows").map(parseWindow),
   };

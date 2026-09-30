@@ -78,6 +78,7 @@ import {
   placedShortcutKey,
   withRoomMadeFor,
 } from "../geometry/grid";
+import type { UiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
 import type { GridDimensions, PlacedShortcut } from "../geometry/grid";
 import { placementOf } from "../geometry/stack";
 import {
@@ -126,6 +127,7 @@ export interface DesktopApi {
   createDesktop(name: string, color: string, glyph: number): Promise<Desktop>;
   updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<Desktop>;
   setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop>;
+  setDesktopTheme(desktopId: string, theme: UiTheme): Promise<Desktop>;
   deleteDesktop(desktopId: string): Promise<string>;
   setDesktopShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<Desktop>;
   moveDesktopShortcut(desktopId: string, app: string, launch: string, cell: GridCell): Promise<Desktop>;
@@ -954,6 +956,10 @@ export class DesktopStore {
 
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<void> {
     this.takeDesktop(await this.deps.api.setDesktopWallpaper(desktopId, wallpaper));
+  }
+
+  async setDesktopTheme(desktopId: string, theme: UiTheme): Promise<void> {
+    this.takeDesktop(await this.deps.api.setDesktopTheme(desktopId, theme));
   }
 
   /** Delete a desktop; the shell moves this client to the fallback and says so over the socket. */

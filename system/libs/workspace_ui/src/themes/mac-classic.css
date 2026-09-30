@@ -1,9 +1,10 @@
-/* Classic Mac theme: the workspace desktop dressed as Macintosh System 6, matching Imbue Studio's
-   theme of the same name (see uiTheme.ts). system.css's element rules (vendor/, scoped and copied
-   from mngr) sit in Tailwind's base layer, so every utility still wins; the rules below remap the
-   design tokens and dress the desktop's chrome through its stable class names. All of it is scoped
-   to :root[data-ui-theme="mac-classic"]. */
-@import "./vendor/mac-classic/lib.css" layer(base);
+/* Classic Mac theme (Desktop settings > Theme): the desktop dressed as Macintosh System 6 by
+   system.css (https://sakofchit.github.io/system.css/). The library (vendor/, scoped by
+   scripts/vendor-retro-themes.mjs) is imported unlayered, so its components win over the utility
+   classes on the elements that carry its class names: the windows (.window, .title-bar, .title),
+   buttons (.btn) and dialogs (.standard-dialog). The rules below remap the design tokens and fill in
+   what the library has no component for. All of it is scoped to :root[data-ui-theme="mac-classic"]. */
+@import "./vendor/mac-classic/lib.css";
 
 :root[data-ui-theme="mac-classic"] {
   --c-bg: #ffffff;
@@ -33,9 +34,10 @@
   --c-shadow-overlay: 2px 2px 0 #000000;
 
   --mac-title-stripes: repeating-linear-gradient(#000000 0 1px, #ffffff 1px 3px);
-  /* The 50% gray of the System 6 desktop, as fine diagonal pixels. A pixel-period gradient, so the
-     wallpaper's cover sizing cannot stretch it. */
-  --desk-default-wallpaper: repeating-linear-gradient(45deg, #000000 0 1px, #ffffff 1px 2px);
+  /* The 50% gray of the System 6 desktop: a one-pixel checker. An SVG with no size of its own takes
+     the backdrop's, and its pattern tiles in CSS pixels, so the wallpaper's cover sizing cannot
+     stretch it. */
+  --desk-default-wallpaper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25'%3E%3Cdefs%3E%3Cpattern id='d' width='2' height='2' patternUnits='userSpaceOnUse'%3E%3Crect width='1' height='1'/%3E%3Crect x='1' y='1' width='1' height='1'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3Crect width='100%25' height='100%25' fill='url(%23d)'/%3E%3C/svg%3E");
   --desk-window-radius: 0px;
   --desk-window-shadow: 2px 2px 0 #000000;
   --desk-taskbar-surface: #ffffff;
@@ -60,38 +62,22 @@
 }
 
 :root[data-ui-theme="mac-classic"] .window-frame {
-  border: 1px solid #000000;
+  border: none;
 }
-/* The focused window's title bar carries the pinstripes, with its name on a white patch cut out
-   of them; a window in the background has a plain white bar. */
-:root[data-ui-theme="mac-classic"] .title-bar {
+/* system.css stripes every .title-bar; a window in the background has a plain white bar. */
+:root[data-ui-theme="mac-classic"] .window:not([data-focused="true"]) .title-bar {
   background: #ffffff;
+}
+:root[data-ui-theme="mac-classic"] .title-bar {
   border-bottom: 1px solid #000000;
 }
-:root[data-ui-theme="mac-classic"] .window[data-focused="true"] .title-bar {
-  background-image: var(--mac-title-stripes);
-  background-clip: content-box;
-  padding-top: 4px;
-  padding-bottom: 4px;
-}
-:root[data-ui-theme="mac-classic"] .window[data-focused="true"] .window-title {
-  background: #ffffff;
-  padding: 0 4px;
-}
-:root[data-ui-theme="mac-classic"] .window[data-focused="true"] .window-control {
-  background: #ffffff;
-}
-:root[data-ui-theme="mac-classic"] .window-control {
+:root[data-ui-theme="mac-classic"] .title-bar button {
   border: 1px solid #000000;
   border-radius: 0;
 }
 
 :root[data-ui-theme="mac-classic"] .taskbar {
   border-top: 1px solid #000000;
-}
-:root[data-ui-theme="mac-classic"] .taskbar-entry {
-  border: 1px solid transparent;
-  border-radius: 4px;
 }
 :root[data-ui-theme="mac-classic"] .taskbar-entry[data-focused="true"] {
   background: #000000;
@@ -103,10 +89,11 @@
   border-radius: 0;
 }
 
-/* Finder labels: black on a white patch under the icon. */
-:root[data-ui-theme="mac-classic"] .shortcut-label {
+/* Finder labels: black on a white patch that hugs the name. */
+:root[data-ui-theme="mac-classic"] .shortcut-label > * {
   color: #000000;
   background: #ffffff;
+  border-radius: 0;
   padding: 0 2px;
 }
 

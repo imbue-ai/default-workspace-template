@@ -110,7 +110,8 @@ export function Window(): m.Component<WindowAttrs> {
               // No border: the shadow is what separates a window from the backdrop, and a line
               // around it only competes. Focus is the title bar's, which changes colour with it.
               class:
-                "window-frame flex h-full w-full flex-col overflow-hidden rounded-(--desk-window-radius) " +
+                // `card` is win95.css's raised frame, inert outside its theme.
+                "window-frame card flex h-full w-full flex-col overflow-hidden rounded-(--desk-window-radius) " +
                 "shadow-(--desk-window-shadow)",
             },
             [

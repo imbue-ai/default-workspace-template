@@ -7,7 +7,7 @@ and a dock tab's leading glyph. The file sits beside the app's manifest as
 reads the file at registration and stores the *markup* on the registry row, so an icon
 changes whenever the app registers -- on its next restart, or at once if you run that
 script yourself. The shell watches the registry and redraws; it never needs rebuilding.
-Under one of the retro themes Imbue Studio can hand the workspace (`minds:ui-theme`), the
+Under one of the retro themes a desktop can wear (Desktop settings > Theme), the
 shell draws that theme's pixel-art icon for the app instead, or its generic program icon
 for an app it has none for (`system/libs/workspace_ui/src/themes/README.md`).
 

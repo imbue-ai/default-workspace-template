@@ -794,6 +794,15 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
         == 404
     )
 
+    # A theme is one of the named looks; it rides on the desktop's wire record.
+    assert settled.get_json()["theme"] == "default"
+    themed = client.post("/api/desktops/research/theme", json={"theme": "mac-classic"})
+    assert themed.status_code == 200 and themed.get_json()["theme"] == "mac-classic"
+    listed = {desktop["id"]: desktop for desktop in client.get("/api/desktops").get_json()["desktops"]}
+    assert listed["research"]["theme"] == "mac-classic"
+    assert client.post("/api/desktops/research/theme", json={"theme": "beos"}).status_code == 400
+    assert client.post("/api/desktops/missing/theme", json={"theme": "default"}).status_code == 404
+
     # A wallpaper must exist to be set; file wallpapers are whatever sits in the wallpapers directory.
     unknown = client.post("/api/desktops/research/wallpaper", json={"wallpaper": {"kind": "bundled", "name": "nope"}})
     assert unknown.status_code == 404

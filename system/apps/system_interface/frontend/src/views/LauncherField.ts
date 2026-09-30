@@ -104,7 +104,8 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
           class:
             // Fully round, and padded so its mark lands under the mark of the menu row above it: a
             // card row's glyph sits 14px inside the card's border, so the field's mark wants 14 too.
-            "launcher-field absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-full " +
+            // `form-95` is win95.css's sunken field, inert outside its theme.
+            "launcher-field form-95 absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-full " +
             // A heavier edge than a panel seam: this is a control you type into, and it has to read
             // as one against a bar of the same colour. Open is a ring OUTSIDE that edge rather than
             // a recolouring of it, so the box does not change weight as it opens.

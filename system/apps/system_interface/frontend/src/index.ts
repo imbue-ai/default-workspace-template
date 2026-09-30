@@ -7,7 +7,6 @@ import {
   POP_OUT_WINDOW,
   REATTACH_WINDOW,
   TEAR_OUT,
-  UI_THEME,
   WINDOW_DRAG_ENDED,
   WINDOW_DRAG_STARTED,
   announceReadyToEmbedder,
@@ -27,6 +26,7 @@ import { PointerGestureSource } from "./gestures/pointerGestures";
 import { startPresenceHeartbeat } from "./model/Presence";
 import { initEmbedderRelay } from "./relay";
 import { reloadInterface } from "./reload";
+import { activeDesktop } from "./reducers/desktopState";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
 import { applyUiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
@@ -79,6 +79,13 @@ function bootstrap(): void {
   const root = document.documentElement;
   const readStyle = (element: HTMLElement): CSSStyleDeclaration => getComputedStyle(element);
   let store: DesktopStore | null = null;
+  // The page wears the theme of the desktop on screen (Desktop settings). A theme can redeclare
+  // metric tokens (the title bar height), so the metrics the geometry reads are taken again under it.
+  const followDesktopTheme = (): void => {
+    if (store === null) return;
+    if (!applyUiTheme(root, activeDesktop(store.getState())?.theme)) return;
+    store.setThemeMetrics(readThemeMetrics(readStyle(root)), currentRenderModes(root));
+  };
   followRenderModes(
     root,
     (query) => window.matchMedia(query),
@@ -91,7 +98,10 @@ function bootstrap(): void {
           socket: new ShellSocket(clientId),
           metrics,
           modes,
-          redraw: () => m.redraw(),
+          redraw: () => {
+            followDesktopTheme();
+            m.redraw();
+          },
           notify: (message) => alert(message),
           reloadInterface,
           popOut: popOutBridge,
@@ -131,12 +141,6 @@ function bootstrap(): void {
     if (typeof windowId !== "string" || windowId === "") return;
     if (phase !== "out" && phase !== "in" && phase !== "released") return;
     desktopStore.setTearOut(windowId, phase);
-  });
-  // The chrome's theme. A theme can redeclare metric tokens (the title bar height), so the metrics
-  // the geometry reads are taken again under it.
-  setEmbedderMessageHandler(UI_THEME, (message) => {
-    if (!applyUiTheme(root, message.theme)) return;
-    desktopStore.setThemeMetrics(readThemeMetrics(readStyle(root)), currentRenderModes(root));
   });
   const rootElement = document.getElementById("app");
   if (rootElement) {

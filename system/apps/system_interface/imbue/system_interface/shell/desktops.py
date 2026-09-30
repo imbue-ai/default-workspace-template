@@ -3,6 +3,7 @@ the default shortcuts offered to them (section 4.1a), in ``default_shortcuts_off
 
 import re
 from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
@@ -26,6 +27,7 @@ from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
 from imbue.system_interface.shell.data_types import DesktopShortcut
+from imbue.system_interface.shell.data_types import DesktopThemesDocument
 from imbue.system_interface.shell.data_types import DesktopsChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.data_types import GridCell
@@ -48,6 +50,7 @@ from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import DesktopTheme
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WindowId
@@ -60,6 +63,8 @@ from imbue.system_interface.shell.state_files import write_json_atomic
 
 DESKTOPS_FILENAME: Final[str] = "desktops.json"
 # The apps whose default shortcut the shell has offered (desktop plan section 3.2).
+DESKTOP_THEMES_FILENAME: Final[str] = "desktop_themes.json"
+DESKTOP_THEMES_FILE_VERSION: Final[int] = 1
 DEFAULT_SHORTCUTS_OFFERED_FILENAME: Final[str] = "default_shortcuts_offered.json"
 DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION: Final[int] = 1
 
@@ -259,7 +264,8 @@ def find_desktop_by_name_or_id(desktops: Sequence[Desktop], requested: str) -> D
 
 
 class DesktopStore(MutableModel):
-    """Reads and writes ``desktops.json`` and ``default_shortcuts_offered.json`` under the shell's state lock."""
+    """Reads and writes ``desktops.json``, ``desktop_themes.json`` and ``default_shortcuts_offered.json`` under the
+    shell's state lock."""
 
     state_directory: Path = Field(frozen=True, description="The shell's state directory")
 
@@ -278,6 +284,23 @@ class DesktopStore(MutableModel):
 
     def _write_unlocked(self, document: DesktopsDocument) -> None:
         write_json_atomic(self._path(), document.model_dump(mode="json"))
+
+    def _themes_path(self) -> Path:
+        return self.state_directory / DESKTOP_THEMES_FILENAME
+
+    def _read_themes_unlocked(self) -> dict[DesktopId, DesktopTheme]:
+        """The recorded themes; empty when the file is absent, unreadable, or of another version (logged)."""
+        document = parse_versioned_document(
+            read_json_object(self._themes_path()),
+            DesktopThemesDocument,
+            DESKTOP_THEMES_FILE_VERSION,
+            self._themes_path(),
+        )
+        return dict(document.themes) if document is not None else {}
+
+    def _write_themes_unlocked(self, themes: Mapping[DesktopId, DesktopTheme]) -> None:
+        document = DesktopThemesDocument(version=DESKTOP_THEMES_FILE_VERSION, themes=dict(themes))
+        write_json_atomic(self._themes_path(), document.model_dump(mode="json"))
 
     def _offered_path(self) -> Path:
         return self.state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME
@@ -423,6 +446,33 @@ class DesktopStore(MutableModel):
             desktop_id, lambda desktop: desktop.model_copy_update(to_update(desktop.field_ref().wallpaper, wallpaper))
         )
 
+    def read_themes(self) -> dict[DesktopId, DesktopTheme]:
+        """Each themed desktop's theme; a desktop missing from it wears the standard look."""
+        with STATE_FILES_LOCK:
+            return self._read_themes_unlocked()
+
+    def set_theme(self, desktop_id: str, theme: DesktopTheme) -> Desktop:
+        """Record the look a desktop wears; raises DesktopNotFoundError for a desktop there is not."""
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            desktop = next(
+                (
+                    candidate
+                    for candidate in (document.desktops if document is not None else ())
+                    if candidate.id == desktop_id
+                ),
+                None,
+            )
+            if desktop is None:
+                raise DesktopNotFoundError(desktop_id)
+            themes = self._read_themes_unlocked()
+            if theme == DesktopTheme.DEFAULT:
+                themes.pop(desktop.id, None)
+            else:
+                themes[desktop.id] = theme
+            self._write_themes_unlocked(themes)
+        return desktop
+
     def delete_desktop(self, desktop_id: str) -> DesktopDeleteOutcome:
         """Delete a desktop (its windows with it) and name the desktop its clients fall back to; the last one is refused."""
         with STATE_FILES_LOCK:
@@ -435,6 +485,9 @@ class DesktopStore(MutableModel):
             if not remaining:
                 raise LastDesktopError(f"Desktop {doomed.name!r} is the last one and cannot be deleted")
             self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=remaining))
+            themes = self._read_themes_unlocked()
+            if themes.pop(doomed.id, None) is not None:
+                self._write_themes_unlocked(themes)
         return DesktopDeleteOutcome(deleted=doomed, fallback_desktop_id=remaining[0].id)
 
     def set_shortcut(self, desktop_id: str, shortcut: DesktopShortcut) -> Desktop:

@@ -143,6 +143,7 @@ export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Des
     color: "#2f6b4f",
     glyph: 0,
     wallpaper: null,
+    theme: "default",
     shortcuts: [],
     windows: [],
     ...overrides,

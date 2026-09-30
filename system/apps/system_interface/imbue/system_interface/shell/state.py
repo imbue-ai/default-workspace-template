@@ -101,6 +101,7 @@ from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import DesktopTheme
 from imbue.system_interface.shell.primitives import IfPresent
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import UserId
@@ -378,7 +379,10 @@ class ShellState(MutableModel):
         for client_id, paths in by_client.items():
             for window_id, stored in paths.items():
                 by_window.setdefault(window_id, {})[client_id] = stored.path
-        return [desktop_wire_json(desktop, by_window) for desktop in desktops]
+        themes = self.desktops.read_themes()
+        return [
+            desktop_wire_json(desktop, by_window, themes.get(desktop.id, DesktopTheme.DEFAULT)) for desktop in desktops
+        ]
 
     def desktop_wire_json(self, desktop: Desktop) -> dict[str, Any]:
         (wire,) = self.desktops_wire_json((desktop,))

@@ -27,6 +27,7 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.primitives import ClientActivityKind
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import DesktopTheme
 from imbue.system_interface.shell.primitives import IfPresent
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import SaveId
@@ -310,6 +311,17 @@ class DesktopsDocument(FrozenModel):
     desktops: tuple[Desktop, ...] = Field(description="Every desktop, in creation order; the first is the fallback")
 
 
+class DesktopThemesDocument(FrozenModel):
+    """The whole of ``desktop_themes.json``: the look each desktop wears, where it is not the standard one.
+
+    Kept beside ``desktops.json`` rather than in it: a shell from before themes still reads that file, and its
+    records refuse a key they do not know.
+    """
+
+    version: int = Field(description="The file format version")
+    themes: dict[DesktopId, DesktopTheme] = Field(description="Each themed desktop's theme, by desktop id")
+
+
 class DefaultShortcutsOfferedDocument(FrozenModel):
     """The whole of ``default_shortcuts_offered.json``: the apps whose default shortcut the shell has offered."""
 
@@ -491,13 +503,14 @@ class DesktopDeleteOutcome(FrozenModel):
 
 @pure
 def desktop_wire_json(
-    desktop: Desktop, client_paths: Mapping[WindowId, Mapping[ClientId, WindowPath]]
+    desktop: Desktop, client_paths: Mapping[WindowId, Mapping[ClientId, WindowPath]], theme: DesktopTheme
 ) -> dict[str, Any]:
     """The ``desktop`` object of desktop contracts.md section 5.2: the record of section 4.1 with each window
     carrying ``client_paths``, the path each client's page of an independent window is at (empty for a linked
     window, and for a client at the home path), so a reader of the shell's windows sees what every client shows."""
     return {
         **desktop.model_dump(mode="json"),
+        "theme": theme.value,
         "windows": [window_wire_json(window, client_paths.get(window.id, {})) for window in desktop.windows],
     }
 

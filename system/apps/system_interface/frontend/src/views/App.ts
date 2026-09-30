@@ -790,9 +790,10 @@ export function App(): m.Component<AppAttrs> {
       desktop,
       wallpapers,
       isDeleting: dialog.isDeleting,
-      onSave: async (name, color, glyph, wallpaper) => {
+      onSave: async (name, color, glyph, wallpaper, theme) => {
         await current.updateDesktopSettings(desktop.id, name, color, glyph);
         if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);
+        if (theme !== desktop.theme) await current.setDesktopTheme(desktop.id, theme);
         settingsDialog = null;
       },
       onDelete: async () => {

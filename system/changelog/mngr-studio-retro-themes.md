@@ -1,5 +1,7 @@
-The shared UI library can wear Imbue Studio's retro themes.
+The shared UI library carries the retro themes a desktop can wear.
 
-- `embed.ts` handles the embed contract's new `minds:ui-theme` message (contract version 7): the theme Imbue Studio's chrome wears, sent after the workspace announces it is ready and on every switch.
+- `src/themes/`: the Classic Mac and Windows 2000 stylesheets, each built on its library (system.css; win95.css recolored to the Windows 2000 face gray), scoped to `:root[data-ui-theme]`, with the libraries' fonts, images and licenses, their pixel-art app icons, and `uiTheme.ts`, which applies a theme and finds an app's icon.
 
-- `themes/`: the Classic Mac and Windows 2000 stylesheets (token overrides plus the element rules of system.css and a Windows 2000 recolor of 98.css, all scoped to `:root[data-ui-theme]`), their pixel-art app icons, and `uiTheme.ts`, which applies a theme and finds an app's icon. The vendored CSS and icons are copies of Imbue Studio's (`apps/minds/frontend/src/themes/` in mngr).
+- The shared button, dialog and menu carry the libraries' class names (`btn`, `modal-content`/`standard-dialog`, `dropdown-menu`/`dropdown-item`), which style them only while a retro theme is worn.
+
+- `scripts/vendor-retro-themes.mjs` regenerates the scoped library copies from pinned, digest-checked sources, and `scripts/generate-retro-icons.mjs` draws app icons with Retro Diffusion (it needs `RETRODIFFUSION_API_KEY`).

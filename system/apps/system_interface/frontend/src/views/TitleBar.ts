@@ -92,12 +92,13 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           // No gap of its own: the spacing between the leading items is uneven, so each carries
           // its own leading margin.
           class:
-            "title-bar pointer-events-auto flex h-(--desk-title-bar-height) shrink-0 items-center border-b " +
+            // `card-header` / `header-inactive` are win95.css's caption classes, inert outside its theme.
+            "title-bar card-header pointer-events-auto flex h-(--desk-title-bar-height) shrink-0 items-center border-b " +
             "border-default pr-1 pl-1.5 touch-none select-none " +
             // The open hand says the bar is the handle. Not in compact mode, where a window fills
             // the backdrop and there is nothing to drag it to. The controls carry their own cursor.
             (isCompact ? "" : "cursor-grab ") +
-            (isFocused ? "bg-surface text-primary" : "bg-surface-secondary text-secondary"),
+            (isFocused ? "bg-surface text-primary" : "header-inactive bg-surface-secondary text-secondary"),
           ondblclick: (event: MouseEvent) => {
             if ((event.target as Element).closest("[data-window-control]") !== null) return;
             onDoubleClick();
@@ -123,7 +124,8 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
             "span",
             {
               class:
-                "window-title ml-1.5 min-w-0 truncate text-(length:--font-size-row) " +
+                // `title` is system.css's title patch, inert outside its theme.
+                "window-title title ml-1.5 min-w-0 truncate text-(length:--font-size-row) " +
                 (isFocused ? "font-bold" : "font-medium opacity-70"),
             },
             title,

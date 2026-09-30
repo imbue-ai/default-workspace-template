@@ -1,9 +1,12 @@
-/* Windows 2000 theme: the workspace desktop in the "Windows Standard" scheme, matching Imbue
-   Studio's theme of the same name (see uiTheme.ts). 98.css's element rules, recolored to the
-   Windows 2000 palette (vendor/, scoped and copied from mngr), sit in Tailwind's base layer; the
-   rules below remap the tokens and dress the desktop's chrome through its stable class names. All
-   of it is scoped to :root[data-ui-theme="windows-2000"]. */
-@import "./vendor/windows-2000/lib.css" layer(base);
+/* Windows 2000 theme (Desktop settings > Theme): the desktop in the Windows 2000 look, drawn by
+   win95.css (https://alexbsoft.github.io/win95.css/), recolored to the Windows 2000 face gray. The
+   library (vendor/, scoped by scripts/vendor-retro-themes.mjs) is imported unlayered, so its
+   components win over the utility classes on the elements that carry its class names: windows
+   (.card, .card-header, .header-inactive), buttons (.btn), dialogs (.modal-content, .modal-header),
+   menus (.dropdown-menu, .dropdown-item), the taskbar (.taskbar) and the launcher (.form-95). The
+   rules below remap the design tokens and fill in the rest. All of it is scoped to
+   :root[data-ui-theme="windows-2000"]. */
+@import "./vendor/windows-2000/lib.css";
 
 :root[data-ui-theme="windows-2000"] {
   --c-bg: #d4d0c8;
@@ -23,7 +26,7 @@
   --c-surface-secondary: #d4d0c8;
   --c-inverse-surface: #0a246a;
   --c-inverse-surface-hover: #0a246a;
-  --font-sans: Tahoma, "Retro MS Sans Serif", Verdana, sans-serif;
+  --font-sans: "MS Sans Serif", Tahoma, Verdana, sans-serif;
   --font-mono: "Lucida Console", "Courier New", monospace;
   --radius-sm: 0px;
   --radius-md: 0px;
@@ -33,15 +36,11 @@
   --c-shadow-overlay: var(--win-raised), 1px 1px 0 #000000;
 
   --win-raised: inset -1px -1px #404040, inset 1px 1px #d4d0c8, inset -2px -2px #808080, inset 2px 2px #ffffff;
-  --win-pressed: inset -1px -1px #ffffff, inset 1px 1px #404040, inset -2px -2px #d4d0c8, inset 2px 2px #808080;
-  --win-sunken: inset -1px -1px #ffffff, inset 1px 1px #808080, inset -2px -2px #d4d0c8, inset 2px 2px #404040;
-  --win-caption: linear-gradient(90deg, #0a246a, #a6caf0);
-  --win-caption-inactive: linear-gradient(90deg, #808080, #c0c0c0);
 
   /* The Windows 2000 desktop: plain teal-blue, no wallpaper. */
   --desk-default-wallpaper: none;
   --desk-window-radius: 0px;
-  --desk-window-shadow: var(--win-raised), 1px 1px 0 #000000;
+  --desk-window-shadow: 1px 1px 0 #000000;
   --desk-taskbar-surface: #d4d0c8;
   --desk-taskbar-entry-shadow: none;
   --desk-icon-radius: 0px;
@@ -66,54 +65,23 @@
   background-color: #3a6ea5;
 }
 
-/* A window is the raised face-gray frame with the caption inside it. */
-:root[data-ui-theme="windows-2000"] .window-frame {
-  background: #d4d0c8;
-  padding: 3px;
-}
+/* The caption: win95.css's gradient carries the title, and the controls on it keep their own face. */
 :root[data-ui-theme="windows-2000"] .title-bar {
-  background: var(--win-caption-inactive);
-  color: #d4d0c8;
   border-bottom: none;
-}
-:root[data-ui-theme="windows-2000"] .window[data-focused="true"] .title-bar {
-  background: var(--win-caption);
-  color: #ffffff;
 }
 :root[data-ui-theme="windows-2000"] .window-title {
   font-weight: 700;
   opacity: 1;
 }
-:root[data-ui-theme="windows-2000"] .window-control {
-  background: #d4d0c8;
-  color: #000000;
-  box-shadow: var(--win-raised);
+
+:root[data-ui-theme="windows-2000"] .launcher-field {
   border-radius: 0;
-}
-:root[data-ui-theme="windows-2000"] .window-control:active {
-  box-shadow: var(--win-pressed);
 }
 
-/* The taskbar: a face-gray strip with a highlight along its top, and one raised button per window,
-   pushed in for the window you are in. */
-:root[data-ui-theme="windows-2000"] .taskbar {
-  box-shadow: inset 0 1px #ffffff;
-}
-:root[data-ui-theme="windows-2000"] .taskbar-entry {
-  background: #d4d0c8;
-  box-shadow: var(--win-raised);
-  border-radius: 0;
-}
 :root[data-ui-theme="windows-2000"] .taskbar-entry[data-focused="true"] {
-  background: repeating-conic-gradient(#ffffff 0 25%, #d4d0c8 0 50%) 0 0 / 2px 2px;
-  box-shadow: var(--win-pressed);
+  border: 2px inset #ffffff;
+  background: url("./vendor/windows-2000/assets/background.bmp");
   font-weight: 700;
-}
-:root[data-ui-theme="windows-2000"] .launcher-field {
-  background: #ffffff;
-  box-shadow: var(--win-sunken);
-  border: none;
-  border-radius: 0;
 }
 
 /* Desktop icon labels: white on the desktop's own blue. */
