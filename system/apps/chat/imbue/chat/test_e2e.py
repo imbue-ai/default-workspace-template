@@ -1449,9 +1449,7 @@ def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_
     ):
         rows = (
             file_viewer_registry_row(viewer_url),
-            registry_row_toml(
-                "browser", url_opener.http_url, message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)]
-            ),
+            registry_row_toml("browser", url_opener.http_url, message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)]),
         )
         with _running_e2e_server(tmp_path, session_events=_LINKING_SESSION_EVENTS, extra_rows=rows) as server:
             _open_fixture_chat(page, server)

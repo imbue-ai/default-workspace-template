@@ -233,7 +233,6 @@ def test_a_sender_that_is_not_an_app_name_is_a_400(tmp_path: Path, broadcaster: 
     assert answer.status_code == 400
 
 
-
 def test_an_app_that_refuses_with_a_json_detail_is_reported_in_its_own_words(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:

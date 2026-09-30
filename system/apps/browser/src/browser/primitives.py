@@ -102,7 +102,9 @@ def describe_local_url_problem(value: str) -> str | None:
     if problem is not None:
         return problem
     hostname = urllib.parse.urlsplit(value).hostname or ""
-    if hostname not in _LOCAL_HOSTNAMES and not hostname.endswith(_LOCAL_HOSTNAME_SUFFIX):
+    if hostname not in _LOCAL_HOSTNAMES and not hostname.endswith(
+        _LOCAL_HOSTNAME_SUFFIX
+    ):
         return f"invalid url {_preview(value)}: only an address on this machine (localhost) opens here"
     return None
 
