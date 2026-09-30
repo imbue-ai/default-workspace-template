@@ -2,9 +2,12 @@
 
 from pathlib import Path
 
+import pytest
+
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_settings import SETTINGS_FILENAME
+from imbue.chat.config import CHAT_STATE_DIR
 from imbue.chat.config import Config
 from imbue.chat.main import MANIFEST_PATH
 from imbue.chat.main import _parse_args
@@ -13,6 +16,7 @@ from imbue.chat.main import build_production_state
 from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.primitives import ChatId
 from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
+from imbue.chat.spare_chat import SPARE_CHAT_FILENAME
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 
@@ -75,5 +79,19 @@ def test_chat_writes_land_in_the_configured_data_dir(tmp_path: Path) -> None:
         assert (tmp_path / "scratch" / STAMPS_FILENAME).exists()
         assert (tmp_path / "scratch" / SETTINGS_FILENAME).exists()
         assert (tmp_path / "scratch" / SECRET_REQUESTS_DIRNAME / f"{filed.request.request_id}.json").exists()
+    finally:
+        state.shutdown()
+
+
+@pytest.mark.parametrize("is_secondary", [False, True], ids=["live", "secondary"])
+def test_the_spares_record_is_the_live_chats_machine_state_whatever_the_data_dir(
+    tmp_path: Path, is_secondary: bool
+) -> None:
+    """A secondary reads the live chat's spares, to hide them, rather than its scratch copy's."""
+    state = build_production_state(Config(chat_data_dir=tmp_path / "scratch"), is_secondary=is_secondary)
+    try:
+        spare_store = state.agent_manager._spare_chat_store
+        assert spare_store is not None
+        assert spare_store.path == CHAT_STATE_DIR / SPARE_CHAT_FILENAME
     finally:
         state.shutdown()
