@@ -997,16 +997,6 @@ export class DesktopStore {
     }
   }
 
-  /** The desktop of record, if it is still there, without the shortcut of ``(app, launch)``. */
-  private withoutShortcutShown(desktopId: string, app: string, launch: string): void {
-    const desktop = desktopById(this.state, desktopId);
-    if (desktop === null) return;
-    this.takeDesktop({
-      ...desktop,
-      shortcuts: desktop.shortcuts.filter((shortcut) => !isShortcutOf(shortcut, app, launch)),
-    });
-  }
-
   /** Replace a shortcut the desktop holds, as the shortcut menu's mode flip does. */
   async setShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<void> {
     try {
@@ -1075,7 +1065,7 @@ export class DesktopStore {
     if (desktop === null) return;
     const removed = findShortcut(desktop, app, launch);
     if (removed === undefined) return;
-    this.withoutShortcutShown(desktop.id, app, launch);
+    this.takeDesktop({ ...desktop, shortcuts: desktop.shortcuts.filter((candidate) => candidate !== removed) });
     try {
       this.takeDesktop(await this.deps.api.removeDesktopShortcut(desktop.id, app, launch));
     } catch (error) {
