@@ -102,7 +102,12 @@ class HttpClient:
                 return int(response.status), response.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as exc:
             return int(exc.code), exc.read().decode("utf-8", "replace")
-        except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
+        except (
+            urllib.error.URLError,
+            OSError,
+            http.client.HTTPException,
+            ValueError,
+        ) as exc:
             return None, str(exc)
 
 
