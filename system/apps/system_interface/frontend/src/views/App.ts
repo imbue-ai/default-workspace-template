@@ -641,14 +641,18 @@ export function App(): m.Component<AppAttrs> {
         onSelect: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
       },
       { kind: "divider" },
-      {
-        kind: "action",
-        key: "remove-from-desktop",
-        label: "Remove from desktop",
-        onSelect: () => void current.removeShortcut(shortcut.target.app, shortcut.target.launch),
-      },
+      removeFromDesktopRow(current, shortcut.target.app, shortcut.target.launch),
     );
     return rows;
+  }
+
+  function removeFromDesktopRow(current: DesktopStore, app: string, launch: string): MenuRow {
+    return {
+      kind: "action",
+      key: "remove-from-desktop",
+      label: "Remove from desktop",
+      onSelect: () => void current.removeShortcut(app, launch),
+    };
   }
 
   /** Add the app's own shortcut (``appShortcutOf``) to the desktop on screen, or take it off when it is there; null
@@ -660,12 +664,7 @@ export function App(): m.Component<AppAttrs> {
     const own = app === undefined ? null : appShortcutOf(app);
     if (desktop === null || own === null) return null;
     if (findShortcut(desktop, appName, own.launch) !== undefined) {
-      return {
-        kind: "action",
-        key: "remove-from-desktop",
-        label: "Remove from desktop",
-        onSelect: () => void current.removeShortcut(appName, own.launch),
-      };
+      return removeFromDesktopRow(current, appName, own.launch);
     }
     return {
       kind: "action",
