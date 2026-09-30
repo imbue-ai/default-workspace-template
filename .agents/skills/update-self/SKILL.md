@@ -588,8 +588,8 @@ resumes), and how to honor a rollback request are in
 
   Its JSON lists what it `restarted`, what it `left_running` because the chat
   app found it busy (`busy_with` says with what: working, waiting on a dialog,
-  switching to another agent, receiving a message, holding queued messages),
-  and what `failed`. The chat app checks each chat at the moment of its
+  switching to another agent, receiving a message, holding queued messages, or
+  in a state the chat app cannot read), and what `failed`. The chat app checks each chat at the moment of its
   restart, so a chat mid-turn is left running, but a restart does end a
   background command an idle chat was waiting on; the chat then gets that
   command's report saying it was killed, and can run it again. The results
