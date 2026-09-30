@@ -43,6 +43,8 @@ dev = [
     "mngr-cli-contract",
     # Keeps tmp_path somewhere a stub executable can run (a workspace container mounts /tmp noexec).
     "pytest-executable-tmp",
+    # Stops a test run on macOS, where these suites cannot run faithfully.
+    "pytest-linux-only",
     # The shell, for the two-process fixture the e2e suite and the system tests boot (the
     # chat is framed by the shell, so a chat page can only be driven through it).
     "system-interface",

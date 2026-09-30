@@ -38,6 +38,7 @@ members = [
     "mngr-cli-contract",
     "oom-priority",
     "pytest-executable-tmp",
+    "pytest-linux-only",
     "share-gateway",
     "system-interface",
     "terminal-app",
@@ -653,6 +654,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-executable-tmp" },
+    { name = "pytest-linux-only" },
     { name = "pytest-playwright" },
     { name = "pytest-timeout" },
     { name = "ruff" },
@@ -694,6 +696,7 @@ dev = [
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-executable-tmp", editable = "system/libs/pytest_executable_tmp" },
+    { name = "pytest-linux-only", editable = "system/libs/pytest_linux_only" },
     { name = "pytest-playwright", specifier = ">=0.4" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
     { name = "ruff", specifier = "~=0.12.8" },
@@ -913,6 +916,7 @@ dev = [
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-executable-tmp" },
+    { name = "pytest-linux-only" },
     { name = "pytest-playwright" },
     { name = "pytest-timeout" },
     { name = "pyyaml" },
@@ -949,6 +953,7 @@ dev = [
     { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-executable-tmp", editable = "system/libs/pytest_executable_tmp" },
+    { name = "pytest-linux-only", editable = "system/libs/pytest_linux_only" },
     { name = "pytest-playwright", specifier = ">=0.4" },
     { name = "pytest-timeout", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6" },
@@ -2758,6 +2763,21 @@ requires-dist = [
 ]
 
 [[package]]
+name = "pytest-linux-only"
+version = "0.1.0"
+source = { editable = "system/libs/pytest_linux_only" }
+dependencies = [
+    { name = "imbue-common" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=8efa2847f2b455c3a06e43266f32b13b13f30d58" },
+    { name = "pytest", specifier = ">=8.0" },
+]
+
+[[package]]
 name = "pytest-playwright"
 version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3341,6 +3361,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-executable-tmp" },
+    { name = "pytest-linux-only" },
     { name = "pytest-playwright" },
     { name = "pytest-timeout" },
     { name = "ruff" },
@@ -3373,6 +3394,7 @@ dev = [
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-executable-tmp", editable = "system/libs/pytest_executable_tmp" },
+    { name = "pytest-linux-only", editable = "system/libs/pytest_linux_only" },
     { name = "pytest-playwright", specifier = ">=0.4" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
     { name = "ruff", specifier = "~=0.12.8" },

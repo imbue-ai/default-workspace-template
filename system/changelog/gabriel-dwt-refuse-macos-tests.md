@@ -1,0 +1,1 @@
+Every pytest root (the repo root, the chat app and the shell) now loads `pytest-linux-only`, which stops a test run on macOS before it collects anything, since these suites target the Linux workspace container. Set `DWT_ALLOW_MACOS_TESTS=1` to run anyway.
