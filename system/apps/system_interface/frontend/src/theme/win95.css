@@ -1,0 +1,330 @@
+/* The Windows 95 look for the desktop, after the default theme's tokens and the shared design
+   system: the teal field, silver chrome with the classic raised and sunken bevels, a navy title
+   bar, a Start button and Start menu in place of the launcher field and its card, and white
+   pixel-art shortcut icons. Mostly a re-tokening; the hand-written rules below are the parts a
+   token cannot reach (bevels, the Start menu's band, the selected shortcut's label).
+
+   Unlayered on purpose: a rule here beats the utilities in the views, so the markup stays as it
+   is and this file alone carries the theme. */
+
+:root {
+  /* The palette: teal desktop, silver chrome, navy selection. */
+  --c-bg: #008080;
+  --c-bg-sidebar: #c0c0c0;
+  --c-surface: #c0c0c0;
+  --c-surface-secondary: #c0c0c0;
+  --c-fill-hover: rgb(0 0 0 / 0.08);
+  --c-fill-active: rgb(0 0 0 / 0.14);
+  --c-text-primary: #000000;
+  --c-text-secondary: #202020;
+  --c-text-faint: #808080;
+  --c-border: #808080;
+  --c-border-faint: #a0a0a0;
+  --c-accent: #000080;
+  --c-accent-hover: #000060;
+  --c-accent-light: #d0d0e8;
+  --c-text-on-accent: #ffffff;
+  --c-inverse-surface: #000080;
+  --c-inverse-surface-hover: #000060;
+
+  --font-sans: "Pixelated MS Sans Serif", "MS Sans Serif", Tahoma, "Segoe UI", Arial, sans-serif;
+  --font-size-body: 12px;
+  --font-size-row: 11px;
+  --font-size-helper: 10px;
+
+  /* Nothing is rounded and nothing floats: bevels say what is raised. */
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --shadow-raised: none;
+  --shadow-overlay: none;
+
+  /* The bevels, spelled once. */
+  --win95-outset: inset -1px -1px #0a0a0a, inset 1px 1px #ffffff, inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+  --win95-inset: inset 1px 1px #0a0a0a, inset -1px -1px #ffffff, inset 2px 2px #808080, inset -2px -2px #dfdfdf;
+  --win95-outset-thin: inset -1px -1px #0a0a0a, inset 1px 1px #ffffff;
+  --win95-inset-thin: inset 1px 1px #0a0a0a, inset -1px -1px #ffffff;
+
+  --desk-title-bar-height: 22px;
+  --desk-taskbar-height: 30px;
+  --desk-cell-width: 76px;
+  --desk-cell-height: 80px;
+  --desk-grid-inset: 8px;
+  --desk-window-radius: 0px;
+  --desk-window-control-inset: 4px;
+  --desk-window-shadow: none;
+  --desk-taskbar-surface: #c0c0c0;
+  --desk-taskbar-blur: 0px;
+  --desk-backdrop: #008080;
+  --desk-default-wallpaper: none;
+  --desk-icon-size: 36px;
+  --desk-icon-radius: 0px;
+  --desk-icon-shadow: none;
+  --desk-icon-shadow-lifted: none;
+  --desk-shortcut-label-shadow: drop-shadow(1px 1px 0 rgb(0 0 0 / 0.75));
+  --desk-shortcut-lift-scale: 1;
+  --desk-launcher-menu-width: 12.5rem;
+}
+
+/* Windows: a silver frame with the raised bevel, the title bar and content inside it. The frame
+   paints nothing of its own: a window's live page sits under its chrome in the stacking order and
+   shows through the content box, so an opaque frame would hide it. The bevel and the silver rim
+   are inset shadows, which only reach the 3px padding the content stays clear of. */
+.window-frame {
+  background: transparent;
+  padding: 3px;
+  box-shadow:
+    var(--win95-outset),
+    inset 3px 3px #c0c0c0,
+    inset -3px -3px #c0c0c0;
+}
+
+.title-bar {
+  background: #000080;
+  color: #ffffff;
+  border-bottom: none;
+  padding: 0 2px 0 3px;
+}
+
+[data-window-id][data-focused="false"] .title-bar {
+  background: #808080;
+  color: #c0c0c0;
+}
+
+.window-title {
+  font-weight: bold;
+  font-size: var(--font-size-row);
+}
+
+.title-bar .window-control,
+.title-bar .window-control:hover {
+  height: 16px;
+  width: 16px;
+  min-height: 16px;
+  min-width: 16px;
+  padding: 0;
+  margin-left: 2px;
+  border: none;
+  border-radius: 0;
+  background: #c0c0c0;
+  color: #000000;
+  box-shadow: var(--win95-outset);
+}
+
+.title-bar .window-control:active {
+  box-shadow: var(--win95-inset);
+}
+
+.title-bar .window-control svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* The taskbar: a silver strip with a highlight along its top edge. */
+.taskbar {
+  border-top: 1px solid #ffffff;
+  box-shadow: 0 -1px 0 #c0c0c0;
+  padding: 0 2px;
+  gap: 3px;
+}
+
+.taskbar-entry,
+.taskbar-entry:hover {
+  height: 22px;
+  border: none;
+  border-radius: 0;
+  background: #c0c0c0;
+  color: #000000;
+  box-shadow: var(--win95-outset);
+  padding: 0 6px;
+  max-width: 160px;
+}
+
+.taskbar-entry[data-focused="true"] {
+  background: #e8e8e8;
+  box-shadow: var(--win95-inset);
+  font-weight: bold;
+}
+
+.taskbar-entry [class*="opacity-60"] {
+  opacity: 1;
+}
+
+.taskbar-entry .taskbar-entry-title {
+  opacity: 1;
+}
+
+/* The Start button. */
+.launcher-start,
+.launcher-start:hover {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px 0 4px;
+  border: none;
+  border-radius: 0;
+  background: #c0c0c0;
+  color: #000000;
+  box-shadow: var(--win95-outset);
+  font-weight: bold;
+  font-size: var(--font-size-body);
+  cursor: pointer;
+}
+
+.launcher-start[aria-expanded="true"],
+.launcher-start:active {
+  box-shadow: var(--win95-inset);
+  background: #e8e8e8;
+}
+
+/* The Start menu: a raised silver card with the navy band down its left edge. */
+.launcher-menu {
+  left: 0;
+  border: none;
+  border-radius: 0;
+  background: #c0c0c0;
+  box-shadow: var(--win95-outset);
+  padding: 3px 3px 3px 27px;
+}
+
+.launcher-menu::before {
+  content: "Imbue Studio";
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  bottom: 3px;
+  width: 22px;
+  background: linear-gradient(to bottom, #000080, #1084d0);
+  color: #c0c0c0;
+  font-weight: bold;
+  font-size: 15px;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  padding: 4px 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.launcher-row {
+  height: 26px;
+  padding: 0 10px 0 6px;
+  border-radius: 0;
+}
+
+.launcher-row:hover,
+.launcher-row[data-highlighted="true"] {
+  background: #000080;
+  color: #ffffff;
+}
+
+.launcher-row:hover *,
+.launcher-row[data-highlighted="true"] * {
+  color: inherit;
+}
+
+.launcher-row > span:first-child {
+  color: inherit;
+}
+
+.launcher-menu [data-section] + [data-section] > .my-1 {
+  border-top-color: #808080;
+  box-shadow: 0 1px 0 #ffffff;
+}
+
+/* Shortcuts: white pixel icons over white labels, the selected one's label in navy. */
+.shortcut {
+  color: #ffffff;
+}
+
+.shortcut-icon {
+  filter: drop-shadow(1px 1px 0 rgb(0 0 0 / 0.55));
+  transition: none;
+}
+
+.shortcut:hover .shortcut-icon {
+  scale: none;
+  transform: none;
+}
+
+.shortcut-icon svg {
+  shape-rendering: crispEdges;
+}
+
+.shortcut-highlight {
+  gap: 4px;
+  padding: 2px;
+  border-radius: 0;
+  background: transparent;
+  outline: none;
+}
+
+.shortcut[aria-pressed="true"] .shortcut-highlight {
+  background: transparent;
+  outline: none;
+}
+
+.shortcut-label span {
+  font-weight: normal;
+  font-size: var(--font-size-row);
+  padding: 0 2px;
+}
+
+.shortcut[aria-pressed="true"] .shortcut-label span {
+  background: #000080;
+  outline: 1px dotted #ffff80;
+}
+
+/* The tray: a sunken well holding the desktops and the clock. */
+.system-tray {
+  height: 22px;
+  padding: 0 6px;
+  gap: 4px;
+  box-shadow: var(--win95-inset-thin);
+}
+
+.system-tray .desktop-switch,
+.system-tray [data-desktops-menu] {
+  height: 18px;
+  width: 18px;
+  min-height: 18px;
+  min-width: 18px;
+  padding: 0;
+  border-radius: 0;
+}
+
+.tray-clock {
+  font-size: var(--font-size-row);
+  padding-left: 4px;
+}
+
+/* Menus (a window's, an entry's, a shortcut's, the desktops'): raised silver cards with navy rows. */
+[data-menu-part="menu"],
+[data-menu-part="submenu"] {
+  border: none;
+  border-radius: 0;
+  background: #c0c0c0;
+  box-shadow: var(--win95-outset);
+}
+
+[data-menu-part] [data-menu-row] {
+  border-radius: 0;
+}
+
+[data-menu-part] [data-menu-row]:hover {
+  background: #000080;
+  color: #ffffff;
+}
+
+[data-menu-part] [data-menu-row]:hover * {
+  color: inherit;
+}
+
+/* Modals keep their card, in silver. */
+.modal-card {
+  border: none;
+  border-radius: 0;
+  box-shadow: var(--win95-outset);
+}

@@ -138,12 +138,16 @@ describe("the launcher field", () => {
     }
   });
 
-  it("in compact mode with the menu closed it is a button that opens the menu", () => {
-    const { root, attrs } = render({ isCompact: true, isOpen: false });
-    expect(root.querySelector("[data-launcher-field] textarea")).toBeNull();
-    const toggle = root.querySelector("[data-launcher-field]") as HTMLElement;
-    expect(toggle.tagName).toBe("BUTTON");
-    toggle.click();
-    expect(attrs.onOpen).toHaveBeenCalledTimes(1);
+  it("the Start button opens the menu while it is closed and closes it while it is open; the field hides with the menu", () => {
+    const closed = render({ isOpen: false });
+    expect(inputOf(closed.root).parentElement?.classList.contains("hidden")).toBe(true);
+    (closed.root.querySelector("[data-launcher-start]") as HTMLElement).click();
+    expect(closed.attrs.onOpen).toHaveBeenCalledTimes(1);
+    expect(closed.attrs.onClose).not.toHaveBeenCalled();
+    unmountViews();
+    const open = render({ isOpen: true });
+    expect(inputOf(open.root).parentElement?.classList.contains("hidden")).toBe(false);
+    (open.root.querySelector("[data-launcher-start]") as HTMLElement).click();
+    expect(open.attrs.onClose).toHaveBeenCalledTimes(1);
   });
 });

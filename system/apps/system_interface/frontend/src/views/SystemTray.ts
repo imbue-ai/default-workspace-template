@@ -1,13 +1,14 @@
 /**
  * The system tray at the taskbar's right end: a row of self-contained tray widgets. V1 ships
- * Presence (who is connected, drawn only when someone is recorded) and Desktops; adding another
- * is adding a component here.
+ * Presence (who is connected, drawn only when someone is recorded), Desktops, and the clock;
+ * adding another is adding a component here.
  */
 
 import m from "mithril";
 import type { Desktop } from "../model/records";
 import { DesktopsWidget } from "./DesktopsWidget";
 import { PresenceStrip } from "./PresenceStrip";
+import { TrayClock } from "./TrayClock";
 
 export interface SystemTrayAttrs {
   readonly desktops: readonly Desktop[];
@@ -31,6 +32,7 @@ export const SystemTray: m.Component<SystemTrayAttrs> = {
         onOpenMenu: attrs.onOpenDesktopsMenu,
         onDesktopContextMenu: attrs.onDesktopContextMenu,
       }),
+      m(TrayClock),
     ]);
   },
 };
