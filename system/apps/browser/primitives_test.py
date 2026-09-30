@@ -1,6 +1,11 @@
 import pytest
 from browser.errors import InvalidBrowserNameValueError, InvalidStartUrlError
-from browser.primitives import AbsoluteHttpUrl, BrowserName, LocalHttpUrl, browser_page_path
+from browser.primitives import (
+    AbsoluteHttpUrl,
+    BrowserName,
+    LocalHttpUrl,
+    browser_page_path,
+)
 
 
 @pytest.mark.parametrize("value", ["browser-1", "alex-smith", "research-2b"])
