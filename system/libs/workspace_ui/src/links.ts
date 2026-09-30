@@ -148,10 +148,25 @@ export function routeLink(href: string, context: LinkRoutingContext): boolean {
   }
 }
 
-/** Follow a link element: the link as written, or, for one written relative to the page (an app page's
- *  ``details.html``), the page address it resolves to. Answers whether it was routed. */
+/** Marks the root ``installLinkRouting`` routes the clicks of, naming its selector. A DOM mark, so the element menu
+ *  served to every app (a bundle of its own) sees which links the page routes. */
+export const LINK_ROUTING_SELECTOR_ATTR = "data-link-routing-selector";
+
+/** Whether a click on ``anchor`` goes through ``installLinkRouting``. */
+function isClickRouted(anchor: HTMLAnchorElement): boolean {
+  const root = anchor.closest(`[${LINK_ROUTING_SELECTOR_ATTR}]`);
+  const selector = root?.getAttribute(LINK_ROUTING_SELECTOR_ATTR) ?? null;
+  return selector !== null && anchor.matches(selector);
+}
+
+/** Follow a link element as a click on it would go: the link as written, or the page address it resolves to for
+ *  one written relative to the page (an app page's ``details.html``). An absolute path names a file only in a link
+ *  the page routes (a chat message's); in any other link it is a page of the page's own app. Answers whether it
+ *  was routed. */
 export function routeLinkElement(anchor: HTMLAnchorElement, context: LinkRoutingContext): boolean {
-  if (routeLink(anchor.getAttribute("href") ?? "", context)) return true;
+  const href = anchor.getAttribute("href") ?? "";
+  const isOwnAppPath = href.startsWith("/") && !isClickRouted(anchor);
+  if (!isOwnAppPath && routeLink(href, context)) return true;
   return WEB_SCHEMES.has(anchor.protocol) && routeLink(anchor.href, context);
 }
 
@@ -196,8 +211,10 @@ export function installLinkRouting(root: Element, selector: string, context: Lin
   };
   root.addEventListener("click", onClick as EventListener);
   root.addEventListener("auxclick", onClick as EventListener);
+  root.setAttribute(LINK_ROUTING_SELECTOR_ATTR, selector);
   return () => {
     root.removeEventListener("click", onClick as EventListener);
     root.removeEventListener("auxclick", onClick as EventListener);
+    root.removeAttribute(LINK_ROUTING_SELECTOR_ATTR);
   };
 }

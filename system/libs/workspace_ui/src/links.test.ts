@@ -7,7 +7,14 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { classifyLink, installLinkRouting, routeLink, type LinkRoutingContext, type LinkTarget } from "./links";
+import {
+  classifyLink,
+  installLinkRouting,
+  routeLink,
+  routeLinkElement,
+  type LinkRoutingContext,
+  type LinkTarget,
+} from "./links";
 
 /** The URLs the Imbue Studio desktop app's ``isExternalUrl`` was asked about, with its answers, fetched from the
  *  pinned mngr commit with the embed contract (``system/scripts/fetch_mngr_assets.sh``). */
@@ -177,6 +184,33 @@ describe("routeLink", () => {
     const context = recordingContext(true);
     expect(routeLink("data/q4.pdf", context)).toBe(false);
     expect(context.calls).toEqual([]);
+  });
+});
+
+describe("routeLinkElement", () => {
+  afterEach(() => {
+    document.head.innerHTML = "";
+    document.body.innerHTML = "";
+  });
+
+  it("takes an absolute path for a file only in a link the page routes, and elsewhere for a page of its own app", () => {
+    document.head.innerHTML = `<base href="http://${CHAT_HOST}/">`;
+    document.body.innerHTML = `<div class="markdown-content"><a id="file" href="/home/user/plan.md">plan</a></div>
+      <a id="page" href="/notes/3?x=1">notes</a><a id="mail" href="mailto:a@example.com">mail</a>`;
+    const context = recordingContext(true);
+    const stopRouting = installLinkRouting(document.body, ".markdown-content a[href]", context);
+
+    const routed = ["file", "page", "mail"].map((id) =>
+      routeLinkElement(document.getElementById(id) as HTMLAnchorElement, context),
+    );
+    stopRouting();
+
+    expect(routed).toEqual([true, true, true]);
+    expect(context.calls).toEqual([
+      ["sendMessage", "open:file", { path: "/home/user/plan.md" }],
+      ["openPath", "/notes/3?x=1", "focus"],
+      ["openInNewTab", "mailto:a@example.com"],
+    ]);
   });
 });
 

@@ -13,6 +13,7 @@ import {
   type ContextMenuConnection,
 } from "./context_menu";
 import type { ContextMenuRow } from "./context_menu_rows";
+import { installLinkRouting, pageLinkRoutingContext } from "./links";
 import { REFERENCE_ID_PATTERN } from "./element_reference";
 
 const HANDSHAKE = { clientId: "client-1", windowId: "win-1", desktopId: "home", app: "docs", path: "/" };
@@ -65,11 +66,17 @@ afterEach(() => {
 });
 
 describe("installElementContextMenu", () => {
-  it("opens a link from the menu as a click on it would be routed: a file through the connection", () => {
-    document.body.innerHTML = '<a id="file" href="/home/user/plan%201.md">plan</a>';
+  it("opens a link from the menu as a click on it would be routed: a routed file link through the connection", () => {
+    document.body.innerHTML = '<div class="message"><a id="file" href="/home/user/plan%201.md">plan</a></div>';
+    const stopRouting = installLinkRouting(
+      document.body,
+      ".message a[href]",
+      pageLinkRoutingContext(window, connection),
+    );
     uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
     rightClick(document.getElementById("file") as Element);
     row("open-link").click();
+    stopRouting();
     expect(connection.sendMessage.mock.calls).toEqual([["open:file", { path: "/home/user/plan 1.md" }]]);
   });
 

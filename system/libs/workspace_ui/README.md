@@ -44,7 +44,10 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   it through the page's shell connection (`open:file` or `open:url` as a
   `shell:message`, `openPath`, `shell:open-link`, or a new browser tab), with a
   download or a new tab when no shell frames the page; `installLinkRouting`
-  routes a page's plain, modified, and middle clicks. The chat's message links,
+  routes a page's plain, modified, and middle clicks. An absolute path is a file
+  only in a link the page routes that way (a chat message's): `routeLinkElement`
+  takes one in any other link for a page of the page's own app, as a click on it
+  would load. The chat's message links,
   the element menu's "Open link", and the shell's handling of the links handed
   to it all go through it, and its test holds its external rule to the desktop
   app's (the vendored `link-externality-vectors.json`).
