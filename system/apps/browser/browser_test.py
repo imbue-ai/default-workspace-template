@@ -2256,6 +2256,26 @@ def test_a_waiting_page_opens_once_the_agent_lets_the_browser_go() -> None:
     assert browser._pending_url is None
 
 
+def test_a_waiting_page_is_dropped_when_the_browser_stops() -> None:
+    browser, cdp = _running_browser_with_tabs(["https://a.example/"], shown_target_id="t1", active_target_id="t1")
+
+    async def go() -> list[dict[str, Any]]:
+        fleet = _fleet_of(browser)
+        assert await browser.acquire("agent-7", "Plan") == "acquired"
+        await fleet.open_url_for_human("http://localhost:3000/")
+        cast = await browser.register_cast_queue()
+        while not cast.empty():
+            cast.get_nowait()
+        await browser.stop()
+        await _settle_background(browser)
+        return [_pop_json(cast) for _ in range(cast.qsize())]
+
+    seen = asyncio.run(go())
+    assert browser._pending_url is None
+    assert [message["pending_url"] for message in seen if message.get("type") == "control"][-1] is None
+    assert cdp.created == []
+
+
 def test_a_page_asked_for_while_the_browser_launches_is_kept_for_the_launch() -> None:
     browser = bsession.LiveBrowser(browser_id="browser-1")
 

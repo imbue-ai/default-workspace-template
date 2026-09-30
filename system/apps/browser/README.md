@@ -82,7 +82,7 @@ background agent, which is its own chat -- or the human).
   is named on the viewer's agent overlay with "Take control of this browser", which takes control as the plain
   button does and opens the URL as a tab in front, and "Cancel" (`POST /browsers/<name>/pending-url/cancel`), which
   drops it and leaves the agent's session as it was. It also opens once the agent lets go of the browser; a
-  second URL held before either replaces the first.
+  second URL held before either replaces the first, and a browser that stops (a failed relaunch included) drops it.
 - **CLI** (`agentic-browser-fleet`): the thin client the agent uses to drive the
   fleet. The fleet starts empty, so the first step is always `new` (it prints the
   name of the browser it started); every other command takes that

@@ -621,7 +621,8 @@ class LiveBrowser(MutableModel):
     # A page the human asked to open (a link clicked in the workspace, ``open:url``) that the browser could not open
     # yet: Chromium was still launching, or an agent was driving. It opens as a tab in front once the launch
     # finishes or control next passes to the human (the human takes control, or the agent lets go); the viewer
-    # shows it on the agent's overlay, where the human can also cancel it. A later page replaces an earlier one.
+    # shows it on the agent's overlay, where the human can also cancel it. A later page replaces an earlier one, and
+    # stopping the browser (a failed relaunch included) drops it.
     _pending_url: str | None = PrivateAttr(default=None)
     # Set by the manager: a no-arg hook that checkpoints the fleet manifest. Fired on
     # crash so a browser that died is dropped from the manifest promptly (not only on
@@ -1909,6 +1910,8 @@ class LiveBrowser(MutableModel):
         # Stopped before the teardown's awaits, so an acquire landing in them is answered
         # ``stopped`` rather than parked, and the control write below carries the new state.
         self._lifecycle = "stopped"
+        # The page was held for this Chromium; a later start must not open it long after it was asked for.
+        self._pending_url = None
         async with self._control_lock:
             await self._abandon_queues_locked("stopped")
             await self._write_control_locked("human", None, None, pinned=False)
