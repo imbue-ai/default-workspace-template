@@ -209,8 +209,10 @@ class ChatNamer(MutableModel):
         is_renamed = False
         try:
             if self._wait_for_active_agent(chat_id) is None:
-                logger.debug("Left chat {} unnamed: it did not come up", chat_id)
-                self._record_attempt(chat_dir)
+                # A shutdown ends the wait too, and is no reason to spend one of the chat's attempts.
+                if not self._stop_event.is_set():
+                    logger.debug("Left chat {} unnamed: it did not come up", chat_id)
+                    self._record_attempt(chat_dir)
                 return
             is_renamed = self.rename_placeholder_named_chat(chat_id, name)
         except (AgentRenameError, ChatConvergingError) as e:

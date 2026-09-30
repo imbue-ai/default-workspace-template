@@ -49,10 +49,12 @@ class _NamingHarness:
         self.rename_error: Exception | None = None
         # Whether the chat still wears a name nobody chose, as the manager would answer.
         self.is_placeholder_named = True
+        # Whether the app shuts down while the namer waits for the chat to be listed.
+        self.is_shut_down_while_waiting = False
         self.chat_files_root = tmp_path / "chats"
         self.namer = ChatNamer(
             chat_files_root=self.chat_files_root,
-            get_active_agent_info=lambda _chat_id: self.agent_info,
+            get_active_agent_info=self._active_agent_info,
             resolve_chat_account_binding=lambda _chat_id: self.binding,
             show_automatic_title=self._show_title,
             clear_automatic_title=self._clear_title,
@@ -62,6 +64,11 @@ class _NamingHarness:
             agent_wait_seconds=0.0,
             executor=InlineExecutor(),
         )
+
+    def _active_agent_info(self, _chat_id: ChatId) -> AgentInfo | None:
+        if self.is_shut_down_while_waiting:
+            self.namer.stop()
+        return self.agent_info
 
     def _show_title(self, _chat_id: ChatId, title: str) -> None:
         self.shown_title = title
@@ -194,6 +201,18 @@ def test_the_name_is_asked_for_before_the_chat_comes_up_and_shown_at_once(tmp_pa
     assert harness.shown_title is None
     assert harness.renames == []
     assert harness.naming_state() == ChatNamingState(attempt_count=1, is_settled=False)
+
+
+def test_a_shutdown_while_waiting_for_the_chat_spends_no_attempt(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", ["Rome trip: plan five days in May"])
+    harness.agent_info = None
+    harness.is_shut_down_while_waiting = True
+
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome")
+
+    assert harness.shown_title is None
+    assert harness.renames == []
+    assert harness.naming_state() == ChatNamingState()
 
 
 def test_a_refused_rename_costs_an_attempt(tmp_path: Path) -> None:
