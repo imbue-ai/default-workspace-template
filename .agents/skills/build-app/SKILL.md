@@ -132,20 +132,48 @@ seconds reading 8 files before it wrote anything, and its sibling spent 24 more.
 `app-building-guidance.md`, `worker-reporting.md` and the scaffolder, report ready, and
 wait. Give each its own runtime dir so their reports do not collide:
 
+**Write each agent's name out in full, and never behind a loop variable.** Both the
+eval's evidence capture and anyone reading the transcript later find a worker by the
+literal name in the command that launched it, so `--name "$APP-low"` is findable and
+`--name "$APP-$NAME"` inside a `for` loop is not: it records one worker called
+`$APP-$NAME` and loses all three. The rule holds for every `create_worker.py` call in
+every step -- `launch`, `reply`, `await`, `destroy`. Three spelled-out commands, and no
+redirecting their output.
+
+The models come from the table, so they are not written out here:
+
 ```bash
-python3 .agents/skills/build-app/scripts/plan_orchestration.py models | while read -r NAME MODEL; do
+MODELS=$(python3 .agents/skills/build-app/scripts/plan_orchestration.py models)
+tier_model() { echo "$MODELS" | awk -v c="$1" '$1 == c { print $2 }'; }
+for NAME in low medium high; do
     mkdir -p "$RUN/agents/$NAME/reports"
     cp .agents/skills/build-app/references/tier-agent-priming.md "$RUN/agents/$NAME/task.md"
-    uv run .agents/skills/launch-task/scripts/create_worker.py launch \
-        --name "$APP-$NAME" \
-        --template shared_worker \
-        --work-folder "$BUILD" \
-        --runtime-dir "$RUN/agents/$NAME/" \
-        --task-file "$RUN/agents/$NAME/task.md" \
-        --create-arg=-S \
-        --create-arg=agent_types.claude.settings_overrides.model="$MODEL" \
-        --message-with-mngr
 done
+```
+
+Then, as three separate commands:
+
+```bash
+uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+    --name "$APP-low" --template shared_worker --work-folder "$BUILD" \
+    --runtime-dir "$RUN/agents/low/" --task-file "$RUN/agents/low/task.md" \
+    --create-arg=-S \
+    --create-arg=agent_types.claude.settings_overrides.model="$(tier_model low)" \
+    --message-with-mngr
+
+uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+    --name "$APP-medium" --template shared_worker --work-folder "$BUILD" \
+    --runtime-dir "$RUN/agents/medium/" --task-file "$RUN/agents/medium/task.md" \
+    --create-arg=-S \
+    --create-arg=agent_types.claude.settings_overrides.model="$(tier_model medium)" \
+    --message-with-mngr
+
+uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+    --name "$APP-high" --template shared_worker --work-folder "$BUILD" \
+    --runtime-dir "$RUN/agents/high/" --task-file "$RUN/agents/high/task.md" \
+    --create-arg=-S \
+    --create-arg=agent_types.claude.settings_overrides.model="$(tier_model high)" \
+    --message-with-mngr
 ```
 
 Do not wait for their ready reports. They read while you clarify, and Step 4 sends the
@@ -592,8 +620,12 @@ live comes first and the teardown happens afterwards, while the user already has
    That single hardening pass is the only thorough test-and-review run the app
    gets; no worker ran one. It runs in a worker of its own, so start it before the
    teardown rather than after it.
-5. **Stop the workers.** Destroy every remaining `$APP-node-*` worker, which
-   removes its worktree.
+5. **Stop the workers.** Destroy every worker still running, one spelled-out
+   `destroy --name` command each and no loop over a glob, for the reason Step 1
+   gives: the literal name is how the run's evidence capture finds the worker
+   afterwards. With `settings.tier_agents` that is `$APP-low`, `$APP-medium` and
+   `$APP-high`; otherwise it is one per `$APP-node-N` you launched, and the
+   destroy also removes that worker's worktree.
 6. **Remove the folders.** List `$BUILD` first (`git -C "$BUILD" status
    --porcelain` must be empty, since every node was committed and merged), then
    `git worktree remove "$BUILD"` and `git worktree prune` to clear out the
