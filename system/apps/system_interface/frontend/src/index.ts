@@ -30,7 +30,7 @@ import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
 import { followRenderModes } from "./theme/metrics";
-import { App } from "./views/App";
+import { App, BACKDROP_AREA_ATTRIBUTE } from "./views/App";
 
 /** Rewrite the page's URL with its query string put through ``strip``, leaving the path, the hash, and the
  *  history entry as they are: how a boot-time parameter is removed once it has been read. */
@@ -64,7 +64,7 @@ function frameFromMessage(value: unknown): Frame | null {
   if (!numbers.every((number) => typeof number === "number" && Number.isFinite(number))) return null;
   const [x, y, width, height] = numbers as number[];
   const frame = { x, y, width, height };
-  const backdrop = document.querySelector<HTMLElement>("[data-backdrop-area]");
+  const backdrop = document.querySelector<HTMLElement>(`[${BACKDROP_AREA_ATTRIBUTE}]`);
   if (backdrop === null) return frame;
   const box = backdrop.getBoundingClientRect();
   return frameFromViewportFractions(

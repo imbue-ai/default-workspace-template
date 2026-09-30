@@ -120,6 +120,9 @@ const SHORTCUT_DRAGGING_ATTRIBUTE = "data-shortcut-dragging";
  *  snap a release commits is written after the press has ended, and travels the last step. */
 const WINDOW_MOTION_ATTRIBUTE = "data-window-motion";
 
+/** Marks the backdrop, the area above the taskbar whose pixels the desktop's frames are fractions of. */
+export const BACKDROP_AREA_ATTRIBUTE = "data-backdrop-area";
+
 interface SettingsDialogState {
   readonly desktopId: string;
   readonly isDeleting: boolean;
@@ -982,7 +985,7 @@ export function App(): m.Component<AppAttrs> {
           m(
             "div",
             {
-              "data-backdrop-area": "",
+              [BACKDROP_AREA_ATTRIBUTE]: "",
               class: "backdrop-area relative min-h-0 flex-1 overflow-hidden",
               oncreate: (created: m.VnodeDOM) => {
                 backdropArea = created.dom as HTMLElement;
