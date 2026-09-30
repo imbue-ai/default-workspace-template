@@ -25,43 +25,93 @@ It describes building an app end to end, so working through it from the top is
 building the app by hand. That is what `SKILL.md` exists to replace: it plans the
 build, runs the pieces as workers, and sends you here only for a detail.
 
-## This is the web specialization of the interactive-delivery shape
+## How to work through this
 
-**Read `.agents/shared/references/interactive-delivery.md` first.** Building a web
-view is not a "scaffold, implement, ship" recipe -- it is an *interactive* flow:
-you confirm the look-and-feel on a cheap throwaway mock *before* building the real
-thing, build to a usable state in the foreground, and defer the thorough
-testing + review gates to a background worker. The phases below fill in that
-shared skeleton for web work. The single biggest mistake this skill exists to
-prevent is building (and testing, and hardening) a whole site before the user has
-confirmed the basic shape is what they want.
+`.agents/shared/references/interactive-delivery.md` is the shared shape this
+specializes for web work -- it is worth reading, with the caveat that it presents
+these as numbered phases and they are not. The single biggest mistake this skill
+exists to prevent is building (and testing, and hardening) a whole site before the
+user has confirmed the basic shape is what they want.
 
-Map of the flow:
+The rest of this file is a set of **parts** a build is made of, not a sequence.
+Nothing below is numbered, because almost none of it has to happen in a fixed
+order: an app needs a name, an icon, a port, a scaffolded service, a mock the user
+reacts to, real routes, verification and a window, and the order those arrive in is
+yours to choose.
 
-- **Step 0 -- clarify and plan** (skeleton phases 1-3): blocking questions only,
-  in business terms; a small plan; wait for approval.
-- **Step 1 -- scaffold + throwaway mock** (skeleton phases 4-6): scaffold the
-  service, put a mock UI in front of the user, loop to explicit confirmation of
-  the look-and-feel. Hard gate.
-- **Step 2-4 -- build to a usable site** (the existing build mechanics, run
-  *after* confirmation): implement real routes, verify, surface the window.
-- **Step 5 -- finalize in the background** (skeleton phase 7): once the user
-  confirms the *working* site looks right, hand thorough testing + the review
-  gates to a background worker. The main agent never runs those itself.
+**Do as much at once as you can.** Work out what a part actually depends on rather
+than assuming it follows the part above it. The icon does not wait for the routes.
+The port does not wait for the name. A data layer whose shape the user's answer
+cannot change does not wait for the mock. Where two parts do not feed each other,
+they belong side by side, and a build that does them one at a time is slower for no
+reason.
 
-If you were sent here by `fetch-process-show` for an app over fetched data,
-the data sample is already confirmed -- but you still run your own mock
-confirmation here, because the data sample confirms the data *shape*, not the UI
-shape. Render the handed-off `sample.json` in the mock so the user judges the UI
-against real data.
+**Get the user's opinion early, and fold it in when it arrives.** Put something in
+front of them as soon as there is anything to react to, keep working while they look
+at it, and apply what they say to whatever it touches -- including work already
+finished. Waiting on an answer is not a reason to stop; it is the time to do
+everything the answer cannot change.
+
+Two things really are ordered, and only two:
+
+- **The user confirms the look-and-feel before the look-and-feel is built for real.**
+  Build the mock, confirm it, then implement the real routes. This is the mistake
+  this file exists to prevent, and it is worth the wait.
+- **Nothing is hardened before that confirmation.** The thorough pass runs last, in
+  a background worker, on a creation the user has already agreed with.
+
+Everything else can overlap.
+
+If you were sent here by `fetch-process-show` for an app over fetched data, the data
+sample is already confirmed -- but you still run your own mock confirmation, because
+the data sample confirms the data *shape*, not the UI shape. Render the handed-off
+`sample.json` in the mock so the user judges the UI against real data.
 
 If you were **not** sent here and the app reads records that come from outside
 itself -- an upload, an export, an API, a third-party service -- stop and run
 `fetch-process-show` first; come back with its confirmed sample. Reading and
-normalizing those records is its job. An app whose ingestion you wrote here
-instead has no entry point anyone can re-run when the next batch lands.
+normalizing those records is its job. An app whose ingestion you wrote here instead
+has no entry point anyone can re-run when the next batch lands.
 
-## Step 0: Clarify and plan (business terms only)
+## The parts of a build
+
+### The app's name
+
+Pick a kebab-case name. It becomes the service's hostname
+label: the window renders at `http://<name>.<workspace-host>/`, so the
+name must be DNS-safe -- lowercase letters/digits with single
+hyphens, and it must not start with `host-` or `agent-` (those
+prefixes are reserved for workspace hostname coordinates), and it must not
+be the first label of a standalone service (`share`, `app`, `owner`, `vm`,
+`host`, `env`, `agent`, and `github` for the `github-sync` program enabling
+GitHub sync adds), which would claim that service as a sidecar. Short and
+descriptive (`news`, `docs-viewer`) beats clever. Avoid names
+already used by an existing program (`system_interface`, `browser`, etc.
+are reserved by the scaffolder, which also refuses a name any
+`system/supervisord.conf.d/*.conf` already declares).
+
+### The app's icon
+
+Draw an `.svg` glyph specific to what *this*
+app does, in the house style (see the CLI reference below);
+`forward_port.py` refuses a brand-new registration without one. The
+scaffold copies it beside the app's manifest (`app.toml`), which names
+it.
+
+### The app's port
+
+Pick a free port -- or let the scaffolder do it. The scaffolder (canonical path) auto-picks the lowest free
+port at or above 8080 by parsing `system/supervisord.conf`, every
+`system/supervisord.conf.d/*.conf`, and `data/.state/apps.toml`, so running
+manual port checks (`ss -tln`) is unnecessary. If you are picking a port
+manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
+(system_interface), `8010` (the chat app), `8030` (the Getting Started app) and
+`8081` (the browser service).
+Two things do not show up there: the `agent-observer` program binds no port at
+all, and a preview of any app (`update-app`'s `preview_app.py`) takes free
+ports at boot, so nothing to avoid is written down for it.
+
+### Blocking questions
 
 Ask only the questions that genuinely *block* -- a fork that is both genuinely
 uncertain *and* expensive to reverse later. Most apps have none: default to
@@ -80,14 +130,14 @@ Record your stated defaults -- they are the architecture you build once, after
 the mock converges. Do not build any of it yet. Then propose a small plan and
 wait for approval.
 
-## Decide which path applies
+### Which path: author routes or wrap a server
 
 - **Authoring routes yourself** (the common case): use the Flask
-  scaffolder in Step 1. The scaffolder picks correct defaults so most
+  scaffolder -- see **Scaffolding the service**. The scaffolder picks correct defaults so most
   framework gotchas don't fire.
 - **Wrapping a pre-existing third-party server** (Jupyter, Grafana,
   an `npx`-installed dashboard, anything with its own start command):
-  skip the scaffolder, jump to "Escape hatch: wrap an existing server"
+  skip the scaffolder and see "Escape hatch: wrap an existing server"
   below.
 
 If you would otherwise scaffold a Flask lib whose only job is to
@@ -97,48 +147,7 @@ Adding a Python proxy in front of the third-party server adds a hop,
 costs an extra process, and complicates WebSocket and streaming
 behavior. Use the escape hatch instead.
 
-Do not extend `system/apps/system_interface/` to add a new view. That app runs
-the top-level workspace UI; new apps go in their own scaffolded lib
-under `system/apps/<your-package>/` so they get an isolated window and origin.
-
-## Pre-flight (both paths)
-
-- **Pick a kebab-case app name.** Becomes the service's hostname
-  label: the window renders at `http://<name>.<workspace-host>/`, so the
-  name must be DNS-safe -- lowercase letters/digits with single
-  hyphens, and it must not start with `host-` or `agent-` (those
-  prefixes are reserved for workspace hostname coordinates), and it must not
-  be the first label of a standalone service (`share`, `app`, `owner`, `vm`,
-  `host`, `env`, `agent`, and `github` for the `github-sync` program enabling
-  GitHub sync adds), which would claim that service as a sidecar. Short and
-  descriptive (`news`, `docs-viewer`) beats clever. Avoid names
-  already used by an existing program (`system_interface`, `browser`, etc.
-  are reserved by the scaffolder, which also refuses a name any
-  `system/supervisord.conf.d/*.conf` already declares).
-- **Draw the app's icon** -- an `.svg` glyph specific to what *this*
-  app does, in the house style (see the CLI reference below);
-  `forward_port.py` refuses a brand-new registration without one. The
-  scaffold copies it beside the app's manifest (`app.toml`), which names
-  it.
-- **Pick a free port.** The scaffolder (canonical path) auto-picks the lowest free
-  port at or above 8080 by parsing `system/supervisord.conf`, every
-  `system/supervisord.conf.d/*.conf`, and `data/.state/apps.toml`, so running
-  manual port checks (`ss -tln`) is unnecessary. If you are picking a port
-  manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
-  (system_interface), `8010` (the chat app), `8030` (the Getting Started app) and
-  `8081` (the browser service).
-  Two things do not show up there: the `agent-observer` program binds no port at
-  all, and a preview of any app (`update-app`'s `preview_app.py`) takes free
-  ports at boot, so nothing to avoid is written down for it.
-- **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
-  app from inside the same container; binding to all interfaces is
-  noise. The scaffolder does this. For the wrap-existing path, many
-  Node frameworks default to `0.0.0.0` -- pass an explicit host
-  (`HOST=127.0.0.1`, `app.listen(port, "127.0.0.1")`, etc.) if your
-  third-party tool's default isn't loopback. Python defaults are
-  usually loopback already.
-
-## Step 1: Run the scaffolder (canonical path)
+### Scaffolding the service
 
 ```bash
 uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
@@ -156,7 +165,7 @@ Required:
   must not start with `host-` or `agent-`) -- it becomes the service's
   hostname label.
 - `--description`: becomes the lib `pyproject.toml` description.
-- `--icon-file`: the icon you drew in pre-flight (`.svg` only); copied
+- `--icon-file`: the icon you drew (`.svg` only); copied
   to `system/apps/<package>/icon.svg`, named by the manifest, and
   registered on every start.
 
@@ -284,7 +293,7 @@ app reaches it well before the window is up. On either, read its log
 (`/var/log/supervisor/<name>-stderr.log`) or run
 `supervisorctl tail <name> stderr`.
 
-### Put a throwaway mock in front of the user (the confirmation gate; looped)
+### The throwaway mock
 
 Scaffolding the service is fine before confirmation -- it is cheap and reversible.
 **Building the real data layer or state architecture before the user confirms the
@@ -292,7 +301,7 @@ look-and-feel is the tripwire: do not.** Instead, serve a *throwaway mock* of th
 proposed UI as a route inside the scaffolded service, so the user sees it as a
 real window and reacts to the actual look-and-feel.
 
-This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
+Keep it disposable:
 
 - The mock renders **static / hard-coded content** that demonstrates the proposed
   layout and interactions -- no real fetching, no persistence, no backend logic.
@@ -302,7 +311,7 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
-- `layout.py open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
+- `layout.py open` to surface it (see **Surfacing the window** for the command and its `--desktop` flag), then loop:
   present -> take feedback -> update the mock so the change is *visible* ->
   re-present. Do not accept feedback and move on having only asserted you'll apply
   it.
@@ -313,8 +322,7 @@ Your mocks should remain mostly frontend code but demonstrate how things would l
 once that updated backend code is implemented. Be careful to confirm that the user will be happy
 with how things look and feel and approximately function prior to doing the heavy work of building out backend code.
 
-**Hard gate (skeleton phase 6).** Do not implement real routes, data, or state
-(Step 2 onward) until that confirmation. The mock is the single source of truth
+**Hard gate.** Do not implement real routes, data, or state until that confirmation. The mock is the single source of truth
 for the UI shape: if later work changes the look-and-feel, re-confirm before
 calling the site done.
 
@@ -323,14 +331,14 @@ author, so there is no mock to build -- the demonstration is the wrapped tool
 itself. Stand it up, show it to the user, and confirm it's what they wanted before
 investing in configuration or integration around it.
 
-## Step 2: Build the real routes to a usable site (after confirmation)
+### The real routes
 
-Everything from here runs **only after** the user has confirmed the mock. The
-goal of the foreground work is a *usable* site the user can actually try -- not a
-fully hardened one. Implement the real routes (replacing the mock), wire in the
-data/state architecture you recorded in Step 0, run the Step 3 smoke verify, and
-surface the window (Step 4). Then **stop and hand the running site to the user** --
-the thorough testing and review gates happen in the background (Step 5), not here.
+This runs **only after** the user has confirmed the mock. The goal is a *usable*
+site the user can actually try -- not a fully hardened one. Implement the real
+routes (replacing the mock), wire in the data/state architecture you settled when
+you asked your blocking questions, verify it, and surface the window. Then **stop
+and hand the running site to the user** -- the thorough testing and review gates
+happen in the background, not here.
 
 The starter `runner.py` has just `GET /` (a placeholder HTML page)
 and `GET /health` (returns `{"status": "ok"}`). Replace the
@@ -349,53 +357,7 @@ picks the path (a keyed `litellm` call or the keyless `claude_p.py` helper),
 covers the `claude -p` environment fix and the cost model, and saves you from
 hand-rolling the call.
 
-### Always surface the raw data and its source
-
-When a view renders data *derived* from underlying records (a summary,
-a reformatted list, extracted fields), include -- by default, without
-the user asking -- a "view raw" control showing the original record
-**rendered in its native format** (an HTML email as the rendered email,
-not escaped source; JSON pretty-printed; markdown rendered -- the
-faithful original minus your processing) plus, for records from an
-external service, an "open in <source>" link back to the origin (e.g.
-open the email in Gmail). When you render untrusted third-party HTML (a
-raw email body is the common case), sandbox it -- a sandboxed `iframe`
-or a sanitizer -- so the view can't run scripts or phone home via
-tracking pixels.
-
-This is the surfacing half of the preserve-and-surface principle
-(CLAUDE.md): the derived view inevitably leaves gaps (a field the agent
-didn't extract, a rendering it didn't anticipate), and the raw/source
-affordance lets the user bridge them without waiting for a rebuild.
-Design it in from the first version -- it depends on the data layer
-having persisted the raw payload and source reference (see the
-crystallize data-capture guidance), so confirm that's available and
-flag it if it isn't. Keep it unobtrusive (a small per-record control,
-not clutter) and don't call it out in chat -- always present, never
-announced.
-
-### File-path conventions
-
-Two cases, two patterns:
-
-- **Persistent state** (caches, cursors, last-visit timestamps, JSON
-  snapshots, user records -- anything written and read across runs):
-  read and write it under the generated `DATA_DIR` constant, never a
-  hardcoded `data/.apps/<name>/` at the call site. `DATA_DIR` defaults to
-  `data/.apps/<name>/` (cwd-relative, resolved from `/home/user/workspace` where the
-  supervisord-managed service runs) but honors the
-  `<PACKAGE_UPPER>_DATA_DIR` env var. That override is what makes a
-  future edit safe: an agent changing the service can run a throwaway
-  instance against a *copy* of the data instead of the live store (see
-  `update-app`), so keep every read/write going through `DATA_DIR`
-  -- a hardcoded `data/.apps/<name>/` silently bypasses the override and
-  re-exposes the live data. Do NOT use `Path(__file__)`-based paths for
-  state.
-- **Static assets shipped alongside the .py file** (templates,
-  default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
-  is the right pattern.
-
-## Step 3: Verify
+### Verification
 
 Both paths use the same verification recipe. See
 [references/verify.md](references/verify.md) -- use `system/scripts/smoketest_app.py`:
@@ -414,7 +376,7 @@ a window stuck on the loading page, broken WebSockets), see
 [references/cross-flow-gotchas.md](references/cross-flow-gotchas.md)
 -- it's symptom-indexed.
 
-## Step 4: Surface the view to the user
+### Surfacing the window
 
 Once verification passes, tell the workspace UI to actually open the
 new window. Without this step the user would have to discover it via the
@@ -453,12 +415,12 @@ the `manage-desktop` skill. `layout.py list` is also useful when the user is
 asking about what is open (it prints every app with its launch paths and
 its windows, and every desktop).
 
-## Step 5: Finalize in the background (after the user confirms the working site)
+### Finalizing in the background
 
 The foreground work stops at a usable, surfaced site. The thorough pass --
 extending Playwright coverage, the full test suite and ratchets, review gates
  -- runs in a **background harden worker**, never in the
-main agent. This is skeleton phase 7: the harden pass
+main agent. This is the harden pass
 (`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**
 operation with the **app** type -- the scaffolded app is already on
 disk and the user confirmed it live, so nothing needs reconstructing and there
@@ -498,6 +460,72 @@ worker gate because the user already confirmed the live site.
 The confirmed mock plus the confirmed working site remain the single source of
 truth: if finalization changes the look-and-feel, re-confirm with the user before
 calling the work done.
+
+## Best practices
+
+These hold for every part above.
+
+### File-path conventions
+
+Two cases, two patterns:
+
+- **Persistent state** (caches, cursors, last-visit timestamps, JSON
+  snapshots, user records -- anything written and read across runs):
+  read and write it under the generated `DATA_DIR` constant, never a
+  hardcoded `data/.apps/<name>/` at the call site. `DATA_DIR` defaults to
+  `data/.apps/<name>/` (cwd-relative, resolved from `/home/user/workspace` where the
+  supervisord-managed service runs) but honors the
+  `<PACKAGE_UPPER>_DATA_DIR` env var. That override is what makes a
+  future edit safe: an agent changing the service can run a throwaway
+  instance against a *copy* of the data instead of the live store (see
+  `update-app`), so keep every read/write going through `DATA_DIR`
+  -- a hardcoded `data/.apps/<name>/` silently bypasses the override and
+  re-exposes the live data. Do NOT use `Path(__file__)`-based paths for
+  state.
+- **Static assets shipped alongside the .py file** (templates,
+  default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
+  is the right pattern.
+
+### Always surface the raw data and its source
+
+When a view renders data *derived* from underlying records (a summary,
+a reformatted list, extracted fields), include -- by default, without
+the user asking -- a "view raw" control showing the original record
+**rendered in its native format** (an HTML email as the rendered email,
+not escaped source; JSON pretty-printed; markdown rendered -- the
+faithful original minus your processing) plus, for records from an
+external service, an "open in <source>" link back to the origin (e.g.
+open the email in Gmail). When you render untrusted third-party HTML (a
+raw email body is the common case), sandbox it -- a sandboxed `iframe`
+or a sanitizer -- so the view can't run scripts or phone home via
+tracking pixels.
+
+This is the surfacing half of the preserve-and-surface principle
+(CLAUDE.md): the derived view inevitably leaves gaps (a field the agent
+didn't extract, a rendering it didn't anticipate), and the raw/source
+affordance lets the user bridge them without waiting for a rebuild.
+Design it in from the first version -- it depends on the data layer
+having persisted the raw payload and source reference (see the
+crystallize data-capture guidance), so confirm that's available and
+flag it if it isn't. Keep it unobtrusive (a small per-record control,
+not clutter) and don't call it out in chat -- always present, never
+announced.
+
+### Bind to `127.0.0.1`
+
+Not `0.0.0.0`. The forwarder reaches your
+app from inside the same container; binding to all interfaces is
+noise. The scaffolder does this. For the wrap-existing path, many
+Node frameworks default to `0.0.0.0` -- pass an explicit host
+(`HOST=127.0.0.1`, `app.listen(port, "127.0.0.1")`, etc.) if your
+third-party tool's default isn't loopback. Python defaults are
+usually loopback already.
+
+### Keep a new app out of `system_interface`
+
+Do not extend `system/apps/system_interface/` to add a new view. That app runs
+the top-level workspace UI; new apps go in their own scaffolded lib
+under `system/apps/<your-package>/` so they get an isolated window and origin.
 
 ## Escape hatch: wrap an existing server
 
