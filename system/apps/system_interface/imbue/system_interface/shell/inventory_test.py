@@ -46,7 +46,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
     assert serialized[1]["launch_paths"] == [
         {
             "id": "open",
-            "label": "Open Files",
+            "label": "Files",
             "path": "/",
             "method": "GET",
             "params": [],
