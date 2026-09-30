@@ -111,7 +111,11 @@ def require_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
         return client_id
     connected_clients = shell.broadcaster.get_connected_client_infos()
     client_summary = (
-        ", ".join(f"{info['client_id']} (desktop={info['active_desktop']})" for info in connected_clients) or "none"
+        ", ".join(
+            f"{info.client_id} (a pop-out)" if info.is_pop_out else f"{info.client_id} (desktop={info.active_desktop})"
+            for info in connected_clients
+        )
+        or "none"
     )
     raise NoTargetClientError(
         "Could not tell which client this op is for: no client has messaged the requesting agent and "

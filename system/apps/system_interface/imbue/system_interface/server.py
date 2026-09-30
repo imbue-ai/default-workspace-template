@@ -38,6 +38,7 @@ from imbue.system_interface.request_helpers import error_response
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.data_types import PopOutStateReport
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
@@ -533,7 +534,8 @@ def _handle_client_state_message(
     ``client_state`` is the only message type clients send: it registers the browser's client id and the
     desktop it is on, on connect and on every switch. Registration feeds the broadcaster's client registry
     (which targets layout ops), the client record, and the client-activity log (a ``desktop_switch`` when
-    the report names a different previous desktop).
+    the report names a different previous desktop). A pop-out's report registers its connection under its
+    client and nothing more: the client's record and active desktop are its main window's.
     """
     try:
         parsed = json.loads(raw_message)
@@ -543,8 +545,11 @@ def _handle_client_state_message(
     if not isinstance(parsed, dict) or parsed.get("type") != "client_state":
         _loguru_logger.warning("Ignored unexpected WebSocket message type from client: {!r}", parsed)
         return False
+    body = {key: value for key, value in parsed.items() if key != "type"}
+    if body.get("is_pop_out") is True:
+        return _register_pop_out(body, client_queue, shell, is_first_report)
     try:
-        report = ClientStateReport.model_validate({key: value for key, value in parsed.items() if key != "type"})
+        report = ClientStateReport.model_validate(body)
     except ValidationError as e:
         _loguru_logger.warning("Ignored a malformed client_state report: {}", e.errors()[0]["msg"])
         return False
@@ -564,6 +569,23 @@ def _handle_client_state_message(
         )
         return True
     _log_client_switches(report, client_queue, shell)
+    return True
+
+
+def _register_pop_out(
+    body: dict[str, Any],
+    client_queue: "queue.Queue[str | None]",
+    shell: ShellState,
+    is_first_report: bool,
+) -> bool:
+    try:
+        report = PopOutStateReport.model_validate(body)
+    except ValidationError as e:
+        _loguru_logger.warning("Ignored a malformed pop-out client_state report: {}", e.errors()[0]["msg"])
+        return False
+    shell.broadcaster.set_pop_out_info(client_queue, str(report.client_id))
+    if is_first_report:
+        _loguru_logger.info("WS pop-out registered: client_id={} (conn {})", report.client_id, id(client_queue))
     return True
 
 
@@ -653,7 +675,7 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: 
         _loguru_logger.info(
             "WS /api/ws connection closed (conn {}, client_id={}, reason: {})",
             id(client_queue),
-            client_info["client_id"] if client_info is not None else "<unregistered>",
+            client_info.client_id if client_info is not None else "<unregistered>",
             disconnect_reason,
         )
         ws_broadcaster.unregister(client_queue)

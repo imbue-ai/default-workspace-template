@@ -5,15 +5,20 @@ from imbue.system_interface.shell.client_activity import MESSAGE_TEXT_TRUNCATION
 from imbue.system_interface.shell.client_activity import RECENT_MESSAGES_PER_CLIENT
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.client_activity import summarize_client_activity
+from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 
 
 def _log(tmp_path: Path) -> ClientActivityLog:
     return ClientActivityLog(events_path=tmp_path / "events" / "client_activity" / "events.jsonl")
 
 
-def _connected(client_id: str, active_desktop: str) -> dict[str, str]:
-    """A live registration as the broadcaster reports it (the desktop "" before the client reported one)."""
-    return {"client_id": client_id, "active_desktop": active_desktop}
+def _connected(client_id: str, active_desktop: str) -> ConnectionRegistration:
+    """A desktop window's live registration as the broadcaster reports it (the desktop "" before it reported one)."""
+    return ConnectionRegistration(client_id=client_id, active_desktop=active_desktop, is_pop_out=False)
+
+
+def _pop_out(client_id: str) -> ConnectionRegistration:
+    return ConnectionRegistration(client_id=client_id, active_desktop="", is_pop_out=True)
 
 
 def test_messages_are_appended_truncated_and_read_back_in_order(tmp_path: Path) -> None:
@@ -68,6 +73,19 @@ def test_a_connected_client_with_no_activity_is_still_listed(tmp_path: Path) -> 
     assert silent["is_connected"] is True
     assert silent["active_desktop"] == "research"
     assert silent["recent_messages"] == [] and silent["last_seen"] == ""
+
+
+def test_a_pop_out_connects_its_client_without_supplying_a_desktop(tmp_path: Path) -> None:
+    log = _log(tmp_path)
+    log.append_desktop_switch("c1", "home", "research")
+    summaries = summarize_client_activity(
+        log.read_events(), [_connected("c1", "notes"), _pop_out("c1"), _pop_out("c2")]
+    )
+    by_id = {summary["client_id"]: summary for summary in summaries}
+    # Its main window's registration settles c1's desktop, whichever order the registrations come in.
+    assert by_id["c1"]["active_desktop"] == "notes"
+    # A client with only a pop-out open is connected, on no desktop the pop-out could name.
+    assert by_id["c2"]["is_connected"] is True and by_id["c2"]["active_desktop"] is None
 
 
 def test_a_message_to_a_page_without_a_marker_is_summarized_with_an_empty_key(tmp_path: Path) -> None:

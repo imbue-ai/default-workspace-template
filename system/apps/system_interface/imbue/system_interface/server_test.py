@@ -35,6 +35,7 @@ from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
+from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Generous: the first receive occasionally exceeded the previous 5.0s cap on a
@@ -608,7 +609,9 @@ def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> 
         assert _handle_client_state_message(json.dumps(report), client_queue, shell, is_first_report=True) is True
         switched = {**report, "active_desktop": "alpha", "previous_desktop": "home"}
         assert _handle_client_state_message(json.dumps(switched), client_queue, shell, is_first_report=False) is True
-        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "alpha"}
+        assert shell.broadcaster.get_client_info(client_queue) == ConnectionRegistration(
+            client_id="c1", active_desktop="alpha", is_pop_out=False
+        )
     finally:
         shell.broadcaster.unregister(client_queue)
 
@@ -621,7 +624,9 @@ def test_client_state_reports_register_the_client_and_log_only_real_desktop_swit
     try:
         first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
         assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
-        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "home"}
+        assert shell.broadcaster.get_client_info(client_queue) == ConnectionRegistration(
+            client_id="c1", active_desktop="home", is_pop_out=False
+        )
         recorded = shell.clients.get_client("c1")
         assert recorded is not None
         assert recorded.active_desktop == "home"
@@ -642,9 +647,41 @@ def test_client_state_reports_register_the_client_and_log_only_real_desktop_swit
 
         for malformed in ("{", json.dumps({"type": "other"}), json.dumps({"type": "client_state", "client_id": "c1"})):
             assert _handle_client_state_message(malformed, client_queue, shell, is_first_report=False) is False
-        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "home"}
+        assert shell.broadcaster.get_client_info(client_queue) == ConnectionRegistration(
+            client_id="c1", active_desktop="home", is_pop_out=False
+        )
     finally:
         shell.broadcaster.unregister(client_queue)
+
+
+def test_a_pop_out_report_registers_its_connection_and_touches_neither_the_record_nor_the_log(app: Flask) -> None:
+    """A pop-out's report makes its connection reachable by ops aimed at its client, and leaves the client's record,
+    active desktop, and desktop switches to its main window."""
+    shell = state_of(app).shell
+    main_queue = shell.broadcaster.register()
+    pop_out_queue = shell.broadcaster.register()
+    try:
+        main_report = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
+        assert _handle_client_state_message(main_report, main_queue, shell, is_first_report=True) is True
+        pop_out_report = json.dumps({"type": "client_state", "client_id": "c1", "is_pop_out": True})
+        assert _handle_client_state_message(pop_out_report, pop_out_queue, shell, is_first_report=True) is True
+        assert _handle_client_state_message(pop_out_report, pop_out_queue, shell, is_first_report=False) is True
+
+        assert shell.broadcaster.get_client_info(pop_out_queue) == ConnectionRegistration(
+            client_id="c1", active_desktop="", is_pop_out=True
+        )
+        recorded = shell.clients.get_client("c1")
+        assert recorded is not None and recorded.active_desktop == "home"
+        assert shell.activity.read_events() == []
+
+        # A pop-out report carrying a desktop is not a pop-out's.
+        with_desktop = json.dumps(
+            {"type": "client_state", "client_id": "c1", "is_pop_out": True, "active_desktop": "x"}
+        )
+        assert _handle_client_state_message(with_desktop, pop_out_queue, shell, is_first_report=False) is False
+    finally:
+        shell.broadcaster.unregister(main_queue)
+        shell.broadcaster.unregister(pop_out_queue)
 
 
 @pytest.mark.frontend

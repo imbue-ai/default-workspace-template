@@ -430,6 +430,8 @@ export class FakeDesktopApi implements DesktopApi {
 export class FakeDesktopSocket implements DesktopSocket {
   handlers: SocketHandlers | null = null;
   readonly reports: { activeDesktop: string; previousDesktop: string }[] = [];
+  /** How many times the store registered the socket as a pop-out's. */
+  popOutReports = 0;
 
   connect(handlers: SocketHandlers): void {
     this.handlers = handlers;
@@ -437,6 +439,10 @@ export class FakeDesktopSocket implements DesktopSocket {
 
   reportClientState(activeDesktop: string, previousDesktop: string): void {
     this.reports.push({ activeDesktop, previousDesktop });
+  }
+
+  reportPopOut(): void {
+    this.popOutReports += 1;
   }
 
   /** The handlers the store registered; a test delivers events through them. */

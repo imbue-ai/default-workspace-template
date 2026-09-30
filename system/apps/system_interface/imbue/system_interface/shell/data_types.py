@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
 from typing import Final
+from typing import Literal
 
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import EntryMode
@@ -161,6 +162,14 @@ class ClientStateReport(FrozenModel):
     client_id: ClientId = Field(description="The reporting client")
     active_desktop: DesktopId = Field(description="The desktop the client is on now")
     previous_desktop: str = Field(default="", description="The desktop it was on before, empty on connect")
+
+
+class PopOutStateReport(FrozenModel):
+    """The inbound ``client_state`` WebSocket message of a pop-out's page (desktop contracts.md section 6): the
+    client it belongs to, and no desktop, since the client's active desktop is its main window's."""
+
+    client_id: ClientId = Field(description="The client the pop-out belongs to")
+    is_pop_out: Literal[True] = Field(description="Marks the report as a pop-out's")
 
 
 class ClientActivityReport(FrozenModel):
