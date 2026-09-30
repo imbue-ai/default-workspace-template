@@ -71,6 +71,10 @@ export const REATTACH_WINDOW: "minds:reattach-window" =
 // desktop window follows it, came back inside, or was released out there.
 // Payload: { windowId, phase: "out" | "in" | "released" }.
 export const TEAR_OUT: "minds:tear-out" = "TEAR_OUT" in embedContract ? embedContract.TEAR_OUT : "minds:tear-out";
+// Embedder -> workspace (contract v7): the theme the Imbue Studio chrome wears, right after
+// WORKSPACE_READY and again on every switch. Payload: { theme }. A snapshot from before v7 has no
+// validator for it and drops it, which leaves the workspace in its default look.
+export const UI_THEME: "minds:ui-theme" = "UI_THEME" in embedContract ? embedContract.UI_THEME : "minds:ui-theme";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
@@ -85,6 +89,7 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   EMBEDDER_CAPABILITIES,
   REATTACH_WINDOW,
   TEAR_OUT,
+  UI_THEME,
 ];
 
 // One replaceable handler per embedder->workspace type, registered by the

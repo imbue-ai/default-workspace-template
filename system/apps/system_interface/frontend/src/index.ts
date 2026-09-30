@@ -7,6 +7,7 @@ import {
   POP_OUT_WINDOW,
   REATTACH_WINDOW,
   TEAR_OUT,
+  UI_THEME,
   WINDOW_DRAG_ENDED,
   WINDOW_DRAG_STARTED,
   announceReadyToEmbedder,
@@ -28,7 +29,8 @@ import { initEmbedderRelay } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
-import { followRenderModes } from "./theme/metrics";
+import { applyUiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
+import { currentRenderModes, followRenderModes, readThemeMetrics } from "./theme/metrics";
 import { App } from "./views/App";
 
 /** Rewrite the page's URL with its query string put through ``strip``, leaving the path, the hash, and the
@@ -129,6 +131,13 @@ function bootstrap(): void {
     if (typeof windowId !== "string" || windowId === "") return;
     if (phase !== "out" && phase !== "in" && phase !== "released") return;
     desktopStore.setTearOut(windowId, phase);
+  });
+  // The chrome's theme. A theme carries its own title bar and taskbar sizes, so the metrics the
+  // geometry reads are taken again under it.
+  setEmbedderMessageHandler(UI_THEME, (message) => {
+    if (!applyUiTheme(root, message.theme)) return;
+    desktopStore.setThemeMetrics(readThemeMetrics(readStyle(root)), currentRenderModes(root));
+    m.redraw();
   });
   const rootElement = document.getElementById("app");
   if (rootElement) {

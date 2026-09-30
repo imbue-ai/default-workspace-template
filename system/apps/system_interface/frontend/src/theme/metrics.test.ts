@@ -10,6 +10,7 @@ import {
   TOUCH_MEDIA_QUERY,
   ThemeMetricsError,
   applyRenderModes,
+  currentRenderModes,
   followRenderModes,
   parsePixelLength,
   readThemeMetrics,
@@ -159,5 +160,13 @@ describe("followRenderModes", () => {
     applyRenderModes(root.element, { isCompact: false, isTouch: false });
     expect(root.element.hasAttribute(COMPACT_ATTRIBUTE)).toBe(false);
     expect(root.element.hasAttribute(TOUCH_ATTRIBUTE)).toBe(false);
+  });
+
+  it("currentRenderModes reads back what applyRenderModes stamped", () => {
+    const root = fakeRoot();
+    applyRenderModes(root.element, { isCompact: true, isTouch: false });
+    expect(currentRenderModes(root.element)).toEqual({ isCompact: true, isTouch: false });
+    applyRenderModes(root.element, { isCompact: false, isTouch: true });
+    expect(currentRenderModes(root.element)).toEqual({ isCompact: false, isTouch: true });
   });
 });

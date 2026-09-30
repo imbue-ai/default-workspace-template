@@ -31,6 +31,8 @@ declare module "@minds/embed-contract" {
   export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities";
   export const REATTACH_WINDOW: "minds:reattach-window";
   export const TEAR_OUT: "minds:tear-out";
+  // The theme the chrome wears (contract v7). Probed like the ones above.
+  export const UI_THEME: "minds:ui-theme";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

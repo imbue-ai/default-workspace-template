@@ -88,6 +88,11 @@ export interface MediaQueryLike {
 
 export type MatchMedia = (query: string) => MediaQueryLike;
 
+/** The render modes the root element carries now (as ``applyRenderModes`` last stamped them). */
+export function currentRenderModes(root: Element): RenderModes {
+  return { isCompact: root.hasAttribute(COMPACT_ATTRIBUTE), isTouch: root.hasAttribute(TOUCH_ATTRIBUTE) };
+}
+
 /** Stamp the render modes onto the root element, which every style keys off. */
 export function applyRenderModes(root: Element, modes: RenderModes): void {
   if (modes.isCompact) root.setAttribute(COMPACT_ATTRIBUTE, "");

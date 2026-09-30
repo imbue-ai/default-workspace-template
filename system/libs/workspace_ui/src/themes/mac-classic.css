@@ -1,0 +1,115 @@
+/* Classic Mac theme: the workspace desktop dressed as Macintosh System 6, matching Imbue Studio's
+   theme of the same name (see uiTheme.ts). system.css's element rules (vendor/, scoped and copied
+   from mngr) sit in Tailwind's base layer, so every utility still wins; the rules below remap the
+   design tokens and dress the desktop's chrome through its stable class names. All of it is scoped
+   to :root[data-ui-theme="mac-classic"]. */
+@import "./vendor/mac-classic/lib.css" layer(base);
+
+:root[data-ui-theme="mac-classic"] {
+  --c-bg: #ffffff;
+  --c-bg-sidebar: #ffffff;
+  --c-fill-hover: rgb(0 0 0 / 0.1);
+  --c-fill-active: rgb(0 0 0 / 0.18);
+  --c-text-primary: #000000;
+  --c-text-secondary: rgb(0 0 0 / 0.75);
+  --c-text-faint: rgb(0 0 0 / 0.55);
+  --c-border: #000000;
+  --c-border-faint: rgb(0 0 0 / 0.35);
+  --c-border-strong: #000000;
+  --c-accent: #000000;
+  --c-accent-hover: #000000;
+  --c-accent-light: rgb(0 0 0 / 0.1);
+  --c-surface: #ffffff;
+  --c-surface-secondary: #ffffff;
+  --c-inverse-surface: #000000;
+  --c-inverse-surface-hover: #000000;
+  --font-sans: "Retro Chicago 12", "Retro Chicago", system-ui, sans-serif;
+  --font-mono: "Retro Monaco", ui-monospace, monospace;
+  --radius-sm: 0px;
+  --radius-md: 4px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --shadow-raised: 1px 1px 0 #000000;
+  --shadow-overlay: 2px 2px 0 #000000;
+
+  --mac-title-stripes: repeating-linear-gradient(#000000 0 1px, #ffffff 1px 3px);
+  /* The 50% gray of the System 6 desktop, as fine diagonal pixels. A pixel-period gradient, so the
+     wallpaper's cover sizing cannot stretch it. */
+  --desk-default-wallpaper: repeating-linear-gradient(45deg, #000000 0 1px, #ffffff 1px 2px);
+  --desk-window-radius: 0px;
+  --desk-window-shadow: 2px 2px 0 #000000;
+  --desk-taskbar-surface: #ffffff;
+  --desk-taskbar-entry-shadow: none;
+  --desk-icon-radius: 0px;
+  --desk-icon-shadow: none;
+  --desk-icon-shadow-lifted: 2px 2px 0 #000000;
+  --desk-shortcut-label-shadow: none;
+}
+/* Metrics: behaviour reads these (theme/metrics.ts re-reads them when the theme changes). Touch
+   mode keeps its own finger-sized bar. */
+:root[data-ui-theme="mac-classic"]:not([data-touch]) {
+  --desk-title-bar-height: 24px;
+}
+
+:root[data-ui-theme="mac-classic"] body {
+  -webkit-font-smoothing: none;
+}
+:root[data-ui-theme="mac-classic"] ::selection {
+  background: #000000;
+  color: #ffffff;
+}
+
+:root[data-ui-theme="mac-classic"] .window-frame {
+  border: 1px solid #000000;
+}
+/* The focused window's title bar carries the pinstripes, with its name on a white patch cut out
+   of them; a window in the background has a plain white bar. */
+:root[data-ui-theme="mac-classic"] .title-bar {
+  background: #ffffff;
+  border-bottom: 1px solid #000000;
+}
+:root[data-ui-theme="mac-classic"] .window[data-focused="true"] .title-bar {
+  background-image: var(--mac-title-stripes);
+  background-clip: content-box;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+:root[data-ui-theme="mac-classic"] .window[data-focused="true"] .window-title {
+  background: #ffffff;
+  padding: 0 4px;
+}
+:root[data-ui-theme="mac-classic"] .window[data-focused="true"] .window-control {
+  background: #ffffff;
+}
+:root[data-ui-theme="mac-classic"] .window-control {
+  border: 1px solid #000000;
+  border-radius: 0;
+}
+
+:root[data-ui-theme="mac-classic"] .taskbar {
+  border-top: 1px solid #000000;
+}
+:root[data-ui-theme="mac-classic"] .taskbar-entry {
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+:root[data-ui-theme="mac-classic"] .taskbar-entry[data-focused="true"] {
+  background: #000000;
+  color: #ffffff;
+}
+:root[data-ui-theme="mac-classic"] .launcher-field {
+  background: #ffffff;
+  border: 1px solid #000000;
+  border-radius: 0;
+}
+
+/* Finder labels: black on a white patch under the icon. */
+:root[data-ui-theme="mac-classic"] .shortcut-label {
+  color: #000000;
+  background: #ffffff;
+  padding: 0 2px;
+}
+
+:root[data-ui-theme="mac-classic"] .retro-icon {
+  image-rendering: pixelated;
+}
