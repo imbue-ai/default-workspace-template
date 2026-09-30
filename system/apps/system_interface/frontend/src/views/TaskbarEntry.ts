@@ -35,12 +35,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
     // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
     const isDimmed = entry.isMinimized || entry.isDetached;
     const look = entry.look;
-    const { isAvatar, attrs, tooltip, image, tileColour } = entryStyleParts(
-      entry,
-      avatar,
-      ENTRY_GLYPH_MARKUP_SIZE,
-      "size-full",
-    );
+    const { isAvatar, attrs, tooltip, image } = entryStyleParts(entry, avatar, ENTRY_GLYPH_MARKUP_SIZE, "size-full");
     return m(
       "button",
       {
@@ -92,17 +87,13 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
             // corner is the tile's own 32 per cent. The chip around it carries the states; what is
             // left here is the fade for a window that is out of sight.
             class:
-              "taskbar-entry-tile relative flex size-(--desk-taskbar-entry-icon) shrink-0 items-center " +
+              "flex size-(--desk-taskbar-entry-icon) shrink-0 items-center " +
               // The bar's own quieter cast, the same in every state, selected included: the tint
-              // behind the icon is what says selected, and the icon has no reason to sit differently
-              // on it. The hairline of light along its edges is a layer of its own (style.css).
+              // behind the icon is what says selected, and the icon has no reason to sit
+              // differently on it.
               "justify-center shadow-(--desk-taskbar-entry-shadow) " +
               (isAvatar ? "rounded-2xl [&>img]:size-full " : "rounded-[32%] [&>svg]:size-full ") +
               (isDimmed ? "opacity-70 group-hover:opacity-100" : ""),
-            // The tile's own colour, for the hairline the theme lights from it. An entry without one
-            // (an avatar, an app with no tile) sets neither, and takes the plain white hairline.
-            "data-tile": tileColour === null ? undefined : "true",
-            style: tileColour === null ? undefined : { "--desk-icon-tile": tileColour },
           },
           image,
         ),

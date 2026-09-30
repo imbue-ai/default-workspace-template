@@ -86,35 +86,3 @@
     transition: none;
   }
 }
-
-/* The hairline of light along an icon's top and bottom (--desk-icon-highlight) is painted OVER the
-   art rather than under it. An inset box-shadow belongs to the element's background layer, and an
-   app's tile is an opaque rectangle edge to edge (`docs/system/app-icons.md`), so a highlight on the
-   box itself is drawn and then covered. This is a layer of its own on top, taking the tile's corner
-   from it and passing every press through. */
-.taskbar-entry-tile::after,
-.shortcut-icon::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow: var(--desk-icon-highlight);
-  pointer-events: none;
-}
-
-/* A tile whose own colour the view could read lights its hairline from that colour instead of from
-   white. `data-tile` is the view saying it set `--desk-icon-tile`; without it the relative colour
-   would have nothing to resolve against and the whole box-shadow would drop.
-
-   The recipe is declared HERE rather than beside `--desk-icon-lit-lift` in the theme, and it has to
-   be: a custom property whose value carries a `var()` is substituted on the element that DECLARES
-   it, not the one that uses it. Written at `:root`, `var(--desk-icon-tile)` would resolve against
-   `:root` -- where no tile colour is set -- and the property would inherit down already invalid,
-   taking the whole `box-shadow` with it and leaving the tile with no hairline at all. */
-.taskbar-entry-tile[data-tile]::after,
-.shortcut-icon[data-tile]::after {
-  --desk-icon-lit: oklch(from var(--desk-icon-tile) calc(l + var(--desk-icon-lit-lift)) c h);
-  box-shadow:
-    inset 0 1px 0 0 var(--desk-icon-lit),
-    inset 0 -1px 0 0 var(--desk-icon-lit);
-}

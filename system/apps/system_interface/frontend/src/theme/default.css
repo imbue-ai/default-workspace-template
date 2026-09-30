@@ -49,21 +49,6 @@
      for a photograph needs to be -- a tile sits on the bar's own white as often as on the wallpaper,
      and a wide pale cast disappears there. */
   --desk-icon-shadow: 0 2px 6px 0 rgb(0 0 0 / 0.2), 0 1px 2px 0 rgb(0 0 0 / 0.16);
-  /* A hairline of light along a tile's top and bottom edges, drawn on the box rather than into the
-     art: it gives a flat tile a rounded face without every icon having to draw one for itself. Light
-     at the bottom too, never a shade: the lit edge has to fall directly against the cast below it,
-     and that light-then-dark step is what lifts the tile off what it sits on. It costs the cream end
-     of the palette (`docs/system/app-icons.md`), where white has nowhere to go and the hairline does
-     not read; the cast is what separates those tiles. */
-  --desk-icon-highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.3), inset 0 -1px 0 0 rgb(255 255 255 / 0.3);
-  /* How far a tile whose own colour the shell could read (`--desk-icon-tile`, set by the views from
-     the icon's background) raises that colour's oklch lightness for its hairline. White is a film
-     laid over a colour -- it flattens a deep tile toward grey, and on a pale one it has nowhere to
-     go at all. Raising lightness and leaving chroma and hue alone is that colour catching light
-     instead: it keeps the tile's own hue, and on the pale end, where lightness runs out of the sRGB
-     gamut, the mapping sheds chroma instead, so the edge still parts from the tile. The recipe that
-     spends this is in style.css, which is the only place it can live -- see the note there. */
-  --desk-icon-lit-lift: 0.18;
   /* Drop shadows rather than a text-shadow: the name is clamped to two lines, so its own box
      clips anything painted inside it, and a filter draws the same silhouette from outside. */
   --desk-shortcut-label-shadow: drop-shadow(0 2px 4px rgb(0 0 0 / 0.45)) drop-shadow(0 1px 0.5px rgb(0 0 0 / 0.4));

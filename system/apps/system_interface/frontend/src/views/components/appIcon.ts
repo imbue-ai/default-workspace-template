@@ -108,16 +108,7 @@ const JAVASCRIPT_URI = /javascript:/i;
 // away wholesale (rather than evicting one entry) keeps the bookkeeping to one
 // line.
 const MAX_CACHE_ENTRIES = 64;
-const sanitizedByKey = new Map<string, SanitizedIcon>();
-
-/** A sanitized icon: the markup to inline, and the flat colour under its tile when it has one.
- *  Both come out of the same parse, so the colour costs nothing beyond the sanitizing already done. */
-interface SanitizedIcon {
-  readonly markup: string | null;
-  readonly background: string | null;
-}
-
-const UNUSABLE: SanitizedIcon = { markup: null, background: null };
+const sanitizedByKey = new Map<string, string | null>();
 
 /** Drop the whitespace and control characters a URL parser ignores, so an
  *  obfuscated scheme (a `javascript:` with a newline inside it) is compared
@@ -223,38 +214,6 @@ const GLYPH_INSET = (TILE_SIZE - GLYPH_BOX) / 2;
 // left the letter and the shadow standing for the app alone.
 const FALLBACK_TILE_BACKGROUND = "#F5D6A0";
 const FALLBACK_TILE_INK = "#492222";
-
-// A plain hex colour and nothing else. A gradient (`url(#...)`), a keyword, an `rgb()` -- none is
-// something the theme can lighten with relative colour syntax, so they are refused rather than
-// guessed at, and the tile falls back to the white hairline.
-const PLAIN_HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
-
-/**
- * The flat colour under the whole tile, or null when the icon has no such thing.
- *
- * `docs/system/app-icons.md` puts a single flat background across the whole 216 box, written as one
- * `<rect>` before anything else; that is the colour the shell lights the tile's edges from. Anything
- * else -- a background drawn as a path, a gradient, a rect that does not reach the edges -- is
- * refused: a light derived from a colour that is not AT the edge is a light from nowhere.
- */
-function tileBackground(root: Element): string | null {
-  const viewBox = (root.getAttribute("viewBox") ?? "")
-    .trim()
-    .split(/[\s,]+/)
-    .map(Number);
-  if (viewBox.length !== 4 || viewBox.some((value) => !Number.isFinite(value))) return null;
-  const [minX, minY, width, height] = viewBox;
-  const first = root.firstElementChild;
-  if (first === null || first.tagName.toLowerCase() !== "rect") return null;
-  const reaches =
-    Number(first.getAttribute("x") ?? 0) <= minX &&
-    Number(first.getAttribute("y") ?? 0) <= minY &&
-    Number(first.getAttribute("width")) >= width &&
-    Number(first.getAttribute("height")) >= height;
-  if (!reaches) return null;
-  const fill = (first.getAttribute("fill") ?? "").trim();
-  return PLAIN_HEX_COLOUR.test(fill) ? fill : null;
-}
 
 /** Numeric length attribute (`24`, `24px`), or null when it says something
  *  this cannot turn into a viewBox. */
@@ -369,13 +328,8 @@ function tiledMarkup(root: Element, sizePx: number): string {
  * costs a picture rather than a surface.
  */
 export function sanitizeIconMarkup(rawMarkup: string, sizePx: number): string | null {
-  return sanitizeIcon(rawMarkup, sizePx).markup;
-}
-
-/** The same parse, kept whole: the markup to inline and the colour under it. */
-function sanitizeIcon(rawMarkup: string, sizePx: number): SanitizedIcon {
   const markup = rawMarkup.trim();
-  if (markup === "" || markup.length > MAX_ICON_LENGTH) return UNUSABLE;
+  if (markup === "" || markup.length > MAX_ICON_LENGTH) return null;
   const key = `${sizePx}|${markup}`;
   const cached = sanitizedByKey.get(key);
   if (cached !== undefined) return cached;
@@ -385,12 +339,12 @@ function sanitizeIcon(rawMarkup: string, sizePx: number): SanitizedIcon {
   return sanitized;
 }
 
-function sanitizeUncached(markup: string, sizePx: number): SanitizedIcon {
-  if (!SVG_OPENING_TAG.test(markup)) return UNUSABLE;
+function sanitizeUncached(markup: string, sizePx: number): string | null {
+  if (!SVG_OPENING_TAG.test(markup)) return null;
   // No DOM means no parser, and there is no safe way to inline unparsed
   // markup. (This is the server-rendered and unit-test case; the browser
   // always has one.)
-  if (!DOMPurify.isSupported) return UNUSABLE;
+  if (!DOMPurify.isSupported) return null;
   const fragment = DOMPurify.sanitize(markup, {
     USE_PROFILES: { svg: true, svgFilters: true },
     FORBID_TAGS: [...FORBIDDEN_TAGS],
@@ -399,14 +353,12 @@ function sanitizeUncached(markup: string, sizePx: number): SanitizedIcon {
     RETURN_DOM_FRAGMENT: true,
   });
   const root = onlyElementChild(fragment);
-  if (root === null) return UNUSABLE;
-  if (root.namespaceURI !== SVG_NAMESPACE || root.tagName.toLowerCase() !== "svg") return UNUSABLE;
+  if (root === null) return null;
+  if (root.namespaceURI !== SVG_NAMESPACE || root.tagName.toLowerCase() !== "svg") return null;
   scrubAttributes(root);
   namespaceIds(root, iconIdPrefix(markup));
-  if (!normalizeRoot(root, sizePx)) return UNUSABLE;
-  // A glyph that brought no tile is put on the shell's, so its colour is the shell's too.
-  if (!paintsItsOwnColour(root)) return { markup: tiledMarkup(root, sizePx), background: FALLBACK_TILE_BACKGROUND };
-  return { markup: root.outerHTML, background: tileBackground(root) };
+  if (!normalizeRoot(root, sizePx)) return null;
+  return paintsItsOwnColour(root) ? root.outerHTML : tiledMarkup(root, sizePx);
 }
 
 /**
@@ -425,25 +377,6 @@ export function appIconMarkup(
   const sanitized = rawIcon === undefined || rawIcon === null ? null : sanitizeIconMarkup(rawIcon, sizePx);
   if (sanitized !== null) return sanitized;
   return appName === undefined ? fallbackMarkup : appMonogramMarkup(appName, sizePx);
-}
-
-/**
- * The flat colour of the tile `appIconMarkup` would draw for the same arguments, or null when
- * there is no single colour under it -- an icon that paints its background some other way, or an
- * app with no icon and no name to monogram. Callers light the tile's edges from it and fall back
- * to the plain white hairline on null.
- *
- * Takes the same `sizePx` as the markup call beside it so the two share one cache entry, and one
- * parse answers both.
- */
-export function appTileBackground(
-  rawIcon: string | undefined | null,
-  sizePx: number,
-  appName?: string,
-): string | null {
-  const background = rawIcon === undefined || rawIcon === null ? null : sanitizeIcon(rawIcon, sizePx).background;
-  if (background !== null) return background;
-  return appName === undefined ? null : FALLBACK_TILE_BACKGROUND;
 }
 
 /**
@@ -495,14 +428,4 @@ export function appIconMarkupForApp(
 ): string {
   if (app === undefined) return fallbackMarkup;
   return appIconMarkup(app.icon, sizePx, fallbackMarkup, app.name);
-}
-
-/** The same, for surfaces that hold the app's record: the colour under the tile `appIconMarkupForApp`
- *  draws, or null when there is no app and the caller's own generic glyph is what gets drawn. */
-export function appTileBackgroundForApp(
-  app: Pick<AppRecord, "name" | "icon"> | undefined,
-  sizePx: number,
-): string | null {
-  if (app === undefined) return null;
-  return appTileBackground(app.icon, sizePx, app.name);
 }

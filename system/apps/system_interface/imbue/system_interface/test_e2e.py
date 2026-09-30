@@ -1312,29 +1312,6 @@ def test_close_removes_the_window_for_every_client_and_the_close_chord_closes_th
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_a_shortcut_tile_lights_its_hairline_from_its_own_colour(tmp_path: Path, page: Page) -> None:
-    """A tile whose colour the shell read wears a hairline built from it, and one it could not read wears white.
-
-    Only a real engine can answer this. The lit hairline is a relative colour resolved against a custom property
-    the view sets on the tile, and the ways it goes wrong -- a recipe declared where that property is not in
-    scope, an engine without relative colour syntax -- all end in a `box-shadow` that computes to `none` while
-    every attribute and every stylesheet rule still reads exactly as intended. So the assertion is on what the
-    browser computed, not on what the markup says.
-    """
-    with _running_e2e_server(tmp_path) as server:
-        _land(page, server)
-        tile = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"] .shortcut-icon')
-        expect(tile).to_have_attribute("data-tile", "true")
-        lit = tile.evaluate("(element) => getComputedStyle(element, '::after').boxShadow")
-        assert lit != "none", "the lit hairline computed to nothing, so the tile is wearing no hairline at all"
-        # Built from the tile's own colour, not from white: the view's colour is what it resolved against.
-        colour = tile.evaluate("(element) => element.style.getPropertyValue('--desk-icon-tile')")
-        assert colour != "", "the view set no tile colour for the hairline to be built from"
-        assert "255, 255, 255" not in lit, f"the hairline fell back to white rather than the tile's colour: {lit}"
-        # Two edges, top and bottom, and both of them inset.
-        assert lit.count("inset") == 2, f"expected a hairline along both edges, got {lit}"
-
-
 def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tmp_path: Path, page: Page) -> None:
     """Dragging a shortcut to an empty cell moves it there for everyone and moves nothing else; held over an
     occupied cell the occupant steps aside under the hand, before the drop, and the drop keeps it there."""

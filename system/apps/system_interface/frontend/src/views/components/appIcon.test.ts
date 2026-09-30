@@ -12,14 +12,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 // hold to the icon rule, so the tests keep a table of records and look them up the same way.
 const registry = { apps: [] as { name: string; url: string; label: string; icon?: string }[] };
 
-import {
-  MAX_ICON_LENGTH,
-  appIconMarkup,
-  sanitizeIconMarkup,
-  appIconMarkupForApp,
-  appTileBackground,
-  appTileBackgroundForApp,
-} from "./appIcon";
+import { MAX_ICON_LENGTH, appIconMarkup, sanitizeIconMarkup, appIconMarkupForApp } from "./appIcon";
 
 /** The icon rule over the record registered under ``name`` (or none), as a view applies it. */
 function appIconMarkupByName(name: string | null, sizePx: number, fallback: string): string {
@@ -489,74 +482,4 @@ describe("a hostile icon, taken all the way into the document", () => {
       }
     });
   }
-});
-
-describe("appTileBackground", () => {
-  // The file every icon is written as (`docs/system/app-icons.md`): the background first, covering
-  // the whole box, then the mark.
-  const TILE =
-    '<svg xmlns="http://www.w3.org/2000/svg" width="216" height="216" viewBox="0 0 216 216" fill="none">' +
-    '<rect width="216" height="216" rx="69.12" fill="#0B292B"/>' +
-    '<path d="M36 36h144v144H36z" fill="#CECD0C"/></svg>';
-
-  it("reads the flat colour under the tile", () => {
-    expect(appTileBackground(TILE, 48)).toBe("#0B292B");
-  });
-
-  it("reads it the same at any drawn size, since the colour is not a function of size", () => {
-    expect(appTileBackground(TILE, 28)).toBe(appTileBackground(TILE, 48));
-  });
-
-  it("refuses a background that is not one plain colour, so nothing is lit from a guess", () => {
-    const gradient =
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 216 216" fill="none">' +
-      '<defs><linearGradient id="g"><stop stop-color="#0B292B"/></linearGradient></defs>' +
-      '<rect width="216" height="216" fill="url(#g)"/>' +
-      '<path d="M36 36h144v144H36z" fill="#CECD0C"/></svg>';
-    expect(appTileBackground(gradient, 48)).toBeNull();
-  });
-
-  it("refuses a first shape that does not reach the tile's edges, where the hairline is drawn", () => {
-    const inset =
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 216 216" fill="none">' +
-      '<rect x="20" y="20" width="176" height="176" fill="#0B292B"/></svg>';
-    expect(appTileBackground(inset, 48)).toBeNull();
-  });
-
-  it("refuses a background painted as something other than a rect", () => {
-    const path =
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 216 216" fill="none">' +
-      '<path d="M0 0h216v216H0z" fill="#0B292B"/></svg>';
-    expect(appTileBackground(path, 48)).toBeNull();
-  });
-
-  it("gives the shell's own tile colour for a glyph that brought no tile", () => {
-    // The same glyph `sanitizeIconMarkup` puts on the shell's tile, so the colour matches the tile
-    // actually drawn rather than being invented beside it.
-    const bare = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>';
-    const background = appTileBackground(bare, 48);
-    expect(background).not.toBeNull();
-    expect(
-      parsed(sanitizeIconMarkup(bare, 48) ?? "")
-        .querySelector("rect")
-        ?.getAttribute("fill"),
-    ).toBe(background);
-  });
-
-  it("gives the monogram's tile colour for a named app with no usable icon", () => {
-    expect(appTileBackground("", 48, "docs")).toBe(appTileBackground("not markup", 48, "docs"));
-    expect(appTileBackground("", 48, "docs")).not.toBeNull();
-  });
-
-  it("gives nothing for an unnamed app with no usable icon, which draws the caller's glyph", () => {
-    expect(appTileBackground("", 48)).toBeNull();
-  });
-
-  it("gives nothing for an app the machine does not know, which has no tile at all", () => {
-    expect(appTileBackgroundForApp(undefined, 48)).toBeNull();
-  });
-
-  it("gives the app record's tile colour through the record-holding entry point", () => {
-    expect(appTileBackgroundForApp({ name: "terminal", icon: TILE }, 48)).toBe("#0B292B");
-  });
 });

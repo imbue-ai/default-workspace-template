@@ -17,7 +17,6 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import type { PixelPoint, PixelRect } from "../geometry/frames";
 import type { AppRecord, DesktopShortcut, GridCell } from "../model/records";
 import { shortcutKey } from "../model/records";
-import { appTileBackgroundForApp } from "./components/appIcon";
 import { appGlyph } from "./glyphs";
 import { rectStyle } from "./pixelStyle";
 
@@ -65,7 +64,6 @@ export interface LiftStyle {
 /** The icon tile over the label: what a shortcut draws inside its cell. The whole thing is what a drag
  *  carries, so the tile forgoes its own hover growth while lifted rather than compounding it with the lift. */
 function shortcutContent(app: AppRecord | undefined, label: string, isLifted: boolean): m.Children {
-  const tileColour = appTileBackgroundForApp(app, ICON_MARKUP_SIZE);
   return [
     m(
       "span",
@@ -80,15 +78,9 @@ function shortcutContent(app: AppRecord | undefined, label: string, isLifted: bo
         class:
           "shortcut-icon relative flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center " +
           "rounded-(--desk-icon-radius) [&>svg]:size-full " +
-          // The hairline of light the bar's icons wear is a layer of its own (style.css); this is
-          // the cast it falls against.
           (isLifted
             ? "shadow-(--desk-icon-shadow-lifted)"
             : "shadow-(--desk-icon-shadow) transition-transform group-hover:scale-110"),
-        // The tile's own colour, for the hairline the theme lights from it. An app with no tile
-        // sets neither, and takes the plain white hairline.
-        "data-tile": tileColour === null ? undefined : "true",
-        style: tileColour === null ? undefined : { "--desk-icon-tile": tileColour },
       },
       m.trust(appGlyph(app, ICON_MARKUP_SIZE)),
     ),
