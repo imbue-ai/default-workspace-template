@@ -155,6 +155,11 @@
   opacity: 1;
 }
 
+/* Windows 95 taskbar buttons carried the window's title alone: no app tile beside it. */
+.taskbar-entry .taskbar-entry-tile {
+  display: none;
+}
+
 /* The Start button. */
 .launcher-start,
 .launcher-start:hover {
