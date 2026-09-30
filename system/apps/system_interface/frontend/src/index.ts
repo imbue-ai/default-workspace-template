@@ -137,7 +137,6 @@ function bootstrap(): void {
   setEmbedderMessageHandler(UI_THEME, (message) => {
     if (!applyUiTheme(root, message.theme)) return;
     desktopStore.setThemeMetrics(readThemeMetrics(readStyle(root)), currentRenderModes(root));
-    m.redraw();
   });
   const rootElement = document.getElementById("app");
   if (rootElement) {
