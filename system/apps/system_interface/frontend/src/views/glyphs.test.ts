@@ -16,6 +16,11 @@ describe("appGlyph", () => {
     expect(markup.startsWith("<svg")).toBe(true);
   });
 
+  it("draws the generic pixel-art icon for an app not in the registry", () => {
+    applyUiTheme(document.documentElement, "mac-classic");
+    expect(appGlyph(undefined, 20)).toContain(`href="${retroAppIconUrl("app")}"`);
+  });
+
   it("keeps the app's own glyph in the default look", () => {
     applyUiTheme(document.documentElement, "default");
     expect(appGlyph(CHAT, 20)).not.toContain("<image");

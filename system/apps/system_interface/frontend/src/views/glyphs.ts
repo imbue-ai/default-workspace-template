@@ -59,10 +59,11 @@ export function zoneGlyph(frame: Frame, size: number): string {
   );
 }
 
-/** The glyph an app wears everywhere: under a retro theme, the theme's pixel-art icon for it;
- *  otherwise its own icon, its monogram, or the generic app glyph. */
+/** The glyph an app wears everywhere: under a retro theme, the theme's pixel-art icon for it (the
+ *  generic program icon for an app not in the registry); otherwise its own icon, its monogram, or
+ *  the generic app glyph. */
 export function appGlyph(app: Pick<AppRecord, "name" | "icon"> | undefined, size: number): string {
-  const retroUrl = app === undefined ? null : retroAppIconUrl(app.name);
+  const retroUrl = retroAppIconUrl(app?.name ?? "app");
   if (retroUrl !== null) return retroIconMarkup(retroUrl, size);
   return appIconMarkupForApp(app, size, glyph("app", size));
 }
