@@ -1,0 +1,1 @@
+The layout client reports a redirect from the shell as the shell's answer instead of following it, so an op the shell redirects fails with its 3xx status rather than reading another page's answer as its own.
