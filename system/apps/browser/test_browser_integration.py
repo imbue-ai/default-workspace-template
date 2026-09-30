@@ -758,6 +758,36 @@ def test_a_page_asked_for_while_an_agent_drives_waits_on_the_overlay_and_opens_o
         asyncio.run(go())
 
 
+@pytest.mark.browser
+@pytest.mark.timeout(120)
+def test_a_page_asked_for_while_the_browser_launches_opens_in_front_once_it_is_up_real_chromium() -> None:
+    # A link the human clicks while Chromium is still starting is kept rather than dropped, and opens as a tab in
+    # front once the launch finishes.
+    pages = _PageServer({"/": "<title>start</title>", "/early": "<title>early</title>"})
+    with pages:
+
+        async def go() -> None:
+            manager = bsession.BrowserSessionManager()
+            try:
+                browser = await manager.create(None, f"{pages.origin}/")
+                assert await manager.open_url_for_human(f"{pages.origin}/early") is browser
+                assert browser._pending_url == f"{pages.origin}/early"
+                try:
+                    for task in list(manager._launch_tasks):
+                        await task
+                except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
+                    pytest.skip(f"Chromium unavailable in this environment: {e}")
+                _require_running(browser)
+
+                opened = await _new_page_target(browser, set(), f"{pages.origin}/early")
+                assert await _eventually(lambda: _is_active(browser, opened["targetId"]))
+                assert browser._pending_url is None
+            finally:
+                await manager.shutdown()
+
+        asyncio.run(go())
+
+
 def _drain(cast: "queue.Queue[str | None]") -> list[str]:
     frames: list[str] = []
     while not cast.empty():
