@@ -116,8 +116,8 @@ and the profile cache.
   but the services agent is running) and pushes `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's default shortcut (its `default_shortcut`, else the
-  first launch path of an app a program runs) on the first read after the
-  registry has been read. An app that registers later has its default
+  first launch path taking no text of an app a program runs) on the first
+  read after the registry has been read. An app that registers later has its default
   shortcut added to every desktop once, on the registry change and on every
   read; `default_shortcuts_offered.json` lists the apps offered so far, so a
   shortcut the user removed stays removed. A client record holds the client's
