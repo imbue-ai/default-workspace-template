@@ -1063,6 +1063,9 @@ registerProcessor('pb', PB);`;
     cancelPendingBtn.classList.remove("show");
     overlayPending.classList.remove("show");
     fetch(new URL("browsers/" + browserId + "/pending-url/cancel", document.baseURI), { method: "POST" })
+      .then((response) => {
+        if (!response.ok) console.warn("could not cancel the waiting page: answered", response.status);
+      })
       .catch((err) => console.warn("could not cancel the waiting page:", err));
   };
   returnBtn.onclick = () => {
