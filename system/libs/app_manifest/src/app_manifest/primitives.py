@@ -1,6 +1,5 @@
 import re
-from collections.abc import Iterable
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Final, Self
 from urllib.parse import quote
@@ -10,8 +9,7 @@ from imbue.imbue_common.pure import pure
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
 
-from app_manifest.errors import InvalidManifestValueError
-from app_manifest.errors import PageTemplateFieldError
+from app_manifest.errors import InvalidManifestValueError, PageTemplateFieldError
 
 # The app-name rule is the registration script's rule (system/scripts/forward_port.py,
 # ``validate_service_name``): the name becomes the leading label of the app's origin

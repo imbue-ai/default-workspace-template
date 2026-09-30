@@ -83,7 +83,13 @@ from browser.errors import (
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
-from browser.primitives import APP_NAME, AbsoluteHttpUrl, BrowserName, LocalHttpUrl, browser_page_path
+from browser.primitives import (
+    APP_NAME,
+    AbsoluteHttpUrl,
+    BrowserName,
+    LocalHttpUrl,
+    browser_page_path,
+)
 from browser.session import (
     _WINDOW_SWEEP_INTERVAL_SECONDS,
     BrowserSessionManager,
