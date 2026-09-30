@@ -3213,6 +3213,16 @@ class AgentManager:
         agent = self._agents.get(spare.chat_id)
         return agent is not None and not is_lifecycle_dead(agent.state)
 
+    def _spare_for_new_chat_locked(self, terms: SpareChatTerms) -> SpareChatAgent | None:
+        """The spare a new chat on ``terms`` takes: a ready one, else one still being created on them. Lock held."""
+        ready = next((spare for spare in self._spares if self._is_spare_usable_locked(spare, terms)), None)
+        if ready is not None:
+            return ready
+        return next(
+            (spare for spare in self._spares if spare.phase is SpareChatPhase.CREATING and spare.terms == terms),
+            None,
+        )
+
     def _create_chat_from_spare(
         self, account_id: str, project_id: str, message: str, model_pick: ModelPick | None
     ) -> CreatedChat | None:
@@ -3233,19 +3243,10 @@ class AgentManager:
         provisional: ProvisionalChat | None = None
         with self._lock:
             terms = self._new_chat_terms_locked(account_id, project_id)
-            spare = next((spare for spare in self._spares if self._is_spare_usable_locked(spare, terms)), None)
-            is_ready = spare is not None
+            spare = self._spare_for_new_chat_locked(terms)
             if spare is None:
-                spare = next(
-                    (
-                        spare
-                        for spare in self._spares
-                        if spare.phase is SpareChatPhase.CREATING and spare.terms == terms
-                    ),
-                    None,
-                )
-                if spare is None:
-                    return None
+                return None
+            is_ready = spare.phase is SpareChatPhase.READY
             # Recorded before anything else changes, so a spares file that cannot be written leaves
             # the spare as it was and the chat to a create of its own.
             try:
