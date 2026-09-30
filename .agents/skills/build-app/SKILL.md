@@ -166,8 +166,16 @@ while it runs:
 When it exits 0, check the plan:
 
 ```bash
-python3 .agents/skills/build-app/scripts/plan_orchestration.py parse --run-dir "$RUN" --reduce-access
+python3 .agents/skills/build-app/scripts/plan_orchestration.py parse --run-dir "$RUN" \
+    --reduce-access --shared-worktree --tier-agents
 ```
+
+Those last two are what decide the shape of the whole build, and `parse` prints which it
+wrote. `--shared-worktree` runs every worker in `$BUILD` rather than cutting a worktree
+each, so there is no per-worker `uv sync` and no branch to merge. `--tier-agents` keeps one
+agent per capability alive across that capability's nodes, so a node after the first starts
+from what the agent already learned instead of reading its way in from nothing. Step 4 has
+the launch commands for both.
 
 If `parse` exits 2, the message names what is wrong. Move `plan.md` aside to
 `plan.rejected-1.md`, append one line to the brief quoting the problem ("Your
