@@ -540,7 +540,9 @@ describe("the desktop shortcut rows", () => {
     return desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")], shortcuts });
   }
 
-  beforeEach(() => {});
+  beforeEach(() => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+  });
 
   function rightClick(element: Element): MouseEvent {
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 });
