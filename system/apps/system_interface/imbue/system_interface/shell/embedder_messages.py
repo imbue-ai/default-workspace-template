@@ -160,7 +160,8 @@ def _refusal_detail(response: httpx.Response) -> str:
     carries it), else the answer's text."""
     try:
         body = response.json()
-    except ValueError:
+    except ValueError as e:
+        logger.debug("A refusal from {} was not JSON ({}); quoting its text", response.url, e)
         body = None
     if isinstance(body, dict) and isinstance(body.get("detail"), str):
         return body["detail"].strip()[:_REFUSAL_DETAIL_LIMIT]
