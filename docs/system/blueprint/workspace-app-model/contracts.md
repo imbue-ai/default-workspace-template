@@ -314,9 +314,9 @@ The vendored ttyd client carries a focus listener for `ttyd-focus`, a payload-fr
 ## 11. The embedder relay
 
 In the shell's embed module: a `message` listener that forwards any message whose `type` starts with `minds:` from a child frame in the workspace origin family to `window.parent` unchanged, and forwards any message from `window.parent` to every child frame the shell created, unchanged.
-The shell handles `minds:close-active-tab` itself and forwards it as well.
-A message from `window.parent` whose type an app's `message_handlers` registers is also posted once to the shell's `POST /api/embedder-messages` with the client's id, and the shell posts it on to that app (`docs/system/blueprint/desktop-interface/contracts.md` section 5.6).
-The shell inspects no payloads.
+The shell handles `minds:close-active-tab` and `minds:open-link` itself and forwards them as well; it opens an `open-link` URL inside the workspace (`docs/system/blueprint/desktop-interface/contracts.md` section 5.6).
+A message from `window.parent` whose type an app's `message_handlers` registers is also posted once to the shell's `POST /api/embedder-messages` with the client's id, and the shell delivers it to that app by the handler's form: posted to its route, or shown as the page it builds from the message (section 5.6 there).
+The shell reads a payload only to fill a `show` handler's page and to take `open-link`'s URL.
 
 ## 12. `workspace-layout` and the op route
 
