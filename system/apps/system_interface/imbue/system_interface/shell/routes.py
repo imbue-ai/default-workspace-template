@@ -13,12 +13,19 @@ from flask import jsonify
 from flask import request
 from flask.typing import ResponseReturnValue
 from loguru import logger
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.ops import CONTEXT_OP
+from workspace_layout.ops import ClientActivityReport
+from workspace_layout.ops import OpRequester
+from workspace_layout.ops import is_known_op
+from workspace_layout.ops import parse_op_requester
+from workspace_layout.primitives import ClientActivityKind
+from workspace_layout.primitives import ClientId
 
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.client_activity import summarize_client_activity
 from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
-from imbue.system_interface.shell.data_types import ClientActivityReport
 from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
@@ -50,14 +57,8 @@ from imbue.system_interface.shell.errors import UpdateNoticeCommandError
 from imbue.system_interface.shell.errors import UpdateNoticeRefusedError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.layout_ops import CONTEXT_OP
-from imbue.system_interface.shell.layout_ops import OpRequester
-from imbue.system_interface.shell.layout_ops import is_known_op
-from imbue.system_interface.shell.layout_ops import parse_op_requester
 from imbue.system_interface.shell.port_parking import ParkedPageKind
 from imbue.system_interface.shell.primitives import AppLifecycleAction
-from imbue.system_interface.shell.primitives import ClientActivityKind
-from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_REQUEST
@@ -111,6 +112,11 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
         case _:
             logger.opt(exception=error).error("Failed to serve a shell request")
             return detail_response(str(error), HTTP_INTERNAL_ERROR)
+
+
+def _answer_layout_value_error(error: InvalidLayoutValueError) -> ResponseReturnValue:
+    """A value off the layout wire's rule (an id, a requester) in a request: the caller's to fix."""
+    return detail_response(str(error), HTTP_BAD_REQUEST)
 
 
 def _shell() -> ShellState:
@@ -365,6 +371,7 @@ def _op_context(shell: ShellState, requester: OpRequester | None) -> ResponseRet
 def register_shell_routes(application: Flask) -> None:
     """Register every shell route of desktop contracts.md sections 5, 6, and 8 on ``application``."""
     application.register_error_handler(ShellError, _answer_shell_error)
+    application.register_error_handler(InvalidLayoutValueError, _answer_layout_value_error)
     register_desktop_routes(application)
     application.add_url_rule(
         "/api/client-activity",

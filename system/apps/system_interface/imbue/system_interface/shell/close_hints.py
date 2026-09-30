@@ -12,12 +12,12 @@ from typing import Final
 import httpx
 from loguru import logger
 from pydantic import Field
+from workspace_layout.primitives import DesktopId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import Window
-from imbue.system_interface.shell.primitives import DesktopId
 
 HINT_TIMEOUT_SECONDS: Final[float] = 2.0
 

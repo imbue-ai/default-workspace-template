@@ -15,6 +15,8 @@ from app_manifest.manifest import LocationScope
 from app_manifest.primitives import AppName
 from flask import Flask
 from flask import request
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import WindowId
 
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import Desktop
@@ -25,8 +27,6 @@ from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
-from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle

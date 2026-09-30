@@ -18,6 +18,24 @@ from flask.typing import ResponseReturnValue
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.ops import DesktopOpArguments
+from workspace_layout.ops import INVENTORY_OPS
+from workspace_layout.ops import LOAD_OP
+from workspace_layout.ops import OpRequester
+from workspace_layout.ops import PINNED_WINDOW
+from workspace_layout.ops import RELOAD_SYSTEM_INTERFACE_OP
+from workspace_layout.ops import SELF_WINDOW
+from workspace_layout.ops import SHORTCUT_OPS
+from workspace_layout.ops import SHOW_OP
+from workspace_layout.ops import Wallpaper
+from workspace_layout.ops import op_only_args
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import WallpaperKind
+from workspace_layout.primitives import WallpaperName
+from workspace_layout.primitives import WindowId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -34,7 +52,6 @@ from imbue.system_interface.shell.data_types import GridCell
 from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import ShortcutTarget
-from imbue.system_interface.shell.data_types import Wallpaper
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
@@ -58,27 +75,11 @@ from imbue.system_interface.shell.desktop_document import with_window_state
 from imbue.system_interface.shell.desktops import find_desktop_by_name_or_id
 from imbue.system_interface.shell.desktops import resolve_active_desktop
 from imbue.system_interface.shell.errors import DesktopNotFoundError
-from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LayoutOpError
 from imbue.system_interface.shell.errors import NoRequesterWindowError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.layout_ops import DesktopOpArguments
-from imbue.system_interface.shell.layout_ops import INVENTORY_OPS
-from imbue.system_interface.shell.layout_ops import LOAD_OP
-from imbue.system_interface.shell.layout_ops import OpRequester
-from imbue.system_interface.shell.layout_ops import PINNED_WINDOW
-from imbue.system_interface.shell.layout_ops import RELOAD_SYSTEM_INTERFACE_OP
-from imbue.system_interface.shell.layout_ops import SELF_WINDOW
-from imbue.system_interface.shell.layout_ops import SHORTCUT_OPS
-from imbue.system_interface.shell.layout_ops import SHOW_OP
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import IfPresent
 from imbue.system_interface.shell.primitives import ShowOutcome
-from imbue.system_interface.shell.primitives import WallpaperKind
-from imbue.system_interface.shell.primitives import WallpaperName
-from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPage
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
@@ -87,7 +88,6 @@ from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
 from imbue.system_interface.shell.route_helpers import HTTP_OK
 from imbue.system_interface.shell.route_helpers import detail_response
-from imbue.system_interface.shell.route_helpers import op_only_args
 from imbue.system_interface.shell.route_helpers import parse_request_body
 from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.route_helpers import require_client
@@ -548,7 +548,7 @@ def _resolve_window(
         return require_window(desktop, own.id)
     try:
         window_id = WindowId(raw)
-    except InvalidShellValueError:
+    except InvalidLayoutValueError:
         window_id = None
     if window_id is not None:
         return require_window(desktop, window_id)

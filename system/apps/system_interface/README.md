@@ -130,7 +130,8 @@ and the profile cache.
   with 409 and the browser refetches. `GET /api/inventory` is
   `{desktops, apps, clients}`, each `app` carrying its `launch_paths`,
   `default_shortcut`, and `is_running`.
-- **The op route** (`shell/layout_ops.py`): an op is `{op, args, requester}`,
+- **The op route** (`shell/desktop_routes.py`, over the request models of
+  the `workspace_layout` library's `ops`): an op is `{op, args, requester}`,
   the requester `{app, marker}` or null; `self` names the requester's app's
   window whose path carries the marker. The document verbs (`open`, `focus`,
   `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `load`,

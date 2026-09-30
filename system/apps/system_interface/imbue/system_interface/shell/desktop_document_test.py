@@ -15,6 +15,11 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.registry import read_registry
+from workspace_layout.ops import Wallpaper
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import WallpaperKind
+from workspace_layout.primitives import WallpaperName
+from workspace_layout.primitives import WindowId
 
 from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.shell.data_types import AppPin
@@ -24,7 +29,6 @@ from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import Frame
 from imbue.system_interface.shell.data_types import GridCell
 from imbue.system_interface.shell.data_types import ShortcutTarget
-from imbue.system_interface.shell.data_types import Wallpaper
 from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import BackdropSize
 from imbue.system_interface.shell.desktop_document import FitMetrics
@@ -69,10 +73,6 @@ from imbue.system_interface.shell.desktop_document import without_pin_marks
 from imbue.system_interface.shell.desktop_document import without_shortcut
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import WallpaperKind
-from imbue.system_interface.shell.primitives import WallpaperName
-from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle

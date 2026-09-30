@@ -8,19 +8,15 @@ from typing import Self
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema
 from pydantic_core import core_schema
+from workspace_layout.primitives import FILENAME_SAFE_PATTERN
+from workspace_layout.primitives import WindowId
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.system_interface.shell.errors import InvalidShellValueError
 
-# A desktop id is the slugified desktop name (desktop contracts.md section 1).
-_DESKTOP_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
-# A value that names a file on disk (a client id its layout files, a user id the user's presence file, a wallpaper
-# name its image file) is held to one filename-safe alphabet.
-_FILENAME_SAFE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SAVE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^save-[0-9a-f]{16}$")
-_WINDOW_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^win-[0-9a-f]{16}$")
 _MINTED_ID_BYTES: Final[int] = 8
 
 # A window's path (desktop contracts.md section 1).
@@ -33,20 +29,6 @@ GLYPH_COUNT: Final[int] = 10
 
 def _string_schema(cls: type, handler: GetCoreSchemaHandler) -> CoreSchema:
     return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
-
-
-class ClientId(NonEmptyStr):
-    """One connected browser context, as its stored id names it: the uuid the browser keeps in local storage
-    (desktop contracts.md section 1)."""
-
-    def __new__(cls, value: str) -> Self:
-        if not _FILENAME_SAFE_PATTERN.fullmatch(value):
-            raise InvalidShellValueError(f"invalid client id {value!r}")
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return _string_schema(cls, handler)
 
 
 class SaveId(NonEmptyStr):
@@ -67,12 +49,6 @@ def mint_save_id() -> SaveId:
     return SaveId(f"save-{secrets.token_hex(_MINTED_ID_BYTES)}")
 
 
-class ClientActivityKind(LowerCaseStrEnum):
-    """What a client-activity report records: a message a client sent to an app's page (a wire value)."""
-
-    MESSAGE = auto()
-
-
 class AppLifecycleAction(LowerCaseStrEnum):
     """The two verbs the workspace has for an app's supervised program (a wire value: the route's last path segment)."""
 
@@ -80,39 +56,13 @@ class AppLifecycleAction(LowerCaseStrEnum):
     START = auto()
 
 
-class DesktopId(NonEmptyStr):
-    """The slugified name of a desktop, stable across renames (desktop contracts.md section 1)."""
-
-    def __new__(cls, value: str) -> Self:
-        if not _DESKTOP_ID_PATTERN.fullmatch(value):
-            raise InvalidShellValueError(f"invalid desktop id {value!r}")
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return _string_schema(cls, handler)
-
-
 class UserId(NonEmptyStr):
     """A signed-in account's user id as the identity header carries it; it names the user's state files, so it is held
     to a filename-safe alphabet."""
 
     def __new__(cls, value: str) -> Self:
-        if not _FILENAME_SAFE_PATTERN.fullmatch(value):
+        if not FILENAME_SAFE_PATTERN.fullmatch(value):
             raise InvalidShellValueError(f"invalid user id {value!r}")
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return _string_schema(cls, handler)
-
-
-class WindowId(NonEmptyStr):
-    """A window id the shell minted: ``win-<16 hex>``, never reused."""
-
-    def __new__(cls, value: str) -> Self:
-        if not _WINDOW_ID_PATTERN.fullmatch(value):
-            raise InvalidShellValueError(f"invalid window id {value!r}")
         return super().__new__(cls, value)
 
     @classmethod
@@ -160,19 +110,6 @@ class WindowTitle(str):
         return _string_schema(cls, handler)
 
 
-class WallpaperName(NonEmptyStr):
-    """A wallpaper's file name without its extension (desktop contracts.md section 4.4)."""
-
-    def __new__(cls, value: str) -> Self:
-        if not _FILENAME_SAFE_PATTERN.fullmatch(value):
-            raise InvalidShellValueError(f"invalid wallpaper name {value!r}")
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
-        return _string_schema(cls, handler)
-
-
 def mint_window_id() -> WindowId:
     return WindowId(f"win-{secrets.token_hex(_MINTED_ID_BYTES)}")
 
@@ -184,20 +121,6 @@ class WindowState(UpperCaseStrEnum):
     SNAPPED_LEFT = auto()
     SNAPPED_RIGHT = auto()
     MAXIMIZED = auto()
-
-
-class WallpaperKind(LowerCaseStrEnum):
-    """Where a wallpaper image comes from: the shell's bundled assets or the workspace's wallpapers directory."""
-
-    BUNDLED = auto()
-    FILE = auto()
-
-
-class IfPresent(LowerCaseStrEnum):
-    """What an open does about a window of the app already at the path: focus it, or open another (a wire value)."""
-
-    FOCUS = auto()
-    NEW = auto()
 
 
 class ShowOutcome(LowerCaseStrEnum):

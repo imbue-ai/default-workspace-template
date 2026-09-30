@@ -8,6 +8,9 @@ import pytest
 from app_manifest.primitives import AppName
 from flask import Flask
 from flask.testing import FlaskClient
+from workspace_layout.ops import OpRequester
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
@@ -18,10 +21,7 @@ from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
-from imbue.system_interface.shell.layout_ops import OpRequester
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState

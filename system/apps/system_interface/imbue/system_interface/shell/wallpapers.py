@@ -8,13 +8,13 @@ from typing import assert_never
 
 from loguru import logger
 from pydantic import Field
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.ops import Wallpaper
+from workspace_layout.primitives import WallpaperKind
+from workspace_layout.primitives import WallpaperName
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.shell.data_types import Wallpaper
-from imbue.system_interface.shell.errors import InvalidShellValueError
-from imbue.system_interface.shell.primitives import WallpaperKind
-from imbue.system_interface.shell.primitives import WallpaperName
 
 # Under ``data/.apps/system_interface/``, named relative to the workspace root ``build_shell_state`` resolves it
 # against.
@@ -68,7 +68,7 @@ def _list_kind(kind: WallpaperKind, directories: WallpaperDirectories) -> list[W
             continue
         try:
             name = WallpaperName(path.stem)
-        except InvalidShellValueError as e:
+        except InvalidLayoutValueError as e:
             logger.debug("Skipped a wallpaper file with an unusable name at {}: {}", path, e)
             continue
         wallpaper = Wallpaper(kind=kind, name=name)

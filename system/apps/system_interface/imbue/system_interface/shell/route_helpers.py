@@ -12,8 +12,9 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from pydantic import BaseModel
 from pydantic import ValidationError
+from workspace_layout.ops import OpRequester
+from workspace_layout.primitives import ClientId
 
-from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
@@ -21,8 +22,6 @@ from imbue.system_interface.shell.errors import NoTargetClientError
 from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.identity import parse_identity_header
-from imbue.system_interface.shell.layout_ops import OpRequester
-from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.state import ShellState
 
 LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -39,9 +38,6 @@ HTTP_PRECONDITION_FAILED: Final[int] = 412
 HTTP_INTERNAL_ERROR: Final[int] = 500
 HTTP_BAD_GATEWAY: Final[int] = 502
 HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
-
-# The keys that pick an op's target rather than describe the op; stripped before the op's own arguments are read.
-TARGET_ARG_KEYS: Final[frozenset[str]] = frozenset({"client", "desktop"})
 
 _RequestModel = TypeVar("_RequestModel", bound=BaseModel)
 
@@ -72,11 +68,6 @@ def require_loopback() -> ResponseReturnValue | None:
     if (request.remote_addr or "") not in LOOPBACK_CLIENT_HOSTS:
         return detail_response("this route is only callable from loopback", HTTP_FORBIDDEN)
     return None
-
-
-@pure
-def op_only_args(args_raw: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in args_raw.items() if key not in TARGET_ARG_KEYS}
 
 
 def is_known_client(shell: ShellState, client_id: str) -> bool:

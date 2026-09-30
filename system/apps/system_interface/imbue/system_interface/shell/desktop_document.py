@@ -22,6 +22,8 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryRow
 from pydantic import Field
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import WindowId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -42,9 +44,7 @@ from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.errors import GridSearchExhaustedError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import ShowOutcome
-from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPage
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState

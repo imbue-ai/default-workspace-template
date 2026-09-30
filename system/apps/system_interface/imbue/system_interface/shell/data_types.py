@@ -18,24 +18,22 @@ from app_manifest.registry import RegistryRow
 from pydantic import AwareDatetime
 from pydantic import Field
 from pydantic import model_validator
+from workspace_layout.ops import Wallpaper
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import WindowId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import InvalidShellValueError
-from imbue.system_interface.shell.primitives import ClientActivityKind
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import IfPresent
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import SaveId
 from imbue.system_interface.shell.primitives import ShortcutTargetKind
 from imbue.system_interface.shell.primitives import ShowOutcome
 from imbue.system_interface.shell.primitives import UserId
-from imbue.system_interface.shell.primitives import WallpaperKind
-from imbue.system_interface.shell.primitives import WallpaperName
-from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
@@ -163,19 +161,6 @@ class ClientStateReport(FrozenModel):
     previous_desktop: str = Field(default="", description="The desktop it was on before, empty on connect")
 
 
-class ClientActivityReport(FrozenModel):
-    """The body of ``POST /api/client-activity`` (desktop contracts.md section 5.1): a message a client sent."""
-
-    client_id: ClientId = Field(description="The client the activity belongs to")
-    desktop_id: DesktopId = Field(description="The desktop the client was on")
-    kind: ClientActivityKind = Field(description="A message sent to an app's page")
-    app: str = Field(description="The app the message went to")
-    key: str = Field(
-        description="The marker of the page the message went to (a chat id); empty for a page without one"
-    )
-    text: str = Field(default="", description="The message text, truncated at write time")
-
-
 class ClientReportOutcome(FrozenModel):
     """What recording a ``client_state`` report came to: the record, and whether its active desktop moved."""
 
@@ -265,13 +250,6 @@ class DesktopShortcut(FrozenModel):
     target: ShortcutTarget = Field(description="What the shortcut runs")
     mode: ShortcutMode = Field(description="Focus the app's most recent window first, or always run the launch path")
     cell: GridCell = Field(description="The stored cell; rendering fits it to the current grid")
-
-
-class Wallpaper(FrozenModel):
-    """A reference to a wallpaper image: bundled with the shell, or a file in the workspace's wallpapers directory."""
-
-    kind: WallpaperKind = Field(description="Bundled or file")
-    name: WallpaperName = Field(description="The file name without its extension")
 
 
 class Window(FrozenModel):
