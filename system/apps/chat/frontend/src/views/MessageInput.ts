@@ -206,7 +206,22 @@ function imageFilesFromClipboard(clipboardData: DataTransfer | null): File[] {
   return files;
 }
 
-export function MessageInput(): m.Component<{ chatId: string | null }> {
+export interface MessageInputAttrs {
+  chatId: string | null;
+  /** A control at the left of the composer's box, bottom-aligned with it: the phone layout's settings button. */
+  leading?: m.Children;
+}
+
+/** The composer's box, beside ``leading`` when there is one. */
+function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]): m.Vnode {
+  if (leading === undefined) return m("div", { class: INPUT_BOX_CLASS }, boxChildren);
+  return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
+    leading,
+    m("div", { class: `${INPUT_BOX_CLASS} min-w-0 flex-1` }, boxChildren),
+  ]);
+}
+
+export function MessageInput(): m.Component<MessageInputAttrs> {
   let messageText = "";
   let currentChatId: string | null = null;
   let messageTextareaElement: HTMLTextAreaElement | null = null;
@@ -1145,7 +1160,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
               input.value = "";
             },
           }),
-          m("div", { class: INPUT_BOX_CLASS }, [
+          composeRow(vnode.attrs.leading, [
             attachments.length > 0
               ? m(
                   "div",

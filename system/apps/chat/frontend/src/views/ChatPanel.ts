@@ -10,6 +10,11 @@
  * seeded chat (the Imbue Studio app's onboarding conversation, continued here) has a transcript from
  * the start, so it renders as one through its wait for the first send and its create; only a
  * failed create shows the provisional screen.
+ *
+ * In the phone layout (``isCompact``) the model menu opens from a settings button at the
+ * composer's left rather than the chip in the under-bar, and carries the Source view switch as
+ * one of its rows; the under-bar keeps the connecting and fast-mode notices, and the switch while
+ * the terminal face is up, since the composer and its button turn over with the chat face.
  */
 
 import m from "mithril";
@@ -111,8 +116,9 @@ export function isSeededTranscriptShown(provisional: ProvisionalChat | null): bo
   return provisional !== null && provisional.is_seeded && provisional.phase !== "failed";
 }
 
-export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }> {
+export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; isCompact?: boolean }> {
   let currentChatId: string | null = null;
+  let panelElement: HTMLElement | null = null;
 
   // Whether the page's frame is on screen. The shell keeps a minimized window's frame mounted
   // and mithril redraws globally, so the component keeps running while hidden against an
@@ -183,6 +189,17 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
   // rather than global: two chats open side by side turn over independently.
   let isFlipped = false;
   let hasEverFlipped = false;
+
+  function toggleSourceView(): void {
+    isFlipped = !isFlipped;
+    // Turning the card over is the user navigating TO the terminal, so the host grants it
+    // focus -- the embedded ttyd client never takes focus on its own (see terminalFocus.ts).
+    // Redraw first so a first flip has mounted the back face before the ask.
+    if (isFlipped) {
+      m.redraw.sync();
+      requestFrameFocus(panelElement?.querySelector(".chat-flip-back") ?? null);
+    }
+  }
 
   function isFileDrag(event: DragEvent): boolean {
     const types = event.dataTransfer?.types;
@@ -665,6 +682,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
 
     view(vnode) {
       const chatId = vnode.attrs.chatId;
+      const isCompact = vnode.attrs.isCompact === true;
+      // The terminal back face attaches to the agent's own tmux session, which a chat still being
+      // created does not have: without a name the terminal dispatch attaches to whatever session
+      // it finds, so the flip waits for the agent to register.
+      const isListed = getChatById(chatId) !== undefined;
       // The shell's live visibility for this frame, fed in by the page. Read
       // it before building content / running lifecycle hooks so the scroll hooks
       // (which read this closure variable) see the current value. Undefined for a
@@ -686,6 +708,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
         "div",
         {
           class: "chat-panel flex flex-col h-full relative",
+          oncreate: (panelVnode: m.VnodeDOM) => {
+            panelElement = panelVnode.dom as HTMLElement;
+          },
           ondragenter: acceptsFileDrops ? handleDragEnter : undefined,
           ondragover: acceptsFileDrops ? handleDragOver : undefined,
           ondragleave: acceptsFileDrops ? handleDragLeave : undefined,
@@ -731,7 +756,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
                 m(
                   "main",
                   {
-                    class: "app-content transcript-scroll flex-1 overflow-y-auto bg-chat px-8 py-6",
+                    class: `app-content transcript-scroll flex-1 overflow-y-auto bg-chat ${isCompact ? "px-4 py-4" : "px-8 py-6"}`,
                     // Focusable so native keyboard scrolling (PageUp/Down, Home/End)
                     // works; the engine's listeners classify the input source.
                     tabindex: 0,
@@ -762,7 +787,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
               ]),
               // Present for every chat, a create in flight included: a message typed while the
               // chat is being created is held and delivered when it lands.
-              m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
+              m("footer", { class: `app-footer shrink-0 bg-chat ${isCompact ? "px-3" : "px-8"}` }, [
                 m(EmptySlot, { name: "conversation-before-input" }),
                 // The switch dialog a provider choice opens (spec 5.1), and why a switch
                 // failed, with a retry on any account (spec 5.10).
@@ -774,7 +799,17 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
                       chatId,
                       events: getEventsForChat(chatId),
                     }),
-                m(MessageInput, { chatId }),
+                m(MessageInput, {
+                  chatId,
+                  leading:
+                    isCompact && isListed
+                      ? m(ModelProviderMenu, {
+                          chatId,
+                          isCompact: true,
+                          sourceView: { on: isFlipped, onToggle: toggleSourceView },
+                        })
+                      : undefined,
+                }),
                 // The under-bar is a sibling of the whole flip card, not part of this face: on
                 // a face it would rotate away with the face its own switch turns, and the flip
                 // would be one-way.
@@ -788,43 +823,27 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
           // on the composer and sits evenly in its own band.
           m(
             "div",
-            { class: "chat-under-bar shrink-0 bg-chat px-8 pb-2" },
+            { class: `chat-under-bar shrink-0 bg-chat pb-2 ${isCompact ? "px-3" : "px-8"}` },
             m(
               "div",
               {
                 // Same max-width as the composer card above it; relative as
                 // the containing block for centered overlays. As tall as the model chip
-                // whether or not anything in it has rendered yet, so the composer never moves.
+                // whether or not anything in it has rendered yet, so the composer never moves;
+                // on a phone, where the chip is the settings button, only as tall as a notice in it.
                 class:
-                  "composer-under-bar relative mx-auto mt-2 flex min-h-[30px] w-full " +
+                  `composer-under-bar relative mx-auto mt-2 flex w-full ${isCompact ? "" : "min-h-[30px]"} ` +
                   "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2",
               },
               [
-                m(ModelProviderMenu, { chatId }),
+                // On a phone a chat with no agent yet still names its account here: it has no menu to open.
+                isCompact && isListed ? null : m(ModelProviderMenu, { chatId }),
                 m(ConnectingIndicator, { chatId }),
                 m(FastModeNotice, { chatId }),
-                // The terminal back face attaches to the agent's own tmux session, which
-                // a chat still being created does not have: without a name the terminal
-                // dispatch attaches to whatever session it finds, so the flip waits for
-                // the agent to register.
-                getChatById(chatId) === undefined
+                !isListed || (isCompact && !isFlipped)
                   ? null
                   : m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
-                      m(TerminalViewToggle, {
-                        on: isFlipped,
-                        onToggle: (event: Event) => {
-                          isFlipped = !isFlipped;
-                          // Turning the card over is the user navigating TO the terminal,
-                          // so the host grants it focus -- the embedded ttyd client never
-                          // takes focus on its own (see terminalFocus.ts). Redraw first so
-                          // a first flip has mounted the back face before the ask.
-                          if (isFlipped) {
-                            const panel = (event.currentTarget as HTMLElement | null)?.closest?.(".chat-panel");
-                            m.redraw.sync();
-                            requestFrameFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
-                          }
-                        },
-                      }),
+                      m(TerminalViewToggle, { on: isFlipped, onToggle: toggleSourceView }),
                     ]),
               ],
             ),
