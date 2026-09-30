@@ -3563,7 +3563,15 @@ class AgentManager:
                     if self._shutdown_event.is_set()
                     else f"the harness did not come up within {SPARE_CHAT_BOOT_TIMEOUT_SECONDS:.0f}s"
                 )
-        error = None if failure is None else failure_notice(failure, output_tail.text())
+        self._settle_spare_creation(spare, None if failure is None else failure_notice(failure, output_tail.text()))
+
+    def _settle_spare_creation(self, spare: SpareChatAgent, error: str | None) -> None:
+        """Settle a spare whose creation ended, cleanly (no ``error``) or with the reason it failed.
+
+        A clean one a chat claimed becomes that chat; a clean one nothing claimed becomes ready and
+        tops the pool up. A failed one is destroyed after the backoff is set, and a chat that
+        claimed it is left failed with ``error``.
+        """
         with self._lock:
             current = self._spare_locked(spare.chat_id)
             claim = self._spare_claim_by_chat.pop(spare.chat_id, None)
@@ -3571,30 +3579,30 @@ class AgentManager:
                 claim = None
             # Taken now: the discard below forgets the chat's per-chat records, this event included.
             settled = self._creation_settled_by_chat.get(spare.chat_id) if claim is not None else None
-            if claim is not None and failure is None:
+            if claim is not None and error is None:
                 self._drop_spare_locked(spare.chat_id)
                 self._provisional_chats.pop(spare.chat_id, None)
-            elif failure is None:
+            elif error is None:
                 self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.READY)
             else:
                 self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.DISCARDING)
                 self._spare_retry_not_before = time.monotonic() + SPARE_CHAT_RETRY_BACKOFF_SECONDS
                 self._spare_ids_being_discarded.add(spare.chat_id)
-                if claim is not None and error is not None:
+                if claim is not None:
                     self._mark_creation_failed_locked(spare.chat_id, error)
-        if claim is not None and failure is None:
+        if claim is not None and error is None:
             self._settle_claimed_spare(spare.chat_id, claim, settled, None)
-        elif failure is None:
-            _loguru_logger.debug("Spare agent {} is ready", agent_id)
+        elif error is None:
+            _loguru_logger.debug("Spare agent {} is ready", spare.chat_id)
             self.ensure_spare_chat()
         elif claim is not None:
-            _loguru_logger.warning("Could not start spare agent {} for its chat: {}", agent_id, error)
+            _loguru_logger.warning("Could not start spare agent {} for its chat: {}", spare.chat_id, error)
             try:
                 self._discard_spare_unless_stopping(spare.chat_id)
             finally:
                 self._settle_claimed_spare(spare.chat_id, claim, settled, error)
         else:
-            _loguru_logger.warning("Could not start spare agent {}: {}", agent_id, error)
+            _loguru_logger.warning("Could not start spare agent {}: {}", spare.chat_id, error)
             self._discard_spare_unless_stopping(spare.chat_id)
 
     def _discard_spare_unless_stopping(self, chat_id: ChatId) -> None:
