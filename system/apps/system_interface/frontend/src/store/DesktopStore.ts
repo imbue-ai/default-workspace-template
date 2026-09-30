@@ -1058,9 +1058,7 @@ export class DesktopStore {
     this.takeDesktop({
       ...desktop,
       shortcuts: desktop.shortcuts.map((shortcut) => {
-        const wanted = cells.find(
-          (entry) => entry.app === shortcut.target.app && entry.launch === shortcut.target.launch,
-        );
+        const wanted = cells.find((entry) => isShortcutOf(shortcut, entry.app, entry.launch));
         return wanted === undefined ? shortcut : { ...shortcut, cell: wanted.cell };
       }),
     });

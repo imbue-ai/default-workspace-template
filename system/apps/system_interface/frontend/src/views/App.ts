@@ -501,9 +501,8 @@ export function App(): m.Component<AppAttrs> {
             openMenuAt({ kind: "window", windowId: binding.windowId }, anchor);
             break;
           case "shortcut": {
-            const shortcut = activeDesktop(current.getState())?.shortcuts.find(
-              (candidate) => candidate.target.app === binding.app && candidate.target.launch === binding.launch,
-            );
+            const desktop = activeDesktop(current.getState());
+            const shortcut = desktop === null ? undefined : findShortcut(desktop, binding.app, binding.launch);
             if (shortcut !== undefined) {
               openMenuAt({ kind: "shortcut", shortcut, referenceRows: referenceRows() }, anchor);
             }
@@ -605,11 +604,10 @@ export function App(): m.Component<AppAttrs> {
   function rowsOfShortcutMenu(current: DesktopStore, opened: DesktopShortcut): MenuRow[] | null {
     const state = current.getState();
     const desktop = activeDesktop(state);
+    if (desktop === null) return null;
     // The record as it is now (its mode may have flipped elsewhere), and nothing once it is removed.
-    const shortcut = desktop?.shortcuts.find(
-      (candidate) => candidate.target.app === opened.target.app && candidate.target.launch === opened.target.launch,
-    );
-    if (desktop === null || shortcut === undefined) return null;
+    const shortcut = findShortcut(desktop, opened.target.app, opened.target.launch);
+    if (shortcut === undefined) return null;
     const app = appByName(state, shortcut.target.app);
     const launchPath = app === undefined ? null : launchPathOf(app, shortcut.target.launch);
     const recent = app === undefined ? null : mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
