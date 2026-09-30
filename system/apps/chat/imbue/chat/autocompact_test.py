@@ -173,7 +173,7 @@ def test_an_unreadable_mode_still_runs_the_sweep(loguru_records: list[str]) -> N
 
 def test_a_failed_batch_is_retried_one_chat_at_a_time() -> None:
     """One chat the batch cannot resolve (stopped since it was listed) fails the whole command;
-    the others must still be checked, as they were when each chat had its own command."""
+    the others must still be checked."""
     recorded_commands: list[list[str]] = []
 
     def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
