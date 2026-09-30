@@ -1822,6 +1822,7 @@ def _load_script(path: Path, module_name: str) -> Any:
     spec = importlib.util.spec_from_file_location(module_name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    modules_before = set(sys.modules)
     # Registered while it runs: a dataclass resolves its string annotations through its module.
     sys.modules[module_name] = module
     sys.path.insert(0, str(path.parent))
@@ -1829,7 +1830,11 @@ def _load_script(path: Path, module_name: str) -> Any:
         spec.loader.exec_module(module)
     finally:
         sys.path.remove(str(path.parent))
-        del sys.modules[module_name]
+        # Its sibling imports go too, so their bare names do not outlive this load in the session.
+        for name in set(sys.modules) - modules_before:
+            origin = getattr(sys.modules[name], "__file__", None)
+            if name == module_name or (origin is not None and Path(origin).parent == path.parent):
+                del sys.modules[name]
     return module
 
 
