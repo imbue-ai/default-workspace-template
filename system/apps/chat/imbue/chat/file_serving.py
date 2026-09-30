@@ -4,10 +4,12 @@ An agent (Claude Code) running in this container can write files and read them
 back, but the browser rendering the chat cannot reach the container's
 filesystem. Markdown like ``![chart](/home/user/workspace/data/images/chart.png)``
 (an inline image) or ``[report](/home/user/workspace/data/documents/report.pdf)`` (a
-download link) makes the browser issue an HTTP GET for that path; the chat app
-runs in the same container as the agent, so it answers the GET by streaming the
-file's bytes. The absolute on-disk path therefore doubles as the URL -- no
-rewriting, no dedicated directory, no separate server.
+file link, which opens in the File Viewer inside the workspace and downloads from
+here only when the chat is opened on its own) makes the browser issue an HTTP GET
+for that path; the chat app runs in the same container as the agent, so it
+answers the GET by streaming the file's bytes. The absolute on-disk path
+therefore doubles as the URL -- no rewriting, no dedicated directory, no separate
+server.
 
 This hangs off the chat app's path route (see ``server._serve_file_or_document``):
 
