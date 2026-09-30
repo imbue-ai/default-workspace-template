@@ -4,4 +4,4 @@
 
 - An app with a pinned window that registers late (the chat's avatar window) now gets that window on every desktop as soon as the registry changes, rather than on the next read of the desktops.
 
-- Existing workspaces get the Chat shortcut back once: with no record yet, the apps with a shortcut on any desktop count as offered, so the chat, missing from every desktop of a workspace seeded before it registered, is added once. A built-in shortcut the user had removed from every desktop comes back once too.
+- Existing workspaces get the Chat shortcut back once: with no record yet, the apps with a shortcut on any desktop count as offered, so the chat, missing from every desktop of a workspace seeded before it registered, is added once. So is any other registered app's default shortcut that is on no desktop: a built-in one the user had removed from every desktop comes back once, and an app built with a `default_shortcut` after the desktops were made gets its shortcut once.
