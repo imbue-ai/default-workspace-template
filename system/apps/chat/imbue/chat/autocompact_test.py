@@ -8,6 +8,7 @@ from imbue.chat.autocompact import ChatAutoCompactor
 from imbue.chat.autocompact import is_proactive_autocompact_enabled
 from imbue.concurrency_group.errors import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.mngr.errors import ConfigParseError
 from imbue.mngr.utils.polling import poll_until
 
 
@@ -145,6 +146,29 @@ def test_sweep_checks_every_running_chat_in_one_command() -> None:
 
     assert len(results) == 1
     assert recorded_commands == [["mngr", "autocompact", "run", "chat-alpha", "chat-beta", "chat-gamma"]]
+
+
+def test_an_unreadable_mode_still_runs_the_sweep(loguru_records: list[str]) -> None:
+    """An unreadable config must cost a launch, not silently turn compaction off."""
+    recorded_commands: list[list[str]] = []
+
+    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
+        recorded_commands.append(list(command))
+        return _make_finished_process(command=command, returncode=0)
+
+    def unreadable_mode() -> bool:
+        raise ConfigParseError("Invalid config for 'plugins.autocompact'")
+
+    compactor = ChatAutoCompactor.build(
+        list_running_chat_agent_names=lambda: ["chat-alpha", "chat-beta"],
+        is_enabled=unreadable_mode,
+        runner=fake_runner,
+    )
+    compactor.sweep()
+
+    assert recorded_commands == [["mngr", "autocompact", "run", "chat-alpha", "chat-beta"]]
+    warning_logs = [log for log in loguru_records if log.startswith("WARNING") and "autocompact mode" in log]
+    assert len(warning_logs) == 1
 
 
 def test_a_failed_batch_is_retried_one_chat_at_a_time() -> None:
