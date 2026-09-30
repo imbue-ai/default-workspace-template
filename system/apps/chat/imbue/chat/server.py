@@ -913,7 +913,8 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     With ``only_if_idle`` a chat that has not ended its turn is left alone and
     answered 409, its ``busy_with`` saying what it is doing. With ``keep_queue``
     the messages queued for the agent are resent to it as one turn after the
-    restart, as the flush does, instead of dying with the process.
+    restart, as the flush does, instead of dying with the process; a resend that
+    fails is a 500 too, though the restart has happened.
 
     Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and restarting it would stop the
@@ -1008,8 +1009,9 @@ def _refuse_queue_action_on_primary(agent_info: AgentInfo, action: str) -> Respo
 def _interrupt_capabilities(
     agent_info: AgentInfo,
 ) -> tuple[AgentSessionWatcher, Callable[[], tuple[bool, str]], Callable[[], None]]:
-    """The harness-neutral capabilities the restart-drain flush binds for one agent: the queue
-    mirror, a process restart (``mngr start --restart --no-resume``), and an activity-settle.
+    """The harness-neutral capabilities the restart-drain (the flush, and the interrupt with
+    ``keep_queue``) binds for one agent: the queue mirror, a process restart
+    (``mngr start --restart --no-resume``), and an activity-settle.
 
     The stop button and the handoff's draining step bind theirs through
     ``ChatAppState.drain_to_composer`` instead, which dispatches to the harness's interrupt.
