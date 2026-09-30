@@ -27,6 +27,7 @@ from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.message import send_key_chord_to_agents
 from imbue.mngr.api.message import send_message_to_agents
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.config.data_types import PluginConfigT
 from imbue.mngr.config.loader import load_config
 from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.main import get_or_create_plugin_manager
@@ -82,6 +83,15 @@ def _get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
         cg.__exit__(None, None, None)
         raise
     return mngr_ctx, cg
+
+
+def read_plugin_config(name: str, config_type: type[PluginConfigT]) -> PluginConfigT:
+    """A plugin's config as this workspace's mngr resolves it: its defaults when no config file sets it."""
+    mngr_ctx, cg = _get_mngr_context()
+    try:
+        return mngr_ctx.get_plugin_config(name, config_type)
+    finally:
+        cg.__exit__(None, None, None)
 
 
 def _read_claude_config_dir_from_env(env_file: Path) -> Path | None:
