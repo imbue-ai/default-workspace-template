@@ -646,7 +646,7 @@ export function App(): m.Component<AppAttrs> {
       {
         kind: "action",
         key: "remove",
-        label: "Remove",
+        label: "Remove from desktop",
         icon: "trash",
         tone: "danger",
         onSelect: () => void current.removeShortcut(shortcut.target.app, shortcut.target.launch),

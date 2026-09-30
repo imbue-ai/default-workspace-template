@@ -2,4 +2,4 @@
 
 - Right-clicking an app's own row in the launcher (the launch path of its desktop icon) now offers `Add to desktop`, which puts the icon on the desktop on screen, or `Remove from desktop` when it is already there; other rows keep the plain right-click menu. A taskbar entry's right-click menu offers the same for its window's app.
 
-- Adding or removing a desktop shortcut (from these menus, or Remove on the icon itself) shows on the desktop at once rather than after the shell answers, and is put back if the shell refuses.
+- The icon's own right-click menu now reads `Remove from desktop` rather than `Remove`. Adding or removing a desktop shortcut (from these menus, or from the icon itself) shows on the desktop at once rather than after the shell answers, and is put back if the shell refuses.

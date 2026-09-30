@@ -614,6 +614,27 @@ describe("a launcher row's menu", () => {
     expect(api.calls).toContain("removeDesktopShortcut:home:docs:new");
   });
 
+  it("names the icon's own Remove row as the other menus do, and takes the icon off at once", () => {
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a")],
+        shortcuts: [
+          { target: { kind: "launch", app: "docs", launch: "new" }, mode: "focus", cell: { column: 0, row: 0 } },
+        ],
+      }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const icon = document.querySelector('[data-shortcut="docs:new"]') as HTMLElement;
+    icon.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    m.redraw.sync();
+    const row = document.querySelector('[data-menu-part="menu"] [data-menu-row="remove"]') as HTMLElement;
+    expect(row.textContent).toContain("Remove from desktop");
+    chooseRow("remove");
+    expect(store.getState().desktops[0].shortcuts).toEqual([]);
+  });
+
   it("offers only an app's own desktop shortcut: its first launch path taking no text, focusing", async () => {
     const notes = appRecord("notes", {
       launch_paths: [
