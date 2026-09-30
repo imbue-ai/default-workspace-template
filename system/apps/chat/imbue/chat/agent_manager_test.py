@@ -5661,7 +5661,7 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
         manager.ensure_spare_chat()
         (spare,) = _wait_for_ready_spares(manager, 1)
         spare_pid = 48213
-        # A subprocess its harness spawned while it waited, which inherited the spare band.
+        # A subprocess its harness spawned while it waited.
         harness_child_pid = 48215
         pid_by_agent_id[spare.chat_id] = spare_pid
         descendant_pids_by_pid[spare_pid] = [harness_child_pid]
@@ -5669,7 +5669,7 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
         manager.ensure_spare_chat()
 
         # The spare's creation thread sweeps once more after it is ready, and may tag it again.
-        assert adj_writes != [] and set(adj_writes) == {(spare_pid, bands.SPARE_AGENT)}
+        assert set(adj_writes) == {(spare_pid, bands.SPARE_AGENT), (harness_child_pid, bands.SPARE_AGENT)}
         adj_writes.clear()
 
         assert manager.create_chat("").chat_id == spare.chat_id
@@ -5677,10 +5677,10 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
         spare_pid_writes = [adj for pid, adj in adj_writes if pid == spare_pid]
         assert spare_pid_writes != []
         assert bands.CHAT_AGENT_FLOOR <= spare_pid_writes[-1] <= bands.CHAT_AGENT_STALE_CEILING
-        assert [adj for pid, adj in adj_writes if pid == harness_child_pid] == [bands.CHAT_AGENT_BASE]
+        assert [adj for pid, adj in adj_writes if pid == harness_child_pid][-1:] == [bands.CHAT_AGENT_BASE]
         adj_writes.clear()
         manager.ensure_spare_chat()
-        assert (spare_pid, bands.SPARE_AGENT) not in adj_writes
+        assert bands.SPARE_AGENT not in [adj for pid, adj in adj_writes if pid in (spare_pid, harness_child_pid)]
     finally:
         manager.stop()
 
@@ -5701,7 +5701,8 @@ def test_a_spare_claimed_while_it_starts_takes_the_chat_band_once_its_chat_settl
         pid_by_agent_id[booting.chat_id] = spare_pid
         descendant_pids_by_pid[spare_pid] = [harness_child_pid]
         manager.ensure_spare_chat()
-        assert (spare_pid, bands.SPARE_AGENT) in adj_writes
+        assert set(adj_writes) >= {(spare_pid, bands.SPARE_AGENT), (harness_child_pid, bands.SPARE_AGENT)}
+        adj_writes.clear()
 
         created = manager.create_chat("")
         assert created.chat_id == booting.chat_id
@@ -5713,6 +5714,6 @@ def test_a_spare_claimed_while_it_starts_takes_the_chat_band_once_its_chat_settl
         assert [adj for pid, adj in adj_writes if pid == harness_child_pid] == [bands.CHAT_AGENT_BASE]
         adj_writes.clear()
         manager.ensure_spare_chat()
-        assert (spare_pid, bands.SPARE_AGENT) not in adj_writes
+        assert bands.SPARE_AGENT not in [adj for pid, adj in adj_writes if pid in (spare_pid, harness_child_pid)]
     finally:
         manager.stop()

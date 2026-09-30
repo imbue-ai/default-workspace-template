@@ -3391,29 +3391,35 @@ class AgentManager:
         return new_spare
 
     def _tag_spares_for_shedding_first(self) -> None:
-        """Put every spare's process in the ``SPARE_AGENT`` band, the first to be shed under memory
-        pressure. Rewritten on every sweep, since a restart of the agent relaunches it in the chat band."""
+        """Put every spare's process tree in the ``SPARE_AGENT`` band, the first to be shed under memory
+        pressure. Rewritten on every sweep, since a restart of the agent relaunches it in the chat band,
+        and the subprocesses its harness spawned before a write keep the band they started in."""
         writer = self._oom_score_adj_writer
         if writer is None:
             return
         with self._lock:
             spare_ids = [spare.chat_id for spare in pooled_spares(self._spares)]
-        pid_by_spare_id = {spare_id: self._resolve_agent_pid(str(spare_id)) for spare_id in spare_ids}
+        pids_by_spare_id: dict[ChatId, list[int]] = {}
+        for spare_id in spare_ids:
+            pid = self._resolve_agent_pid(str(spare_id))
+            if pid is not None:
+                pids_by_spare_id[spare_id] = [pid, *self._list_descendant_pids(pid)]
         # Written under the lock, and only for a spare still pooled: a hand-over takes the spare under
         # it and moves it into the chat band after, so this write can never land on a chat.
         with self._lock:
             pooled_ids = {spare.chat_id for spare in pooled_spares(self._spares)}
-            for spare_id, pid in pid_by_spare_id.items():
-                if pid is not None and spare_id in pooled_ids:
-                    writer(pid, SPARE_AGENT)
+            for spare_id, pids in pids_by_spare_id.items():
+                if spare_id in pooled_ids:
+                    for pid in pids:
+                        writer(pid, SPARE_AGENT)
 
     def _move_handed_spare_into_chat_band(self, chat_id: ChatId) -> None:
         """Move a spare a chat just took out of the ``SPARE_AGENT`` band, as a chat just started.
 
         The chat prioritizer moves its main process. The subprocesses its harness spawned while
-        it waited inherited ``SPARE_AGENT`` and nothing re-tags them, so they are brought down to
-        the chat launch band, where a chat's harness subprocesses start. The main process moves
-        first, so a subprocess spawned meanwhile inherits the chat band.
+        it waited are in ``SPARE_AGENT`` too and the prioritizer does not re-tag them, so they are
+        brought down to the chat launch band, where a chat's harness subprocesses start. The main
+        process moves first, so a subprocess spawned meanwhile inherits the chat band.
         """
         self._oom_prioritizer.record_chat_started(chat_id)
         writer = self._oom_score_adj_writer
