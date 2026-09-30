@@ -10,7 +10,7 @@ is minted as the id of the chat it will become (a chat's id is its first agent's
 ``MINDS_CHAT_ID`` and every label baked in at its create are already right when it is handed
 over, and the hand-over itself runs no mngr command.
 
-The spares are recorded in ``data/.apps/chat/spare_chat.json`` before their create starts, so
+The spares are recorded in ``data/.state/chat/spare_chat.json`` before their create starts, so
 the observe stream, which lists an agent as soon as mngr provisions it, never shows one as a
 chat, and a restart of this app still knows them: a ready spare stays the spare, and a create
 the restart cut short is destroyed. ``path`` None keeps the record in memory, for tests.

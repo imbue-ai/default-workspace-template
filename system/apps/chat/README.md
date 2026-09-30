@@ -220,8 +220,8 @@ hand-over, so the next boot does not compete with the new chat's first turn. A
 sign-in starts the spares at once, and the session sweep keeps them current: one
 whose terms went stale or whose process died is destroyed and replaced, and
 after a failed create or destroy the spares wait five minutes. The spares are
-recorded in `data/.apps/chat/spare_chat.json` before their create starts, so a
-restart of the app keeps a ready spare and destroys one whose create it cut
+recorded in `data/.state/chat/spare_chat.json` before their create starts, so
+a restart of the app keeps a ready spare and destroys one whose create it cut
 short. `GET /api/agents`, the plain mngr listing, does list the spares. A
 spare sits in `oom_priority`'s ceiling band (`SPARE_AGENT`, shared with the
 browser's renderers) until a chat takes it, so memory pressure sheds it before

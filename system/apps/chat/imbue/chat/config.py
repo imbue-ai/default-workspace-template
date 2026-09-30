@@ -11,6 +11,9 @@ DEFAULT_CHAT_PORT: Final[int] = 8010
 # Where the chat persists the user's things (contracts.md section 17), relative to the repo
 # root every supervised program runs from.
 DEFAULT_CHAT_DATA_DIR: Final[Path] = Path("data/.apps/chat")
+# Where the chat keeps what it knows about this machine rather than the user's things (the spare
+# agents it started, ``spare_chat.py``; contracts.md section 17), relative to the repo root.
+CHAT_STATE_DIR: Final[Path] = Path("data/.state/chat")
 
 
 class DuplicateStaticBasenameError(ValueError):
