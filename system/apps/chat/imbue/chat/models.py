@@ -170,6 +170,15 @@ class AttachmentUploadResponse(FrozenModel):
     size: int = Field(description="Size of the stored upload in bytes")
 
 
+class InterruptAgentRequest(FrozenModel):
+    """Optional request body for the /api/chats/{id}/interrupt endpoint."""
+
+    only_if_idle: bool = Field(
+        default=False,
+        description="Restart only a chat that has ended its turn; a busy one is refused with 409 and what it is doing",
+    )
+
+
 class InterruptAgentResponse(FrozenModel):
     """Response from the /api/chats/{id}/interrupt endpoint."""
 
