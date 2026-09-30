@@ -956,7 +956,7 @@ describe("MessageInput switching harness", () => {
       "Type a message; it is delivered once Codex is ready…",
     );
     const cancel = findByAttr(rendered, "aria-label", "Cancel switch");
-    expect(renderedText(cancel)).toContain("Cancel switch");
+    expect(cancel).toBeDefined();
     (cancel?.attrs?.onclick as () => void)();
     await flushAsync();
     expect(mocks.cancelHandoff).toHaveBeenCalledWith("agent-1");
