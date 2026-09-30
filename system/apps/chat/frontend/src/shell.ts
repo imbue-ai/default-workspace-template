@@ -72,7 +72,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     lastHandshake = received;
     adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
     // Hidden until the shell says shown: a page can load into a background tab, and open
-    // (any client's unexpired report) is what a hidden report keeps.
+    // (any page's unexpired report) is what a hidden report keeps.
     if (isPresenceReported) startPresenceReporting(chatId, received.clientId, isShown ? "visible" : "hidden");
     m.redraw();
   };
@@ -101,7 +101,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   }
   if (!connection.isFramed) {
     // A direct visit has no shell to say when the page is showing; the document's own
-    // visibility is the closest fact, and there is no shell-handed client id to key on.
+    // visibility is the closest fact, and there is no shell-handed client id to report.
     if (isPresenceReported) {
       startPresenceReporting(chatId, "direct-visit", document.visibilityState === "visible" ? "visible" : "hidden");
       document.addEventListener("visibilitychange", () => {
