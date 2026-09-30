@@ -8,6 +8,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
+import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
@@ -529,6 +530,18 @@ describe("the element menu", () => {
 });
 
 describe("the desktop shortcut rows", () => {
+  const DOCS_NEW: DesktopShortcut = {
+    target: { kind: "launch", app: "docs", launch: "new" },
+    mode: "focus",
+    cell: { column: 0, row: 0 },
+  };
+
+  function homeWith(shortcuts: DesktopShortcut[]): Desktop {
+    return desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")], shortcuts });
+  }
+
+  beforeEach(() => {});
+
   function rightClick(element: Element): MouseEvent {
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 });
     element.dispatchEvent(event);
@@ -556,7 +569,6 @@ describe("the desktop shortcut rows", () => {
       default_shortcut: { launch: "new", mode: "new" },
     });
     socket.deliver().onAppsUpdated([appRecord("docs"), chat]);
-    store.setBackdropSize({ width: 1000, height: 800 });
 
     openLaunchMenu("chat:new");
     expect(document.querySelector(".app-shortcut-menu")).not.toBeNull();
@@ -574,7 +586,6 @@ describe("the desktop shortcut rows", () => {
   });
 
   it("draws an added or removed shortcut at once, and puts the desktop back when the shell refuses", async () => {
-    store.setBackdropSize({ width: 1000, height: 800 });
     const shownApps = (): string[] =>
       (store.getState().desktops[0]?.shortcuts ?? []).map((shortcut) => shortcut.target.app);
 
@@ -598,41 +609,24 @@ describe("the desktop shortcut rows", () => {
   });
 
   it("keeps a shortcut a broadcast put on the desktop while a refused add was in flight", async () => {
-    store.setBackdropSize({ width: 1000, height: 800 });
     api.refusal = "the answer was lost";
     void store.addShortcut("docs", "new", "focus");
-    const broadcast = desktopRecord("home", {
-      windows: [windowRecord("win-1", "docs", "/a")],
-      shortcuts: [
-        { target: { kind: "launch", app: "docs", launch: "new" }, mode: "focus", cell: { column: 0, row: 0 } },
-      ],
-    });
+    const broadcast = homeWith([DOCS_NEW]);
     socket.deliver().onDesktopsUpdated([broadcast]);
     await settle();
     expect(store.getState().desktops[0].shortcuts).toEqual(broadcast.shortcuts);
   });
 
   it("leaves a shortcut off when a broadcast says it is gone while a refused removal was in flight", async () => {
-    store.setBackdropSize({ width: 1000, height: 800 });
-    const docsNew = {
-      target: { kind: "launch" as const, app: "docs", launch: "new" },
-      mode: "focus" as const,
-      cell: { column: 0, row: 0 },
-    };
-    socket
-      .deliver()
-      .onDesktopsUpdated([
-        desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")], shortcuts: [docsNew] }),
-      ]);
+    socket.deliver().onDesktopsUpdated([homeWith([DOCS_NEW])]);
     api.refusal = "the answer was lost";
     void store.removeShortcut("docs", "new");
-    socket.deliver().onDesktopsUpdated([desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })]);
+    socket.deliver().onDesktopsUpdated([homeWith([])]);
     await settle();
     expect(store.getState().desktops[0].shortcuts).toEqual([]);
   });
 
   it("offers the same row on a taskbar entry's menu, for the app's own shortcut", async () => {
-    store.setBackdropSize({ width: 1000, height: 800 });
     const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
 
     rightClick(entry);
@@ -647,16 +641,8 @@ describe("the desktop shortcut rows", () => {
   });
 
   it("gives the icon's own menu the same plain Remove from desktop row as the other menus, taking it off at once", () => {
-    api.desktops = [
-      desktopRecord("home", {
-        windows: [windowRecord("win-1", "docs", "/a")],
-        shortcuts: [
-          { target: { kind: "launch", app: "docs", launch: "new" }, mode: "focus", cell: { column: 0, row: 0 } },
-        ],
-      }),
-    ];
+    api.desktops = [homeWith([DOCS_NEW])];
     socket.deliver().onDesktopsUpdated(api.desktops);
-    store.setBackdropSize({ width: 1000, height: 800 });
     m.redraw.sync();
     rightClick(document.querySelector('[data-shortcut="docs:new"]') as HTMLElement);
     const row = document.querySelector('[data-menu-part="menu"] [data-menu-row="remove-from-desktop"]') as HTMLElement;
@@ -678,7 +664,6 @@ describe("the desktop shortcut rows", () => {
       default_shortcut: null,
     });
     socket.deliver().onAppsUpdated([appRecord("docs"), notes]);
-    store.setBackdropSize({ width: 1000, height: 800 });
 
     store.openLauncher();
     m.redraw.sync();
