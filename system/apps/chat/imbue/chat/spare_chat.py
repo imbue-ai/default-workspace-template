@@ -13,7 +13,7 @@ over, and the hand-over itself runs no mngr command.
 The spares are recorded in ``data/.state/chat/spare_chat.json`` before their create starts, so
 the observe stream, which lists an agent as soon as mngr provisions it, never shows one as a
 chat, and a restart of this app still knows them: a ready spare stays the spare, and a create
-the restart cut short is destroyed. ``path`` None keeps the record in memory, for tests.
+the restart cut short is destroyed.
 """
 
 import json
@@ -77,12 +77,12 @@ class SpareChatAgent(FrozenModel):
 class SpareChatStore(MutableModel):
     """The spares file: read by the live chat at build and by a secondary on every sweep, written whole on every change."""
 
-    path: Path | None = Field(frozen=True, description="The spares file, or None for memory only (tests)")
+    path: Path = Field(frozen=True, description="The spares file")
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def read(self) -> tuple[SpareChatAgent, ...]:
         """The spares as recorded; an absent file reads as none, an unreadable one as none with a warning."""
-        if self.path is None or not self.path.exists():
+        if not self.path.exists():
             return ()
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -100,8 +100,6 @@ class SpareChatStore(MutableModel):
             return ()
 
     def write(self, spares: Sequence[SpareChatAgent]) -> None:
-        if self.path is None:
-            return
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = self.path.with_suffix(".json.tmp")
