@@ -29,8 +29,8 @@
   --radius-md: 4px;
   --radius-lg: 0px;
   --radius-xl: 0px;
-  --shadow-raised: 1px 1px 0 #000000;
-  --shadow-overlay: 2px 2px 0 #000000;
+  --c-shadow-raised: 1px 1px 0 #000000;
+  --c-shadow-overlay: 2px 2px 0 #000000;
 
   --mac-title-stripes: repeating-linear-gradient(#000000 0 1px, #ffffff 1px 3px);
   /* The 50% gray of the System 6 desktop, as fine diagonal pixels. A pixel-period gradient, so the
