@@ -255,3 +255,71 @@ def test_the_shell_names_no_app() -> None:
     assert offenders == [], (
         _SHELL_NAMES_THE_CHAT_RULE.rule_description + "\n" + "\n".join(f"  - {line}" for line in offenders)
     )
+
+
+# Where the tile relief and the colours it has to survive are written down. The palette is the one
+# every icon draws its background from; the relief is the hairline the shell lays over the art.
+_THEME_CSS = _FRONTEND_SRC / "theme" / "default.css"
+_ICON_DOC = _PACKAGE_ROOT.parents[2] / "docs" / "system" / "app-icons.md"
+
+# A tile's top and bottom rows are pure background -- the glyph lives in a centred 144 box
+# (docs/system/app-icons.md) -- so the relief's colour over a tile is one alpha composite over one
+# flat colour, and how well it reads is the lightness it gains or loses against that colour.
+# Anything under this is a hairline nobody can see: white on cream scores 1.5.
+_RELIEF_MIN_CONTRAST: Final[float] = 8.0
+
+_RELIEF_RULE = RatchetRuleInfo(
+    rule_name="an icon tile's relief disappearing on part of the palette",
+    rule_description=(
+        "--desk-icon-relief is the hairline that gives a flat tile a rounded face, and it has to read on "
+        "every background an icon may carry -- the palette in docs/system/app-icons.md runs from near-black "
+        "to cream, and white has nowhere to go on a cream tile. Light above and shade below is what covers "
+        "both ends: whichever edge a tile leaves room for is the one that reads. A relief that is light at "
+        "both edges (or dark at both) vanishes on half the palette."
+    ),
+)
+
+# The shadows in the token: a colour and its alpha, one per edge.
+_RELIEF_LAYER = re.compile(r"inset[^,]*?rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*/\s*([\d.]+)\s*\)")
+_PALETTE_COLOUR = re.compile(r"#[0-9A-F]{6}")
+
+
+def _relief_layers() -> list[tuple[tuple[int, int, int], float]]:
+    """Each edge of ``--desk-icon-relief`` as the colour it paints and the alpha it paints at."""
+    token = re.search(r"--desk-icon-relief:\s*([^;]+);", _THEME_CSS.read_text())
+    assert token is not None, "the shell's theme no longer defines --desk-icon-relief"
+    layers = [
+        ((int(r), int(g), int(b)), float(alpha)) for r, g, b, alpha in _RELIEF_LAYER.findall(token.group(1))
+    ]
+    assert layers, f"--desk-icon-relief paints no rgb() layer this test can read: {token.group(1)}"
+    return layers
+
+
+def _palette_backgrounds() -> list[str]:
+    """Every colour an icon may use, read from the palette block of the icon doc."""
+    block = re.search(r"## The palette.*?```(.*?)```", _ICON_DOC.read_text(), re.DOTALL)
+    assert block is not None, "docs/system/app-icons.md no longer carries a fenced palette block"
+    return sorted(set(_PALETTE_COLOUR.findall(block.group(1))))
+
+
+def _lightness(rgb: tuple[float, float, float]) -> float:
+    """CIE L* of an sRGB colour given as three 0..1 channels."""
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+    luminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    return 116 * luminance ** (1 / 3) - 16 if luminance > 0.008856 else 903.3 * luminance
+
+
+def test_the_icon_relief_reads_on_every_colour_in_the_palette() -> None:
+    layers = _relief_layers()
+    offenders = []
+    for background in _palette_backgrounds():
+        tile = tuple(int(background[index : index + 2], 16) / 255 for index in (1, 3, 5))
+        best = max(
+            abs(_lightness(tuple(alpha * (c / 255) + (1 - alpha) * t for c, t in zip(source, tile))) - _lightness(tile))
+            for source, alpha in layers
+        )
+        if best < _RELIEF_MIN_CONTRAST:
+            offenders.append(f"{background}: best edge moves L* by {best:.1f}")
+    assert offenders == [], (
+        _RELIEF_RULE.rule_description + "\n" + "\n".join(f"  - {line}" for line in offenders)
+    )

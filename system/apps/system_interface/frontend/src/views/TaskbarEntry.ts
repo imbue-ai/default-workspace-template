@@ -90,7 +90,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
               "taskbar-entry-tile relative flex size-(--desk-taskbar-entry-icon) shrink-0 items-center " +
               // The bar's own quieter cast, the same in every state, selected included: the tint
               // behind the icon is what says selected, and the icon has no reason to sit differently
-              // on it. The hairline of light along its edges is a layer of its own (style.css).
+              // on it. The hairline along its edges is a layer of its own (style.css).
               "justify-center shadow-(--desk-taskbar-entry-shadow) " +
               (isAvatar ? "rounded-2xl [&>img]:size-full " : "rounded-[32%] [&>svg]:size-full ") +
               (isDimmed ? "opacity-70 group-hover:opacity-100" : ""),
