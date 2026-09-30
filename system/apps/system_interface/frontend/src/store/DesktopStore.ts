@@ -825,9 +825,11 @@ export class DesktopStore {
       case "other-workspace":
         this.deps.notify(OTHER_WORKSPACE_LINK_NOTICE);
         return;
+      case "unroutable":
+        this.deps.notify(`Nothing in this workspace is at ${url}`);
+        return;
       case "external":
       case "file":
-      case "unroutable":
         console.warn(`[si] an opened link was ignored: ${url} is no address of this machine`);
         return;
     }

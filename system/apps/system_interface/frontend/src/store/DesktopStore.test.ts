@@ -1390,10 +1390,13 @@ describe("links Imbue Studio hands over", () => {
 
     await store.openLink("http://files-ab12cd34.host-fedcba9876543210fedcba9876543210.localhost:8421/", SHELL_HOST);
     await store.openLink(`http://gone-zz99yy88.${COORDINATE}/`, SHELL_HOST);
+    // The workspace's own bare address, which names no app; the desktop app forwards it like an app address.
+    await store.openLink(`http://${COORDINATE}/`, SHELL_HOST);
 
     expect(notices).toEqual([
       OTHER_WORKSPACE_LINK_NOTICE,
       `Nothing in this workspace is at http://gone-zz99yy88.${COORDINATE}/`,
+      `Nothing in this workspace is at http://${COORDINATE}/`,
     ]);
     expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
   });
