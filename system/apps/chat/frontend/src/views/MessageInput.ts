@@ -1253,27 +1253,22 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
                       m.trust(stopIcon(14)),
                     )
                   : null,
-                // The send button reads "Switch and send" while a pending lane differs from the
-                // chat's harness (spec 5.1): the next send moves the chat, so the button says so.
+                // While a pending lane differs from the chat's harness the next send moves the chat: the
+                // demo branch keeps the plain send glyph for it (the strip above says what the send does)
+                // and names the switch only in the button's label and tooltip.
                 canSend && switchTarget !== null
                   ? m(
                       Button,
                       {
                         variant: "primary",
-                        sm: true,
+                        icon: true,
+                        round: true,
                         extra: "message-input-send-button message-input-send-button--switch shrink-0",
                         ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`, "above"),
                         "aria-label": "Switch and send",
                         onclick: handleSubmit,
                       },
-                      [
-                        m("span", "Switch and send"),
-                        m(
-                          "span",
-                          { class: "ml-1.5 inline-flex items-center" },
-                          m.trust(icon("send", { size: 14, strokeWidth: 2.5 })),
-                        ),
-                      ],
+                      m.trust(icon("send", { size: 16, strokeWidth: 2.5 })),
                     )
                   : canSend
                     ? m(

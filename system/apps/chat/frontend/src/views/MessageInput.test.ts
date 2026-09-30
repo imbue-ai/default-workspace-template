@@ -852,7 +852,7 @@ describe("MessageInput switching harness", () => {
     mocks.switching.pick = PICK;
     const rendered = typeDraft(MessageInput(), "agent-1", "Carry on in Codex");
     expect(findByAttr(rendered, "aria-label", "Send message")).toBeUndefined();
-    expect(renderedText(findByAttr(rendered, "aria-label", "Switch and send"))).toContain("Switch and send");
+    expect(findByAttr(rendered, "aria-label", "Switch and send")).toBeDefined();
     const strip = findByClass(rendered, "message-input-switch-strip");
     expect(renderedText(strip)).toContain(
       "Next message switches this chat to OpenAI (Codex), GPT-6 Astra · High",
