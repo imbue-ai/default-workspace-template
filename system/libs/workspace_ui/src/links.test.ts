@@ -3,8 +3,24 @@
  * The link classifier over every kind of link a chat or an app page can hold, the router's action for each (framed
  * and not), and the delegated click routing: a plain, modified, or middle click is routed and never navigates.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
 import { classifyLink, installLinkRouting, routeLink, type LinkRoutingContext, type LinkTarget } from "./links";
+
+/** The URLs the Imbue Studio desktop app's ``isExternalUrl`` was asked about, with its answers, fetched from the
+ *  pinned mngr commit with the embed contract (``system/scripts/fetch_mngr_assets.sh``). */
+const EXTERNALITY_VECTORS_PATH = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../vendor/mngr-assets/apps/minds/electron/link-externality-vectors.json",
+);
+
+interface ExternalityVector {
+  readonly url: string;
+  readonly isExternal: boolean;
+  readonly note: string;
+}
 
 const COORDINATE = "host-0123456789abcdef0123456789abcdef.localhost:8421";
 const OTHER_COORDINATE = "host-fedcba9876543210fedcba9876543210.localhost:8421";
@@ -57,6 +73,21 @@ describe("classifyLink", () => {
   ])("classifies %s", (_what, href, expected) => {
     expect(classifyLink(href, CHAT_HOST)).toEqual(expected);
   });
+});
+
+describe("agreement with the Imbue Studio desktop app", () => {
+  const vectors = JSON.parse(readFileSync(EXTERNALITY_VECTORS_PATH, "utf8")) as ExternalityVector[];
+
+  it("has vectors to agree with", () => {
+    expect(vectors.length).toBeGreaterThan(0);
+  });
+
+  it.each(vectors.map((vector) => [vector.note, vector.url, vector.isExternal] as const))(
+    "calls %s external exactly when the desktop app does",
+    (_note, url, isExternal) => {
+      expect(classifyLink(url, CHAT_HOST).kind === "external").toBe(isExternal);
+    },
+  );
 });
 
 interface RecordingContext extends LinkRoutingContext {
