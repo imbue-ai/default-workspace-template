@@ -2,7 +2,8 @@
  * The shell's WebSocket (desktop-interface contracts.md section 6), the one socket this window
  * holds. On connect the server sends ``apps_updated``, ``desktops_updated``, ``avatar_status``,
  * ``update_notice_changed``, and ``presence_updated``; the window answers with its ``client_state``
- * (which client it is, on which desktop) and re-sends it on every switch. ``placements_updated``,
+ * (which client it is, on which desktop) and re-sends it on every switch; a pulled-out window's page answers
+ * with a pop-out's ``client_state`` instead, naming its client and no desktop. ``placements_updated``,
  * ``active_desktop_changed``, ``client_entries_changed``, and the transient ``layout_op`` are how this
  * client's other windows, the shell's own edits, and an agent's ops reach this one; ``avatar_status`` and
  * ``avatar_selection_changed`` are how the workspace's avatar reaches every window, ``update_notice_changed``
@@ -79,6 +80,9 @@ export interface DesktopSocket {
   connect(handlers: SocketHandlers): void;
   /** Report this client's active desktop; ``previousDesktop`` is "" on connect. */
   reportClientState(activeDesktop: string, previousDesktop: string): void;
+  /** Register this socket as a pulled-out window's, under this client and naming no desktop: the ops aimed at
+   *  the client reach it, and the client's active desktop stays its main window's. */
+  reportPopOut(): void;
 }
 
 interface RawSocketEvent {
@@ -121,6 +125,11 @@ export class ShellSocket implements DesktopSocket {
         previous_desktop: previousDesktop,
       }),
     );
+  }
+
+  reportPopOut(): void {
+    if (this.ws === null || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "client_state", client_id: this.clientId, is_pop_out: true }));
   }
 
   private open(): void {

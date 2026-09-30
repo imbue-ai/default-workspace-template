@@ -37,7 +37,7 @@ let reloads: number;
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "soloWindowId"> = {},
+  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened"> = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -1349,7 +1349,10 @@ describe("embedder messages", () => {
 describe("pulled-out windows", () => {
   /** A store whose pull-out conversation is recorded: every ask in ``calls``, every detached-set report in
    *  ``reports``; opened to show ``soloWindowId`` alone when given. */
-  function makePopOutStore(soloWindowId: string | null = null): {
+  function makePopOutStore(
+    soloWindowId: string | null = null,
+    isSoloReopened = false,
+  ): {
     store: DesktopStore;
     calls: unknown[];
     reports: unknown[];
@@ -1362,7 +1365,7 @@ describe("pulled-out windows", () => {
       endWindowDrag: (windowId, isDetached) => calls.push(["ended", windowId, isDetached]),
       reportDetachedWindows: (windows) => reports.push(windows),
     };
-    return { store: makeStore(() => undefined, { popOut, soloWindowId }), calls, reports };
+    return { store: makeStore(() => undefined, { popOut, soloWindowId, isSoloReopened }), calls, reports };
   }
 
   const savedCalls = (): string[] => api.calls.filter((call) => call.startsWith("savePlacements"));
@@ -1695,6 +1698,8 @@ describe("pulled-out windows", () => {
     const { store, reports } = makePopOutStore("win-5");
     await store.start(NO_LINK);
     socket.deliver().onConnected();
+    // The socket is registered as a pop-out's, under the client: the ops aimed at the client reach this window.
+    expect(socket.popOutReports).toBe(1);
     expect(api.calls.filter((call) => call === "fetchPlacements:work")).toHaveLength(1);
     // The socket comes back with the client still recorded on home: this window's desktop is not the client's,
     // and adopting the record would report win-5 as back, which closes its own desktop window.
@@ -1702,6 +1707,7 @@ describe("pulled-out windows", () => {
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
     expect(socket.reports).toEqual([]);
+    expect(socket.popOutReports).toBe(2);
     expect(api.calls.filter((call) => call === "fetchPlacements:work")).toHaveLength(2);
     expect(api.calls.filter((call) => call === "fetchPlacements:home")).toHaveLength(0);
     expect(reports).toEqual([[{ windowId: "win-5", title: "Notes" }]]);
@@ -1751,6 +1757,37 @@ describe("pulled-out windows", () => {
     expect(storedPlacement("win-1")?.is_detached).toBe(true);
     // Never an empty report first: the chrome closes the popout on a report without its window.
     expect(reports).toEqual([[{ windowId: "win-1", title: "Docs" }]]);
+  });
+
+  it("a solo shell the chrome reopened takes a first layout saying its window is back as the truth", async () => {
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-1")] });
+    const { store, reports } = makePopOutStore("win-1", true);
+    await store.start(NO_LINK);
+    // Reported at once without the window, which is what closes this window; no grace, and nothing written.
+    expect(reports).toEqual([[]]);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(false);
+    expect(savedCalls()).toHaveLength(0);
+    expect(storedPlacement("win-1")?.is_detached).toBe(false);
+  });
+
+  it("a solo shell the chrome reopened over a window still out shows it as a freshly torn-out one does", async () => {
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] })];
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    const { store, reports } = makePopOutStore("win-1", true);
+    await store.start(NO_LINK);
+    expect(reports).toEqual([[{ windowId: "win-1", title: "Docs" }]]);
+  });
+
+  it("a desktop shell never registers its socket as a pop-out's", async () => {
+    await startedStore();
+    socket.deliver().onConnected();
+    expect(socket.popOutReports).toBe(0);
+    expect(last(socket.reports)).toEqual({ activeDesktop: "home", previousDesktop: "" });
   });
 
   it("a solo shell reports its window's return only once the return is in the file", async () => {

@@ -19,7 +19,7 @@ import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCurs
 import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
-import { parseSoloWindowId, stripSoloParam } from "./model/soloMode";
+import { parseSoloMode } from "./model/soloMode";
 import type { Frame } from "./model/records";
 import type { PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
@@ -45,14 +45,6 @@ function takeDeepLinkFromLocation(): DeepLink {
   return link;
 }
 
-/** The window the page was opened to show alone (the pull-out-window spec, section 7.5), removed from the URL as
- *  it is read. */
-function takeSoloWindowIdFromLocation(): string | null {
-  const soloWindowId = parseSoloWindowId(window.location.search);
-  if (soloWindowId !== null) stripLocationSearch(stripSoloParam);
-  return soloWindowId;
-}
-
 /** The frame a reattach message names, when it names one: four finite fractions (clamped by the verb). */
 function frameFromMessage(value: unknown): Frame | null {
   if (typeof value !== "object" || value === null) return null;
@@ -73,7 +65,8 @@ const popOutBridge: PopOutBridge = {
 
 function bootstrap(): void {
   const clientId = getClientId();
-  const soloWindowId = takeSoloWindowIdFromLocation();
+  // Read and left in the URL, unlike the deep link: a reload of a pulled-out window's page must come back as it.
+  const solo = parseSoloMode(window.location.search);
   const root = document.documentElement;
   const readStyle = (element: HTMLElement): CSSStyleDeclaration => getComputedStyle(element);
   let store: DesktopStore | null = null;
@@ -93,7 +86,8 @@ function bootstrap(): void {
           notify: (message) => alert(message),
           reloadInterface,
           popOut: popOutBridge,
-          soloWindowId,
+          soloWindowId: solo?.windowId ?? null,
+          isSoloReopened: solo?.isReopened ?? false,
         });
       } else {
         store.setThemeMetrics(metrics, modes);

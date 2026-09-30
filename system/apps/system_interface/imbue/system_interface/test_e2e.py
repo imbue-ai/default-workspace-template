@@ -2085,6 +2085,89 @@ def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_
     assert _get_json(f"{e2e_server.base_url}/api/updates/pending") is None
 
 
+# Past the grace a freshly torn-out pop-out gives the desktop's detach save before writing the detach itself
+# (``SOLO_HEAL_GRACE_MS`` in DesktopStore.ts): long enough for a pop-out that was going to write it to have.
+_PAST_SOLO_HEAL_GRACE_MS = 2000
+
+# Records, in the page it is added to, every ``minds:detached-windows`` report the page's shell sends its
+# embedder: a top-level page is its own parent, so it hears its own reports.
+_RECORD_DETACHED_REPORTS_SCRIPT = """
+window.__detachedReports = [];
+window.addEventListener("message", (event) => {
+  if (event.data?.type === "minds:detached-windows") window.__detachedReports.push(event.data.windows);
+});
+"""
+
+
+def _pop_out(page: Page, server: E2EServer, window_id: str, is_reopened: bool = False) -> Page:
+    """A pulled-out window's own page as the chrome's desktop window loads it: a second page of ``page``'s browser
+    context (so the same client) at ``/?solo=<window_id>``, marked reopened when asked, showing the window's page."""
+    pop_out = page.context.new_page()
+    pop_out.add_init_script(_RECORD_DETACHED_REPORTS_SCRIPT)
+    query = f"?solo={window_id}" + ("&reopened=1" if is_reopened else "")
+    pop_out.goto(f"{server.base_url}/{query}")
+    _page_frame(pop_out, window_id)
+    return pop_out
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_pop_out_is_reached_by_a_refresh_of_its_window_and_stays_a_pop_out_over_the_interface_reload(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """A pulled-out window's own page registers with the shell under its client, so ``refresh <window>`` reloads
+    it (and the main window's hidden copy of it), and it keeps ``?solo=`` in its URL, so the interface reload
+    brings it back as the pop-out rather than as a whole desktop."""
+    _land(page, e2e_server)
+    client_id = _client_id(page)
+    window_id = _broadcast_op(e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id})[
+        "window_id"
+    ]
+    main_copy = _page_frame(page, window_id)
+    pop_out = _pop_out(page, e2e_server, window_id)
+    # No drag wrote the detach, so the fresh pop-out writes it itself once its grace is over.
+    _wait_for_stored_placement(e2e_server, client_id, window_id, lambda placement: placement["is_detached"], "detach")
+    expect(_window(page, window_id)).to_have_count(0, timeout=15000)
+
+    pop_out_page = _page_frame(pop_out, window_id)
+    for frame in (pop_out_page, main_copy):
+        frame.evaluate("() => { window.__beforeRefresh = true; }")
+    _broadcast_op(e2e_server.base_url, "refresh", {"window": window_id, "client": client_id})
+    for frame in (pop_out_page, main_copy):
+        frame.wait_for_function(
+            "() => window.__beforeRefresh === undefined && window.__handshake !== undefined", timeout=15000
+        )
+
+    with pop_out.expect_navigation(timeout=15000):
+        _broadcast_op(e2e_server.base_url, "reload_system_interface", {"client": client_id})
+    assert urllib.parse.parse_qs(urllib.parse.urlparse(pop_out.url).query)["solo"] == [window_id]
+    _page_frame(pop_out, window_id)
+    expect(pop_out.locator("[data-taskbar]")).to_have_count(0)
+    assert _stored_placements(e2e_server.state_dir, client_id)[window_id]["is_detached"] is True
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_pop_out_reopened_at_launch_over_a_window_brought_back_closes_rather_than_pulling_it_out_again(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """A pop-out the chrome reopened (a relaunch) whose window was brought back while it was away reports the
+    window back at once, which is what closes it, and never writes the window out again after the grace."""
+    _land(page, e2e_server)
+    client_id = _client_id(page)
+    window_id = _broadcast_op(e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id})[
+        "window_id"
+    ]
+    _wait_for_stored_placement(
+        e2e_server, client_id, window_id, lambda placement: not placement["is_detached"], "the open"
+    )
+    pop_out = _pop_out(page, e2e_server, window_id, is_reopened=True)
+
+    pop_out.wait_for_function("() => window.__detachedReports.length > 0", timeout=15000)
+    pop_out.wait_for_timeout(_PAST_SOLO_HEAL_GRACE_MS)
+    assert pop_out.evaluate("() => window.__detachedReports") == [[]]
+    assert _stored_placements(e2e_server.state_dir, client_id)[window_id]["is_detached"] is False
+    expect(_window(page, window_id)).to_be_visible()
+
+
 # The Imbue Studio chrome, played by a page on its own origin: it frames the shell, waits for the shell's
 # ``minds:workspace-ready``, and then posts the chat notification's ask down to it, as the Imbue Studio app does.
 _CHROME_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Chrome</title></head><body>

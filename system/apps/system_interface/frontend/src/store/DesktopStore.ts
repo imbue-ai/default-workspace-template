@@ -235,6 +235,10 @@ export interface StoreDependencies {
   readonly popOut?: PopOutBridge;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
   readonly soloWindowId?: string | null;
+  /** Whether the chrome reopened the solo window's desktop window (a session restore, a reopen of the app, a
+   *  backend retry) rather than opening it for a tear-out just now; absent means a tear-out, as an older chrome
+   *  says. */
+  readonly isSoloReopened?: boolean;
 }
 
 /** A navigation this client asked for on its own page (the chooser's draft), which the live pages honour
@@ -611,6 +615,8 @@ export class DesktopStore {
    *  the rest to ``start``; a reconnect resynchronises, since the messages of the time apart are gone
    *  with the socket (the shell resends the apps and desktops itself). */
   private takeConnected(): void {
+    // A solo shell's socket is still its client's: registered as a pop-out's, the ops aimed at the client reach it.
+    if (this.soloWindowId !== null) this.deps.socket.reportPopOut();
     if (this.hasSocketConnected) {
       void this.resyncAfterReconnect();
       return;
@@ -1757,12 +1763,14 @@ export class DesktopStore {
     this.healSoloWindowOnFirstLoad();
   }
 
-  /** A solo shell exists because its window is pulled out; the first layout it loads may say otherwise. During
-   *  a drag the desktop's shell writes the detach as the window goes out and that save is on its way while this
-   *  shell boots, so a load that does not yet say it waits for the desktop's word (the broadcast's refetch is
-   *  another load, which settles this). Only when no word comes within the grace (a relaunch after a return on
-   *  another device, a detach whose save was refused) does this shell take its own existence as the truth and
-   *  detach the window itself. Until then the report is held: one without the solo window would close this
+  /** A solo shell exists because its window is pulled out; the first layout it loads may say otherwise. A
+   *  desktop window the chrome reopened (a relaunch, a reopen of the app, a backend retry) takes the layout as the
+   *  truth at once: the window was brought back while it was away, and the report without it closes this
+   *  window. A freshly torn-out one cannot: during a drag the desktop's shell writes the detach as the window
+   *  goes out and that save is on its way while this shell boots, so a load that does not yet say it waits for
+   *  the desktop's word (the broadcast's refetch is another load, which settles this). Only when no word comes
+   *  within the grace (a detach whose save was refused) does this shell take its own existence as the truth
+   *  and detach the window itself. Until then the report is held: one without the solo window would close this
    *  window. A later load that says the window is back is the desktop's word, and the chrome closes it. */
   private healSoloWindowOnFirstLoad(): void {
     if (!this.isSoloFirstLayoutPending || this.soloWindowId === null) return;
@@ -1771,7 +1779,7 @@ export class DesktopStore {
       found !== null &&
       found.desktop.id === this.state.activeDesktopId &&
       !placementOf(this.state.layout, this.soloWindowId).is_detached;
-    if (!isAttachedHere) {
+    if (!isAttachedHere || this.deps.isSoloReopened === true) {
       this.settleSoloFirstLoad();
       return;
     }

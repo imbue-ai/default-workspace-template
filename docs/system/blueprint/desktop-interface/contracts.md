@@ -244,6 +244,7 @@ It answers `200 {"type", "deliveries": [{"app", "status", "detail"}, ...]}` when
 Route `/api/ws`, one connection per browser window.
 
 Inbound: `client_state {"client_id", "active_desktop", "previous_desktop"}` on connect and on every desktop switch; the shell records the active desktop and `last_seen`, and logs a `desktop_switch` activity when `previous_desktop` differs.
+A solo page (section 9) sends `client_state {"client_id", "is_pop_out": true}` on every connect instead: the shell registers the connection under the client, so the ops targeting the client (section 8) reach it, and records nothing else. It never becomes the client's report, never logs a desktop switch, and never supplies an active desktop to `context` or anything else: the client's active desktop stays its main window's.
 
 Outbound:
 
@@ -260,7 +261,7 @@ Outbound:
 | `update_notice_changed` | `{"notice": notice \| null}` | on connect (after `avatar_status`), and whenever `data/.state/update-apply/last-good.json` is written or removed and reads differently: an apply kept it, a rollback's progress and outcome, a confirm cleared it; `notice` is the document `GET /api/updates/pending` answers (section 5.1) |
 | `presence_updated` | `{"users": [present_user, ...]}` | on connect, when a heartbeat brings a user into the connected set, and when the shell's sweep (every 10 seconds) finds that a user's heartbeats have stopped (section 5.1) |
 
-`is_connected` on a client is whether any window of it holds the socket.
+`is_connected` on a client is whether any window of it holds the socket, a solo page's included.
 
 ## 7. The app contract (`app_contract.js`)
 
@@ -334,7 +335,9 @@ Exit codes are `0`, `1`, `3`.
 Honoured by the shell on page load for the requesting client, then stripped: `?desktop=<id>` switches to it; `&open=<app>:<path>` opens (or focuses) a window there; `&launch=<app>:<launch_id>` runs a launch path through the launch route (section 5.3) with a `new` target.
 Unknown or stale targets are ignored silently.
 
-`?solo=<window-id>` (stripped the same way) is *solo mode* (the pull-out-window spec, section 7.5): the page shows that one window edge to edge and nothing else, which is what a pulled-out window's desktop window loads. A solo page lands on the desktop that holds the window without reporting `client_state` (the client's active desktop stays its main window's), ignores every layout verb but its own window's detach and reattach, and never follows an `active_desktop_changed`. A first layout load that does not yet say the window is out waits a moment for the desktop's word (the main window's shell writes the detach as the window leaves, and that save is on its way while the solo page boots) and detaches the window itself only when none comes; its own window's return is reported to the embedder (`minds:detached-windows`) only once saved, since the embedder closes the page's window on that report; a later load that says the window is back is the desktop's word.
+`?solo=<window-id>` is *solo mode* (the pull-out-window spec, section 7.5): the page shows that one window edge to edge and nothing else, which is what a pulled-out window's desktop window loads. It is read and kept in the URL, unlike the deep link, so any reload of the page (the `reload_system_interface` op, the browser's own) comes back as the same pop-out. A solo page lands on the desktop that holds the window without reporting its desktop (its `client_state` is a pop-out's, section 6, and the client's active desktop stays its main window's), ignores every layout verb but its own window's detach and reattach, and never follows an `active_desktop_changed`.
+`&reopened=1` beside it (also kept) says the embedder reopened the page's desktop window (a session restore, a reopen of the app, a backend retry) rather than opening it for a tear-out just now. A reopened page takes its first layout as the truth: when it says the window is back (brought back while the embedder was away), the page reports the window back at once, which closes it. A page without the flag (a tear-out, the window menu's "Open in its own window", or an embedder that does not send it) cannot: a first layout load that does not yet say the window is out waits a moment for the desktop's word (the main window's shell writes the detach as the window leaves, and that save is on its way while the solo page boots) and detaches the window itself only when none comes.
+Either way its own window's return is reported to the embedder (`minds:detached-windows`) only once saved, since the embedder closes the page's window on that report; a later load that says the window is back is the desktop's word.
 
 ## 10. Geometry rules and constants
 
