@@ -4,6 +4,7 @@ import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   DETACHED_WINDOWS,
   EMBEDDER_CAPABILITIES,
+  OPEN_LINK,
   POP_OUT_WINDOW,
   REATTACH_WINDOW,
   TEAR_OUT,
@@ -123,6 +124,12 @@ function bootstrap(): void {
     if (typeof windowId !== "string" || windowId === "") return;
     void desktopStore.reattachWindow(windowId, frameFromMessage(message.frame));
   });
+  // A popup a page of this workspace opened, which Imbue Studio turned away from a window of its own: it opens here.
+  setEmbedderMessageHandler(OPEN_LINK, (message) => {
+    const url = message.url;
+    if (typeof url !== "string" || url === "") return;
+    void desktopStore.openLink(url, window.location.host);
+  });
   setEmbedderMessageHandler(TEAR_OUT, (message) => {
     const windowId = message.windowId;
     const phase = message.phase;
@@ -146,7 +153,7 @@ function bootstrap(): void {
   // Announced once the page can act on what the embedder held, not merely once a handler is
   // registered: relaying a message needs the apps (which of them take it), and the embedder sends
   // what it held the moment this lands.
-  void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder());
+  void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder({ opensLinks: true }));
 }
 
 window.addEventListener("load", bootstrap);

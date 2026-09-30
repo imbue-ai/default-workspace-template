@@ -15,6 +15,7 @@ import type {
   WindowOpenOutcome,
   WindowOpenRequest,
 } from "../model/api";
+import { OPEN_URL_MESSAGE, classifyLink } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
 import {
   NO_DRAFT_APP_REASON,
@@ -162,6 +163,9 @@ export type EmbedderMessage = { readonly type: string } & Readonly<Record<string
 
 /** The sender the relay names for a message the Imbue Studio chrome sent (contracts.md section 5.6). */
 export const EMBEDDER_SENDER = "embedder";
+
+/** What a link to another workspace's app gets, since only that workspace can open it. */
+export const OTHER_WORKSPACE_LINK_NOTICE = "That link belongs to another workspace, so it cannot open here.";
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
 export interface PageDriver {
@@ -784,14 +788,50 @@ export class DesktopStore {
     ) {
       return false;
     }
+    return this.deliverMessage(message, senderApp ?? EMBEDDER_SENDER);
+  }
+
+  /** Ask the shell to deliver ``message`` to the apps registered for its type, telling the user why when it did not
+   *  reach every one; answers whether it did. */
+  private async deliverMessage(message: EmbedderMessage, sender: string): Promise<boolean> {
     const { type, ...payload } = message;
     try {
-      await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, senderApp ?? EMBEDDER_SENDER);
+      await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
     } catch (error) {
       this.deps.notify((error as Error).message);
       return false;
     }
     return true;
+  }
+
+  /** A link Imbue Studio took from a popup a page of this workspace opened (``minds:open-link``, the workspace link
+   *  routing plan), opened where it belongs: a local URL in the workspace's browser (``open:url``), one of this
+   *  workspace's app addresses as that app's window at its path. Another workspace's address is refused with a
+   *  notice. ``workspaceHost`` is this page's own host, which says which workspace it is. */
+  async openLink(url: string, workspaceHost: string): Promise<void> {
+    const target = classifyLink(url, workspaceHost);
+    switch (target.kind) {
+      case "local-url":
+        await this.deliverMessage({ type: OPEN_URL_MESSAGE, url: target.url }, EMBEDDER_SENDER);
+        return;
+      case "app-address": {
+        const app = this.state.apps.find((candidate) => candidate.label === target.label);
+        if (app === undefined) {
+          this.deps.notify(`Nothing in this workspace is at ${target.url}`);
+          return;
+        }
+        await this.openWindowAt(app.name, target.path, "focus");
+        return;
+      }
+      case "other-workspace":
+        this.deps.notify(OTHER_WORKSPACE_LINK_NOTICE);
+        return;
+      case "external":
+      case "file":
+      case "unroutable":
+        console.warn(`[si] an opened link was ignored: ${url} is no address of this machine`);
+        return;
+    }
   }
 
   /** Point this client's view of a window at ``path``, the way an agent's ``navigate`` does: the location is

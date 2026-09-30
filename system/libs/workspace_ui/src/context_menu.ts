@@ -9,17 +9,27 @@
  * an app an agent built -- takes the renderer here, a fixed card of buttons with inline styles.
  * Built as its own library entry into the shell's static output and served by every app at
  * ``/_static/context_menu.js`` from its own origin, beside ``app_contract.js``; so it imports
- * the reference and row modules alone, and touches no message primitive (the draft goes
- * through the connection the page already holds).
+ * the reference, row, and link modules alone, and touches no message primitive (a draft and an
+ * opened link go through the connection the page already holds).
  */
 
+import type { OpenIfPresent } from "./app_contract";
 import { scopeOfHandshake, type ReferenceHandshake, type ReferenceScope } from "./element_reference";
-import { elementMenuRows, targetOfEvent, type ContextMenuRow, type ContextMenuTarget } from "./context_menu_rows";
+import {
+  elementMenuRows,
+  targetOfEvent,
+  type ContextMenuRow,
+  type ContextMenuTarget,
+  type OpenLink,
+} from "./context_menu_rows";
+import { pageLinkRoutingContext, routeLinkElement } from "./links";
 
-/** The connection the page holds to the shell: what the installer drafts through. */
+/** The connection the page holds to the shell: what the installer drafts and opens links through. */
 export interface ContextMenuConnection {
   readonly isFramed: boolean;
   draftText(text: string): void;
+  openPath(path: string, ifPresent: OpenIfPresent): void;
+  sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
 }
 
 /** Where the menu opens: the pointer's viewport position. */
@@ -56,20 +66,30 @@ interface RoutedContextMenuOptions extends ContextMenuBaseOptions {
   connection?: undefined;
   draft: (text: string) => void;
   isDraftAvailable: () => boolean;
+  /** Where "Open link" goes. */
+  openLink: OpenLink;
 }
 
 export type ContextMenuOptions = ConnectedContextMenuOptions | RoutedContextMenuOptions;
 
-/** Where a draft goes and whether it can, from either shape of the options. */
-function draftRouteOf(options: ContextMenuOptions): {
+/** Where a draft goes and whether it can, and where "Open link" goes, from either shape of the options. */
+function routesOf(
+  options: ContextMenuOptions,
+  view: Window,
+): {
   draft: (text: string) => void;
   isDraftAvailable: () => boolean;
+  openLink: OpenLink;
 } {
-  if (options.connection === undefined) return { draft: options.draft, isDraftAvailable: options.isDraftAvailable };
+  if (options.connection === undefined) {
+    return { draft: options.draft, isDraftAvailable: options.isDraftAvailable, openLink: options.openLink };
+  }
   const { connection } = options;
+  const linkRouting = pageLinkRoutingContext(view, connection);
   return {
     draft: options.draft ?? ((text: string) => connection.draftText(text)),
     isDraftAvailable: options.isDraftAvailable ?? (() => connection.isFramed),
+    openLink: (anchor) => void routeLinkElement(anchor, linkRouting),
   };
 }
 
@@ -95,7 +115,9 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
   // A page's own renderer is its owner's to close; the default one is closed here on uninstall.
   const renderer: ContextMenuRenderer =
     options.open === undefined ? createDefaultRenderer(ownerDocument) : { open: options.open };
-  const { draft, isDraftAvailable } = draftRouteOf(options);
+  const view = ownerDocument.defaultView;
+  if (view === null) return () => undefined;
+  const { draft, isDraftAvailable, openLink } = routesOf(options, view);
   const scopeOf = options.scope ?? (() => scopeOfHandshake(options.handshake?.() ?? null));
 
   const onContextMenu = (event: MouseEvent): void => {
@@ -108,6 +130,7 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
       draft,
       isDraftAvailable(),
       options.extraRows?.(target) ?? [],
+      openLink,
     );
     renderer.open(rows, { x: event.clientX, y: event.clientY });
   };

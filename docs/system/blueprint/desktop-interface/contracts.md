@@ -237,6 +237,8 @@ For every registered app whose row names the type, in registry order, the shell 
 
 It answers `200 {"type", "deliveries": [{"app", "status", "detail", "shown"?, "window_id"?}, ...]}` when every handler took it (`detail` empty; a `show` delivery's `status` is `200` and it carries the op's `shown` and the window's id); `502` with the same body and a `detail` naming each app that answered otherwise, could not be reached, or could not have its page built or shown (its `status` then `null` unless the app answered); `404` when no app handles the type (`detail`: `Nothing in this workspace handles '<type>'`); `400` for a type off the manifest rule, a bad client id, a sender that is not an app name, or a payload carrying `type` or `client_id`; and a preview shell `403`, its page posting none of the chrome's messages (the workspace app model's contracts section 6).
 
+The shell page announces `opensLinks: true` with `minds:workspace-ready` (the Imbue Studio embed contract, version 7) and so takes `minds:open-link {url}`: a popup a page of this workspace opened to a local address, which the desktop app turned away from a window of its own (the workspace link routing plan). It classifies the URL as a click on it would be (`workspace_ui`'s `links.ts`): a local URL is delivered as `open:url` above, with sender `embedder`; one of this workspace's app addresses (`<label>.<coordinate>`, the label resolved to its app by the registry) opens as that app's window at the address's path and query, raising one already there; another workspace's address, or one no app is at, is refused with a notice.
+
 ## 6. The WebSocket
 
 Route `/api/ws`, one connection per browser window.

@@ -176,7 +176,7 @@ export interface AppRecord {
   readonly default_shortcut: DefaultShortcut | null;
   readonly launcher_rank: number | null;
   readonly pin: AppPin | null;
-  /** The messages from the Imbue Studio chrome the app takes, which the shell relays to it. */
+  /** The messages the app takes, from the Imbue Studio chrome or from other apps' pages, which the shell relays. */
   readonly message_handlers: readonly MessageHandler[];
   readonly is_running: boolean;
 }

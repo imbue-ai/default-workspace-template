@@ -900,6 +900,9 @@ export function App(): m.Component<AppAttrs> {
       uninstallContextMenu = installElementContextMenu({
         draft: (text) => void current.draftText(text),
         isDraftAvailable: () => true,
+        // The shell's own links lead out of the workspace (help, a changelog); a local one comes back through
+        // Imbue Studio as the popup it turns into a link to open here.
+        openLink: (anchor) => void window.open(anchor.href, "_blank", "noopener"),
         scope: (target) => shellReferenceScope(current, target.element),
         open: (rows, point) => {
           openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));

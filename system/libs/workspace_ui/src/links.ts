@@ -145,6 +145,13 @@ export function routeLink(href: string, context: LinkRoutingContext): boolean {
   }
 }
 
+/** Follow a link element as the element menu's "Open link" does: the link as written, or, for one written relative
+ *  to the page (an app page's ``details.html``), the page address it resolves to. Answers whether it was routed. */
+export function routeLinkElement(anchor: HTMLAnchorElement, context: LinkRoutingContext): boolean {
+  if (routeLink(anchor.getAttribute("href") ?? "", context)) return true;
+  return WEB_SCHEMES.has(anchor.protocol) && routeLink(anchor.href, context);
+}
+
 /** The routing context of a page from its window and its shell connection. */
 export function pageLinkRoutingContext(
   view: Window,

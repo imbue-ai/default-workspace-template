@@ -31,6 +31,9 @@ declare module "@minds/embed-contract" {
   export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities";
   export const REATTACH_WINDOW: "minds:reattach-window";
   export const TEAR_OUT: "minds:tear-out";
+  // The link a popup was turned into (contract v7). Probed like the ones above.
+  export const OPEN_LINK: "minds:open-link";
+  export const MAX_OPEN_LINK_URL_LENGTH: number;
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;
