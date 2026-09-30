@@ -18,5 +18,11 @@ class ScopeComputationError(AppManifestError):
     """A creation's footprint cannot be computed: a git command failed, or a config it reads is unparseable."""
 
 
+class SuiteSelectionError(AppManifestError):
+    """The suite selection cannot be computed: a file it reads cannot be read or parsed, a
+    guard it lists is not tracked by git, or a diff selection would miss the working tree's
+    uncommitted changes."""
+
+
 class AppRegistrationError(AppManifestError):
     """The registration script could not upsert the app's row: it is missing, failed, or did not finish."""

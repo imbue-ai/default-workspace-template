@@ -146,6 +146,79 @@ workspace's own content beside the merged set, and `has_local_footprint` says
 whether any local content at all -- `local_only` or merged -- is outside the
 docs class; both 4a and 4b read it.
 
+**When `has_local_footprint` is true, also resolve the user's creations by
+footprint** before 4a. Every app with an `app.toml` has a footprint the
+manifest library computes -- its directory, the supervisord drop-ins that run
+it, and the paths its manifest claims in `[[references]]` -- and reading it
+over two ranges answers by rule what 4a and 4b otherwise judge by hand:
+whether the creation carries the workspace's own content, and whether the
+update reached it.
+
+```bash
+eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+SCOPES=data/.tasks/update-self/scopes
+RANGES=data/.tasks/update-self/footprint-ranges.json
+rm -rf "$SCOPES" && mkdir -p "$SCOPES"
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    footprint-ranges --target "$TARGET_REF" > "$RANGES" || exit 1
+for manifest in system/apps/*/app.toml; do
+    package=$(basename "$(dirname "$manifest")")
+    uv run --frozen --package app-manifest app-manifest footprint "$manifest" \
+        --diff-base "$(jq -r .local_base "$RANGES")" \
+        --diff-ref "$(jq -r .local_ref "$RANGES")" \
+        --out "$SCOPES/$package.local.json" || exit 1
+    uv run --frozen --package app-manifest app-manifest footprint "$manifest" \
+        --diff-base "$(jq -r .update_base "$RANGES")" \
+        --diff-ref "$(jq -r .update_ref "$RANGES")" \
+        --out "$SCOPES/$package.update.json" || exit 1
+done
+```
+
+`footprint-ranges` names the two ranges: the local range is what the
+workspace itself changed since it forked from the target's line, and the
+update range is what the update changes in the tree the live workspace runs.
+Both are anchored on this pass's merge commit rather than on `HEAD`, so a fix
+you commit on top of it, and any rerun, reads the same two sides; the command
+shifts them for a pass after rolled-back updates, and refuses when the latest
+merge commit it finds does not merge `$TARGET_REF` (an earlier update's merge
+carries the same subject). `--package app-manifest` installs the library from
+the merged tree, which a workspace from before the app model has none of (the
+root project does not depend on it), and `--frozen` keeps the command from
+re-locking the merged tree before 4b's environment gate has checked it.
+
+`<package>.local.json`'s `diff.inside_footprint` is the creation's own
+content: every file of its footprint in which the workspace differs from the
+base (all of them for an app built here, the modified ones for a built-in app
+the user changed). Empty means the creation is upstream's exactly as shipped,
+so the footprint evidence names no customization of it to carry -- it does
+not exempt the app from any gate the rules below apply to the merged set.
+`<package>.update.json`'s `diff.inside_footprint` is what the update changed
+inside that same footprint. A creation with both non-empty is one **the update
+touches**: 4a names it and its `references` as consumers, and 4b's
+customization survival covers it over exactly the files the `.update.json`
+lists. A creation with local content that the update did not reach by
+footprint is still a consumer for 4a to find by grep and interface coupling
+(its steps 2 and 3): the footprint is what the app owns, not what it depends
+on.
+
+Two limits of this evidence. The footprint is read from the merged tree, so
+the local side is measured against the merged manifest: a local edit under a
+path the update removed from the manifest (a dropped `[[references]]` entry, a
+program moved out of the app) falls outside it, and the manifest's own diff in
+`.update.json` is the sign to look. And the update range is what the merge
+changed against the local side, so a conflict you resolved wholly to the local
+side shows no update change there; the discarded-side accounting (Step 2)
+carries that case.
+
+A `footprint` command that fails names a manifest the merged tree can no
+longer satisfy -- most often a `[[references]]` path the update deleted or
+moved. That is merge work: fix the reference in your branch (the root suite's
+`system/test_app_manifests.py` holds every manifest to it) and rerun the
+block; never drop the creation from the loop. An app directory with no
+`app.toml` has no footprint the library can compute, so its directory is its
+footprint, read by hand as before; a workspace-added skill has no footprint
+the update can reach at all and stays a consumer for step 2 to find.
+
 ### 4a. Identify impacted services, skills, and creations
 
 **Whether this analysis runs is decided by rule.** It exists to find a
@@ -185,17 +258,25 @@ command).
    `system/supervisord.conf.d/` program (and what its `command` invokes), every
    app or service under `system/services/` and `system/apps/`, every
    workspace-added skill under `.agents/skills/`, and any cron or scheduled
-   runners.
+   runners. When Step 4 wrote scope files, start from them: they already name
+   every manifest app with local content and, through `references`, the
+   skills, scripts and docs each claims -- the part of this list that is
+   declared rather than discovered.
 2. **Search for dependents of each changed file**: its path, basename, and
    importable module name; follow each service's code into the shared scripts
    and libs it calls; check skills' `SKILL.md` and scripts, and the paths an
-   app's `app.toml` claims in `[[references]]`. If the update adds reference-
-   or dependency-declaration machinery, write the declarations it expects.
+   app's `app.toml` claims in `[[references]]`. For a manifest app with a
+   Step 4 scope file that last search is already done: its `.update.json`
+   lists the update's changes inside its footprint, references included, and
+   a hit there is an impacted consumer. If the update adds reference- or
+   dependency-declaration machinery, write the declarations it expects.
 3. **Reason about interface-level coupling no grep finds**: an API surface (the
    system interface HTTP API, a shared data file's format, a script's CLI
    flags) has callers that reference no file of it.
 4. **Bias toward "impacted" when uncertain**, and record what you checked and
-   how, so the lead sees the coverage.
+   how, so the lead sees the coverage. List each impacted creation in
+   `data/.tasks/update-self/impacted-paths.txt` as 4b's suites step describes,
+   so its tests run in the same gate.
 5. **Verify "workspace-added" by provenance, not directory**: a path is
    built-in if it exists at the target ref (`git ls-tree -r --name-only
    "$TARGET_REF" -- <dir>`; empty output = genuinely workspace-added).
@@ -235,14 +316,52 @@ in your report.
   merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
   is a precise blocker (an unparseable root lock means no service in the
   workspace can start); fix it before running anything else.
-- **Suites, lint, ratchets** for each project in `projects_to_validate` plus
-  that of any file you edited yourself in the branch, and for no other (with
-  neither, no suite runs at all): root
-  `.` (`uv run pytest` + `uv run ruff check`); `system/apps/system_interface`
-  and `system/apps/chat` each its own `uv run pytest` (and, when any frontend
-  or the shared `system/libs/workspace_ui` merged, `npm run lint && npm run
-  test` at `system/`, the npm workspace root). mngr's own suite runs in its
-  repo, not here.
+- **Suites, lint, ratchets** for what the merged set, the update's changes to
+  your creations, 4a's impacted consumers, and your own edits can reach, and
+  for nothing else (with none of them, no suite runs at all). The test
+  selector names them from those paths -- each changed package's or skill's
+  own tests, the suites of whatever declares a dependency on it, the frontend
+  checks, the repo guards, and the full root suite for a path in no package or
+  skill or in a package the root project depends on; a set made only of
+  documentation selects nothing.
+  The update's changes inside a creation that carries local content (every
+  creation whose Step 4 `.local.json` and `.update.json` both list files
+  inside its footprint) go in by rule, so the user's own tests of it run
+  whether or not a file changed on both sides. What 4a found impacted by
+  search or reasoning goes in through `impacted-paths.txt`: one line per
+  impacted creation, naming a file that stands for its whole suite (an app's
+  `app.toml`, a skill's `SKILL.md`, a package's `pyproject.toml`, or a flat
+  script itself); no file means 4a found none, or did not run:
+
+  ```bash
+  MERGE="$(git log --merges -1 --format=%H --fixed-strings \
+      --grep "update-self: merge upstream template ($TARGET_REF)")"
+  python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+      classify-merge --local "$MERGE^1" --target "$TARGET_REF" \
+      > data/.tasks/update-self/classify.json
+  { jq -r '.merged[].path' data/.tasks/update-self/classify.json
+    for update in data/.tasks/update-self/scopes/*.update.json; do
+        [ -e "$update" ] || continue
+        jq -e '.diff.inside_footprint | length > 0' "${update%.update.json}.local.json" >/dev/null \
+            && jq -r '.diff.inside_footprint[]' "$update"
+    done
+    cat data/.tasks/update-self/impacted-paths.txt 2>/dev/null
+    git diff --name-only --no-renames "$MERGE" HEAD; } | sed '/^[[:space:]]*$/d' | sort -u \
+      > data/.tasks/update-self/validate-paths.txt
+  [ -s data/.tasks/update-self/validate-paths.txt ] \
+      && uv run --frozen --package app-manifest app-manifest select-tests \
+          --diff-base "$MERGE^1" \
+          $(sed 's/^/--path /' data/.tasks/update-self/validate-paths.txt)
+  ```
+
+  Commit your own edits first: the `git diff` line reads commits.
+  `--diff-base` here only names what a merged `uv.lock` is compared against,
+  so a lock that upgraded a package selects the suites that depend on it. Run
+  every printed line, in order, plus `uv run ruff check` when a Python file is
+  in the list, and handle a failing test and a shed command the way
+  `.agents/shared/worker/references/harden-creation.md` ("The test gate")
+  says, naming a flaky test under your report's Validation. mngr's own suite
+  runs in its repo, not here.
 - **Isolated-service boots** for each service with a file in the merged set,
   and for each service 4a found impacted that carries local content of its
   own -- one the workspace created, or a built-in one it has modified (a
@@ -267,18 +386,22 @@ in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
-  result* still carries it in substance. Suites passing is not the bar. For a
-  visual surface, screenshot the merged instance you booted and the running
-  workspace's surface (read-only) for the before picture, and actually look at
-  the pair; for an app or integration, exercise its hook points. Classify
-  each: **intact**; **intact-but-changed** (moved, restyled -- never blocks;
-  record it with the before/after evidence so the lead can offer to restore
-  the old arrangement); **cannot be kept** (no place for it on the new base,
-  or broken and your attempts to re-fit it failed -- "tried and failed", never
-  "looks hard"). Cannot-be-kept is the one verdict that stops the pass: raise
-  it as a `question` gate (Step 6) with the evidence and options; never let it
-  ride into `done`. A conflict where every resolution breaks the creation
-  lands here too.
+  result* still carries it in substance. For a manifest app that set is read
+  off the Step 4 scope files -- every creation whose `.local.json` and
+  `.update.json` both list files inside its footprint, checked over the files
+  the `.update.json` names -- and a creation 4a found coupled through an
+  interface joins it whether or not its footprint shows a change. Suites
+  passing is not the bar. For a visual surface, screenshot the merged instance
+  you booted and the running workspace's surface (read-only) for the before
+  picture, and actually look at the pair; for an app or integration, exercise
+  its hook points. Classify each: **intact**; **intact-but-changed** (moved,
+  restyled -- never blocks; record it with the before/after evidence so the
+  lead can offer to restore the old arrangement); **cannot be kept** (no place
+  for it on the new base, or broken and your attempts to re-fit it failed --
+  "tried and failed", never "looks hard"). Cannot-be-kept is the one verdict
+  that stops the pass: raise it as a `question` gate (Step 6) with the
+  evidence and options; never let it ride into `done`. A conflict where every
+  resolution breaks the creation lands here too.
 
 ### 4c. Review gates
 
@@ -292,8 +415,10 @@ even though `classify-merge` cannot see it; Step 1's rollback reverts are not,
 as git made them or with a `both added` file taken at the target's version,
 when `git diff <merge-sha> HEAD` is empty). **Otherwise run
 the real gates**,
-scoped to every file whose merged content differs from the target release. The
-full rule, its scope, and the keep/revert disposition for fix commits are in
+scoped to every file whose merged content differs from the target release; 4b's
+suites run is their test gate, so select tests again only over what you commit
+after it. The full rule, its scope, and the keep/revert disposition for fix
+commits are in
 `references/worker-review-gates.md`. If you believe the gates should not run,
 or should run at another scope, in a situation the rule does not cover, that is
 a `question` gate for the lead -- never a silent adaptation.
@@ -349,7 +474,9 @@ Valid `name:` values:
     on what was reconciled) for the system interface and each user web
     service; the lead attaches the rollback offer to each nontrivial one.
   - **Customization survival** -- each touched creation classified per 4b,
-    with evidence paths for anything not plainly intact.
+    with evidence paths for anything not plainly intact, and the scope-file
+    evidence for the manifest apps: which carried local content and which
+    the update reached.
   - **Built frontend bundles** -- when you built them, the absolute paths of
     all three (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
     `<your work_dir>/system/apps/chat/imbue/chat/static`, and
@@ -371,7 +498,9 @@ Valid `name:` values:
   - **Validation** -- **which branch of the 4b scope rule applied, with its
     evidence** (each item's condition and whether it held; on a clean pull
     with no footprint, that nothing ran and why), then the suites, boots and
-    Playwright that did run, all passing; **which branch of the 4c rule
+    Playwright that did run, all passing, and any test that failed and then
+    passed when rerun alone, here or after a 4c commit, as flaky; **which
+    branch of the 4c rule
     applied, with its evidence** (the clean-pull skip's three conditions, or
     the gate run's kept/reverted fix commits -- or "gate ran clean" -- and the
     architecture-gate verdicts); any validation gap called out honestly. A

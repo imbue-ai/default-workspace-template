@@ -147,6 +147,7 @@ from imbue.chat.models import StopAgentResponse
 from imbue.chat.models import SwitchChatRequest
 from imbue.chat.models import SwitchChatResponse
 from imbue.chat.models import parse_subagent_key
+from imbue.chat.naming import canonical_agent_name
 from imbue.chat.presence import PresenceReport
 from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import CHAT_APP_NAME
@@ -1426,6 +1427,24 @@ def _create_chat() -> Response:
     return json_response(response.model_dump(), status_code=201)
 
 
+def _awaiting_chat_for_empty_list() -> Response:
+    """``POST /api/chats/awaiting``: the chat a chat list with none to show opens on, waiting for its first send.
+
+    Nothing is written until that send launches it, so a list that shows it and is closed leaves no chat behind
+    after a restart of this app. Answers the chat's id and name pair; 503 until the agent list has been read.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    if not agent_manager.is_agent_list_known():
+        return _agent_list_not_known_response()
+    provisional = agent_manager.awaiting_chat_for_empty_list()
+    response = CreateChatResponse(
+        chat_id=provisional.chat_id,
+        name=canonical_agent_name(provisional.name),
+        display_name=provisional.name,
+    )
+    return json_response(response.model_dump())
+
+
 def _seed_chat() -> Response:
     """``POST /api/chats/seed``: open a chat on the turns the Imbue Studio app had before the workspace existed.
 
@@ -2067,6 +2086,7 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule("/api/chats", view_func=_list_chats_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats/create", view_func=_create_chat, methods=["POST"])
     application.add_url_rule("/api/chats/seed", view_func=_seed_chat, methods=["POST"])
+    application.add_url_rule("/api/chats/awaiting", view_func=_awaiting_chat_for_empty_list, methods=["POST"])
     application.add_url_rule("/api/chats/intake", view_func=_intake_chat, methods=["POST"])
     application.add_url_rule("/api/chats/intakes/<token>", view_func=_get_pending_intake, methods=["GET"])
     application.add_url_rule("/api/chats/intakes/<token>/apply", view_func=_apply_pending_intake, methods=["POST"])

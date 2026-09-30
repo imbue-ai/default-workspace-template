@@ -63,7 +63,7 @@ def _frontends_built() -> bool:
 
 
 pytestmark = [
-    pytest.mark.release,
+    pytest.mark.browser,
     pytest.mark.skipif(not _playwright_browsers_installed(), reason="Playwright browsers not installed"),
     pytest.mark.skipif(
         not _frontends_built(),
@@ -789,6 +789,17 @@ def test_a_chat_selector_intake_with_one_chat_sends_to_it_on_the_server_and_the_
 
 
 # starting a chat
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_chat_list_opened_with_nothing_selected_shows_the_most_recent_chat(tmp_path: Path, page: Page) -> None:
+    """The chat list is never open empty: at ``/`` it selects the most recent chat and reports that selection."""
+    with _running_e2e_server(tmp_path) as server:
+        _land(page, server, "?" + urllib.parse.urlencode({"open": f"{CHAT_APP_NAME}:/"}))
+        expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
+        _wait_for_chat_window_path(server, lambda path: path == _FIXTURE_ROOT_PATH, "the most recent chat's selection")
+        expect(_chat_root(page).locator("iframe.chat-root-frame:visible")).to_have_count(1, timeout=15000)
+        expect(_chat_root(page).locator(".chat-root-empty")).to_have_count(0)
 
 
 @pytest.mark.timeout(120, func_only=False)

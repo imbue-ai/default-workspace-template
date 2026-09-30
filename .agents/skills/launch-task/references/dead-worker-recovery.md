@@ -15,7 +15,7 @@ A worker can die because the **OOM daemon** (earlyoom) shed it -- the container 
 grep '"agent_name": *"<worker>"' /home/user/workspace/data/.state/oom_priority/events/shed.jsonl
 ```
 
-Revival guidelines when a worker was shed:
+Revival guidelines when a worker was shed (first free memory with the user per `.agents/shared/references/freeing-memory.md`, or the revival lands in the same pressure):
 
 - **Revive at most once** with `mngr start <worker> --restart`, then nudge it to continue (`uv run .agents/skills/launch-task/scripts/create_worker.py reply --task-file data/.tasks/launch-task/<worker>/task.md -m continue`). A shed agent needs `--restart` -- a plain `mngr start` or a message will not relaunch it. You do not need to resend the task: it survives in the worker's conversation history, and a SessionStart hook already tells the revived worker it was paused, so it re-checks state before continuing.
 - **If the same worker has already been shed twice** (two `process_shed` lines naming it): stop. Do not keep reviving -- surface to the user with the ledger details, because something about this worker's footprint is incompatible with the current memory budget. Reviving again will most likely just be shed a third time.

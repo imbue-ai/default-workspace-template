@@ -174,7 +174,9 @@ class ClientReportOutcome(FrozenModel):
 
 
 # The launch path every app that declares none has, at its root, synthesized by the shell (desktop
-# contracts.md section 2). ``label`` is ``Open <display name>`` per app, filled in by ``effective_launch_paths``.
+# contracts.md section 2). Its ``label`` is the app's display name, filled in by
+# ``effective_launch_paths``: the row stands in a list beside rows an app labelled for itself, where
+# a verb reads as a different KIND of row rather than as the same row with a word in front of it.
 OPEN_LAUNCH_PATH_VALUE: Final[LaunchPathValue] = LaunchPathValue("/")
 
 
@@ -185,9 +187,7 @@ def effective_launch_paths(row: RegistryRow) -> tuple[RegistryLaunchPath, ...]:
         return row.launch_paths
     display = str(row.display_name) if row.display_name is not None else str(row.name)
     return (
-        RegistryLaunchPath(
-            id=OPEN_LAUNCH_PATH_ID, label=NonEmptyStr(f"Open {display}"), path=OPEN_LAUNCH_PATH_VALUE, params=()
-        ),
+        RegistryLaunchPath(id=OPEN_LAUNCH_PATH_ID, label=NonEmptyStr(display), path=OPEN_LAUNCH_PATH_VALUE, params=()),
     )
 
 
@@ -286,6 +286,15 @@ class DesktopsDocument(FrozenModel):
 
     version: int = Field(description="The file format version")
     desktops: tuple[Desktop, ...] = Field(description="Every desktop, in creation order; the first is the fallback")
+
+
+class DefaultShortcutsOfferedDocument(FrozenModel):
+    """The whole of ``default_shortcuts_offered.json``: the apps whose default shortcut the shell has offered."""
+
+    version: int = Field(description="The file format version")
+    apps: tuple[AppName, ...] = Field(
+        description="Every app whose default shortcut the shell has put on a desktop or found there, sorted"
+    )
 
 
 class WindowPlacement(FrozenModel):

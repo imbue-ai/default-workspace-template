@@ -3,7 +3,6 @@ run_in_background.py."""
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import socket
@@ -14,26 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-
-def _load_script_module(module_name: str, filename: str) -> Any:
-    """Import one of the scripts beside this file under ``module_name`` (they are not a package)."""
-    spec = importlib.util.spec_from_file_location(
-        module_name, Path(__file__).parent / filename
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-message_chat = _load_script_module("message_chat_for_fixtures", "message_chat.py")
-run_in_background = _load_script_module(
-    "run_in_background_for_fixtures", "run_in_background.py"
-)
-seed_welcome_chat = _load_script_module(
-    "seed_welcome_chat_for_fixtures", "seed_welcome_chat.py"
-)
+from script_modules_testing import message_chat
 
 
 @pytest.fixture(autouse=True)

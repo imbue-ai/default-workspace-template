@@ -51,6 +51,14 @@ belong in tested code rather than agent prose:
     update could break", which scopes the worker's impact analysis and its
     validation.
 
+``footprint-ranges``
+    Name the two commit ranges the worker reads each app's footprint over:
+    what the workspace itself changed, and what the update changes in the tree
+    the live workspace runs. Anchored on this pass's merge commit, so a fix
+    committed on top of it leaves them unchanged, and shifted past the
+    rollback reverts of a pass after rolled-back updates (whether the target
+    moved or not).
+
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
     the worker's "what's new" report.
@@ -152,11 +160,13 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from update_apply import (
+    UpdateRollbackHistory,
     apply_update,
     confirm_last,
     pending_update_rollbacks,
     recover,
     rollback_last,
+    update_rollback_history,
 )
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
@@ -354,6 +364,156 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
             indent=2,
         )
     )
+    return 0
+
+
+UPDATE_SELF_MERGE_SUBJECT = "update-self: merge upstream template"
+
+
+class NoUpdateMergeError(Exception):
+    """The branch carries no ``update-self`` merge of the requested target."""
+
+
+def _commit_sha(ref: str, repo_root: Path) -> str:
+    return _git(["rev-parse", f"{ref}^{{commit}}"], repo_root)
+
+
+def _latest_commit_with_subject(
+    subject_prefix: str, revision_range: str, repo_root: Path
+) -> str | None:
+    found = _git(
+        [
+            "log",
+            "--format=%H %s",
+            "--fixed-strings",
+            f"--grep={subject_prefix}",
+            revision_range,
+        ],
+        repo_root,
+    )
+    for line in _list_names(found):
+        sha, _, subject = line.partition(" ")
+        if subject.startswith(subject_prefix):
+            return sha
+    return None
+
+
+def _before_rollback_reverts(
+    commit: str, history: UpdateRollbackHistory, repo_root: Path
+) -> str:
+    """The commit under the run of update-rollback reverts ending at ``commit``
+    (``commit`` itself when it is not one): the tree before the worker's first step."""
+    while commit in history.reverts:
+        commit = _commit_sha(f"{commit}^", repo_root)
+    return commit
+
+
+def _has_update_rolled_back_since(earlier: str, commit: str, repo_root: Path) -> bool:
+    """Whether ``commit``'s history since ``earlier`` holds an update rollback that
+    nothing there has undone."""
+    return bool(pending_update_rollbacks(earlier, commit, repo_root, Runner()))
+
+
+def _first_attempt_first_parent(
+    merge: str, history: UpdateRollbackHistory, repo_root: Path
+) -> str:
+    """The first parent of the first merge in ``merge``'s chain of retries.
+
+    A merge made while an earlier landed merge's rollback was still in force
+    under it -- directly, under the reverts of it that the pass's first step
+    committed, or under the workspace's own later commits -- was made on top
+    of that rolled-back attempt; the chain ends at a merge made on the
+    workspace's own line, whose first parent carries none of those releases.
+    """
+    first_parent = _commit_sha(f"{merge}^1", repo_root)
+    while True:
+        before_reverts = _before_rollback_reverts(first_parent, history, repo_root)
+        earlier = _latest_commit_with_subject(
+            UPDATE_SELF_MERGE_SUBJECT, before_reverts, repo_root
+        )
+        if earlier is None:
+            if first_parent in history.reverts or first_parent in history.rollbacks:
+                raise NoUpdateMergeError(
+                    f"{first_parent} rolls back an update or reverts its rollback, "
+                    f"but no earlier '{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
+                )
+            return first_parent
+        if not _has_update_rolled_back_since(earlier, before_reverts, repo_root):
+            return first_parent
+        first_parent = _commit_sha(f"{earlier}^1", repo_root)
+
+
+def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
+    """The two commit ranges the worker reads each app's footprint over.
+
+    The local range is what the workspace itself changed since it forked from
+    the target's line; the update range is what the update changes in the tree
+    the live workspace runs. Both are anchored on this pass's
+    ``update-self: merge upstream template`` commit rather than on ``HEAD``, so
+    a fix committed on top of the merge leaves them unchanged.
+
+    A pass after rolled-back updates shifts the anchors. The worker first reverts
+    every update rollback nothing has undone, so when the target moved, the
+    merge's first parent is the last of those reverts, which already carries the
+    landed releases: the update range starts under the whole run of reverts
+    instead, at the tree the live workspace runs. On a retry of the same target
+    the reverts leave ``git merge`` nothing to do, so the merge found is the
+    landed attempt's own; the reverts are then the whole update, and the local
+    range runs to the commit under them, which carries every local commit since
+    that attempt branched. That commit runs the tree from before every
+    rolled-back attempt, so its fork point is taken from the first attempt in
+    the chain rather than from the landed one, which may itself have been made
+    on top of an earlier release. A user's rollback of an app change, and its
+    revert, carry the same subjects but are the workspace's own history, and
+    shift nothing.
+    """
+    target_sha = _commit_sha(target, repo_root)
+    merge = _latest_commit_with_subject(UPDATE_SELF_MERGE_SUBJECT, "HEAD", repo_root)
+    if merge is None:
+        raise NoUpdateMergeError(
+            f"no '{UPDATE_SELF_MERGE_SUBJECT}' commit on this branch"
+        )
+    parents = _git(["log", "-1", "--format=%P", merge], repo_root).split()
+    if len(parents) != 2 or parents[1] != target_sha:
+        raise NoUpdateMergeError(
+            f"the latest '{UPDATE_SELF_MERGE_SUBJECT}' commit ({merge}) does not "
+            f"merge {target}; an earlier update's merge carries the same subject"
+        )
+    first_parent = parents[0]
+    history = update_rollback_history(target, "HEAD", repo_root, Runner())
+    since_merge = _list_names(
+        _git(["rev-list", "--first-parent", f"{merge}..HEAD"], repo_root)
+    )
+    same_target_revert = next(
+        (commit for commit in since_merge if commit in history.reverts), None
+    )
+    if same_target_revert is not None:
+        local_fork = _first_attempt_first_parent(merge, history, repo_root)
+        local_ref = update_base = _before_rollback_reverts(
+            same_target_revert, history, repo_root
+        )
+        update_ref = same_target_revert
+    else:
+        local_fork = local_ref = first_parent
+        update_base = _before_rollback_reverts(first_parent, history, repo_root)
+        update_ref = merge
+    local_base = _git(["merge-base", local_fork, target_sha], repo_root)
+    return {
+        "merge": merge,
+        "local_base": local_base,
+        "local_ref": local_ref,
+        "update_base": update_base,
+        "update_ref": update_ref,
+    }
+
+
+def _cmd_footprint_ranges(args: argparse.Namespace) -> int:
+    try:
+        ranges = footprint_ranges(args.target, _repo_root(args))
+    except NoUpdateMergeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(json.dumps(ranges, indent=2))
     return 0
 
 
@@ -825,6 +985,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Merge base (default: git merge-base <local> <target>).",
     )
     classify_parser.set_defaults(func=_cmd_classify_merge)
+
+    ranges_parser = sub.add_parser(
+        "footprint-ranges",
+        help="Print the local and update commit ranges the worker reads each "
+        "app's footprint over, anchored on this pass's update-self merge.",
+        parents=[common],
+    )
+    ranges_parser.add_argument(
+        "--target", required=True, help="The upstream ref this pass merged."
+    )
+    ranges_parser.set_defaults(func=_cmd_footprint_ranges)
 
     changelog_parser = sub.add_parser(
         "changelog-entries",
