@@ -21,6 +21,7 @@ import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
 import { parseSoloWindowId, stripSoloParam } from "./model/soloMode";
+import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
 import type { PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
@@ -125,7 +126,9 @@ function bootstrap(): void {
     void desktopStore.reattachWindow(windowId, frameFromMessage(message.frame));
   });
   // A popup a page of this workspace opened, which Imbue Studio turned away from a window of its own: it opens here.
+  // A preview shell sees it only as the live shell's rebroadcast, and the live shell opens it.
   setEmbedderMessageHandler(OPEN_LINK, (message) => {
+    if (isPreviewShell()) return;
     const url = message.url;
     if (typeof url !== "string" || url === "") return;
     void desktopStore.openLink(url, window.location.host);
