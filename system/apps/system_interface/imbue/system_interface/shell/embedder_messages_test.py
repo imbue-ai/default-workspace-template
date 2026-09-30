@@ -129,11 +129,10 @@ _VIEWER_SHOWING = ("{path}", "{path}/", "{path}/?view")
 _CLIENT_ID = "c-show-5f2a"
 
 
-def _viewer_row(*extra_handlers: tuple[str, str]) -> str:
+def _viewer_row() -> str:
     return registry_row_toml(
         _VIEWER_ROW_NAME,
         "http://127.0.0.1:1",
-        message_handlers=extra_handlers,
         shown_message_handlers=[(_OPEN_FILE, _VIEWER_SHOW, _VIEWER_SHOWING)],
     )
 
