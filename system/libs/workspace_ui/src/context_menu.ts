@@ -74,10 +74,7 @@ interface RoutedContextMenuOptions extends ContextMenuBaseOptions {
 export type ContextMenuOptions = ConnectedContextMenuOptions | RoutedContextMenuOptions;
 
 /** Where a draft goes and whether it can, and where "Open link" goes, from either shape of the options. */
-function routesOf(
-  options: ContextMenuOptions,
-  view: Window,
-): {
+function routesOf(options: ContextMenuOptions): {
   draft: (text: string) => void;
   isDraftAvailable: () => boolean;
   openLink: OpenLink;
@@ -86,11 +83,17 @@ function routesOf(
     return { draft: options.draft, isDraftAvailable: options.isDraftAvailable, openLink: options.openLink };
   }
   const { connection } = options;
-  const linkRouting = pageLinkRoutingContext(view, connection);
   return {
     draft: options.draft ?? ((text: string) => connection.draftText(text)),
     isDraftAvailable: options.isDraftAvailable ?? (() => connection.isFramed),
-    openLink: (anchor) => void routeLinkElement(anchor, linkRouting),
+    openLink: (anchor) => {
+      const view = anchor.ownerDocument.defaultView;
+      if (view === null) {
+        console.warn(`[context-menu] Open link ignored: ${anchor.href} is in a document with no window`);
+        return;
+      }
+      void routeLinkElement(anchor, pageLinkRoutingContext(view, connection));
+    },
   };
 }
 
@@ -116,9 +119,7 @@ export function installElementContextMenu(options: ContextMenuOptions): () => vo
   // A page's own renderer is its owner's to close; the default one is closed here on uninstall.
   const renderer: ContextMenuRenderer =
     options.open === undefined ? createDefaultRenderer(ownerDocument) : { open: options.open };
-  const view = ownerDocument.defaultView;
-  if (view === null) return () => undefined;
-  const { draft, isDraftAvailable, openLink } = routesOf(options, view);
+  const { draft, isDraftAvailable, openLink } = routesOf(options);
   const scopeOf = options.scope ?? (() => scopeOfHandshake(options.handshake?.() ?? null));
 
   const onContextMenu = (event: MouseEvent): void => {

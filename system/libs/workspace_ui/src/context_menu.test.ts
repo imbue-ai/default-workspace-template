@@ -12,6 +12,7 @@ import {
   installElementContextMenu,
   type ContextMenuConnection,
 } from "./context_menu";
+import type { ContextMenuRow } from "./context_menu_rows";
 import { REFERENCE_ID_PATTERN } from "./element_reference";
 
 const HANDSHAKE = { clientId: "client-1", windowId: "win-1", desktopId: "home", app: "docs", path: "/" };
@@ -70,6 +71,26 @@ describe("installElementContextMenu", () => {
     rightClick(document.getElementById("file") as Element);
     row("open-link").click();
     expect(connection.sendMessage.mock.calls).toEqual([["open:file", { path: "/home/user/plan 1.md" }]]);
+  });
+
+  it("installs on a document with no window, where Open link warns rather than routing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const windowless = document.implementation.createHTMLDocument("");
+    windowless.body.innerHTML = '<a id="file" href="/home/user/plan.md">plan</a>';
+    const opened: ContextMenuRow[] = [];
+    uninstall = installElementContextMenu({
+      connection,
+      handshake: () => HANDSHAKE,
+      document: windowless,
+      open: (rows) => opened.push(...rows),
+    });
+    rightClick(windowless.getElementById("file") as Element);
+    const openLink = opened.find((candidate) => candidate.kind === "action" && candidate.key === "open-link");
+    expect(openLink?.kind).toBe("action");
+    if (openLink?.kind === "action") openLink.onSelect();
+    expect(connection.sendMessage).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Open link ignored"));
+    warn.mockRestore();
   });
 
   it("opens the menu at the pointer on a right-click, with the reference rows last", () => {
