@@ -922,6 +922,10 @@ class AgentManager:
     # manager only knows WHEN an agent is positively gone or stopped. ``None`` (tests) =
     # no eviction.
     _watcher_eviction_callback: Callable[[str], None] | None
+    # Drops what stopped chats nobody is streaming hold resident, after every observe event.
+    # Set once at composition (``set_unviewed_transcript_release``); the app state knows who
+    # is streaming. ``None`` (tests) = no release.
+    _unviewed_transcript_release: Callable[[], None] | None
 
     @classmethod
     def build(
@@ -1003,6 +1007,7 @@ class AgentManager:
         manager._message_stamps = message_stamps if message_stamps is not None else MessageStampStore(path=None)
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
+        manager._unviewed_transcript_release = None
         manager._auto_open = (
             auto_open
             if auto_open is not None
@@ -2383,6 +2388,18 @@ class AgentManager:
             match = self._match_by_agent_id.get(agent_id)
             return [match] if match is not None else []
 
+    def is_chat_stopped(self, chat_id: ChatId) -> bool:
+        """Whether the chat's active agent is tracked and positively dead (stopped, crashed, shed).
+
+        A chat a send is reviving (its agent marked connecting) is not stopped: the send is
+        starting it, and the observe stream has not seen that yet.
+        """
+        with self._lock:
+            chat = self._resolve_chat_locked(chat_id)
+            agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
+            is_reviving = agent is not None and bool(self._connecting_message_ids_by_agent.get(agent.id))
+        return agent is not None and is_lifecycle_dead(agent.state) and not is_reviving
+
     def is_agent_alive(self, agent_id: str) -> bool:
         """Whether the agent's process is not POSITIVELY dead.
 
@@ -3566,6 +3583,10 @@ class AgentManager:
         # would tear that rebuild down again on the next observe tick.
         for agent_id in newly_dead_ids:
             self._evict_chat_transcripts(agent_id)
+        # The level-triggered half: a stopped chat read after its stop is rebuilt on that
+        # read, and no transition is coming to evict it again.
+        if self._unviewed_transcript_release is not None:
+            self._unviewed_transcript_release()
 
         self._broadcast_chats_updated()
 
@@ -3758,6 +3779,14 @@ class AgentManager:
         would tear down the watcher a user is actively viewing on a stopped chat, right
         after every rebuild-on-read."""
         self._watcher_eviction_callback = callback
+
+    def set_unviewed_transcript_release(self, callback: Callable[[], None]) -> None:
+        """Wire the release of stopped chats' transcripts nobody is streaming (the composition root calls this once).
+
+        Invoked after every observe event. The transition eviction alone would leave a
+        stopped chat that is read after its stop resident until the app restarts: the read
+        rebuilds its transcript, and no further transition comes to evict it."""
+        self._unviewed_transcript_release = callback
 
     def _evict_watcher(self, agent_id: str) -> None:
         callback = self._watcher_eviction_callback

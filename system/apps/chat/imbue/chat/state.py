@@ -254,6 +254,20 @@ class ChatAppState(MutableModel):
             logger.debug("Evicting the loaded transcript of agent {}", agent_id)
             loader.close()
 
+    def release_unviewed_stopped_transcripts(self) -> None:
+        """Evict what each stopped chat holds resident, unless a stream of it is open.
+
+        Reading a stopped chat rebuilds its transcript, which the manager's eviction (on the
+        chat's transition into stopped) never sees. A chat with an open stream keeps its
+        transcript while its viewer reads it; the first call after the stream closes drops it.
+        """
+        with self._watchers_lock:
+            resident_agent_ids = set(self.watchers) | set(self.loaders)
+        for agent_id in resident_agent_ids:
+            chat_id = self.agent_manager.chat_id_of_agent(agent_id)
+            if self.agent_manager.is_chat_stopped(chat_id) and not self.event_queues.has_consumers(str(chat_id)):
+                self.stop_and_remove_watcher(agent_id)
+
     def stop_all_watchers(self) -> None:
         with self._watchers_lock:
             for watcher in self.watchers.values():

@@ -100,6 +100,7 @@ from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RecordingShell
+from imbue.chat.testing import build_test_state
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_chat_agent_entry
@@ -3577,6 +3578,35 @@ def test_lifecycle_transition_into_dead_evicts_the_watcher_once(agent_manager: A
     agent_manager._handle_observe_event(make_agent_state_event(running))
     agent_manager._handle_observe_event(make_agent_state_event(stopped))
     assert evicted == [str(agent.id), str(agent.id)]
+
+
+def test_a_stopped_chat_read_after_its_stop_is_released_at_the_next_observe_event(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """A read after the stop rebuilds the transcript the stop evicted, and no further
+    transition comes to evict it; the next observe event's release drops it."""
+    state = build_test_state(agent_manager=agent_manager)
+    agent = _agent_details("read-after-stop")
+    stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    agent_manager._handle_observe_event(make_agent_state_event(stopped))
+    try:
+        state.get_or_create_watcher(
+            AgentInfo(
+                id=str(agent.id),
+                name=str(agent.name),
+                state="STOPPED",
+                agent_state_dir=tmp_path / "agent_state",
+                claude_config_dir=tmp_path / "claude_config",
+            )
+        )
+        assert set(state.watchers) == {str(agent.id)}
+
+        agent_manager._handle_observe_event(make_agent_state_event(stopped))
+
+        assert state.watchers == {}
+    finally:
+        state.shutdown()
 
 
 def test_note_agent_alive_flips_a_dead_state_to_waiting(agent_manager: AgentManager) -> None:

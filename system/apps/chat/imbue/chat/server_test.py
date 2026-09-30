@@ -411,13 +411,11 @@ def test_get_event_detail_serves_and_404s(client: FlaskClient, app: Flask, tmp_p
     assert missing.status_code == 404
 
 
-def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
-    """Eviction releases the watcher (resident transcript, watch thread); a later read
-    rebuilds it from disk transparently -- the chat-memory lifecycle's two halves."""
-    state = build_test_state()
-    agent_state_dir = tmp_path / "agent_state"
+def _claude_agent_info_with_one_message(tmp_path: Path, agent_id: str, state: str) -> AgentInfo:
+    """A claude agent whose transcript on disk holds one user message, "hello"."""
+    agent_state_dir = tmp_path / agent_id / "agent_state"
     agent_state_dir.mkdir(parents=True)
-    claude_config_dir = tmp_path / "claude_config"
+    claude_config_dir = tmp_path / agent_id / "claude_config"
     (claude_config_dir / "projects" / "hash123").mkdir(parents=True)
     (claude_config_dir / "projects" / "hash123" / "s1.jsonl").write_text(
         json.dumps(
@@ -431,13 +429,20 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
         + "\n"
     )
     (agent_state_dir / "claude_session_id_history").write_text("s1\n")
-    agent_info = AgentInfo(
-        id="evictable-agent",
-        name="evictable-agent",
-        state="RUNNING",
+    return AgentInfo(
+        id=agent_id,
+        name=agent_id,
+        state=state,
         agent_state_dir=agent_state_dir,
         claude_config_dir=claude_config_dir,
     )
+
+
+def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
+    """Eviction releases the watcher (resident transcript, watch thread); a later read
+    rebuilds it from disk transparently -- the chat-memory lifecycle's two halves."""
+    state = build_test_state()
+    agent_info = _claude_agent_info_with_one_message(tmp_path, "evictable-agent", "RUNNING")
 
     first = state.get_or_create_watcher(agent_info)
     assert state.watchers == {"evictable-agent": first}
@@ -452,6 +457,38 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
     assert rebuilt is not first
     assert [e["content"] for e in rebuilt.get_all_events()] == ["hello"]
     state.shutdown()
+
+
+def test_a_stopped_chat_read_after_its_stop_is_released_once_nobody_streams_it(tmp_path: Path) -> None:
+    """Reading a stopped chat rebuilds its transcript after the stop's own eviction; the
+    release drops that rebuild, but not while a stream of the chat is open or a send is
+    reviving it, and never a running chat's."""
+    state = build_test_state()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    seed_agent_state(state.agent_manager, "running-agent", name="running-agent", state="RUNNING")
+    stopped_info = _claude_agent_info_with_one_message(tmp_path, "stopped-agent", "STOPPED")
+    running_info = _claude_agent_info_with_one_message(tmp_path, "running-agent", "RUNNING")
+    try:
+        state.get_or_create_watcher(stopped_info)
+        running_watcher = state.get_or_create_watcher(running_info)
+
+        # A viewer's stream holds the stopped chat's transcript.
+        stream = state.event_queues.register("stopped-agent")
+        state.release_unviewed_stopped_transcripts()
+        assert set(state.watchers) == {"stopped-agent", "running-agent"}
+        state.event_queues.unregister("stopped-agent", stream)
+
+        # So does a send reviving it, which built the watcher before starting the agent.
+        with state.agent_manager.track_connecting_send("stopped-agent", "reviving-send") as mark_connecting:
+            mark_connecting()
+            state.release_unviewed_stopped_transcripts()
+            assert set(state.watchers) == {"stopped-agent", "running-agent"}
+
+        # With neither, the next release drops it; the running chat keeps its own.
+        state.release_unviewed_stopped_transcripts()
+        assert state.watchers == {"running-agent": running_watcher}
+    finally:
+        state.shutdown()
 
 
 def test_get_events_caps_initial_load_to_tail(client: FlaskClient, app: Flask, tmp_path: Path) -> None:

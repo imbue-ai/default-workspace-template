@@ -173,6 +173,7 @@ def build_production_state(
     # transition into a dead state, the state drops that agent's watcher -- the
     # resident transcript, watch thread, and inotify watches go with it.
     agent_manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
+    agent_manager.set_unviewed_transcript_release(state.release_unviewed_stopped_transcripts)
     return state
 
 

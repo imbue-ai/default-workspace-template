@@ -552,6 +552,7 @@ def build_test_state(
     )
     # Match production: eviction drops a destroyed/stopped agent's watcher.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
+    manager.set_unviewed_transcript_release(state.release_unviewed_stopped_transcripts)
     return state
 
 
