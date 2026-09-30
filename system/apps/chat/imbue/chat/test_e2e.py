@@ -1382,37 +1382,40 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         expect(provider_row).not_to_contain_text("next:")
 
 
+def _question_and_reply_events(uuid_prefix: str, question: str, reply: str) -> list[dict[str, Any]]:
+    """A session of one user question and the assistant's finished reply to it."""
+    return [
+        {
+            "type": "user",
+            "uuid": f"{uuid_prefix}-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": question},
+        },
+        {
+            "type": "assistant",
+            "uuid": f"{uuid_prefix}-2",
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {
+                "role": "assistant",
+                "model": "claude-opus-4-6",
+                "content": [{"type": "text", "text": reply}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        },
+    ]
+
+
 # A reply that links a file of the workspace and a service running in it (the workspace link routing plan), served
 # with the real File Viewer (dufs over a folder of the test's own) and a stand-in for the app that opens URLs.
 _LINKED_FILE_HREF = "/notes/plan%201.md"
 _LINKED_SERVICE_URL = "http://localhost:3000/preview"
 _OPEN_URL_HANDLER_PATH = "/api/open-url"
-_LINKING_SESSION_EVENTS: list[dict[str, Any]] = [
-    {
-        "type": "user",
-        "uuid": "uuid-link-1",
-        "timestamp": "2026-01-01T00:00:00Z",
-        "message": {"role": "user", "content": "Where are the plan and the preview?"},
-    },
-    {
-        "type": "assistant",
-        "uuid": "uuid-link-2",
-        "timestamp": "2026-01-01T00:00:01Z",
-        "message": {
-            "role": "assistant",
-            "model": "claude-opus-4-6",
-            "content": [
-                {
-                    "type": "text",
-                    "text": f"The plan is [the plan file]({_LINKED_FILE_HREF}) and the preview is "
-                    f"[the preview]({_LINKED_SERVICE_URL}).",
-                }
-            ],
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 10, "output_tokens": 5},
-        },
-    },
-]
+_LINKING_SESSION_EVENTS = _question_and_reply_events(
+    "uuid-link",
+    "Where are the plan and the preview?",
+    f"The plan is [the plan file]({_LINKED_FILE_HREF}) and the preview is [the preview]({_LINKED_SERVICE_URL}).",
+)
 
 
 def _app_windows(server: RunningWorkspace, app: str) -> list[dict[str, Any]]:
@@ -1489,26 +1492,9 @@ def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_
 
 # A folder whose name holds characters a URL spells in different ways: a space, parentheses, an apostrophe.
 _ODD_FOLDER_NAME = "q4 (final)'s"
-_FOLDER_LINK_SESSION_EVENTS: list[dict[str, Any]] = [
-    {
-        "type": "user",
-        "uuid": "uuid-folder-1",
-        "timestamp": "2026-01-01T00:00:00Z",
-        "message": {"role": "user", "content": "Where did the report go?"},
-    },
-    {
-        "type": "assistant",
-        "uuid": "uuid-folder-2",
-        "timestamp": "2026-01-01T00:00:01Z",
-        "message": {
-            "role": "assistant",
-            "model": "claude-opus-4-6",
-            "content": [{"type": "text", "text": f"It is in [the report folder](</{_ODD_FOLDER_NAME}>)."}],
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 10, "output_tokens": 5},
-        },
-    },
-]
+_FOLDER_LINK_SESSION_EVENTS = _question_and_reply_events(
+    "uuid-folder", "Where did the report go?", f"It is in [the report folder](</{_ODD_FOLDER_NAME}>)."
+)
 
 
 @pytest.mark.skipif(DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
