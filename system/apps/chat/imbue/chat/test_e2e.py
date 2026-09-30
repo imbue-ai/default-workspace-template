@@ -1488,3 +1488,73 @@ def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_
             assert opened_urls == [{"type": "open:url", "client_id": client_id, "url": _LINKED_SERVICE_URL}]
             assert _chat_frame(page).url == chat_url
             assert page.context.pages == [page]
+
+
+# A folder whose name holds characters a URL spells in different ways: a space, parentheses, an apostrophe.
+_ODD_FOLDER_NAME = "q4 (final)'s"
+_FOLDER_LINK_SESSION_EVENTS: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-folder-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Where did the report go?"},
+    },
+    {
+        "type": "assistant",
+        "uuid": "uuid-folder-2",
+        "timestamp": "2026-01-01T00:00:01Z",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "content": [{"type": "text", "text": f"It is in [the report folder](</{_ODD_FOLDER_NAME}>)."}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    },
+]
+
+
+@pytest.mark.skipif(DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
+@pytest.mark.timeout(120, func_only=False)
+def test_a_folder_link_raises_the_file_viewer_window_that_reached_the_folder_through_its_own_listing(
+    tmp_path: Path, page: Page
+) -> None:
+    """A File Viewer window that walked into a folder through dufs's own listing is at the path as dufs spells it;
+    a chat link to that folder spells it the shell's way, and the two must agree so the link raises that window
+    rather than opening a second one."""
+    root = tmp_path / "viewer-root"
+    (root / _ODD_FOLDER_NAME).mkdir(parents=True)
+    with running_file_viewer(root) as viewer_url:
+        rows = (file_viewer_registry_row(viewer_url),)
+        with _running_e2e_server(tmp_path, session_events=_FOLDER_LINK_SESSION_EVENTS, extra_rows=rows) as server:
+            _open_fixture_chat(page, server)
+            client_id = _client_id(page)
+            opened = {"op": "open", "args": {"app": "files", "path": "/", "client": client_id}, "requester": None}
+            assert _post_op(server, opened) == 200
+            wait_for(
+                lambda: len(_app_windows(server, "files")) == 1,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the File Viewer window never opened",
+            )
+            (viewer,) = _app_windows(server, "files")
+            listing = page.frame_locator(f'iframe[data-live-page="{viewer["id"]}"]')
+            listing.get_by_role("link", name=_ODD_FOLDER_NAME, exact=True).click()
+            wait_for(
+                lambda: _app_windows(server, "files")[0]["path"] != "/",
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the File Viewer window never reported the folder it walked into",
+            )
+            listed_path = _app_windows(server, "files")[0]["path"]
+
+            _bring_the_chat_over(page, server, client_id, viewer["id"])
+            _chat(page).get_by_role("link", name="the report folder").click()
+
+            expect(page.locator(f'[data-window-id="{viewer["id"]}"]')).to_have_attribute(
+                "data-focused", "true", timeout=15000
+            )
+            page.wait_for_timeout(1000)
+            assert [(window["id"], window["path"]) for window in _app_windows(server, "files")] == [
+                (viewer["id"], listed_path)
+            ]
