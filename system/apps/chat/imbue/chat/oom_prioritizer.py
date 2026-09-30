@@ -108,6 +108,9 @@ class ChatOomPrioritizer:
         # chat_id -> time of its most recent engagement of *any* kind (messaged,
         # switched to, or entered a running state), for the staleness clock.
         self._last_engaged_at: dict[ChatId, float] = {}
+        # chat_id -> when it began on an agent started ahead of it (``record_chat_started``);
+        # such a chat is fully engaged for ``CHAT_JUST_STARTED_GRACE_SECONDS``.
+        self._started_at: dict[ChatId, float] = {}
         # Chats whose active agent is in a running lifecycle state, i.e. mid-turn.
         self._running: set[ChatId] = set()
         self._sweep_stop = threading.Event()
@@ -181,17 +184,22 @@ class ChatOomPrioritizer:
         it) as engaged now, then re-tag every chat.
 
         Without it the staleness clock would run from that agent's process start, so a spare
-        that waited a day for a chat would begin as an abandoned one. It is not a message, so
+        that waited a day for a chat would begin as an abandoned one. The user opened the chat
+        this moment, so for ``CHAT_JUST_STARTED_GRACE_SECONDS`` it sits at the engaged floor,
+        before its page reports presence or its first message lands. It is not a message, so
         the chat gets no recency rank from it.
         """
         now = self._clock()
         with self._lock:
             self._stamp_engagement_locked(chat_id, now)
+            self._started_at[chat_id] = now
         self.reapply()
 
     def forget_chat(self, chat_id: ChatId) -> None:
         """Drop a destroyed chat's presence so its reports never count again."""
         self._presence.forget_chat(chat_id)
+        with self._lock:
+            self._started_at.pop(chat_id, None)
 
     def record_running_chats(self, running_ids: Iterable[ChatId]) -> None:
         """Record which chats are currently mid-turn, then re-tag if it changed.
@@ -234,6 +242,7 @@ class ChatOomPrioritizer:
             running_ids = set(self._running)
             last_message_at = dict(self._last_message_at)
             last_engaged_at = dict(self._last_engaged_at)
+            started_at = dict(self._started_at)
 
         now = self._clock()
         open_ids = self._presence.open_chat_ids()
@@ -257,13 +266,17 @@ class ChatOomPrioritizer:
                 continue
             is_visible = chat_id in visible_ids
             is_open = chat_id in open_ids
-            adj = bands.chat_agent_oom_score_adj(
-                is_open=is_open,
-                is_visible=is_visible,
-                recency_rank=rank_by_id.get(chat_id),
-                idle_seconds=self._idle_seconds(chat_id, last_engaged_at, now),
-                is_mid_turn=chat_id in running_ids,
-            )
+            chat_started_at = started_at.get(chat_id)
+            if chat_started_at is not None and now - chat_started_at < bands.CHAT_JUST_STARTED_GRACE_SECONDS:
+                adj = bands.CHAT_AGENT_FLOOR
+            else:
+                adj = bands.chat_agent_oom_score_adj(
+                    is_open=is_open,
+                    is_visible=is_visible,
+                    recency_rank=rank_by_id.get(chat_id),
+                    idle_seconds=self._idle_seconds(chat_id, last_engaged_at, now),
+                    is_mid_turn=chat_id in running_ids,
+                )
             set_adj(pid, adj)
 
     def _idle_seconds(self, chat_id: ChatId, last_engaged_at: dict[ChatId, float], now: float) -> float | None:

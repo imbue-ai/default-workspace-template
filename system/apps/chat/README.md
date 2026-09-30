@@ -226,7 +226,8 @@ short. `GET /api/agents`, the plain mngr listing, does list the spares. A
 spare sits in `oom_priority`'s ceiling band (`SPARE_AGENT`, shared with the
 browser's renderers) until a chat takes it, so memory pressure sheds it before
 any agent or agent subprocess; one that dies is replaced after the same
-backoff. A secondary chat (a preview) keeps none of its own: it reads the live
+backoff. The chat that takes it sits at the engaged chat floor for its first
+minute (`CHAT_JUST_STARTED_GRACE_SECONDS`), then is prioritized like any chat. A secondary chat (a preview) keeps none of its own: it reads the live
 chat's `spare_chat.json` on every sweep, never writing it, so the live spares
 stay hidden there too and a spare the live chat hands over appears.
 

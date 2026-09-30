@@ -92,6 +92,11 @@ _CHAT_RECENCY_STEP: Final[int] = 15
 
 _HOUR: Final[float] = 3600.0
 
+# How long a chat that just began on an agent started ahead of it (a spare the chat app
+# handed it) sits at ``CHAT_AGENT_FLOOR``: the user opened it this moment, before its page
+# has reported presence or its first message has landed.
+CHAT_JUST_STARTED_GRACE_SECONDS: Final[float] = 60.0
+
 # How a chat's freshness decays with idle time: ``(idle_seconds, freshness)``
 # points in ascending idle order, linearly interpolated between neighbours and
 # flat outside the ends. 1.0 is fully fresh (today's engagement-only behaviour),
