@@ -1,7 +1,7 @@
 [project]
 name = "pytest-workspace-env"
 version = "0.1.0"
-description = "Test-only pytest plugin that fails, rather than skips, a workspace-only test whose environment is missing"
+description = "Test-only pytest plugin that fails, rather than skips, any test where the environment is meant to be complete"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
