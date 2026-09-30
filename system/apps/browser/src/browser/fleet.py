@@ -30,17 +30,15 @@ Commands::
 Driving is NOT here -- the agent attaches `playwright-cli` to the gated CDP endpoint this
 CLI hands out. `playwright-cli --help` is the command reference.
 
-The daemon address is discovered from ``data/.state/apps.toml`` (the same
-registry ``layout.py`` reads), overridable via ``MINDS_BROWSER_SERVICE_URL``,
+The daemon address is discovered from ``data/.state/apps.toml`` (the app
+registry), overridable via ``MINDS_BROWSER_SERVICE_URL``,
 falling back to ``http://127.0.0.1:8081``. A new browser's viewer page is opened as a
-window on the requesting chat's desktop via ``system/scripts/layout.py``.
+window on the requesting chat's desktop through the shell's ``open`` op.
 """
 
 import argparse
 import json
 import os
-import subprocess
-import sys
 import time
 import tomllib
 import urllib.error
@@ -49,6 +47,13 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from imbue.mngr.cli.output_helpers import write_human_line, write_stderr_line
+from workspace_layout.client import ShellLayoutClient, requester_from_environment
+from workspace_layout.errors import ShellOpError
+from workspace_layout.ops import OpenRequest
+from workspace_layout.primitives import IfPresent
+from workspace_layout.shell_url import shell_base_url
+
+from browser.primitives import APP_NAME
 
 _DEFAULT_URL = "http://127.0.0.1:8081"
 _ENV_URL = "MINDS_BROWSER_SERVICE_URL"
@@ -63,6 +68,9 @@ _EXIT_TIMEOUT = 4  # waited --max-wait and another agent still held it
 _EXIT_USAGE = 64
 _EXIT_NO_DAEMON = 69
 
+# An agent's command waits on the shell's open as long as the layout command would.
+_SHELL_OP_TIMEOUT_SECONDS = 30.0
+
 
 def _out(message: str) -> None:
     write_human_line(message)
@@ -73,10 +81,10 @@ def _err(message: str) -> None:
 
 
 def _repo_root() -> Path:
-    """Walk up from cwd to the workspace root (where ``system/scripts/layout.py`` lives)."""
+    """Walk up from cwd to the workspace root (where ``system/scripts/forward_port.py``, the registry's writer, lives)."""
     here = Path.cwd()
     for candidate in (here, *here.parents):
-        if (candidate / "system" / "scripts" / "layout.py").exists():
+        if (candidate / "system" / "scripts" / "forward_port.py").exists():
             return candidate
     return here
 
@@ -168,41 +176,37 @@ def _stream(path: str, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
                 yield json.loads(line)
 
 
-# opening the viewer window (reuse system/scripts/layout.py)
-
-
-def _layout(*args: str, quiet: bool = False) -> bool:
-    """Run ``system/scripts/layout.py`` with the given args from the repo root. True on success.
-    ``quiet`` suppresses layout.py's raw stderr so the caller can substitute its own
-    message (used by the viewer-window open, which has a friendlier failure note)."""
-    root = _repo_root()
-    layout = root / "system" / "scripts" / "layout.py"
-    if not layout.exists():
-        return False
-    result = subprocess.run(
-        [sys.executable, str(layout), *args], cwd=str(root), capture_output=True, text=True
-    )
-    if result.returncode != 0 and not quiet:
-        _err(result.stderr.strip() or f"layout {' '.join(args)} failed")
-    return result.returncode == 0
+# opening the viewer window (the shell's open op)
 
 
 def _open_viewer_window(browser_name: str, *, is_minimized: bool) -> None:
     """Surface browser ``browser_name`` as its own window on the requesting agent's desktop.
 
-    ``layout.py open browser --path /?session=<name>`` lands the window on the client that most recently
+    The shell's ``open`` of ``/?session=<name>`` lands the window on the client that most recently
     messaged this chat (else the one connected client, else unplaced on the first desktop). With
     ``is_minimized`` the window lands out of the way of what the human is doing and a window already there is
     left as they placed it; without it, the window (new or existing) is restored and raised. The window is
     what keeps the browser alive (docs/system/specs/window-bound-resources.md): a browser no window shows
-    is stopped once one has shown it. If ``layout.py`` fails (no shell answers), we fall back to one neutral
-    line offering the launcher: the browser is up and fully drivable from the CLI either way.
+    is stopped once one has shown it. If the shell does not open it (no shell answers), we fall back to one
+    neutral line offering the launcher: the browser is up and fully drivable from the CLI either way.
     """
-    minimized_args = ("--minimized",) if is_minimized else ()
-    if _layout("open", "browser", "--path", f"/?session={browser_name}", *minimized_args, quiet=True):
-        return
-    _out(f"browser {browser_name} is ready. To watch it live, open it from the "
-         'launcher (Browser -> ' + f"{browser_name}).")
+    shell = ShellLayoutClient(
+        shell_url=shell_base_url(), requester=requester_from_environment(), timeout_seconds=_SHELL_OP_TIMEOUT_SECONDS
+    )
+    request = OpenRequest(
+        app=APP_NAME,
+        path=f"/?session={browser_name}",
+        if_present=IfPresent.FOCUS,
+        is_minimized=is_minimized,
+        client_id=None,
+        desktop=None,
+    )
+    try:
+        shell.open(request)
+    except ShellOpError:
+        # This line is the whole report: the shell's own reason would read as the browser having failed.
+        _out(f"browser {browser_name} is ready. To watch it live, open it from the "
+             'launcher (Browser -> ' + f"{browser_name}).")
 
 
 # commands

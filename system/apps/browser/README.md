@@ -33,7 +33,7 @@ background agent, which is its own chat -- or the human).
   (`docs/system/specs/window-bound-resources.md`). The shell posts every closed
   window of the browser to `POST /api/window-closed` (the manifest's
   `window_closed_path`), and the daemon sweeps the shell's windows
-  (`GET /api/desktops`, through `app_manifest.shell_windows`) every
+  (`GET /api/desktops`, through `workspace_layout.windows`) every
   `BROWSER_WINDOW_SWEEP_SECONDS` (default 90) regardless: a browser some window
   showed (recorded as `window_seen` in the manifest) and none shows any more is
   stopped, never deleted, so its profile and tabs come back with its next window.

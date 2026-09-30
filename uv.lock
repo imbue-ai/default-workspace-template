@@ -424,6 +424,7 @@ dependencies = [
     { name = "simple-websocket" },
     { name = "websockets" },
     { name = "werkzeug" },
+    { name = "workspace-layout" },
 ]
 
 [package.metadata]
@@ -439,6 +440,7 @@ requires-dist = [
     { name = "simple-websocket", specifier = ">=1.0" },
     { name = "websockets", specifier = ">=13" },
     { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [[package]]
