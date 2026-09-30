@@ -488,6 +488,25 @@ def _desktops_updates(client_queue: "queue.Queue[str | None]") -> list[tuple[str
     ]
 
 
+def test_a_registry_change_before_the_first_read_of_the_desktops_seeds_nothing(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """Home is seeded by the first read of the desktops, from the registry as it reads then, never by the reconcile a
+    registry change runs."""
+    shell = _shell_before_the_chat(tmp_path, broadcaster)
+    client_queue = broadcaster.register()
+
+    _register_chat(shell.inventory.registry_path)
+    shell.inventory.reload_registry()
+
+    assert shell.desktops.list_desktops() == []
+    assert not (tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME).exists()
+    assert _desktops_updates(client_queue) == []
+    (home,) = shell.list_desktops()
+    assert home.shortcuts == seed_desktop_shortcuts([entry.row for entry in shell.inventory.entries()])
+    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
+
+
 def test_an_app_registering_after_home_was_seeded_reaches_it_through_the_registry_change_alone(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
