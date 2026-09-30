@@ -11,7 +11,7 @@ contract; everything about chats lives in this app's own pages and routes.
 
 The `chat` program (declared in `system/supervisord.conf.d/chat.conf`) runs
 `chat-app`, the console script of this package, from its own uv tool environment
-(installed by `system/scripts/build_workspace.sh` with the mngr harness plugins
+(installed by `system/scripts/build_workspace.sh` with the mngr plugins
 `system/config/mngr_plugins.toml` assigns to `chat`). At startup it registers
 its manifest and port 8010 through `system/scripts/forward_port.py`, follows
 the agent lifecycle event file the workspace's `agent-observer` program (`mngr
