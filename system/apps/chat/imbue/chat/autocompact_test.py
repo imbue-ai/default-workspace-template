@@ -234,6 +234,24 @@ def test_a_batch_failure_no_single_chat_causes_is_not_retried_per_chat(batch_out
     assert recorded_commands == [["mngr", "autocompact", "run", "chat-alpha", "chat-beta", "chat-gamma"]]
 
 
+def test_a_lone_rejected_chat_is_not_launched_again() -> None:
+    """With one chat the batch already is the one-chat command, so a retry would only repeat it."""
+    recorded_commands: list[list[str]] = []
+
+    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
+        recorded_commands.append(list(command))
+        return _make_finished_process(command=command, returncode=1)
+
+    compactor = ChatAutoCompactor.build(
+        list_running_chat_agent_names=lambda: ["chat-alpha"],
+        is_enabled=lambda: True,
+        runner=fake_runner,
+    )
+
+    assert compactor.sweep() == [None]
+    assert recorded_commands == [["mngr", "autocompact", "run", "chat-alpha"]]
+
+
 def test_the_one_chat_retry_stops_early_if_stop_event_set() -> None:
     recorded_commands: list[list[str]] = []
 
