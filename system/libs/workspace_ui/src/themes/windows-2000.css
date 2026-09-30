@@ -32,12 +32,9 @@
   --shadow-raised: var(--win-raised);
   --shadow-overlay: var(--win-raised), 1px 1px 0 #000000;
 
-  --win-raised:
-    inset -1px -1px #404040, inset 1px 1px #d4d0c8, inset -2px -2px #808080, inset 2px 2px #ffffff;
-  --win-pressed:
-    inset -1px -1px #ffffff, inset 1px 1px #404040, inset -2px -2px #d4d0c8, inset 2px 2px #808080;
-  --win-sunken:
-    inset -1px -1px #ffffff, inset 1px 1px #808080, inset -2px -2px #d4d0c8, inset 2px 2px #404040;
+  --win-raised: inset -1px -1px #404040, inset 1px 1px #d4d0c8, inset -2px -2px #808080, inset 2px 2px #ffffff;
+  --win-pressed: inset -1px -1px #ffffff, inset 1px 1px #404040, inset -2px -2px #d4d0c8, inset 2px 2px #808080;
+  --win-sunken: inset -1px -1px #ffffff, inset 1px 1px #808080, inset -2px -2px #d4d0c8, inset 2px 2px #404040;
   --win-caption: linear-gradient(90deg, #0a246a, #a6caf0);
   --win-caption-inactive: linear-gradient(90deg, #808080, #c0c0c0);
 
