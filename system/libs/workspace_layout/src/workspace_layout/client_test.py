@@ -179,6 +179,20 @@ def test_a_shell_that_refuses_an_op_raises_quoting_the_status_and_the_refusal(lo
     assert len(loopback_shell.posted) == 1
 
 
+def test_a_redirect_is_answered_as_it_came_rather_than_followed(loopback_shell: LoopbackShell) -> None:
+    loopback_shell.answer_headers = {"Location": "/moved"}
+    loopback_shell.get_answers = {DESKTOPS_ROUTE: (302, "moved"), "/moved": (200, {"desktops": []})}
+    loopback_shell.op_refusal = (302, "moved")
+    client = _client(loopback_shell.url)
+
+    with pytest.raises(ShellRefusedOpError) as refused_op:
+        client.show(_SHOW)
+    with pytest.raises(ShellRefusedOpError) as refused_read:
+        client.desktops()
+
+    assert (refused_op.value.status_code, refused_read.value.status_code) == (302, 302)
+
+
 def test_a_shell_that_cannot_be_reached_raises_unreachable(loopback_shell: LoopbackShell) -> None:
     client = _client(_unreachable_url(loopback_shell))
 

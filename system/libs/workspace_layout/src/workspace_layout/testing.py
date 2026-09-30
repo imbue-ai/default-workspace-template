@@ -244,6 +244,9 @@ class LoopbackShell(MutableModel):
     context_clients: list[dict[str, Any]] = Field(default_factory=list, description="What ``context`` lists")
     refresh_target: str | None = Field(default="c1", description="The client a ``refresh`` says it reached")
     activity_status: int = Field(default=204, description="What the client-activity route answers")
+    answer_headers: dict[str, str] = Field(
+        default_factory=dict, description="Headers every answer carries besides its Content-Type and Content-Length"
+    )
     posted: list[tuple[str, Any]] = Field(default_factory=list, description="Every (route, body) posted, in order")
     posted_content_types: list[str | None] = Field(
         default_factory=list, description="The Content-Type of every post, in order"
@@ -281,6 +284,8 @@ class LoopbackShell(MutableModel):
                 self.send_response(status)
                 self.send_header("Content-Type", "text/html" if is_text else "application/json")
                 self.send_header("Content-Length", str(len(payload)))
+                for name, value in shell.answer_headers.items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(payload)
 
