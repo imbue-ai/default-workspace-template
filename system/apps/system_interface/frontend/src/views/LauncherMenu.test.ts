@@ -136,8 +136,8 @@ describe("the launcher menu", () => {
     row.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
     expect(attrs.onAppShortcutContextMenu).toHaveBeenCalledWith("terminal", 12, 34, row);
-    // The chat-like app's default shortcut names its text launch path, so it has no desktop shortcut and its root
-    // row, like a free-text row, keeps the right-click every other surface gets.
+    // The chat-like app's default shortcut names its text launch path, which has no launcher row, so its root row
+    // (not its shortcut), like a free-text row, keeps the right-click every other surface gets.
     for (const selector of ['[data-launch="chatty:root"]', '[data-text-action="primary"]']) {
       const other = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
       root.querySelector(selector)!.dispatchEvent(other);

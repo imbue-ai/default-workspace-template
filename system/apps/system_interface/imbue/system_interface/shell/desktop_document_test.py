@@ -498,7 +498,7 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
     }
 
 
-def test_each_app_is_seeded_with_its_default_shortcut_never_one_taking_text(tmp_path: Path) -> None:
+def test_each_app_is_seeded_with_its_default_shortcut_preferring_one_taking_no_text(tmp_path: Path) -> None:
     rows = read_registry(
         write_registry(
             tmp_path / "apps.toml",
@@ -513,7 +513,7 @@ def test_each_app_is_seeded_with_its_default_shortcut_never_one_taking_text(tmp_
             # A preview frame or an isolated test server registers with no program.
             registry_row_toml("preview-1", "http://localhost:3"),
             registry_row_toml("vm-exec", "http://localhost:4", program="vm-exec", is_internal=True),
-            # A launch path that takes typed or drafted text is never a shortcut: the first that takes none is.
+            # With no default declared, the first launch path taking no typed or drafted text is the shortcut...
             registry_row_toml(
                 "journal",
                 "http://localhost:5",
@@ -523,6 +523,7 @@ def test_each_app_is_seeded_with_its_default_shortcut_never_one_taking_text(tmp_
                 launch_text_params={"write": "entry"},
                 launch_draft_params={"draft": "entry"},
             ),
+            # ...or the first launch path of all, when every one takes text.
             registry_row_toml(
                 "asker",
                 "http://localhost:6",
@@ -531,7 +532,7 @@ def test_each_app_is_seeded_with_its_default_shortcut_never_one_taking_text(tmp_
                 launch_params={"ask": ["question"]},
                 launch_text_params={"ask": "question"},
             ),
-            # A declared default shortcut naming a text launch path gives none, whatever else the app offers.
+            # A declared default shortcut stands even when its launch path takes text.
             registry_row_toml(
                 "intake",
                 "http://localhost:7",
@@ -550,8 +551,10 @@ def test_each_app_is_seeded_with_its_default_shortcut_never_one_taking_text(tmp_
         ("notes", "open", ShortcutMode.FOCUS),
         ("recipes", "browse", ShortcutMode.FOCUS),
         ("journal", "read", ShortcutMode.FOCUS),
+        ("asker", "ask", ShortcutMode.FOCUS),
+        ("intake", "send", ShortcutMode.NEW),
     ]
-    assert apps_with_a_default_shortcut(rows) == {"notes", "recipes", "journal"}
+    assert apps_with_a_default_shortcut(rows) == {"notes", "recipes", "journal", "asker", "intake"}
 
 
 def _targets_and_cells(desktop: Desktop) -> list[tuple[str, str, int, int]]:

@@ -76,11 +76,21 @@ describe("launch paths of an app", () => {
     expect(launchPathOf(docs, "other")).toBeNull();
   });
 
-  it("gives an app one desktop shortcut by the shell's seeding rule, never of a launch path taking text", () => {
+  it("gives an app one desktop shortcut by the shell's seeding rule, preferring a launch path taking no text", () => {
     expect(appShortcutOf(notes)).toEqual({ launch: "new", mode: "focus" });
-    expect(appShortcutOf(appRecord("chatty", { launch_paths: docs.launch_paths }))).toBeNull();
+    // A declared default shortcut stands even when its launch path takes text; one the app does not offer gives none.
+    expect(appShortcutOf(appRecord("chatty", { launch_paths: docs.launch_paths }))).toEqual({
+      launch: "new",
+      mode: "focus",
+    });
+    expect(appShortcutOf(appRecord("gone", { default_shortcut: { launch: "missing", mode: "new" } }))).toBeNull();
     const undeclared = { default_shortcut: null, launch_paths: buddy.launch_paths };
     expect(appShortcutOf(appRecord("own", undeclared))).toEqual({ launch: "root", mode: "focus" });
+    // With no declared default and every launch path taking text, the first is still the app's shortcut.
+    expect(appShortcutOf(appRecord("asker", { default_shortcut: null, launch_paths: docs.launch_paths }))).toEqual({
+      launch: "new",
+      mode: "focus",
+    });
     expect(appShortcutOf(appRecord("preview-1", { ...undeclared, program: "" }))).toBeNull();
     expect(appShortcutOf(hidden)).toBeNull();
   });

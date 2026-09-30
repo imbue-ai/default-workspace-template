@@ -657,21 +657,21 @@ def _takes_text(launch_path: RegistryLaunchPath) -> bool:
 
 @pure
 def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
-    """The shortcut an app is given on a desktop, never of a launch path that takes typed or drafted text: its
-    ``default_shortcut`` when it declares one naming a launch path it offers that takes no text; else, for a
-    supervised app (one whose row names a ``program``), its first launch path that takes no text, focusing. A
-    manifest-less row with no program (a preview, an isolated test server) gets none, and neither does an internal
-    app."""
+    """The shortcut an app is given on a desktop: its ``default_shortcut`` when it declares one naming a launch path it
+    offers, whether or not that path takes text; else, for a supervised app (one whose row names a ``program``), its
+    first launch path that takes no typed or drafted text, or its first launch path when every one takes text,
+    focusing. A manifest-less row with no program (a preview, an isolated test server) gets none, and neither does an
+    internal app."""
     if row.internal:
         return None
     offered = effective_launch_paths(row)
     if row.default_shortcut is not None:
-        declared = next((path for path in offered if path.id == row.default_shortcut.launch), None)
-        return None if declared is None or _takes_text(declared) else row.default_shortcut
+        is_offered = any(path.id == row.default_shortcut.launch for path in offered)
+        return row.default_shortcut if is_offered else None
     if row.program is None:
         return None
-    first = next((path for path in offered if not _takes_text(path)), None)
-    return None if first is None else DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS)
+    first = next((path for path in offered if not _takes_text(path)), offered[0])
+    return DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS)
 
 
 @pure
