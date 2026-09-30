@@ -15,6 +15,10 @@ from flask import Response
 from loguru import logger
 from pydantic import ConfigDict
 from pydantic import Field
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.errors import ShellOpError
+from workspace_layout.ops import ShowRequest
+from workspace_layout.primitives import ClientId
 
 from imbue.chat.auto_open import CHAT_ROOT_PAGE
 from imbue.chat.auto_open import chat_root_path
@@ -23,8 +27,7 @@ from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import ChatId
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import parse_request_body
-from imbue.chat.shell_client import ShellOpError
-from imbue.chat.shell_client import ShowRequest
+from imbue.chat.shell_client import chat_show_request
 from imbue.chat.state import get_state
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
@@ -54,14 +57,11 @@ def chat_page_path(chat_id: ChatId) -> str:
 
 
 @pure
-def show_chat_request(chat_id: ChatId, client_id: str) -> ShowRequest:
+def show_chat_request(chat_id: ChatId, client_id: ClientId) -> ShowRequest:
     """The ``show`` that puts the chat on the client's screen: the chat root with the chat selected, the chat's own
     page counting as already showing it, and a chat root window on another chat moved to it."""
-    return ShowRequest(
-        path=chat_root_path(chat_id),
-        showing=(chat_page_path(chat_id),),
-        repoint=(CHAT_ROOT_PAGE,),
-        client_id=client_id,
+    return chat_show_request(
+        chat_root_path(chat_id), showing=(chat_page_path(chat_id),), repoint=(CHAT_ROOT_PAGE,), client_id=client_id
     )
 
 
@@ -71,7 +71,7 @@ def _error(detail: str, status_code: int) -> Response:
 
 def focus_chat_endpoint() -> Response:
     """``POST /api/focus-chat``: ask the shell to show the chat to the client. Answers the shell's ``shown`` and
-    window; 400 for a chat id of the wrong shape, 403 in a secondary chat (it opens no windows), and 502 when the
+    window; 400 for a chat or client id of the wrong shape, 403 in a secondary chat (it opens no windows), and 502 when the
     shell could not be reached, refused, or answered something that is not a show's answer."""
     focus_request = parse_request_body(FocusChatRequest)
     if not AGENT_ID_PATTERN.fullmatch(focus_request.chat_id):
@@ -79,14 +79,18 @@ def focus_chat_endpoint() -> Response:
     state = get_state()
     if state.is_secondary:
         return _error("A secondary chat opens no windows", HTTP_FORBIDDEN)
+    try:
+        client_id = ClientId(focus_request.client_id)
+    except InvalidLayoutValueError as e:
+        return _error(str(e), HTTP_BAD_REQUEST)
     chat_id = ChatId(focus_request.chat_id)
     try:
-        answer = state.shell.show(show_chat_request(chat_id, focus_request.client_id))
+        answer = state.shell.show(show_chat_request(chat_id, client_id))
     except ShellOpError as e:
         logger.warning("Could not show chat {} to client {}: {}", chat_id, focus_request.client_id, e)
         return _error(str(e), HTTP_BAD_GATEWAY)
     logger.info("Showed chat {} to client {} ({})", chat_id, focus_request.client_id, answer.shown)
-    return json_response({"shown": answer.shown, "window_id": answer.window_id})
+    return json_response({"shown": answer.shown, "window_id": str(answer.window_id)})
 
 
 def register_routes(application: Flask) -> None:

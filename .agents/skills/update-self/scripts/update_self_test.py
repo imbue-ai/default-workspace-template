@@ -7707,27 +7707,38 @@ def test_wait_and_open_chat_tab_stops_at_the_first_success() -> None:
 def test_try_open_chat_tab_opens_the_chats_window_through_the_desktops_open(
     tmp_path: Path,
 ) -> None:
-    """The one contract the flow has with layout.py's grammar: the chat app at its chat's page, run from the repo root."""
+    """The one contract the flow has with the desktop command's grammar: the chat app at its chat's page, run from the
+    repo root."""
     runner = _RecordingRunner()
 
     assert update_self._try_open_chat_tab(tmp_path, "chat-9", runner) is True
 
     assert runner.calls == [
-        [
-            sys.executable,
-            "system/scripts/layout.py",
-            "open",
-            "chat",
-            "--path",
-            "/?chat=chat-9",
-        ]
+        ["uv", "run", "workspace-layout", "open", "chat", "--path", "/?chat=chat-9"]
     ]
     assert runner.cwds == [str(tmp_path)]
     runner.respond(
-        (sys.executable, "system/scripts/layout.py"),
+        ("uv", "run", "workspace-layout"),
         _Result(returncode=1, stderr="no client"),
     )
     assert update_self._try_open_chat_tab(tmp_path, "chat-9", runner) is False
+
+
+def test_try_open_chat_tab_uses_the_script_a_workspace_from_before_the_command_has(
+    tmp_path: Path,
+) -> None:
+    """The flow runs from the target's copy of this skill, so the first update onto the release with the command
+    starts from a workspace that has only the script."""
+    script = tmp_path / "system" / "scripts" / "layout.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("")
+    runner = _RecordingRunner()
+
+    assert update_self._try_open_chat_tab(tmp_path, "chat-9", runner) is True
+
+    assert runner.calls == [
+        [sys.executable, "system/scripts/layout.py", "open", "chat", "--path", "/?chat=chat-9"]
+    ]
 
 
 def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:

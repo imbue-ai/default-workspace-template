@@ -13,6 +13,9 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from loguru import logger
 from pydantic import Field
+from workspace_layout.ops import Wallpaper
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import WindowId
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -26,7 +29,6 @@ from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import DesktopsChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.data_types import GridCell
-from imbue.system_interface.shell.data_types import Wallpaper
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_ensured
@@ -41,10 +43,8 @@ from imbue.system_interface.shell.errors import DesktopConflictError
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
-from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.primitives import UserId
-from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK

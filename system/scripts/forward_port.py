@@ -376,7 +376,7 @@ def _apps_file() -> Path:
     Defaults to ``data/.state/apps.toml`` relative to cwd. Override
     via ``MINDS_APPS_FILE`` -- used by tests and by callers that
     need to point at a non-default registry (e.g. when running outside
-    the agent's repo root). Mirrors ``system/scripts/layout.py``.
+    the agent's repo root). Mirrors ``app_manifest.registry.registry_path``.
     """
     return Path(os.environ.get(ENV_APPS_FILE, DEFAULT_APPS_FILE))
 

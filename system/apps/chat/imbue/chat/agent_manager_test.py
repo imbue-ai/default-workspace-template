@@ -16,6 +16,8 @@ from uuid import uuid4
 import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
+from workspace_layout.testing import FakeShell
+from workspace_layout.testing import connected_client
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import account_dir
@@ -99,7 +101,6 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingMngrMessenger
-from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_chat_agent_entry
@@ -904,7 +905,7 @@ def test_a_build_restores_the_seeded_chats_still_awaiting_their_first_send(
     finally:
         first.stop()
 
-    reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=RecordingShell(client_ids=[]))
+    reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=FakeShell())
     second, _ = _seed_manager(broadcaster, tmp_path, store=store, auto_open=reactor)
     try:
         restored = second.get_provisional_chat(seeded.chat_id)
@@ -919,7 +920,7 @@ def test_a_build_restores_the_seeded_chats_still_awaiting_their_first_send(
     # A tab the ledger says was delivered is not popped again by a restart.
     delivered_ledger = AutoOpenLedger(path=None)
     delivered_ledger.mark_delivered(ChatId(seeded.chat_id))
-    delivered_reactor = AutoOpenReactor(ledger=delivered_ledger, shell=RecordingShell(client_ids=[]))
+    delivered_reactor = AutoOpenReactor(ledger=delivered_ledger, shell=FakeShell())
     third, _ = _seed_manager(broadcaster, tmp_path, store=store, auto_open=delivered_reactor)
     try:
         assert third.get_provisional_chat(seeded.chat_id) is not None
@@ -3679,7 +3680,7 @@ def test_observe_events_feed_the_auto_open_reactor(
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    shell = RecordingShell(client_ids=["c1"])
+    shell = FakeShell(clients=[connected_client("c1")])
     reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=shell)
     manager = AgentManager.build(broadcaster, auto_open=reactor)
     at_start = _agent_details("update-self-1", labels={"auto_open": "true"})

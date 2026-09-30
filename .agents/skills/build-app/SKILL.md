@@ -370,7 +370,7 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
-- `layout.py open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
+- `workspace-layout open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
   present -> take feedback -> update the mock so the change is *visible* ->
   re-present. Do not accept feedback and move on having only asserted you'll apply
   it.
@@ -490,7 +490,7 @@ launcher -- skip the surfacing step only for services with no UI
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
-python3 system/scripts/layout.py open <name> --beside
+uv run workspace-layout open <name> --beside
 ```
 
 `--beside` lays it beside the chat that asked for it instead of on top of the
@@ -505,7 +505,7 @@ With no `--desktop`, the op edits the desktop the target client is looking
 at, which is where the user expects the new window. (Pass `--desktop <name>`
 to surface it on a different desktop instead; the op edits that desktop and
 switches the client to it.)
-`layout.py` POSTs to a loopback-only shell endpoint that opens the window
+`workspace-layout` POSTs to a loopback-only shell endpoint that opens the window
 on the desktop and writes that client's placement of it (no browser needs
 to be connected) and broadcasts the change, so the client's screen shows the
 new window on top, or brings the window for `<name>` to the front when one is
@@ -518,14 +518,14 @@ To force a reload of an already-open window (e.g. after redeploying the
 service) without prompting the user to click Refresh:
 
 ```bash
-python3 system/scripts/layout.py refresh --app <name>
+uv run workspace-layout refresh --app <name>
 ```
 
 You should always `refresh` services after making changes, to make sure the user can see the updates.
 
 For anything beyond `open` / `refresh` -- placing, focusing, minimizing,
 maximizing, navigating a window to another path, reading the desktops -- see
-the `manage-desktop` skill. `layout.py list` is also useful when the user is
+the `manage-desktop` skill. `workspace-layout list` is also useful when the user is
 asking about what is open (it prints every app with its launch paths and
 its windows, and every desktop).
 

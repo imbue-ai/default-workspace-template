@@ -19,6 +19,8 @@ from app_manifest.manifest import LaunchPathMethod
 from app_manifest.registry import RegistryLaunchPath
 from loguru import logger
 from pydantic import Field
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -26,8 +28,6 @@ from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LaunchRefusedError
 from imbue.system_interface.shell.errors import LaunchUnavailableError
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import WindowPath
 
 # The envelope's field names (the manifest library reserves them for the shell).

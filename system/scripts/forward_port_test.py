@@ -597,26 +597,23 @@ def _load_module(module_name: str, path: Path) -> ModuleType:
 
 
 def test_every_carrier_of_the_reserved_name_set_holds_the_same_set() -> None:
-    """Drift guard: three places in this repo carry the reserved-name set, because
-    two of them cannot import the one that owns it -- ``forward_port.py`` is
-    stdlib-only by contract, and ``layout.py`` is an agent-facing script run from
-    any cwd. Comparing the sets is what makes the copies safe; sampling names
-    cannot, since any name absent from the sample is free to diverge. Every
+    """Drift guard: two places in this repo carry the reserved-name set, because
+    ``forward_port.py`` is stdlib-only by contract and cannot import the
+    ``app_manifest`` library that owns it. Comparing the sets is what makes the
+    copy safe; sampling names cannot, since any name absent from the sample is
+    free to diverge. Every
     carrier this repo owns belongs here: one left out is one free to drift,
     which is the state this guard was written to end.
 
-    A fourth carrier is the mngr repo's: ``SEED_APP_RESERVED_NAMES`` in
+    A third carrier is the mngr repo's: ``SEED_APP_RESERVED_NAMES`` in
     ``apps/minds_evals/imbue/minds_evals/data_types.py``, copied from
     ``validate_service_name`` here so a seeded app's name can be checked before the
     workspace sees it. It lives outside this tree, so only a fix in mngr reaches it.
     """
     forward_port = _load_module("_forward_port_set_drift_check", _SCRIPT)
-    layout = _load_module("_layout_set_drift_check", _SCRIPT.parent / "layout.py")
 
     assert forward_port.RESERVED_NAMES == RESERVED_APP_NAMES
-    assert forward_port.RESERVED_NAMES == layout._RESERVED_APP_NAMES
     assert forward_port.RESERVED_NAME_PREFIXES == RESERVED_APP_NAME_PREFIXES
-    assert forward_port.RESERVED_NAME_PREFIXES == layout._RESERVED_APP_NAME_PREFIXES
 
 
 def test_app_manifest_name_rule_is_identical_to_the_registration_rule() -> None:

@@ -12,8 +12,9 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from pydantic import BaseModel
 from pydantic import ValidationError
+from workspace_layout.ops import OpRequester
+from workspace_layout.primitives import ClientId
 
-from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
@@ -21,8 +22,6 @@ from imbue.system_interface.shell.errors import NoTargetClientError
 from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.identity import parse_identity_header
-from imbue.system_interface.shell.layout_ops import OpRequester
-from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.state import ShellState
 
 LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -39,9 +38,6 @@ HTTP_PRECONDITION_FAILED: Final[int] = 412
 HTTP_INTERNAL_ERROR: Final[int] = 500
 HTTP_BAD_GATEWAY: Final[int] = 502
 HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
-
-# The keys that pick an op's target rather than describe the op; stripped before the op's own arguments are read.
-TARGET_ARG_KEYS: Final[frozenset[str]] = frozenset({"client", "desktop"})
 
 _RequestModel = TypeVar("_RequestModel", bound=BaseModel)
 
@@ -74,11 +70,6 @@ def require_loopback() -> ResponseReturnValue | None:
     return None
 
 
-@pure
-def op_only_args(args_raw: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in args_raw.items() if key not in TARGET_ARG_KEYS}
-
-
 def is_known_client(shell: ShellState, client_id: str) -> bool:
     return shell.clients.get_client(client_id) is not None or client_id in shell.broadcaster.connected_client_ids()
 
@@ -91,7 +82,7 @@ def resolve_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
         # Held to the client id rule before it names a layout file.
         client_id = ClientId(explicit)
         if not is_known_client(shell, client_id):
-            raise ClientNotFoundError(f"No client {client_id!r}: see `layout.py context` for the known clients")
+            raise ClientNotFoundError(f"No client {client_id!r}: see `workspace-layout context` for the known clients")
         return client_id
     # Only a requester with a marker has a client that last messaged it; a bare app names none.
     if requester is not None and requester.marker:
@@ -115,6 +106,6 @@ def require_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
     )
     raise NoTargetClientError(
         "Could not tell which client this op is for: no client has messaged the requesting agent and "
-        f"{len(connected_clients)} client(s) are connected. Pass --client <id> (see `layout.py context`). "
+        f"{len(connected_clients)} client(s) are connected. Pass --client <id> (see `workspace-layout context`). "
         f"Connected clients: {client_summary}."
     )

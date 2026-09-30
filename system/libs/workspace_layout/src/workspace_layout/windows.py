@@ -1,32 +1,18 @@
-"""Reading the shell's windows over loopback: what an app with window-bound resources sweeps against
-(docs/system/specs/window-bound-resources.md section 4.2)."""
-
 import json
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
 from typing import Final
 
+from app_manifest.primitives import AppName
 from imbue.imbue_common.pure import pure
 from loguru import logger
 
-from app_manifest.primitives import AppName
-
-# The shell's address, resolved as system/scripts/layout.py resolves it.
-DEFAULT_SHELL_URL: Final[str] = "http://127.0.0.1:8000"
-ENV_SHELL_URL: Final[str] = "MINDS_WORKSPACE_SERVER_URL"
-
-# The desktops document (desktop-interface contracts.md section 5.2): every desktop with its windows.
-DESKTOPS_ROUTE: Final[str] = "/api/desktops"
+from workspace_layout.shell_url import DESKTOPS_ROUTE
 
 # One loopback read of a small file the shell holds in memory; past this it is not answering.
 WINDOW_READ_TIMEOUT_SECONDS: Final[float] = 2.0
-
-
-def shell_base_url() -> str:
-    return os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/")
 
 
 def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
@@ -35,7 +21,7 @@ def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
 
     None is never "no windows": an app that collects what no window shows must skip a sweep it
     cannot ground in the shell's own answer, so an unreachable shell, a non-JSON body, and a
-    document of the wrong shape all read as unknown.
+    document of the wrong shape all read as unknown (docs/system/specs/window-bound-resources.md section 4.2).
     """
     url = f"{shell_url}{DESKTOPS_ROUTE}"
     try:

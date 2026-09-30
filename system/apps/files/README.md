@@ -20,7 +20,7 @@ for every other registered app.
 The manifest's one launch path is `/home/user/workspace/` with an optional `path`
 param (an absolute path, since dufs serves the filesystem root), so a plain launch
 opens the workspace folder and the shell opens a file viewer window at
-`/home/user/workspace/?path=<folder>` when asked for one (`layout.py open files
+`/home/user/workspace/?path=<folder>` when asked for one (`workspace-layout open files
 --path /home/user/workspace/data/notes/` is the same thing). dufs ignores the query; the vendored frontend
 takes the frame to the folder itself (see below) and then reports that folder as
 its location, so the window's stored path follows and a reload reopens the

@@ -6,6 +6,8 @@ import pytest
 from app_manifest.manifest import EntryMode
 from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
 
 from imbue.system_interface.shell.clients import CLIENTS_FILENAME
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
@@ -15,8 +17,6 @@ from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import FloatingPosition
 from imbue.system_interface.shell.errors import ClientNotFoundError
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.testing import TEST_NOW
 

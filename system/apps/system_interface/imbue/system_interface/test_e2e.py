@@ -453,7 +453,7 @@ def _wait_for_window_count(base_url: str, count: int, desktop_id: str = _HOME_DE
 
 
 def _broadcast_op(base_url: str, op: str, args: dict[str, Any]) -> dict[str, Any]:
-    """POST an op to ``/api/layout/broadcast`` the way ``system/scripts/layout.py`` does, retrying while the shell
+    """POST an op to ``/api/layout/broadcast`` the way ``workspace-layout`` does, retrying while the shell
     has not yet registered the client the op names (a 404 or 412)."""
     answer: dict[str, Any] = {}
 

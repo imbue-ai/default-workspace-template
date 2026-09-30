@@ -26,7 +26,6 @@ def load_script_module(module_name: str, filename: str) -> Any:
     return module
 
 
-layout = load_script_module("layout_for_fixtures", "layout.py")
 message_chat = load_script_module("message_chat_for_fixtures", "message_chat.py")
 run_in_background = load_script_module(
     "run_in_background_for_fixtures", "run_in_background.py"

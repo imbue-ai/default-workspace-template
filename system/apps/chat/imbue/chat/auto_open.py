@@ -31,11 +31,12 @@ from typing import Final
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from workspace_layout.errors import ShellOpError
+from workspace_layout.interfaces import ShellLayoutInterface
+from workspace_layout.primitives import ClientId
 
 from imbue.chat.primitives import ChatId
-from imbue.chat.shell_client import ShellLayoutInterface
-from imbue.chat.shell_client import ShellOpError
-from imbue.chat.shell_client import ShowRequest
+from imbue.chat.shell_client import chat_show_request
 from imbue.imbue_common.mutable_model import MutableModel
 
 logger = _loguru_logger
@@ -239,7 +240,12 @@ class AutoOpenReactor(MutableModel):
         pending = self.pending_chat_ids()
         if not pending:
             return
-        client_ids = self.shell.connected_client_ids()
+        try:
+            client_ids = [client.id for client in self.shell.connected_clients()]
+        except ShellOpError as e:
+            # The shell may be restarting; the next wake asks again.
+            logger.debug("Could not list the shell's clients, so {} chat(s) stay held: {}", len(pending), e)
+            return
         if not client_ids:
             return
         for chat_id in pending:
@@ -279,9 +285,9 @@ class AutoOpenReactor(MutableModel):
             # The thread has to outlive one bad answer from the shell; the next wake retries.
             logger.opt(exception=e).warning("An auto-open flush failed; retrying on the next wake")
 
-    def _is_shown(self, chat_id: ChatId, client_id: str) -> bool:
+    def _is_shown(self, chat_id: ChatId, client_id: ClientId) -> bool:
         """Ask the shell to show the chat root on the chat to one client; whichever way it shows it counts."""
-        request = ShowRequest(path=chat_root_path(chat_id), showing=(), repoint=(), client_id=client_id)
+        request = chat_show_request(chat_root_path(chat_id), showing=(), repoint=(), client_id=client_id)
         try:
             self.shell.show(request)
         except ShellOpError as e:

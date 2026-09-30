@@ -1,12 +1,12 @@
 """Acceptance test for the agent-driven desktop pipeline.
 
 Exercises the full backend path the agent-facing helper depends on:
-``system/scripts/layout.py`` (subprocess) -> ``POST /api/layout/broadcast``
+the ``workspace-layout`` command (subprocess) -> ``POST /api/layout/broadcast``
 (loopback Flask route) -> the desktop and placement files -> the broadcaster's
 ``desktops_updated`` and ``placements_updated`` messages. The WS-to-DOM step is
 ``test_e2e.py``'s.
 
-The machine the script sees is a registry with two rows, both stand-in apps
+The machine the command sees is a registry with two rows, both stand-in apps
 served over loopback so the liveness probe finds them running. Broadcaster
 output is observed via the broadcaster's own queue-registration API rather than
 a live WebSocket.
@@ -35,23 +35,23 @@ from imbue.system_interface.testing import PipelineHarness
 
 pytestmark = pytest.mark.acceptance
 
-# A chat title, for the retired ``chat:<title>`` spelling the script must refuse.
+# A chat title, for the retired ``chat:<title>`` spelling the command must refuse.
 _SEEDED_TITLE = "alice"
-# The requesting agent, which the script resolves ``self`` and its attribution against.
+# The requesting agent, which the command resolves ``self`` and its attribution against.
 _AGENT_ID = "agent-test-alice"
 
-_REPO_ROOT = Path(__file__).resolve().parents[5]
-_LAYOUT_SCRIPT = _REPO_ROOT / "system" / "scripts" / "layout.py"
+# The console script the workspace-layout library installs beside this interpreter.
+_LAYOUT_COMMAND = Path(sys.executable).parent / "workspace-layout"
 
 
-def _run_layout_script(args: list[str], harness: PipelineHarness, cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Invoke ``system/scripts/layout.py`` as a subprocess against the test server.
+def _run_layout_command(args: list[str], harness: PipelineHarness, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """Invoke the ``workspace-layout`` command as a subprocess against the test server.
 
     ``cwd`` is a sandbox so nothing relative resolves into the repo; the registry the
-    script reads is the fixture's, through ``MINDS_APPS_FILE``.
+    command reads is the fixture's, through ``MINDS_APPS_FILE``.
     """
     return subprocess.run(
-        [sys.executable, str(_LAYOUT_SCRIPT), *args],
+        [str(_LAYOUT_COMMAND), *args],
         capture_output=True,
         text=True,
         cwd=str(cwd),
@@ -67,15 +67,15 @@ def _run_layout_script(args: list[str], harness: PipelineHarness, cwd: Path) -> 
 
 
 def _listing(harness: PipelineHarness, cwd: Path) -> dict[str, dict[str, Any]]:
-    """``layout.py list --json`` as ``{app name: entry}``."""
-    result = _run_layout_script(["list", "--json"], harness, cwd)
+    """``workspace-layout list --json`` as ``{app name: entry}``."""
+    result = _run_layout_command(["list", "--json"], harness, cwd)
     assert result.returncode == 0, f"stderr={result.stderr!r}"
     return {entry["name"]: entry for entry in json.loads(result.stdout)["apps"]}
 
 
 def _windows(harness: PipelineHarness, cwd: Path) -> list[dict[str, Any]]:
-    """Every window on every desktop, as ``layout.py desktops --json`` lists them."""
-    result = _run_layout_script(["desktops", "--json"], harness, cwd)
+    """Every window on every desktop, as ``workspace-layout desktops --json`` lists them."""
+    result = _run_layout_command(["desktops", "--json"], harness, cwd)
     assert result.returncode == 0, f"stderr={result.stderr!r}"
     return [window for desktop in json.loads(result.stdout)["desktops"] for window in desktop["windows"]]
 
@@ -93,14 +93,14 @@ def test_context_and_desktops_round_trip_through_script_and_endpoint(
     before it has messaged; ``desktops --json`` lists the default desktop with no windows."""
     sandbox = _sandbox(tmp_path)
 
-    context = _run_layout_script(["context", "--json"], layout_server, sandbox)
+    context = _run_layout_command(["context", "--json"], layout_server, sandbox)
     assert context.returncode == 0, f"stderr={context.stderr!r}"
     assert json.loads(context.stdout) == []
 
     client_queue = layout_server.broadcaster.register()
     layout_server.broadcaster.set_client_info(client_queue, "client-silent", "home")
     try:
-        connected = _run_layout_script(["context", "--json"], layout_server, sandbox)
+        connected = _run_layout_command(["context", "--json"], layout_server, sandbox)
         assert connected.returncode == 0, f"stderr={connected.stderr!r}"
         (entry,) = json.loads(connected.stdout)
         assert entry["client_id"] == "client-silent"
@@ -108,7 +108,7 @@ def test_context_and_desktops_round_trip_through_script_and_endpoint(
     finally:
         layout_server.broadcaster.unregister(client_queue)
 
-    desktops = _run_layout_script(["desktops", "--json"], layout_server, sandbox)
+    desktops = _run_layout_command(["desktops", "--json"], layout_server, sandbox)
     assert desktops.returncode == 0, f"stderr={desktops.stderr!r}"
     listed = json.loads(desktops.stdout)
     assert [(desktop["id"], desktop["windows"]) for desktop in listed["desktops"]] == [
@@ -119,11 +119,11 @@ def test_context_and_desktops_round_trip_through_script_and_endpoint(
 def test_an_op_with_no_client_to_target_fails_with_412_but_an_open_lands_unplaced(
     layout_server: PipelineHarness, tmp_path: Path
 ) -> None:
-    """With no client connected or recorded, there is nobody's placements to edit, and the script says so; an
+    """With no client connected or recorded, there is nobody's placements to edit, and the command says so; an
     open still lands, unplaced, since a window is shared."""
-    opened = _run_layout_script(["open", PIPELINE_STUB_APP_NAME, "--minimized"], layout_server, _sandbox(tmp_path))
+    opened = _run_layout_command(["open", PIPELINE_STUB_APP_NAME, "--minimized"], layout_server, _sandbox(tmp_path))
     window_id = opened.stdout.strip()
-    result = _run_layout_script(["minimize", window_id], layout_server, _sandbox(tmp_path))
+    result = _run_layout_command(["minimize", window_id], layout_server, _sandbox(tmp_path))
 
     assert opened.returncode == 0, opened.stderr
     assert window_id.startswith("win-") and "for no client" in opened.stderr
@@ -153,7 +153,7 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
     everyone; the writes are announced to the client."""
     sandbox = _sandbox(tmp_path)
 
-    opened = _run_layout_script(["open", PIPELINE_STUB_APP_NAME], layout_server, sandbox)
+    opened = _run_layout_command(["open", PIPELINE_STUB_APP_NAME], layout_server, sandbox)
     assert opened.returncode == 0, f"stderr={opened.stderr!r}"
     window_id = opened.stdout.strip()
     assert window_id.startswith("win-")
@@ -165,7 +165,7 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
     ]
 
     # Opening the app again focuses the window already at its launch path rather than opening another.
-    focused = _run_layout_script(["open", PIPELINE_STUB_APP_NAME], layout_server, sandbox)
+    focused = _run_layout_command(["open", PIPELINE_STUB_APP_NAME], layout_server, sandbox)
     assert focused.returncode == 0, f"stderr={focused.stderr!r}"
     assert focused.stdout.strip() == window_id
     assert len(_windows(layout_server, sandbox)) == 1
@@ -182,18 +182,49 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
         ("maximize", [], (window_id, "MAXIMIZED", False)),
         ("place", ["--frame", "0.1,0.1,0.5,0.5"], (window_id, "NORMAL", False)),
     ):
-        result = _run_layout_script([verb, window_id, *extra], layout_server, sandbox)
+        result = _run_layout_command([verb, window_id, *extra], layout_server, sandbox)
         assert result.returncode == 0, f"{verb}: stderr={result.stderr!r}"
         assert placement_states() == [expected], verb
 
-    closed = _run_layout_script(["close", window_id], layout_server, sandbox)
+    closed = _run_layout_command(["close", window_id], layout_server, sandbox)
     assert closed.returncode == 0, f"stderr={closed.stderr!r}"
     assert _windows(layout_server, sandbox) == []
     types = [message["type"] for message in drain_messages(connected_client)]
     assert "desktops_updated" in types and "placements_updated" in types
     # Focusing what is gone is a 404 with the window named.
-    missing = _run_layout_script(["focus", window_id], layout_server, sandbox)
+    missing = _run_layout_command(["focus", window_id], layout_server, sandbox)
     assert missing.returncode == 1 and window_id in missing.stderr
+
+
+def test_show_raises_a_window_already_showing_the_page_and_moves_only_what_repoint_names(
+    layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
+) -> None:
+    """``show`` opens a window only when none shows the page: a second ``show`` of the page, or of another page
+    that names it with ``--showing``, raises the same window; ``--repoint`` lets it move that window, and without
+    it another page gets a window of its own."""
+    sandbox = _sandbox(tmp_path)
+
+    def show(*argv: str) -> subprocess.CompletedProcess[str]:
+        result = _run_layout_command(["show", PIPELINE_STUB_APP_NAME, *argv], layout_server, sandbox)
+        assert result.returncode == 0, f"stderr={result.stderr!r}"
+        return result
+
+    first = show("--path", "/a")
+    window_id = first.stdout.strip()
+    assert first.stderr.startswith(f"opened window {window_id} ({PIPELINE_STUB_APP_NAME} at /a)")
+
+    assert show("--path", "/a").stdout.strip() == window_id
+    showing = show("--path", "/b", "--showing", "/a")
+    assert showing.stdout.strip() == window_id and showing.stderr.startswith("raised window")
+    assert [window["path"] for window in _windows(layout_server, sandbox)] == ["/a"]
+
+    repointed = show("--path", "/b", "--repoint", "/a")
+    assert repointed.stdout.strip() == window_id and repointed.stderr.startswith("navigated window")
+    assert [window["path"] for window in _windows(layout_server, sandbox)] == ["/b"]
+
+    elsewhere = show("--path", "/c")
+    assert elsewhere.stdout.strip() != window_id
+    assert [window["path"] for window in _windows(layout_server, sandbox)] == ["/b", "/c"]
 
 
 def test_open_at_a_path_names_the_page_and_self_names_the_callers_window(
@@ -205,24 +236,24 @@ def test_open_at_a_path_names_the_page_and_self_names_the_callers_window(
     sandbox = _sandbox(tmp_path)
     own_path = f"/?chat={_AGENT_ID}"
 
-    opened = _run_layout_script(["open", PIPELINE_SEEDED_APP_NAME, "--path", own_path], layout_server, sandbox)
+    opened = _run_layout_command(["open", PIPELINE_SEEDED_APP_NAME, "--path", own_path], layout_server, sandbox)
     assert opened.returncode == 0, f"stderr={opened.stderr!r}"
     own_window_id = opened.stdout.strip()
     (window,) = _windows(layout_server, sandbox)
     assert window["path"] == own_path
 
-    focused = _run_layout_script(["focus", "self"], layout_server, sandbox)
+    focused = _run_layout_command(["focus", "self"], layout_server, sandbox)
     assert focused.returncode == 0, f"stderr={focused.stderr!r}"
     assert f"focused window {own_window_id}" in focused.stderr
 
-    navigated = _run_layout_script(["navigate", "self", "/?chat=other"], layout_server, sandbox)
+    navigated = _run_layout_command(["navigate", "self", "/?chat=other"], layout_server, sandbox)
     assert navigated.returncode == 0, f"stderr={navigated.stderr!r}"
     assert [window["path"] for window in _windows(layout_server, sandbox)] == ["/?chat=other"]
     # With its marker gone from every path, ``self`` names nothing.
-    gone = _run_layout_script(["focus", "self"], layout_server, sandbox)
+    gone = _run_layout_command(["focus", "self"], layout_server, sandbox)
     assert gone.returncode == 1 and "self" in gone.stderr
 
-    by_app = _run_layout_script(["maximize", PIPELINE_SEEDED_APP_NAME], layout_server, sandbox)
+    by_app = _run_layout_command(["maximize", PIPELINE_SEEDED_APP_NAME], layout_server, sandbox)
     assert by_app.returncode == 0, f"stderr={by_app.stderr!r}"
     assert f"maximized window {own_window_id}" in by_app.stderr
 
@@ -244,8 +275,8 @@ def test_retired_spellings_and_verbs_are_refused_before_they_reach_the_shell(
     argv: list[str],
     expected_hint: str,
 ) -> None:
-    """A retired form fails at the script, naming what to use instead, and opens nothing."""
-    result = _run_layout_script(argv, layout_server, _sandbox(tmp_path))
+    """A retired form fails at the command, naming what to use instead, and opens nothing."""
+    result = _run_layout_command(argv, layout_server, _sandbox(tmp_path))
 
     assert result.returncode != 0
     assert expected_hint in result.stderr
@@ -256,7 +287,7 @@ def test_a_url_needs_the_browser_app(
     layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
 ) -> None:
     """``open https://...`` is the browser's ``new`` launch path, so with no browser registered it fails naming it."""
-    result = _run_layout_script(["open", "https://example.com/"], layout_server, _sandbox(tmp_path))
+    result = _run_layout_command(["open", "https://example.com/"], layout_server, _sandbox(tmp_path))
 
     assert result.returncode != 0 and "browser" in result.stderr
     assert _windows(layout_server, _sandbox(tmp_path)) == []
@@ -266,7 +297,7 @@ def test_unknown_app_is_refused_by_name(
     layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
 ) -> None:
     """``open nowhere`` names the missing registration and opens nothing."""
-    result = _run_layout_script(["open", "nowhere"], layout_server, _sandbox(tmp_path))
+    result = _run_layout_command(["open", "nowhere"], layout_server, _sandbox(tmp_path))
 
     assert result.returncode != 0
     assert "nowhere" in result.stderr
@@ -280,11 +311,11 @@ def test_shortcuts_are_set_moved_and_removed_on_a_desktop(
     cell, and ``shortcut remove`` takes it off."""
     sandbox = _sandbox(tmp_path)
 
-    set_result = _run_layout_script(
+    set_result = _run_layout_command(
         ["shortcut", "set", PIPELINE_STUB_APP_NAME, "open", "--mode", "new", "--cell", "1,0"], layout_server, sandbox
     )
     assert set_result.returncode == 0, f"stderr={set_result.stderr!r}"
-    listed = _run_layout_script(["shortcuts", "--json"], layout_server, sandbox)
+    listed = _run_layout_command(["shortcuts", "--json"], layout_server, sandbox)
     assert listed.returncode == 0, f"stderr={listed.stderr!r}"
     shortcuts = json.loads(listed.stdout)
     assert shortcuts["desktop"] == PIPELINE_DEFAULT_DESKTOP_ID
@@ -292,7 +323,7 @@ def test_shortcuts_are_set_moved_and_removed_on_a_desktop(
     assert rows[(PIPELINE_STUB_APP_NAME, "open")]["mode"] == "new"
     assert rows[(PIPELINE_STUB_APP_NAME, "open")]["cell"] == {"column": 1, "row": 0}
 
-    moved = _run_layout_script(
+    moved = _run_layout_command(
         ["shortcut", "move", PIPELINE_STUB_APP_NAME, "open", "--cell", "2,1"], layout_server, sandbox
     )
     assert moved.returncode == 0, f"stderr={moved.stderr!r}"
@@ -302,19 +333,19 @@ def test_shortcuts_are_set_moved_and_removed_on_a_desktop(
     ]
     assert shortcut["cell"] == {"column": 2, "row": 1}
 
-    removed = _run_layout_script(["shortcut", "remove", PIPELINE_STUB_APP_NAME, "open"], layout_server, sandbox)
+    removed = _run_layout_command(["shortcut", "remove", PIPELINE_STUB_APP_NAME, "open"], layout_server, sandbox)
     assert removed.returncode == 0, f"stderr={removed.stderr!r}"
-    listed_after = _run_layout_script(["shortcuts", "--json"], layout_server, sandbox)
+    listed_after = _run_layout_command(["shortcuts", "--json"], layout_server, sandbox)
     assert (PIPELINE_STUB_APP_NAME, "open") not in {
         (row["target"]["app"], row["target"]["launch"]) for row in json.loads(listed_after.stdout)["shortcuts"]
     }
 
 
-def test_script_runs_without_a_registry_file_for_read_ops(layout_server: PipelineHarness, tmp_path: Path) -> None:
+def test_the_command_runs_without_a_registry_file_for_read_ops(layout_server: PipelineHarness, tmp_path: Path) -> None:
     """``desktops --json`` needs no registry on disk: the shell answers it."""
     sandbox = _sandbox(tmp_path)
     result = subprocess.run(
-        [sys.executable, str(_LAYOUT_SCRIPT), "desktops", "--json"],
+        [str(_LAYOUT_COMMAND), "desktops", "--json"],
         capture_output=True,
         text=True,
         cwd=str(sandbox),

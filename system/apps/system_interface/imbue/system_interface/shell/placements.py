@@ -17,6 +17,9 @@ from typing import Final
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import WindowId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -30,9 +33,6 @@ from imbue.system_interface.shell.desktop_document import drop_stale_placements
 from imbue.system_interface.shell.desktop_document import is_same_layout
 from imbue.system_interface.shell.desktop_document import without_placement
 from imbue.system_interface.shell.errors import StalePlacementsSaveError
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
-from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic

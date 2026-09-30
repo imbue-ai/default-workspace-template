@@ -14,6 +14,8 @@ from app_manifest.primitives import AppName
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -24,8 +26,6 @@ from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.errors import ClientNotFoundError
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document

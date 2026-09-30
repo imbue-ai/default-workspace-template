@@ -22,11 +22,11 @@ from app_manifest.registry import RegistryRow
 from loguru import logger
 from pydantic import Field
 from pydantic import model_validator
+from workspace_layout.primitives import ClientId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import InvalidShellValueError
-from imbue.system_interface.shell.primitives import ClientId
 
 # A handler is one loopback request to an app that answers once it has asked the shell for what it wants; past the
 # first threshold it is suspicious, past the second it is broken.

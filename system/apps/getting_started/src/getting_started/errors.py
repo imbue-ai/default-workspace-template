@@ -12,7 +12,3 @@ class TemplateCatalogFormatError(GettingStartedError, ValueError):
 
 class ServeError(GettingStartedError):
     """The page server cannot be started or stopped as asked."""
-
-
-class ShellAnswerError(GettingStartedError, ValueError):
-    """The shell answered a request with a body of another shape than the contract gives it."""

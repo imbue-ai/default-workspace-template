@@ -11,6 +11,7 @@ from app_manifest.primitives import AppUrl
 from app_manifest.registry import register_app
 from flask import Flask
 from loguru import logger as _loguru_logger
+from workspace_layout.client import DisconnectedShell
 
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import reconcile
@@ -35,9 +36,7 @@ from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
 from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
-from imbue.chat.shell_client import DisconnectedShell
-from imbue.chat.shell_client import ShellLayoutClient
-from imbue.chat.shell_client import shell_base_url
+from imbue.chat.shell_client import build_live_chat_shell_client
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -122,7 +121,7 @@ def build_production_state(
     broadcaster = WebSocketBroadcaster()
     data_dir = config.chat_data_dir
     # The one client of the shell's layout, shared by the auto-open reactor and the routes; a secondary has none.
-    shell = DisconnectedShell() if is_secondary else ShellLayoutClient(shell_url=shell_base_url())
+    shell = DisconnectedShell() if is_secondary else build_live_chat_shell_client()
     chat_settings = ChatSettingsStore(path=data_dir / SETTINGS_FILENAME)
     chat_records_root = data_dir / CHAT_RECORDS_DIRNAME
     agent_manager = AgentManager.build(

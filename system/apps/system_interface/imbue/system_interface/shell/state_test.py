@@ -14,6 +14,9 @@ import httpx
 import pytest
 from app_manifest.primitives import AppName
 from pydantic import ValidationError
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import WindowId
 
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
@@ -29,10 +32,7 @@ from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
-from imbue.system_interface.shell.primitives import ClientId
-from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import UserId
-from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.state import ShellState

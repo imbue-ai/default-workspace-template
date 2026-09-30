@@ -185,9 +185,9 @@ def test_rewrite_legacy_references_rewrites_the_old_safety_net_symlinks() -> Non
 
 def test_rewrite_legacy_references_keeps_directory_prefixes_intact() -> None:
     rewritten, _ = migrate_workspace.rewrite_legacy_references(
-        "python3 scripts/layout.py open\nDATA_DIR = Path('runtime/memory')\n"
+        "python3 scripts/forward_port.py --list\nDATA_DIR = Path('runtime/memory')\n"
     )
-    assert "python3 system/scripts/layout.py open" in rewritten
+    assert "python3 system/scripts/forward_port.py --list" in rewritten
     # A multi-segment legacy dir is rewritten with or without a trailing slash,
     # since code most often names it without one.
     assert "Path('data/memories')" in rewritten
