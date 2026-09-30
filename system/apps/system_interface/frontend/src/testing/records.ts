@@ -162,6 +162,7 @@ export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}):
     last_seen: "2026-09-19T00:00:00Z",
     is_connected: true,
     entries: {},
+    shown_history: [],
     ...overrides,
   };
 }

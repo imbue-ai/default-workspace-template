@@ -24,7 +24,7 @@ export const PINNED_ENTRY_ATTRIBUTE = "data-pinned-entry";
 /** Marks an element (a menu button) whose press must not start a drag. */
 export const NO_DRAG_ATTRIBUTE = "data-no-drag";
 
-const LONG_PRESS_MS = 500;
+export const LONG_PRESS_MS = 500;
 const PRIMARY_BUTTON = 0;
 
 /** What a press landed on, as the data attributes name it. */

@@ -55,9 +55,8 @@ async function mountApp(options: { isDetached?: boolean; soloWindowId?: string }
     api,
     socket,
     metrics: themeMetricsRecord(),
-    modes: { isCompact: false, isTouch: false },
+    modes: { isPhone: false, isTouch: false },
     redraw: () => m.redraw(),
-    notify: () => undefined,
     reloadInterface: () => undefined,
     soloWindowId: options.soloWindowId ?? null,
   });

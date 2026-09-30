@@ -198,7 +198,13 @@ export interface ClientRecord {
   readonly is_connected: boolean;
   /** The client's presentation of each pinned entry, by app name. */
   readonly entries: Readonly<Record<string, EntryPresentation>>;
+  /** What the client's phone layout has shown (plan-phone-interface.md), most recent last: window ids, and
+   *  ``SHOWN_HOME`` for the home grid. */
+  readonly shown_history: readonly string[];
 }
+
+/** The ``shown_history`` entry that stands for the phone's home grid rather than a window. */
+export const SHOWN_HOME = "home";
 
 /** What the shell answers when this client's page arrives (contracts.md section 5.5): where it lands, the desktop
  *  seeded for a first-time user, and the name of the user's earlier desktop when it had been deleted meanwhile. */
@@ -221,6 +227,8 @@ export interface Inventory {
   readonly desktops: readonly Desktop[];
   readonly apps: readonly AppRecord[];
   readonly clients: readonly ClientRecord[];
+  /** What the workspace is called: the phone's home grid names it. */
+  readonly workspace_name: string;
 }
 
 /** One connected user as the shell serializes it (one entry per user, however many tabs): the identity record
@@ -527,6 +535,9 @@ export function parseClientRecord(raw: unknown): ClientRecord {
     last_seen: asString(record.last_seen, "client.last_seen"),
     is_connected: record.is_connected === true,
     entries: parseEntries(record.entries),
+    shown_history: asArray(record.shown_history ?? [], "client.shown_history").map((entry, index) =>
+      asString(entry, `client.shown_history[${index}]`),
+    ),
   };
 }
 
@@ -603,6 +614,7 @@ export function parseInventory(raw: unknown): Inventory {
     desktops: parseDesktops(record.desktops),
     apps: parseAppRecords(record.apps),
     clients: parseClientRecords(record.clients),
+    workspace_name: asString(record.workspace_name ?? "", "inventory.workspace_name"),
   };
 }
 

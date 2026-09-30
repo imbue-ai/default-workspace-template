@@ -25,7 +25,7 @@ const chatty = chatLikeAppRecord("chatty");
 const terminal = appRecord("terminal", { launch_paths: [launchPathRecord({ id: "new", label: "New Terminal" })] });
 
 function stateWithWindows(): DesktopState {
-  let next = initialDesktopState("client-1", { isCompact: false, isTouch: false });
+  let next = initialDesktopState("client-1", { isPhone: false, isTouch: false });
   next = reduceDesktopState(next, { type: "apps_updated", apps: [terminal, chatty] });
   next = reduceDesktopState(next, {
     type: "desktops_updated",
@@ -43,7 +43,6 @@ function render(
   const attrs: LauncherMenuAttrs = {
     menu,
     highlightIndex: defaultHighlightIndex(menu.rows),
-    isCompact: false,
     isApplePlatform: false,
     bottomOffsetPx: 0,
     onRun: vi.fn(),

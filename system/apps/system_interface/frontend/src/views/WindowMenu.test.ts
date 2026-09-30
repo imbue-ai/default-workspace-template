@@ -67,7 +67,7 @@ describe("windowMenuRows", () => {
     ).toEqual(["size", "|", "close"]);
   });
 
-  it("drops Move and resize where the caller gives none (compact, where every window is maximized)", () => {
+  it("drops Move and resize where the caller gives none (a window since closed)", () => {
     expect(
       keysOf(
         windowMenuRows(appRecord("docs"), {
@@ -131,17 +131,14 @@ describe("taskbarEntryMenuRows", () => {
     const setMode = vi.fn();
     const setStyle = vi.fn();
     const changeAvatar = vi.fn();
-    const pinnedEntries = (look: EntryLook, options: { isMinimized?: boolean; isCompact?: boolean } = {}) =>
-      taskbarEntryMenuRows(
-        {
-          ...actions,
-          close: vi.fn(),
-          isMinimized: options.isMinimized ?? false,
-          isMaximized: false,
-          presentation: { look, setMode, setStyle, changeAvatar },
-        },
-        options.isCompact ?? false,
-      );
+    const pinnedEntries = (look: EntryLook, options: { isMinimized?: boolean } = {}) =>
+      taskbarEntryMenuRows({
+        ...actions,
+        close: vi.fn(),
+        isMinimized: options.isMinimized ?? false,
+        isMaximized: false,
+        presentation: { look, setMode, setStyle, changeAvatar },
+      });
     const inBar = pinnedEntries(
       { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null },
       { isMinimized: true },
@@ -158,24 +155,19 @@ describe("taskbarEntryMenuRows", () => {
     const floating = pinnedEntries({ mode: "floating", style: "plain", declaredStyle: "avatar", position: null });
     expect(keysOf(floating)).toEqual(["minimize", "maximize", "|", "move-to-taskbar", "style-avatar", "|", "close"]);
     expect(rowOf(floating, "style-avatar").label).toBe("Show as avatar");
-    // A pin declaring no style offers no style row; compact mode offers no float row either.
+    // A pin declaring no style offers no style row.
     const plainPin = pinnedEntries({ mode: "bar", style: "plain", declaredStyle: "plain", position: null });
     expect(keysOf(plainPin)).toEqual(["minimize", "maximize", "|", "float", "|", "close"]);
-    const compact = pinnedEntries(
-      { mode: "floating", style: "plain", declaredStyle: "plain", position: null },
-      { isCompact: true },
-    );
-    expect(keysOf(compact)).toEqual(["minimize", "|", "close"]);
   });
 
   it("offers Restore or Minimize, Maximize or Restore size, and Close", () => {
-    expect(keysOf(taskbarEntryMenuRows({ ...actions, isMinimized: true, isMaximized: false }, false))).toEqual([
+    expect(keysOf(taskbarEntryMenuRows({ ...actions, isMinimized: true, isMaximized: false }))).toEqual([
       "restore",
       "maximize",
       "|",
       "close",
     ]);
-    expect(keysOf(taskbarEntryMenuRows({ ...actions, isMinimized: false, isMaximized: true }, false))).toEqual([
+    expect(keysOf(taskbarEntryMenuRows({ ...actions, isMinimized: false, isMaximized: true }))).toEqual([
       "minimize",
       "unmaximize",
       "|",
@@ -185,26 +177,23 @@ describe("taskbarEntryMenuRows", () => {
 
   it("offers Close for a pinned window's entry too (the caller minimizes it)", () => {
     expect(
-      keysOf(taskbarEntryMenuRows({ ...actions, close: vi.fn(), isMinimized: true, isMaximized: false }, false)),
+      keysOf(taskbarEntryMenuRows({ ...actions, close: vi.fn(), isMinimized: true, isMaximized: false })),
     ).toEqual(["restore", "maximize", "|", "close"]);
-  });
-
-  it("drops the maximize verbs in compact mode, where every window is maximized", () => {
-    expect(keysOf(taskbarEntryMenuRows({ ...actions, isMinimized: false, isMaximized: false }, true))).toEqual([
-      "minimize",
-      "|",
-      "close",
-    ]);
   });
 
   it("offers a pulled-out window's entry Show, Hide placeholder, and Bring back in place of the arrangement verbs", () => {
     const show = vi.fn();
     const minimize = vi.fn();
     const bringBack = vi.fn();
-    const rows = taskbarEntryMenuRows(
-      { ...actions, isDetached: true, show, minimize, bringBack, isMinimized: false, isMaximized: false },
-      false,
-    );
+    const rows = taskbarEntryMenuRows({
+      ...actions,
+      isDetached: true,
+      show,
+      minimize,
+      bringBack,
+      isMinimized: false,
+      isMaximized: false,
+    });
     expect(keysOf(rows)).toEqual(["show", "hide-ghost", "bring-back", "|", "close"]);
     rowOf(rows, "show").onSelect();
     rowOf(rows, "hide-ghost").onSelect();
@@ -218,10 +207,13 @@ describe("taskbarEntryMenuRows", () => {
 
   it("offers Show placeholder instead once a pulled-out window's ghost is hidden", () => {
     const showGhost = vi.fn();
-    const rows = taskbarEntryMenuRows(
-      { ...actions, isDetached: true, showGhost, isMinimized: true, isMaximized: false },
-      false,
-    );
+    const rows = taskbarEntryMenuRows({
+      ...actions,
+      isDetached: true,
+      showGhost,
+      isMinimized: true,
+      isMaximized: false,
+    });
     expect(keysOf(rows)).toEqual(["show", "show-ghost", "bring-back", "|", "close"]);
     rowOf(rows, "show-ghost").onSelect();
     expect(showGhost).toHaveBeenCalledTimes(1);

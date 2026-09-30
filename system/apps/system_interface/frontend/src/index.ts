@@ -90,7 +90,6 @@ function bootstrap(): void {
           metrics,
           modes,
           redraw: () => m.redraw(),
-          notify: (message) => alert(message),
           reloadInterface,
           popOut: popOutBridge,
           soloWindowId,
@@ -112,6 +111,10 @@ function bootstrap(): void {
   // shell side of the app contract.
   initEmbedderRelay();
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, () => void desktopStore.closeFocusedWindow());
+  // A phone's page sleeps while it is out of sight; coming back, the store reads the shell's word again.
+  document.addEventListener("visibilitychange", () =>
+    desktopStore.onVisibilityChange(document.visibilityState === "visible"),
+  );
   // Every message the chrome sends also goes, its payload unread, to the apps registered for its type.
   setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message));
   // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.

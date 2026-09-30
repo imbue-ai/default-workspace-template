@@ -1,7 +1,8 @@
 /**
  * The desktop's state and the reducers over it (desktop-interface plan section 6.2): one frozen
  * record of what this client knows (the apps, the desktops, the active desktop, this client's
- * layout of it, the render modes, this client's presentation of each pinned entry, the avatar),
+ * layout of it, the render modes, this client's presentation of each pinned entry, the avatar,
+ * and what the phone layout shows),
  * and every verb of plan section 4 as a pure ``(state, event) -> state`` step. The store applies
  * these, schedules redraws, and saves when a step marked the layout dirty; nothing here reads the
  * DOM or the network.
@@ -23,7 +24,7 @@ import type {
   WindowRecord,
   WindowState,
 } from "../model/records";
-import { EMPTY_LAYOUT } from "../model/records";
+import { EMPTY_LAYOUT, SHOWN_HOME } from "../model/records";
 import type { UpdateNotice } from "../model/UpdateNotice";
 import {
   effectivePlacements,
@@ -63,7 +64,30 @@ export interface DesktopState {
   readonly avatar: AvatarState;
   /** The rollback point the last update-app careful-flow apply kept, until a person closes its notice. */
   readonly updateNotice: UpdateNotice | null;
+  /** What the workspace is called, as the inventory names it. */
+  readonly workspaceName: string;
+  /** What the phone layout shows and has shown (plan-phone-interface.md). */
+  readonly phone: PhoneState;
 }
+
+/** What the phone layout puts on the screen: the home grid, or one window's page. */
+export type PhoneShown = { readonly kind: "home" } | { readonly kind: "window"; readonly windowId: string };
+
+/** The phone's sheets: the windows sheet the pill opens, and the start sheet the plus opens. */
+export type PhoneSheet = "windows" | "start";
+
+export interface PhoneState {
+  /** Null until the phone has landed (the inventory has not answered, or the desktop layout is on screen). */
+  readonly shown: PhoneShown | null;
+  /** What this client recorded showing, most recent last: window ids and ``SHOWN_HOME``, each at most once. */
+  readonly history: readonly string[];
+  readonly sheet: PhoneSheet | null;
+}
+
+/** The most entries the shown history keeps, as the shell bounds it. */
+export const SHOWN_HISTORY_LIMIT = 20;
+
+export const INITIAL_PHONE_STATE: PhoneState = { shown: null, history: [], sheet: null };
 
 /** The avatar as this window draws it: the workspace's design, the design a failed load falls back to, and
  *  the last status the shell pushed (stale and idle until one arrives). */
@@ -98,6 +122,8 @@ export function initialDesktopState(clientId: string, modes: RenderModes): Deskt
     entries: {},
     avatar: INITIAL_AVATAR_STATE,
     updateNotice: null,
+    workspaceName: "",
+    phone: INITIAL_PHONE_STATE,
   };
 }
 
@@ -131,6 +157,8 @@ export type DesktopEvent =
       readonly desktopId: string;
       readonly window: WindowRecord;
       readonly isNew: boolean;
+      /** The shell placed a new window out of sight for this client (the phone's opens). */
+      readonly isMinimized: boolean;
     }
   | { readonly type: "window_closed_here"; readonly desktopId: string; readonly windowId: string }
   | { readonly type: "window_location_reported"; readonly desktopId: string; readonly window: WindowRecord }
@@ -142,7 +170,13 @@ export type DesktopEvent =
   /** The workspace's design, as the catalog or an ``avatar_selection_changed`` says. */
   | { readonly type: "avatar_selection_updated"; readonly design: string; readonly defaultDesign: string | null }
   /** The ``update_notice_changed`` the shell pushed (and its seed on connect); null once the record is cleared. */
-  | { readonly type: "update_notice_changed"; readonly notice: UpdateNotice | null };
+  | { readonly type: "update_notice_changed"; readonly notice: UpdateNotice | null }
+  | { readonly type: "workspace_name_updated"; readonly workspaceName: string }
+  /** The phone shows the home grid or a window, which goes to the front of its history. */
+  | { readonly type: "phone_shown"; readonly shown: PhoneShown }
+  /** The history this client's record carries, as the shell answered it. */
+  | { readonly type: "phone_history_loaded"; readonly history: readonly string[] }
+  | { readonly type: "phone_sheet_set"; readonly sheet: PhoneSheet | null };
 
 /** Whether a gesture has changed the layout since the last save wrote it. */
 export function isLayoutDirty(state: DesktopState): boolean {
@@ -181,6 +215,7 @@ function withWindowOpenedHere(
   desktopId: string,
   window: WindowRecord,
   isNew: boolean,
+  isMinimized: boolean,
 ): DesktopState {
   const desktops = state.desktops.map((desktop) => {
     if (desktop.id !== desktopId || desktop.windows.some((candidate) => candidate.id === window.id)) return desktop;
@@ -192,9 +227,28 @@ function withWindowOpenedHere(
   // it is not counted as a gesture to save. When the broadcast's refetch landed before the answer,
   // the layout already holds the stored placement, which is kept rather than cascaded again.
   const isPlaced = state.layout.placements.some((placement) => placement.window_id === window.id);
+  if (isMinimized) {
+    if (!isNew || isPlaced) return withWindow;
+    return { ...withWindow, layout: withWindowMinimized(withWindowPlacedOnOpen(state.layout, window.id), window.id) };
+  }
   const layout =
     isNew && !isPlaced ? withWindowPlacedOnOpen(state.layout, window.id) : withWindowRaised(state.layout, window.id);
   return { ...withWindow, layout };
+}
+
+/** ``entry`` moved to the end of ``history`` (an entry is recorded once), keeping the newest ``SHOWN_HISTORY_LIMIT``. */
+export function withShownRecorded(history: readonly string[], entry: string): string[] {
+  return [...history.filter((candidate) => candidate !== entry), entry].slice(-SHOWN_HISTORY_LIMIT);
+}
+
+/** The ``shown_history`` spelling of what the phone shows. */
+export function shownHistoryEntry(shown: PhoneShown): string {
+  return shown.kind === "home" ? SHOWN_HOME : shown.windowId;
+}
+
+function withPhoneShown(state: DesktopState, shown: PhoneShown): DesktopState {
+  const history = withShownRecorded(state.phone.history, shownHistoryEntry(shown));
+  return { ...state, phone: { ...state.phone, shown, history, sheet: null } };
 }
 
 function withWindowClosedHere(state: DesktopState, desktopId: string, windowId: string): DesktopState {
@@ -272,7 +326,7 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
     case "window_reattached":
       return withLayoutEdited(state, withWindowReattached(state.layout, event.windowId, event.frame));
     case "window_opened_here":
-      return withWindowOpenedHere(state, event.desktopId, event.window, event.isNew);
+      return withWindowOpenedHere(state, event.desktopId, event.window, event.isNew, event.isMinimized);
     case "window_closed_here":
       return withWindowClosedHere(state, event.desktopId, event.windowId);
     case "window_location_reported":
@@ -294,6 +348,15 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
       };
     case "update_notice_changed":
       return { ...state, updateNotice: event.notice };
+    case "workspace_name_updated":
+      return { ...state, workspaceName: event.workspaceName };
+    case "phone_shown":
+      return withPhoneShown(state, event.shown);
+    case "phone_history_loaded":
+      return { ...state, phone: { ...state.phone, history: event.history.slice(-SHOWN_HISTORY_LIMIT) } };
+    case "phone_sheet_set":
+      if (state.phone.sheet === event.sheet) return state;
+      return { ...state, phone: { ...state.phone, sheet: event.sheet } };
   }
 }
 
@@ -359,11 +422,6 @@ export function activePlacements(state: DesktopState): Placement[] {
 
 export function activeFocusedWindowId(state: DesktopState): string | null {
   return focusedWindowId(activePlacements(state));
-}
-
-/** The state a placement renders in: maximized whatever it says while compact (never rewritten). */
-export function renderedState(placement: Placement, modes: RenderModes): WindowState {
-  return modes.isCompact ? "MAXIMIZED" : placement.state;
 }
 
 /** The title a window shows: what its page reported, else its app's display name. */
@@ -490,18 +548,17 @@ export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
   });
 }
 
-/** Whether an entry is drawn floating right now: its mode says so, and the desktop is not compact (which
- *  renders every entry in the bar without rewriting the mode). */
-export function isEntryFloating(entry: TaskbarEntry, modes: RenderModes): boolean {
-  return entry.look !== null && entry.look.mode === "floating" && !modes.isCompact;
+/** Whether an entry is drawn floating: its mode says so. */
+export function isEntryFloating(entry: TaskbarEntry): boolean {
+  return entry.look !== null && entry.look.mode === "floating";
 }
 
 /** The entries the bar draws, in opening order. */
 export function barEntries(state: DesktopState): TaskbarEntry[] {
-  return taskbarEntries(state).filter((entry) => !isEntryFloating(entry, state.modes));
+  return taskbarEntries(state).filter((entry) => !isEntryFloating(entry));
 }
 
 /** The entries drawn floating above the windows. */
 export function floatingEntries(state: DesktopState): TaskbarEntry[] {
-  return taskbarEntries(state).filter((entry) => isEntryFloating(entry, state.modes));
+  return taskbarEntries(state).filter((entry) => isEntryFloating(entry));
 }

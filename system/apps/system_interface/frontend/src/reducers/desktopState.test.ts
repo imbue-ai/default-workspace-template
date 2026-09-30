@@ -23,13 +23,12 @@ import {
   isLayoutDirty,
   pinnedWindowOf,
   reduceDesktopState,
-  renderedState,
   taskbarEntries,
   windowTitle,
 } from "./desktopState";
 import type { DesktopEvent, DesktopState } from "./desktopState";
 
-const MODES = { isCompact: false, isTouch: false };
+const MODES = { isPhone: false, isTouch: false };
 const home = desktopRecord("home", {
   windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-2", "notes", "/b", { is_pinned: true })],
 });
@@ -159,6 +158,7 @@ describe("opens and closes this client made", () => {
       desktopId: "home",
       window: opened,
       isNew: true,
+      isMinimized: false,
     });
     expect(state.desktops[0].windows.map((window) => window.id)).toEqual(["win-1", "win-2", "win-3"]);
     const placements = activePlacements(state);
@@ -185,6 +185,7 @@ describe("opens and closes this client made", () => {
       desktopId: "home",
       window: opened,
       isNew: true,
+      isMinimized: false,
     });
     expect(state.layout).toBe(before.layout);
     expect(isLayoutDirty(state)).toBe(false);
@@ -196,6 +197,7 @@ describe("opens and closes this client made", () => {
       desktopId: "home",
       window: home.windows[1],
       isNew: false,
+      isMinimized: false,
     });
     expect(state.desktops[0].windows).toHaveLength(2);
     expect(activeFocusedWindowId(state)).toBe("win-2");
@@ -324,16 +326,6 @@ describe("pinned entries", () => {
     });
   });
 
-  it("render every entry in the bar while compact without rewriting the mode", () => {
-    const compact = reduceDesktopState(withPinned(), {
-      type: "render_modes_changed",
-      modes: { isCompact: true, isTouch: true },
-    });
-    expect(floatingEntries(compact)).toEqual([]);
-    expect(barEntries(compact).map((entry) => entry.window.id)).toEqual(["win-1", "win-2", "win-9"]);
-    expect(entryLook(compact, pinned, pinnedApp)?.mode).toBe("floating");
-  });
-
   it("find the draft target in a pinned app's launch path declaring a draft param, and none otherwise", () => {
     const draftPath = launchPathRecord({
       id: "draft",
@@ -361,11 +353,7 @@ describe("pinned entries", () => {
 });
 
 describe("selectors", () => {
-  it("render every window maximized while compact, and title windows after their page or their app", () => {
-    expect(renderedState(placementRecord("win-1", { state: "NORMAL" }), { isCompact: true, isTouch: false })).toBe(
-      "MAXIMIZED",
-    );
-    expect(renderedState(placementRecord("win-1", { state: "SNAPPED_LEFT" }), MODES)).toBe("SNAPPED_LEFT");
+  it("title windows after their page or their app", () => {
     expect(windowTitle(windowRecord("win-1", "docs", "/", { title: "Plan" }), appRecord("docs"))).toBe("Plan");
     expect(windowTitle(windowRecord("win-1", "docs", "/"), appRecord("docs"))).toBe("Docs");
     expect(windowTitle(windowRecord("win-1", "docs", "/"), undefined)).toBe("docs");
@@ -374,7 +362,7 @@ describe("selectors", () => {
   it("list the taskbar's entries in opening order with their focus and minimized marks", () => {
     const state = reduceDesktopState(loaded(), {
       type: "render_modes_changed",
-      modes: { isCompact: true, isTouch: true },
+      modes: { isPhone: false, isTouch: true },
     });
     expect(state.modes.isTouch).toBe(true);
     expect(

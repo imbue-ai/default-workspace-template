@@ -4,7 +4,8 @@
  * ``DesktopStore``. The App owns the transient interface state no record holds (which menu is
  * open, the launcher's query and highlight, the selected shortcut, the chooser and the designs it lists),
  * measures the backdrop for the store, binds the gesture source to the document, and hosts the
- * live-page layer, reconciling it after every redraw.
+ * live-page layer, reconciling it after every redraw. A phone-sized viewport gets the phone layout instead
+ * (plan-phone-interface.md), over the same store and the same live-page layer.
  */
 
 import m from "mithril";
@@ -12,7 +13,6 @@ import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import type { MenuAlign, MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
-import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
@@ -57,12 +57,14 @@ import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyDropStyle, applyLiftStyle } from "./ShortcutIcon";
 import { applyRectStyle } from "./pixelStyle";
 import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
+import { PhoneLayout, phoneMountPolicy } from "./phone/PhoneLayout";
 import { SoloView } from "./SoloView";
 import { Taskbar } from "./Taskbar";
+import { Toasts } from "./Toast";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
-import { taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
+import { openShareSettings, taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
 import { windowSizeRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
@@ -165,6 +167,8 @@ export function App(): m.Component<AppAttrs> {
   const travellingWindows = new Map<string, number>();
   let travelFrame: number | null = null;
   let detachGestures: (() => void) | null = null;
+  /** The root the gesture source is bound to: the layout's root changes when the phone layout comes or goes. */
+  let gestureRoot: HTMLElement | null = null;
   let uninstallContextMenu: (() => void) | null = null;
   let store: DesktopStore | null = null;
 
@@ -211,6 +215,14 @@ export function App(): m.Component<AppAttrs> {
     }
     openMenu = next;
     menu.open(anchor);
+  }
+
+  /** Bind the gesture source to the layout's root, again whenever the root is a new element. */
+  function bindGestures(current: DesktopStore, root: HTMLElement, gestures: GestureSource): void {
+    if (root === gestureRoot) return;
+    detachGestures?.();
+    gestureRoot = root;
+    detachGestures = gestures.attach(root, gestureListener(current, root));
   }
 
   function closeLauncher(): void {
@@ -390,11 +402,7 @@ export function App(): m.Component<AppAttrs> {
     const pinnedWindowIdOf = (app: string): string | null => pinnedWindowOf(current.getState(), app)?.id ?? null;
     return {
       thresholdPx: () => current.getMetrics().dragThreshold,
-      isDraggable: (binding) => {
-        if (binding.kind === "shortcut") return true;
-        if (binding.kind === "taskbar-entry") return false;
-        return !current.getState().modes.isCompact;
-      },
+      isDraggable: (binding) => binding.kind !== "taskbar-entry",
       // Inert for the whole press: the pixels before the threshold are spent beside the handle, often
       // over a neighbouring page, and a move the root cannot see is a move the threshold never counts.
       onPressStart: (binding) => {
@@ -522,12 +530,11 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
-  /** The zone grid's actions for a window, or null where there is nothing to choose: compact mode,
-   *  where every window renders maximized, and a window that has since been closed -- a hover menu
-   *  outlives its trigger, and placing a window that is gone writes a placement nothing owns. */
+  /** The zone grid's actions for a window, or null where there is nothing to choose: a window that has since
+   *  been closed -- a hover menu outlives its trigger, and placing a window that is gone writes a placement
+   *  nothing owns. */
   function sizeActionsOf(current: DesktopStore, windowId: string): WindowSizeActions | null {
     const state = current.getState();
-    if (state.modes.isCompact) return null;
     if (!activeDesktop(state)?.windows.some((candidate) => candidate.id === windowId)) return null;
     return {
       setState: (state) => current.setWindowState(windowId, state),
@@ -557,12 +564,9 @@ export function App(): m.Component<AppAttrs> {
     return windowMenuRows(app, {
       size: sizeActionsOf(current, windowId),
       onSized: () => menu.close(),
-      share:
-        app === undefined || app.critical
-          ? null
-          : () => sendToEmbedder(OPEN_SHARE_SETTINGS, { serviceName: app.name }),
+      share: app === undefined || app.critical ? null : () => openShareSettings(app),
       quit: app !== undefined && current.canStopApp(app) ? () => void current.quitApp(app.name) : null,
-      popOut: current.getCanPopOut() && !state.modes.isCompact ? () => void current.detachWindow(windowId) : null,
+      popOut: current.getCanPopOut() ? () => void current.detachWindow(windowId) : null,
       close: () => void current.closeOrMinimizeWindow(windowId),
     });
   }
@@ -573,31 +577,28 @@ export function App(): m.Component<AppAttrs> {
     if (window === undefined) return null;
     const placement = placementOf(state.layout, windowId);
     const look = entryLook(state, window, appByName(state, window.app));
-    return taskbarEntryMenuRows(
-      {
-        isMinimized: placement.is_minimized,
-        isMaximized: placement.state === "MAXIMIZED",
-        isDetached: placement.is_detached,
-        show: () => current.showDetachedWindow(windowId),
-        showGhost: () => current.showWindowGhost(windowId),
-        bringBack: () => void current.reattachWindow(windowId, null),
-        restore: () => current.restoreWindow(windowId),
-        minimize: () => current.minimizeWindow(windowId),
-        maximize: () => current.setWindowState(windowId, "MAXIMIZED"),
-        unmaximize: () => current.toggleMaximized(windowId),
-        close: () => void current.closeOrMinimizeWindow(windowId),
-        presentation:
-          look === null
-            ? null
-            : {
-                look,
-                setMode: (mode) => void current.setEntryMode(window.app, mode),
-                setStyle: (style) => void current.setEntryStyle(window.app, style),
-                changeAvatar: () => openAvatarChooser(current),
-              },
-      },
-      state.modes.isCompact,
-    );
+    return taskbarEntryMenuRows({
+      isMinimized: placement.is_minimized,
+      isMaximized: placement.state === "MAXIMIZED",
+      isDetached: placement.is_detached,
+      show: () => current.showDetachedWindow(windowId),
+      showGhost: () => current.showWindowGhost(windowId),
+      bringBack: () => void current.reattachWindow(windowId, null),
+      restore: () => current.restoreWindow(windowId),
+      minimize: () => current.minimizeWindow(windowId),
+      maximize: () => current.setWindowState(windowId, "MAXIMIZED"),
+      unmaximize: () => current.toggleMaximized(windowId),
+      close: () => void current.closeOrMinimizeWindow(windowId),
+      presentation:
+        look === null
+          ? null
+          : {
+              look,
+              setMode: (mode) => void current.setEntryMode(window.app, mode),
+              setStyle: (style) => void current.setEntryStyle(window.app, style),
+              changeAvatar: () => openAvatarChooser(current),
+            },
+    });
   }
 
   function rowsOfShortcutMenu(current: DesktopStore, opened: DesktopShortcut): MenuRow[] | null {
@@ -893,8 +894,7 @@ export function App(): m.Component<AppAttrs> {
       store = current;
       document.addEventListener("keydown", onDocumentKeyDown);
       document.addEventListener("pointerdown", onDocumentPointerDown, true);
-      const root = vnode.dom as HTMLElement;
-      detachGestures = vnode.attrs.gestures.attach(root, gestureListener(current, root));
+      bindGestures(current, vnode.dom as HTMLElement, vnode.attrs.gestures);
       // The element menu over the shell's own chrome (element-reference-menu plan section 6): what a right-click
       // the views do not handle themselves opens, drawn as the desktop's one menu. The shell is no frame's page:
       // its draft route is the store's, and a draft can always go.
@@ -903,12 +903,15 @@ export function App(): m.Component<AppAttrs> {
         isDraftAvailable: () => true,
         scope: (target) => shellReferenceScope(current, target.element),
         open: (rows, point) => {
+          // The phone has no element menu: a long press there is a tile's or the pill's.
+          if (current.isPhoneLayout()) return;
           openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));
           m.redraw();
         },
       });
     },
-    onupdate() {
+    onupdate(vnode) {
+      if (store !== null) bindGestures(store, vnode.dom as HTMLElement, vnode.attrs.gestures);
       // The chrome's word on a tear-out arrives between pointer moves (its window has the cursor by then), so
       // the dragged window is painted here too, hidden or shown as the store now has it. Its word can also end
       // the gesture, with no release for the pointer source to end it by, so the window it was dragging is
@@ -918,6 +921,7 @@ export function App(): m.Component<AppAttrs> {
       const windowToPaint = movingWindowId ?? draggedWindowId;
       if (store !== null && windowToPaint !== null) paintWindow(store, windowToPaint);
       draggedWindowId = movingWindowId;
+      pages?.setMountPolicy(store?.isPhoneLayout() === true ? phoneMountPolicy(store) : { kind: "all" });
       pages?.reconcile();
     },
     onremove() {
@@ -937,7 +941,7 @@ export function App(): m.Component<AppAttrs> {
       const soloWindowId = current.getSoloWindowId();
       if (soloWindowId !== null) {
         // A pulled-out window's own desktop window: that one window edge to edge, and the banners above it.
-        return m("div", { class: "app-layout flex h-screen flex-col bg-page" }, [
+        return m("div", { class: "app-layout flex h-dvh flex-col bg-page" }, [
           m(UpdateStalenessBanner),
           m(UpdateNoticeBanner, { store: current }),
           m(SoloView, {
@@ -949,7 +953,14 @@ export function App(): m.Component<AppAttrs> {
               observeBackdropSize(current, host);
             },
           }),
+          m(Toasts, { toasts: current.toasts.current(), bottomClass: "bottom-(--desk-toast-gap)" }),
         ]);
+      }
+      if (current.isPhoneLayout()) {
+        return m(PhoneLayout, {
+          store: current,
+          onPagesHostCreated: (host) => startPagesLayer(current, host, vnode.attrs),
+        });
       }
       const desktop: Desktop | null = activeDesktop(state);
       const placements = activePlacements(state);
@@ -973,7 +984,7 @@ export function App(): m.Component<AppAttrs> {
       return m(
         "div",
         {
-          class: "app-layout flex h-screen flex-col bg-page bg-cover bg-center bg-(image:--desk-default-wallpaper)",
+          class: "app-layout flex h-dvh flex-col bg-page bg-cover bg-center bg-(image:--desk-default-wallpaper)",
           style: wallpaperStyle,
         },
         [
@@ -1038,7 +1049,6 @@ export function App(): m.Component<AppAttrs> {
                 ? m(LauncherMenu, {
                     menu: launcher,
                     highlightIndex: launcherHighlightIndex(launcher.rows),
-                    isCompact: state.modes.isCompact,
                     isApplePlatform: isApplePlatform(),
                     bottomOffsetPx: launcherFieldRise,
                     onRun: (row) => runLauncherRow(current, row),
@@ -1056,7 +1066,6 @@ export function App(): m.Component<AppAttrs> {
             launcher: {
               query: launcherQuery,
               isOpen: isLauncherOpen,
-              isCompact: state.modes.isCompact,
               onOpen: () => current.openLauncher(),
               onClose: closeLauncher,
               onQuery: (query) => {
@@ -1095,6 +1104,10 @@ export function App(): m.Component<AppAttrs> {
             },
             onEntryClick,
             onEntryContextMenu,
+          }),
+          m(Toasts, {
+            toasts: current.toasts.current(),
+            bottomClass: "bottom-[calc(var(--desk-taskbar-height)+var(--desk-toast-gap))]",
           }),
           menuRows === null ? null : menu.view(menuRows),
           settingsDialog === null ? null : settingsDialogView(current, settingsDialog),

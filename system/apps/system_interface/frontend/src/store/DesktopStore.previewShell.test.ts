@@ -25,9 +25,8 @@ beforeEach(async () => {
     api,
     socket,
     metrics: themeMetricsRecord(),
-    modes: { isCompact: false, isTouch: false },
+    modes: { isPhone: false, isTouch: false },
     redraw: () => undefined,
-    notify: () => undefined,
     reloadInterface: () => undefined,
   });
   await store.start(NO_LINK);
