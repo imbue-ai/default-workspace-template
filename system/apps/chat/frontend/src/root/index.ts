@@ -24,16 +24,19 @@ import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCurs
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
+import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import {
   PendingIntakeGoneError,
   addChatsUpdatedListener,
   applyPendingIntake,
+  awaitingChatForEmptyList,
   createChat,
   discardPendingIntake,
   fetchPendingIntake,
   getChatById,
   getChats,
   getProvisionalChats,
+  hasReceivedChatList,
   initChats,
   launchChat,
   removeChatsUpdatedListener,
@@ -46,6 +49,7 @@ import {
   isProviderChooserOpen,
   loadAccountsWithRetry,
   openProviderChooser,
+  whenAccountsReadyToChoose,
 } from "../models/Providers";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { ChatRail } from "./ChatRail";
@@ -56,7 +60,8 @@ import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
-import { intakeTokenFromSearch, rootPathFor, selectionFromSearch } from "./selection";
+import { intakeTokenFromSearch, rootPathFor, selectionFromSearch, slotFill } from "./selection";
+import type { SlotFill } from "./selection";
 import { prependToComposer } from "../views/MessageInput";
 
 // The desktop shell's compact breakpoint (desktop-interface contracts.md section 11): under
@@ -105,14 +110,64 @@ function reportLocation(): void {
   connection?.location(path, title);
 }
 
-/** Show ``chatId`` (or nothing): the URL, the frame, the shell's location, and the unread mark follow. */
+// Whether a chat for the empty list is being asked for, so the list asks once.
+let isOpeningChatForEmptyList = false;
+// Paces asking again after a failure: the app refuses until it has read its agent list, and a list that is still
+// empty after that brings no push to ask again on (an unchanged list is not passed on).
+const emptyListChatBackoff = new ReconnectBackoff();
+
+/** The rail's rows in display order, most recent first. */
+function railRows(): ChatRow[] {
+  return groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats()), startedHere);
+}
+
+function slotFillFor(chatId: string | null): SlotFill {
+  return slotFill({
+    selectedChatId: chatId,
+    chatIds: railRows().map((row) => row.chatId),
+    isChatListKnown: hasReceivedChatList(),
+    isChoosing: pendingToken !== null || pendingPick !== null,
+    isCompact: compactQuery.matches,
+    isShown: isRootShown,
+  });
+}
+
+/** Show ``chatId``: the URL, the frame, the shell's location, and the unread mark follow. Asked to show nothing, the
+ *  root shows the most recent chat instead, or with no chats one awaiting its first send (``slotFill``). */
 function select(chatId: string | null): void {
-  selectedChatId = chatId;
-  history.replaceState(null, "", `${getBasePath()}${rootPathFor(chatId)}`);
-  pool?.show(chatId);
-  if (chatId !== null && isRootShown) markRead(chatId);
+  const fill = slotFillFor(chatId);
+  const shown = fill.kind === "select" ? fill.chatId : chatId;
+  selectedChatId = shown;
+  history.replaceState(null, "", `${getBasePath()}${rootPathFor(shown)}`);
+  pool?.show(shown);
+  if (shown !== null && isRootShown) markRead(shown);
   reportLocation();
   m.redraw();
+  if (fill.kind === "open_new") openChatForEmptyList();
+}
+
+/** Fill an empty slot now that something it depends on changed (the chat list arrived, the root came on screen, the
+ *  layout left the phone width). */
+function fillSlot(): void {
+  if (selectedChatId === null && slotFillFor(null).kind !== "keep") select(null);
+}
+
+function openChatForEmptyList(): void {
+  if (isOpeningChatForEmptyList) return;
+  isOpeningChatForEmptyList = true;
+  awaitingChatForEmptyList()
+    .then((chatId) => {
+      emptyListChatBackoff.reset();
+      awaitingListing.add(chatId);
+      if (selectedChatId === null) select(chatId);
+    })
+    .catch((error: unknown) => {
+      console.warn("[chat-root] could not open a chat for the empty list; asking again", error);
+      setTimeout(fillSlot, emptyListChatBackoff.nextDelay());
+    })
+    .finally(() => {
+      isOpeningChatForEmptyList = false;
+    });
 }
 
 async function createAndSelect(accountId: string): Promise<void> {
@@ -127,10 +182,11 @@ async function createAndSelect(accountId: string): Promise<void> {
 }
 
 /** The New chat button: a chat on the selected account, or after a sign-in when nothing is signed in. */
-function startNewChat(): void {
+async function startNewChat(): Promise<void> {
+  await whenAccountsReadyToChoose();
   const account = getSelectedAccount();
   if (account !== null) {
-    void createAndSelect(account.id);
+    await createAndSelect(account.id);
     return;
   }
   openProviderChooser({ onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId) });
@@ -158,13 +214,14 @@ function draftInto(chatId: string, text: string): void {
  *  through the provider chooser, as the composer's first send does; a dismissed chooser leaves the text in the
  *  composer, where the next send offers the chooser again. A chooser already open (for the New chat button) takes
  *  no second intent, so the text goes to the composer at once. */
-function launchWithFirstMessage(chatId: string, text: string): void {
+async function launchWithFirstMessage(chatId: string, text: string): Promise<void> {
   const launchOrDraft = (accountId: string): void => {
     launchChat(chatId, accountId, text).catch((error: unknown) => {
       alert(`Failed to start the chat: ${(error as Error).message}`);
       draftInto(chatId, text);
     });
   };
+  await whenAccountsReadyToChoose();
   const minted = getProvisionalChats().find((chat) => chat.chat_id === chatId);
   const account = accountForFirstSend(minted?.account_id);
   if (account !== null) {
@@ -199,7 +256,7 @@ function takeApplied(applied: AppliedIntake): void {
   startedHere.add(applied.chatId);
   settleIntake(applied.chatId);
   if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
-  if (applied.firstMessage !== null) launchWithFirstMessage(applied.chatId, applied.firstMessage);
+  if (applied.firstMessage !== null) void launchWithFirstMessage(applied.chatId, applied.firstMessage);
 }
 
 /** Apply a held intake on the chat it resolved to, or on ``pickedChatId``; a token already gone (another client
@@ -264,13 +321,17 @@ function onChatsUpdated(): void {
       if (!isKept(heldId)) pool.destroy(heldId);
     }
   }
-  if (selectedChatId !== null && !isKept(selectedChatId)) select(null);
-  else reportLocation();
+  if (selectedChatId !== null && !isKept(selectedChatId)) {
+    select(null);
+    return;
+  }
+  fillSlot();
+  reportLocation();
 }
 
 const ChatRoot: m.Component = {
   view() {
-    const rows = groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats()), startedHere);
+    const rows = railRows();
     const isCompact = compactQuery.matches;
     // On a phone with nothing selected, the list is the whole page.
     const isListOnly = isCompact && selectedChatId === null;
@@ -335,7 +396,7 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     selectedChatId,
     isCompact,
     onPick: (chatId: string) => select(chatId),
-    onNew: () => startNewChat(),
+    onNew: () => void startNewChat(),
     referenceScope: scopeOfHandshake(handshake),
     onDraftReference: draftReference,
     isReferenceDraftAvailable: isReferenceDraftAvailable(),
@@ -368,6 +429,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       isRootShown = true;
       pool?.setRootShown(true);
       if (selectedChatId !== null) markRead(selectedChatId);
+      fillSlot();
       m.redraw();
     },
     onHidden: () => {
@@ -401,7 +463,10 @@ function bootstrap(): void {
   initChats();
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
-  compactQuery.addEventListener("change", () => m.redraw());
+  compactQuery.addEventListener("change", () => {
+    fillSlot();
+    m.redraw();
+  });
   const shell = connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
