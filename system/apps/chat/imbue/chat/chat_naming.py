@@ -18,6 +18,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Executor
+from concurrent.futures import Future
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
@@ -114,6 +115,15 @@ def write_chat_naming_state(chat_dir: Path, state: ChatNamingState) -> None:
     temp_path.replace(path)
 
 
+def _log_naming_failure(chat_id: ChatId, future: Future[None]) -> None:
+    """Log what ended a naming attempt the attempt itself did not handle; nothing else reads its future."""
+    if future.cancelled():
+        return
+    error = future.exception()
+    if error is not None:
+        logger.opt(exception=error).error("Naming chat {} failed", chat_id)
+
+
 class ChatNamer(MutableModel):
     """Names chats from their first messages in the background, one attempt per chat at a time."""
 
@@ -163,7 +173,8 @@ class ChatNamer(MutableModel):
             if chat_id in self._in_flight_chat_ids:
                 return
             self._in_flight_chat_ids.add(chat_id)
-        self.executor.submit(self._name_chat_then_release, chat_id, message)
+        future = self.executor.submit(self._name_chat_then_release, chat_id, message)
+        future.add_done_callback(lambda done: _log_naming_failure(chat_id, done))
 
     def stop(self) -> None:
         """Stop taking messages and abandon the attempts not yet started."""

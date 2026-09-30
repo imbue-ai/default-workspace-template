@@ -1,3 +1,5 @@
+from concurrent.futures import Executor
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -36,7 +38,13 @@ def _agent_info(display_name: str, tmp_path: Path) -> AgentInfo:
 class _NamingHarness:
     """The namer's collaborators, as a test drives them: one chat, a scripted model, and the renames it asked for."""
 
-    def __init__(self, tmp_path: Path, display_name: str, answers: list[str | OneShotCompletionError]) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        display_name: str,
+        answers: list[str | OneShotCompletionError],
+        executor: Executor | None = None,
+    ) -> None:
         self.agent_info: AgentInfo | None = _agent_info(display_name, tmp_path)
         self.binding: ChatAccountBinding | None = ChatAccountBinding(
             harness=HarnessType.CLAUDE, account_dir=tmp_path / "account"
@@ -62,7 +70,7 @@ class _NamingHarness:
             rename_placeholder_named_chat=self._rename,
             build_one_shot_completion=self._build_completion,
             agent_wait_seconds=0.0,
-            executor=InlineExecutor(),
+            executor=executor if executor is not None else InlineExecutor(),
         )
 
     def _active_agent_info(self, _chat_id: ChatId) -> AgentInfo | None:
@@ -256,3 +264,17 @@ def test_a_stopped_namer_takes_no_more_messages(tmp_path: Path) -> None:
     harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome")
 
     assert harness.completion.prompts == []
+
+
+def test_a_failure_the_namer_does_not_handle_is_logged_rather_than_lost(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    executor = ThreadPoolExecutor(max_workers=1)
+    harness = _NamingHarness(tmp_path, "Chat 3", ["Rome trip: plan five days in May"], executor=executor)
+    harness.rename_error = OSError("No space left on device")
+
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome")
+    executor.shutdown(wait=True)
+
+    assert f"ERROR Naming chat {_CHAT_ID} failed" in loguru_records
+    assert harness.shown_title is None
