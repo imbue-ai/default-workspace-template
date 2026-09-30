@@ -21,7 +21,7 @@ import type { ProviderAccount } from "../models/Providers";
 import { beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
-import { accountForFirstSend, isAccountSignedOut, openProviderChooser } from "../models/Providers";
+import { accountForFirstSend, isAccountSignedOut, loadAccounts, openProviderChooser } from "../models/Providers";
 import type { ProvisionalChat } from "../models/Chats";
 import {
   ensureHarnessCatalogs,
@@ -61,6 +61,9 @@ const INPUT_BOX_CLASS =
 const ATTACHMENT_DETAIL_BASE = "composer-attachment-detail text-(length:--font-size-helper)";
 
 const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
+
+// The kind of the server's refusal of a send to a chat whose account was signed out.
+const ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND = "account_signed_out";
 
 function messageTextKey(chatId: string): string {
   return `${MESSAGE_TEXT_KEY_PREFIX}${chatId}`;
@@ -204,6 +207,23 @@ function imageFilesFromClipboard(clipboardData: DataTransfer | null): File[] {
     }
   }
   return files;
+}
+
+/**
+ * Re-read the account list when a send was refused because the chat's account was signed out.
+ *
+ * The composer offers "Choose a provider" from that list, which only this page's own account
+ * actions refresh: a removal made in another window leaves it listing the account until then.
+ */
+function catchUpOnSignedOutAccount(sendError: unknown): void {
+  const kind = (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
+  if (kind !== ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND) {
+    return;
+  }
+  loadAccounts().then(
+    () => m.redraw(),
+    (err: unknown) => console.error(`Failed to re-read the account list: ${describeRequestError(err)}`),
+  );
 }
 
 export function MessageInput(): m.Component<{ chatId: string | null }> {
@@ -564,6 +584,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
           restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+          catchUpOnSignedOutAccount(err);
           // Actions only if they are still on the agent that failed -- this catch runs after an
           // await, so they may have switched and the switch-clear has already gone by.
           if (currentChatId === chatId) {
@@ -908,6 +929,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           focusMessageTextarea();
         } catch (err) {
           dropOutgoing(recovery.chatId, outgoingId);
+          catchUpOnSignedOutAccount(err);
           // Failed again. Only re-open the notice if they are still on that agent -- otherwise
           // it would surface this agent's error over a different chat, with no way to act on it.
           // The message is already back in that agent's composer either way.
