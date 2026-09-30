@@ -197,6 +197,39 @@ def test_a_failed_batch_is_retried_one_chat_at_a_time() -> None:
     assert [result is not None for result in results] == [True, False, True]
 
 
+@pytest.mark.parametrize(
+    "batch_outcome",
+    ["crash", "timeout", "cannot_launch"],
+)
+def test_a_batch_failure_no_single_chat_causes_is_not_retried_per_chat(batch_outcome: str) -> None:
+    """A crash, a timeout, or no mngr to launch would fail again for each chat, so only one launch is paid."""
+    recorded_commands: list[list[str]] = []
+
+    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
+        recorded_commands.append(list(command))
+        if batch_outcome == "cannot_launch":
+            raise ProcessSetupError(
+                command=tuple(command), stdout="", stderr="mngr not found", is_output_already_logged=False
+            )
+        return FinishedProcess(
+            command=tuple(command),
+            returncode=2 if batch_outcome == "crash" else 1,
+            stdout="",
+            stderr="",
+            is_timed_out=batch_outcome == "timeout",
+            is_output_already_logged=False,
+        )
+
+    compactor = ChatAutoCompactor.build(
+        list_running_chat_agent_names=lambda: ["chat-alpha", "chat-beta", "chat-gamma"],
+        is_enabled=lambda: True,
+        runner=fake_runner,
+    )
+
+    assert compactor.sweep() == [None]
+    assert recorded_commands == [["mngr", "autocompact", "run", "chat-alpha", "chat-beta", "chat-gamma"]]
+
+
 def test_the_one_chat_retry_stops_early_if_stop_event_set() -> None:
     recorded_commands: list[list[str]] = []
 

@@ -93,11 +93,18 @@ class ChatAutoCompactor:
         if not names or not self._is_autocompact_enabled():
             return []
 
-        batch_result = self._check_agents(names)
-        if batch_result is not None or len(names) == 1:
-            return [batch_result]
+        batch_result = self._run_autocompact(names)
         # One chat the command cannot resolve (e.g. stopped since it was listed) fails the
-        # whole command, so the rest would go unchecked until it is gone.
+        # whole command with mngr's exit 1, so the rest would go unchecked until it is gone.
+        # Any other failure (a timeout, a crash, no mngr to launch) would repeat for each chat.
+        is_retried_per_chat = (
+            len(names) > 1
+            and batch_result is not None
+            and batch_result.returncode == 1
+            and not batch_result.is_timed_out
+        )
+        if not is_retried_per_chat:
+            return [_succeeded_or_none(batch_result)]
         results: list[FinishedProcess | None] = []
         for name in names:
             if self._stop_event.is_set():
@@ -107,10 +114,10 @@ class ChatAutoCompactor:
 
     def check_agent(self, agent_name: str) -> FinishedProcess | None:
         """Run `mngr autocompact run <agent_name>` for a single agent."""
-        return self._check_agents([agent_name])
+        return _succeeded_or_none(self._run_autocompact([agent_name]))
 
-    def _check_agents(self, agent_names: Sequence[str]) -> FinishedProcess | None:
-        """Run `mngr autocompact run <agent_names...>`; the result when it exits 0, else None."""
+    def _run_autocompact(self, agent_names: Sequence[str]) -> FinishedProcess | None:
+        """Run `mngr autocompact run <agent_names...>`, logging a failure; None when it could not be run."""
         command = [self._mngr_binary, "autocompact", "run", *agent_names]
         described_agents = ", ".join(agent_names)
         try:
@@ -124,19 +131,17 @@ class ChatAutoCompactor:
             logger.warning("Failed to run autocompact for {}: {}", described_agents, e)
             return None
 
-        if result.returncode == 0:
-            return result
         if result.returncode == 1:
             # mngr's own errors (a target that is not running, say) exit 1.
             logger.debug("Failed to run autocompact for {}: {}", described_agents, result.stderr)
-            return None
-        logger.warning(
-            "Failed to run autocompact for {}: return code {}, stderr: {}",
-            described_agents,
-            result.returncode,
-            result.stderr,
-        )
-        return None
+        elif result.returncode != 0:
+            logger.warning(
+                "Failed to run autocompact for {}: return code {}, stderr: {}",
+                described_agents,
+                result.returncode,
+                result.stderr,
+            )
+        return result
 
     def _is_autocompact_enabled(self) -> bool:
         try:
@@ -151,3 +156,7 @@ class ChatAutoCompactor:
         """Background loop executing sweeps on interval until stopped."""
         while not self._stop_event.wait(self._interval_seconds):
             self.sweep()
+
+
+def _succeeded_or_none(result: FinishedProcess | None) -> FinishedProcess | None:
+    return result if result is not None and result.returncode == 0 else None
