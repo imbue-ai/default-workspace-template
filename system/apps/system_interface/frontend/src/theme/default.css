@@ -50,7 +50,7 @@
   /* How long a shortcut takes to slide to the cell it has stepped aside into. Short: it is feedback under
      a moving hand, and a slower slide lags behind the pointer it is answering. */
   --desk-shortcut-slide: 160ms;
-  --desk-floating-entry-size: 84px;
+  --desk-floating-entry-size: 56px;
   --desk-floating-entry-inset-x: 16px;
   --desk-floating-entry-inset-y: 12px;
   --desk-resize-edge: 8px;

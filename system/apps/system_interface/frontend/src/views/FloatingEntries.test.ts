@@ -30,7 +30,6 @@ function pinnedEntry(overrides: Partial<TaskbarEntry> = {}): TaskbarEntry {
 function render(overrides: Partial<FloatingEntriesAttrs> = {}): HTMLElement {
   const attrs: FloatingEntriesAttrs = {
     avatar: avatarStateRecord(),
-    desktop: { name: "Home", color: "#2f855a", glyph: 0 },
     entries: [pinnedEntry()],
     rectOf: () => ({ x: 500, y: 400, width: 56, height: 56 }),
     openMenuWindowId: null,
@@ -89,10 +88,12 @@ describe("FloatingEntries", () => {
     expect(entry.getAttribute("data-mood")).toBe("working");
     expect(entry.getAttribute("data-stale")).toBe("true");
     expect(entry.getAttribute("aria-label")).toBe("Buddy (status may be out of date)");
-    // The launch video's framing: the desktop's squiggle in red stands in for the avatar's image.
-    expect(entry.querySelector("img")).toBeNull();
-    const squiggle = entry.querySelector("svg") as SVGSVGElement;
-    expect(squiggle.getAttribute("stroke")).toBe("#e5322d");
+    expect(entry.querySelector("svg")).toBeNull();
+    const image = entry.querySelector("img") as HTMLImageElement;
+    expect(image.getAttribute("src")).toBe("/api/avatars/jelly-cat/image.svg?mood=working");
+    // A load that fails falls back to the default design at the same mood.
+    image.dispatchEvent(new Event("error"));
+    expect(image.getAttribute("src")).toBe("/api/avatars/gummy-seal/image.svg?mood=working");
   });
 
   it("paints nothing behind the icon in the plain style: no surface, no border, no padding", () => {
