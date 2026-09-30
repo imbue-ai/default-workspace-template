@@ -20,6 +20,7 @@ import {
   SHELL_NAVIGATE,
   SHELL_MESSAGE,
   SHELL_OPEN,
+  SHELL_OPEN_LINK,
   SHELL_SHOWN,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
@@ -711,6 +712,19 @@ describe("the contract", () => {
     await settle();
     expect(api.relayedMessages).toHaveLength(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:message ignored"));
+    warn.mockRestore();
+  });
+
+  it("opens a page's shell:open-link where the store opens a link, and warns about one with no url", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    messageFromPage("win-1", { type: SHELL_OPEN_LINK, url: "http://localhost:3000/preview" });
+    await settle();
+    expect(api.relayedMessages).toEqual([
+      { type: "open:url", clientId: "client-1", payload: { url: "http://localhost:3000/preview" }, sender: "embedder" },
+    ]);
+    messageFromPage("win-1", { type: SHELL_OPEN_LINK });
+    await settle();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:open-link ignored"));
     warn.mockRestore();
   });
 

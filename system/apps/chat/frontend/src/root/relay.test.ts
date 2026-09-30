@@ -32,6 +32,7 @@ describe("isForwardedToShell", () => {
     expect(isForwardedToShell({ type: "shell:message", message: { type: "open:file", path: "/home/user/a.md" } })).toBe(
       true,
     );
+    expect(isForwardedToShell({ type: "shell:open-link", url: "http://files-ab12cd34.host-0123.localhost/" })).toBe(true);
   });
 
   it("keeps everything else the page posts, and anything that is not a typed message, at the root", () => {

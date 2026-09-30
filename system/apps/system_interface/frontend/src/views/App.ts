@@ -8,6 +8,7 @@
  */
 
 import m from "mithril";
+import { classifyLink } from "@imbue/workspace-ui/src/links";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { anchorForEvent, anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
@@ -900,9 +901,15 @@ export function App(): m.Component<AppAttrs> {
       uninstallContextMenu = installElementContextMenu({
         draft: (text) => void current.draftText(text),
         isDraftAvailable: () => true,
-        // The shell's own links lead out of the workspace (help, a changelog); a local one comes back through
-        // Imbue Studio as the popup it turns into a link to open here.
-        openLink: (anchor) => void window.open(anchor.href, "_blank", "noopener"),
+        // A link of the shell's own chrome to a local address opens where a forwarded popup would; any other
+        // (help, a changelog) opens in the browser.
+        openLink: (anchor) => {
+          if (classifyLink(anchor.href, window.location.host).kind === "external") {
+            window.open(anchor.href, "_blank", "noopener");
+          } else {
+            void current.openLink(anchor.href, window.location.host);
+          }
+        },
         scope: (target) => shellReferenceScope(current, target.element),
         open: (rows, point) => {
           openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));

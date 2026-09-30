@@ -30,6 +30,7 @@ export interface ContextMenuConnection {
   draftText(text: string): void;
   openPath(path: string, ifPresent: OpenIfPresent): void;
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
+  openLink(url: string): void;
 }
 
 /** Where the menu opens: the pointer's viewport position. */

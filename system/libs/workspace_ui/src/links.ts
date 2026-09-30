@@ -9,7 +9,8 @@
  * - An absolute path is a **file** of the workspace, opened in the File Viewer (``open:file``).
  * - A URL on a local host (``localhost``, ``127.0.0.1``, ``[::1]``, ``*.localhost``) is a **local URL**, opened in
  *   the workspace's browser (``open:url``), unless it is the address of an app of a workspace: one of this
- *   workspace's apps (an **app address**, opened as that app's window) or another workspace's (refused).
+ *   workspace's apps (an **app address**, opened as that app's window: by the page itself for its own app, by the
+ *   shell through ``shell:open-link`` for another) or another workspace's (which the shell refuses).
  * - Anything else (a relative path, a fragment, another scheme) is **unroutable**.
  *
  * This module touches no message primitive: it acts through the page's app-contract connection.
@@ -100,6 +101,8 @@ export interface LinkRoutingContext {
   readonly isFramed: boolean;
   openPath(path: string, ifPresent: OpenIfPresent): void;
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
+  /** Ask the shell to open a workspace app address that is not the page's own (``shell:open-link``). */
+  openLink(url: string): void;
   /** The page's own host, which says which workspace (and which app) it is in. */
   readonly pageHost: string;
   /** Open a URL in a new browser tab or window: Imbue Studio sends an external one to the user's browser, and
@@ -130,15 +133,16 @@ export function routeLink(href: string, context: LinkRoutingContext): boolean {
       else context.openInNewTab(target.url);
       return true;
     case "app-address":
-      // A page opens pages of its own app itself; any other app's window is the shell's to open, which Imbue
-      // Studio asks it for when the page opens the address as a popup.
-      if (context.isFramed && target.label === firstLabel(context.pageHost)) {
-        context.openPath(target.path, "focus");
-      } else {
-        context.openInNewTab(target.url);
-      }
+      // A page opens pages of its own app itself; any other app's window is the shell's to open.
+      if (!context.isFramed) context.openInNewTab(target.url);
+      else if (target.label === firstLabel(context.pageHost)) context.openPath(target.path, "focus");
+      else context.openLink(target.url);
       return true;
     case "other-workspace":
+      // The shell refuses it with a notice; a plain browser tab is all an unframed page can offer.
+      if (context.isFramed) context.openLink(target.url);
+      else context.openInNewTab(target.url);
+      return true;
     case "external":
       context.openInNewTab(target.url);
       return true;
@@ -155,12 +159,13 @@ export function routeLinkElement(anchor: HTMLAnchorElement, context: LinkRouting
 /** The routing context of a page from its window and its shell connection. */
 export function pageLinkRoutingContext(
   view: Window,
-  connection: Pick<LinkRoutingContext, "isFramed" | "openPath" | "sendMessage">,
+  connection: Pick<LinkRoutingContext, "isFramed" | "openPath" | "sendMessage" | "openLink">,
 ): LinkRoutingContext {
   return {
     isFramed: connection.isFramed,
     openPath: (path, ifPresent) => connection.openPath(path, ifPresent),
     sendMessage: (type, fields) => connection.sendMessage(type, fields),
+    openLink: (url) => connection.openLink(url),
     pageHost: view.location.host,
     openInNewTab: (url) => void view.open(url, "_blank", "noopener"),
     download: (path) => {

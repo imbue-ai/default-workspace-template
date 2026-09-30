@@ -47,6 +47,9 @@ export const SHELL_DRAFT_TEXT = "shell:draft-text";
 /** App to shell: a message for whichever apps registered its type (``open:file``, ``open:url``, ...; desktop-interface
  *  contracts.md section 5.6), so a page says what it wants done without naming the app that does it. */
 export const SHELL_MESSAGE = "shell:message";
+/** App to shell: open a link to one of the workspace's app addresses (another app's page) or another workspace's,
+ *  which only the shell can put on screen: it opens that app's window at the address, or says why it cannot. */
+export const SHELL_OPEN_LINK = "shell:open-link";
 
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
@@ -100,6 +103,8 @@ export interface ShellConnection {
   draftText(text: string): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
+  /** Ask the shell to open a link to an address of the workspace's apps (or another workspace's) as a window. */
+  openLink(url: string): void;
   /** Stop listening to the shell. */
   disconnect(): void;
 }
@@ -194,6 +199,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),
+    openLink: (url: string) => send(SHELL_OPEN_LINK, { url }),
     disconnect: () => boundWindow.removeEventListener("message", onMessage),
   };
 }

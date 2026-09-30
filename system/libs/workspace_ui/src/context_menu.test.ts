@@ -27,6 +27,7 @@ function fakeConnection(isFramed: boolean): typeof connection {
     draftText: vi.fn<(text: string) => void>(),
     openPath: vi.fn(),
     sendMessage: vi.fn<(type: string, fields: Readonly<Record<string, unknown>>) => void>(),
+    openLink: vi.fn(),
   };
 }
 let uninstall: (() => void) | null = null;
