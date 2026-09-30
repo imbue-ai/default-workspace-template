@@ -70,7 +70,7 @@ def _frontend_built() -> bool:
 
 
 pytestmark = [
-    pytest.mark.release,
+    pytest.mark.browser,
     pytest.mark.skipif(not _playwright_browsers_installed(), reason="Playwright browsers not installed"),
     pytest.mark.skipif(
         not _frontend_built(),

@@ -740,6 +740,7 @@ name = "files"
 display_name = "File Viewer"
 icon = "icon.svg"
 critical = false
+stop_when_no_windows = true
 priority = "files"
 launcher_rank = 20
 window_closed_path = "/api/window-closed"
@@ -774,6 +775,10 @@ path = "/"
 style = "avatar"
 scope = "independent"
 default_mode = "floating"
+
+[[message_handlers]]
+type = "minds:focus-chat"
+path = "/api/focus-chat"
 """
 
 
@@ -796,6 +801,7 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["display_name"] == "File Viewer"
     assert "instances" not in row and "instances_url" not in row
     assert row["critical"] is False
+    assert row["stop_when_no_windows"] is True
     assert row["priority"] == "files"
     assert row["program"] == "files"
     assert "internal" not in row
@@ -821,6 +827,7 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
         },
     ]
     assert row["pin"] == {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"}
+    assert row["message_handlers"] == [{"type": "minds:focus-chat", "path": "/api/focus-chat"}]
 
 
 def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_path: Path) -> None:
@@ -872,6 +879,11 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_p
             '[default_shortcut]\nlaunch = 3\nmode = "focus"\n',
             "default_shortcut must be a table with string 'launch' and 'mode'",
             id="default-shortcut-launch-not-a-string",
+        ),
+        pytest.param(
+            '[[message_handlers]]\ntype = "minds:focus-chat"\n',
+            "every message handler needs a string 'type' and 'path'",
+            id="message-handler-without-a-path",
         ),
         pytest.param(
             '[pin]\nstyle = "avatar"\n',
@@ -930,12 +942,14 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
     for stale_key in (
         "instances",
         "instances_url",
+        "stop_when_no_windows",
         "default_shortcut",
         "actions",
         "launch_paths",
         "launcher_rank",
         "pin",
         "window_closed_path",
+        "message_handlers",
     ):
         assert stale_key not in row, stale_key
     assert "priority" not in row

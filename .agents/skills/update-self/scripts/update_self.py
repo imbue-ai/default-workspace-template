@@ -12,9 +12,9 @@ belong in tested code rather than agent prose:
 ``resolve-target``
     Resolve the ref to update to. Default is the release the Imbue Studio app driving
     this workspace was built against -- the ``minds-v*`` tag it names, and only
-    that one; an explicit override may name a specific tag, ``main``, or any
-    other ref, and is reported back as exceeding the ceiling when it cannot be
-    proven to sit at or below it.
+    that one; an explicit override may name a specific tag, an upstream branch
+    (qualified to ``upstream/<branch>``), or any other ref, and is reported back
+    as exceeding the ceiling when it cannot be proven to sit at or below it.
 
     The ceiling exists because a workspace's template ships the code the outer
     app talks to (the system interface, ``mngr``), so updating past
@@ -51,6 +51,14 @@ belong in tested code rather than agent prose:
     update could break", which scopes the worker's impact analysis and its
     validation.
 
+``footprint-ranges``
+    Name the two commit ranges the worker reads each app's footprint over:
+    what the workspace itself changed, and what the update changes in the tree
+    the live workspace runs. Anchored on this pass's merge commit, so a fix
+    committed on top of it leaves them unchanged, and shifted past the
+    rollback reverts of a pass after rolled-back updates (whether the target
+    moved or not).
+
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
     the worker's "what's new" report.
@@ -74,7 +82,8 @@ belong in tested code rather than agent prose:
     the rest of the pass runs, at a single fixed path, and report whether it
     differs from the local copy. Normally that staged copy is the target ref's
     *own* copy (extracted from the already-fetched object); when the ref predates
-    the skill it is the local copy instead. Either way the fixed path is left
+    the skill it is the local copy instead. A ref that names no commit is refused
+    with nothing staged. Otherwise the fixed path is left
     populated with a runnable flow, so the lead and worker can dispatch against it
     by literal path without carrying any value across shell invocations. This is
     what lets the flow, after resolving the target, hand off to the update-self
@@ -151,11 +160,13 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from update_apply import (
+    UpdateRollbackHistory,
     apply_update,
     confirm_last,
     pending_update_rollbacks,
     recover,
     rollback_last,
+    update_rollback_history,
 )
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
@@ -227,6 +238,22 @@ def _is_already_merged(ref: str, repo_root: Path) -> bool:
     return result.returncode == 0
 
 
+def _names_commit(ref: str, repo_root: Path) -> bool:
+    """Whether ``ref`` resolves to a commit in ``repo_root``.
+
+    Exit 1 from ``rev-parse --verify --quiet`` is the ordinary "no such commit"
+    answer; any other non-zero code is a real git error and is raised.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+    )
+    if result.returncode not in (0, 1):
+        result.check_returncode()
+    return result.returncode == 0
+
+
 def _repo_root(args: argparse.Namespace) -> Path:
     """The ``--repo-root`` value, whether given before or after the subcommand.
 
@@ -249,8 +276,24 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
     app_version = (
         args.app_version if args.app_version is not None else fetch_app_template_ref()
     )
+    # A symref (``<remote>/HEAD``) prints as an empty line and drops out: it is
+    # not a branch, and qualifying an override of ``HEAD`` would retarget it.
+    remote_branches = _list_names(
+        _git(
+            [
+                "for-each-ref",
+                "--format=%(if)%(symref)%(then)%(else)%(refname:lstrip=3)%(end)",
+                f"refs/remotes/{args.remote}/",
+            ],
+            repo_root,
+        )
+    )
     target = resolve_target(
-        args.override, tags, remote=args.remote, app_version=app_version
+        args.override,
+        tags,
+        remote=args.remote,
+        app_version=app_version,
+        remote_branches=remote_branches,
     )
     # Only the default path: an override was asked for by name, and the rule that
     # it is never silently blocked outranks saving a no-op merge.
@@ -321,6 +364,156 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
             indent=2,
         )
     )
+    return 0
+
+
+UPDATE_SELF_MERGE_SUBJECT = "update-self: merge upstream template"
+
+
+class NoUpdateMergeError(Exception):
+    """The branch carries no ``update-self`` merge of the requested target."""
+
+
+def _commit_sha(ref: str, repo_root: Path) -> str:
+    return _git(["rev-parse", f"{ref}^{{commit}}"], repo_root)
+
+
+def _latest_commit_with_subject(
+    subject_prefix: str, revision_range: str, repo_root: Path
+) -> str | None:
+    found = _git(
+        [
+            "log",
+            "--format=%H %s",
+            "--fixed-strings",
+            f"--grep={subject_prefix}",
+            revision_range,
+        ],
+        repo_root,
+    )
+    for line in _list_names(found):
+        sha, _, subject = line.partition(" ")
+        if subject.startswith(subject_prefix):
+            return sha
+    return None
+
+
+def _before_rollback_reverts(
+    commit: str, history: UpdateRollbackHistory, repo_root: Path
+) -> str:
+    """The commit under the run of update-rollback reverts ending at ``commit``
+    (``commit`` itself when it is not one): the tree before the worker's first step."""
+    while commit in history.reverts:
+        commit = _commit_sha(f"{commit}^", repo_root)
+    return commit
+
+
+def _has_update_rolled_back_since(earlier: str, commit: str, repo_root: Path) -> bool:
+    """Whether ``commit``'s history since ``earlier`` holds an update rollback that
+    nothing there has undone."""
+    return bool(pending_update_rollbacks(earlier, commit, repo_root, Runner()))
+
+
+def _first_attempt_first_parent(
+    merge: str, history: UpdateRollbackHistory, repo_root: Path
+) -> str:
+    """The first parent of the first merge in ``merge``'s chain of retries.
+
+    A merge made while an earlier landed merge's rollback was still in force
+    under it -- directly, under the reverts of it that the pass's first step
+    committed, or under the workspace's own later commits -- was made on top
+    of that rolled-back attempt; the chain ends at a merge made on the
+    workspace's own line, whose first parent carries none of those releases.
+    """
+    first_parent = _commit_sha(f"{merge}^1", repo_root)
+    while True:
+        before_reverts = _before_rollback_reverts(first_parent, history, repo_root)
+        earlier = _latest_commit_with_subject(
+            UPDATE_SELF_MERGE_SUBJECT, before_reverts, repo_root
+        )
+        if earlier is None:
+            if first_parent in history.reverts or first_parent in history.rollbacks:
+                raise NoUpdateMergeError(
+                    f"{first_parent} rolls back an update or reverts its rollback, "
+                    f"but no earlier '{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
+                )
+            return first_parent
+        if not _has_update_rolled_back_since(earlier, before_reverts, repo_root):
+            return first_parent
+        first_parent = _commit_sha(f"{earlier}^1", repo_root)
+
+
+def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
+    """The two commit ranges the worker reads each app's footprint over.
+
+    The local range is what the workspace itself changed since it forked from
+    the target's line; the update range is what the update changes in the tree
+    the live workspace runs. Both are anchored on this pass's
+    ``update-self: merge upstream template`` commit rather than on ``HEAD``, so
+    a fix committed on top of the merge leaves them unchanged.
+
+    A pass after rolled-back updates shifts the anchors. The worker first reverts
+    every update rollback nothing has undone, so when the target moved, the
+    merge's first parent is the last of those reverts, which already carries the
+    landed releases: the update range starts under the whole run of reverts
+    instead, at the tree the live workspace runs. On a retry of the same target
+    the reverts leave ``git merge`` nothing to do, so the merge found is the
+    landed attempt's own; the reverts are then the whole update, and the local
+    range runs to the commit under them, which carries every local commit since
+    that attempt branched. That commit runs the tree from before every
+    rolled-back attempt, so its fork point is taken from the first attempt in
+    the chain rather than from the landed one, which may itself have been made
+    on top of an earlier release. A user's rollback of an app change, and its
+    revert, carry the same subjects but are the workspace's own history, and
+    shift nothing.
+    """
+    target_sha = _commit_sha(target, repo_root)
+    merge = _latest_commit_with_subject(UPDATE_SELF_MERGE_SUBJECT, "HEAD", repo_root)
+    if merge is None:
+        raise NoUpdateMergeError(
+            f"no '{UPDATE_SELF_MERGE_SUBJECT}' commit on this branch"
+        )
+    parents = _git(["log", "-1", "--format=%P", merge], repo_root).split()
+    if len(parents) != 2 or parents[1] != target_sha:
+        raise NoUpdateMergeError(
+            f"the latest '{UPDATE_SELF_MERGE_SUBJECT}' commit ({merge}) does not "
+            f"merge {target}; an earlier update's merge carries the same subject"
+        )
+    first_parent = parents[0]
+    history = update_rollback_history(target, "HEAD", repo_root, Runner())
+    since_merge = _list_names(
+        _git(["rev-list", "--first-parent", f"{merge}..HEAD"], repo_root)
+    )
+    same_target_revert = next(
+        (commit for commit in since_merge if commit in history.reverts), None
+    )
+    if same_target_revert is not None:
+        local_fork = _first_attempt_first_parent(merge, history, repo_root)
+        local_ref = update_base = _before_rollback_reverts(
+            same_target_revert, history, repo_root
+        )
+        update_ref = same_target_revert
+    else:
+        local_fork = local_ref = first_parent
+        update_base = _before_rollback_reverts(first_parent, history, repo_root)
+        update_ref = merge
+    local_base = _git(["merge-base", local_fork, target_sha], repo_root)
+    return {
+        "merge": merge,
+        "local_base": local_base,
+        "local_ref": local_ref,
+        "update_base": update_base,
+        "update_ref": update_ref,
+    }
+
+
+def _cmd_footprint_ranges(args: argparse.Namespace) -> int:
+    try:
+        ranges = footprint_ranges(args.target, _repo_root(args))
+    except NoUpdateMergeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(json.dumps(ranges, indent=2))
     return 0
 
 
@@ -450,6 +643,17 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
     dest = Path(args.dest)
     dest_root = (dest if dest.is_absolute() else repo_root / dest).resolve()
     staged_skill = dest_root / SKILL_DIR_REL
+
+    # Checked first: the skill-dir probe below cannot tell a ref that names
+    # nothing from one that predates the skill.
+    if not _names_commit(args.ref, repo_root):
+        print(
+            f"error: {args.ref} does not name a commit in this workspace, so there "
+            "is no target to update to. It is not a release, remote branch or "
+            "commit that has been fetched.",
+            file=sys.stderr,
+        )
+        return 1
 
     # Always stage into a clean dir. The flow runs the skill from ``staged_skill``
     # unconditionally (a single fixed path the lead and worker both reference by
@@ -732,11 +936,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     resolve_parser.add_argument(
         "--override",
         default=None,
-        help="A tag, 'main', or any ref to update to (default: latest stable "
-        "minds-v* tag).",
+        help="A tag, a branch of --remote (qualified to <remote>/<branch>), or "
+        "any other ref to update to (default: the release the Imbue Studio app names).",
     )
     resolve_parser.add_argument(
-        "--remote", default="upstream", help="Remote to read tags from."
+        "--remote", default="upstream", help="Remote to read tags and branches from."
     )
     resolve_parser.add_argument(
         "--local-tags",
@@ -773,6 +977,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Merge base (default: git merge-base <local> <target>).",
     )
     classify_parser.set_defaults(func=_cmd_classify_merge)
+
+    ranges_parser = sub.add_parser(
+        "footprint-ranges",
+        help="Print the local and update commit ranges the worker reads each "
+        "app's footprint over, anchored on this pass's update-self merge.",
+        parents=[common],
+    )
+    ranges_parser.add_argument(
+        "--target", required=True, help="The upstream ref this pass merged."
+    )
+    ranges_parser.set_defaults(func=_cmd_footprint_ranges)
 
     changelog_parser = sub.add_parser(
         "changelog-entries",

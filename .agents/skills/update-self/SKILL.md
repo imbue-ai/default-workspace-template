@@ -118,7 +118,8 @@ REF=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-target.jso
 `--local-tags` reads the tags the fetch just landed. To honor a user override,
 append `--override main` or `--override minds-v0.3.6`. The `|| exit 1` leaves a
 refusal's `error:` line as the last thing printed. The output carries `ref`,
-`kind`, `ceiling` and `exceeds_ceiling`; `main` resolves to `upstream/main`.
+`kind`, `ceiling` and `exceeds_ceiling`; an upstream branch name such as `main`
+resolves to `upstream/main`.
 Tell the user which version you are updating to, and never mention a release
 above `ceiling` that they did not ask for by name: the Imbue Studio app announces its
 own updates.
@@ -156,12 +157,16 @@ Stage the skill as it exists at `$REF` (from the fetched objects; no network,
 no working-tree mutation) and learn whether it differs from your local copy:
 
 ```bash
-DIFFERS=$(python3 .agents/skills/update-self/scripts/update_self.py bootstrap-skill --ref "$REF" \
-    | python3 -c 'import sys, json; print(json.load(sys.stdin)["differs"])')
+python3 .agents/skills/update-self/scripts/update_self.py bootstrap-skill --ref "$REF" \
+    > /tmp/update-self-bootstrap.json || exit 1
+DIFFERS=$(python3 -c 'import json; print(json.load(open("/tmp/update-self-bootstrap.json"))["differs"])')
 echo "differs=$DIFFERS"
 ```
 
-`bootstrap-skill` always leaves a runnable flow at the staging path (the
+**If it exits non-zero, stop.** Its `error:` line says `$REF` names no commit
+here; handle it as a Step 2 error.
+
+Otherwise `bootstrap-skill` has left a runnable flow at the staging path (the
 target's copy, or the local copy when the ref predates the skill), so the
 worker runs from there regardless. `differs` decides only which prose *you*
 follow next:
@@ -334,7 +339,10 @@ git branch -m mngr/update-self "$ARCHIVE" && echo "$ARCHIVE"
 
 Launch with the plain `worker` template, record the hand-off (from here until
 the worker reports this chat is idle, and naming the worker lets the Imbue Studio app
-read the worker's liveness instead of "waiting for you"), then background-poll:
+read the worker's liveness instead of "waiting for you"), then background-poll
+through `run_in_background.py`, which delivers `await`'s result to this chat as
+a message that starts your next turn, whatever your harness. Run the staged
+skill's copy of it: this workspace's own tree may predate the script.
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
@@ -348,15 +356,16 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 ```bash
-# Run with Bash run_in_background: true
-uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
+    --description "Wait for the update's background agent" -- \
+    uv run .agents/skills/launch-task/scripts/create_worker.py await \
     --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```
 
-Once the poll is armed, **end your turn**; its completion wakes you with the
-report. Never wait on the worker any other way -- no `sleep`, no polling its
-reports directory or its pane -- see "Never sleep on a worker" in
-`.agents/shared/references/lead-proxy.md`.
+Once the poll is armed, **end your turn**; its message wakes you with the
+report. Re-arm with the same command. Never wait on the worker any other way
+-- no `sleep`, no polling its reports directory or its pane -- see "Never sleep
+on a worker" in `.agents/shared/references/lead-proxy.md`.
 
 ## 4. Proxy the `question` gate
 
@@ -430,10 +439,11 @@ carry on into §5 and get their verdict there.
 The worker contract (the staged copy's `references/update-self-worker.md`,
 §4a, §4b, §4c and §6) makes the impact analysis, the validation scope and the
 review gates rule-driven and the report evidence-bearing. It must show which
-branch of the 4a and 4b rules applied (the footprint evidence, and each
-validation item's condition and whether it held), and either show the
-clean-pull skip's three conditions held (`has_merge_work: false`, no impacted
-user-created code, no worker-authored in-branch edits beyond Step 1's
+branch of the 4a and 4b rules applied (the footprint evidence --
+`has_local_footprint`, and per creation the scope files' verdicts when it is
+true -- and each validation item's condition and whether it held), and either
+show the clean-pull skip's three conditions held (`has_merge_work: false`, no
+impacted user-created code, no worker-authored in-branch edits beyond Step 1's
 rollback reverts as git made them or with a `both added` file taken at the
 target's version, shown by an empty diff against the landed merge) or carry
 the gate run's own evidence (fix commits kept or reverted, or a clean run,
@@ -443,8 +453,8 @@ openly discloses skipping a gate outside the rule -- goes back to the worker
 via the Step 4 cycle (say what is missing, consume the report into
 `data/.tasks/update-self/reports/consumed/`, re-arm). Do not run the apply
 over the gap. A deviation stands only when the worker is gone and the gap
-cannot be closed from here, and then the results message states it plainly
-as a caveat.
+cannot be closed from here, and then the results message states it plainly as
+a caveat.
 
 There is no approval gate: the audit, not the user, authorizes the apply. The
 `done` report is your raw material, not the user's message; the results
@@ -546,17 +556,33 @@ resumes), and how to honor a rollback request are in
   image-level hunk needs a manual workspace rebuild -- say so.
 - **Rebuild-only flags** -- surface as needing a workspace recreate; never
   imply they are live.
+- **User apps without `stop_when_no_windows`** -- the shell stops an app
+  whose manifest declares `stop_when_no_windows = true` a minute after its
+  last window closes and starts it again on the next request (the build-app
+  skill says which apps should carry it). A manifest without the field reads
+  as `false`, so an app built before the field existed keeps running for the
+  life of the workspace, as it always did. Do not add the field
+  mechanically. For each `system/apps/*/app.toml` that is the user's and
+  lacks it, read the app: if it only answers requests, add
+  `stop_when_no_windows = true` and restart its program so the registration
+  carries it; if it does work between requests (a background thread, a
+  poller or scheduled refresh, a subscription to an outside service, a job
+  that outlives the window, an API another agent drives with no window),
+  add `stop_when_no_windows = false` with a comment saying why, so the next
+  pass does not ask again. Name each decision in the results message.
 
 ### 5d. Escalate the built-in defects this pass found
 
 Before composing the results message, collect every finding the worker labelled
 a `submit-upstream-changes` candidate, plus any other defect in built-in code
-you hit this pass (a failing built-in test, a step of this flow that broke and
-had to be worked around). Escalate them together as AGENTS.md's "Updates"
+you hit this pass (a failing built-in test, a built-in test the worker's
+Validation names as flaky, a step of this flow that broke and had to be worked
+around). Escalate them together as AGENTS.md's "Updates"
 section describes -- one report via
 `.agents/shared/references/report-built-in-issues.md`, or
 `submit-upstream-changes` for a template fix -- or name each in the results
-message with the submission offered.
+message with the submission offered. A flaky test of a creation the workspace
+built is not built-in: file a regular ticket for it (`tk create`).
 
 Then compose the results message per `references/results-message.md`.
 

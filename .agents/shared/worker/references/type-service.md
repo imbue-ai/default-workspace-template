@@ -2,7 +2,7 @@
 
 A background service -- a supervisord `[program:<name>]` with no tab. Two
 homes: standalone services live under `system/services/<package>/` (their own
-uv workspace member, e.g. `host_backup`, `app_watcher`); a service that exists
+uv workspace member, e.g. `host_backup`, `share_gateway`); a service that exists
 solely to support one app lives in that app's folder under
 `system/apps/<package>/` and is named `<app>-<role>`.
 
@@ -24,12 +24,16 @@ solely to support one app lives in that app's folder under
   tests in its package, and exercise its entry point (`uv run <name>`) with a
   bounded invocation where feasible. Never start supervisord, and never
   `supervisorctl` against the served tree from a worktree.
-- Run the package's tests by path, never a bare root `uv run pytest`:
+- While you iterate, run the package's tests by path, never a bare root `uv
+  run pytest`:
 
   ```bash
   uv run pytest system/services/<package>       # standalone
   cd system/apps/<package> && uv run pytest     # app-owned (<app>-<role>)
   ```
+
+  The gate is `harden-creation.md`'s "The test gate", which adds whatever
+  consumes the package.
 - Verify config-only changes by parsing the service's own
   `system/supervisord.conf.d/<name>.conf` (e.g. with Python's `configparser`),
   not by starting the daemon. To check the whole realized set instead, read

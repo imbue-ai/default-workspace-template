@@ -30,6 +30,7 @@ def _full_manifest_data() -> dict[str, object]:
         "display_name": "File Viewer",
         "icon": "icon.svg",
         "critical": False,
+        "stop_when_no_windows": True,
         "priority": "files",
         "program": "files",
         "internal": False,
@@ -70,6 +71,15 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.pin.scope is LocationScope.INDEPENDENT
     assert manifest.pin.default_mode is EntryMode.FLOATING
     assert manifest.window_closed_path == "/api/window-closed"
+    assert manifest.stop_when_no_windows is True
+
+
+def test_stop_when_no_windows_defaults_to_false_and_is_refused_on_a_critical_app() -> None:
+    manifest = AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg"})
+    assert manifest.stop_when_no_windows is False
+    with pytest.raises(ValidationError, match="critical app cannot declare stop_when_no_windows"):
+        AppManifest.model_validate({**_full_manifest_data(), "critical": True, "stop_when_no_windows": True})
+    assert AppManifest.model_validate({**_full_manifest_data(), "critical": True, "stop_when_no_windows": False}).critical
 
 
 def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> None:
@@ -106,6 +116,54 @@ def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(pin: dict
 def test_window_closed_path_follows_the_launch_path_rule() -> None:
     with pytest.raises(ValidationError, match="no query string"):
         AppManifest.model_validate({**_full_manifest_data(), "window_closed_path": "/closed?x=1"})
+
+
+def test_message_handlers_name_the_embedder_messages_an_app_takes_and_where_the_shell_posts_them() -> None:
+    manifest = AppManifest.model_validate(
+        {
+            **_full_manifest_data(),
+            "message_handlers": [
+                {"type": "minds:focus-chat", "path": "/api/focus-chat"},
+                {"type": "minds:permission-resolutions", "path": "/api/verdicts"},
+            ],
+        }
+    )
+
+    assert [(handler.type, handler.path) for handler in manifest.message_handlers] == [
+        ("minds:focus-chat", "/api/focus-chat"),
+        ("minds:permission-resolutions", "/api/verdicts"),
+    ]
+    assert AppManifest.model_validate(_full_manifest_data()).message_handlers == ()
+
+
+@pytest.mark.parametrize(
+    ("handler", "match"),
+    [
+        pytest.param({"type": "focus-chat", "path": "/api/focus-chat"}, "minds:", id="no-prefix"),
+        pytest.param({"type": "shell:open", "path": "/api/open"}, "minds:", id="another-prefix"),
+        pytest.param({"type": "minds:", "path": "/api/focus-chat"}, "minds:", id="prefix-alone"),
+        pytest.param({"type": "minds:Focus Chat", "path": "/api/focus-chat"}, "minds:", id="not-kebab-case"),
+        pytest.param({"type": "minds:focus-chat", "path": "api/focus-chat"}, "single '/'", id="unrooted-path"),
+        pytest.param({"type": "minds:focus-chat", "path": "/api/focus-chat?x=1"}, "no query string", id="query"),
+        pytest.param({"type": "minds:focus-chat"}, "path", id="no-path"),
+    ],
+)
+def test_a_message_handler_names_a_minds_type_and_a_rooted_path(handler: dict[str, object], match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        AppManifest.model_validate({**_full_manifest_data(), "message_handlers": [handler]})
+
+
+def test_duplicate_message_handler_types_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="message handler types must be unique"):
+        AppManifest.model_validate(
+            {
+                **_full_manifest_data(),
+                "message_handlers": [
+                    {"type": "minds:focus-chat", "path": "/api/focus-chat"},
+                    {"type": "minds:focus-chat", "path": "/api/other"},
+                ],
+            }
+        )
 
 
 def test_text_param_must_name_a_declared_param_and_defaults_to_none() -> None:

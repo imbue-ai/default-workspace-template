@@ -39,6 +39,8 @@ from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.presence import build_presence_sweep
 from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
 from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
+from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.state import build_shell_state
@@ -183,6 +185,9 @@ def build_test_state(
     profiles: ProfileResolver | None = None,
     wallpaper_files_directory: Path | None = None,
     launch_poster: LaunchPoster | None = None,
+    is_lifecycle_enabled: bool = False,
+    no_windows_grace_seconds: float = NO_WINDOWS_GRACE_SECONDS,
+    idle_sweep_interval_seconds: float = IDLE_SWEEP_INTERVAL_SECONDS,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
@@ -201,7 +206,9 @@ def build_test_state(
     ``presence_directory`` is where the presence files go (a fresh temp directory by default), and ``profiles``
     the resolver that names and pictures each account (one that can reach no connector by default, so no test
     fetches anything unless it says so). ``launch_poster`` answers the POST launches the shell would otherwise make
-    over loopback.
+    over loopback. ``is_lifecycle_enabled`` makes the lifecycle manager own the apps: its sweep runs once the shell
+    is started, and a POST launch wakes a stopped app (off by default, so no test parks a port or starts a
+    program by accident), with the grace period and idle sweep interval given.
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
     resolved_presence_directory = (
@@ -233,6 +240,9 @@ def build_test_state(
         repo_root=repo_root if repo_root is not None else _fresh_shell_state_directory(),
         profiles=resolved_profiles,
         launch_poster=launch_poster,
+        is_lifecycle_enabled=is_lifecycle_enabled,
+        no_windows_grace_seconds=no_windows_grace_seconds,
+        idle_sweep_interval_seconds=idle_sweep_interval_seconds,
     )
     resolved_static_directory = static_directory if static_directory is not None else DEFAULT_STATIC_DIRECTORY
     return SystemInterfaceState(
@@ -246,11 +256,8 @@ def build_test_state(
     )
 
 
-# The agent-driven desktop pipeline (``test_layout_pipeline.py``): the shell's fixed loopback port, the two
-# stand-in apps its registry holds (one declaring launch paths), and the one connected client most of its
-# tests target, on the default desktop.
-PIPELINE_PORT: Final[int] = 18766
-PIPELINE_BASE_URL: Final[str] = f"http://127.0.0.1:{PIPELINE_PORT}"
+# The agent-driven desktop pipeline (``test_layout_pipeline.py``): the two stand-in apps its registry holds
+# (one declaring launch paths), and the one connected client most of its tests target, on the default desktop.
 PIPELINE_SEEDED_APP_NAME: Final[str] = "chat"
 PIPELINE_STUB_APP_NAME: Final[str] = "docs"
 PIPELINE_CLIENT_ID: Final[str] = "client-1"
@@ -279,6 +286,25 @@ def find_free_port() -> int:
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+def can_bind_loopback_port(port: int) -> bool:
+    """Whether nothing listens on the loopback port, probed by a bind rather than a connect: a connect to a port
+    the shell parks is itself the wake."""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+        return True
+
+
+def send_raw_get_over_socket(port: int) -> bytes:
+    """One GET to the loopback port over a bare socket, read until the server closes: what a parked port answers."""
+    with socket.create_connection(("127.0.0.1", port), timeout=5.0) as connection:
+        connection.sendall(b"GET /some/page HTTP/1.1\r\nHost: docs.localhost\r\n\r\n")
+        return b"".join(iter(lambda: connection.recv(65536), b""))
 
 
 def is_server_answering(base_url: str) -> bool:

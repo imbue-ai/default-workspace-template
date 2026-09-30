@@ -4,10 +4,12 @@ The models behind a workspace app's two descriptions:
 
 - **The manifest**, `system/apps/<package>/app.toml`: an app's static
   declarations (name, display name, icon, its memory-shedding priority, whether
-  it is critical, its supervisord program, the launch paths the desktop opens
-  windows at, the shortcut a new desktop is seeded with, and what it owns
-  outside its own directory). The schema is `contracts.md` section 2 of the
-  desktop interface (`docs/system/blueprint/desktop-interface/`), which carries
+  it is critical, whether it stops once no window shows it, its supervisord
+  program, the launch paths the desktop opens windows at, the shortcut a new
+  desktop is seeded with, the messages from the Imbue Studio chrome it takes,
+  and what it owns outside its own directory). The schema is `contracts.md`
+  section 2 of the desktop interface (`docs/system/blueprint/desktop-interface/`),
+  which carries
   section 2 of the workspace app model
   (`docs/system/blueprint/workspace-app-model/`) forward without its instance
   fields.
@@ -29,6 +31,9 @@ The models behind a workspace app's two descriptions:
   shell's launch envelope and can name neither a param nor a preset; `open` is
   reserved for the root launch path the shell synthesizes for an app that
   declares none), `LaunchPathMethod`,
+  `MessageHandler` (`type`, a `MessageType`: `minds:` and a lowercase kebab-case
+  name, unique within the manifest; `path`, the route under the app's origin the
+  shell posts each message of that type to, shaped like a launch path),
   `DefaultShortcut`
   (`launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
@@ -77,9 +82,17 @@ The models behind a workspace app's two descriptions:
   `BUILT_IN_EXCLUDES`, `APP_CONVENTIONS`, and `SKILL_CONVENTIONS` are the fixed
   lists. Exclude matching is `pathspec` gitignore syntax; a failing git command
   raises `ScopeComputationError` rather than reporting an empty diff.
+- `app_manifest.selection` and `app_manifest.workspace_graph`: the test
+  selection behind `app-manifest select-tests` (below). `workspace_graph` reads
+  what the workspace declares about its packages: the uv workspace members and
+  npm packages with their consumers (`python_consumers`, `npm_consumers`), the
+  suites that run as their own pytest root, and what a `uv.lock` change
+  upgraded and who depends on it (`classify_lockfile_change`).
+  `scope.list_changed_files` is the diff both `footprint` and `select-tests`
+  read.
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `LaunchPathId`, `LaunchParamName`, `LaunchPathValue` (rooted with one
-  slash, no query string or fragment, nothing a URL would escape),
+  slash, no query string or fragment, nothing a URL would escape), `MessageType`,
   `PriorityName`, `ProgramName`,
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
   gitignore negation would re-include a built-in exclude), `ReferenceNote`) and
@@ -100,8 +113,8 @@ test, freshness, or publish pass may treat as that creation's own. Every path in
 it is repo-root-relative, and `--repo-root` (default: the current directory, the
 same convention `registry_path()` follows) is what they are relative to.
 
-    app-manifest footprint <manifest> [--repo-root DIR] [--diff-base REF] [--out FILE]
-    app-manifest footprint --for-path <path> [--repo-root DIR] [--diff-base REF] [--out FILE]
+    app-manifest footprint <manifest> [--repo-root DIR] [--diff-base REF [--diff-ref REF]] [--out FILE]
+    app-manifest footprint --for-path <path> [--repo-root DIR] [--diff-base REF [--diff-ref REF]] [--out FILE]
     app-manifest references --for-path <path> [--repo-root DIR]
 
 The positional manifest and `--for-path` are alternatives: the first describes
@@ -149,12 +162,16 @@ goes to stdout; with it, the parent directories are created.
   existence.
 - `exclude` is the built-in globs followed by the manifest's own, deduplicated.
 - `diff` is null unless `--diff-base` is given, and then reports the base's full
-  sha, every file the diff changed (from the three-dot form, so what the base
-  branch did after the fork is not the creation's change), and
-  `outside_footprint`: the changed files that are neither under a `primary` path,
-  nor a `wiring` file, nor under a reference, nor a `context` entry's
-  `app.toml`, nor matched by `exclude`. A non-empty `outside_footprint` means either a missing
-  reference or a change that does not belong on the branch.
+  sha, the full sha of the `ref` the diff runs to (HEAD, or what `--diff-ref`
+  names, so one tree can answer for a range that ends elsewhere -- what a merge
+  commit's first parent changed since the fork, say), every file the diff
+  changed (from the three-dot form, so what the base branch did after the fork
+  is not the creation's change), and that list split in two:
+  `inside_footprint`, the changed files under a `primary` path, a `wiring`
+  file, a reference, or a `context` entry's `app.toml`, and `outside_footprint`,
+  the changed files under none of those. A file matched by `exclude` is in
+  neither. A non-empty `outside_footprint` means either a missing reference or a
+  change that does not belong on the branch.
 
 `app-manifest references --for-path <path>` prints one JSON object per line
 (`app`, `manifest`, `path`, `note`) for every app whose manifest claims that
@@ -171,3 +188,102 @@ plain `python3` from every supervisord program line, so it stays stdlib-only
 and copies the manifest's fields without applying the rules above. The rules
 are applied by `validate-manifest` (which the build-app scaffold runs on the
 manifest it writes) and by every reader of the registry.
+
+## Selecting tests
+
+    app-manifest select-tests --diff-base REF [--diff-ref REF] [--repo-root DIR] [--format text|json]
+    app-manifest select-tests --path P [--path P ...] [--diff-base REF] [--repo-root DIR] [--format text|json]
+
+`select-tests` prints the commands that can observe a change, one per line, in
+the order to run them, each under a comment saying which changed paths called
+for it. Every line runs from the repo root. With `--diff-base` the change is
+what the ref changed since it forked from the base (the same three-dot diff as
+`footprint`); with `--path` it is the paths given, as the working tree holds
+them, and `--diff-base` only names the revision a changed `uv.lock` is compared
+against. A `--diff-base` selection that runs to the checked-out commit refuses
+to run while the working tree holds uncommitted or untracked changes, and names
+them, since the tests would run against changes the diff leaves out.
+
+Selection reads only what the workspace declares. A path selects:
+
+- its own tests: the package (`system/{libs,services,apps}/<name>`) or skill
+  (`.agents/skills/<name>`) it sits in, or, for a collected test file outside
+  both, that file alone -- except for a path in an app's frontend, which
+  selects only what the npm package bullet below says;
+- its consumers: every workspace member that depends on its package, directly
+  or transitively (`pyproject.toml` dependencies and dependency groups) -- not
+  for a test file, which nothing that depends on the package runs, and not for
+  a path in an app's frontend, which is built into the app's own bundle;
+- for a path in an app other than a test file or a frontend path, the tests
+  beneath each directory the app's manifest references (a referenced skill
+  drives the app's surface);
+- the app whose manifest references it (`[[references]]`), or whose program a
+  supervisord block holds; a supervisord block also selects
+  `oom_priority`'s `oom_tag_service_test.py`, which checks that every program
+  block names its OOM band;
+- for a `uv.lock` change, every member that depends on a package the lock
+  upgraded (a package only added selects nothing beyond the member whose
+  `pyproject.toml` added it);
+- for an npm package, its and its consumers' `npm test`, `npm run lint` and
+  `npm run format:check` (and `npm run typecheck` for a package with no build),
+  after `npm ci && npm run build`, plus the tests marked `browser` or
+  `frontend` of every app whose frontend is among them (and nothing else of
+  that app, since no Python code loads its frontend; an app the root suite
+  runs runs whole instead, since a marker run over an app none of whose tests
+  carry the markers collects nothing, which pytest fails); the npm root's
+  configuration and its prebuild script
+  (`system/scripts/fetch_mngr_assets.sh`, with the `_mngr_git_auth.sh` it
+  sources) select every npm package.
+
+A path in no package, skill or npm package, that is not npm root
+configuration, a supervisord block, `uv.lock`, a guard, a collected test file,
+markdown under `.agents/` (agent prose, which only the always-run prose checks
+and the apps referencing it read), or other markdown those checks read, runs
+the full root suite (`uv run pytest` from the repo root), which replaces the
+other root-collected commands; so does a change to the root `pyproject.toml` or
+`conftest.py`, and a `uv.lock` change that cannot be compared. A `system/*.py`
+that is not a test file (a `system/conftest.py`, say) is no guard, so it runs
+the full root suite too. So does a path in a package the root project's
+`pyproject.toml` depends on, or that one of those packages depends on (other
+than a test file or a frontend path), and a `uv.lock` upgrade the root project
+depends on directly or through one of those packages: the root project's own
+tests, in `system/scripts`, `.agents` and the skills, are its consumers.
+
+Every change that is not entirely documentation (README and changelog files
+anywhere, and other markdown outside `.agents/` and
+`system/{scripts,libs,services,apps}/`, where markdown is prose an agent runs;
+but not the markdown `system/test_meta_ratchets.py`'s live-prose checks read:
+the root `README.md`, `AGENTS.md` and `CLAUDE.md`, and markdown under
+`.agents/`, `docs/` and `data/` outside a changelog, blueprint, specs or vendor
+directory) also runs the always-run set: the test files in `system/*.py`, the
+cross-cutting `system/scripts` guards, and the checks that read every skill's
+prose. A listed guard git does not track (an always-run one, or the OOM band
+check a supervisord block selects) fails the selection rather than dropping out
+of it. A change made only of documentation selects nothing.
+
+`system/apps/chat` and `system/apps/system_interface` run as their own pytest
+roots: workspace members with their own pytest configuration, which the root
+configuration ignores. Any other directory it ignores (a vendored subtree such
+as `system/vendor/tk`) is no suite, and its tests are never selected. The two
+apps' suites deselect their `browser` (and chat its `real_claude`) tests by
+default. Such an app runs everything (`-m ''`) when its Python changed, its
+default run when it was reached as a consumer, and only its tests marked
+`browser` or `frontend` (`-m 'browser or frontend'`) when only a frontend it
+builds changed; reached both ways, it runs its default run and then only its
+`browser` tests (`-m browser`), since the default run holds the `frontend` ones.
+A changed test file of such an app is not a change to its Python: nothing else
+in the suite imports it, so it runs on its own with every marker (`-m ''`), and
+a marker run beside it leaves it out (`--ignore`) so none of its tests runs twice.
+The selection reads the markers, never the test files. A run of
+only some of such a suite's tests (by marker, or changed test files) passes
+`--no-cov` when the suite measures coverage, since only a whole run can reach
+its coverage floor. When a run includes the chat suite's `test_no_type_errors`,
+the test is deselected and its `ty check` printed as a command of its own, so
+the two memory peaks do not stack; a run of only the marked tests includes
+neither.
+
+A coupling nothing declares (a script run as a subprocess, a service called
+over HTTP, a file one component writes and another reads) is invisible to the
+selection. When the consumer is an app, declaring the path in its manifest's
+`[[references]]` is what makes a change to the path select it.
+

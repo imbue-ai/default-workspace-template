@@ -10,6 +10,7 @@ import { getTerminalOriginLabel } from "../document-meta";
 import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice, ModelIdentity } from "./ModelSettings";
+import type { UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
@@ -111,8 +112,8 @@ export interface ChatSnapshot {
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
- *  ``QueuedMessageState``). The frontend renders these verbatim and keys the bubble on
- *  ``queued_id``; it never derives or reconciles them. */
+ *  ``QueuedMessageState``). The frontend keys the bubble on ``queued_id`` and never derives or
+ *  reconciles these. */
 export interface QueuedMessage {
   queued_id: string;
   content: string;
@@ -121,6 +122,11 @@ export interface QueuedMessage {
   // interrupt+resend, or a Claude message still queued when the reply landed): it renders as an
   // ordinary send's bubble rather than as a plain queued chip.
   is_sending?: boolean;
+  // The render decision the content would get in the transcript (a user_message's fields of
+  // the same names); null for a plain message.
+  display?: UserMessageEvent["display"] | null;
+  display_label?: string | null;
+  display_body?: string | null;
 }
 
 /** Where a chat that is not an agent yet stands (the backend's ``ProvisionalChatPhase``). */
@@ -456,6 +462,15 @@ export function createChat(
 ): Promise<CreatedChat> {
   // No harness: the account decides it. An empty account_id takes the most recently used account.
   return postCreateChat({ project_id: projectId, account_id: accountId, message, model: pick });
+}
+
+/** The chat a chat list with none to show opens on: one waiting for its first send, which launches it on the
+ *  selected account. Nothing is created until then, and a list asking while another waits gets that one. */
+export async function awaitingChatForEmptyList(): Promise<string> {
+  const response = await fetch(apiUrl("/api/chats/awaiting"), { method: "POST" });
+  if (!response.ok) throw new Error(`The chat list could not open a new chat (${response.status})`);
+  const data = (await response.json()) as { chat_id: string };
+  return data.chat_id;
 }
 
 /**

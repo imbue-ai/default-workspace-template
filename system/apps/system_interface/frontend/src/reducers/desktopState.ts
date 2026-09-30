@@ -25,7 +25,6 @@ import type {
 } from "../model/records";
 import { EMPTY_LAYOUT } from "../model/records";
 import type { UpdateNotice } from "../model/UpdateNotice";
-import { freeTextRowsOf, isPathShowingChat } from "../model/launch";
 import {
   effectivePlacements,
   focusedWindowId,
@@ -347,29 +346,9 @@ export function findWindow(state: DesktopState, windowId: string): { desktop: De
   return null;
 }
 
-/** The app that holds chats: the one that can start one from typed text, which is the app of the
- *  launcher's primary free-text row (the first launch path declaring a ``text_param`` or a
- *  ``draft_param``). The shell names no app. Null when this machine has no such app. */
-export function chatApp(state: DesktopState): AppRecord | null {
-  return freeTextRowsOf(state.apps)[0]?.app ?? null;
-}
-
-/** A window showing the chat ``chatId``, with the desktop it is on, or null when none is.
- *  The active desktop's windows are read as this client sees them; every other desktop's are read
- *  as the shared record, since an independent window's path is this client's own and only the
- *  active desktop's layout is loaded. */
-export function windowShowingChat(
-  state: DesktopState,
-  chatId: string,
-): { desktop: Desktop; window: WindowRecord } | null {
-  for (const desktop of state.desktops) {
-    const isActive = desktop.id === state.activeDesktopId;
-    for (const window of desktop.windows) {
-      const seen = isActive ? effectiveWindow(state, window) : window;
-      if (isPathShowingChat(seen.path, chatId)) return { desktop, window };
-    }
-  }
-  return null;
+/** Whether an app registered for the Imbue Studio chrome's messages of ``type``, so the shell relays them. */
+export function isEmbedderMessageHandled(state: DesktopState, type: string): boolean {
+  return state.apps.some((app) => app.message_handlers.some((handler) => handler.type === type));
 }
 
 /** Every window of the active desktop placed, back to front. */
@@ -406,11 +385,20 @@ export function effectiveWindowTitle(state: DesktopState, window: WindowRecord, 
   return windowTitle(effectiveWindow(state, window), app);
 }
 
-/** Whether the workspace can stop and start this app: supervised, not critical to the workspace,
- *  and not running inside a critical app's program (the shell refuses those the same way). */
+/** Whether the workspace may Quit this app, and the shell's parker wakes it while it is stopped: supervised, not
+ *  critical to the workspace, and not running inside a critical app's program (the shell refuses those the same
+ *  way). */
 export function isAppStoppable(state: DesktopState, app: AppRecord): boolean {
   if (app.program === "" || app.critical) return false;
   return !state.apps.some((other) => other.critical && other.program === app.program);
+}
+
+/** Whether an app is shown as stopped: not running, and nothing brings it back on a request. A stoppable app's
+ *  stopped state is the shell's parker answering for it (the stop-when-no-windows spec, decision 7), so its
+ *  windows and shortcuts draw as ready; a row the workspace cannot start (no supervised program, critical, or
+ *  inside a critical app's program) is honestly down. */
+export function isAppShownStopped(state: DesktopState, app: AppRecord | undefined): boolean {
+  return app !== undefined && !app.is_running && !isAppStoppable(state, app);
 }
 
 /** Whether a window reads as minimized in these placements; one the placements lack reads as minimized. */

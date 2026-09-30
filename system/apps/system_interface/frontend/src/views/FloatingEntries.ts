@@ -4,8 +4,8 @@
  * at the theme's sticky level. The layer is inert; only each entry's own box takes a press. An entry is a
  * square button at the client's stored position (the drag is the gesture layer's, bound by
  * ``data-pinned-entry``) showing whether its window is shown or minimized the way the bar entry does. In
- * ``plain`` style it draws the app's icon on a raised tile; in ``avatar`` style, the workspace's avatar
- * wearing the current mood, on no tile at all.
+ * ``plain`` style it draws the app's icon, which brings its own tile; in ``avatar`` style, the workspace's
+ * avatar wearing the current mood. Neither is given a tile of the chrome's own.
  */
 
 import m from "mithril";
@@ -57,16 +57,23 @@ export const FloatingEntries: m.Component<FloatingEntriesAttrs> = {
             "aria-label": tooltip,
             class:
               "floating-entry pointer-events-auto absolute flex cursor-pointer items-center justify-center " +
-              "rounded-2xl touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-accent " +
+              "touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-accent " +
               (isAvatar
-                ? "border-0 bg-transparent p-0 [&>img]:size-full "
-                : "border p-2 [&>svg]:size-full " +
-                  (entry.isFocused
-                    ? "border-default bg-surface text-primary shadow-overlay "
-                    : "border-subtle bg-surface/90 text-secondary shadow-raised hover:bg-fill-hover ")) +
+                ? "rounded-2xl border-0 bg-transparent p-0 [&>img]:size-full "
+                : // The icon brings its own tile (`docs/system/app-icons.md`), so this box paints nothing and
+                  // pads nothing, the way a backdrop shortcut does not: a surface and 8px of padding around a
+                  // tile framed it in a second one, which is the pale edge the avatar loses when it is
+                  // switched to the icon. The corner is the tile's own 32 per cent rather than a fixed
+                  // radius, so the shadow traces the drawing at whatever size the entry is. The hover is the
+                  // tile growing and the open menu is a ring, since a tint behind the tile cannot be seen.
+                  // The text colour still matters: the built-in glyph for a window whose app the registry no
+                  // longer has is the one drawing here that takes it.
+                  "rounded-[32%] border-0 bg-transparent p-0 [&>svg]:size-full transition-transform " +
+                  "hover:scale-110 " +
+                  (entry.isFocused ? "text-primary shadow-overlay " : "text-secondary shadow-raised ")) +
               // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
               (entry.isMinimized || entry.isDetached ? "opacity-70 " : "") +
-              (isMenuOpen && !isAvatar ? "bg-fill-active" : ""),
+              (isMenuOpen && !isAvatar ? "ring-2 ring-accent" : ""),
             style: rectStyle(rect),
             ...hoverTooltipAttrs(tooltip),
             onclick: () => attrs.onClick(entry.window.id),

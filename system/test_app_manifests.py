@@ -16,6 +16,7 @@ from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
 from app_manifest.primitives import RESERVED_APP_NAMES
 from app_manifest.scope import APP_CONVENTIONS
 from app_manifest.scope import SKILL_CONVENTIONS
+from app_manifest.scope import compute_app_scope
 from oom_priority import bands
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -172,12 +173,32 @@ def test_every_convention_doc_the_scope_file_names_exists(convention_path: str) 
     assert (_REPO_ROOT / convention_path).is_file(), convention_path
 
 
+@pytest.mark.parametrize(
+    "manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name
+)
+def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(manifest_path: Path) -> None:
+    # The footprint's wiring is read off the real tree here, where every program block
+    # is a drop-in: a finder that reads the daemon's config alone finds nothing for any
+    # app, and the library's own tests write their own layout, so none of them sees that.
+    manifest = load_manifest(manifest_path, repo_root=_REPO_ROOT)
+    scope = compute_app_scope(_REPO_ROOT, manifest_path, manifest)
+    sections_by_path = {entry.path: list(entry.sections) for entry in scope.wiring}
+
+    for program in (manifest.program, *manifest.wiring.programs):
+        dropin = f"system/supervisord.conf.d/{program}.conf"
+        assert sections_by_path.get(dropin) == [f"program:{program}"], (
+            f"{manifest_path} runs program {program!r}, whose drop-in the footprint does not "
+            f"carry as wiring: {sections_by_path}"
+        )
+
+
 def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
     command_by_program = _command_by_program()
     for manifest_path in _every_manifest_path():
         for program in load_manifest(manifest_path, repo_root=_REPO_ROOT).wiring.programs:
             assert program in command_by_program, (
-                f"{manifest_path} declares wiring program {program!r}, which supervisord.conf does not define"
+                f"{manifest_path} declares wiring program {program!r}, which neither "
+                "system/supervisord.conf nor a drop-in beside it defines"
             )
 
 
@@ -352,12 +373,23 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False
+    # The stop-when-no-windows spec, section 4.2: the file viewer and Getting Started stop once no window shows
+    # them; the browser keeps running, since agents drive its browsers with no window; and the critical ones
+    # (which the manifest refuses the field on) never stop.
+    assert {name: manifest.stop_when_no_windows for name, manifest in by_name.items()} == {
+        "system_interface": False,
+        "chat": False,
+        "terminal": False,
+        "terminal-pty": False,
+        "files": True,
+        "browser": False,
+        "getting-started": True,
+    }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
     # focuses it like the browser's; it declares no launch path, so the desktop synthesizes ``open`` at its root.
     assert by_name["getting-started"].critical is False
     assert by_name["getting-started"].program == "getting-started"
     assert by_name["getting-started"].priority == "getting-started"
-    assert by_name["getting-started"].launcher_rank == 5
     assert by_name["getting-started"].launch_paths == ()
     assert by_name["getting-started"].default_shortcut is not None
     assert by_name["getting-started"].default_shortcut.launch == "open"
@@ -366,6 +398,10 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     # Its preview (update-app's preview_app.py) boots unregistered, so it neither re-points the live row nor opens
     # the first-visit window.
     assert by_name["getting-started"].preview.command[:2] == ("getting-started", "--no-register")
+    # One order for the built-ins: the desktop seeds its shortcuts in it and the launcher lists its apps in it.
+    assert sorted(
+        (manifest.launcher_rank, manifest.name) for manifest in by_name.values() if manifest.launcher_rank is not None
+    ) == [(10, "chat"), (15, "getting-started"), (20, "files"), (30, "browser"), (40, "terminal")]
     # Every seeded shortcut opens a new window of its app; the one browser is focused instead
     # (docs/system/specs/window-bound-resources.md section 3.1).
     for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):

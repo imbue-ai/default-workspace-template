@@ -53,8 +53,8 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
       };
     case "skill_expansion":
       return { kind: UserMessageKind.SkillExpansion, label: event.display_label ?? null, body: content };
-    // The user's own turn, shown as one: the context block the chat app wrote ahead of their
-    // words is kept out of the bubble.
+    // The user's own turn, shown as one: the machine context sent with their words (a seeded
+    // chat's context block, or background-task reports flushed into the turn) is kept out of the bubble.
     case "prompt_with_context":
       return { kind: UserMessageKind.UserPrompt, label: null, body: event.display_body ?? content };
     case "status":
@@ -106,8 +106,9 @@ export function isNoticeUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.Notice;
 }
 
-/** True for a seeded chat's first send: the user's own words behind the context block the chat
- *  app prefixed for the agent (the backend's `prompt_with_context`). A genuine human turn. */
+/** True for the user's own words sent with machine context for the agent -- a seeded chat's context
+ *  block, or background-task reports flushed into the turn (the backend's `prompt_with_context`).
+ *  A genuine human turn. */
 export function isPromptWithContext(event: ClassifiableUserMessage): boolean {
   return event.display === "prompt_with_context";
 }
@@ -221,15 +222,19 @@ export function secretResolutionRequestIdOf(event: Pick<UserMessageEvent, "displ
   return event.request_id ?? null;
 }
 
-/** The user's note on a declined secret request: whatever follows the machine tag. */
 const SECRET_TAG_RE = /\(secret:\s*(?:stored|declined|superseded),\s*request_id:\s*[^)\s]+\)\s*/;
 
-export function secretResolutionNoteOf(event: Pick<UserMessageEvent, "display" | "content">): string | null {
+/** The user's note on a declined secret request: whatever follows the machine tag. Read from the
+ *  notice the backend supplies without any background-task reports a harness flushed with it. */
+export function secretResolutionNoteOf(
+  event: Pick<UserMessageEvent, "display" | "content" | "display_body">,
+): string | null {
   if (event.display !== "secret_resolution") {
     return null;
   }
-  const match = SECRET_TAG_RE.exec(event.content);
+  const notice = event.display_body ?? event.content;
+  const match = SECRET_TAG_RE.exec(notice);
   if (match === null) return null;
-  const note = event.content.slice(match.index + match[0].length).trim();
+  const note = notice.slice(match.index + match[0].length).trim();
   return note === "" ? null : note;
 }

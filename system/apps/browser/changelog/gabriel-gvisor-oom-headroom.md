@@ -1,0 +1,1 @@
+The browser service now reaps its PulseAudio daemon the moment it exits. It started the daemon with a bare `Popen` it never waited for, so a daemon shed under memory pressure stayed a zombie. The imbue-ai earlyoom fork before v1.9.0-imbue.3 scored such a zombie on its band alone, and signalled one in a loop until the host's memory cgroup killed the whole workspace.

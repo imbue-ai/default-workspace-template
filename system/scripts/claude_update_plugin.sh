@@ -24,8 +24,7 @@ set -euo pipefail
 #     provision output, and the worker itself reports the missing gate.
 #
 #   --strict (exit 1 when any plugin failed to install) is for callers that
-#   would rather fail fast than run without the plugins, e.g. the acceptance
-#   test in test_claude_plugin_first_session.py.
+#   would rather fail fast than run without the plugins.
 #
 # The cache is never wiped here. Every claude in the workspace shares one
 # config dir, so deleting plugins/cache/<marketplace> while other sessions run

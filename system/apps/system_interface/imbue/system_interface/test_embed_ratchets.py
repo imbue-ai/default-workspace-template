@@ -54,7 +54,7 @@ _PACKAGE_IMPORT = re.compile(
     + r""")[^"']+)["']"""
 )
 
-pytestmark = pytest.mark.xdist_group(name="ratchets")
+pytestmark = [pytest.mark.xdist_group(name="ratchets"), pytest.mark.frontend]
 
 _RAW_POST_MESSAGE_RULE = RatchetRuleInfo(
     rule_name="raw postMessage / message-listener usages outside the sanctioned boundaries",

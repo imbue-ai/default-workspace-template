@@ -118,8 +118,15 @@ create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_ac
 # git-ignored), so a create run from inside one -- a worker launching a worker --
 # would name no type and no account. Sharing the workspace's copy by symlink keeps
 # every checkout of the workspace on the same default account.
+#
+# The mngr assets (docs/system/style_guide.md links into them, and the frontends bundle
+# them) are fetched, not tracked, so a worktree has none until something fetches them.
+# Copying the workspace's assets into a worker's worktree gives it them at the
+# workspace's pin. Copied, not shared: vite resolves a symlink to its target, and
+# vitest then refuses to load an asset from outside the worktree it runs in.
 [work_dir_extra_paths]
 ".mngr/settings.local.toml" = "SHARE"
+"system/vendor/mngr-assets" = "COPY"
 
 # Agent types
 
@@ -490,15 +497,38 @@ host_log_dir = "/var/log/mngr"
 # socket inode. supervisord installs its control socket via a hard link, so on a
 # gofer-backed /run it wedges ("Unlinking stale socket") and never starts
 # system_interface -- the workspace then sits on the "Loading workspace" loader
-# forever. A tmpfs /run makes the hard link work. The same two mounts are applied
-# by the aws-<region> provider start args and by the imbue_cloud slice bake's
-# per-box `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2
-# slices run under runsc from the bake).
-# /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
-# persist or ride a backup. It says `exec` because Docker mounts a bare
+# forever. A tmpfs /run makes the hard link work. This block covers the local
+# docker provider only: the cloud VM providers (aws / gcp / azure / vultr / ovh,
+# all on mngr_vps) add both mounts themselves whenever their `docker_runtime`
+# is runsc, with /tmp capped at an eighth of the VM's RAM, and the imbue_cloud
+# slice bake passes its own pair through its per-box
+# `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2 slices
+# run under runsc from the bake).
+# /tmp is tmpfs here so it starts empty on every container start: the
+# container's root filesystem, /tmp included, otherwise survives a restart
+# (under runc, and under runsc with --overlay2=none, which also mounts its own
+# unbounded tmpfs on an empty /tmp). A tmpfs is memory that counts against the
+# container's limit and no process kill frees, so it is capped: a write past
+# the cap fails with ENOSPC instead of OOM-killing the workspace. The cap is a
+# fixed 1 GiB, an eighth of the default_memory below (the ratio the cloud
+# providers use), because a `size=N%` resolves against the host's RAM rather
+# than the container's limit. It says `exec` because Docker mounts a bare
 # `--tmpfs` noexec, and a stub executable a test writes under /tmp and puts on
 # PATH is then skipped, so the real binary it stands in for runs instead.
-default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec"]
+default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp:exec,size=1g"]
+# The size of every new local workspace container: `docker run --cpus` and
+# `--memory` (with `--memory-swap` equal to the memory cap, so a workspace at its
+# limit is shed by the OOM killer rather than swapping the laptop to a halt).
+# Without a cap a runaway workspace can take the whole machine down; with one,
+# under runsc the container's /proc/meminfo reports the cap as MemTotal, so the
+# workspace's earlyoom (system/services/oom_priority) sheds relative to it.
+# Docker refuses a CPU cap above the daemon's CPU count, so mngr clamps
+# default_cpus to it (a 2-core laptop gets 2 CPUs, not a failed create). A
+# per-create `-s --cpus=N` / `-s --memory=Ng` overrides either, and `mngr docker
+# resize <host> --cpus N --memory Ng` changes a workspace's size afterwards;
+# `mngr list` reports the recorded size as host.resource.
+default_cpus = 4
+default_memory = "8g"
 
 [providers.lima]
 # is_enabled=false (mirrors [providers.docker]) is load-bearing: the lima backend
@@ -521,18 +551,25 @@ is_host_data_volume_exposed = false
 is_run_as_root = true
 # The user-data layout (matching the docker provider): /home/user symlinks to
 # the btrfs data disk with mngr's data dir inside it; plain-text mngr service
-# logs go to /var/log/mngr.
+# logs go to /var/log/mngr. That data disk (mngr's default 100 GiB, sparse) is
+# the one disk that grows: the lima create template also moves the regenerable
+# caches onto it (system/scripts/lima_cache_on_data_disk.sh), mngr caps the
+# VM's journal, and `mngr lima resize --disk` grows it. The VM's boot disk is
+# the pre-baked image's fixed size (see [create_templates.lima]).
 host_dir = "/home/user/.mngr"
 volume_home_path = "/home/user"
 host_log_dir = "/var/log/mngr"
 # Pin the Lima guest to the same Debian release the docker image uses (trixie),
-# so setup_system.sh provisions an identical toolchain everywhere. Set here
-# (dwt-side) rather than bumping mngr_lima's bookworm default, which outside
-# mngr users keep. Served from imbue's artifact mirror rather than
-# cloud.debian.org, which prunes old releases: the same image release the
-# gen-2 cloud slices boot (mngr's apps/minds_admin/.../slices/mirror_artifacts.py
-# is the manifest; bump both together, uploading the new release with
-# `minds-admin artifacts upload` before landing the bump here).
+# so setup_system.sh provisions an identical toolchain everywhere. mngr_lima's
+# library default is now this same release from the same mirror; the pin stays
+# here so the workspace's guest image is chosen by the template rather than by
+# whichever mngr version the desktop app happens to ship. Served from imbue's
+# artifact mirror rather than cloud.debian.org, which prunes old releases: the
+# same image release the gen-2 cloud slices boot (mngr's
+# apps/minds_admin/.../slices/mirror_artifacts.py is the manifest and
+# libs/mngr_lima/imbue/mngr_lima/constants.py the library default; bump all of
+# them together, uploading the new release with `minds-admin artifacts upload`
+# before landing the bump here).
 default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
 default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
 
@@ -595,14 +632,10 @@ host_log_dir = "/var/log/mngr"
 # the template that is shared across all agent types
 [create_templates.main]
 type = "main"
-# bootstrap is the only extra_window now. It runs first-boot setup (git config)
-# and then launches
-# supervisord, which runs every background service (system_interface, web,
-# share-gateway, app-watcher, host-backup, terminal, and the one-shot
-# deferred-install -- see system/supervisord.conf; the opt-in github-sync service is
-# added by its skill). The old git_auth_setup window is gone (the git config
-# it performed now runs inside bootstrap), and terminal is a supervisord
-# service rather than its own window.
+# bootstrap is the only extra_window. It runs first-boot setup (git config) and
+# then launches supervisord, which runs every background service (see
+# system/supervisord.conf; the opt-in github-sync service is added by its skill).
+# terminal is a supervisord service rather than its own window.
 extra_window = ["bootstrap='uv run bootstrap'"]
 # Write a sane default tmux config on every Imbue Studio host. tuple-typed
 # `extra_provision_command` stacks across templates (see
@@ -686,6 +719,12 @@ setting__extend = ["providers.docker.docker_runtime=runsc"]
 provider = "lima"
 target_path = "/home/user/workspace/"
 idle_mode = "disabled"
+# The VM's size. --cpus / --memory are what the VM boots with; --disk is its
+# boot disk, which holds the OS and toolchain and is the pre-baked image's
+# size (build-lima-image.sh bakes 20 GiB, and lima cannot shrink a disk below
+# its image). The workspace's data lives on the separate btrfs data disk
+# [providers.lima] sizes. `mngr lima resize <host> --cpus/--memory/--disk`
+# changes a host's size afterwards (--disk there grows the data disk).
 start_arg__extend = ["--cpus=2", "--memory=4", "--disk=20"]
 # Mirror the docker template: flip the (default-disabled) lima provider on for
 # this create. Redundant in practice -- `@<name>.lima` resolves the provider by
@@ -712,11 +751,14 @@ setting__extend = ["providers.lima.is_enabled=true"]
 extra_provision_command__extend = [
     # Move root's home to the persistent /home/user tree (the Dockerfile does
     # this for container images; VM/sandbox provisioning does it here) so
-    # $HOME, passwd, and sshd agree. /var/cache/user is the off-volume cache
-    # target the host env points XDG_CACHE_HOME / npm_config_cache at.
-    # (Direct passwd edit rather than `usermod -d`: usermod refuses to modify
-    # a user with running processes, and root always has one here.)
-    "sed -i 's|^root:\\([^:]*:[^:]*:[^:]*:[^:]*\\):/root:|root:\\1:/home/user:|' /etc/passwd && grep -q '^root:.*:/home/user:' /etc/passwd && mkdir -p /home/user /var/cache/user",
+    # $HOME, passwd, and sshd agree. (Direct passwd edit rather than
+    # `usermod -d`: usermod refuses to modify a user with running processes,
+    # and root always has one here.)
+    "sed -i 's|^root:\\([^:]*:[^:]*:[^:]*:[^:]*\\):/root:|root:\\1:/home/user:|' /etc/passwd && grep -q '^root:.*:/home/user:' /etc/passwd && mkdir -p /home/user",
+    # Put the caches the host env points XDG_CACHE_HOME / npm_config_cache at
+    # (/var/cache/user) on the resizable btrfs data disk rather than the VM's
+    # fixed boot disk, before install_dependencies.sh fills them.
+    "sh /home/user/workspace/system/scripts/lima_cache_on_data_disk.sh",
     "bash /home/user/workspace/system/scripts/setup_system.sh",
     "bash /home/user/workspace/system/scripts/install_dependencies.sh",
     "bash /home/user/workspace/system/scripts/build_workspace.sh",
@@ -1648,8 +1690,6 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 ## Aggregate keys in a role use `__extend`, never a bare assign: templates stack,
 ## and a bare assign over a key an earlier template in the stack contributed to is
 ## rejected by the settings narrowing guard.
-
-## --- roles ---
 
 # Chat: a user-facing conversational agent, sharing the workspace's work
 # directory (`transfer = none`) rather than taking a worktree of its own -- one
