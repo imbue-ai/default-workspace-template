@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import threading
 from collections.abc import Callable
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -487,6 +488,35 @@ def test_a_stopped_chat_read_after_its_stop_is_released_once_nobody_streams_it(t
         # With neither, the next release drops it; the running chat keeps its own.
         state.release_unviewed_stopped_transcripts()
         assert state.watchers == {"running-agent": running_watcher}
+    finally:
+        state.shutdown()
+
+
+class _ReleasingWhileSeedingAgentManager(AgentManager):
+    """Runs the chat app's release once, while a watcher is seeded and before it starts."""
+
+    release: Callable[[], None] | None = None
+
+    def update_session_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
+        release, self.release = self.release, None
+        if release is not None:
+            release()
+        super().update_session_events(agent_id, events)
+
+
+def test_a_watcher_released_before_it_starts_leaves_no_watch_thread_running(tmp_path: Path) -> None:
+    manager = _ReleasingWhileSeedingAgentManager.build(WebSocketBroadcaster())
+    state = build_test_state(agent_manager=manager)
+    seed_agent_state(manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    stopped_info = _claude_agent_info_with_one_message(tmp_path, "stopped-agent", "STOPPED")
+    manager.release = state.release_unviewed_stopped_transcripts
+    threads_before = set(threading.enumerate())
+    try:
+        watcher = state.get_or_create_watcher(stopped_info)
+
+        assert state.watchers == {}
+        assert len(watcher.get_all_events()) == 1
+        assert set(threading.enumerate()) - threads_before == set()
     finally:
         state.shutdown()
 

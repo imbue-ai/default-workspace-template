@@ -172,6 +172,12 @@ class ChatAppState(MutableModel):
         # agent manager's own lock.
         self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
         watcher.start()
+        # An eviction that popped the watcher before it started stopped nothing (stop is a
+        # no-op until start), so the thread just started would run with nobody left to stop it.
+        with self._watchers_lock:
+            is_evicted = self.watchers.get(agent_info.id) is not watcher
+        if is_evicted:
+            watcher.stop()
         return watcher
 
     def get_or_create_loader(self, agent_info: AgentInfo) -> TranscriptLoader:
