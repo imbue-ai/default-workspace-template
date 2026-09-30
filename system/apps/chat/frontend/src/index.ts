@@ -22,6 +22,8 @@ import { initShellPermissionResolutions } from "./views/permission-card";
 import { connectChatToShell, getShellHandshake, isFrameRendered } from "./shell";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
+import { installLinkRouting, pageLinkRoutingContext } from "@imbue/workspace-ui/src/links";
+import { MESSAGE_LINK_SELECTOR } from "./markdown";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { prependToComposer } from "./views/MessageInput";
 
@@ -86,6 +88,9 @@ async function bootstrap(): Promise<void> {
   void loadAccountsWithRetry();
   const rootElement = document.getElementById("app");
   if (rootElement) {
+    // A link in a message opens inside the workspace (a file in the File Viewer, a local address in the browser)
+    // or in the user's browser, and never takes the chat's own page with it.
+    installLinkRouting(rootElement, MESSAGE_LINK_SELECTOR, pageLinkRoutingContext(window, connection));
     m.mount(rootElement, ChatDocument(chatId, agentId, sessionId));
     await runHook("ready");
   }

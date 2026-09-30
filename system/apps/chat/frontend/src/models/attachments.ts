@@ -4,8 +4,8 @@
  *
  * The composer appends a "See attachment here:" line to the message it sends,
  * whose comma-separated values are the markdown for each uploaded file: an
- * inline image (``![path](path)``) for images, a download link (``[path](path)``)
- * otherwise, each referencing the file by its absolute path on the agent VM
+ * inline image (``![path](path)``) for images, a file link (``[path](path)``, which
+ * opens the file in the File Viewer) otherwise, each referencing the file by its absolute path on the agent VM
  * (e.g. "/code/uploads/<id>/<name>"). The line stays visible in the bubble and
  * renders through the shared markdown renderer -- the chat app serves
  * the file at that absolute path -- so the attachment is transparent to both the
@@ -74,7 +74,7 @@ export function attachmentServeUrl(path: string): string {
 /**
  * Markdown for one attachment, referencing the file by its absolute on-disk
  * path. An image renders inline (``![path](path)``); any other file becomes a
- * download link (``[path](path)``). The absolute path is used as both the label
+ * file link (``[path](path)``), which opens it in the File Viewer. The absolute path is used as both the label
  * / alt text and the URL, so the chat app serves the file at that path
  * and the path stays visible to the reader.
  *

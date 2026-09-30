@@ -1,6 +1,7 @@
 import m from "mithril";
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
+import { classifyLink } from "@imbue/workspace-ui/src/links";
 import { openImageLightbox } from "./lightbox";
 import { isBlockExpanded, setBlockExpanded } from "./views/expansion-state";
 
@@ -10,6 +11,9 @@ const marked = new Marked({
 });
 
 const TOOL_CALL_PREFIX = "Tool call: ";
+
+/** The links of rendered markdown (a message, a step's narration): the ones the chat routes when clicked. */
+export const MESSAGE_LINK_SELECTOR = ".markdown-content a[href]";
 
 export function renderMarkdown(source: string): string {
   const rawHtml = marked.parse(source) as string;
@@ -25,22 +29,32 @@ export function renderMarkdown(source: string): string {
 /**
  * Keep a clicked message link from replacing the conversation.
  *
- * A web link is left alone: the desktop app opens external http(s), mailto and
- * tel links in the browser. An absolute path is a file the chat backend serves
- * as a download (see the show-files-in-chat skill); ``download`` makes a missing
- * file fail as a download rather than load an error page over the chat. Anything
- * else (a relative path, a fragment, another scheme) cannot open anything from
- * the chat's origin, so it is unwrapped to its text.
+ * A link keeps its real target, so hovering it and copying its address show where it goes; the
+ * page's link routing (``installLinkRouting``) takes the click. Only a link the desktop app sends
+ * to the user's browser (an external web, mailto or tel link) opens in a new browsing context, so
+ * the desktop app turns it away from a window of its own and a plain browser keeps the chat. A
+ * file path or a link to a local address opens inside the workspace instead. Anything else (a
+ * relative path, a fragment, another scheme) cannot open anything, so it is unwrapped to its text.
  */
 function rewritePathLinks(root: DocumentFragment): void {
   for (const anchor of Array.from(root.querySelectorAll("a"))) {
-    const href = anchor.getAttribute("href") ?? "";
-    if (/^(?:https?:|mailto:|tel:|\/\/)/i.test(href)) continue;
-    if (href.startsWith("/")) {
-      anchor.setAttribute("download", "");
-      continue;
+    const target = classifyLink(anchor.getAttribute("href") ?? "", window.location.host);
+    switch (target.kind) {
+      case "unroutable":
+        anchor.replaceWith(...Array.from(anchor.childNodes));
+        break;
+      case "external":
+        anchor.setAttribute("target", "_blank");
+        anchor.setAttribute("rel", "noopener noreferrer");
+        break;
+      case "file":
+      case "local-url":
+      case "app-address":
+      case "other-workspace":
+        anchor.removeAttribute("target");
+        anchor.removeAttribute("download");
+        break;
     }
-    anchor.replaceWith(...Array.from(anchor.childNodes));
   }
 }
 

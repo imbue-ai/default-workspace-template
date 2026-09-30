@@ -56,6 +56,11 @@ export function workspaceHostCoordinate(host: string): string {
   return coordinateIndex < 0 ? host : labels.slice(coordinateIndex).join(".");
 }
 
+/** Whether ``host`` is a workspace's: some hostname label of it starts a workspace coordinate. */
+export function hasWorkspaceCoordinate(host: string): boolean {
+  return host.split(".").some((label) => WORKSPACE_COORDINATE_LABEL.test(label));
+}
+
 /** Derive the origin URL (with trailing slash) whose first hostname label is
  *  ``hostLabel`` (an app's ``<name>-<rand>`` origin label). ``host`` and
  *  ``protocol`` default to the shell's own ``window.location`` but are
