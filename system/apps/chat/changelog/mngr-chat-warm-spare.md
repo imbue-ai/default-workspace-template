@@ -8,4 +8,4 @@ New chats start instantly. The chat app now keeps a spare agent already running 
 
 - Spares never appear in any chat list until a chat takes one, including in a chat preview (a second copy of the chat app beside the live one), which follows the live chat's spares without creating, handing over or destroying any.
 
-- Under memory pressure a spare is shed before any agent or agent subprocess (the new `SPARE_AGENT` band, the ceiling it shares with the browser's renderers), since losing it loses no work. The moment a chat takes it, it moves into the chat band as a freshly started chat, however long it waited. A spare that dies is replaced only after the five-minute backoff, so memory pressure does not churn it.
+- Under memory pressure a spare is shed before any agent or agent subprocess (the new `SPARE_AGENT` band, the ceiling it shares with the browser's renderers), since losing it loses no work. The moment a chat takes it, it moves into the chat band as a freshly started chat, however long it waited, and so do the processes its harness started while it waited. A spare that dies is replaced only after the five-minute backoff, so memory pressure does not churn it.

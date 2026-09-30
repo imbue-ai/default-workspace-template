@@ -15,8 +15,10 @@ from typing import Final
 from uuid import uuid4
 
 from loguru import logger as _loguru_logger
+from oom_priority.bands import CHAT_AGENT_BASE
 from oom_priority.bands import SPARE_AGENT
 from oom_priority.bands import set_oom_score_adj
+from oom_priority.proctree import list_descendant_pids
 from oom_priority.registry import lookup_pid_by_agent_id
 from pydantic import Field
 
@@ -881,6 +883,8 @@ class AgentManager:
     _oom_score_adj_writer: Callable[[int, int], bool] | None
     # The live main-process pid mngr's launch wrapper registered for an agent id, or None.
     _resolve_agent_pid: Callable[[str], int | None]
+    # Every live descendant of a pid.
+    _list_descendant_pids: Callable[[int], list[int]]
     # The spares whose ``mngr destroy`` is running, so a sweep does not start a second one.
     _spare_ids_being_discarded: set[ChatId]
     # ``time.monotonic()`` before which no spare is created or destroyed, set when one failed.
@@ -1005,6 +1009,7 @@ class AgentManager:
         spare_chat_pool_size: int = SPARE_CHAT_POOL_SIZE,
         oom_score_adj_writer: Callable[[int, int], bool] = set_oom_score_adj,
         agent_pid_resolver: Callable[[str], int | None] = lookup_pid_by_agent_id,
+        descendant_pid_lister: Callable[[int], list[int]] = list_descendant_pids,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
@@ -1029,8 +1034,9 @@ class AgentManager:
         refuses every switch (a handoff or a rebind), since its chat records are a scratch copy.
         ``spare_chat_store`` records the spare agents a new chat is handed (``spare_chat.py``);
         None keeps none. ``spare_chat_pool_size`` is how many idle spares it keeps.
-        ``oom_score_adj_writer`` and ``agent_pid_resolver`` are how the agents' memory-shedding
-        bands are written: the real ``/proc`` writer and pid registry unless a test passes its own.
+        ``oom_score_adj_writer``, ``agent_pid_resolver``, and ``descendant_pid_lister`` are how
+        the agents' memory-shedding bands are written: the real ``/proc`` writer, pid registry,
+        and process-tree walk unless a test passes its own.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -1060,6 +1066,7 @@ class AgentManager:
         manager._spare_chat_pool_size = spare_chat_pool_size
         manager._oom_score_adj_writer = None if is_secondary else oom_score_adj_writer
         manager._resolve_agent_pid = agent_pid_resolver
+        manager._list_descendant_pids = descendant_pid_lister
         manager._chat_files_root = chat_files_root
         manager._prompt_template_path = prompt_template_path
         manager._handoff_capabilities = None
@@ -3271,9 +3278,8 @@ class AgentManager:
         _record_mru(account_id)
         if provisional is None:
             _loguru_logger.info("Handed spare agent {} to a new chat", spare.chat_id)
+            self._move_handed_spare_into_chat_band(spare.chat_id)
             self._broadcast_chats_updated()
-            # Out of the spares' shedding band and into the chat band, as a chat just started.
-            self._oom_prioritizer.record_chat_started(spare.chat_id)
             if model_pick is not None or message:
                 self._creation_cg.start_new_thread(
                     target=self._settle_new_chat,
@@ -3400,6 +3406,22 @@ class AgentManager:
             for spare_id, pid in pid_by_spare_id.items():
                 if pid is not None and spare_id in pooled_ids:
                     writer(pid, SPARE_AGENT)
+
+    def _move_handed_spare_into_chat_band(self, chat_id: ChatId) -> None:
+        """Move a spare a chat just took out of the ``SPARE_AGENT`` band, as a chat just started.
+
+        The chat prioritizer moves its main process. The subprocesses its harness spawned while
+        it waited inherited ``SPARE_AGENT`` and nothing re-tags them, so they are brought down to
+        the chat launch band, where a chat's harness subprocesses start. The main process moves
+        first, so a subprocess spawned meanwhile inherits the chat band.
+        """
+        self._oom_prioritizer.record_chat_started(chat_id)
+        writer = self._oom_score_adj_writer
+        pid = None if writer is None else self._resolve_agent_pid(str(chat_id))
+        if writer is None or pid is None:
+            return
+        for descendant_pid in self._list_descendant_pids(pid):
+            writer(descendant_pid, CHAT_AGENT_BASE)
 
     def _follow_live_spares(self, live_spare_store: SpareChatStore) -> None:
         """A secondary chat's view of the live chat's spares: re-read on every sweep, so a spare the
@@ -3587,8 +3609,8 @@ class AgentManager:
         try:
             if error is None:
                 _loguru_logger.info("Handed claimed spare agent {} to its chat", chat_id)
+                self._move_handed_spare_into_chat_band(chat_id)
                 self._broadcast_chats_updated()
-                self._oom_prioritizer.record_chat_started(chat_id)
                 self._settle_new_chat(chat_id, str(chat_id), claim.model_pick, claim.message)
         finally:
             if settled is not None:
