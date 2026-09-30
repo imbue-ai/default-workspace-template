@@ -16,7 +16,6 @@ import {
   isEditableElement,
   imageSrcOf,
   isPasswordField,
-  linkHrefOf,
   referenceBlock,
   selectionOf,
   type ElementReference,
@@ -212,9 +211,9 @@ export function standardContextMenuRows(target: ContextMenuTarget, openLink: Ope
     editRows.push({ kind: "action", key: "select-all", label: "Select All", onSelect: () => selectAllIn(element) });
   }
   const mediaRows: ContextMenuRow[] = [];
-  const href = linkHrefOf(element);
   const anchor = element.closest("a[href]");
-  if (href !== null && anchor instanceof HTMLAnchorElement) {
+  if (anchor instanceof HTMLAnchorElement) {
+    const href = anchor.href;
     mediaRows.push(
       { kind: "action", key: "copy-link", label: "Copy link address", onSelect: () => void copyText(href) },
       { kind: "action", key: "open-link", label: "Open link", onSelect: () => openLink(anchor) },
