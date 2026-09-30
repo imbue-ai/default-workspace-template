@@ -3319,43 +3319,14 @@ class AgentManager:
             if not self._is_agent_list_known or now < self._spare_retry_not_before:
                 return
             terms = None if account is None or harness is None else self._new_chat_terms_locked(account.id, "")
-            stale_spares = [
-                spare
-                for spare in self._spares
-                if spare.phase is SpareChatPhase.READY and not self._is_spare_usable_locked(spare, terms)
-            ]
-            for stale in stale_spares:
-                self._set_spare_phase_locked(stale.chat_id, SpareChatPhase.DISCARDING)
-            # A spare whose process died was most likely shed for memory: its replacement waits out
-            # the backoff rather than being shed in turn.
-            if any(not self._is_spare_process_alive_locked(stale) for stale in stale_spares):
-                self._spare_retry_not_before = now + SPARE_CHAT_RETRY_BACKOFF_SECONDS
+            self._retire_stale_spares_locked(terms, now)
             discarded_ids = [
                 spare.chat_id
                 for spare in self._spares
                 if spare.phase is SpareChatPhase.DISCARDING and spare.chat_id not in self._spare_ids_being_discarded
             ]
-            pooled = pooled_spares(self._spares)
-            is_one_being_created = any(spare.phase is SpareChatPhase.CREATING for spare in pooled)
-            is_one_ready = any(spare.phase is SpareChatPhase.READY for spare in pooled)
             work_dir = self._resolve_agent_work_dir(self._own_agent_id)
-            new_spare: SpareChatAgent | None = None
-            if (
-                terms is not None
-                and work_dir is not None
-                and now >= self._spare_retry_not_before
-                and not is_one_being_created
-                and len(pooled) < self._spare_chat_pool_size
-                and (not is_one_ready or now >= self._spare_replenish_not_before)
-            ):
-                new_spare = SpareChatAgent(
-                    chat_id=ChatId(str(AgentId())),
-                    display_name=self._mint_display_name_locked(""),
-                    terms=terms,
-                    phase=SpareChatPhase.CREATING,
-                )
-                # On record before the create, so the observe stream never lists it as a chat.
-                self._set_spares_locked((*self._spares, new_spare))
+            new_spare = None if work_dir is None else self._record_new_spare_locked(terms, now)
             # Marked only once nothing above can raise, so a failed write leaves them to the next sweep.
             self._spare_ids_being_discarded.update(discarded_ids)
         for discarded_id in discarded_ids:
@@ -3372,6 +3343,44 @@ class AgentManager:
                 name=f"create-spare-{str(new_spare.chat_id)[:8]}",
                 is_checked=False,
             )
+
+    def _retire_stale_spares_locked(self, terms: SpareChatTerms | None, now: float) -> None:
+        """Mark every ready spare that cannot be handed to a new chat on ``terms`` as due a destroy. Lock held."""
+        stale_spares = [
+            spare
+            for spare in self._spares
+            if spare.phase is SpareChatPhase.READY and not self._is_spare_usable_locked(spare, terms)
+        ]
+        for stale in stale_spares:
+            self._set_spare_phase_locked(stale.chat_id, SpareChatPhase.DISCARDING)
+        # A spare whose process died was most likely shed for memory: its replacement waits out
+        # the backoff rather than being shed in turn.
+        if any(not self._is_spare_process_alive_locked(stale) for stale in stale_spares):
+            self._spare_retry_not_before = now + SPARE_CHAT_RETRY_BACKOFF_SECONDS
+
+    def _record_new_spare_locked(self, terms: SpareChatTerms | None, now: float) -> SpareChatAgent | None:
+        """Record the next spare on ``terms`` when the pool is short and may grow now, and return it for
+        its create; None when no spare is due. Lock held."""
+        pooled = pooled_spares(self._spares)
+        is_one_being_created = any(spare.phase is SpareChatPhase.CREATING for spare in pooled)
+        is_one_ready = any(spare.phase is SpareChatPhase.READY for spare in pooled)
+        if (
+            terms is None
+            or now < self._spare_retry_not_before
+            or is_one_being_created
+            or len(pooled) >= self._spare_chat_pool_size
+            or (is_one_ready and now < self._spare_replenish_not_before)
+        ):
+            return None
+        new_spare = SpareChatAgent(
+            chat_id=ChatId(str(AgentId())),
+            display_name=self._mint_display_name_locked(""),
+            terms=terms,
+            phase=SpareChatPhase.CREATING,
+        )
+        # On record before the create, so the observe stream never lists it as a chat.
+        self._set_spares_locked((*self._spares, new_spare))
+        return new_spare
 
     def _tag_spares_for_shedding_first(self) -> None:
         """Put every spare's process in the ``SPARE_AGENT`` band, the first to be shed under memory
