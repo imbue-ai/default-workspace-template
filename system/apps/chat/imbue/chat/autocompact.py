@@ -97,7 +97,7 @@ class ChatAutoCompactor:
         batch_result = self._run_autocompact(names)
         # One chat the command cannot resolve (e.g. stopped since it was listed) fails the
         # whole command with mngr's exit 1, so the rest would go unchecked until it is gone.
-        # Any other failure (a timeout, a crash, no mngr to launch) would repeat for each chat.
+        # Any other failure (a timeout, being killed, no mngr to launch) would repeat for each chat.
         is_retried_per_chat = (
             len(names) > 1
             and batch_result is not None

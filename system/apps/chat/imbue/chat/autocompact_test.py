@@ -203,10 +203,10 @@ def test_a_failed_batch_is_retried_one_chat_at_a_time() -> None:
 
 @pytest.mark.parametrize(
     "batch_outcome",
-    ["crash", "timeout", "cannot_launch"],
+    ["killed", "timeout", "cannot_launch"],
 )
 def test_a_batch_failure_no_single_chat_causes_is_not_retried_per_chat(batch_outcome: str) -> None:
-    """A crash, a timeout, or no mngr to launch would fail again for each chat, so only one launch is paid."""
+    """Being killed, a timeout, or no mngr to launch would fail again for each chat, so only one launch is paid."""
     recorded_commands: list[list[str]] = []
 
     def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
@@ -217,7 +217,7 @@ def test_a_batch_failure_no_single_chat_causes_is_not_retried_per_chat(batch_out
             )
         return FinishedProcess(
             command=tuple(command),
-            returncode=2 if batch_outcome == "crash" else 1,
+            returncode=-9 if batch_outcome == "killed" else 1,
             stdout="",
             stderr="",
             is_timed_out=batch_outcome == "timeout",
