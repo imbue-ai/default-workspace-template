@@ -19,13 +19,13 @@ from typing import Final
 
 from app_manifest.primitives import AppName
 from app_manifest.registry import APP_CONTRACT_ROUTE, read_origin_label
-from app_manifest.shell_windows import window_query_value
 from flask import Blueprint, Response, jsonify, request, send_file
 from flask.typing import ResponseReturnValue
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
+from workspace_layout.windows import window_query_value
 
 from terminal_app.errors import (
     InvalidTerminalValueError,

@@ -3417,6 +3417,7 @@ dependencies = [
     { name = "loguru" },
     { name = "pydantic" },
     { name = "werkzeug" },
+    { name = "workspace-layout" },
 ]
 
 [package.dev-dependencies]
@@ -3435,6 +3436,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [package.metadata.requires-dev]

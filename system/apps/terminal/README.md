@@ -94,7 +94,7 @@ session in its URL, and a reload reattaches to that session.
 
 `window_sweep.py` (`WindowSweeper`) reads the shell's desktops
 (`GET /api/desktops` on `MINDS_WORKSPACE_SERVER_URL`, through
-`app_manifest.shell_windows`) and hands the terminal's window paths to
+`workspace_layout.windows`) and hands the terminal's window paths to
 `TmuxSessionSource.sweep_windows`: a remembered terminal some window shows is
 marked window-seen in the store (`is_window_seen`), and one that was marked and
 no window shows any more is deleted. A terminal no window has ever shown (a
