@@ -13,6 +13,7 @@ from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
 from imbue.system_interface.avatar.selection import SELECTION_FILENAME
 from imbue.system_interface.avatar.testing import MINIMAL_DESIGN_SVG
 from imbue.system_interface.avatar.testing import design_registration
+from imbue.system_interface.avatar.testing import png_size
 from imbue.system_interface.shell.testing import drain_messages
 
 _REGISTRATION = design_registration("mine").model_dump(mode="json")
@@ -43,6 +44,20 @@ def test_the_image_is_an_isolated_svg_wearing_the_mood(client: FlaskClient) -> N
     )
     assert client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg?mood=angry").status_code == 400
     assert client.get("/api/avatars/nobody/image.svg").status_code == 404
+
+
+def test_the_icon_is_a_png_of_the_asked_size_defaulting_to_the_touch_icons(client: FlaskClient) -> None:
+    response = client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/icon.png?size=64")
+    assert response.status_code == 200
+    assert response.mimetype == "image/png"
+    assert response.headers["Cache-Control"] == "no-cache"
+    assert png_size(response.data) == (64, 64)
+    assert png_size(client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/icon.png").data) == (180, 180)
+    client.post("/api/avatars", json=_REGISTRATION)
+    assert png_size(client.get("/api/avatars/mine/icon.png?size=512").data) == (512, 512)
+    assert client.get("/api/avatars/nobody/icon.png").status_code == 404
+    for size in ("0", "4096", "big"):
+        assert client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/icon.png?size={size}").status_code == 400
 
 
 def test_the_source_is_the_original_as_an_attachment(client: FlaskClient) -> None:

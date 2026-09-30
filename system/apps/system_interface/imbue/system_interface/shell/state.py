@@ -40,6 +40,7 @@ from imbue.system_interface.shell.app_lifecycle import build_app_lifecycle_manag
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
+from imbue.system_interface.shell.clients import SHOWN_HOME_ENTRY
 from imbue.system_interface.shell.clients import entries_wire_json
 from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.close_hints import post_window_closed_hint
@@ -91,6 +92,7 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.errors import ShellStateError
+from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.identity import visiting_user_id
 from imbue.system_interface.shell.inventory import AppInventory
@@ -341,8 +343,13 @@ class ShellState(MutableModel):
                 if_present = IfPresent.NEW if request.target.kind is LaunchTargetKind.NEW else IfPresent.FOCUS
                 opened = self.open_window(
                     desktop.id,
-                    WindowOpenRequest(app=request.app, path=path, client_id=request.client_id, if_present=if_present),
-                    request.minimized,
+                    WindowOpenRequest(
+                        app=request.app,
+                        path=path,
+                        client_id=request.client_id,
+                        if_present=if_present,
+                        minimized=request.minimized,
+                    ),
                 )
                 return LaunchOutcome(window=opened.window, path=path, is_new=opened.is_new)
             case LaunchTargetKind.WINDOW:
@@ -460,13 +467,14 @@ class ShellState(MutableModel):
             )
         return saved
 
-    def open_window(self, desktop_id: str, request: WindowOpenRequest, is_minimized: bool) -> WindowOpenOutcome:
+    def open_window(self, desktop_id: str, request: WindowOpenRequest) -> WindowOpenOutcome:
         """Open a window of ``request.app`` at ``request.path`` on the desktop for everyone, placed at once in the
-        requesting client's layout (shown, or minimized when asked); with ``if_present`` focus, a window of the app
-        already at that exact path is answered instead, restored and raised there unless the open asked for
-        minimized, in which case it is left as placed (desktop plan section 4.1)."""
+        requesting client's layout (shown, or minimized when ``request.minimized``); with ``if_present`` focus, a
+        window of the app already at that exact path is answered instead, restored and raised there unless the open
+        asked for minimized, in which case it is left as placed (desktop plan section 4.1)."""
         desktop = self.get_desktop(desktop_id)
         self.require_app_entry(str(request.app))
+        is_minimized = request.minimized
         if request.if_present is IfPresent.FOCUS:
             existing = find_window_at(desktop, request.app, request.path)
             if existing is not None:
@@ -542,6 +550,7 @@ class ShellState(MutableModel):
         if not outcome.is_written:
             return False
         rewritten = self.placements.drop_window_everywhere(desktop_id, window_id, datetime.now(timezone.utc))
+        self.clients.drop_windows((window_id,))
         self.broadcast_desktops_updated()
         self._broadcast_placements_written(rewritten)
         logger.info("Closed window {} on desktop {} ({} layout(s) rewritten)", window_id, desktop_id, len(rewritten))
@@ -594,6 +603,7 @@ class ShellState(MutableModel):
         first remaining desktop. Raises LastDesktopError for the last one."""
         outcome = self.desktops.delete_desktop(desktop_id)
         self.placements.delete_desktop_layouts(desktop_id)
+        self.clients.drop_windows([window.id for window in outcome.deleted.windows])
         for client in self.clients.list_clients():
             if client.active_desktop == outcome.deleted.id:
                 self.set_client_active_desktop(client.id, outcome.fallback_desktop_id)
@@ -722,6 +732,19 @@ class ShellState(MutableModel):
         record = self.clients.set_entry_presentation(client_id, app, presentation, datetime.now(timezone.utc))
         self.broadcaster.broadcast_client_entries_changed(str(record.id), entries_wire_json(record.entries))
         return record
+
+    def record_client_shown(self, client_id: ClientId, window_id: WindowId | None) -> ClientRecord:
+        """Record what a client's phone layout now shows: a window some desktop holds, or its home grid for None.
+        Raises WindowNotFoundError for a window no desktop holds, and ClientNotFoundError."""
+        entry = str(window_id) if window_id is not None else SHOWN_HOME_ENTRY
+        # Checked and recorded under one hold of the lock, so a close either lands first (and this is a 404) or
+        # drops the entry after it is recorded.
+        with STATE_FILES_LOCK:
+            if window_id is not None and not any(
+                find_window(desktop, window_id) is not None for desktop in self.list_desktops()
+            ):
+                raise WindowNotFoundError(str(window_id))
+            return self.clients.record_shown(client_id, entry, datetime.now(timezone.utc))
 
     def active_desktop_of_client(self, client_id: str) -> DesktopId | None:
         """The desktop a client is on by the rule of desktop contracts.md section 4.3; None with no desktops."""

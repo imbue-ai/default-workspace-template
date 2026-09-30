@@ -1,6 +1,7 @@
 """The per-request assembly of the shell document: the vite build's HTML with meta tags injected per request."""
 
 import html
+import re
 from typing import Final
 
 from flask import Response
@@ -55,3 +56,82 @@ def inject_meta_tag(html_content: str, name: str, content: str) -> str:
 
 def inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
     return inject_meta_tag(html_content, BASE_PATH_META_NAME, root_path)
+
+
+# The shell's page background (``--c-bg`` in ``system/libs/workspace_ui/src/base.css``): the browser chrome's colour
+# around the page, the manifest's splash colour, and the home-screen icon's tile.
+SHELL_BACKGROUND_COLOR: Final[str] = "#fafaf8"
+
+VIEWPORT_META_NAME: Final[str] = "viewport"
+VIEWPORT_FIT_COVER: Final[str] = "viewport-fit=cover"
+_DEFAULT_VIEWPORT: Final[str] = "width=device-width, initial-scale=1.0"
+
+_TITLE_PATTERN: Final[re.Pattern[str]] = re.compile(r"<title>.*?</title>", re.IGNORECASE | re.DOTALL)
+_CONTENT_ATTRIBUTE_PATTERN: Final[re.Pattern[str]] = re.compile(r'\scontent="([^"]*)"', re.IGNORECASE)
+
+
+def _tag_pattern(tag: str, attribute: str, value: str) -> re.Pattern[str]:
+    """A ``<tag ...>`` whose ``attribute`` is exactly ``value``, wherever the attribute sits in the tag."""
+    return re.compile(rf'<{tag}\s(?:[^>]*\s)?{attribute}="{re.escape(value)}"[^>]*>', re.IGNORECASE)
+
+
+def _in_head(html_content: str, tag: str) -> str:
+    return html_content.replace("</head>", f"{tag}\n</head>", 1)
+
+
+def set_document_title(html_content: str, title: str) -> str:
+    """The document titled ``title`` (escaped): its ``<title>`` replaced, or one added to the head."""
+    tag = f"<title>{html.escape(title, quote=False)}</title>"
+    if _TITLE_PATTERN.search(html_content) is not None:
+        return _TITLE_PATTERN.sub(lambda _match: tag, html_content, count=1)
+    return _in_head(html_content, tag)
+
+
+def set_meta_tag(html_content: str, name: str, content: str) -> str:
+    """The document with the ``name`` meta tag carrying ``content`` (escaped): an existing tag of that name is
+    replaced, so the build may already carry it."""
+    tag = f'<meta name="{name}" content="{html.escape(content, quote=True)}">'
+    pattern = _tag_pattern("meta", "name", name)
+    if pattern.search(html_content) is not None:
+        return pattern.sub(lambda _match: tag, html_content, count=1)
+    return _in_head(html_content, tag)
+
+
+def set_link_tag(html_content: str, rel: str, href: str) -> str:
+    """The document with one ``<link rel=...>`` pointing at ``href`` (escaped), replacing one the build carries."""
+    tag = f'<link rel="{rel}" href="{html.escape(href, quote=True)}">'
+    pattern = _tag_pattern("link", "rel", rel)
+    if pattern.search(html_content) is not None:
+        return pattern.sub(lambda _match: tag, html_content, count=1)
+    return _in_head(html_content, tag)
+
+
+def with_viewport_fit_cover(html_content: str) -> str:
+    """The document whose viewport lets the page draw under a phone's notch and home indicator: the build's
+    viewport with ``viewport-fit=cover`` added when it lacks it, or a viewport of its own when it has none."""
+    match = _tag_pattern("meta", "name", VIEWPORT_META_NAME).search(html_content)
+    content_match = _CONTENT_ATTRIBUTE_PATTERN.search(match.group(0)) if match is not None else None
+    if content_match is None:
+        return set_meta_tag(html_content, VIEWPORT_META_NAME, f"{_DEFAULT_VIEWPORT}, {VIEWPORT_FIT_COVER}")
+    content = html.unescape(content_match.group(1))
+    if VIEWPORT_FIT_COVER in content.replace(" ", ""):
+        return html_content
+    return set_meta_tag(html_content, VIEWPORT_META_NAME, f"{content}, {VIEWPORT_FIT_COVER}")
+
+
+APPLE_WEB_APP_TITLE_META_NAME: Final[str] = "apple-mobile-web-app-title"
+THEME_COLOR_META_NAME: Final[str] = "theme-color"
+TOUCH_ICON_PATH: Final[str] = "/apple-touch-icon.png"
+MANIFEST_PATH: Final[str] = "/manifest.webmanifest"
+
+
+def inject_install_tags(html_content: str, workspace_name: str, root_path: str) -> str:
+    """What a phone saving the page to its home screen reads, which only the server knows: the workspace's name as
+    the title and the tile's label, the page colour, the touch icon and the manifest under the shell's root path, and
+    a viewport that reaches under the notch. Each tag the build already carries is replaced rather than repeated."""
+    html_content = set_document_title(html_content, workspace_name)
+    html_content = set_meta_tag(html_content, APPLE_WEB_APP_TITLE_META_NAME, workspace_name)
+    html_content = set_meta_tag(html_content, THEME_COLOR_META_NAME, SHELL_BACKGROUND_COLOR)
+    html_content = with_viewport_fit_cover(html_content)
+    html_content = set_link_tag(html_content, "apple-touch-icon", f"{root_path}{TOUCH_ICON_PATH}")
+    return set_link_tag(html_content, "manifest", f"{root_path}{MANIFEST_PATH}")

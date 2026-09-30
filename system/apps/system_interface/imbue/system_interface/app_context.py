@@ -11,6 +11,7 @@ from imbue.system_interface.presence import PresenceSweep
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.update_staleness import UpdateStalenessTracker
+from imbue.system_interface.workspace_name import WorkspaceNameSource
 
 # Key under which the single SystemInterfaceState is stored on ``app.config`` so
 # handlers can fetch it via ``get_state()``.
@@ -44,6 +45,8 @@ class SystemInterfaceState(MutableModel):
     presence_sweep: PresenceSweep
     # Each account's display name and avatar, from imbue_cloud through the on-disk cache.
     profiles: ProfileResolver
+    # The workspace's name for the page's title, its home-screen tile, and the inventory.
+    workspace_name: WorkspaceNameSource
     # Captures the tree HEAD this process started from, so the app shell can
     # say when the served tree has moved under it (see update_staleness.py).
     # A factory (not a shared default): the HEAD read happens per state build,

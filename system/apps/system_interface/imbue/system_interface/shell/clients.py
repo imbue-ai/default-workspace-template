@@ -2,6 +2,7 @@
 signed-in user, per browser context."""
 
 from collections.abc import Callable
+from collections.abc import Collection
 from collections.abc import Mapping
 from datetime import datetime
 from datetime import timedelta
@@ -27,6 +28,7 @@ from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import UserId
+from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
@@ -43,6 +45,11 @@ _LEGACY_CLIENTS_FILE_VERSION: Final[int] = 1
 # A client unseen for this long is dropped, together with every layout it owns.
 CLIENT_RETENTION: Final[timedelta] = timedelta(days=90)
 
+# The entry a client's shown history records for its home grid, beside the window ids it records for its windows.
+SHOWN_HOME_ENTRY: Final[str] = "home"
+# How many distinct entries a client's shown history keeps, the newest.
+SHOWN_HISTORY_LIMIT: Final[int] = 20
+
 
 class _StoredClient(FrozenModel):
     """One entry of the ``clients`` map (the id is the key)."""
@@ -52,6 +59,9 @@ class _StoredClient(FrozenModel):
     user_id: UserId | None = Field(default=None, description="The signed-in visitor the client last arrived as")
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"
+    )
+    shown_history: tuple[str, ...] = Field(
+        default=(), description="What the client has shown on the phone layout, most recent last"
     )
 
 
@@ -78,6 +88,7 @@ def client_wire_json(record: ClientRecord, is_connected: bool) -> dict[str, Any]
         "is_connected": is_connected,
         "user_id": str(record.user_id) if record.user_id is not None else None,
         "entries": entries_wire_json(record.entries),
+        "shown_history": list(record.shown_history),
     }
 
 
@@ -89,7 +100,15 @@ def _record_of(client_id: ClientId, stored: _StoredClient) -> ClientRecord:
         last_seen=stored.last_seen,
         user_id=stored.user_id,
         entries=stored.entries,
+        shown_history=stored.shown_history,
     )
+
+
+@pure
+def with_shown_entry(history: tuple[str, ...], entry: str) -> tuple[str, ...]:
+    """The history with ``entry`` moved to its end (an earlier occurrence dropped), holding the newest
+    ``SHOWN_HISTORY_LIMIT`` entries."""
+    return (*(kept for kept in history if kept != entry), entry)[-SHOWN_HISTORY_LIMIT:]
 
 
 @pure
@@ -172,6 +191,7 @@ class ClientStore(MutableModel):
                 last_seen=stamped,
                 user_id=previous.user_id if previous is not None else None,
                 entries=previous.entries if previous is not None else {},
+                shown_history=previous.shown_history if previous is not None else (),
             ),
         )
 
@@ -193,6 +213,7 @@ class ClientStore(MutableModel):
                 last_seen=stamped,
                 user_id=user_id,
                 entries=previous.entries if previous is not None else {},
+                shown_history=previous.shown_history if previous is not None else (),
             ),
         )
 
@@ -229,6 +250,40 @@ class ClientStore(MutableModel):
             clients = {**document.clients, str(client_id): updated}
             self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
         return _record_of(client_id, updated)
+
+    def record_shown(self, client_id: ClientId, entry: str, now: datetime) -> ClientRecord:
+        """Record what a recorded client now shows (a window id, or ``SHOWN_HOME_ENTRY``) as the newest entry of its
+        shown history; raises ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            previous = document.clients.get(str(client_id))
+            if previous is None:
+                raise ClientNotFoundError(f"No client record for {client_id!r}")
+            updated = previous.model_copy_update(
+                to_update(previous.field_ref().shown_history, with_shown_entry(previous.shown_history, entry)),
+                to_update(previous.field_ref().last_seen, stamped),
+            )
+            clients = {**document.clients, str(client_id): updated}
+            self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
+        return _record_of(client_id, updated)
+
+    def drop_windows(self, window_ids: Collection[WindowId]) -> None:
+        """Drop closed windows from every client's shown history; writes only when a history named one."""
+        closed = {str(window_id) for window_id in window_ids}
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            clients: dict[str, _StoredClient] = {}
+            is_changed = False
+            for client_id, stored in document.clients.items():
+                kept = tuple(entry for entry in stored.shown_history if entry not in closed)
+                if kept == stored.shown_history:
+                    clients[client_id] = stored
+                    continue
+                clients[client_id] = stored.model_copy_update(to_update(stored.field_ref().shown_history, kept))
+                is_changed = True
+            if is_changed:
+                self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
 
     def prune_unseen(self, now: datetime) -> list[ClientId]:
         """Drop every client unseen for the retention period; returns their ids so the caller can drop their layouts."""
