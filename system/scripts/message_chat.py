@@ -54,9 +54,9 @@ bubble; the browser app's wake-up nudges use it. The tag is pinned against the
 chat app's copy by a test there.
 
 ``--interrupt`` restarts the chat's agent first, through the chat app's
-interrupt route (the process is replaced and resumes its own conversation, and
-any turn in progress ends), then sends the message, if one was given, the same
-way as any other. A refusal is final there too; only when the chat app cannot
+interrupt route (the process is replaced and resumes its own conversation, any
+turn in progress ends, and messages queued for it are resent as one turn), then
+sends the message, if one was given, the same way as any other. A refusal is final there too; only when the chat app cannot
 take the restart does ``mngr start --restart --no-resume`` do it, and
 ``mngr message`` then carries the text. A restart with no message exits 0 once
 the agent is back.
@@ -135,6 +135,10 @@ WAIT_FIELD = "should_wait"
 # the setting the create route applies for ``is_installation_check_skipped``; the backoff
 # create applies it itself.
 SKIP_CLAUDE_INSTALLATION_CHECK_SETTING = "agent_types.claude.check_installation=false"
+
+# The interrupt route's request: the messages queued for the agent are resent after the restart
+# rather than dropped with the process. The chat app's server tests pin it against the route.
+INTERRUPT_REQUEST: Mapping[str, object] = {"keep_queue": True}
 
 CONNECT_TIMEOUT_SECONDS = 3.0
 # How long a 503 (chat app up, not ready) is retried before it is a failure. The
@@ -368,7 +372,7 @@ def interrupt_through_chat_app(
 ) -> SendResult:
     """Post to the chat app's interrupt route, which restarts the chat's agent, and report how it ended."""
     path = f"/api/chats/{urllib.parse.quote(chat_id, safe='')}/interrupt"
-    answer = _post_until_answered(base_url, path, {}, clock, sleep)
+    answer = _post_until_answered(base_url, path, INTERRUPT_REQUEST, clock, sleep)
     if isinstance(answer, SendResult):
         return answer
     if 200 <= answer.status < 300:

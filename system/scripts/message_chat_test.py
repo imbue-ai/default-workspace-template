@@ -702,8 +702,12 @@ def test_an_interrupt_restarts_the_chat_then_sends_the_message(
     rc, _ = _run("--interrupt", "-m", "you are back")
 
     assert rc == message_chat.EXIT_DELIVERED
-    [(interrupt_path, _), (message_path, message_body)] = fake_chat_app.posted
+    [(interrupt_path, interrupt_body), (message_path, message_body)] = (
+        fake_chat_app.posted
+    )
     assert interrupt_path == f"/api/chats/{_CHAT_ID}/interrupt"
+    # Anything queued for the agent is resent after the restart rather than dropped.
+    assert interrupt_body == {"keep_queue": True}
     assert message_path == f"/api/chats/{_CHAT_ID}/message"
     assert message_body["message"] == "you are back"
     assert _mngr_calls(fake_mngr) == []

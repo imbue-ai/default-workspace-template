@@ -31,6 +31,7 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
+from imbue.chat.agent_manager import UNREADABLE_CHAT_BUSY_REASON
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
@@ -4870,6 +4871,11 @@ def test_a_turn_the_lifecycle_has_not_caught_up_with_is_read_off_the_active_mark
 
     (state_dir / "active").touch()
     assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-1")) == "working"
+
+
+def test_a_chat_the_manager_cannot_read_is_never_free_to_restart(agent_manager: AgentManager) -> None:
+    """An unattended restart needs positive evidence the turn has ended; not finding the chat is not that."""
+    assert agent_manager.restart_busy_reason_for_chat(ChatId("agent-unknown")) == UNREADABLE_CHAT_BUSY_REASON
 
 
 # Unseeded chats awaiting their first send (post-launch-paths plan section 3.7)
