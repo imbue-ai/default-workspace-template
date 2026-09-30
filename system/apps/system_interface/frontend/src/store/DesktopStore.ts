@@ -1059,18 +1059,21 @@ export class DesktopStore {
     });
   }
 
-  /** Take a shortcut off the active desktop at once, putting it back if the shell refuses. */
+  /** Take a shortcut off the active desktop at once, putting it back if the shell refuses. A refusal puts it back
+   *  only while the shell has said nothing of the desktops since: a broadcast in the meantime is the shell's word on
+   *  whether it is still there, and stands. */
   async removeShortcut(app: string, launch: string): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
     const removed = findShortcut(desktop, app, launch);
     if (removed === undefined) return;
     this.takeDesktop({ ...desktop, shortcuts: desktop.shortcuts.filter((candidate) => candidate !== removed) });
+    const revision = this.desktopsRevision;
     try {
       this.takeDesktop(await this.deps.api.removeDesktopShortcut(desktop.id, app, launch));
     } catch (error) {
       const now = desktopById(this.state, desktop.id);
-      if (now !== null && findShortcut(now, app, launch) === undefined) {
+      if (this.desktopsRevision === revision && now !== null && findShortcut(now, app, launch) === undefined) {
         this.takeDesktop({ ...now, shortcuts: [...now.shortcuts, removed] });
       }
       this.deps.notify(`Could not remove the shortcut: ${(error as Error).message}`);
