@@ -5,6 +5,8 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
+from http.client import HTTPMessage
+from typing import IO
 from typing import Any
 from typing import Final
 
@@ -81,9 +83,27 @@ def _json_object_or_text(text: str) -> dict[str, Any] | str:
     return parsed if isinstance(parsed, dict) else text
 
 
+class _RedirectsAsAnswersHandler(urllib.request.HTTPRedirectHandler):
+    """Declines every redirect, so a 3xx reaches the caller as an HTTPError carrying the shell's own answer."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+_SHELL_OPENER: Final[urllib.request.OpenerDirector] = urllib.request.build_opener(_RedirectsAsAnswersHandler)
+
+
 def _exchange(request: urllib.request.Request, timeout_seconds: float) -> tuple[int, bytes]:
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with _SHELL_OPENER.open(request, timeout=timeout_seconds) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
