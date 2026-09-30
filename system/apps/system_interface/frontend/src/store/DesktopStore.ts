@@ -774,7 +774,7 @@ export class DesktopStore {
   /** A message this page received, from the Imbue Studio chrome (``senderApp`` null) or from the frame of an app's
    *  page (``senderApp`` that app): the shell is asked, once, to deliver it with this client's id to the apps
    *  registered for its type (contracts.md section 5.6); the apps decide what it means. When it did not reach
-   *  every app, the user is told why in the relay's words. False when nothing was delivered.
+   *  every app, the user is told why in the relay's words. Answers whether it was relayed and reached every app.
    *
    *  A chrome message is relayed only when an app registered for its type, and never from a preview shell (whose
    *  backend refuses the relay: the apps it names are the live ones) or a solo shell (whose client is the main
