@@ -1,0 +1,1 @@
+The statusline conformance tests now pin the trimmed `claude_status_line.sh`. The script prints nothing, spawns no command besides `jq` (and `mv` when the state changes), and leaves `model_state.json` untouched when a run reports the same model, effort and fast mode.
