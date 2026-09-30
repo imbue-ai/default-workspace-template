@@ -1,7 +1,6 @@
 """The chat record store: round trips, the version guard, and the per-record skip on a bad file."""
 
 import json
-import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -170,8 +169,6 @@ def test_a_file_store_round_trips_a_record_and_deletes_its_folder(tmp_path: Path
     store.delete(ChatId(second))
 
 
-@pytest.mark.may_skip_in_workspace
-@pytest.mark.skipif(os.geteuid() == 0, reason="root removes a folder whatever its parent's mode says")
 def test_a_file_store_raises_when_a_record_cannot_be_removed(tmp_path: Path) -> None:
     """A delete that leaves the record on disk must not look like a delete: the next build would
     read the record back and resurrect a destroyed chat."""
@@ -180,14 +177,14 @@ def test_a_file_store_raises_when_a_record_cannot_be_removed(tmp_path: Path) -> 
     first = _agent_id()
     store.write(two_member_record(first, _agent_id()))
 
-    # Nothing inside a read-only folder can be unlinked, so the record file stays where it is.
+    # A folder that is a symlink cannot be removed as a tree, whoever asks (root included).
     chat_dir = root / first
-    chat_dir.chmod(0o555)
-    try:
-        with pytest.raises(ChatRecordError, match="could not be removed"):
-            store.delete(ChatId(first))
-    finally:
-        chat_dir.chmod(0o755)
+    moved_chat_dir = tmp_path / "moved"
+    chat_dir.rename(moved_chat_dir)
+    chat_dir.symlink_to(moved_chat_dir, target_is_directory=True)
+
+    with pytest.raises(ChatRecordError, match="could not be removed"):
+        store.delete(ChatId(first))
     assert store.read(ChatId(first)) is not None
 
 
