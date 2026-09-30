@@ -1,4 +1,5 @@
 import threading
+from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -26,6 +27,19 @@ def _make_finished_process(
         is_timed_out=False,
         is_output_already_logged=False,
     )
+
+
+def _recording_runner(
+    returncode_of: Callable[[Sequence[str]], int] = lambda command: 0,
+) -> tuple[list[list[str]], Callable[..., FinishedProcess]]:
+    """A fake runner recording each command it is given, answering it with ``returncode_of(command)``."""
+    recorded_commands: list[list[str]] = []
+
+    def runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
+        recorded_commands.append(list(command))
+        return _make_finished_process(command=command, returncode=returncode_of(command))
+
+    return recorded_commands, runner
 
 
 def test_check_agent_success() -> None:
@@ -114,11 +128,7 @@ def test_check_agent_process_setup_error_handled_gracefully(loguru_records: list
 
 def test_sweep_launches_nothing_while_autocompact_is_disabled() -> None:
     """With the mode off every `mngr autocompact run` is a no-op, so the sweep must not pay for one."""
-    recorded_commands: list[list[str]] = []
-
-    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
-        recorded_commands.append(list(command))
-        return _make_finished_process(command=command, returncode=0)
+    recorded_commands, fake_runner = _recording_runner()
 
     compactor = ChatAutoCompactor.build(
         list_running_chat_agent_names=lambda: ["chat-alpha", "chat-beta"],
@@ -131,11 +141,7 @@ def test_sweep_launches_nothing_while_autocompact_is_disabled() -> None:
 
 
 def test_sweep_checks_every_running_chat_in_one_command() -> None:
-    recorded_commands: list[list[str]] = []
-
-    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
-        recorded_commands.append(list(command))
-        return _make_finished_process(command=command, returncode=0)
+    recorded_commands, fake_runner = _recording_runner()
 
     compactor = ChatAutoCompactor.build(
         list_running_chat_agent_names=lambda: ["chat-alpha", "chat-beta", "chat-gamma"],
@@ -154,11 +160,7 @@ def test_sweep_checks_every_running_chat_in_one_command() -> None:
 )
 def test_an_unreadable_mode_still_runs_the_sweep(read_error: Exception, loguru_records: list[str]) -> None:
     """An unreadable config must cost a launch, not silently turn compaction off."""
-    recorded_commands: list[list[str]] = []
-
-    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
-        recorded_commands.append(list(command))
-        return _make_finished_process(command=command, returncode=0)
+    recorded_commands, fake_runner = _recording_runner()
 
     def unreadable_mode() -> bool:
         raise read_error
@@ -178,12 +180,7 @@ def test_an_unreadable_mode_still_runs_the_sweep(read_error: Exception, loguru_r
 def test_a_failed_batch_is_retried_one_chat_at_a_time() -> None:
     """One chat the batch cannot resolve (stopped since it was listed) fails the whole command;
     the others must still be checked."""
-    recorded_commands: list[list[str]] = []
-
-    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
-        recorded_commands.append(list(command))
-        is_stopped_chat_named = "chat-stopped" in command
-        return _make_finished_process(command=command, returncode=1 if is_stopped_chat_named else 0)
+    recorded_commands, fake_runner = _recording_runner(lambda command: 1 if "chat-stopped" in command else 0)
 
     compactor = ChatAutoCompactor.build(
         list_running_chat_agent_names=lambda: ["chat-alpha", "chat-stopped", "chat-gamma"],
@@ -236,11 +233,7 @@ def test_a_batch_failure_no_single_chat_causes_is_not_retried_per_chat(batch_out
 
 def test_a_lone_rejected_chat_is_not_launched_again() -> None:
     """With one chat the batch already is the one-chat command, so a retry would only repeat it."""
-    recorded_commands: list[list[str]] = []
-
-    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
-        recorded_commands.append(list(command))
-        return _make_finished_process(command=command, returncode=1)
+    recorded_commands, fake_runner = _recording_runner(lambda command: 1)
 
     compactor = ChatAutoCompactor.build(
         list_running_chat_agent_names=lambda: ["chat-alpha"],
@@ -298,11 +291,7 @@ def test_an_invalid_mode_in_the_settings_file_still_runs_the_sweep(
 ) -> None:
     """mngr's loader rejects an unknown mode with a pydantic error, which must not end the sweep."""
     _use_mngr_settings('[plugins.autocompact]\nmode = "bogus"\n', tmp_path, monkeypatch)
-    recorded_commands: list[list[str]] = []
-
-    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
-        recorded_commands.append(list(command))
-        return _make_finished_process(command=command, returncode=0)
+    recorded_commands, fake_runner = _recording_runner()
 
     compactor = ChatAutoCompactor.build(list_running_chat_agent_names=lambda: ["chat-alpha"], runner=fake_runner)
     compactor.sweep()
