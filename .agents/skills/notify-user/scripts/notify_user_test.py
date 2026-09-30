@@ -34,9 +34,17 @@ _WATCH_WARNING = "notify-user: could not check who is watching this chat ("
 @pytest.fixture
 def environ(tmp_path: Path) -> dict[str, str]:
     """The gateway env plus an app registry naming the chat app's address."""
-    registry = tmp_path / "apps.toml"
-    registry.write_text(f'[[apps]]\nname = "chat"\nurl = "{_CHAT_APP_URL}/"\n')
-    return {**_GATEWAY_ENV, "MINDS_APPS_FILE": str(registry)}
+    return _env_with_chat_app_at(
+        _GATEWAY_ENV, tmp_path / "apps.toml", f"{_CHAT_APP_URL}/"
+    )
+
+
+def _env_with_chat_app_at(
+    base_env: dict[str, str], registry: Path, url: str
+) -> dict[str, str]:
+    """``base_env`` pointed at an app registry, written to ``registry``, whose chat app is at ``url``."""
+    registry.write_text(f'[[apps]]\nname = "chat"\nurl = "{url}"\n')
+    return {**base_env, "MINDS_APPS_FILE": str(registry)}
 
 
 def _watchers_answer(*instance_ids: str) -> tuple[int | None, str]:
@@ -158,12 +166,13 @@ def silent_chat_app(
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
-    registry = tmp_path / "silent_apps.toml"
-    registry.write_text(
-        f'[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:{listener.getsockname()[1]}"\n'
+    chat_app_env = _env_with_chat_app_at(
+        environ,
+        tmp_path / "silent_apps.toml",
+        f"http://127.0.0.1:{listener.getsockname()[1]}",
     )
     try:
-        yield {**environ, "MINDS_APPS_FILE": str(registry)}
+        yield chat_app_env
     finally:
         listener.close()
 
@@ -213,12 +222,13 @@ def garbled_chat_app(
 
     answering = threading.Thread(target=answer_once, daemon=True)
     answering.start()
-    registry = tmp_path / "garbled_apps.toml"
-    registry.write_text(
-        f'[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:{listener.getsockname()[1]}"\n'
+    chat_app_env = _env_with_chat_app_at(
+        environ,
+        tmp_path / "garbled_apps.toml",
+        f"http://127.0.0.1:{listener.getsockname()[1]}",
     )
     try:
-        yield {**environ, "MINDS_APPS_FILE": str(registry)}
+        yield chat_app_env
     finally:
         listener.close()
         answering.join(timeout=5.0)
