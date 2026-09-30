@@ -106,7 +106,22 @@ you read when they finish.
 
 ## Step 1: Clarify (business terms only)
 
-Ask only the questions that genuinely block: a fork that is both genuinely
+**Start the integration folder before you ask anything.** It does not depend on the
+plan or on the answers, and its `uv sync` is the slowest thing in a build's opening --
+slow enough that overlapping it with the planner alone has not been enough. Clarifying
+is time the orchestrator otherwise spends waiting on the user, so spend it syncing.
+
+Pick `$APP` from the request as it stands; a clarifying answer rarely changes it, and
+`git branch -m` renames the branch if one does. Commit any pending changes in the main
+checkout first (commit, never stash; the build branch starts from your last commit):
+
+```bash
+mkdir -p "$RUN"
+git worktree add -b "build-app/$APP" "$BUILD" HEAD
+(cd "$BUILD" && nohup uv sync --all-packages > "$RUN/sync.log" 2>&1 &)
+```
+
+Then ask only the questions that genuinely block: a fork that is both genuinely
 uncertain and expensive to reverse. Most apps have none. Default to the simplest
 conventional choice and to a single user, and state each default in one line.
 Phrase any real blocker as its user-visible consequence ("should everyone see the
@@ -124,27 +139,23 @@ handed-off sample. Give context, not a plan; working out the plan is the
 planner's job.
 
 ```bash
-mkdir -p "$RUN"
+mkdir -p "$RUN"   # already there if Step 1 ran; harmless either way
 cat > "$RUN/brief.md" <<'BRIEF'
 <the brief>
 BRIEF
 ```
 
-The integration folder does not depend on the plan, and its `uv sync` takes
-about as long as the planner does, so start it first and let the two run
-together -- otherwise nothing at all happens for the first four minutes of a
-build. It is
-where every node's branch is merged and where the previews are served from, so it
-needs a working checkout of its own. Commit any pending changes in the main
-checkout (commit, never stash; the build branch starts from your last commit),
-then:
+The integration folder is already there and already syncing, from Step 1. It is where
+every node's branch is merged and where the previews are served from, which is why it
+needs a working checkout of its own. If you skipped that -- a build that did not come
+through Step 1 -- make it now, before the planner, so the two run together:
 
 ```bash
 git worktree add -b "build-app/$APP" "$BUILD" HEAD
 (cd "$BUILD" && nohup uv sync --all-packages > "$RUN/sync.log" 2>&1 &)
 ```
 
-Then run the planner in the foreground, with the longest tool timeout you can
+Run the planner in the foreground, with the longest tool timeout you can
 give it; waiting it out inside your turn keeps the floor. Send the user nothing
 while it runs:
 
@@ -515,9 +526,12 @@ lock it in?"), and only an explicit confirmation ends it.
 
 After the working-site conversation is confirmed and every node is done:
 
-1. **Stop the workers.** Destroy every remaining `$APP-node-*` worker, which
-   removes its worktree, and check the build branch has everything (Step 4,
-   item 7).
+**Nothing here waits on the workers.** Every node's branch was merged into the build
+branch as it finished, so by now the workers hold nothing the app needs. Taking the app
+live comes first and the teardown happens afterwards, while the user already has it.
+
+1. **Check the build branch has everything** (Step 4, item 7). A `git log` against the
+   branch, not a reason to stop any agent first.
 2. **Merge into main** from the main checkout:
    `git merge --no-ff "build-app/$APP"`. Every node was merged into that branch
    as it finished, so this brings the whole build over in one commit. A conflict
@@ -528,17 +542,21 @@ After the working-site conversation is confirmed and every node is done:
    `uv sync --all-packages`, then `supervisorctl reread && supervisorctl update`,
    then `supervisorctl status "$APP"`. Verify it with
    `.agents/skills/build-app/references/verify.md`, and open the window with
-   `python3 system/scripts/layout.py open "$APP"`.
-4. **Remove the folders.** List `$BUILD` first (`git -C "$BUILD" status
+   `python3 system/scripts/layout.py open "$APP"`. **The user has the app from here**,
+   so everything below runs while they are looking at it.
+4. **Hand off to hardening** exactly as `build-app` Step 5 does: invoke the
+   `crystallize-creation` skill with `type=app`, the slug `$APP`, and a task body
+   naming the lib path, the app name, the URL segment, and what the app does.
+   That single hardening pass is the only thorough test-and-review run the app
+   gets; no worker ran one. It runs in a worker of its own, so start it before the
+   teardown rather than after it.
+5. **Stop the workers.** Destroy every remaining `$APP-node-*` worker, which
+   removes its worktree.
+6. **Remove the folders.** List `$BUILD` first (`git -C "$BUILD" status
    --porcelain` must be empty, since every node was committed and merged), then
    `git worktree remove "$BUILD"` and `git worktree prune` to clear out the
    worktrees of any workers already destroyed. The `mngr/$APP-node-*` branches
    stay: they are the per-node history behind the merge.
-5. **Hand off to hardening** exactly as `build-app` Step 5 does: invoke the
-   `crystallize-creation` skill with `type=app`, the slug `$APP`, and a task body
-   naming the lib path, the app name, the URL segment, and what the app does.
-   That single hardening pass is the only thorough test-and-review run the app
-   gets; no worker ran one.
 
 ## When things go wrong
 
