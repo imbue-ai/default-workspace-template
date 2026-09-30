@@ -1,7 +1,6 @@
 /**
- * Where a link clicked inside the workspace goes (the workspace link routing plan): one classifier the chat's
- * clicks, the element menu's "Open link", and the shell page's handling of a popup Imbue Studio forwards all share,
- * so a link means the same thing wherever it is followed.
+ * Where a link clicked inside the workspace goes (the workspace link routing plan): one classifier shared by every
+ * place a link is followed, so a link means the same thing wherever it is.
  *
  * - A web link off this machine (and ``mailto:``, ``tel:``) is **external**: it opens in the user's own browser. The
  *   rule is exactly the Imbue Studio desktop app's ``isExternalUrl``, which decides the same thing for a popup, and
@@ -149,8 +148,8 @@ export function routeLink(href: string, context: LinkRoutingContext): boolean {
   }
 }
 
-/** Follow a link element as the element menu's "Open link" does: the link as written, or, for one written relative
- *  to the page (an app page's ``details.html``), the page address it resolves to. Answers whether it was routed. */
+/** Follow a link element: the link as written, or, for one written relative to the page (an app page's
+ *  ``details.html``), the page address it resolves to. Answers whether it was routed. */
 export function routeLinkElement(anchor: HTMLAnchorElement, context: LinkRoutingContext): boolean {
   if (routeLink(anchor.getAttribute("href") ?? "", context)) return true;
   return WEB_SCHEMES.has(anchor.protocol) && routeLink(anchor.href, context);

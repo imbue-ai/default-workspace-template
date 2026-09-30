@@ -147,8 +147,6 @@ export interface AppPin {
   readonly default_mode: EntryMode;
 }
 
-/** A message an app takes from the Imbue Studio chrome, and the route under its origin the shell posts it to
- *  (contracts.md section 2). */
 /** One message an app registered for (contracts.md section 2): its type, and either the route the shell posts it to
  *  or the page template the shell shows for it (``null`` for the form it does not use). */
 export interface MessageHandler {

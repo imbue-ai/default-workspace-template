@@ -138,8 +138,6 @@ export function formatFileSize(bytes: number): string {
   return `${rounded} ${units[unitIndex]}`;
 }
 
-// --- Upload client ----------------------------------------------------------
-
 interface AttachmentUploadResponseBody {
   path: string;
   size: number;

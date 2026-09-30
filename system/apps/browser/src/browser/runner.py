@@ -112,7 +112,7 @@ HTTP_NO_CONTENT = 204
 # The ``open:url`` message handler's route (the manifest's ``[[message_handlers]]``): a link to a local address
 # clicked in the workspace, which the browser opens for the human.
 OPEN_URL_PATH = "/api/open-url"
-# The shell answers a ``show`` at once; the relay that posted the message gives the whole delivery ten seconds.
+# Short, since the shell answers a ``show`` at once and the relay that posted the message bounds the whole delivery.
 _SHELL_SHOW_TIMEOUT_SECONDS = 5.0
 # The launch path's one parameter (the manifest's ``params``): the start page. The shell posts it
 # in a JSON object beside its own envelope fields, which are ignored here.

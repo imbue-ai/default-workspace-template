@@ -804,9 +804,8 @@ export class DesktopStore {
     return true;
   }
 
-  /** A link Imbue Studio took from a popup a page of this workspace opened (``minds:open-link``, the workspace link
-   *  routing plan), opened where it belongs: a local URL in the workspace's browser (``open:url``), one of this
-   *  workspace's app addresses as that app's window at its path. Another workspace's address is refused with a
+  /** Open a link where it belongs in this workspace: a local URL in the workspace's browser (``open:url``), one of
+   *  this workspace's app addresses as that app's window at its path. Another workspace's address is refused with a
    *  notice. ``workspaceHost`` is this page's own host, which says which workspace it is. */
   async openLink(url: string, workspaceHost: string): Promise<void> {
     const target = classifyLink(url, workspaceHost);
