@@ -26,6 +26,17 @@ takes the frame to the folder itself (see below) and then reports that folder as
 its location, so the window's stored path follows and a reload reopens the
 folder.
 
+## Opening a linked file or folder
+
+The manifest also registers the `open:file` message (`[[message_handlers]]`,
+desktop-interface contracts.md section 5.6), which an app sends when a link to
+an absolute path is clicked (a chat's file link). The shell shows the path's
+`?view` page in a file viewer window: dufs shows a file there (text as
+read-only source, PDFs and media embedded, anything else offered as a
+download) and ignores `?view` on a folder, which lists as usual. A window
+already on that file or folder, as `/a/b`, `/a/b/`, or `/a/b/?view` (where a
+click through the listing leaves it), is raised instead of opening another.
+
 ## The vendored frontend
 
 Beyond the manifest (`app.toml`) and its icon (`icon.svg`), this directory
