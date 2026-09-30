@@ -60,7 +60,7 @@ refusal costs a turn. Redirect to a file and read the file instead.
 ## Conventions
 
 Pick the app's kebab-case name `$APP` up front (the rules are in `build-app`'s
-pre-flight: DNS-safe, not starting with `host-` or `agent-`, and not a name an
+"The app's name": DNS-safe, not starting with `host-` or `agent-`, and not a name an
 app already registers). Workers may refine the display name, but `$APP`
 names everything below.
 

@@ -136,7 +136,7 @@ shape confirmed. So read the following as a sample of the space rather than a
 checklist, and let the request decide.
 
 Most of it comes from build-app itself: settling the defaults and the small
-plan, the pre-flight of naming the app and finding it a port, drawing its icon,
+plan, naming the app and finding it a port, drawing its icon,
 scaffolding it and getting it running as a supervised process, wrapping a
 pre-existing server where scaffolding does not apply, deciding where and how its
 data is stored, building the throwaway mock and then the real page, implementing
@@ -252,7 +252,7 @@ the whole history, such as a final assembly.
 Some nodes are mostly waiting. Connecting an account or granting access to an
 outside service -- the `latchkey` skill -- costs time rather than capability:
 the request goes up to the user, and everyone waits on them. Put those on an empty access list wherever the
-work allows, so the waiting overlaps the pre-flight, the icon, or the mock.
+work allows, so the waiting overlaps the name, the port, the icon, or the mock.
 
 ## Output
 
