@@ -12,6 +12,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import Self
 from uuid import uuid4
 
 from loguru import logger as _loguru_logger
@@ -941,7 +942,7 @@ class AgentManager:
         chat_settings: ChatSettingsStore | None = None,
         autocompactor: ChatAutoCompactor | None = None,
         is_secondary: bool = False,
-    ) -> "AgentManager":
+    ) -> Self:
         """Build an AgentManager with the given broadcaster.
 
         ``messenger`` is the agent-messaging collaborator; it defaults to the
