@@ -1,0 +1,3 @@
+- The interrupt route (`POST /api/chats/<id>/interrupt`) takes `{"only_if_idle": true}`: it then restarts the chat only if its agent has ended its turn, and otherwise answers 409 with `busy_with` saying what the chat is doing (working, waiting on a dialog, receiving a message, holding queued messages, or in a state the chat app cannot read). update-self uses it to restart the workspace's idle chats after an update that changes their harness, leaving busy ones for the user to decide about.
+
+- It also takes `{"keep_queue": true}`: the messages queued for the agent are resent to it as one turn after the restart, as the flush does, instead of being dropped with the process. `message_chat.py --interrupt` always asks for it.

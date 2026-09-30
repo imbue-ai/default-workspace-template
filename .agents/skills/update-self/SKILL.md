@@ -285,8 +285,9 @@ Per §6 of the worker guide: the report shapes come from
 `.agents/shared/references/worker-reporting.md`, but you write and push the
 report by hand as §6 spells out -- not with the launcher's `report` subcommand,
 which this workspace's own launcher may predate. Valid `name:` values:
-`question` (mid-flight gate: a genuine, unresolvable conflict, the §4a/§4b/§4c
-scope escape hatch, or a §4b customization the update cannot keep),
+`question` (mid-flight gate: a genuine, unresolvable conflict, the
+§4a/§4b/§4c/§4d scope escape hatch, or a §4b customization the update cannot
+keep),
 `done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
@@ -384,11 +385,12 @@ report, re-arm the poll.
    results message presents each with the alternative still on offer. A
    conflict where *every* resolution breaks something the user built is not
    a merge question; it is the hold below.
-2. **The worker's scope escape hatch** (its §4a, §4b or §4c): a process
+2. **The worker's scope escape hatch** (its §4a, §4b, §4c or §4d): a process
    question about whether its impact analysis runs, whether a validation item
-   runs, or whether and at what scope the review gates run. Answer it by the
-   rule it names as written; where the rule is silent, the fallback is more
-   coverage, never less. Escalate only if it contains a real question of user
+   runs, whether and at what scope the review gates run, or whether a changed
+   file needs the agents restarted. Answer it by the rule it names as written;
+   where the rule is silent, the fallback is more coverage, never less (for
+   §4d, a restart). Escalate only if it contains a real question of user
    intent.
 3. **A customization hold** (its §4b verdict): something the user built that
    the update **cannot keep**, after the worker genuinely tried to re-fit it.
@@ -437,19 +439,21 @@ carry on into §5 and get their verdict there.
 ### 5a. Audit the report
 
 The worker contract (the staged copy's `references/update-self-worker.md`,
-§4a, §4b, §4c and §6) makes the impact analysis, the validation scope and the
-review gates rule-driven and the report evidence-bearing. It must show which
-branch of the 4a and 4b rules applied (the footprint evidence, and each
-validation item's condition and whether it held), and either show the
-clean-pull skip's three conditions held (`has_merge_work: false`, no impacted
-user-created code, no worker-authored in-branch edits beyond Step 1's
-rollback reverts as git made them or with a `both added` file taken at the
-target's version, shown by an empty diff against the landed merge) or carry
-the gate run's own evidence (fix commits kept or reverted, or a clean run,
-plus architecture-gate verdicts); a side-picked conflict must carry the
-discarded-side accounting. A report missing any of this -- including one that
-openly discloses skipping a gate outside the rule -- goes back to the worker
-via the Step 4 cycle (say what is missing, consume the report into
+§4a, §4b, §4c, §4d and §6) makes the impact analysis, the validation scope,
+the review gates and the agent-restart verdict rule-driven and the report
+evidence-bearing. It must show which branch of the 4a and 4b rules applied
+(the footprint evidence, and each validation item's condition and whether it
+held), and either show the clean-pull skip's three conditions held
+(`has_merge_work: false`, no impacted user-created code, no worker-authored
+in-branch edits beyond Step 1's rollback reverts as git made them or with a
+`both added` file taken at the target's version, shown by an empty diff
+against the landed merge) or carry the gate run's own evidence (fix commits
+kept or reverted, or a clean run, plus architecture-gate verdicts); a
+side-picked conflict must carry the discarded-side accounting; and it must
+carry the §4d **Agent restarts** verdict with the changed files that decided
+it. A report missing any of this -- including one that openly discloses
+skipping a gate outside the rule -- goes back to the worker via the Step 4
+cycle (say what is missing, consume the report into
 `data/.tasks/update-self/reports/consumed/`, re-arm). Do not run the apply
 over the gap. A deviation stands only when the worker is gone and the gap
 cannot be closed from here, and then the results message states it plainly
@@ -569,6 +573,31 @@ resumes), and how to honor a rollback request are in
   that outlives the window, an API another agent drives with no window),
   add `stop_when_no_windows = false` with a comment saying why, so the next
   pass does not ask again. Name each decision in the results message.
+- **Agent restarts** -- when the report's §4d verdict is `needed` (a harness
+  upgrade, new pi extensions, other config a harness loads once at start),
+  every running chat and background agent is still on what it loaded before
+  the apply. Restart the idle ones now; a restart keeps each conversation.
+  This chat and the update's worker are left out (this chat restarts last, in
+  §6):
+
+  ```bash
+  python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+      restart-agents > data/.tasks/update-self/agent-restarts.json
+  cat data/.tasks/update-self/agent-restarts.json
+  ```
+
+  Its JSON lists what it `restarted`, what it `left_running` because the chat
+  app found it busy (`busy_with` says with what: working, waiting on a dialog,
+  switching to another agent, receiving a message, holding queued messages, or
+  in a state the chat app cannot read), and what `failed`. The chat app checks
+  each chat at the moment of its restart, so a chat mid-turn is left running,
+  but a restart does end a background command an idle chat was waiting on; the
+  chat then gets that command's report saying it was killed, and can run it
+  again. The results message names each chat left running or failed, says it
+  is still on the previous version, and asks the user whether to interrupt and
+  restart it (`python3 system/scripts/message_chat.py <chat-id> --interrupt` on
+  a yes). A non-zero exit with no JSON means no chat was restarted; say so in
+  the same place.
 
 ### 5d. Escalate the built-in defects this pass found
 
@@ -647,12 +676,32 @@ mv data/.tasks/update-self/reports/report.md \
 mngr stop update-self
 ```
 
-Release the leases and close the ticket last, each as its own tool call: `tk
+Then release the leases and close the ticket, each as its own tool call: `tk
 close` each `editing critical app <name>` lease 5b took, then the
 `updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
 finished."`), then `tk close <ticket-id> "Updated to <ref> -- worker branch
 merged and applied."`, adding the `archive/update-self-<timestamp>` name when
 Step 3b set a previous branch aside.
+
+**When the §4d verdict was `needed`, restart this chat too, as your last
+command** -- even when §5c restarted no other chat -- after everything above
+and before the results message. It detaches a helper that waits for this turn
+to end, restarts this chat, and sends it a note asking you to confirm the
+restart to the user (and to repeat the offer for any chat left running or
+whose restart failed); when the restart does not happen, its note says so
+instead. `--reason` is the report's one-line **Agent restarts** summary of
+what the restart picks up, and `--restart-report` is the file §5c's
+`restart-agents` wrote (the note says the other chats were not restarted when
+it holds no report):
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    restart-self --reason "<what the restart picks up, one plain line>" \
+    --restart-report data/.tasks/update-self/agent-restarts.json
+```
+
+Then end the turn with the results message, which says this chat restarts
+right after it. Do nothing after the turn ends: the note starts your next turn.
 
 ## To push local improvements back upstream
 
