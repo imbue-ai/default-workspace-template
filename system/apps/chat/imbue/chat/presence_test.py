@@ -96,11 +96,9 @@ def test_only_a_visible_and_focused_page_watches() -> None:
     tracker.record(_CHAT, _report("shown-unfocused", PresenceState.VISIBLE, is_focused=False))
     tracker.record(_CHAT, _report("hidden-focused", PresenceState.HIDDEN, is_focused=True))
     assert tracker.watchers(_CHAT) == []
-    assert not tracker.is_watched(_CHAT)
 
     tracker.record(_CHAT, _report("shown-focused", PresenceState.VISIBLE, is_focused=True))
     assert tracker.watchers(_CHAT) == ["shown-focused"]
-    assert tracker.is_watched(_CHAT)
 
 
 def test_every_watching_page_is_listed() -> None:

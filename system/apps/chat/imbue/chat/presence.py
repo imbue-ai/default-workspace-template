@@ -137,9 +137,6 @@ class PresenceTracker(MutableModel):
         with self._lock:
             return self._watchers_among(self._live_reports_locked(chat_id, now), now)
 
-    def is_watched(self, chat_id: ChatId) -> bool:
-        return len(self.watchers(chat_id)) > 0
-
     def open_chat_ids(self) -> set[ChatId]:
         with self._lock:
             chat_ids = list(self._presence_by_instance_by_chat)
