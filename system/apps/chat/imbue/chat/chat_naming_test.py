@@ -1,8 +1,4 @@
-from collections.abc import Callable
-from concurrent.futures import Executor
-from concurrent.futures import Future
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -20,17 +16,9 @@ from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import ChatAccountBinding
 from imbue.chat.primitives import ChatId
+from imbue.chat.testing import InlineExecutor
 
 _CHAT_ID = ChatId("agent-4f1c2a9e7b6d4c3a8e5f0b1d2c3e4f5a")
-
-
-class _InlineExecutor(Executor):
-    """Runs each submitted call at once, so a test sees the naming finished when the send returns."""
-
-    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
-        future: Future[Any] = Future()
-        future.set_result(fn(*args, **kwargs))
-        return future
 
 
 def _agent_info(display_name: str, tmp_path: Path) -> AgentInfo:
@@ -72,7 +60,7 @@ class _NamingHarness:
             rename_placeholder_named_chat=self._rename,
             build_one_shot_completion=self._build_completion,
             agent_wait_seconds=0.0,
-            executor=_InlineExecutor(),
+            executor=InlineExecutor(),
         )
 
     def _show_title(self, _chat_id: ChatId, title: str) -> None:

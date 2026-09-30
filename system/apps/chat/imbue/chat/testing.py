@@ -31,6 +31,8 @@ from collections.abc import Generator
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
+from concurrent.futures import Executor
+from concurrent.futures import Future
 from contextlib import closing
 from contextlib import contextmanager
 from datetime import datetime
@@ -379,6 +381,15 @@ def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: 
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     return log_path
+
+
+class InlineExecutor(Executor):
+    """Runs each submitted call at once, so work a request hands off has finished when the request returns."""
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        future: Future[Any] = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
 
 
 class RecordingMngrMessenger(MngrMessenger):

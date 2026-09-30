@@ -7,8 +7,6 @@ import json
 import os
 from collections.abc import Callable
 from collections.abc import Generator
-from concurrent.futures import Executor
-from concurrent.futures import Future
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -72,6 +70,7 @@ from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
+from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
@@ -556,15 +555,6 @@ def test_send_message_success() -> None:
     assert messenger.sent == [(agent_id, "hello")]
 
 
-class _InlineExecutor(Executor):
-    """Runs each submitted call at once, so the naming a send starts has finished when the response comes back."""
-
-    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
-        future: Future[Any] = Future()
-        future.set_result(fn(*args, **kwargs))
-        return future
-
-
 def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -587,7 +577,7 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
         has_placeholder_name=manager.has_placeholder_name,
         rename_placeholder_named_chat=lambda chat_id, name: (renames.append((chat_id, name)), True)[1],
         build_one_shot_completion=lambda _harness: completion,
-        executor=_InlineExecutor(),
+        executor=InlineExecutor(),
     )
     client = create_application(build_test_state(agent_manager=manager, chat_namer=namer)).test_client()
 
