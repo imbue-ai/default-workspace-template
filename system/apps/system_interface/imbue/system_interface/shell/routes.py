@@ -332,8 +332,8 @@ def _show_relayed_page(shown: ShownPage, relayed: EmbedderMessageRelayRequest) -
         status=HTTP_OK,
         detail="",
         is_delivered=True,
-        shown=result.outcome.value,
-        window_id=str(result.window_id),
+        shown=result.outcome,
+        window_id=result.window_id,
     )
 
 

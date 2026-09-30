@@ -23,10 +23,12 @@ from loguru import logger
 from pydantic import Field
 from pydantic import model_validator
 from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WindowId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import InvalidShellValueError
+from imbue.system_interface.shell.primitives import ShowOutcome
 
 # A handler is one loopback request to an app that answers once it has asked the shell for what it wants; past the
 # first threshold it is suspicious, past the second it is broken.
@@ -91,10 +93,10 @@ class MessageDelivery(FrozenModel):
     )
     detail: str = Field(description="Empty when delivered; otherwise why the app did not take the message")
     is_delivered: bool = Field(description="Whether the app took the message")
-    shown: str | None = Field(
+    shown: ShowOutcome | None = Field(
         default=None, description="For a page shown: which way the ``show`` op went (raised, navigated, ...)"
     )
-    window_id: str | None = Field(default=None, description="For a page shown: the window that shows it")
+    window_id: WindowId | None = Field(default=None, description="For a page shown: the window that shows it")
 
 
 @pure
@@ -172,7 +174,7 @@ def _refusal_detail(response: httpx.Response) -> str:
 def message_delivery_wire_json(delivery: MessageDelivery) -> dict[str, Any]:
     wire: dict[str, Any] = {"app": str(delivery.app), "status": delivery.status, "detail": delivery.detail}
     if delivery.shown is not None:
-        wire["shown"] = delivery.shown
+        wire["shown"] = delivery.shown.value
     if delivery.window_id is not None:
-        wire["window_id"] = delivery.window_id
+        wire["window_id"] = str(delivery.window_id)
     return wire
