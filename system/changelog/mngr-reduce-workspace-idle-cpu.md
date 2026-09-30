@@ -1,0 +1,3 @@
+The Claude status line in the agent terminal is now blank. `claude_status_line.sh` no longer prints the `[time user@host dir] branch | PR` line; it only records the agent's live model state for the chat model bar, as before.
+
+Claude Code re-runs the script every 2 seconds in every Claude session (`refreshInterval` in `.claude/settings.json`, kept so an idle chat's `/model`, `/effort` and `/fast` changes still reach the model bar promptly). Each run used to spawn about ten processes (`date`, `whoami`, `hostname`, `git`, two `jq`s, `cat`, `mv`). On a busy 4-vCPU workspace with eight chats, those runs cost about a core. A run now uses shell builtins plus one `jq`, and rewrites `model_state.json` only when the state changes.
