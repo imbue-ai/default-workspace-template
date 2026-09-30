@@ -456,8 +456,16 @@ def _register_chat(registry_path: Path) -> None:
     write_registry(registry_path, *builtin_rows_toml_before_chat(), builtin_chat_row_toml())
 
 
-def _deregister_chat(registry_path: Path) -> None:
-    write_registry(registry_path, *builtin_rows_toml_before_chat())
+def _register_chat_and_read(shell: ShellState) -> None:
+    """The chat registers, and the shell's inventory reads the registry as its watch would."""
+    _register_chat(shell.inventory.registry_path)
+    shell.inventory.reload_registry()
+
+
+def _deregister_chat_and_read(shell: ShellState) -> None:
+    """The chat deregisters, and the shell's inventory reads the registry as its watch would."""
+    write_registry(shell.inventory.registry_path, *builtin_rows_toml_before_chat())
+    shell.inventory.reload_registry()
 
 
 def _shell_over(state_directory: Path, registry_path: Path, broadcaster: WebSocketBroadcaster) -> ShellState:
@@ -502,8 +510,7 @@ def test_a_registry_change_before_the_first_read_of_the_desktops_seeds_nothing(
     shell = _shell_before_the_chat(tmp_path, broadcaster)
     client_queue = broadcaster.register()
 
-    _register_chat(shell.inventory.registry_path)
-    shell.inventory.reload_registry()
+    _register_chat_and_read(shell)
 
     assert shell.desktops.list_desktops() == []
     assert not (tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME).exists()
@@ -521,8 +528,7 @@ def test_an_app_registering_after_home_was_seeded_reaches_it_through_the_registr
     assert shortcut_apps_on(home) == BUILTIN_SHORTCUT_APPS_BEFORE_CHAT and _pinned_apps_on(home) == []
     client_queue = broadcaster.register()
 
-    _register_chat(shell.inventory.registry_path)
-    shell.inventory.reload_registry()
+    _register_chat_and_read(shell)
 
     # Read straight from the store, so nothing but the registry change can have added the chat.
     (stored,) = shell.desktops.list_desktops()
@@ -578,8 +584,7 @@ def test_a_visiting_users_desktop_made_before_a_late_app_registered_gets_its_sho
     assert arrival is not None and arrival.created_desktop is not None
     assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_BEFORE_CHAT)
 
-    _register_chat(shell.inventory.registry_path)
-    shell.inventory.reload_registry()
+    _register_chat_and_read(shell)
 
     seeded_with_chat = _seed_of_the_registry(shell)
     home, visitors = shell.desktops.list_desktops()
@@ -592,24 +597,20 @@ def test_a_removed_default_shortcut_stays_removed_across_registrations_and_a_new
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     shell = _shell_before_the_chat(tmp_path, broadcaster)
-    registry_path = shell.inventory.registry_path
     shell.list_desktops()
-    _register_chat(registry_path)
-    shell.inventory.reload_registry()
+    _register_chat_and_read(shell)
     assert shortcut_apps_on(shell.desktops.list_desktops()[0]) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
     shell.desktops.remove_shortcut("home", AppName("chat"), LaunchPathId("root"))
 
     # The chat deregisters and registers again; each change reached the desktops (its pinned window was released and
     # taken back), and neither brought the shortcut back.
-    _deregister_chat(registry_path)
-    shell.inventory.reload_registry()
+    _deregister_chat_and_read(shell)
     assert _pinned_apps_on(shell.desktops.list_desktops()[0]) == []
-    _register_chat(registry_path)
-    shell.inventory.reload_registry()
+    _register_chat_and_read(shell)
     assert _pinned_apps_on(shell.desktops.list_desktops()[0]) == ["chat"]
     assert shortcut_apps_on(shell.list_desktops()[0]) == BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
 
-    restarted = _shell_over(tmp_path / "state", registry_path, broadcaster)
+    restarted = _shell_over(tmp_path / "state", shell.inventory.registry_path, broadcaster)
     assert shortcut_apps_on(restarted.list_desktops()[0]) == BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
 
 
@@ -649,8 +650,7 @@ def test_a_registry_change_whose_reconcile_cannot_write_is_logged_and_the_next_r
     offered_path.unlink()
     offered_path.mkdir()
 
-    _register_chat(shell.inventory.registry_path)
-    shell.inventory.reload_registry()
+    _register_chat_and_read(shell)
 
     assert any(
         record.startswith("ERROR Failed to reconcile the desktops with the changed app registry")
