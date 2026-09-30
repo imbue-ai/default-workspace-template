@@ -33,6 +33,20 @@ def _find_statusline_script() -> Path:
     raise AssertionError("could not locate system/scripts/claude_status_line.sh from the test file")
 
 
+def _run_statusline(state_dir: Path, payload: str, path: str) -> subprocess.CompletedProcess[str]:
+    """Run the script as Claude Code does, with ``payload`` on stdin and only ``path`` on PATH."""
+    bash_path = shutil.which("bash")
+    assert bash_path is not None
+    return subprocess.run(
+        [bash_path, str(_find_statusline_script())],
+        input=payload,
+        capture_output=True,
+        text=True,
+        env={"PATH": path, "MNGR_AGENT_STATE_DIR": str(state_dir)},
+        check=True,
+    )
+
+
 def test_statusline_writes_state_the_shared_reader_matches(tmp_path: Path) -> None:
     if shutil.which("jq") is None:
         pytest.skip("jq is required by the statusline script")
@@ -44,14 +58,7 @@ def test_statusline_writes_state_the_shared_reader_matches(tmp_path: Path) -> No
     state_dir = tmp_path
     (state_dir / "claude_session_id").write_text(session_id)
 
-    result = subprocess.run(
-        ["bash", str(_find_statusline_script())],
-        input=payload,
-        capture_output=True,
-        text=True,
-        env={"PATH": "/usr/bin:/bin", "MNGR_AGENT_STATE_DIR": str(state_dir)},
-        check=True,
-    )
+    result = _run_statusline(state_dir, payload, "/usr/bin:/bin")
     # The status line row is deliberately blank.
     assert result.stdout == ""
 
@@ -75,25 +82,14 @@ def test_statusline_writes_state_the_shared_reader_matches(tmp_path: Path) -> No
     assert matched.label == "Fable 5"
 
 
-def _run_statusline_with_only_jq_and_mv_on_path(state_dir: Path, bin_dir: Path, payload: str) -> None:
-    """Run the script with a PATH holding nothing but jq and mv, so any other command it spawns fails the run."""
-    bin_dir.mkdir(exist_ok=True)
+def _bin_dir_holding_only_jq_and_mv(bin_dir: Path) -> str:
+    """A PATH holding nothing but jq and mv, so any other command the script spawns fails the run."""
+    bin_dir.mkdir()
     for tool in ("jq", "mv"):
         tool_path = shutil.which(tool)
         assert tool_path is not None
-        link = bin_dir / tool
-        if not link.exists():
-            link.symlink_to(tool_path)
-    bash_path = shutil.which("bash")
-    assert bash_path is not None
-    subprocess.run(
-        [bash_path, str(_find_statusline_script())],
-        input=payload,
-        capture_output=True,
-        text=True,
-        env={"PATH": str(bin_dir), "MNGR_AGENT_STATE_DIR": str(state_dir)},
-        check=True,
-    )
+        (bin_dir / tool).symlink_to(tool_path)
+    return str(bin_dir)
 
 
 def test_statusline_spawns_nothing_but_jq_and_rewrites_only_on_change(tmp_path: Path) -> None:
@@ -106,18 +102,18 @@ def test_statusline_spawns_nothing_but_jq_and_rewrites_only_on_change(tmp_path: 
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     (state_dir / "claude_session_id").write_text(payload["session_id"] + "\n")
-    bin_dir = tmp_path / "bin"
+    path = _bin_dir_holding_only_jq_and_mv(tmp_path / "bin")
     written = state_dir / "model_state.json"
 
-    _run_statusline_with_only_jq_and_mv_on_path(state_dir, bin_dir, json.dumps(payload))
+    _run_statusline(state_dir, json.dumps(payload), path)
     assert read_model_identity(written) == ModelIdentity(model_id="claude-fable-5", effort="high", fast=False)
     first_stamp = (written.stat().st_ino, written.stat().st_mtime_ns)
 
-    _run_statusline_with_only_jq_and_mv_on_path(state_dir, bin_dir, json.dumps(payload))
+    _run_statusline(state_dir, json.dumps(payload), path)
     assert (written.stat().st_ino, written.stat().st_mtime_ns) == first_stamp
 
     switched = {**payload, "effort": {**payload["effort"], "level": "low"}}
-    _run_statusline_with_only_jq_and_mv_on_path(state_dir, bin_dir, json.dumps(switched))
+    _run_statusline(state_dir, json.dumps(switched), path)
     assert read_model_identity(written) == ModelIdentity(model_id="claude-fable-5", effort="low", fast=False)
 
 
@@ -130,12 +126,5 @@ def test_statusline_skips_a_nested_session(tmp_path: Path) -> None:
     state_dir = tmp_path
     (state_dir / "claude_session_id").write_text("some-other-session-id")
 
-    subprocess.run(
-        ["bash", str(_find_statusline_script())],
-        input=payload,
-        capture_output=True,
-        text=True,
-        env={"PATH": "/usr/bin:/bin", "MNGR_AGENT_STATE_DIR": str(state_dir)},
-        check=True,
-    )
+    _run_statusline(state_dir, payload, "/usr/bin:/bin")
     assert not (state_dir / "model_state.json").exists()
