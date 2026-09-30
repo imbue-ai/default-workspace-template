@@ -17,6 +17,7 @@ from typing import assert_never
 from urllib.parse import parse_qsl
 from urllib.parse import urlsplit
 
+from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import LocationScope
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
@@ -649,18 +650,13 @@ def launcher_order(rows: Sequence[RegistryRow]) -> tuple[RegistryRow, ...]:
     )
 
 
-class _ShortcutChoice(FrozenModel):
-    launch: LaunchPathId = Field(description="The launch path the shortcut runs")
-    mode: ShortcutMode = Field(description="How the shortcut behaves")
-
-
 @pure
 def _takes_text(launch_path: RegistryLaunchPath) -> bool:
     return launch_path.text_param is not None or launch_path.draft_param is not None
 
 
 @pure
-def _default_shortcut_choice(row: RegistryRow) -> _ShortcutChoice | None:
+def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
     """The shortcut an app is given on a desktop, never of a launch path that takes typed or drafted text: its
     ``default_shortcut`` when it declares one that names such a launch path it offers; else, for a supervised app (one
     whose row names a ``program``), its first launch path that takes no text, focusing. A manifest-less row with no
@@ -670,13 +666,11 @@ def _default_shortcut_choice(row: RegistryRow) -> _ShortcutChoice | None:
     offered = effective_launch_paths(row)
     if row.default_shortcut is not None:
         declared = next((path for path in offered if path.id == row.default_shortcut.launch), None)
-        if declared is None or _takes_text(declared):
-            return None
-        return _ShortcutChoice(launch=declared.id, mode=row.default_shortcut.mode)
+        return None if declared is None or _takes_text(declared) else row.default_shortcut
     if row.program is None:
         return None
     first = next((path for path in offered if not _takes_text(path)), None)
-    return None if first is None else _ShortcutChoice(launch=first.id, mode=ShortcutMode.FOCUS)
+    return None if first is None else DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS)
 
 
 @pure
