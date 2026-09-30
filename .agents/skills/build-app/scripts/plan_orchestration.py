@@ -605,6 +605,17 @@ def _parse_node_index_list(text: str) -> list[int]:
         ) from None
 
 
+def _run_models() -> int:
+    """Print each worker capability and the model it runs on, one per line.
+
+    Exists so the skill can start one agent per capability without writing the mapping out
+    a second time: the table here stays the only place it lives.
+    """
+    for capability, model in MODEL_BY_CAPABILITY.items():
+        print(f"{capability} {model}")
+    return 0
+
+
 def _run_parse(
     run_dir: Path,
     reduce_access: bool,
@@ -741,6 +752,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
 
+    subparsers.add_parser(
+        "models",
+        help="Print each worker capability and its model, one per line, for the skill's "
+        "per-capability agents.",
+    )
+
     ready_parser = subparsers.add_parser(
         "ready", help="Print the nodes that can start now, comma-separated."
     )
@@ -769,6 +786,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.shared_worktree,
                     args.tier_agents,
                 )
+            case "models":
+                return _run_models()
             case "ready":
                 return _run_ready(args.run_dir, args.done, args.running)
             case "write-task":

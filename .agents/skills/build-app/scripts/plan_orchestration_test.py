@@ -813,3 +813,25 @@ def test_tier_agents_still_take_the_model_of_their_capability() -> None:
     for node in plan["nodes"]:
         if node["agent"]:
             assert node["model"] == plan_orchestration.MODEL_BY_CAPABILITY[node["capability"]]
+
+
+def test_models_are_printed_for_the_skill_to_read() -> None:
+    """The skill starts one agent per capability and needs each one's model. It reads them
+    from here rather than repeating the table, which is the mistake that put the same mapping
+    in two places once already."""
+    import io
+    import contextlib
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert plan_orchestration._run_models() == 0
+
+    printed = dict(line.split() for line in out.getvalue().splitlines())
+    assert printed == plan_orchestration.MODEL_BY_CAPABILITY
+
+
+def test_every_printed_capability_can_be_an_agent_name() -> None:
+    """The skill names an agent `$APP-<capability>`, so a capability with a space or a slash
+    in it would produce an agent nobody can address."""
+    for capability in plan_orchestration.MODEL_BY_CAPABILITY:
+        assert capability.isalnum(), capability

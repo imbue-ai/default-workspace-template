@@ -121,6 +121,40 @@ git worktree add -b "build-app/$APP" "$BUILD" HEAD
 (cd "$BUILD" && nohup uv sync --all-packages > "$RUN/sync.log" 2>&1 &)
 ```
 
+**Then start the three workers, before the plan exists.** With
+`settings.tier_agents` (Step 2) there is one agent per difficulty and the three are
+always `low`, `medium` and `high`, on Haiku, Sonnet and Opus -- none of which the plan
+decides. So they can go up now, and spend the clarifying and the planning doing the
+reading every node would otherwise repeat: in one measured build a worker spent 144
+seconds reading 8 files before it wrote anything, and its sibling spent 24 more.
+
+`references/tier-agent-priming.md` is their first task: read `worker-node.md`,
+`app-building-guidance.md`, `worker-reporting.md` and the scaffolder, report ready, and
+wait. Give each its own runtime dir so their reports do not collide:
+
+```bash
+python3 .agents/skills/build-app/scripts/plan_orchestration.py models | while read -r NAME MODEL; do
+    mkdir -p "$RUN/agents/$NAME/reports"
+    cp .agents/skills/build-app/references/tier-agent-priming.md "$RUN/agents/$NAME/task.md"
+    uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+        --name "$APP-$NAME" \
+        --template shared_worker \
+        --work-folder "$BUILD" \
+        --runtime-dir "$RUN/agents/$NAME/" \
+        --task-file "$RUN/agents/$NAME/task.md" \
+        --create-arg=-S \
+        --create-arg=agent_types.claude.settings_overrides.model="$MODEL" \
+        --message-with-mngr
+done
+```
+
+Do not wait for their ready reports. They read while you clarify, and Step 4 sends the
+first node to an agent that is already warm -- `launch` there becomes a `reply`, since
+every tier agent exists from here.
+
+A plan that turns out to use only two difficulties leaves one agent idle, which costs a
+create and is destroyed with the rest in Step 6.
+
 Then ask only the questions that genuinely block: a fork that is both genuinely
 uncertain and expensive to reverse. Most apps have none. Default to the simplest
 conventional choice and to a single user, and state each default in one line.
@@ -294,9 +328,9 @@ Repeat until every node is done.
    ```
 
    **`settings.tier_agents` true** -- the node's `agent` is a capability (`low`, `medium`,
-   `high`), not a node number, and several nodes name the same one. **Launch it the first
-   time you meet that agent; after that send the node's task to the agent already running**,
-   which is what saves the cold start and lets it keep what the last node taught it:
+   `high`), not a node number, and several nodes name the same one. **All three exist already**, started
+   in Step 1 and primed with the reading every node would otherwise repeat, so every node
+   is a message to an agent that is warm -- there is nothing to launch here:
 
    ```bash
    python3 .agents/skills/build-app/scripts/plan_orchestration.py write-task \
