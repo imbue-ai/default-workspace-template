@@ -8,6 +8,7 @@ import os
 import threading
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -663,6 +664,38 @@ def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     assert messenger.sent == [(agent_id, "wake up")]
     tracked = manager.get_agent_by_id(agent_id)
     assert tracked is not None and tracked.state == "WAITING"
+
+
+class _ReleasingAsEachSendEndsAgentManager(AgentManager):
+    """Runs the chat app's release the moment a send's connecting scope ends, as an observe event could."""
+
+    release: Callable[[], None] | None = None
+
+    @contextmanager
+    def track_connecting_send(self, agent_id: str, message_id: str) -> Iterator[Callable[[], None]]:
+        with super().track_connecting_send(agent_id, message_id) as mark_connecting:
+            yield mark_connecting
+        if self.release is not None:
+            self.release()
+
+
+def test_a_send_reviving_a_stopped_chat_keeps_the_chats_watcher(tmp_path: Path) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _claude_agent_info_with_one_message(tmp_path, agent_id, "STOPPED")
+    manager = _ReleasingAsEachSendEndsAgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name=agent_id, state="STOPPED")
+    state = build_test_state(agent_manager=manager)
+    manager.release = state.release_unviewed_stopped_transcripts
+    client = create_application(state).test_client()
+    try:
+        with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+            response = client.post(f"/api/chats/{agent_id}/message", json={"message": "wake up"})
+
+        assert response.status_code == 200
+        assert set(state.watchers) == {agent_id}
+    finally:
+        state.shutdown()
 
 
 def _send_and_record_connecting_pushes(state: str, *, is_ready_marker_written: bool) -> tuple[int, list[bool]]:
