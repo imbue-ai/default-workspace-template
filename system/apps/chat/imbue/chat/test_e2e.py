@@ -47,7 +47,13 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY as SHELL_STATIC_DIRECTORY
 from imbue.system_interface.shell.desktops import DEFAULT_DESKTOP_NAME
 from imbue.system_interface.shell.desktops import slugify_desktop_name
+from imbue.system_interface.shell.testing import DUFS_BINARY
+from imbue.system_interface.shell.testing import file_viewer_registry_row
+from imbue.system_interface.shell.testing import message_handling_app
+from imbue.system_interface.shell.testing import registry_row_toml
+from imbue.system_interface.shell.testing import running_file_viewer
 from imbue.system_interface.testing import find_free_port
+from imbue.system_interface.testing import serve_app
 
 
 def _playwright_browsers_installed() -> bool:
@@ -119,6 +125,7 @@ def _running_e2e_server(
     session_events: list[dict[str, Any]] | None = None,
     is_account_signed_in: bool = True,
     additional_agents: Sequence[tuple[str, str]] = (),
+    extra_rows: Sequence[str] = (),
 ) -> AbstractContextManager[RunningWorkspace]:
     """The two-server workspace, the shell and the chat each on a free port of their own."""
     return running_workspace(
@@ -128,6 +135,7 @@ def _running_e2e_server(
         session_events=session_events,
         additional_agents=additional_agents,
         is_account_signed_in=is_account_signed_in,
+        extra_rows=extra_rows,
     )
 
 
@@ -1372,3 +1380,111 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         provider_row = chat.locator('[data-menu-row="providers"]')
         expect(provider_row).to_contain_text("Google")
         expect(provider_row).not_to_contain_text("next:")
+
+
+# A reply that links a file of the workspace and a service running in it (the workspace link routing plan), served
+# with the real File Viewer (dufs over a folder of the test's own) and a stand-in for the app that opens URLs.
+_LINKED_FILE_HREF = "/notes/plan%201.md"
+_LINKED_SERVICE_URL = "http://localhost:3000/preview"
+_OPEN_URL_HANDLER_PATH = "/api/open-url"
+_LINKING_SESSION_EVENTS: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-link-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Where are the plan and the preview?"},
+    },
+    {
+        "type": "assistant",
+        "uuid": "uuid-link-2",
+        "timestamp": "2026-01-01T00:00:01Z",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"The plan is [the plan file]({_LINKED_FILE_HREF}) and the preview is "
+                    f"[the preview]({_LINKED_SERVICE_URL}).",
+                }
+            ],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    },
+]
+
+
+def _app_windows(server: RunningWorkspace, app: str) -> list[dict[str, Any]]:
+    desktop = next(candidate for candidate in _desktops(server) if candidate["id"] == _HOME_DESKTOP_ID)
+    return [window for window in desktop["windows"] if window["app"] == app]
+
+
+def _bring_the_chat_over(page: Page, server: RunningWorkspace, client_id: str, covering_window_id: str) -> None:
+    """Raise the chat window over the one that opened on top of it, as an agent's ``focus`` op does, so its links can
+    be clicked again."""
+    focus = {"op": "focus", "args": {"window": _the_chat_window(server)["id"], "client": client_id}}
+    assert _post_op(server, {**focus, "requester": None}) == 200
+    expect(page.locator(f'[data-window-id="{covering_window_id}"]')).to_have_attribute(
+        "data-focused", "false", timeout=15000
+    )
+
+
+@pytest.mark.skipif(DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
+@pytest.mark.timeout(120, func_only=False)
+def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_the_app_that_opens_urls(
+    tmp_path: Path, page: Page
+) -> None:
+    """Clicking a reply's file link opens the file on its view page in a File Viewer window, and clicking it again
+    (with a modifier) raises that window rather than opening another; a middle click on a local address sends it,
+    with the client, to the app registered for ``open:url``. The chat never navigates and no browser window
+    opens."""
+    root = tmp_path / "viewer-root"
+    (root / "notes").mkdir(parents=True)
+    (root / "notes" / "plan 1.md").write_text("# The plan\n")
+    opened_urls: list[dict[str, Any]] = []
+    with (
+        running_file_viewer(root) as viewer_url,
+        serve_app(message_handling_app(opened_urls, _OPEN_URL_HANDLER_PATH, 200)) as url_opener,
+    ):
+        rows = (
+            file_viewer_registry_row(viewer_url),
+            registry_row_toml(
+                "browser", url_opener.http_url, message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)]
+            ),
+        )
+        with _running_e2e_server(tmp_path, session_events=_LINKING_SESSION_EVENTS, extra_rows=rows) as server:
+            _open_fixture_chat(page, server)
+            chat = _chat(page)
+            file_link = chat.get_by_role("link", name="the plan file")
+            expect(file_link).to_be_visible(timeout=15000)
+            chat_url = _chat_frame(page).url
+
+            file_link.click()
+            wait_for(
+                lambda: [window["path"] for window in _app_windows(server, "files")] == ["/notes/plan%201.md?view"],
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="no File Viewer window opened on the linked file's view page",
+            )
+            (viewer,) = _app_windows(server, "files")
+            client_id = _client_id(page)
+            _bring_the_chat_over(page, server, client_id, viewer["id"])
+            file_link.click(modifiers=["ControlOrMeta"])
+            expect(page.locator(f'[data-window-id="{viewer["id"]}"]')).to_have_attribute(
+                "data-focused", "true", timeout=15000
+            )
+            page.wait_for_timeout(1000)
+            assert [window["id"] for window in _app_windows(server, "files")] == [viewer["id"]]
+
+            _bring_the_chat_over(page, server, client_id, viewer["id"])
+            chat.get_by_role("link", name="the preview").click(button="middle")
+            wait_for(
+                lambda: len(opened_urls) == 1,
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the app registered for open:url was never posted the link",
+            )
+            assert opened_urls == [{"type": "open:url", "client_id": client_id, "url": _LINKED_SERVICE_URL}]
+            assert _chat_frame(page).url == chat_url
+            assert page.context.pages == [page]
