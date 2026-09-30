@@ -227,8 +227,7 @@ spare sits in `oom_priority`'s ceiling band (`SPARE_AGENT`, shared with the
 browser's renderers) until a chat takes it, so memory pressure sheds it before
 any agent or agent subprocess; one that dies is replaced after the same
 backoff. A secondary chat (a preview) keeps none of its own: it reads the live
-chat's `spare_chat.json` on every sweep (its manifest's `CHAT_STATE_DIR` names the
-live state dir, since a preview runs from a worktree), never writing it, so the live spares
+chat's `spare_chat.json` on every sweep, never writing it, so the live spares
 stay hidden there too and a spare the live chat hands over appears.
 
 The send route is also how anything inside the workspace messages a chat:
@@ -414,7 +413,10 @@ real, but a switch to another account is refused, since it would write the chat'
 record into the scratch copy only, and so is an answer to a secret card, since the
 answer belongs to the live chat. Point `CHAT_DATA_DIR` at a scratch copy of
 `data/.apps/chat/` so its writes (the message stamps, settings, chat records, and
-secret requests) never land in the live chat's data.
+secret requests) never land in the live chat's data. It starts, hands over, and
+destroys no spare agent; point `CHAT_STATE_DIR` at the live chat's
+`data/.state/chat/` by absolute path (a preview runs from a worktree, where the
+relative default names nothing) so it reads the live spares and hides them.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm
