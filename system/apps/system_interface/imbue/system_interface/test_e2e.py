@@ -1483,6 +1483,15 @@ def _pinned_entry(page: Page) -> Locator:
     return page.locator(f'[data-pinned-entry="{_PINNED_APP_NAME}"]')
 
 
+def _resting_box(page: Page, entry: Locator) -> FloatRect:
+    """A floating entry's box with the pointer off it and its tile at rest. Under the pointer the tile grows by a
+    tenth about its centre, through a transition reduced motion leaves on, so a box read there is anywhere between
+    its place and its place grown."""
+    page.mouse.move(0, 0)
+    page.wait_for_function("(element) => element.getAnimations().length === 0", arg=entry.element_handle())
+    return _box(entry)
+
+
 @pytest.mark.timeout(90, func_only=False)
 def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minimizes_and_never_closes(
     tmp_path: Path, page: Page
@@ -1684,12 +1693,12 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         expect(entry).to_have_attribute("data-minimized", "true")
 
         backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
-        before = _box(entry)
+        before = _resting_box(page, entry)
         # The default corner: bottom right of the backdrop, inset by the theme's tokens.
         _assert_close(before["x"] + before["width"], backdrop["x"] + backdrop["width"] - 16, "default x")
         _assert_close(before["y"] + before["height"], backdrop["y"] + backdrop["height"] - 12, "default y")
         _drag(page, _center(before), (_center(before)[0] - 300, _center(before)[1] - 200))
-        moved = _box(entry)
+        moved = _resting_box(page, entry)
         _assert_close(moved["x"], before["x"] - 300, "dragged x")
         _assert_close(moved["y"], before["y"] - 200, "dragged y")
         stored = _wait_for_client_entry(
@@ -1707,7 +1716,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
 
         page.reload()
         expect(_pinned_entry(page)).to_be_visible(timeout=15000)
-        _assert_same_box(_box(_pinned_entry(page)), moved, "after reload")
+        _assert_same_box(_resting_box(page, _pinned_entry(page)), moved, "after reload")
 
         menu = _open_entry_menu(page, _pinned_entry(page))
         expect(menu.locator('[data-menu-row="close"]')).to_have_count(1)
@@ -1724,7 +1733,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         _open_entry_menu(page, _taskbar_entry(page, pinned["id"])).locator('[data-menu-row="float"]').click()
         expect(page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(1, timeout=10000)
         # The position it was dragged to is kept across the trip through the bar.
-        _assert_same_box(_box(_pinned_entry(page)), moved, "back afloat")
+        _assert_same_box(_resting_box(page, _pinned_entry(page)), moved, "back afloat")
 
 
 def _avatar_image_source(entry: Locator) -> str:
