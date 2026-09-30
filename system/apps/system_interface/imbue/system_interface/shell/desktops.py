@@ -1,4 +1,5 @@
-"""Desktops: the shared desktops of desktop-interface contracts.md section 4.1, stored in ``desktops.json``."""
+"""Desktops: the shared desktops of desktop-interface contracts.md section 4.1, stored in ``desktops.json``, and
+the default shortcuts offered to them (section 4.1a), in ``default_shortcuts_offered.json``."""
 
 import re
 from collections.abc import Callable
