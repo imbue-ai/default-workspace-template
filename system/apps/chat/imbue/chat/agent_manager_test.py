@@ -5634,3 +5634,46 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
         assert (spare_pid, bands.SPARE_AGENT) not in adj_writes
     finally:
         manager.stop()
+
+
+def test_a_spare_claimed_while_it_starts_takes_the_chat_band_once_its_chat_settles(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, _argv_log = _write_booting_mngr_binary(tmp_path)
+    adj_writes: list[tuple[int, int]] = []
+    pid_by_agent_id: dict[str, int] = {}
+
+    def record_adj_write(pid: int, adj: int) -> bool:
+        adj_writes.append((pid, adj))
+        return True
+
+    manager, _ = _spare_manager(
+        broadcaster,
+        monkeypatch,
+        tmp_path,
+        mngr_binary,
+        1,
+        oom_score_adj_writer=record_adj_write,
+        agent_pid_resolver=pid_by_agent_id.get,
+    )
+    manager.set_handoff_capabilities(_handoff_capabilities([]))
+    try:
+        manager.ensure_spare_chat()
+        booting = _wait_for_created_spare(manager)
+        spare_pid = 48214
+        pid_by_agent_id[booting.chat_id] = spare_pid
+        manager.ensure_spare_chat()
+        assert (spare_pid, bands.SPARE_AGENT) in adj_writes
+
+        created = manager.create_chat("")
+        assert created.chat_id == booting.chat_id
+        _mark_harness_ready(tmp_path, booting.chat_id)
+        assert manager.wait_for_chat_creation(created.chat_id, timeout=15.0) == ChatCreationOutcome(is_created=True)
+
+        spare_pid_writes = [adj for pid, adj in adj_writes if pid == spare_pid]
+        assert bands.CHAT_AGENT_FLOOR <= spare_pid_writes[-1] <= bands.CHAT_AGENT_STALE_CEILING
+        adj_writes.clear()
+        manager.ensure_spare_chat()
+        assert (spare_pid, bands.SPARE_AGENT) not in adj_writes
+    finally:
+        manager.stop()
