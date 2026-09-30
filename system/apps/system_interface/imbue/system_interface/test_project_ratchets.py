@@ -257,40 +257,39 @@ def test_the_shell_names_no_app() -> None:
     )
 
 
-# Where the tile relief and the colours it has to survive are written down. The palette is the one
-# every icon draws its background from; the relief is the hairline the shell lays over the art.
+# Where the tile's highlight and the colours it has to sit on are written down.
 _THEME_CSS = _FRONTEND_SRC / "theme" / "default.css"
 _ICON_DOC = _PACKAGE_ROOT.parents[2] / "docs" / "system" / "app-icons.md"
 
-# A tile's top and bottom rows are pure background -- the glyph lives in a centred 144 box
-# (docs/system/app-icons.md) -- so the relief's colour over a tile is one alpha composite over one
-# flat colour, and how well it reads is the lightness it gains or loses against that colour.
-# Anything under this is a hairline nobody can see: white on cream scores 1.5.
-_RELIEF_MIN_CONTRAST: Final[float] = 8.0
-
-_RELIEF_RULE = RatchetRuleInfo(
-    rule_name="an icon tile's relief disappearing on part of the palette",
+_HIGHLIGHT_RULE = RatchetRuleInfo(
+    rule_name="a shade along the bottom edge of an icon tile",
     rule_description=(
-        "--desk-icon-relief is the hairline that gives a flat tile a rounded face, and it has to read on "
-        "every background an icon may carry -- the palette in docs/system/app-icons.md runs from near-black "
-        "to cream, and white has nowhere to go on a cream tile. Light above and shade below is what covers "
-        "both ends: whichever edge a tile leaves room for is the one that reads. A relief that is light at "
-        "both edges (or dark at both) vanishes on half the palette."
+        "--desk-icon-highlight lights a tile's bottom edge as well as its top. The lit edge has to fall "
+        "directly against the cast below it: that light-then-dark step is what lifts the tile off the "
+        "surface, and a shade there merges into the cast instead. It is a shape the eye reads before it "
+        "reads a colour, so it outranks the contrast a dark edge would buy on the pale end of the palette "
+        "-- the cast is what separates those tiles. Light the bottom edge, never darken it."
     ),
 )
 
-# The shadows in the token: a colour and its alpha, one per edge.
-_RELIEF_LAYER = re.compile(r"inset[^,]*?rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*/\s*([\d.]+)\s*\)")
+# One edge of the token: its vertical offset (negative for the bottom edge) and what it paints there.
+_HIGHLIGHT_EDGE = re.compile(
+    r"inset\s+0\s+(-?[\d.]+)px[^,]*?rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*/\s*([\d.]+)\s*\)"
+)
 _PALETTE_COLOUR = re.compile(r"#[0-9A-F]{6}")
 
 
-def _relief_layers() -> list[tuple[tuple[int, int, int], float]]:
-    """Each edge of ``--desk-icon-relief`` as the colour it paints and the alpha it paints at."""
-    token = re.search(r"--desk-icon-relief:\s*([^;]+);", _THEME_CSS.read_text())
-    assert token is not None, "the shell's theme no longer defines --desk-icon-relief"
-    layers = [((int(r), int(g), int(b)), float(alpha)) for r, g, b, alpha in _RELIEF_LAYER.findall(token.group(1))]
-    assert layers, f"--desk-icon-relief paints no rgb() layer this test can read: {token.group(1)}"
-    return layers
+def _bottom_edge() -> tuple[tuple[int, int, int], float]:
+    """What ``--desk-icon-highlight`` paints along the tile's bottom, as a colour and an alpha."""
+    token = re.search(r"--desk-icon-highlight:\s*([^;]+);", _THEME_CSS.read_text())
+    assert token is not None, "the shell's theme no longer defines --desk-icon-highlight"
+    bottom = [
+        ((int(red), int(green), int(blue)), float(alpha))
+        for offset, red, green, blue, alpha in _HIGHLIGHT_EDGE.findall(token.group(1))
+        if float(offset) < 0
+    ]
+    assert len(bottom) == 1, f"--desk-icon-highlight paints {len(bottom)} bottom edges this test can read"
+    return bottom[0]
 
 
 def _palette_backgrounds() -> list[str]:
@@ -307,23 +306,13 @@ def _lightness(rgb: tuple[float, float, float]) -> float:
     return 116 * luminance ** (1 / 3) - 16 if luminance > 0.008856 else 903.3 * luminance
 
 
-def _composited(
-    source: tuple[int, int, int], alpha: float, tile: tuple[float, float, float]
-) -> tuple[float, float, float]:
-    """``source`` (0..255 channels) painted at ``alpha`` over an opaque tile colour."""
-    red, green, blue = (
-        alpha * (channel / 255) + (1 - alpha) * base for channel, base in zip(source, tile, strict=True)
-    )
-    return (red, green, blue)
-
-
-def test_the_icon_relief_reads_on_every_colour_in_the_palette() -> None:
-    layers = _relief_layers()
+def test_the_bottom_edge_of_an_icon_tile_is_lit_and_never_shaded() -> None:
+    source, alpha = _bottom_edge()
     offenders = []
     for background in _palette_backgrounds():
-        red, green, blue = (int(background[index : index + 2], 16) / 255 for index in (1, 3, 5))
-        tile = (red, green, blue)
-        best = max(abs(_lightness(_composited(source, alpha, tile)) - _lightness(tile)) for source, alpha in layers)
-        if best < _RELIEF_MIN_CONTRAST:
-            offenders.append(f"{background}: best edge moves L* by {best:.1f}")
-    assert offenders == [], _RELIEF_RULE.rule_description + "\n" + "\n".join(f"  - {line}" for line in offenders)
+        tile = tuple(int(background[index : index + 2], 16) / 255 for index in (1, 3, 5))
+        lit = tuple(alpha * (channel / 255) + (1 - alpha) * base for channel, base in zip(source, tile, strict=True))
+        moved = _lightness(lit) - _lightness(tile)
+        if moved < 0:
+            offenders.append(f"{background}: the bottom edge moves L* by {moved:.1f}")
+    assert offenders == [], _HIGHLIGHT_RULE.rule_description + "\n" + "\n".join(f"  - {line}" for line in offenders)

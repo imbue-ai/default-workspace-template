@@ -78,8 +78,8 @@ function shortcutContent(app: AppRecord | undefined, label: string, isLifted: bo
         class:
           "shortcut-icon relative flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center " +
           "rounded-(--desk-icon-radius) [&>svg]:size-full " +
-          // The hairline the bar's icons wear is a layer of its own (style.css); this is the cast
-          // under it.
+          // The hairline of light the bar's icons wear is a layer of its own (style.css); this is
+          // the cast it falls against.
           (isLifted
             ? "shadow-(--desk-icon-shadow-lifted)"
             : "shadow-(--desk-icon-shadow) transition-transform group-hover:scale-110"),
