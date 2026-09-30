@@ -1,0 +1,1 @@
+New `SPARE_AGENT` band (1000, the ceiling) for a spare chat agent: one the chat app starts ahead of the next new chat and that no one uses yet. It is shed before any other agent or agent subprocess under memory pressure.

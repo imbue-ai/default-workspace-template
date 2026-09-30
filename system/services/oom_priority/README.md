@@ -56,7 +56,8 @@ docker, lima), earlyoom logs that once and uses `/proc/meminfo` alone.
   the agent observer at 24, itself just above the shell) <
   user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
   (600) < agent subprocess (900) < Chromium's own processes (910-1000, renderers
-  at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
+  at the ceiling) and a spare chat agent (`SPARE_AGENT`, 1000: an agent the chat
+  app started ahead of the next new chat, which no one uses yet). Chat agents occupy a *dynamic* range that straddles the worker
   band: `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
   `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
   `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).
@@ -89,6 +90,7 @@ without inspecting the process tree:
 | a user-created supervisord service or app | launch | user service (above every built-in) | `system/services/oom_priority/bin/oom_tag_service.py user` (command prefix) |
 | a workspace terminal's shell (a `terminal-N` tmux session's pane, and everything run in it) | session creation | `terminal-session` (the user-service level, 200) | `system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l`, the session command the terminal app gives `tmux new-session` (a pane otherwise inherits the tmux server's protected 0) |
 | an agent's main process | launch | chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/agent_oom_launch.py` |
+| a spare chat agent's main process | every chat-app sweep (a restart relaunches it at the chat band) | spare agent (1000, the ceiling); the chat band once a chat takes it | the chat app's `AgentManager` (`spare_chat.py`) |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/agent_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
 | the browser coordinator | launch | its `SERVICE_BANDS` value (70, an ordinary service band; the file viewer and Getting Started sit above it) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |
 | Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000), renderers at the ceiling | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |

@@ -48,6 +48,11 @@ PRIMARY_AGENT: Final[int] = PROTECTED
 USER_AGENT: Final[int] = 300
 WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
+# A spare chat agent: started ahead of the next new chat (the chat app's ``spare_chat.py``) and
+# used by no one yet. The most expendable process in the workspace, above every agent's
+# subprocesses: shedding it loses no work, and the chat app starts another once memory allows.
+# The chat app tags it; once a chat takes it, the chat prioritizer moves it into the chat band.
+SPARE_AGENT: Final[int] = 1000
 
 # Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` and is re-tagged
 # at runtime from live activity (see the chat app's ``ChatOomPrioritizer``)
