@@ -5518,3 +5518,57 @@ def test_a_manager_with_no_spares_store_starts_no_spare(agent_manager: AgentMana
     agent_manager.ensure_spare_chat()
 
     assert agent_manager._spares == ()
+
+
+def test_a_secondary_chat_hides_the_live_spares_follows_their_changes_and_never_touches_them(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    account_id = read_index().accounts[0].id
+    first_id, second_id = ChatId(f"agent-{uuid4().hex}"), ChatId(f"agent-{uuid4().hex}")
+
+    def live_spare(chat_id: ChatId) -> SpareChatAgent:
+        return SpareChatAgent(
+            chat_id=chat_id,
+            display_name="Chat 7",
+            terms=SpareChatTerms(account_id=account_id, project_label="", is_fast=True),
+            phase=SpareChatPhase.READY,
+        )
+
+    live_store = SpareChatStore(path=tmp_path / "live" / "spare_chat.json")
+    live_store.write((live_spare(first_id),))
+    manager = AgentManager.build(
+        broadcaster,
+        mngr_binary=mngr_binary,
+        chat_files_root=tmp_path / "chats",
+        messenger=RecordingMngrMessenger(),
+        spare_chat_store=live_store,
+        is_secondary=True,
+    )
+    manager.note_agent_list_known()
+    seed_agent_state(manager, first_id, name="Chat-7", labels={"display_name": "Chat 7"})
+    seed_agent_state(manager, second_id, name="Chat-8", labels={"display_name": "Chat 8"})
+    try:
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [second_id]
+        assert not manager.knows_chat(first_id)
+
+        # The live chat hands the first spare over and starts the second as its next.
+        live_store.write((live_spare(second_id),))
+        manager.ensure_spare_chat()
+
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [first_id]
+        created = manager.create_chat("")
+        assert created.chat_id not in (first_id, second_id)
+        wait_until_true(
+            lambda: manager.get_agent_by_id(created.chat_id) is not None,
+            timeout_seconds=15.0,
+            what="the secondary's own create finishing",
+        )
+        assert [call[3] for call in _mngr_calls(argv_log, "create")] == [created.chat_id]
+        assert _mngr_calls(argv_log, "destroy") == []
+        assert live_store.read() == (live_spare(second_id),)
+    finally:
+        manager.stop()

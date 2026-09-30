@@ -24,6 +24,7 @@ from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.chat_settings import SETTINGS_FILENAME
 from imbue.chat.config import Config
+from imbue.chat.config import DEFAULT_CHAT_DATA_DIR
 from imbue.chat.config import load_config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
@@ -140,8 +141,11 @@ def build_production_state(
         chat_files_root=chat_records_root,
         chat_settings=chat_settings,
         is_secondary=is_secondary,
-        # The agent kept started for the next new chat; a secondary's chats are a scratch copy, so it keeps none.
-        spare_chat_store=None if is_secondary else SpareChatStore(path=data_dir / SPARE_CHAT_FILENAME),
+        # The agents kept started for the next new chats. A secondary follows the live chat's
+        # record rather than its scratch copy, only to hide them.
+        spare_chat_store=SpareChatStore(
+            path=(DEFAULT_CHAT_DATA_DIR if is_secondary else data_dir) / SPARE_CHAT_FILENAME
+        ),
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)

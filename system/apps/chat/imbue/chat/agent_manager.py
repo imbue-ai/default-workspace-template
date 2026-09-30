@@ -863,7 +863,8 @@ class AgentManager:
     # The workspace-wide chat settings (the fast mode a new chat starts in), read on every create.
     _chat_settings: ChatSettingsStore
     # Where the spare agents a new chat is handed are recorded (``spare_chat.py``); None keeps
-    # no spare (tests, a secondary chat).
+    # no spare (tests). A secondary chat is given the live chat's, which it only reads: it hides
+    # the live spares and never creates, hands over, or destroys one.
     _spare_chat_store: SpareChatStore | None
     # The spare agents: the pool (being created or waiting to be taken), any a new chat claimed
     # while it was created, and any being destroyed. Every one is hidden from the chat listings.
@@ -1036,7 +1037,12 @@ class AgentManager:
         manager._provisional_chats = seeded_provisional_chats(manager._chat_record_by_id)
         manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
         manager._spare_chat_store = spare_chat_store
-        manager._spares = () if spare_chat_store is None else spares_after_restart(spare_chat_store.read())
+        if spare_chat_store is None:
+            manager._spares = ()
+        elif is_secondary:
+            manager._spares = spare_chat_store.read()
+        else:
+            manager._spares = spares_after_restart(spare_chat_store.read())
         manager._spare_ids_being_discarded = set()
         manager._spare_retry_not_before = 0.0
         manager._spare_claim_by_chat = {}
@@ -3198,7 +3204,7 @@ class AgentManager:
         ``SPARE_CHAT_REPLENISH_DELAY_SECONDS`` have passed, so the next spare's boot does not
         compete with this chat's first turn.
         """
-        if self._spare_chat_store is None:
+        if self._spare_chat_store is None or self._is_secondary:
             return None
         provisional: ProvisionalChat | None = None
         with self._lock:
@@ -3278,6 +3284,9 @@ class AgentManager:
         """
         if self._spare_chat_store is None or self._shutdown_event.is_set():
             return
+        if self._is_secondary:
+            self._follow_live_spares(self._spare_chat_store)
+            return
         try:
             account: Account | None = resolve_binding()
         except (AccountError, BindingError) as e:
@@ -3336,6 +3345,16 @@ class AgentManager:
                 name=f"create-spare-{str(new_spare.chat_id)[:8]}",
                 is_checked=False,
             )
+
+    def _follow_live_spares(self, live_spare_store: SpareChatStore) -> None:
+        """A secondary chat's view of the live chat's spares: re-read on every sweep, so a spare the
+        live chat hands over appears here and one it starts stays hidden. Never written."""
+        live_spares = live_spare_store.read()
+        with self._lock:
+            is_changed = live_spares != self._spares
+            self._spares = live_spares
+        if is_changed:
+            self._broadcast_chats_updated()
 
     def ensure_spare_chat_in_background(self) -> None:
         """``ensure_spare_chat`` on a thread of its own, for a caller that must not wait on or fail by it (a sign-in, a hand-over)."""

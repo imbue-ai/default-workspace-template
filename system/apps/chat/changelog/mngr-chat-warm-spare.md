@@ -5,3 +5,5 @@ New chats start instantly. The chat app now keeps a spare agent already running 
 - Signing in to a provider starts the spare immediately, and a new one is started after each hand-over. With a larger pool, the refill waits while another spare is still ready so it does not slow the new chat's first turn.
 
 - The spares follow changes to the default account, project and fast-mode setting, are replaced if their process dies, and survive a restart of the chat app. Chats created with their own name, labels, a pre-minted chat id, or a waived installation check start the way they did.
+
+- Spares never appear in any chat list until a chat takes one, including in a chat preview (a second copy of the chat app beside the live one), which follows the live chat's spares without creating, handing over or destroying any.
