@@ -498,9 +498,7 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
     }
 
 
-def test_a_supervised_app_declaring_no_default_shortcut_is_seeded_at_its_first_launch_path_focusing(
-    tmp_path: Path,
-) -> None:
+def test_each_app_is_seeded_with_its_default_shortcut_never_one_taking_text(tmp_path: Path) -> None:
     rows = read_registry(
         write_registry(
             tmp_path / "apps.toml",
