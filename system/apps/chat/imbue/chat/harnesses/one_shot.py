@@ -16,6 +16,10 @@ class OneShotCompletionError(RuntimeError):
     """A one-shot completion could not be run or gave no usable answer."""
 
 
+class OneShotCompletionTimeoutError(OneShotCompletionError):
+    """The harness's CLI did not answer in time; another model would wait as long, so no fallback is tried."""
+
+
 class OneShotCompletion(ABC):
     """Answers one prompt with the harness's smallest model on an account, with no tools and no session left behind."""
 

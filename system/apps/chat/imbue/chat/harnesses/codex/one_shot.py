@@ -22,6 +22,7 @@ from imbue.chat.harnesses.codex.model import read_codex_model_options
 from imbue.chat.harnesses.codex.model import write_codex_model_options
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.harnesses.one_shot import OneShotCompletionTimeoutError
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -112,10 +113,6 @@ def _account_models(account_dir: Path) -> tuple[CodexModel, ...]:
     return models
 
 
-class _OneShotTimeoutError(OneShotCompletionError):
-    """``codex exec`` did not answer in time; the default model would wait as long, so it is not tried."""
-
-
 class CodexOneShotCompletion(OneShotCompletion):
     """Runs ``codex exec`` from an empty directory with no tools that can write, and no session kept."""
 
@@ -126,7 +123,7 @@ class CodexOneShotCompletion(OneShotCompletion):
         full_prompt = f"{system_prompt}\n\nThe message:\n\n{prompt}"
         try:
             return self._complete_on(choice, account_dir, full_prompt)
-        except _OneShotTimeoutError:
+        except OneShotCompletionTimeoutError:
             raise
         except OneShotCompletionError as e:
             if choice.model is None:
@@ -152,7 +149,7 @@ class CodexOneShotCompletion(OneShotCompletion):
             except ProcessError as e:
                 raise OneShotCompletionError(f"codex exec could not run: {e}") from e
             if finished.is_timed_out:
-                raise _OneShotTimeoutError(f"codex exec did not answer within {_TIMEOUT_SECONDS:.0f}s")
+                raise OneShotCompletionTimeoutError(f"codex exec did not answer within {_TIMEOUT_SECONDS:.0f}s")
             if finished.returncode != 0:
                 raise OneShotCompletionError(
                     f"codex exec exited {finished.returncode}: {finished.stderr.strip()[-300:]}"

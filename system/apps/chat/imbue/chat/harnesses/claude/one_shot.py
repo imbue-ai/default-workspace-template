@@ -17,6 +17,7 @@ from imbue.chat.harnesses.claude.account_binding import ClaudeAccountBinding
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.harnesses.one_shot import OneShotCompletionTimeoutError
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.pure import pure
@@ -99,10 +100,6 @@ def parse_claude_print_result(stdout: str) -> str:
     return parsed.result
 
 
-class _OneShotTimeoutError(OneShotCompletionError):
-    """``claude -p`` did not answer in time; another model would wait as long, so none is tried."""
-
-
 class ClaudeOneShotCompletion(OneShotCompletion):
     """Runs ``claude -p`` from an empty directory, so no project instructions or hooks reach the answer."""
 
@@ -112,7 +109,7 @@ class ClaudeOneShotCompletion(OneShotCompletion):
         for model in ONE_SHOT_MODEL_PREFERENCE:
             try:
                 return self._complete_on(model, account_dir, system_prompt, prompt)
-            except _OneShotTimeoutError:
+            except OneShotCompletionTimeoutError:
                 raise
             except OneShotCompletionError as e:
                 failures.append(f"{model or 'default model'}: {e}")
@@ -136,7 +133,7 @@ class ClaudeOneShotCompletion(OneShotCompletion):
                 raise OneShotCompletionError(f"claude -p could not run: {e}") from e
         elapsed_seconds = time.monotonic() - started_at
         if finished.is_timed_out:
-            raise _OneShotTimeoutError(f"claude -p did not answer within {_TIMEOUT_SECONDS:.0f}s")
+            raise OneShotCompletionTimeoutError(f"claude -p did not answer within {_TIMEOUT_SECONDS:.0f}s")
         if finished.returncode != 0:
             raise OneShotCompletionError(f"claude -p exited {finished.returncode}: {finished.stderr.strip()[:300]}")
         if elapsed_seconds > _SLOW_WARNING_SECONDS:
