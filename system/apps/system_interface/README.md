@@ -119,8 +119,8 @@ and the profile cache.
   first launch path taking no text of an app a program runs; never a launch
   path that takes text) on the first read after the registry has been read.
   An app that registers later has its default shortcut added to every
-  desktop once, on the registry change and on every
-  read; `default_shortcuts_offered.json` lists the apps offered so far, so a
+  desktop once, on the registry change and on every read;
+  `default_shortcuts_offered.json` lists the apps offered so far, so a
   shortcut the user removed stays removed. A client record holds the client's
   active desktop, when it was last seen, and the user it last arrived as;
   clients unseen for a while are pruned with their placement files.
