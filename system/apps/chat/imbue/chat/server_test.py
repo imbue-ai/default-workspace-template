@@ -1767,6 +1767,35 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
     mock_send.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("lifecycle", "body", "expected_status", "is_restart_expected"),
+    [
+        ("WAITING", {"only_if_idle": True}, 200, True),
+        ("RUNNING", {"only_if_idle": True}, 409, False),
+        # Without the flag the route is the plain interrupt it always was.
+        ("RUNNING", None, 200, True),
+    ],
+)
+def test_interrupt_only_if_idle_restarts_an_idle_chat_and_leaves_a_busy_one(
+    client: FlaskClient,
+    app: Flask,
+    lifecycle: str,
+    body: dict[str, bool] | None,
+    expected_status: int,
+    is_restart_expected: bool,
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    _register_agent(app, agent_id, "claude-agent", lifecycle)
+
+    with patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run:
+        response = client.post(f"/api/chats/{agent_id}/interrupt", json=body)
+
+    assert response.status_code == expected_status
+    assert mock_run.called is is_restart_expected
+    if expected_status == 409:
+        assert response.get_json()["busy_with"] == "working"
+
+
 def test_shoulder_tap_atomic_returns_404_for_unknown_agent(client: FlaskClient) -> None:
     with patch("imbue.chat.server._find_active_agent", return_value=None):
         response = client.post("/api/chats/nonexistent/shoulder-tap-atomic")

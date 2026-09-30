@@ -40,6 +40,7 @@ from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import chat_status_for_agent
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
+from imbue.chat.agent_manager import restart_busy_reason
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
@@ -4825,6 +4826,31 @@ def test_status_mapping_follows_the_chat_row(
     lifecycle: str, activity: ActivityState | None, is_permission_pending: bool, expected: ChatStatus
 ) -> None:
     assert chat_status_for_agent(lifecycle, activity, is_permission_pending) is expected
+
+
+@pytest.mark.parametrize(
+    ("lifecycle", "activity", "is_permission_pending", "is_connecting", "has_queued", "expected"),
+    [
+        ("WAITING", ActivityState.IDLE, False, False, False, None),
+        ("WAITING", None, False, False, False, None),
+        # The transcript reads idle between an assistant message and its next tool call.
+        ("RUNNING", ActivityState.IDLE, False, False, False, "working"),
+        ("RUNNING", ActivityState.TOOL_RUNNING, False, False, False, "working"),
+        ("UNKNOWN", ActivityState.IDLE, False, False, False, "working"),
+        ("WAITING", ActivityState.IDLE, True, False, False, "waiting on a dialog"),
+        ("WAITING", ActivityState.IDLE, False, True, False, "receiving a message"),
+        ("WAITING", ActivityState.IDLE, False, False, True, "holding queued messages"),
+    ],
+)
+def test_only_a_chat_whose_harness_ended_its_turn_is_free_to_restart(
+    lifecycle: str,
+    activity: ActivityState | None,
+    is_permission_pending: bool,
+    is_connecting: bool,
+    has_queued: bool,
+    expected: str | None,
+) -> None:
+    assert restart_busy_reason(lifecycle, activity, is_permission_pending, is_connecting, has_queued) == expected
 
 
 # Unseeded chats awaiting their first send (post-launch-paths plan section 3.7)

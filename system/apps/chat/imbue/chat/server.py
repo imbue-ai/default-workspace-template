@@ -123,6 +123,7 @@ from imbue.chat.models import IntakeApplyResponse
 from imbue.chat.models import IntakeRequest
 from imbue.chat.models import IntakeResponse
 from imbue.chat.models import IntakeTarget
+from imbue.chat.models import InterruptAgentRequest
 from imbue.chat.models import InterruptAgentResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import PendingIntakeView
@@ -909,6 +910,8 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     (ending any in-progress turn) and starts it fresh without sending a resume
     message. Returns 404 if the agent is unknown, 400 if the agent carries the
     ``is_primary=true`` label, 500 if the restart command fails, 200 otherwise.
+    With ``only_if_idle`` a chat that has not ended its turn is left alone and
+    answered 409, its ``busy_with`` saying what it is doing.
 
     Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and restarting it would stop the
@@ -932,6 +935,15 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
             )
         )
         return json_response(error.model_dump(), status_code=400)
+
+    interrupt_request = InterruptAgentRequest.model_validate(request.get_json(silent=True) or {})
+    if interrupt_request.only_if_idle:
+        busy_with = get_state().agent_manager.restart_busy_reason_for_chat(ChatId(chat_id))
+        if busy_with is not None:
+            return json_response(
+                {"detail": f"Chat '{chat_id}' is {busy_with}; it was not restarted", "busy_with": busy_with},
+                status_code=409,
+            )
 
     agent_name = agent_info.name
 

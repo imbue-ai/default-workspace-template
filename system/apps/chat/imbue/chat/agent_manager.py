@@ -516,6 +516,30 @@ def chat_status_for_agent(
     return ChatStatus.IDLE
 
 
+@pure
+def restart_busy_reason(
+    lifecycle_state: str,
+    activity_state: ActivityState | None,
+    is_permission_pending: bool,
+    is_connecting: bool,
+    has_queued_messages: bool,
+) -> str | None:
+    """What a chat is in the middle of that a restart would cut short, in plain words; None when it is idle.
+
+    Idle needs the harness to have ended its turn (WAITING), not just a transcript that reads idle:
+    between an assistant message and the tool call after it the transcript shows no turn in flight.
+    """
+    if is_permission_pending:
+        return "waiting on a dialog"
+    if is_connecting:
+        return "receiving a message"
+    if has_queued_messages:
+        return "holding queued messages"
+    if lifecycle_state != "WAITING" or activity_state in (ActivityState.THINKING, ActivityState.TOOL_RUNNING):
+        return "working"
+    return None
+
+
 class _ResolvedChat(FrozenModel):
     """A chat id resolved against the records and the own-chat rule: its members and the agent it runs on."""
 
@@ -1444,6 +1468,21 @@ class AgentManager:
         """Stamp a chat as just-messaged for the OOM prioritizer's recency ranking (and on disk, for the next restart)."""
         self._oom_prioritizer.record_message(chat_id)
         self._message_stamps.record(chat_id)
+
+    def restart_busy_reason_for_chat(self, chat_id: ChatId) -> str | None:
+        """What the chat's active agent is in the middle of (``restart_busy_reason``); None when it is idle."""
+        with self._lock:
+            chat = self._resolve_chat_locked(chat_id)
+            agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
+            if agent is None:
+                return None
+            return restart_busy_reason(
+                agent.state,
+                agent.activity_state,
+                bool(self._pending_permission_ids_by_agent.get(agent.id)),
+                bool(self._connecting_message_ids_by_agent.get(agent.id)),
+                bool(agent.queued_messages),
+            )
 
     def has_pending_permission(self, chat_id: ChatId) -> bool:
         """Whether a permission request the chat's active agent filed is still awaiting the user's verdict."""
