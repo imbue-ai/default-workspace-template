@@ -33,6 +33,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from concurrent.futures import Executor
 from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from contextlib import contextmanager
 from datetime import datetime
@@ -384,20 +385,15 @@ def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: 
 
 
 class InlineExecutor(Executor):
-    """Runs each submitted call at once, so work a request hands off has finished when the request returns.
+    """Runs each submitted call to completion before ``submit`` returns, so work a request hands off has finished
+    when the request returns.
 
-    A call that raises leaves its exception on the future, as a real executor does, rather than raising from ``submit``.
+    The call runs on a one-off pool, so a call that raises leaves its exception on the future, as with any executor.
     """
 
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
-        future: Future[Any] = Future()
-        try:
-            result = fn(*args, **kwargs)
-        except BaseException as e:
-            future.set_exception(e)
-        else:
-            future.set_result(result)
-        return future
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(fn, *args, **kwargs)
 
 
 class RecordingMngrMessenger(MngrMessenger):
