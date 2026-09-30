@@ -48,7 +48,7 @@ def _missing_requirements() -> list[str]:
 
 
 pytestmark = [
-    pytest.mark.release,
+    pytest.mark.real_claude,
     pytest.mark.skipif(bool(_missing_requirements()), reason=f"needs {', '.join(_missing_requirements())}"),
 ]
 

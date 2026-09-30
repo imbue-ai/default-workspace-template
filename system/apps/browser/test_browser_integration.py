@@ -316,9 +316,22 @@ def test_startup_opens_gate_even_if_restore_fails(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(bsession.BrowserSessionManager, "restore", boom)
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    # The real starters would leave the shared manager's checkpoint and window-sweep loops
+    # running on the session-wide bridge loop through every later test, sweeping against
+    # the live shell's windows.
+    started: list[str] = []
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager, "start_checkpointing", lambda _self: started.append("checkpointing")
+    )
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager,
+        "start_window_sweeping",
+        lambda _self, *_args: started.append("window sweeping"),
+    )
     runner._init_done.clear()
     runner.bridge.run(runner._startup())  # the loop runs the same startup coroutine
     assert runner._init_done.is_set()
+    assert started == ["checkpointing", "window sweeping"]
 
 
 def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -343,6 +356,7 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
 # Persistence, the core promise, against real Chromium.
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -376,6 +390,7 @@ def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest
     asyncio.run(go())
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
@@ -397,6 +412,7 @@ def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
     asyncio.run(go())
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -612,27 +628,36 @@ class _AutoResumingAgent:
                 await self._send("Runtime.runIfWaitingForDebugger", {}, message["params"]["sessionId"])
 
 
-def _browser_window_count(display: str) -> int:
-    """Mapped top-level browser windows on ``display``, by the window guardian's own rule."""
+def _browser_window_geometries(display: str) -> list[tuple[int, int, int, int]]:
+    """``(x, y, width, height)`` on the root of each mapped top-level browser window on
+    ``display``, by the window guardian's own rule."""
     disp = Display(display)
     try:
         atoms = {
             "window_type": disp.intern_atom("_NET_WM_WINDOW_TYPE"),
             "type_normal": disp.intern_atom("_NET_WM_WINDOW_TYPE_NORMAL"),
         }
-        count = 0
-        for window in disp.screen().root.query_tree().children:
+        root = disp.screen().root
+        geometries: list[tuple[int, int, int, int]] = []
+        for window in root.query_tree().children:
             try:
                 attrs = window.get_attributes()
                 if attrs.map_state != X.IsViewable or attrs.override_redirect:
                     continue
                 if WindowGuardian._is_browser_window(window, atoms):
-                    count += 1
+                    geometry = window.get_geometry()
+                    origin = root.translate_coords(window, 0, 0)
+                    geometries.append((origin.x, origin.y, geometry.width, geometry.height))
             except Xlib.error.BadWindow:
                 continue  # gone between query_tree and the read
-        return count
+        return geometries
     finally:
         disp.close()
+
+
+def _browser_window_count(display: str) -> int:
+    """Mapped top-level browser windows on ``display``, by the window guardian's own rule."""
+    return len(_browser_window_geometries(display))
 
 
 def _held_keycodes(display: str) -> list[int]:
@@ -644,6 +669,7 @@ def _held_keycodes(display: str) -> list[int]:
         disp.close()
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> None:
@@ -684,6 +710,7 @@ def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> Non
             asyncio.run(go())
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)
 def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -717,6 +744,7 @@ def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkey
         asyncio.run(go())
 
 
+@pytest.mark.browser
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(180)
 def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
@@ -734,11 +762,16 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
                 assert display is not None
                 loop = asyncio.get_running_loop()
                 session_id = await _only_page_session(browser, f"{pages.origin}/")
-                x, y = await _evaluate(browser, session_id, (
+                client_x, client_y, inner_height = await _evaluate(browser, session_id, (
                     "(() => { const r = document.getElementById('i').getBoundingClientRect();"
-                    " const top = window.screenY + window.outerHeight - window.innerHeight;"
-                    " return [Math.round(window.screenX + r.left + 20), Math.round(top + r.top + r.height / 2)]; })()"
+                    " return [Math.round(r.left + 20), Math.round(r.top + r.height / 2), window.innerHeight]; })()"
                 ))
+                # The page sits at the bottom of the window, below the toolbar. The window's
+                # place and size come from X: the stealth-patched Chromium reports made-up
+                # screenX/outerHeight values, which put a click computed from them anywhere.
+                [(window_x, window_y, _width, window_height)] = _browser_window_geometries(display)
+                x = window_x + client_x
+                y = window_y + window_height - inner_height + client_y
 
                 def run_on_loop(coro: Any) -> Any:
                     return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)

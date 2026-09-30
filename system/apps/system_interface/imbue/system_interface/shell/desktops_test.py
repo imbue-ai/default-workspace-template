@@ -227,6 +227,7 @@ def test_the_next_glyph_is_the_first_unused_then_cycles() -> None:
     assert next_glyph_index([*range(GLYPH_COUNT), 0]) == 1
 
 
+@pytest.mark.frontend
 def test_the_shells_glyph_colours_are_the_frontends_palette_in_glyph_order() -> None:
     palette = _SQUIGGLE_GLYPHS_ARRAY.search(_SQUIGGLES_PATH.read_text())
     assert palette is not None, f"no SQUIGGLE_GLYPHS array in {_SQUIGGLES_PATH}"

@@ -1,7 +1,7 @@
 """One live message-conservation check (invariant U1) against a REAL claude agent.
 
 The storm tests (``harnesses/conservation_storm_test.py``) enforce the ledger property at scale
-against scripted worlds; this release test proves the same property against reality, small: a
+against scripted worlds; this live test proves the same property against reality, small: a
 real ``mngr create``'d claude agent processes a handful of sends interleaved with the REAL stop
 executor (``drain-to-composer``'s dispatch) and the REAL restart-based flush (``/flush-queue``'s
 ``restart_drain`` + resend), each of which restarts the live process -- then conservation is read
@@ -42,7 +42,7 @@ from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.testing import prepare_isolated_mngr_host_dir
 from imbue.mngr.utils.polling import wait_for
 
-pytestmark = pytest.mark.release
+pytestmark = pytest.mark.real_claude
 
 _PROJECT_ROOT = Path(__file__).parents[2]
 
