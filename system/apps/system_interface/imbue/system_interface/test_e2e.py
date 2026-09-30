@@ -592,7 +592,7 @@ def _cell_center(backdrop: FloatRect, column: int, row: int) -> tuple[float, flo
 
 def _open_launcher(page: Page) -> Locator:
     """Focus the launcher's field, answering the menu it opens."""
-    page.locator("[data-launcher-field] textarea").click()
+    page.locator("[data-launcher-start]").click()
     menu = page.locator("[data-launcher-overlay]")
     expect(menu).to_be_visible(timeout=10000)
     return menu

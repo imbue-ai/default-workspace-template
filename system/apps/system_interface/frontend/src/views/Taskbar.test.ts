@@ -174,7 +174,7 @@ describe("Taskbar", () => {
     expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40, expect.any(Element));
   });
 
-  it("carries the launcher field and the Desktops widget with a glyph per desktop, and nothing else in the tray while nobody is recorded", () => {
+  it("carries the launcher field, the Desktops widget with a glyph per desktop, and the clock, and nothing else in the tray while nobody is recorded", () => {
     const onSwitchDesktop = vi.fn();
     const taskbar = render({
       tray: {
@@ -193,7 +193,8 @@ describe("Taskbar", () => {
     (switches[1] as HTMLElement).click();
     expect(onSwitchDesktop).toHaveBeenCalledWith("work");
     expect(taskbar.querySelector('[data-tray-widget="desktops"]')).not.toBeNull();
-    expect(taskbar.querySelector("[data-system-tray]")?.children).toHaveLength(1);
+    expect(taskbar.querySelector('[data-tray-widget="clock"]')).not.toBeNull();
+    expect(taskbar.querySelector("[data-system-tray]")?.children).toHaveLength(2);
   });
 
   it("draws the Presence widget in front of Desktops once two users are connected", () => {
@@ -203,6 +204,7 @@ describe("Taskbar", () => {
     expect([...tray.children].map((widget) => widget.getAttribute("data-tray-widget"))).toEqual([
       "presence",
       "desktops",
+      "clock",
     ]);
     expect(
       [...tray.querySelectorAll("[data-presence-user]")].map((el) => el.getAttribute("data-presence-user")),

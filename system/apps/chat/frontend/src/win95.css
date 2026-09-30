@@ -1,0 +1,222 @@
+/* The Windows 95 look for the chat pages, after the shared design system: silver panels with
+   white sunken wells for the chat list and the transcript, navy selection, square bubbles, and a
+   bevelled Send button. Mostly a re-tokening; the hand-written rules below are the bevels and
+   the parts the tokens cannot reach. Unlayered on purpose: a rule here beats the utilities in the
+   views, so the markup stays as it is. */
+
+:root {
+  --c-bg: #c0c0c0;
+  --c-bg-sidebar: #c0c0c0;
+  --c-fill-hover: rgb(0 0 0 / 0.08);
+  --c-fill-active: rgb(0 0 0 / 0.14);
+  --c-bg-user-bubble: #c9e0ff;
+  --c-bg-composer: #ffffff;
+  --c-bg-chat: #ffffff;
+  --c-bg-code: #f0f0f0;
+  --c-text-primary: #000000;
+  --c-text-secondary: #202020;
+  --c-text-faint: #808080;
+  --c-border: #808080;
+  --c-border-faint: #a0a0a0;
+  --c-border-code: #a0a0a0;
+  --c-accent: #000080;
+  --c-accent-hover: #000060;
+  --c-accent-light: #d0d0e8;
+  --c-surface: #ffffff;
+  --c-surface-secondary: #c0c0c0;
+  --c-text-on-accent: #ffffff;
+  --c-inverse-surface: #000080;
+  --c-inverse-surface-hover: #000060;
+
+  --font-sans: "Pixelated MS Sans Serif", "MS Sans Serif", Tahoma, "Segoe UI", Arial, sans-serif;
+  --font-size-body: 12px;
+  --font-size-row: 11px;
+  --font-size-helper: 10px;
+
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --shadow-raised: none;
+  --shadow-overlay: none;
+
+  --win95-outset: inset -1px -1px #0a0a0a, inset 1px 1px #ffffff, inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+  --win95-inset: inset 1px 1px #0a0a0a, inset -1px -1px #ffffff, inset 2px 2px #808080, inset -2px -2px #dfdfdf;
+}
+
+/* The chat root: the list and the chat's frame as two sunken wells on a silver ground. */
+.chat-root {
+  gap: 3px;
+  padding: 3px;
+}
+
+.chat-rail {
+  width: 176px;
+  border-right: none;
+  background: #ffffff;
+  box-shadow: var(--win95-inset);
+  padding: 2px;
+}
+
+.chat-rail-head {
+  padding: 4px;
+}
+
+.chat-rail-new {
+  font-weight: bold;
+  border-radius: 0;
+}
+
+.chat-rail-row {
+  border-radius: 0;
+  border-bottom: 1px solid #e4e4e4;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+.chat-rail-row--selected,
+.chat-rail-row[aria-current="true"] {
+  background: #000080;
+  color: #ffffff;
+}
+
+.chat-rail-row--selected *,
+.chat-rail-row[aria-current="true"] * {
+  color: inherit;
+}
+
+.chat-root-slot {
+  background: #ffffff;
+  box-shadow: var(--win95-inset);
+}
+
+.chat-root-frames {
+  inset: 2px;
+}
+
+/* The chat page: the transcript in a sunken white well, the composer row on silver under it. */
+.chat-panel,
+.chat-flip-face {
+  background: #c0c0c0;
+}
+
+.chat-transcript-area .app-content {
+  margin: 3px 3px 0;
+  padding: 8px 10px;
+  background: #ffffff;
+  box-shadow: var(--win95-inset);
+}
+
+.message-user-bubble {
+  border-radius: 0;
+  padding: 4px 8px;
+  max-width: 85%;
+}
+
+.message-assistant .message-content.markdown-content,
+.pv-final .message-content.markdown-content {
+  width: fit-content;
+  background: #e4e4e4;
+  padding: 4px 8px;
+}
+
+.app-footer,
+.chat-under-bar {
+  background: #c0c0c0;
+  padding-left: 3px;
+  padding-right: 3px;
+}
+
+.app-footer {
+  padding-top: 3px;
+}
+
+.message-input-box,
+.message-input-box:focus-within {
+  border: none;
+  border-radius: 0;
+  background: #ffffff;
+  box-shadow: var(--win95-inset);
+}
+
+.message-input-textbox {
+  padding: 5px 6px;
+}
+
+.message-input-send-button,
+.message-input-send-button:hover {
+  width: auto;
+  height: 22px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 0;
+  background: #c0c0c0;
+  color: #000000;
+  box-shadow: var(--win95-outset);
+}
+
+.message-input-send-button:active {
+  box-shadow: var(--win95-inset);
+}
+
+.message-input-send-button::after {
+  content: "Send";
+  margin-left: 4px;
+  font-size: var(--font-size-row);
+}
+
+.message-input-attach-button {
+  border-radius: 0;
+}
+
+/* The transcript's own scrollbar, drawn as a Windows 95 one: a grey track and a raised thumb. */
+.transcript-scrollbar {
+  opacity: 1;
+  width: 14px;
+  right: 3px;
+  top: 3px;
+  bottom: 0;
+  background: #dfdfdf;
+}
+
+.transcript-scrollbar-thumb {
+  left: 0;
+  right: 0;
+  border-radius: 0;
+  background: #c0c0c0;
+  box-shadow: var(--win95-outset);
+}
+
+.transcript-scrollbar:hover .transcript-scrollbar-thumb,
+.transcript-scrollbar-shown .transcript-scrollbar-thumb {
+  background: #c0c0c0;
+}
+
+/* Menus and modals: raised silver cards with navy rows. */
+[data-menu-part="menu"],
+[data-menu-part="submenu"] {
+  border: none;
+  border-radius: 0;
+  background: #c0c0c0;
+  box-shadow: var(--win95-outset);
+}
+
+[data-menu-part] [data-menu-row] {
+  border-radius: 0;
+}
+
+[data-menu-part] [data-menu-row]:hover {
+  background: #000080;
+  color: #ffffff;
+}
+
+[data-menu-part] [data-menu-row]:hover * {
+  color: inherit;
+}
+
+.modal-card {
+  border: none;
+  border-radius: 0;
+  background: #c0c0c0;
+  box-shadow: var(--win95-outset);
+}
