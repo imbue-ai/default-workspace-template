@@ -33,6 +33,7 @@ files.
 | **client** | One browser (its windows share it). Each client has one active desktop and its own placements of every desktop. |
 | **launch path** | A way an app declares for opening a new page of itself, with optional parameters. A GET launch path is the page itself with the parameters as its query (`files` declares `new` at `/home/user/workspace/` with a `path` parameter); a POST launch path is posted the parameters by the shell and answers the page to open (`terminal` and `browser` declare `new` at `/new`; `chat` declares `new`, `send`, and `draft` at `/api/chats/intake`). An app that declares none offers `open` at `/`. |
 | **shortcut** | An icon on a desktop's backdrop that runs one app's launch path, in `focus` mode (raise the app's most recent window, opening one only when it has none) or `new` mode (always open one). |
+| **popped-out window** | A window the user dragged out of the desktop into its own Imbue Studio window (or opened there from the window menu). The desktop keeps a dashed placeholder, its *ghost*, where the window was; the user can hide the ghost. Per client, like a placement. |
 
 **Shared vs per client.** Desktops, their windows, their shortcuts, and their
 wallpaper are shared: an `open` or a `close` is seen by everyone. Placements
@@ -71,6 +72,47 @@ never applied to every client at once.
   by the least that opens the space when neither does, and resized only when it
   is over half the backdrop wide.
   Reach for it whenever you have made something for the user to look at.
+
+## Popped-out windows
+
+A window the user popped out into its own Imbue Studio window is an
+arrangement they made on purpose, so the ops that would put it back on the
+desktop do not do it quietly.
+
+**Spotting one.** `desktops` and `list` give every client a `popped_out` list:
+each entry is `{window_id, desktop_id, is_ghost_hidden}` (`is_ghost_hidden`:
+the user hid the placeholder the desktop keeps for it). It is judged per
+client: another client may have the same window on its desktop.
+
+**What each op does with one** (for the target client, while it is connected;
+a client with no window open has no pop-out on screen, only a record, and every
+op applies to it as usual):
+
+| Op | On a popped-out window |
+|---|---|
+| `minimize`, `restore`, `maximize`, `place` | Refused, changing nothing (not even the `--desktop` switch), with exit code `4`. With `--force` the window comes back onto its own desktop (`minimize` puts it there minimized) and its own window closes; the client's desktop window stays on the desktop it shows. |
+| `focus`, and an `open` that finds the window at the path | Raise its own window; it stays popped out, a hidden placeholder stays hidden, and the client stays on its desktop. |
+| `open --beside <it>` (bare `--beside` too, when your chat is the one popped out) | The new window opens where a plain `open` puts it, not paired, and the summary says why. `--force` brings the partner back and pairs the two. |
+| `show` | Raises its own window (and may point it at the path), as it always has. |
+| `refresh`, `navigate`, `close`, `load`, shortcuts, the wallpaper | Never refused. `refresh` reloads its page; `navigate` moves its page; `close` closes the window for everyone, its own window included. |
+
+Every mutating verb accepts `--force`; it is ignored where nothing can be
+refused. A forced op that brought a window back says `(brought back from its
+own window)`; a `focus` or `open` that raised one says `(raised in its own
+window ...)`.
+
+**When an op is refused**: pass `--force` only when the user asked for exactly
+that change to that window ("put the terminal on the left half" while it is
+popped out). Otherwise leave it, and tell the user the window is in its own
+window and how to bring it back if they want to: drag it back over the Imbue
+Studio window, use the button in its bar, or choose "Bring back to desktop" on
+its placeholder or its taskbar entry.
+
+**A client with only pop-outs open.** When the user closed the main Imbue
+Studio window and kept a popped-out one, the client is still connected: ops
+target it and its pop-outs refuse as above. An `open`, `focus`, or `show` that
+puts a window on its desktop is stored for when the main window reopens, and
+the summary notes `client <id> has no desktop window open`.
 
 ## Naming a window
 
@@ -204,8 +246,9 @@ and never closed; `scope`: `linked`, or `independent` for a window whose path
 is each client's own, in which case the listed `path` is the shared home path
 and `client_paths` says where each client's page is, by client id) and shortcuts,
 and every client with its `active_desktop`,
-`is_connected`, and `shown` (the windows of its active desktop it has not
-minimized). `list` prints every app with its launch paths, whether it is
+`is_connected`, `shown` (the windows of its active desktop it has not
+minimized), and `popped_out` (the windows it popped out into their own
+windows, on any desktop; see "Popped-out windows"). `list` prints every app with its launch paths, whether it is
 running, and where its windows are, plus the same desktops and clients. Both
 print JSON.
 
@@ -252,6 +295,9 @@ shortcuts as they stand after a `shortcut set`, `shortcut move`, or
   `context`, and a window that no desktop holds)
 - `3` the shell cannot do it right now (a 409 or a 503: a save in flight, an
   app still starting up): retry after a short backoff, or tell the user
+- `4` the window is popped out into its own window and the op would bring it
+  back (a 423): pass `--force` if the user asked for exactly this, else tell
+  the user (see "Popped-out windows"); retrying changes nothing
 
 ## When NOT to use this skill
 
