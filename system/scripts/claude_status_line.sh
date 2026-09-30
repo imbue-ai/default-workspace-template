@@ -5,7 +5,8 @@ set -euo pipefail
 # model bar. See docs/system/blueprint/live-model-state/plan-live-model-state.md.
 #
 # .claude/settings.json re-runs it every refreshInterval seconds in every claude
-# session, so it uses shell builtins and spawns at most one jq per run.
+# session, so it uses shell builtins and spawns one jq per run, plus an mv only
+# when the state changed.
 
 # Only inside an mngr agent (MNGR_AGENT_STATE_DIR set), and only for the
 # agent's MAIN session -- a nested interactive claude in the same pane
