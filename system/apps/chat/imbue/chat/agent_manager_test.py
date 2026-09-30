@@ -86,6 +86,7 @@ from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatCreationOutcome
+from imbue.chat.models import CreatedChat
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
@@ -5269,9 +5270,21 @@ def test_a_new_chat_claims_a_spare_still_starting_and_becomes_it_once_its_harnes
         manager.stop()
 
 
-@pytest.mark.parametrize("kind", ["another account", "an explicit name", "caller labels", "a check waiver"])
+@pytest.mark.parametrize(
+    "create_unfitting_chat",
+    [
+        lambda manager: manager.create_chat("", account_id=_openai_account()),
+        lambda manager: manager.create_chat("Budget review 3308"),
+        lambda manager: manager.create_chat("", labels={"auto_open": "true"}),
+        lambda manager: manager.create_chat("", is_installation_check_skipped=True),
+    ],
+    ids=["another account", "an explicit name", "caller labels", "a check waiver"],
+)
 def test_a_new_chat_the_spares_do_not_fit_is_created_and_the_spares_are_kept(
-    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str
+    broadcaster: WebSocketBroadcaster,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    create_unfitting_chat: Callable[[AgentManager], CreatedChat],
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
@@ -5279,16 +5292,7 @@ def test_a_new_chat_the_spares_do_not_fit_is_created_and_the_spares_are_kept(
         manager.ensure_spare_chat()
         spares = _wait_for_ready_spares(manager, 1)
 
-        if kind == "another account":
-            created = manager.create_chat("", account_id=_openai_account())
-        elif kind == "an explicit name":
-            created = manager.create_chat("Budget review 3308")
-        elif kind == "caller labels":
-            created = manager.create_chat("", labels={"auto_open": "true"})
-        elif kind == "a check waiver":
-            created = manager.create_chat("", is_installation_check_skipped=True)
-        else:
-            raise AssertionError(kind)
+        created = create_unfitting_chat(manager)
 
         assert created.chat_id not in [spare.chat_id for spare in spares]
         wait_until_true(
