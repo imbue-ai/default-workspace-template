@@ -55,7 +55,7 @@ def test_check_agent_exit_code_1_logged_as_debug(loguru_records: list[str]) -> N
         return _make_finished_process(
             command=command,
             returncode=1,
-            stderr="Agent 'chat-1' does not support context compaction",
+            stderr="Error: Agent 'chat-1' is not running on host 'localhost'",
         )
 
     compactor = ChatAutoCompactor.build(
@@ -67,7 +67,7 @@ def test_check_agent_exit_code_1_logged_as_debug(loguru_records: list[str]) -> N
     assert result is None
     debug_logs = [log for log in loguru_records if log.startswith("DEBUG") and "chat-1" in log]
     assert len(debug_logs) == 1
-    assert "does not support context compaction" in debug_logs[0]
+    assert "is not running on host" in debug_logs[0]
     warning_logs = [log for log in loguru_records if log.startswith("WARNING")]
     assert len(warning_logs) == 0
 
