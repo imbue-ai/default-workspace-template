@@ -25,6 +25,7 @@ from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import cascade_frame
+from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
 from imbue.system_interface.shell.desktops import DESKTOPS_FILENAME
 from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.identity import RequestIdentity
@@ -154,6 +155,11 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
     )
 
 
+# The apps the built-in rows seed a desktop with, in launcher order: without the chat, and with it.
+BUILTIN_SHORTCUT_APPS_BEFORE_CHAT: Final[tuple[str, ...]] = ("getting-started", "files", "browser", "terminal")
+BUILTIN_SHORTCUT_APPS_WITH_CHAT: Final[tuple[str, ...]] = ("chat", *BUILTIN_SHORTCUT_APPS_BEFORE_CHAT)
+
+
 def builtin_rows_toml_before_chat() -> tuple[str, ...]:
     """The rows of the built-in apps that register before the chat, shaped as their manifests make them: the shell
     (internal), Getting Started, the file viewer, the browser, and the terminal."""
@@ -218,8 +224,8 @@ def builtin_registry_rows(directory: Path) -> tuple[list[RegistryRow], list[Regi
     return before_chat, with_chat
 
 
-def shortcut_apps_on(desktop: Desktop) -> list[str]:
-    return [str(shortcut.target.app) for shortcut in desktop.shortcuts]
+def shortcut_apps_on(desktop: Desktop) -> tuple[str, ...]:
+    return tuple(str(shortcut.target.app) for shortcut in desktop.shortcuts)
 
 
 def write_desktops_file(state_directory: Path, *desktops: Desktop) -> None:
@@ -227,6 +233,10 @@ def write_desktops_file(state_directory: Path, *desktops: Desktop) -> None:
         state_directory / DESKTOPS_FILENAME,
         DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=desktops).model_dump(mode="json"),
     )
+
+
+def read_default_shortcuts_offered(state_directory: Path) -> dict[str, Any]:
+    return json.loads((state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME).read_text())
 
 
 # The ``desktops.json`` a released shell reads: its version, and its keys at the top and per desktop.

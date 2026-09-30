@@ -80,6 +80,7 @@ from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowState
 from imbue.system_interface.shell.primitives import WindowTitle
+from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import builtin_chat_row_toml
 from imbue.system_interface.shell.testing import builtin_registry_rows
@@ -510,7 +511,7 @@ def test_an_untouched_desktop_seeded_before_a_late_app_registered_is_seeded_agai
     before_chat, with_chat = builtin_registry_rows(tmp_path)
     home = _desktop_with_shortcuts(*seed_desktop_shortcuts(before_chat))
     offered = apps_with_a_default_shortcut(before_chat)
-    assert offered == {"getting-started", "files", "browser", "terminal"}
+    assert offered == set(BUILTIN_SHORTCUT_APPS_BEFORE_CHAT)
 
     reconciled = with_default_shortcuts_offered(home, with_chat, offered)
 

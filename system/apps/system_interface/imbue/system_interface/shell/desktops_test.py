@@ -44,8 +44,10 @@ from imbue.system_interface.shell.primitives import WallpaperName
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
+from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_WITH_CHAT
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import builtin_registry_rows
+from imbue.system_interface.shell.testing import read_default_shortcuts_offered
 from imbue.system_interface.shell.testing import read_desktops_file_in_its_released_shape
 from imbue.system_interface.shell.testing import shortcut_apps_on
 from imbue.system_interface.shell.testing import window_record
@@ -77,11 +79,7 @@ def test_the_default_desktop_is_created_once_on_the_first_read_that_may_seed(tmp
     assert store.ensure_default(lambda: ()) == seeded
     assert json.loads((tmp_path / "desktops.json").read_text())["version"] == 1
     # The apps of the seeded shortcuts are recorded as offered.
-    assert _offered_record(tmp_path) == {"version": 1, "apps": ["chat"]}
-
-
-def _offered_record(state_directory: Path) -> dict[str, object]:
-    return json.loads((state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME).read_text())
+    assert read_default_shortcuts_offered(tmp_path) == {"version": 1, "apps": ["chat"]}
 
 
 def test_a_late_apps_default_shortcut_is_offered_once_on_every_desktop_and_a_removal_sticks(tmp_path: Path) -> None:
@@ -101,9 +99,9 @@ def test_a_late_apps_default_shortcut_is_offered_once_on_every_desktop_and_a_rem
     assert work.shortcuts[:-1] == rearranged.shortcuts
     assert (shortcut_apps_on(work)[-1], work.shortcuts[-1].cell) == ("chat", next_shortcut_cell(rearranged))
     assert store.list_desktops() == list(offered.desktops)
-    assert _offered_record(tmp_path) == {
+    assert read_default_shortcuts_offered(tmp_path) == {
         "version": 1,
-        "apps": ["browser", "chat", "files", "getting-started", "terminal"],
+        "apps": sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT),
     }
     stamp = (tmp_path / "desktops.json").stat().st_mtime_ns
     assert store.ensure_default_shortcuts_offered(with_chat).is_written is False
@@ -127,17 +125,17 @@ def test_a_desktops_file_from_before_the_offered_record_counts_its_shortcuts_as_
     offered = store.ensure_default_shortcuts_offered(with_chat)
 
     assert offered.is_written is True
-    assert shortcut_apps_on(offered.desktops[0]) == ["chat", "getting-started", "files", "browser", "terminal"]
-    assert _offered_record(state_directory)["apps"] == ["browser", "chat", "files", "getting-started", "terminal"]
+    assert shortcut_apps_on(offered.desktops[0]) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
+    assert read_default_shortcuts_offered(state_directory)["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
     assert read_desktops_file_in_its_released_shape(state_directory) == offered.desktops
 
 
 def test_a_created_or_added_desktop_records_the_apps_of_its_default_shortcuts(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     store.create_desktop("Alpha", "#111111", 1, _SEED, ())
-    assert _offered_record(tmp_path)["apps"] == ["chat"]
+    assert read_default_shortcuts_offered(tmp_path)["apps"] == ["chat"]
     store.add_desktop(default_desktop(()), {AppName("files")})
-    assert _offered_record(tmp_path)["apps"] == ["chat", "files"]
+    assert read_default_shortcuts_offered(tmp_path)["apps"] == ["chat", "files"]
 
 
 def test_a_desktop_added_before_any_offered_record_starts_it_from_the_shortcuts_already_there(tmp_path: Path) -> None:
@@ -147,7 +145,7 @@ def test_a_desktop_added_before_any_offered_record_starts_it_from_the_shortcuts_
 
     store.create_desktop("Alpha", "#111111", 1, (), ())
 
-    assert _offered_record(tmp_path)["apps"] == ["chat"]
+    assert read_default_shortcuts_offered(tmp_path)["apps"] == ["chat"]
 
 
 def _delete_file(path: Path) -> None:
@@ -177,12 +175,12 @@ def test_seeding_the_default_desktop_again_starts_the_offered_record_over(
     store = DesktopStore(state_directory=state_directory)
     store.ensure_default(lambda: seed_desktop_shortcuts(before_chat))
     store.ensure_default_shortcuts_offered(with_chat)
-    assert _offered_record(state_directory)["apps"] == ["browser", "chat", "files", "getting-started", "terminal"]
+    assert read_default_shortcuts_offered(state_directory)["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
     spoil_desktops_file(state_directory / "desktops.json")
 
     (home,) = store.ensure_default(lambda: seed_desktop_shortcuts(before_chat))
 
-    assert _offered_record(state_directory)["apps"] == sorted(shortcut_apps_on(home))
+    assert read_default_shortcuts_offered(state_directory)["apps"] == sorted(shortcut_apps_on(home))
     offered = store.ensure_default_shortcuts_offered(with_chat)
     assert offered.is_written is True
     assert offered.desktops[0].shortcuts == seed_desktop_shortcuts(with_chat)
@@ -195,7 +193,7 @@ def test_a_desktop_added_where_no_desktop_stands_starts_the_offered_record_over(
 
     store.create_desktop("Alpha", "#111111", 1, (), ())
 
-    assert _offered_record(tmp_path)["apps"] == []
+    assert read_default_shortcuts_offered(tmp_path)["apps"] == []
 
 
 def test_with_no_desktop_nothing_is_offered_or_recorded(tmp_path: Path) -> None:
