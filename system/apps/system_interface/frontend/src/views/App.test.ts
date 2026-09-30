@@ -614,7 +614,7 @@ describe("a launcher row's menu", () => {
     expect(api.calls).toContain("removeDesktopShortcut:home:docs:new");
   });
 
-  it("names the icon's own Remove row as the other menus do, and takes the icon off at once", () => {
+  it("gives the icon's own menu the same plain Remove from desktop row as the other menus, taking it off at once", () => {
     api.desktops = [
       desktopRecord("home", {
         windows: [windowRecord("win-1", "docs", "/a")],
@@ -629,9 +629,12 @@ describe("a launcher row's menu", () => {
     const icon = document.querySelector('[data-shortcut="docs:new"]') as HTMLElement;
     icon.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
     m.redraw.sync();
-    const row = document.querySelector('[data-menu-part="menu"] [data-menu-row="remove"]') as HTMLElement;
-    expect(row.textContent).toContain("Remove from desktop");
-    chooseRow("remove");
+    const row = document.querySelector('[data-menu-part="menu"] [data-menu-row="remove-from-desktop"]') as HTMLElement;
+    expect(row.textContent?.trim()).toBe("Remove from desktop");
+    // Taking an icon off the desktop deletes nothing, so it reads as an ordinary verb: no danger tone, no trash.
+    expect(row.outerHTML).not.toContain("text-danger");
+    expect(row.querySelector("svg")).toBeNull();
+    chooseRow("remove-from-desktop");
     expect(store.getState().desktops[0].shortcuts).toEqual([]);
   });
 
