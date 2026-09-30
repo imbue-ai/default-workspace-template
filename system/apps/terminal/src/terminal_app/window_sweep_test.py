@@ -1,8 +1,9 @@
 import json
 
 from app_manifest.primitives import AppName
-from app_manifest.testing import ShellStub
 from imbue.mngr.utils.polling import wait_for
+from workspace_layout.shell_url import DESKTOPS_ROUTE
+from workspace_layout.testing import LoopbackShell
 
 from terminal_app.primitives import TmuxSessionName
 from terminal_app.sessions import TmuxSessionSource
@@ -16,9 +17,9 @@ def _desktops_showing(*names: str) -> str:
     return json.dumps({"desktops": [{"id": "home", "windows": windows}]})
 
 
-def _sweeper(session_source: TmuxSessionSource, shell_stub: ShellStub, interval_seconds: float) -> WindowSweeper:
+def _sweeper(session_source: TmuxSessionSource, loopback_shell: LoopbackShell, interval_seconds: float) -> WindowSweeper:
     return WindowSweeper(
-        source=session_source, shell_url=shell_stub.url, app_name=AppName("terminal"), interval_seconds=interval_seconds
+        source=session_source, shell_url=loopback_shell.url, app_name=AppName("terminal"), interval_seconds=interval_seconds
     )
 
 
@@ -26,18 +27,18 @@ def test_a_sweep_skips_a_shell_it_cannot_read_and_collects_from_one_it_can(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     session_source: TmuxSessionSource,
-    shell_stub: ShellStub,
+    loopback_shell: LoopbackShell,
 ) -> None:
     fake_tmux.set_sessions([make_tmux_session("terminal-1", "$1")])
     session_store.save_record(make_terminal_record("terminal-1", None, "/srv", session_id="$1"))
-    sweeper = _sweeper(session_source, shell_stub, interval_seconds=3600.0)
+    sweeper = _sweeper(session_source, loopback_shell, interval_seconds=3600.0)
 
-    shell_stub.answer(200, _desktops_showing("terminal-1"))
+    loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, _desktops_showing("terminal-1"))
     assert sweeper.sweep_once() == []
-    shell_stub.answer(503, "restarting")
+    loopback_shell.get_answers[DESKTOPS_ROUTE] = (503, "restarting")
     assert sweeper.sweep_once() is None
     assert fake_tmux.session_names() == ["terminal-1"]
-    shell_stub.answer(200, _desktops_showing())
+    loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, _desktops_showing())
     assert sweeper.sweep_once() == ["terminal-1"]
     assert fake_tmux.session_names() == []
 
@@ -46,13 +47,13 @@ def test_the_thread_sweeps_on_its_interval_and_at_once_when_asked(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     session_source: TmuxSessionSource,
-    shell_stub: ShellStub,
+    loopback_shell: LoopbackShell,
 ) -> None:
     fake_tmux.set_sessions([make_tmux_session("terminal-1", "$1"), make_tmux_session("terminal-2", "$2")])
     for name, session_id in (("terminal-1", "$1"), ("terminal-2", "$2")):
         session_store.save_record(make_terminal_record(name, None, "/srv", session_id=session_id))
-    shell_stub.answer(200, _desktops_showing("terminal-1", "terminal-2"))
-    sweeper = _sweeper(session_source, shell_stub, interval_seconds=0.05)
+    loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, _desktops_showing("terminal-1", "terminal-2"))
+    sweeper = _sweeper(session_source, loopback_shell, interval_seconds=0.05)
     sweeper.start()
     try:
         wait_for(
@@ -63,10 +64,10 @@ def test_the_thread_sweeps_on_its_interval_and_at_once_when_asked(
         )
         # A long interval from here on: only a hint can bring the next sweep.
         sweeper.stop()
-        slow = _sweeper(session_source, shell_stub, interval_seconds=3600.0)
+        slow = _sweeper(session_source, loopback_shell, interval_seconds=3600.0)
         slow.start()
         try:
-            shell_stub.answer(200, _desktops_showing("terminal-1"))
+            loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, _desktops_showing("terminal-1"))
             slow.request_sweep(None)
             wait_for(
                 lambda: fake_tmux.session_names() == ["terminal-1"],
@@ -84,13 +85,13 @@ def test_a_hint_marks_the_closed_windows_terminal_before_the_sweep_it_brings(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     session_source: TmuxSessionSource,
-    shell_stub: ShellStub,
+    loopback_shell: LoopbackShell,
 ) -> None:
     fake_tmux.set_sessions([make_tmux_session("terminal-1", "$1")])
     session_store.save_record(make_terminal_record("terminal-1", None, "/srv", session_id="$1"))
     # The window opened and closed between two periodic sweeps: no sweep ever saw it, and the shell shows none now.
-    shell_stub.answer(200, _desktops_showing())
-    sweeper = _sweeper(session_source, shell_stub, interval_seconds=3600.0)
+    loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, _desktops_showing())
+    sweeper = _sweeper(session_source, loopback_shell, interval_seconds=3600.0)
     sweeper.start()
     try:
         sweeper.request_sweep(TmuxSessionName("terminal-1"))

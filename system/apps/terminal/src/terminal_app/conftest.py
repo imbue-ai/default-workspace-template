@@ -3,8 +3,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from app_manifest.testing import ShellStub
 from flask.testing import FlaskClient
+from workspace_layout.testing import LoopbackShell
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.primitives import TmuxSessionName
@@ -76,11 +76,11 @@ def pages_client(session_source: TmuxSessionSource, tmp_path: Path, window_close
 
 
 @pytest.fixture
-def shell_stub() -> Iterator[ShellStub]:
+def loopback_shell() -> Iterator[LoopbackShell]:
     """A loopback stand-in for the shell, answering what a test sets."""
-    stub = ShellStub()
-    stub.start()
+    shell = LoopbackShell()
+    shell.start()
     try:
-        yield stub
+        yield shell
     finally:
-        stub.close()
+        shell.close()
