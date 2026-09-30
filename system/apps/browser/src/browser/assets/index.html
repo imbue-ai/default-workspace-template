@@ -61,6 +61,12 @@
   #overlay .sub { font-size: 12px; color: #aaa; max-width: 80%; min-height: 14px; }
   #takecontrol { padding: 8px 16px; background: #b5462b; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
   #takecontrol:disabled { opacity: .6; cursor: default; }
+  /* A page the human asked to open while the agent drives: named here, with a way to drop it. */
+  #overlaypending { display: none; font-size: 13px; color: #ddd; max-width: 80%; word-break: break-all; }
+  #overlaypending.show { display: block; }
+  #overlaybuttons { display: flex; gap: 10px; }
+  #cancelpending { display: none; padding: 8px 16px; background: #3a3a3a; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
+  #cancelpending.show { display: inline-block; }
 
   /* Terminal near-opaque cover for a browser that is gone: crashed/OOM-killed
      (#crashoverlay) or explicitly closed by an agent (#terminatedoverlay). Same styling
@@ -148,7 +154,11 @@
     <div id="overlay">
       <div class="msg" id="overlaymsg">An agent has control.</div>
       <div class="sub" id="overlaysub"></div>
-      <button id="takecontrol">Take control</button>
+      <div id="overlaypending"></div>
+      <div id="overlaybuttons">
+        <button id="takecontrol">Take control</button>
+        <button id="cancelpending">Cancel</button>
+      </div>
     </div>
     <div id="crashoverlay">
       <div class="msg">This browser crashed.<br />Chromium was killed (for example, out of memory).</div>
@@ -214,6 +224,8 @@
   const overlayMsg = document.getElementById("overlaymsg");
   const overlaySub = document.getElementById("overlaysub");
   const takeControlBtn = document.getElementById("takecontrol");
+  const overlayPending = document.getElementById("overlaypending");
+  const cancelPendingBtn = document.getElementById("cancelpending");
   const returnBar = document.getElementById("returnbar");
   const returnBtn = document.getElementById("returnbtn");
   const returnQueue = document.getElementById("returnqueue");
@@ -301,6 +313,12 @@
       returnBtn.style.display = "none";  // can't hand back control you don't hold
       if (!pausedOverlay.classList.contains("show")) overlay.classList.add("show");  // stay hidden behind the paused card
       takeControlBtn.disabled = false;
+      // A page the human asked to open waits for them: taking control opens it, Cancel drops it.
+      const pendingUrl = typeof state.pending_url === "string" ? state.pending_url : "";
+      overlayPending.textContent = pendingUrl ? "Waiting to open " + pendingUrl : "";
+      overlayPending.classList.toggle("show", pendingUrl !== "");
+      cancelPendingBtn.classList.toggle("show", pendingUrl !== "");
+      takeControlBtn.textContent = pendingUrl ? "Take control of this browser" : "Take control";
       waitingList = Array.isArray(state.waiting) ? state.waiting : [];
       if (typeof state.idle_release_seconds === "number") {
         idleSeconds = state.idle_seconds || 0;
@@ -1039,6 +1057,13 @@ registerProcessor('pb', PB);`;
     takeControlBtn.disabled = true;
     overlay.classList.remove("show");
     if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify({ type: "take_control" }));
+  };
+  cancelPendingBtn.onclick = () => {
+    if (!browserId) return;
+    cancelPendingBtn.classList.remove("show");
+    overlayPending.classList.remove("show");
+    fetch(new URL("browsers/" + browserId + "/pending-url/cancel", document.baseURI), { method: "POST" })
+      .catch((err) => console.warn("could not cancel the waiting page:", err));
   };
   returnBtn.onclick = () => {
     returnBar.classList.remove("show");

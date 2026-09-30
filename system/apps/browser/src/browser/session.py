@@ -618,6 +618,11 @@ class LiveBrowser(MutableModel):
     # nobody connected -- outlives every sweep. Rides the manifest (``window_seen``) so a
     # daemon restart neither forgets nor invents it.
     _is_window_seen: bool = PrivateAttr(default=False)
+    # A page the human asked to open (a link clicked in the workspace, ``open:url``) that the browser could not open
+    # yet: Chromium was still launching, or an agent was driving. It opens as a tab in front once the launch
+    # finishes or control next passes to the human (the human takes control, or the agent lets go); the viewer
+    # shows it on the agent's overlay, where the human can also cancel it. A later page replaces an earlier one.
+    _pending_url: str | None = PrivateAttr(default=None)
     # Set by the manager: a no-arg hook that checkpoints the fleet manifest. Fired on
     # crash so a browser that died is dropped from the manifest promptly (not only on
     # the next ~10s checkpoint tick), so an ungraceful kill right after a crash doesn't
@@ -766,6 +771,8 @@ class LiveBrowser(MutableModel):
         self._lifecycle = "running"
         self._broadcast(self._control_message())
         logger.info("LiveBrowser {} started (cdp={})", self.browser_id, self._chrome.http_endpoint)
+        if self.controller == "human":
+            await self._open_pending_url()
 
     # the proxy's callbacks into ownership
 
@@ -881,6 +888,29 @@ class LiveBrowser(MutableModel):
                 logger.debug("new tab for {} on {} ignored ({})", url, self.browser_id, e)
                 return
             await self._focus_and_foreground(target_id)
+
+    def hold_pending_url(self, url: str) -> None:
+        """Keep ``url`` to open once the browser can (see ``_pending_url``), replacing any page held before, and show
+        it to the viewers."""
+        self._pending_url = url
+        self._broadcast(self._control_message())
+
+    def cancel_pending_url(self) -> bool:
+        """Drop the held page, leaving whoever drives the browser as they were; answers whether one was held."""
+        if self._pending_url is None:
+            return False
+        self._pending_url = None
+        self._broadcast(self._control_message())
+        return True
+
+    async def _open_pending_url(self) -> None:
+        """Open the held page as a tab in front, if one is held and the browser runs."""
+        url = self._pending_url
+        if url is None or not self._is_running:
+            return
+        self._pending_url = None
+        self._broadcast(self._control_message())
+        await self.open_tab(url)
 
     async def close_active_tab(self) -> None:
         """Close the tab the pane is showing, keeping the Chromium window alive.
@@ -1175,6 +1205,9 @@ class LiveBrowser(MutableModel):
         if to == "human":
             self._input_enabled.set()
             self._input_gate.set()  # thread-safe mirror for the /stream input path
+            if self._pending_url is not None:
+                # Opened off the control lock: a tab is slow CDP work, taken under the browser's own lock.
+                self._spawn(self._open_pending_url())
         else:
             self._input_enabled.clear()
             self._input_gate.clear()
@@ -1204,6 +1237,8 @@ class LiveBrowser(MutableModel):
             "human_pinned": self.human_pinned,
             # Agents queued (monitor-and-wait) behind the current owner, in FIFO order.
             "waiting": self._waiting_names(),
+            # The page the human asked to open while an agent drives (or while launching), or None.
+            "pending_url": self._pending_url,
         }
         # While an agent holds a sticky lease, tell the viewer how long it has been idle
         # and when the idle-TTL will auto-release it, so a watching human knows the
@@ -2197,8 +2232,8 @@ class BrowserSessionManager(MutableModel):
         """What ``/new`` and a nameless ``POST /browsers`` answer: the one browser, created when there is none,
         relaunched when it was stopped (or crashed), with ``start_url`` opened in it as a new tab when given.
 
-        A browser still launching is answered as it is; a start page asked for then is dropped with a debug
-        log, since its launch already carries the tabs it will open.
+        A browser still launching is answered as it is, with a start page asked for then held and opened in front
+        once the launch finishes.
         """
         browser = self.the_browser()
         if browser is None:
@@ -2209,7 +2244,7 @@ class BrowserSessionManager(MutableModel):
             return browser
         if browser._lifecycle == "init":
             if start_url is not None:
-                logger.debug("start page {} for launching browser {} dropped", start_url, browser.browser_id)
+                browser.hold_pending_url(start_url)
             return browser
         if start_url is not None:
             # Relaunched on its tabs plus the start page, which comes up in front.
@@ -2217,6 +2252,18 @@ class BrowserSessionManager(MutableModel):
             browser._last_known_active_tab = len(browser._last_known_tabs) - 1
         await self.start_browser(browser.browser_id)
         return browser
+
+    async def open_url_for_human(self, url: str) -> LiveBrowser:
+        """Open a page the human asked for (a link clicked in the workspace, ``open:url``) in the one browser, as
+        ``ensure_browser`` does a start page, except that while an agent drives the browser the page is held rather
+        than opened over the agent's work: the viewer offers the human to take control, which opens it, or to
+        cancel it."""
+        browser = self.the_browser()
+        if browser is not None and browser._is_running and browser.controller == "agent":
+            logger.info("Held {} for browser {} while an agent drives it", url, browser.browser_id)
+            browser.hold_pending_url(url)
+            return browser
+        return await self.ensure_browser(url)
 
     async def sweep_windows(self, window_paths: Sequence[str]) -> list[str]:
         """Mark every browser a window shows, and stop the ones a window showed once and none shows now.
