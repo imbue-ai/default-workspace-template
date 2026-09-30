@@ -1,0 +1,35 @@
+[project]
+name = "workspace-layout"
+version = "0.1.0"
+description = "The shell's layout routes as a typed client, and the agent-facing workspace-layout command"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "app-manifest",
+    "httpx>=0.27",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+    # Polls the registry for an app `open` names until its row appears.
+    "tenacity>=8.0",
+]
+
+[project.scripts]
+workspace-layout = "workspace_layout.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/workspace_layout"]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = ["F", "I", "UP006", "UP007"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+known-first-party = ["workspace_layout"]
