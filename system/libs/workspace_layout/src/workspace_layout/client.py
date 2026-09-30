@@ -117,7 +117,10 @@ def request_shell(method: str, url: str, body: Mapping[str, Any] | None, timeout
     # (which loads rich and pygments for its own CLI) would be a large share of that startup.
     data = None if body is None else json.dumps(dict(body)).encode("utf-8")
     headers = {} if data is None else {"Content-Type": "application/json"}
-    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    except ValueError as e:
+        raise ShellUnreachableError(str(e)) from e
     try:
         status_code, raw = _exchange(request, timeout_seconds)
     except (OSError, http.client.HTTPException) as e:
