@@ -8,7 +8,7 @@ set -euo pipefail
 # session, so it uses shell builtins and spawns at most one jq per run.
 
 # Claude Code pipes a JSON payload on stdin (model.id, effort.level, fast_mode,
-# session_id, ...). Consume it whether or not it is used.
+# session_id, ...).
 PAYLOAD=""
 IFS= read -r -d '' PAYLOAD || true
 
