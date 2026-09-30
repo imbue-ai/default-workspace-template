@@ -454,13 +454,18 @@ def _deregister_chat(registry_path: Path) -> None:
     write_registry(registry_path, *builtin_rows_toml_before_chat())
 
 
+def _shell_over(state_directory: Path, registry_path: Path, broadcaster: WebSocketBroadcaster) -> ShellState:
+    """A shell over ``state_directory`` whose inventory has read ``registry_path`` once."""
+    return build_shell_state(
+        state_directory, registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
+    )
+
+
 def _shell_before_the_chat(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> ShellState:
     """A shell over ``tmp_path / "state"`` whose inventory has read a registry of the built-in apps' rows without the
     chat's."""
     registry_path = write_registry(tmp_path / "apps.toml", *builtin_rows_toml_before_chat())
-    return build_shell_state(
-        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
-    )
+    return _shell_over(tmp_path / "state", registry_path, broadcaster)
 
 
 def _shell_restarted_after_the_chat_registered(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> ShellState:
@@ -471,9 +476,7 @@ def _shell_restarted_after_the_chat_registered(tmp_path: Path, broadcaster: WebS
     assert shortcut_apps_on(home) == BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
     registry_path = seeding.inventory.registry_path
     _register_chat(registry_path)
-    return build_shell_state(
-        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
-    )
+    return _shell_over(tmp_path / "state", registry_path, broadcaster)
 
 
 def _desktops_updates(client_queue: "queue.Queue[str | None]") -> list[tuple[str, ...]]:
@@ -558,9 +561,7 @@ def test_a_removed_default_shortcut_stays_removed_across_registrations_and_a_new
     assert _pinned_apps_on(shell.desktops.list_desktops()[0]) == ["chat"]
     assert shortcut_apps_on(shell.list_desktops()[0]) == BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
 
-    restarted = build_shell_state(
-        tmp_path / "state", registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
-    )
+    restarted = _shell_over(tmp_path / "state", registry_path, broadcaster)
     assert shortcut_apps_on(restarted.list_desktops()[0]) == BUILTIN_SHORTCUT_APPS_BEFORE_CHAT
 
 
@@ -573,9 +574,7 @@ def test_a_state_directory_from_before_the_offered_record_gets_a_late_apps_short
     state_directory = tmp_path / "state"
     write_desktops_file(state_directory, default_desktop(seed_desktop_shortcuts(before_chat)))
     registry_path = write_registry(tmp_path / "apps.toml", *builtin_rows_toml_before_chat(), builtin_chat_row_toml())
-    shell = build_shell_state(
-        state_directory, registry_path, broadcaster, inventory=build_inventory(registry_path, broadcaster)
-    )
+    shell = _shell_over(state_directory, registry_path, broadcaster)
 
     (home,) = shell.list_desktops()
 
