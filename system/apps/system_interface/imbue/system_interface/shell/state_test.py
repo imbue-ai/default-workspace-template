@@ -540,6 +540,29 @@ def test_a_desktop_created_before_a_late_app_was_reconciled_leaves_it_offered_on
     assert "chat" in read_default_shortcuts_offered(tmp_path / "state")["apps"]
 
 
+def test_a_visiting_users_desktop_made_before_a_late_app_registered_gets_its_shortcut_too(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A visitor's desktop, a copy of Home made before the chat registered, records no app Home was not seeded with,
+    and is laid out again in launcher order with Home when the chat registers."""
+    shell = _shell_before_the_chat(tmp_path, broadcaster)
+    shell.list_desktops()
+    arrival = shell.arrive_client(
+        ClientId("visitor-tab"), RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com")
+    )
+    assert arrival is not None and arrival.created_desktop is not None
+    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_BEFORE_CHAT)
+
+    _register_chat(shell.inventory.registry_path)
+    shell.inventory.reload_registry()
+
+    seeded_with_chat = seed_desktop_shortcuts([entry.row for entry in shell.inventory.entries()])
+    home, visitors = shell.desktops.list_desktops()
+    assert visitors.id == arrival.created_desktop.id
+    assert home.shortcuts == seeded_with_chat and visitors.shortcuts == seeded_with_chat
+    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
+
+
 def test_a_removed_default_shortcut_stays_removed_across_registrations_and_a_new_shell(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
