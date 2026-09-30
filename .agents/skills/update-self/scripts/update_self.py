@@ -51,6 +51,12 @@ belong in tested code rather than agent prose:
     update could break", which scopes the worker's impact analysis and its
     validation.
 
+``agent-restart-verdict``
+    Whether the merge changes what a running agent's harness loaded when it started (a
+    harness version pin, the Antigravity installer, a harness extension tree), so the
+    lead must restart the agents after the apply, and which changes say so. The
+    worker's §4d rule reads it.
+
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
     the worker's "what's new" report.
@@ -172,7 +178,7 @@ from run_in_background import (
 from update_agent_restarts import (
     ChatListUnavailableError,
     compose_self_restart_note,
-    read_chats_not_restarted,
+    read_restart_report,
     restart_idle_agents,
     restart_self_when_idle,
     start_self_restart,
@@ -194,7 +200,11 @@ from update_apply_contract import (
     write_run_status,
 )
 from update_banding import protect_from_memory_shed
-from update_classification import classify_merge
+from update_classification import (
+    MNGR_SETTINGS_PATH,
+    agent_restart_verdict,
+    classify_merge,
+)
 from update_environment import default_sweep_homes
 from update_history_bridge import (
     DEFAULT_STATE_PATH,
@@ -202,7 +212,7 @@ from update_history_bridge import (
     bridge_history,
     drop_history_bridge,
 )
-from update_layout import FRONTEND_BUNDLES
+from update_layout import FRONTEND_BUNDLES, PROVISIONER_SCRIPT
 from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
 from update_target import (
     AppVersionNotReleasedError,
@@ -383,6 +393,34 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
     return 0
 
 
+def _file_at(ref: str, path: str, repo_root: Path) -> str:
+    """``path`` as it is at ``ref``; empty when it does not exist there."""
+    result = subprocess.run(
+        ["git", "show", f"{ref}:{path}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout if result.returncode == 0 else ""
+
+
+def _cmd_agent_restart_verdict(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args)
+    verdict = agent_restart_verdict(
+        _list_names(_git(["diff", "--name-only", args.before, args.after], repo_root)),
+        _file_at(args.before, PROVISIONER_SCRIPT, repo_root),
+        _file_at(args.after, PROVISIONER_SCRIPT, repo_root),
+        _file_at(args.before, MNGR_SETTINGS_PATH, repo_root),
+        _file_at(args.after, MNGR_SETTINGS_PATH, repo_root),
+    )
+    print(
+        json.dumps(
+            {"needed": verdict.is_needed, "triggers": list(verdict.triggers)}, indent=2
+        )
+    )
+    return 0
+
+
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args)
     # Per-PR changelog entries live in a ``changelog/`` dir under each project
@@ -519,9 +557,7 @@ def _cmd_restart_agents(args: argparse.Namespace) -> int:
     if not chat_id:
         return 1
     try:
-        report = restart_idle_agents(
-            _repo_root(args).resolve(), chat_id, HttpClient(), Runner()
-        )
+        report = restart_idle_agents(_repo_root(args).resolve(), chat_id, HttpClient())
     except ChatListUnavailableError as exc:
         print(f"error: no agent was restarted: {exc}", file=sys.stderr)
         return 1
@@ -539,16 +575,19 @@ def _cmd_restart_self(args: argparse.Namespace) -> int:
         # call that started it, which is shed before the agent.
         move_to_runner_oom_band(OWN_OOM_SCORE_ADJ_PATH)
         return restart_self_when_idle(repo_root, chat_id, HttpClient(), Runner())
-    if not args.reason:
+    if not args.reason or args.restart_report is None:
         print(
-            "error: --reason is required: what the restart picks up, in one plain line.",
+            "error: --reason (what the restart picks up, in one plain line) and --restart-report "
+            "(the file restart-agents' output went to) are required.",
             file=sys.stderr,
         )
         return 1
     note_path = start_self_restart(
         repo_root,
         chat_id,
-        compose_self_restart_note(args.reason, read_chats_not_restarted(repo_root)),
+        compose_self_restart_note(
+            args.reason, read_restart_report(Path(args.restart_report))
+        ),
         os.environ,
         helper_argv=[
             sys.executable,
@@ -908,6 +947,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     classify_parser.set_defaults(func=_cmd_classify_merge)
 
+    restart_verdict_parser = sub.add_parser(
+        "agent-restart-verdict",
+        help="Whether the merge changes what running agents' harnesses loaded at start, and what does.",
+        parents=[common],
+    )
+    restart_verdict_parser.add_argument(
+        "--before",
+        default="HEAD^1",
+        help="The tree the running agents started from (default HEAD^1, the pre-merge local).",
+    )
+    restart_verdict_parser.add_argument(
+        "--after",
+        default="HEAD",
+        help="The tree the apply lands (default HEAD, the merge).",
+    )
+    restart_verdict_parser.set_defaults(func=_cmd_agent_restart_verdict)
+
     changelog_parser = sub.add_parser(
         "changelog-entries",
         help="List per-PR changelog entries newly added between two refs "
@@ -974,6 +1030,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--reason",
         default="",
         help="What the restart picks up, in one plain line (e.g. 'Claude Code 2.1.300'); the note names it.",
+    )
+    restart_self_parser.add_argument(
+        "--restart-report",
+        default=None,
+        help="The file restart-agents printed its report into; one with no report (restart-agents "
+        "failed) makes the note say the other chats were not restarted.",
     )
     restart_self_parser.add_argument(
         "--wait",

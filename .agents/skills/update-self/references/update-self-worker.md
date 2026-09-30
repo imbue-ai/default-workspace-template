@@ -304,22 +304,32 @@ The apply restarts the services, never the agents: every chat and worker keeps
 the harness process it had, which loaded its binary and some of its config
 once, when it started. After a successful apply the lead restarts them all
 (itself last) when the update changes what those processes loaded. **Whether
-that happens is decided by this rule, from the files the update changed**
-(`git diff --name-only "$BASE" "$TARGET_REF"`); record the verdict and its
-evidence in your report.
+that happens is decided by rule**; record the verdict and its evidence in your
+report. The mechanical half is a command, run from the pre-merge local tree (the
+first parent of Step 3's merge, wherever 4c's fix commits left `HEAD`) to
+`HEAD`:
 
-A restart is **needed** when the update changes any of:
+```bash
+MERGE=$(git log -1 --merges --format=%H --grep='^update-self: merge upstream template')
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    agent-restart-verdict --before "$MERGE^1" --after HEAD
+```
 
-- **A harness version pin**: `CLAUDE_CODE_VERSION`, `CODEX_VERSION`,
-  `PI_VERSION`, `PI_SUBAGENTS_VERSION`, `PI_WEB_ACCESS_VERSION` or
-  `OPENCODE_VERSION` in `system/scripts/setup_system.sh`, the versioned
-  Antigravity installer it runs (`system/scripts/agy_install-<version>.sh`,
-  agy's only version pin), or an `[agent_types.*]` `version` in
-  `.mngr/settings.toml`. The apply's provisioner installs the new binary, but
-  a running agent keeps executing the old one.
-- **Code a harness loads into its process at start**: `.pi/extensions/**` (pi
-  loads every extension when it starts), and a harness extension or plugin
-  tree like it that the update adds.
+Its `triggers` name every change it knows makes a restart **needed**: a
+harness version pin in `system/scripts/setup_system.sh` or an
+`[agent_types.*]` `version` in `.mngr/settings.toml` (the apply's provisioner
+installs the new binary, but a running agent keeps executing the old one),
+the versioned Antigravity installer (`system/scripts/agy_install-*.sh`), and
+code a harness loads into its process at start (`.pi/extensions/**`). When
+`needed` is `true`, the verdict is `needed`, and its triggers are the
+evidence. When it is `false`, read the rest of the diff (`git diff
+--name-only "$MERGE^1" HEAD`) for what the command cannot see, which also
+makes a restart **needed**:
+
+- **A harness extension or plugin tree the update adds**, like
+  `.pi/extensions/`, that a harness loads when it starts. Name it for the
+  command too, as a `submit-upstream-changes` candidate, so the next update
+  sees it.
 - **Other harness config whose live reload you cannot establish** (for example
   `.codex/hooks.json`): a harness that re-reads it on its own needs no
   restart, but only its documentation can tell you that, and when it does not
@@ -415,8 +425,9 @@ Valid `name:` values:
     rebuild-only, with the version delta (and, for a user-created dependent,
     what your research turned up); a genuinely breaking, unapplyable change
     is a `stuck` report, not a `done`.
-  - **Agent restarts** -- the 4d verdict, `needed` or `not needed`, with the
-    changed files that decided it and, when needed, one plain line naming what
+  - **Agent restarts** -- the 4d verdict, `needed` or `not needed`, with
+    `agent-restart-verdict`'s output and any changed file you judged beyond
+    it, and, when needed, one plain line naming what
     the restart picks up (for example "Claude Code 2.1.300" or "new pi command
     guards"); the lead passes that line to the restart. Add any change that
     reaches only newly created agents.

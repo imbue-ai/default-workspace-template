@@ -57,23 +57,25 @@ def recording_messengers(
     return messengers
 
 
-class _FakeChatListHandler(BaseHTTPRequestHandler):
-    """The chat app's ``GET /api/chats``, answering a scripted sequence of chat lists."""
+class FakeChatAppServer(ThreadingHTTPServer):
+    """The fake chat app's server and the scripts and records its handler shares with a test."""
+
+    def __init__(self, workspace: Path) -> None:
+        super().__init__(("127.0.0.1", 0), _FakeChatAppHandler)
+        self.workspace = workspace
+        self.answers: list[tuple[int, object]] = [(200, {"chats": []})]
+        self.list_reads = 0
+        self.interrupt_answers: dict[str, list[tuple[int, object]]] = {}
+        self.interrupts: list[tuple[str, object]] = []
+
+
+class _FakeChatAppHandler(BaseHTTPRequestHandler):
+    """The chat app's ``GET /api/chats`` and ``POST /api/chats/<id>/interrupt``, answering scripts."""
 
     def log_message(self, format: str, *args: Any) -> None:
         return
 
-    def do_GET(self) -> None:
-        server: Any = self.server
-        if self.path != "/api/chats":
-            self.send_response(404)
-            self.end_headers()
-            return
-        server.list_reads += 1
-        # The last scripted answer repeats, so a test scripts only the transitions it is about.
-        status, body = (
-            server.answers.pop(0) if len(server.answers) > 1 else server.answers[0]
-        )
+    def _respond(self, status: int, body: object) -> None:
         payload = json.dumps(body).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -81,18 +83,44 @@ class _FakeChatListHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def do_GET(self) -> None:
+        server = self.server
+        assert isinstance(server, FakeChatAppServer)
+        if self.path != "/api/chats":
+            self._respond(404, {"detail": f"unknown path {self.path}"})
+            return
+        server.list_reads += 1
+        # The last scripted answer repeats, so a test scripts only the transitions it is about.
+        self._respond(
+            *(server.answers.pop(0) if len(server.answers) > 1 else server.answers[0])
+        )
+
+    def do_POST(self) -> None:
+        server = self.server
+        assert isinstance(server, FakeChatAppServer)
+        prefix, suffix = "/api/chats/", "/interrupt"
+        if not (self.path.startswith(prefix) and self.path.endswith(suffix)):
+            self._respond(404, {"detail": f"unknown path {self.path}"})
+            return
+        chat_id = self.path[len(prefix) : -len(suffix)]
+        body_length = int(self.headers.get("Content-Length", "0"))
+        server.interrupts.append(
+            (chat_id, json.loads(self.rfile.read(body_length) or b"{}"))
+        )
+        answers = server.interrupt_answers.get(chat_id, [(200, {"status": "ok"})])
+        self._respond(*(answers.pop(0) if len(answers) > 1 else answers[0]))
+
 
 @pytest.fixture
-def fake_chat_list(tmp_path: Path) -> Iterator[Any]:
+def fake_chat_app(tmp_path: Path) -> Iterator[FakeChatAppServer]:
     """A chat app over loopback, registered under the ``chat`` row of ``tmp_path/workspace``'s registry.
 
     ``server.answers`` is the sequence of ``(status, body)`` its chat list gives, the last one
-    repeating; ``server.list_reads`` counts the reads; ``server.workspace`` is the workspace root.
+    repeating; ``server.list_reads`` counts the reads. ``server.interrupt_answers`` maps a chat id
+    to the sequence its interrupt route gives (default a 200), and ``server.interrupts`` records
+    each ``(chat_id, body)`` posted there. ``server.workspace`` is the workspace root.
     """
-    server: Any = ThreadingHTTPServer(("127.0.0.1", 0), _FakeChatListHandler)
-    server.answers = [(200, {"chats": []})]
-    server.list_reads = 0
-    server.workspace = tmp_path / "workspace"
+    server = FakeChatAppServer(tmp_path / "workspace")
     registry = server.workspace / APPS_REGISTRY_PATH
     registry.parent.mkdir(parents=True)
     registry.write_text(
