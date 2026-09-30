@@ -407,8 +407,8 @@ def cancel_pending_url(browser_id: str) -> Response:
     browser = _resolve_sync(browser_id)
     if isinstance(browser, Response):
         return browser
-    was_held = bridge.run(_cancel_pending_url(browser), timeout=_ROUTE_TIMEOUT)
-    return jsonify({"cancelled": was_held})
+    is_cancelled = bridge.run(_cancel_pending_url(browser), timeout=_ROUTE_TIMEOUT)
+    return jsonify({"cancelled": is_cancelled})
 
 
 def health() -> Response:

@@ -725,14 +725,14 @@ def _copied_message_handler(
     ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
     if not (isinstance(handler, dict) and isinstance(handler.get("type"), str)):
         return None, f"manifest {str(path)!r}: every message handler needs a string 'type'"
-    has_path = isinstance(handler.get("path"), str)
-    has_show = isinstance(handler.get("show"), str)
-    if has_path == has_show:
+    is_path_given = isinstance(handler.get("path"), str)
+    is_show_given = isinstance(handler.get("show"), str)
+    if is_path_given == is_show_given:
         return (
             None,
             f"manifest {str(path)!r}: every message handler needs exactly one of a string 'path' or 'show'",
         )
-    if has_path:
+    if is_path_given:
         return {"type": handler["type"], "path": handler["path"]}, None
     copied: dict[str, object] = {"type": handler["type"], "show": handler["show"]}
     showing = handler.get("showing")
