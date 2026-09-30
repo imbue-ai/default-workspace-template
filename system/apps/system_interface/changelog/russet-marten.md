@@ -19,8 +19,3 @@ Taskbar and launcher refresh.
 
 - An app that declares no launch path of its own is offered by its name rather
   than as "Open <name>", so a verb in that list means a different kind of row.
-
-- The Desktops tray widget is parked behind a single grid button: switching
-  desktops, the desktops menu and its settings dialog are out of view while how
-  they should come back is decided. Everything behind them is intact, and the
-  end-to-end tests drive desktops over the shell's API in the meantime.

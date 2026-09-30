@@ -4,8 +4,8 @@
  * and the launcher's plus and app fallback. Same Feather-style 24x24 frame as ``icons.ts``,
  * produced as SVG strings for ``m.trust``.
  *
- * The glyphs named for Lucide are that project's path data, copied rather than imported; its ISC
- * notice is in THIRD_PARTY_NOTICES.md at the repo root.
+ * Some of these are Lucide's own shapes as well as its frame -- the plus, the minus the minimize
+ * control draws -- copied rather than imported; its notice is in THIRD_PARTY_NOTICES.md at the root.
  */
 
 import { appIconMarkupForApp } from "./components/appIcon";
@@ -26,10 +26,6 @@ const GLYPH_PATHS = {
     '<circle cx="12" cy="19" r="2" fill="currentColor" stroke="none"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   app: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>',
-  // Lucide's "layout-grid": four squares, for the desktops the tray stands for.
-  "layout-grid":
-    '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>' +
-    '<rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>',
 } as const;
 
 export type GlyphName = keyof typeof GLYPH_PATHS;

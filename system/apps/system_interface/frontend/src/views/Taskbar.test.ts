@@ -186,30 +186,25 @@ describe("Taskbar", () => {
     expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40, expect.any(Element));
   });
 
-  it("carries the launcher field and the parked Desktops widget, and nothing else in the tray while nobody is recorded", () => {
+  it("carries the launcher field and the Desktops widget with a glyph per desktop, and nothing else in the tray while nobody is recorded", () => {
     const onSwitchDesktop = vi.fn();
-    const onOpenDesktopsMenu = vi.fn();
     const taskbar = render({
       tray: {
         desktops: [desktopRecord("home"), desktopRecord("work")],
         activeDesktopId: "home",
         isDesktopsMenuOpen: false,
         onSwitchDesktop,
-        onOpenDesktopsMenu,
+        onOpenDesktopsMenu: vi.fn(),
         onDesktopContextMenu: vi.fn(),
       },
     });
     expect(taskbar.querySelector("[data-launcher-field]")).not.toBeNull();
-    // Parked: one button standing for the desktops, with no glyph per desktop behind it and nothing
-    // happening when it is pressed. The switching it used to do is still there to be wired back up.
-    const widget = taskbar.querySelector('[data-tray-widget="desktops"]') as HTMLElement;
-    expect(widget).not.toBeNull();
-    expect(widget.querySelectorAll("[data-desktop-switch]")).toHaveLength(0);
-    const buttons = [...widget.querySelectorAll("button")];
-    expect(buttons).toHaveLength(1);
-    (buttons[0] as HTMLElement).click();
-    expect(onSwitchDesktop).not.toHaveBeenCalled();
-    expect(onOpenDesktopsMenu).not.toHaveBeenCalled();
+    const switches = [...taskbar.querySelectorAll("[data-desktop-switch]")];
+    expect(switches.map((element) => element.getAttribute("data-desktop-switch"))).toEqual(["home", "work"]);
+    expect(switches.map((element) => element.getAttribute("data-active"))).toEqual(["true", "false"]);
+    (switches[1] as HTMLElement).click();
+    expect(onSwitchDesktop).toHaveBeenCalledWith("work");
+    expect(taskbar.querySelector('[data-tray-widget="desktops"]')).not.toBeNull();
     expect(taskbar.querySelector("[data-system-tray]")?.children).toHaveLength(1);
   });
 

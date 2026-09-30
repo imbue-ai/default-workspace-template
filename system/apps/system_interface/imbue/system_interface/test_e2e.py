@@ -613,16 +613,9 @@ def _wait_for_own_window_path(base_url: str, client_id: str, window_id: str, pat
     )
 
 
-def _create_desktop(base_url: str, name: str) -> dict[str, Any]:
-    """Create a desktop, as the Desktops widget's menu did before it was parked; answers the created record."""
-    return dict(_post_json(f"{base_url}/api/desktops", {"name": name, "color": "#12B5A5", "glyph": 4}))
-
-
-def _seat_client_on_desktop(base_url: str, client_id: str, desktop_id: str) -> None:
-    """Move a client to a desktop, as a click on the widget's glyph did before it was parked: the ``load`` op is
-    the other way in, and it reaches the client the same way, over the socket."""
-    answer = _broadcast_op(base_url, "load", {"desktop": desktop_id, "client": client_id})
-    assert answer["desktop_id"] == desktop_id, answer
+def _open_desktops_menu(page: Page) -> None:
+    page.locator("[data-desktops-menu]").click()
+    expect(page.locator(".desktops-menu")).to_be_visible(timeout=5000)
 
 
 def _open_entry_menu(page: Page, entry: Locator) -> Locator:
@@ -662,7 +655,7 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     e2e_server: E2EServer, page: Page
 ) -> None:
     """A fresh browser lands on the home desktop over the bundled wallpaper: the seeded shortcut sits in the first
-    cell, nothing is open, the taskbar carries the launcher field and the parked Desktops widget, and the shell soon
+    cell, nothing is open, the taskbar carries the launcher field and the Desktops tray widget, and the shell soon
     knows the client with home as its active desktop."""
     _land(page, e2e_server)
     expect(page).to_have_title("System Interface")
@@ -671,8 +664,7 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     expect(shortcut.locator(".shortcut-label")).to_have_text(_STUB_APP_DISPLAY_NAME)
     expect(_shown_windows(page)).to_have_count(0)
     expect(page.locator("[data-taskbar] [data-launcher-field]")).to_be_visible()
-    expect(page.locator('[data-tray-widget="desktops"] [data-desktops-menu]')).to_have_count(1)
-    expect(page.locator("[data-desktop-switch]")).to_have_count(0)
+    expect(page.locator('[data-tray-widget="desktops"] [data-desktop-switch]')).to_have_count(1)
     expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible()
     # The wallpaper is the app layout's, so it spans the taskbar too; the backdrop is clear over it.
     assert (
@@ -1412,35 +1404,59 @@ def test_shortcut_menu_changes_mode_and_removes(e2e_server: E2EServer, page: Pag
 
 
 @pytest.mark.timeout(90, func_only=False)
-def test_a_client_seated_on_another_desktop_sees_its_windows_and_the_way_back(
-    e2e_server: E2EServer, page: Page
-) -> None:
-    """Each desktop keeps its own windows: a client seated on a desktop created beside home finds the seeded
-    shortcut and none of home's windows, and coming back shows home's window where it was.
-
-    The Desktops widget is parked (DesktopsWidget.ts), so there is no way in the chrome to create a desktop or
-    to switch between them; what the widget used to drive is driven here the other way, over the API and the
-    ``load`` op. The create, rename and delete themselves are covered at the API in shell/routes_test.py.
-    """
+def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: E2EServer, page: Page) -> None:
+    """The Desktops widget's menu creates a desktop (the client switches to it, with the seeded shortcut), its
+    settings dialog renames it, the widget switches back and forth (each desktop keeps its own windows), and the
+    delete confirmation removes it, moving the client home."""
     _land(page, e2e_server)
     home_window = _open_via_shortcut(page, e2e_server)
-    client_id = _client_id(page)
 
-    created = _create_desktop(e2e_server.base_url, "Research")
-    assert [desktop["id"] for desktop in _desktops(e2e_server.base_url)] == [_HOME_DESKTOP_ID, created["id"]]
-    _seat_client_on_desktop(e2e_server.base_url, client_id, created["id"])
+    _open_desktops_menu(page)
+    page.locator('[data-menu-row="new-desktop"]').click()
+    wait_for(
+        lambda: len(_desktops(e2e_server.base_url)) == 2,
+        timeout=10.0,
+        poll_interval=0.1,
+        error_message="no second desktop was created",
+    )
+    (created,) = [desktop for desktop in _desktops(e2e_server.base_url) if desktop["id"] != _HOME_DESKTOP_ID]
     expect(page.locator(f'[data-desktop-id="{created["id"]}"]')).to_be_visible(timeout=15000)
+    expect(page.locator(f'[data-desktop-switch="{created["id"]}"]')).to_have_attribute("data-active", "true")
     expect(page.locator(f'[data-desktop-id="{created["id"]}"] [data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible()
     expect(_taskbar_entry(page, home_window)).to_have_count(0)
 
-    _seat_client_on_desktop(e2e_server.base_url, client_id, _HOME_DESKTOP_ID)
+    _open_desktops_menu(page)
+    page.locator('[data-menu-row="settings"]').click()
+    dialog = page.locator(f'[data-desktop-settings="{created["id"]}"]')
+    expect(dialog).to_be_visible(timeout=5000)
+    dialog.locator('input[placeholder="desktop name"]').fill("Research")
+    dialog.locator(".desktop-settings-save").click()
+    expect(dialog).to_be_hidden(timeout=5000)
+    wait_for(
+        lambda: _desktop(e2e_server.base_url, created["id"])["name"] == "Research",
+        timeout=10.0,
+        poll_interval=0.1,
+        error_message="the rename never landed",
+    )
+
+    page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]').click()
     expect(_taskbar_entry(page, home_window)).to_be_visible(timeout=15000)
     expect(_window(page, home_window)).to_be_visible()
-
-    _seat_client_on_desktop(e2e_server.base_url, client_id, created["id"])
+    page.locator(f'[data-desktop-switch="{created["id"]}"]').click()
     expect(_taskbar_entry(page, home_window)).to_have_count(0, timeout=15000)
-    assert [window["id"] for window in _windows(e2e_server.base_url)] == [home_window]
-    assert _windows(e2e_server.base_url, created["id"]) == []
+
+    _open_desktops_menu(page)
+    page.locator('[data-menu-row="delete"]').click()
+    expect(dialog).to_be_visible(timeout=5000)
+    dialog.locator(".desktop-settings-confirm-delete").click()
+    wait_for(
+        lambda: [desktop["id"] for desktop in _desktops(e2e_server.base_url)] == [_HOME_DESKTOP_ID],
+        timeout=10.0,
+        poll_interval=0.1,
+        error_message="the desktop was never deleted",
+    )
+    expect(page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]')).to_have_attribute("data-active", "true")
+    expect(_window(page, home_window)).to_be_visible(timeout=15000)
 
 
 # Pinned windows (pinned-taskbar-entries plan sections 3.2, 4.1, 4.3, 4.4)
@@ -1531,10 +1547,16 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
         assert "minimize" in refused.value.read().decode()
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
 
-        # A new desktop is born with its own pinned window, and an open at the home path finds it. The
-        # client is seated there, as the widget's own create used to seat it, so its entry is in this bar.
-        created = _create_desktop(server.base_url, "Research")
-        _seat_client_on_desktop(server.base_url, client_id, created["id"])
+        # A new desktop is born with its own pinned window, and an open at the home path finds it.
+        _open_desktops_menu(page)
+        page.locator('[data-menu-row="new-desktop"]').click()
+        wait_for(
+            lambda: len(_desktops(server.base_url)) == 2,
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="no second desktop was created",
+        )
+        (created,) = [desktop for desktop in _desktops(server.base_url) if desktop["id"] != _HOME_DESKTOP_ID]
         born = _pinned_window(server.base_url, created["id"])
         assert born["id"] != pinned["id"]
         expect(_taskbar_entry(page, born["id"])).to_have_attribute("data-pinned", "true", timeout=15000)
@@ -1995,6 +2017,7 @@ def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_se
         # The copy is hers to arrange: it starts minimized in her taskbar, and Home's window is untouched.
         expect(_taskbar_entry(visitor, copied["id"])).to_be_visible(timeout=15000)
         assert [window["id"] for window in _windows(e2e_server.base_url)] == [home_window]
+        expect(page.locator('[data-desktop-switch="alice"]')).to_be_visible(timeout=15000)
         expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)
 
         with _visiting_client(page, e2e_server, "user-alice", "alice", "alice"):

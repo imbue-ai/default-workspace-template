@@ -1,20 +1,19 @@
 /**
- * The Desktops tray widget (concepts.md section 2.8).
- *
- * Parked: one grid button standing for the desktops, doing nothing when pressed. The widget used to
- * draw a glyph per desktop -- the squiggle in the desktop's colour, the active one marked, a click
- * switching -- with a kebab beside them for the new/settings/delete menu. All of that still exists
- * behind it (the switching, the menu, the settings dialog, ``desktopIdentityMarkup``, and the attrs
- * this still takes); what is undecided is how the desktops should come back into view, not whether.
+ * The Desktops tray widget (concepts.md section 2.8): one glyph per desktop (the squiggle in the
+ * desktop's colour), the active one marked, a click switching; its menu offers a new desktop,
+ * the active desktop's settings, and its deletion.
  */
 
 import m from "mithril";
+import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { Desktop } from "../model/records";
 import { SQUIGGLE_GLYPHS, monogramMarkup, squiggleMarkup } from "./squiggles";
 import { glyph } from "./glyphs";
 
-const TRAY_GLYPH_SIZE = 20;
+const DESKTOP_GLYPH_SIZE = 18;
+const KEBAB_GLYPH_SIZE = 14;
 
 /** Full <svg> string for a desktop's identity: its squiggle in its colour, or its monogram. */
 export function desktopIdentityMarkup(desktop: Pick<Desktop, "name" | "color" | "glyph">, size: number): string {
@@ -34,8 +33,34 @@ export interface DesktopsWidgetAttrs {
 }
 
 export const DesktopsWidget: m.Component<DesktopsWidgetAttrs> = {
-  view() {
+  view(vnode) {
+    const { desktops, activeDesktopId, isMenuOpen, onSwitch, onOpenMenu, onDesktopContextMenu } = vnode.attrs;
     return m("div", { "data-tray-widget": "desktops", class: "tray-desktops flex items-center gap-0.5" }, [
+      desktops.map((desktop) => {
+        const isActive = desktop.id === activeDesktopId;
+        return m(
+          Button,
+          {
+            key: desktop.id,
+            variant: "ghost",
+            icon: true,
+            sm: true,
+            selected: isActive,
+            extra: "desktop-switch min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
+            "data-desktop-switch": desktop.id,
+            "data-active": isActive ? "true" : "false",
+            "aria-pressed": isActive ? "true" : "false",
+            "aria-label": `Switch to ${desktop.name}`,
+            ...hoverTooltipAttrs(desktop.name),
+            onclick: () => onSwitch(desktop.id),
+            oncontextmenu: (event: MouseEvent) => {
+              event.preventDefault();
+              onDesktopContextMenu(desktop.id, event.clientX, event.clientY, targetElementOf(event));
+            },
+          },
+          m.trust(desktopIdentityMarkup(desktop, DESKTOP_GLYPH_SIZE)),
+        );
+      }),
       m(
         Button,
         {
@@ -43,13 +68,15 @@ export const DesktopsWidget: m.Component<DesktopsWidgetAttrs> = {
           icon: true,
           sm: true,
           extra: "min-h-(--desk-touch-target) min-w-(--desk-touch-target)",
-          // The hook everything addresses the widget by, kept through the parking so whatever brings
-          // the desktops back finds the same button here.
+          // The hook everything addresses the button by; `.desktops-menu` names the menu it opens.
           "data-desktops-menu": "",
-          "aria-label": "Desktops",
-          onclick: () => {},
+          "aria-label": "Desktop options",
+          "aria-haspopup": "menu",
+          "aria-expanded": isMenuOpen ? "true" : "false",
+          ...hoverTooltipAttrs("Desktop options"),
+          onclick: onOpenMenu,
         },
-        m.trust(glyph("layout-grid", TRAY_GLYPH_SIZE)),
+        m.trust(glyph("kebab", KEBAB_GLYPH_SIZE)),
       ),
     ]);
   },

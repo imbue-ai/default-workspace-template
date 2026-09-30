@@ -380,14 +380,11 @@ describe("Escape", () => {
   it("closes a menu opened over the launcher (by keyboard, so the launcher stayed) before the launcher", () => {
     store.openLauncher();
     m.redraw.sync();
-    // A taskbar entry's menu: the Desktops widget is parked and opens nothing to press Escape at.
-    (document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement).dispatchEvent(
-      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 }),
-    );
+    (document.querySelector("[data-desktops-menu]") as HTMLElement).click();
     m.redraw.sync();
-    expect(document.querySelector(".entry-menu")).not.toBeNull();
+    expect(document.querySelector(".desktops-menu")).not.toBeNull();
     pressEscape();
-    expect(document.querySelector(".entry-menu")).toBeNull();
+    expect(document.querySelector(".desktops-menu")).toBeNull();
     expect(store.isLauncherOpen()).toBe(true);
     pressEscape();
     expect(store.isLauncherOpen()).toBe(false);
