@@ -1,3 +1,4 @@
+import threading
 from concurrent.futures import Executor
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -8,6 +9,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.chat_naming import CHAT_NAMING_FILENAME
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import ChatNamingState
+from imbue.chat.chat_naming import DaemonThreadExecutor
 from imbue.chat.chat_naming import MAX_NAMING_ATTEMPTS
 from imbue.chat.chat_naming import parse_generated_chat_name
 from imbue.chat.chat_naming import read_chat_naming_state
@@ -278,3 +280,26 @@ def test_a_failure_the_namer_does_not_handle_is_logged_rather_than_lost(
 
     assert f"ERROR Naming chat {_CHAT_ID} failed" in loguru_records
     assert harness.shown_title is None
+
+
+def test_a_waiting_naming_attempt_holds_up_neither_the_next_one_nor_the_apps_exit() -> None:
+    executor = DaemonThreadExecutor()
+    release = threading.Event()
+
+    waiting = executor.submit(release.wait, 10.0)
+    next_attempt = executor.submit(lambda: threading.current_thread().daemon)
+
+    assert next_attempt.result(timeout=5.0) is True
+    release.set()
+    assert waiting.result(timeout=5.0) is True
+
+
+# The thread re-raises after handing the exception to the future, as every ObservableThread does.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_naming_attempt_that_raises_leaves_its_exception_on_the_future() -> None:
+    error = OSError("No space left on device")
+
+    def fail() -> None:
+        raise error
+
+    assert DaemonThreadExecutor().submit(fail).exception(timeout=5.0) is error

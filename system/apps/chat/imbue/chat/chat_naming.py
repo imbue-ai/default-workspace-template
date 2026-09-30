@@ -19,8 +19,8 @@ import time
 from collections.abc import Callable
 from concurrent.futures import Executor
 from concurrent.futures import Future
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 from loguru import logger as _loguru_logger
@@ -37,6 +37,7 @@ from imbue.chat.models import ChatAccountBinding
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.primitives import ChatId
+from imbue.concurrency_group.thread_utils import ObservableThread
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
@@ -55,7 +56,6 @@ _MAX_PROMPT_CHARACTERS: Final[int] = 3000
 # How long a chat created with its first message may take to come up before naming gives up on it.
 _AGENT_WAIT_SECONDS: Final[float] = 600.0
 _AGENT_POLL_SECONDS: Final[float] = 2.0
-_NAMING_THREADS: Final[int] = 2
 
 CHAT_NAMING_SYSTEM_PROMPT: Final[str] = (
     "You name chats for a sidebar list. You are given the first message a person sent in a new chat. "
@@ -115,6 +115,32 @@ def write_chat_naming_state(chat_dir: Path, state: ChatNamingState) -> None:
     temp_path.replace(path)
 
 
+def _set_result_of_call(
+    future: Future[Any], fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> None:
+    future.set_result(fn(*args, **kwargs))
+
+
+class DaemonThreadExecutor(Executor):
+    """Runs each submitted call on a daemon thread of its own; a call that raises leaves its exception on the future.
+
+    A naming attempt can wait minutes for its chat to come up. On a pool, such waits would hold the places other
+    chats' attempts queue for, and the pool's threads would hold up the app's exit: the interpreter joins them before
+    the ``atexit`` teardown that stops the namer runs.
+    """
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        future: Future[Any] = Future()
+        future.set_running_or_notify_cancel()
+        ObservableThread(
+            target=_set_result_of_call,
+            args=(future, fn, args, kwargs),
+            name="chat-naming",
+            on_failure=future.set_exception,
+        ).start()
+        return future
+
+
 def _log_naming_failure(chat_id: ChatId, future: Future[None]) -> None:
     """Log what ended a naming attempt the attempt itself did not handle; nothing else reads its future."""
     if future.cancelled():
@@ -153,7 +179,7 @@ class ChatNamer(MutableModel):
     )
     agent_wait_seconds: float = Field(default=_AGENT_WAIT_SECONDS, frozen=True, description="See _AGENT_WAIT_SECONDS")
     executor: Executor = Field(
-        default_factory=lambda: ThreadPoolExecutor(max_workers=_NAMING_THREADS, thread_name_prefix="chat-naming"),
+        default_factory=DaemonThreadExecutor,
         frozen=True,
         description="Where naming runs, off the request thread",
     )
@@ -177,7 +203,7 @@ class ChatNamer(MutableModel):
         future.add_done_callback(lambda done: _log_naming_failure(chat_id, done))
 
     def stop(self) -> None:
-        """Stop taking messages and abandon the attempts not yet started."""
+        """Stop taking messages, end the waits of the attempts in flight, and abandon any not yet started."""
         self._stop_event.set()
         self.executor.shutdown(wait=False, cancel_futures=True)
 
