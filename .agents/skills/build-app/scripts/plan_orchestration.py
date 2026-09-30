@@ -75,6 +75,10 @@ INTERACTIVE_CAPABILITY: Final[str] = "interactive"
 # has to run against -- set every value here to that alias. Editing the table is the
 # only way to do it, on purpose: the value a build used is then a property of the commit
 # it ran, which is what lets two eval arms differ by nothing else.
+# What every worker runs on when the build uses one pool instead of a model per difficulty.
+# Opus 5.5's own default effort is medium, so naming the model is the whole setting.
+POOL_MODEL: Final[str] = "opus[1m]"
+
 MODEL_BY_CAPABILITY: Final[dict[str, str]] = {
     "low": "haiku",
     "medium": "sonnet[1m]",
@@ -329,6 +333,7 @@ def parse_plan(
     reduce_access: bool = False,
     shared_worktree: bool = False,
     tier_agents: bool = False,
+    worker_pool: int = 0,
 ) -> dict[str, object]:
     """Turn the planner's output into the validated plan the orchestrator runs.
 
@@ -347,6 +352,12 @@ def parse_plan(
 
     They are independent. Shared folders with per-node agents still pay the cold starts;
     tier agents in separate worktrees still pay the syncs.
+
+    ``worker_pool`` is a third shape and it replaces the other two's idea of who runs what.
+    With a pool of N identical workers, all on ``POOL_MODEL``, no node names an agent: the
+    orchestrator sends each ready node to whichever worker is free, preferring one that already
+    holds context for it. A tier agent idles whenever the plan has no node of its capability
+    ready, which a pool cannot do, and the cap on nodes running at once becomes the pool size.
 
     """
     output_block = _extract_output_block(plan_text)
@@ -409,15 +420,22 @@ def parse_plan(
             # adds. With tier agents it is one long-lived agent per capability, so several
             # nodes name the same one and the orchestrator messages it again instead of
             # creating another; otherwise every node has an agent of its own.
+            # None with a pool too, but for the opposite reason: not "no worker runs this"
+            # but "the orchestrator picks which of the pool does", so `has_worker` is what
+            # tells the two apart.
             "agent": (
                 None
-                if idx not in with_worker
+                if idx not in with_worker or worker_pool
                 else (capabilities[idx] if tier_agents else f"node-{idx}")
             ),
             # Nodes sharing this number are consecutive work for the orchestrator, to be
             # done as one piece rather than one at a time. None when a worker does it.
             "own_group": group_by_node.get(idx),
-            "model": model_for_capability(capabilities[idx]) if idx in with_worker else None,
+            "model": (
+                None
+                if idx not in with_worker
+                else (POOL_MODEL if worker_pool else model_for_capability(capabilities[idx]))
+            ),
         }
         for idx in range(node_count)
     ]
@@ -429,6 +447,7 @@ def parse_plan(
         "settings": {
             "shared_worktree": shared_worktree,
             "tier_agents": tier_agents,
+            "worker_pool": worker_pool,
             "reduce_access": reduce_access,
         },
     }
@@ -472,7 +491,12 @@ def find_ready_nodes(
         and set(node["access"]) <= done
     ]
     running_worker_count = sum(1 for idx in running if has_worker(idx))
-    free_worker_slot_count = max(MAX_RUNNING_NODE_COUNT - running_worker_count, 0)
+    # A pool of N workers can run N nodes at once and no more, which is a tighter cap than the
+    # flow's own. Without a pool the cap is the flow's.
+    settings = plan.get("settings") or {}
+    assert isinstance(settings, dict)
+    cap = settings.get("worker_pool") or MAX_RUNNING_NODE_COUNT
+    free_worker_slot_count = max(cap - running_worker_count, 0)
     ready_workers = [idx for idx in unblocked if has_worker(idx)][
         :free_worker_slot_count
     ]
@@ -569,6 +593,7 @@ def _run_models() -> int:
     Exists so the skill can start one agent per capability without writing the mapping out
     a second time: the table here stays the only place it lives.
     """
+    print(f"pool {POOL_MODEL}")
     for capability, model in MODEL_BY_CAPABILITY.items():
         print(f"{capability} {model}")
     return 0
@@ -579,12 +604,14 @@ def _run_parse(
     reduce_access: bool,
     shared_worktree: bool,
     tier_agents: bool,
+    worker_pool: int,
 ) -> int:
     plan = parse_plan(
         _read_run_file(run_dir / PLAN_MARKDOWN_FILE_NAME),
         reduce_access=reduce_access,
         shared_worktree=shared_worktree,
         tier_agents=tier_agents,
+        worker_pool=worker_pool,
     )
     plan_json_path = run_dir / PLAN_JSON_FILE_NAME
     plan_json_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
@@ -593,7 +620,9 @@ def _run_parse(
     assert isinstance(settings, dict)
     folders = "one shared folder" if settings["shared_worktree"] else "a worktree per node"
     agents = (
-        "one agent per capability" if settings["tier_agents"] else "an agent per node"
+        f"a pool of {settings['worker_pool']} workers on {POOL_MODEL}"
+        if settings.get("worker_pool")
+        else ("one agent per capability" if settings["tier_agents"] else "an agent per node")
     )
     print(f"plan_orchestration: workers run in {folders}, with {agents}")
     nodes = plan["nodes"]
@@ -696,6 +725,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             "start per node and carries what the agent learned into the next. Off by default."
         ),
     )
+    parse_parser.add_argument(
+        "--worker-pool",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Run the build on a pool of N identical workers, all on "
+            f"{POOL_MODEL}, instead of an agent per node or per capability. No node names an "
+            "agent: the orchestrator sends each ready node to whichever worker is free. N is "
+            "also the cap on nodes running at once. 0 (the default) means no pool."
+        ),
+    )
+
     subparsers.add_parser(
         "models",
         help="Print each worker capability and its model, one per line, for the skill's "
@@ -728,6 +770,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.reduce_access,
                     args.shared_worktree,
                     args.tier_agents,
+                    args.worker_pool,
                 )
             case "models":
                 return _run_models()

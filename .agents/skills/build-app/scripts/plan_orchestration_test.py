@@ -743,6 +743,7 @@ def test_by_default_every_node_has_an_agent_of_its_own() -> None:
     assert plan["settings"] == {
         "shared_worktree": False,
         "tier_agents": False,
+        "worker_pool": 0,
         "reduce_access": False,
     }
 
@@ -800,9 +801,10 @@ def test_tier_agents_still_take_the_model_of_their_capability() -> None:
 
 
 def test_models_are_printed_for_the_skill_to_read() -> None:
-    """The skill starts one agent per capability and needs each one's model. It reads them
-    from here rather than repeating the table, which is the mistake that put the same mapping
-    in two places once already."""
+    """The skill starts its agents and needs each one's model. It reads them from here rather
+    than repeating the table, which is the mistake that put the same mapping in two places
+    once already. `pool` is the single model a worker-pool build uses, beside the per-capability
+    rows a tier-agent build reads."""
     import io
     import contextlib
 
@@ -811,7 +813,7 @@ def test_models_are_printed_for_the_skill_to_read() -> None:
         assert plan_orchestration._run_models() == 0
 
     printed = dict(line.split() for line in out.getvalue().splitlines())
-    assert printed == plan_orchestration.MODEL_BY_CAPABILITY
+    assert printed == {"pool": plan_orchestration.POOL_MODEL, **plan_orchestration.MODEL_BY_CAPABILITY}
 
 
 def test_every_printed_capability_can_be_an_agent_name() -> None:
@@ -819,3 +821,52 @@ def test_every_printed_capability_can_be_an_agent_name() -> None:
     in it would produce an agent nobody can address."""
     for capability in plan_orchestration.MODEL_BY_CAPABILITY:
         assert capability.isalnum(), capability
+
+
+_POOL_PLAN = _plan_text(
+    '["low", "medium", "high", "medium"]',
+    '["icon", "scaffold", "the page", "polish"]',
+    "[[], [], [0, 1], [2]]",
+)
+
+
+def test_a_pool_leaves_the_agent_to_the_orchestrator() -> None:
+    """With a pool no node names an agent: which worker runs it is decided when it starts,
+    from who is free, not when the plan is written."""
+    plan = plan_orchestration.parse_plan(_POOL_PLAN, worker_pool=3)
+    assert all(node["has_worker"] for node in plan["nodes"])
+    assert [node["agent"] for node in plan["nodes"]] == [None, None, None, None]
+    assert plan["settings"]["worker_pool"] == 3
+
+
+def test_every_node_in_a_pool_runs_on_the_one_model() -> None:
+    """The pool is one model, so the planner's difficulty no longer picks a cheaper one."""
+    plan = plan_orchestration.parse_plan(_POOL_PLAN, worker_pool=3)
+    assert {node["model"] for node in plan["nodes"]} == {plan_orchestration.POOL_MODEL}
+
+
+def test_the_pool_size_caps_how_many_nodes_run_at_once() -> None:
+    """A pool of two can have two nodes going, so a third ready node waits for a worker."""
+    plan = plan_orchestration.parse_plan(
+        _plan_text(
+            '["high", "high", "high", "high"]',
+            '["a", "b", "c", "d"]',
+            "[[], [], [], []]",
+        ),
+        worker_pool=2,
+    )
+    assert plan_orchestration.find_ready_nodes(plan, [], []) == [0, 1]
+    assert plan_orchestration.find_ready_nodes(plan, [], [0]) == [1]
+    assert plan_orchestration.find_ready_nodes(plan, [], [0, 1]) == []
+
+
+def test_without_a_pool_the_flows_own_cap_still_applies() -> None:
+    """Five nodes start at once with no pool, which is the cap the flow has always had."""
+    plan = plan_orchestration.parse_plan(
+        _plan_text(
+            '["high", "high", "high", "high", "high", "high"]',
+            '["a", "b", "c", "d", "e", "f"]',
+            "[[], [], [], [], [], []]",
+        )
+    )
+    assert plan_orchestration.find_ready_nodes(plan, [], []) == [0, 1, 2, 3, 4]
