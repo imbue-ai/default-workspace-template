@@ -223,12 +223,12 @@ after a failed create or destroy the spares wait five minutes. The spares are
 recorded in `data/.apps/chat/spare_chat.json` before their create starts, so a
 restart of the app keeps a ready spare and destroys one whose create it cut
 short. `GET /api/agents`, the plain mngr listing, does list the spares. A
-spare is the first process shed under memory pressure (`SPARE_AGENT`, the
-ceiling of `oom_priority`'s bands) until a chat takes it; one that dies is
-replaced after the same backoff. A secondary chat (a preview) keeps none of
-its own: it reads the live chat's `spare_chat.json` on every sweep, never
-writing it, so the live spares stay hidden there too and a spare the live chat
-hands over appears.
+spare sits in `oom_priority`'s ceiling band (`SPARE_AGENT`, shared with the
+browser's renderers) until a chat takes it, so memory pressure sheds it before
+any agent or agent subprocess; one that dies is replaced after the same
+backoff. A secondary chat (a preview) keeps none of its own: it reads the live
+chat's `spare_chat.json` on every sweep, never writing it, so the live spares
+stay hidden there too and a spare the live chat hands over appears.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's

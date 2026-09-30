@@ -103,8 +103,8 @@ def test_unrecognized_supervisord_program_falls_back_to_the_user_service_band() 
 
 def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
     # Program names that double as service keys resolve to their service band;
-    # the OOM machinery itself stays protected; the browser stays the single
-    # most-expendable thing, above even an agent's subprocesses.
+    # the OOM machinery itself stays protected; the browser sits at the ceiling
+    # (shared with a spare chat agent), above even an agent's subprocesses.
     for key in _BUILTIN_SERVICE_ORDER:
         assert bands.supervisord_program_band(key, {}) == bands.SERVICE_BANDS[key]
     assert bands.supervisord_program_band("earlyoom", {}) == bands.PROTECTED
