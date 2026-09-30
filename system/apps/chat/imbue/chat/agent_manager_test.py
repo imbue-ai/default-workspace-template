@@ -4954,8 +4954,11 @@ def _spare_manager(
     *,
     oom_score_adj_writer: Callable[[int, int], bool] = bands.set_oom_score_adj,
     agent_pid_resolver: Callable[[str], int | None] = lookup_pid_by_agent_id,
+    is_secondary: bool = False,
 ) -> tuple[AgentManager, SpareChatStore]:
-    """A manager that keeps ``pool_size`` spares, recorded in a file, with its agent list known and the sweep not running."""
+    """A manager that keeps ``pool_size`` spares, recorded in a file, with its agent list known and the sweep not running.
+
+    ``is_secondary`` builds a secondary chat instead, which only follows the spares the file records."""
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
@@ -4969,6 +4972,7 @@ def _spare_manager(
         spare_chat_pool_size=pool_size,
         oom_score_adj_writer=oom_score_adj_writer,
         agent_pid_resolver=agent_pid_resolver,
+        is_secondary=is_secondary,
     )
     manager.note_agent_list_known()
     return manager, spare_store
@@ -5570,9 +5574,6 @@ def test_a_secondary_chat_hides_the_live_spares_follows_their_changes_and_never_
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     account_id = read_index().accounts[0].id
     first_id, second_id = ChatId(f"agent-{uuid4().hex}"), ChatId(f"agent-{uuid4().hex}")
 
@@ -5584,17 +5585,9 @@ def test_a_secondary_chat_hides_the_live_spares_follows_their_changes_and_never_
             phase=SpareChatPhase.READY,
         )
 
-    live_store = SpareChatStore(path=tmp_path / "live" / "spare_chat.json")
-    live_store.write((live_spare(first_id),))
-    manager = AgentManager.build(
-        broadcaster,
-        mngr_binary=mngr_binary,
-        chat_files_root=tmp_path / "chats",
-        messenger=RecordingMngrMessenger(),
-        spare_chat_store=live_store,
-        is_secondary=True,
-    )
-    manager.note_agent_list_known()
+    # The live chat's record, which the secondary reads when it is built.
+    SpareChatStore(path=tmp_path / "spare_chat.json").write((live_spare(first_id),))
+    manager, live_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1, is_secondary=True)
     seed_agent_state(manager, first_id, name="Chat-7", labels={"display_name": "Chat 7"})
     seed_agent_state(manager, second_id, name="Chat-8", labels={"display_name": "Chat 8"})
     try:
