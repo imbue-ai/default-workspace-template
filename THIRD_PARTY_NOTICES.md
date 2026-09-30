@@ -31,4 +31,6 @@ editing this one -- a notice restated in someone else's words stops being the
 notice.
 
 The app icons are not Lucide's: every one is drawn for this workspace to the
-rules in `docs/system/app-icons.md`.
+rules in `docs/system/app-icons.md`, and the retro themes' pixel-art icons under
+`system/libs/workspace_ui/src/themes/icons/` were drawn for Imbue Studio with
+Retro Diffusion.
