@@ -240,9 +240,9 @@ def read_default_shortcuts_offered(state_directory: Path) -> dict[str, Any]:
 
 
 # The ``desktops.json`` a released shell reads: its version, and its keys at the top and per desktop.
-RELEASED_DESKTOPS_FILE_VERSION: Final[int] = 1
-RELEASED_DESKTOPS_FILE_KEYS: Final[frozenset[str]] = frozenset({"version", "desktops"})
-RELEASED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset(
+_RELEASED_DESKTOPS_FILE_VERSION: Final[int] = 1
+_RELEASED_DESKTOPS_FILE_KEYS: Final[frozenset[str]] = frozenset({"version", "desktops"})
+_RELEASED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset(
     {"id", "name", "color", "glyph", "wallpaper", "shortcuts", "windows"}
 )
 
@@ -251,9 +251,9 @@ def read_desktops_file_in_its_released_shape(state_directory: Path) -> tuple[Des
     """The desktops ``desktops.json`` holds, after checking it is the version and has exactly the keys a released
     shell reads."""
     raw = json.loads((state_directory / DESKTOPS_FILENAME).read_text())
-    assert set(raw) == RELEASED_DESKTOPS_FILE_KEYS and raw["version"] == RELEASED_DESKTOPS_FILE_VERSION
+    assert set(raw) == _RELEASED_DESKTOPS_FILE_KEYS and raw["version"] == _RELEASED_DESKTOPS_FILE_VERSION
     for desktop in raw["desktops"]:
-        assert set(desktop) == RELEASED_DESKTOP_KEYS
+        assert set(desktop) == _RELEASED_DESKTOP_KEYS
     return DesktopsDocument.model_validate(raw).desktops
 
 
