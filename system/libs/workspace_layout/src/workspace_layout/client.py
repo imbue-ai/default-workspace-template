@@ -106,7 +106,8 @@ def _exchange(request: urllib.request.Request, timeout_seconds: float) -> tuple[
         with _SHELL_OPENER.open(request, timeout=timeout_seconds) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as e:
-        return e.code, e.read()
+        with e:
+            return e.code, e.read()
 
 
 def request_shell(method: str, url: str, body: Mapping[str, Any] | None, timeout_seconds: float) -> ShellResponse:
