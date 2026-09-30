@@ -1449,8 +1449,9 @@ class AgentManager:
         (``is_primary=true``), and archived members of a chat; those keep their launch
         bands -- workers maximally expendable, the primary pinned -- so no UI activity
         moves their score. Spare agents are excluded too: they keep the ``SPARE_AGENT``
-        band ``ensure_spare_chat`` tags them with until a chat takes one. Remote agents are left in (they have no local pid, so the
-        prioritizer's pid lookup skips them harmlessly).
+        band ``ensure_spare_chat`` tags them with until a chat takes one. Remote agents
+        are left in (they have no local pid, so the prioritizer's pid lookup skips them
+        harmlessly).
         """
         with self._lock:
             return [
