@@ -97,6 +97,33 @@ in that app's folder and is named `<app>-<role>`.
   `host_env`) so tickets live alongside the rest of the workspace's data
   (covered by the restic host backup).
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every PR and push to `main`. The `test`
+job checks the lockfile, the mngr pin and the frontends on a bare runner. The
+Python suites run in the `test-offload` job, inside the workspace
+image on Modal through [offload](https://github.com/imbue-ai/offload): one
+config per pytest root at the repo root (`offload-modal.toml`,
+`offload-modal-chat.toml`, `offload-modal-system-interface.toml`). The
+checkpoint image is `system/Dockerfile` as shipped, plus a first boot
+(`default-workspace-template-seed`) and `system/scripts/offload_sandbox_init.sh`
+(the Fortress env.d unit and the offload binary); it rebuilds only when one of
+the config's build inputs changes, and every other commit rides it as a thin
+source diff followed by `system/scripts/offload_post_patch.sh`. Inside the
+image any test that skips fails the job
+(`system/libs/pytest_workspace_env`). Coverage for the two app suites is
+measured there and held to each app's floor on the runner.
+
+That job needs two things this repo cannot provide for itself, and skips
+without them: the repository variable `TEST_IN_WORKSPACE_IMAGE=true`
+(unset in a workspace repo made from the template, which then runs the
+Python suites on the bare runner in the `test` job, as fork PRs do), and the
+Modal token, read from Vault through the `dwt_ci_gh` role defined in
+`imbue-ai/vault` (`terraform/github_actions.tf`), which is bound to this
+repository and can read only `mngr/ci/MODAL_TOKEN_ID` and
+`mngr/ci/MODAL_TOKEN_SECRET`. offload records its image cache in git notes
+(`refs/notes/offload-images`), which is why the job has `contents: write`.
+
 ## Create templates
 
 - `worker` - For sub-agents created via the launch-task skill and the flows built on it (the crystallize / update / heal creation lifecycle, including the careful flow for a critical app). Includes code review. Nothing is installed into the worker's own `.agents/skills/`: a worker running a harden pass reads the generic worker contract from `.agents/shared/worker/SKILL.md`, which the checkout in its worktree already carries.

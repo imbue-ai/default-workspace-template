@@ -647,6 +647,7 @@ def test_client_state_reports_register_the_client_and_log_only_real_desktop_swit
         shell.broadcaster.unregister(client_queue)
 
 
+@pytest.mark.frontend
 def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
     """The placeholder derives a service origin, so it carries a copy of the rule.
 

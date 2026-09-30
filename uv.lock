@@ -38,6 +38,7 @@ members = [
     "mngr-cli-contract",
     "oom-priority",
     "pytest-executable-tmp",
+    "pytest-workspace-env",
     "share-gateway",
     "system-interface",
     "terminal-app",
@@ -655,6 +656,7 @@ dev = [
     { name = "pytest-executable-tmp" },
     { name = "pytest-playwright" },
     { name = "pytest-timeout" },
+    { name = "pytest-workspace-env" },
     { name = "ruff" },
     { name = "system-interface" },
     { name = "ty" },
@@ -696,6 +698,7 @@ dev = [
     { name = "pytest-executable-tmp", editable = "system/libs/pytest_executable_tmp" },
     { name = "pytest-playwright", specifier = ">=0.4" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "pytest-workspace-env", editable = "system/libs/pytest_workspace_env" },
     { name = "ruff", specifier = "~=0.12.8" },
     { name = "system-interface", editable = "system/apps/system_interface" },
     { name = "ty", specifier = "==0.0.24" },
@@ -915,6 +918,7 @@ dev = [
     { name = "pytest-executable-tmp" },
     { name = "pytest-playwright" },
     { name = "pytest-timeout" },
+    { name = "pytest-workspace-env" },
     { name = "pyyaml" },
     { name = "ruff" },
     { name = "tomlkit" },
@@ -951,6 +955,7 @@ dev = [
     { name = "pytest-executable-tmp", editable = "system/libs/pytest_executable_tmp" },
     { name = "pytest-playwright", specifier = ">=0.4" },
     { name = "pytest-timeout", specifier = ">=2.0" },
+    { name = "pytest-workspace-env", editable = "system/libs/pytest_workspace_env" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "ruff", specifier = ">=0.4" },
     { name = "tomlkit", specifier = ">=0.12" },
@@ -2785,6 +2790,17 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-workspace-env"
+version = "0.1.0"
+source = { editable = "system/libs/pytest_workspace_env" }
+dependencies = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pytest", specifier = ">=8.0" }]
+
+[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
@@ -3343,6 +3359,7 @@ dev = [
     { name = "pytest-executable-tmp" },
     { name = "pytest-playwright" },
     { name = "pytest-timeout" },
+    { name = "pytest-workspace-env" },
     { name = "ruff" },
     { name = "ty" },
 ]
@@ -3375,6 +3392,7 @@ dev = [
     { name = "pytest-executable-tmp", editable = "system/libs/pytest_executable_tmp" },
     { name = "pytest-playwright", specifier = ">=0.4" },
     { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "pytest-workspace-env", editable = "system/libs/pytest_workspace_env" },
     { name = "ruff", specifier = "~=0.12.8" },
     { name = "ty", specifier = "==0.0.24" },
 ]
