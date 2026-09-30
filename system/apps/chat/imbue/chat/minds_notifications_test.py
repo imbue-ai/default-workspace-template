@@ -1,5 +1,8 @@
 """The read call to the Imbue Studio app: its shape and headers, and that every failure is dropped quietly."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from pydantic import SecretStr
 
 from imbue.chat.latchkey_gateway import GatewayAccess
@@ -23,14 +26,25 @@ def _client(base_url: str, override: str | None, agent_by_chat: dict[str, str]) 
     )
 
 
-def test_mark_chat_read_posts_an_empty_body_as_the_chats_current_agent_with_the_gateway_headers() -> None:
-    gateway = RecordingGateway(status=200)
+@contextmanager
+def _served_client(
+    status: int, agent_by_chat: dict[str, str], override: str | None = None, base_url_suffix: str = ""
+) -> Iterator[tuple[RecordingGateway, MindsNotificationsClient]]:
+    """A client pointed at a served ``RecordingGateway`` answering ``status``; shut down on exit."""
+    gateway = RecordingGateway(status=status)
     with serve_app(gateway.application) as served:
-        client = _client(served.http_url + "/", "override-jwt-4410", {"agent-chat1": "agent-successor2"})
+        client = _client(served.http_url + base_url_suffix, override, agent_by_chat)
         try:
-            client.mark_chat_read(ChatId("agent-chat1")).result(timeout=_FUTURE_TIMEOUT_SECONDS)
+            yield gateway, client
         finally:
             client.shutdown()
+
+
+def test_mark_chat_read_posts_an_empty_body_as_the_chats_current_agent_with_the_gateway_headers() -> None:
+    with _served_client(
+        200, {"agent-chat1": "agent-successor2"}, override="override-jwt-4410", base_url_suffix="/"
+    ) as (gateway, client):
+        client.mark_chat_read(ChatId("agent-chat1")).result(timeout=_FUTURE_TIMEOUT_SECONDS)
 
     (received,) = gateway.received
     assert received.path == "/minds-api-proxy/api/v1/agents/agent-successor2/notifications/read"
@@ -40,27 +54,16 @@ def test_mark_chat_read_posts_an_empty_body_as_the_chats_current_agent_with_the_
 
 
 def test_mark_chat_read_sends_no_override_header_to_a_vps_gateway() -> None:
-    gateway = RecordingGateway(status=200)
-    with serve_app(gateway.application) as served:
-        client = _client(served.http_url, None, {"agent-chat1": "agent-chat1"})
-        try:
-            client.mark_chat_read(ChatId("agent-chat1")).result(timeout=_FUTURE_TIMEOUT_SECONDS)
-        finally:
-            client.shutdown()
+    with _served_client(200, {"agent-chat1": "agent-chat1"}) as (gateway, client):
+        client.mark_chat_read(ChatId("agent-chat1")).result(timeout=_FUTURE_TIMEOUT_SECONDS)
 
     (received,) = gateway.received
     assert "X-Latchkey-Gateway-Permissions-Override" not in received.headers
 
 
 def test_an_app_without_the_read_route_is_ignored() -> None:
-    gateway = RecordingGateway(status=404)
-    with serve_app(gateway.application) as served:
-        client = _client(served.http_url, None, {"agent-chat1": "agent-chat1"})
-        try:
-            future = client.mark_chat_read(ChatId("agent-chat1"))
-            assert future.result(timeout=_FUTURE_TIMEOUT_SECONDS) is None
-        finally:
-            client.shutdown()
+    with _served_client(404, {"agent-chat1": "agent-chat1"}) as (gateway, client):
+        assert client.mark_chat_read(ChatId("agent-chat1")).result(timeout=_FUTURE_TIMEOUT_SECONDS) is None
     assert len(gateway.received) == 1
 
 
@@ -73,14 +76,11 @@ def test_an_unreachable_gateway_is_ignored() -> None:
 
 
 def test_nothing_is_posted_for_a_chat_with_no_agent_or_without_a_gateway() -> None:
-    gateway = RecordingGateway(status=200)
-    with serve_app(gateway.application) as served:
-        client = _client(served.http_url, None, {})
-        without_gateway = MindsNotificationsClient(gateway=None, resolve_agent_id=lambda _chat_id: "agent-chat1")
-        try:
+    without_gateway = MindsNotificationsClient(gateway=None, resolve_agent_id=lambda _chat_id: "agent-chat1")
+    try:
+        with _served_client(200, {}) as (gateway, client):
             client.mark_chat_read(ChatId("agent-provisional")).result(timeout=_FUTURE_TIMEOUT_SECONDS)
             without_gateway.mark_chat_read(ChatId("agent-chat1")).result(timeout=_FUTURE_TIMEOUT_SECONDS)
-        finally:
-            client.shutdown()
-            without_gateway.shutdown()
+    finally:
+        without_gateway.shutdown()
     assert gateway.received == []
