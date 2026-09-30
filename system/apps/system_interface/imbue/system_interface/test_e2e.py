@@ -2109,7 +2109,9 @@ _FILES_ASSETS_DIRECTORY = Path(__file__).resolve().parents[3] / "files" / "asset
 _DUFS_BINARY = shutil.which("dufs")
 # dufs answers a client it takes for a script (curl and the like) with a bare "Not Found" instead of the assets'
 # ``404.html``, so a direct request says it is a browser.
-_BROWSER_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+)
 
 
 @contextlib.contextmanager
@@ -2193,9 +2195,9 @@ def test_the_file_viewer_opens_files_in_workspace_windows_and_raises_one_already
     with _running_e2e_server_with_file_viewer(tmp_path, root) as (server, _):
         _land(page, server)
         client_id = _client_id(page)
-        listing_id = _broadcast_op(server.base_url, "open", {"app": _FILES_APP_NAME, "path": "/", "client": client_id})[
-            "window_id"
-        ]
+        listing_id = _broadcast_op(
+            server.base_url, "open", {"app": _FILES_APP_NAME, "path": "/", "client": client_id}
+        )["window_id"]
         listing = _file_viewer_frame(page, listing_id)
 
         listing.get_by_role("link", name="notes", exact=True).click()
