@@ -1767,6 +1767,27 @@ append_system_prompt__extend = ["You were launched by another agent. List any qu
 #   mngr's agent list, answering 404 until then -- a window that a batch of
 #   workers created seconds apart runs into, and whose success answer means
 #   "delivered or queued" either way. mngr talks to the agent it just created.
+# Shared-folder worker: the same node worker, but running in a folder the orchestrator
+# already made and synced rather than a git worktree of its own. Used by a build run with
+# `parse --shared-worktree`, and by `--tier-agents`, where one agent per capability stays
+# alive across every node of that capability.
+#
+# Differences from `worktree_worker`, each following from the shared folder:
+# - `transfer = "none"`: mngr takes no worktree, and `create_worker.py launch --work-folder`
+#   points the agent at the folder the orchestrator prepared.
+# - No `uv sync --all-packages` in provisioning, and the SessionStart hooks skip it too
+#   (see .claude/settings.json): the orchestrator syncs that folder once, and a per-worker
+#   sync would only queue behind the other workers on one .venv.
+# - Nobody commits per node. There are no worker branches and nothing to merge, so two nodes
+#   writing one file overwrite rather than conflict -- which is the trade this mode makes,
+#   and why the planner's file ownership has to hold.
+[create_templates.shared_worker]
+transfer = "none"
+extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
+env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=0", "MNGR_AGENT_ROLE=shared_worker"]
+extra_provision_command__extend = ["bash .agents/skills/build-app/scripts/use_worker_instructions.sh"]
+append_system_prompt__extend = ["You are one of several workers an orchestrating agent runs in one shared folder, each building one node of a planned app build. You may be sent more than one node, one at a time; do each as it arrives and then wait for the next. Only create or edit the files your task assigns to you -- nothing merges here, so a file you touch that is not yours overwrites another worker's work rather than raising a conflict. Do not commit, and change no git state: no stash, no checkout, no rebase, no merge, no branch. Check your own piece with one command that proves what you wrote loads, and build nothing to check with: no test script, no serving the app. Do not run the full test suite, coverage, ratchets, /autofix or any review gate, even where CLAUDE.md asks for them: a single hardening pass runs all of those once the whole job is done. Report back exactly as your task file says, then stop and wait."]
+
 [create_templates.worktree_worker]
 transfer = "git-worktree"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]

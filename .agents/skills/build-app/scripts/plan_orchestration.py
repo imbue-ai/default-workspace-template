@@ -357,6 +357,8 @@ def parse_plan(
     *,
     reduce_access: bool = False,
     only_parallel_workers: bool = False,
+    shared_worktree: bool = False,
+    tier_agents: bool = False,
 ) -> dict[str, object]:
     """Turn the planner's output into the validated plan the orchestrator runs.
 
@@ -364,6 +366,17 @@ def parse_plan(
     dropped; without it, the planner's lists are carried through untouched. The
     two are worth comparing on a real build, so this is a switch rather than a
     decision baked into the script.
+
+    ``shared_worktree`` and ``tier_agents`` are two more, and they are what a build pays its
+    per-worker setup for. Off, each node gets its own git worktree and its own agent: the
+    worktree costs a `uv sync --all-packages` and the agent costs a cold start, both per node,
+    and the agent then reads its way to a task it has no other context for. On,
+    ``shared_worktree`` puts every worker in one folder the orchestrator syncs once, and
+    ``tier_agents`` keeps one agent per capability alive across all the nodes of that
+    capability, so the second node it does starts from what the first one learned.
+
+    They are independent. Shared folders with per-node agents still pay the cold starts;
+    tier agents in separate worktrees still pay the syncs.
 
     ``only_parallel_workers`` is the same kind of switch. Off, every non-interactive
     node gets a worker, which is what the flow has always done. On, a node that would
@@ -432,6 +445,15 @@ def parse_plan(
             # False means the orchestrator does this node itself: an interactive node
             # always, and under `only_parallel_workers` a node nothing runs beside.
             "has_worker": idx in with_worker,
+            # The agent that runs this node, named without the app prefix the orchestrator
+            # adds. With tier agents it is one long-lived agent per capability, so several
+            # nodes name the same one and the orchestrator messages it again instead of
+            # creating another; otherwise every node has an agent of its own.
+            "agent": (
+                None
+                if idx not in with_worker
+                else (capabilities[idx] if tier_agents else f"node-{idx}")
+            ),
             # Nodes sharing this number are consecutive work for the orchestrator, to be
             # done as one piece rather than one at a time. None when a worker does it.
             "own_group": group_by_node.get(idx),
@@ -439,7 +461,18 @@ def parse_plan(
         }
         for idx in range(node_count)
     ]
-    return {"nodes": nodes, "own_groups": own_groups}
+    return {
+        "nodes": nodes,
+        "own_groups": own_groups,
+        # What the orchestrator has to know to launch: read here rather than remembered, so a
+        # build resumed from plan.json alone still runs the way it was planned.
+        "settings": {
+            "shared_worktree": shared_worktree,
+            "tier_agents": tier_agents,
+            "only_parallel_workers": only_parallel_workers,
+            "reduce_access": reduce_access,
+        },
+    }
 
 
 def find_ready_nodes(
@@ -572,15 +605,30 @@ def _parse_node_index_list(text: str) -> list[int]:
         ) from None
 
 
-def _run_parse(run_dir: Path, reduce_access: bool, only_parallel_workers: bool) -> int:
+def _run_parse(
+    run_dir: Path,
+    reduce_access: bool,
+    only_parallel_workers: bool,
+    shared_worktree: bool,
+    tier_agents: bool,
+) -> int:
     plan = parse_plan(
         _read_run_file(run_dir / PLAN_MARKDOWN_FILE_NAME),
         reduce_access=reduce_access,
         only_parallel_workers=only_parallel_workers,
+        shared_worktree=shared_worktree,
+        tier_agents=tier_agents,
     )
     plan_json_path = run_dir / PLAN_JSON_FILE_NAME
     plan_json_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     print(f"plan_orchestration: wrote {len(plan['nodes'])} nodes to {plan_json_path}")
+    settings = plan["settings"]
+    assert isinstance(settings, dict)
+    folders = "one shared folder" if settings["shared_worktree"] else "a worktree per node"
+    agents = (
+        "one agent per capability" if settings["tier_agents"] else "an agent per node"
+    )
+    print(f"plan_orchestration: workers run in {folders}, with {agents}")
     nodes = plan["nodes"]
     assert isinstance(nodes, list)
     own_groups = plan["own_groups"]
@@ -662,6 +710,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parse_parser.add_argument(
+        "--shared-worktree",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Run every worker in one folder the orchestrator syncs once, instead of giving "
+            "each its own git worktree. Saves a `uv sync --all-packages` per worker; two "
+            "nodes writing one file then overwrite rather than conflict. Off by default."
+        ),
+    )
+    parse_parser.add_argument(
+        "--tier-agents",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Keep one agent per capability alive across all the nodes of that capability, "
+            "messaged with each in turn, instead of creating an agent per node. Saves a cold "
+            "start per node and carries what the agent learned into the next. Off by default."
+        ),
+    )
+    parse_parser.add_argument(
         "--only-parallel-workers",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -695,7 +763,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         match args.command:
             case "parse":
                 return _run_parse(
-                    args.run_dir, args.reduce_access, args.only_parallel_workers
+                    args.run_dir,
+                    args.reduce_access,
+                    args.only_parallel_workers,
+                    args.shared_worktree,
+                    args.tier_agents,
                 )
             case "ready":
                 return _run_ready(args.run_dir, args.done, args.running)

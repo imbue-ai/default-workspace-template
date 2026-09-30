@@ -9,11 +9,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ \"${MNGR_AGENT_ROLE:-}\" = \"worktree_worker\" ] || uv sync --all-packages"
+            "command": "case \"${MNGR_AGENT_ROLE:-}\" in worktree_worker|shared_worker) ;; *) uv sync --all-packages;; esac"
           },
           {
             "type": "command",
-            "command": "[ \"${MNGR_AGENT_ROLE:-}\" = \"worktree_worker\" ] || ./system/scripts/claude_update_plugin.sh"
+            "command": "case \"${MNGR_AGENT_ROLE:-}\" in worktree_worker|shared_worker) ;; *) ./system/scripts/claude_update_plugin.sh;; esac"
           },
           {
             "type": "command",

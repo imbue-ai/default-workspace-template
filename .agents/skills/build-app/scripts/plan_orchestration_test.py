@@ -739,3 +739,77 @@ def test_a_worker_after_an_orchestrator_node_needs_that_node_reported(
     )
     assert "Set up the package and the data loader." in task
     assert "### Node 0" in task
+
+
+_TIERED_PLAN = _plan_text(
+    '["low", "medium", "medium", "high", "interactive", "low"]',
+    '["icon", "scaffold", "data layer", "the page", "show the user", "polish"]',
+    "[[], [0], [0], [1, 2], [3], [3]]",
+)
+
+
+def test_by_default_every_node_has_an_agent_of_its_own() -> None:
+    """Off, the flags change nothing: this is the flow as it has always run."""
+    plan = plan_orchestration.parse_plan(_TIERED_PLAN)
+
+    assert [n["agent"] for n in plan["nodes"]] == [
+        "node-0", "node-1", "node-2", "node-3", None, "node-5"
+    ]
+    assert plan["settings"] == {
+        "shared_worktree": False,
+        "tier_agents": False,
+        "only_parallel_workers": False,
+        "reduce_access": False,
+    }
+
+
+def test_tier_agents_collapse_the_nodes_onto_one_agent_per_capability() -> None:
+    """Six nodes, three agents: the `low` agent does both low nodes, in the order the plan
+    puts them, so the second starts from what the first one learned."""
+    plan = plan_orchestration.parse_plan(_TIERED_PLAN, tier_agents=True)
+
+    assert [n["agent"] for n in plan["nodes"]] == [
+        "low", "medium", "medium", "high", None, "low"
+    ]
+    by_agent: dict[str, list[int]] = {}
+    for node in plan["nodes"]:
+        if node["agent"]:
+            by_agent.setdefault(node["agent"], []).append(node["index"])
+    assert by_agent == {"low": [0, 5], "medium": [1, 2], "high": [3]}
+
+
+def test_an_interactive_node_never_gets_an_agent() -> None:
+    """It is the orchestrator's own conversation, under either setting."""
+    for kwargs in ({}, {"tier_agents": True}, {"shared_worktree": True}):
+        plan = plan_orchestration.parse_plan(_TIERED_PLAN, **kwargs)
+        assert plan["nodes"][4]["agent"] is None, kwargs
+
+
+def test_the_settings_ride_along_in_the_plan() -> None:
+    """The orchestrator reads how to launch out of plan.json rather than remembering it, so a
+    build picked up from the file alone still runs the way it was planned."""
+    plan = plan_orchestration.parse_plan(
+        _TIERED_PLAN, shared_worktree=True, tier_agents=True
+    )
+
+    assert plan["settings"]["shared_worktree"] is True
+    assert plan["settings"]["tier_agents"] is True
+
+
+def test_the_two_switches_are_independent() -> None:
+    """Shared folders with per-node agents still pay the cold starts; tier agents in their own
+    worktrees still pay the syncs. Each is worth measuring on its own."""
+    shared_only = plan_orchestration.parse_plan(_TIERED_PLAN, shared_worktree=True)
+    tiers_only = plan_orchestration.parse_plan(_TIERED_PLAN, tier_agents=True)
+
+    assert [n["agent"] for n in shared_only["nodes"]][:2] == ["node-0", "node-1"]
+    assert [n["agent"] for n in tiers_only["nodes"]][:2] == ["low", "medium"]
+
+
+def test_tier_agents_still_take_the_model_of_their_capability() -> None:
+    """The agent is named for the capability, so its model is that capability's model."""
+    plan = plan_orchestration.parse_plan(_TIERED_PLAN, tier_agents=True)
+
+    for node in plan["nodes"]:
+        if node["agent"]:
+            assert node["model"] == plan_orchestration.MODEL_BY_CAPABILITY[node["capability"]]
