@@ -7,6 +7,7 @@ import signal
 import threading
 import time
 import tomllib
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from uuid import uuid4
 import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
+from oom_priority.registry import lookup_pid_by_agent_id
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import account_dir
@@ -4948,6 +4950,9 @@ def _spare_manager(
     tmp_path: Path,
     mngr_binary: str,
     pool_size: int,
+    *,
+    oom_score_adj_writer: Callable[[int, int], bool] = bands.set_oom_score_adj,
+    agent_pid_resolver: Callable[[str], int | None] = lookup_pid_by_agent_id,
 ) -> tuple[AgentManager, SpareChatStore]:
     """A manager that keeps ``pool_size`` spares, recorded in a file, with its agent list known and the sweep not running."""
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
@@ -4961,6 +4966,8 @@ def _spare_manager(
         messenger=RecordingMngrMessenger(),
         spare_chat_store=spare_store,
         spare_chat_pool_size=pool_size,
+        oom_score_adj_writer=oom_score_adj_writer,
+        agent_pid_resolver=agent_pid_resolver,
     )
     manager.note_agent_list_known()
     return manager, spare_store
@@ -5589,9 +5596,6 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
-    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     adj_writes: list[tuple[int, int]] = []
     pid_by_agent_id: dict[str, int] = {}
 
@@ -5599,17 +5603,15 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
         adj_writes.append((pid, adj))
         return True
 
-    manager = AgentManager.build(
+    manager, _ = _spare_manager(
         broadcaster,
-        mngr_binary=mngr_binary,
-        chat_files_root=tmp_path / "chats",
-        messenger=RecordingMngrMessenger(),
-        spare_chat_store=SpareChatStore(path=tmp_path / "spare_chat.json"),
-        spare_chat_pool_size=1,
+        monkeypatch,
+        tmp_path,
+        mngr_binary,
+        1,
         oom_score_adj_writer=record_adj_write,
         agent_pid_resolver=pid_by_agent_id.get,
     )
-    manager.note_agent_list_known()
     try:
         manager.ensure_spare_chat()
         (spare,) = _wait_for_ready_spares(manager, 1)
