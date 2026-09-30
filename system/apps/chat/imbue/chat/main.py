@@ -95,8 +95,9 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
             "Boot as a second chat beside the live one (a preview): follows the same agent "
             "observer and reads the live accounts, but reconciles no accounts, writes no memory "
             "scores, runs no automatic compaction, starts or resumes no switch, opens no windows, "
-            "reports no client activity to the shell, and registers nothing; point CHAT_DATA_DIR "
-            "at a scratch copy so its writes never land in the live data"
+            "reports no client activity to the shell, keeps no spare agents, and registers nothing; "
+            "point CHAT_DATA_DIR at a scratch copy so its writes never land in the live data, and "
+            "CHAT_STATE_DIR at the live chat's state dir by absolute path so it hides the live spares"
         ),
     )
     return parser.parse_args(argv)
