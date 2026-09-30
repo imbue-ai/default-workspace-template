@@ -4,6 +4,8 @@ every app whose row registered its type, over real loopback servers standing in 
 from pathlib import Path
 from typing import Any
 
+from flask import Flask
+from flask import jsonify
 from flask.testing import FlaskClient
 
 from imbue.system_interface.shell.testing import build_inventory
@@ -229,3 +231,29 @@ def test_a_sender_that_is_not_an_app_name_is_a_400(tmp_path: Path, broadcaster: 
     answer = _relay(client, {"type": _OPEN_FILE, "client_id": "c1", "payload": {"path": "/x"}, "sender": "Not An App"})
 
     assert answer.status_code == 400
+
+
+
+def test_an_app_that_refuses_with_a_json_detail_is_reported_in_its_own_words(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    refusing = Flask("refusing")
+    refusing.add_url_rule(
+        "/api/open-url",
+        view_func=lambda: (jsonify({"detail": "Chromium is not installed yet"}), 503),
+        methods=["POST"],
+    )
+    with serve_app(refusing) as refusing_app:
+        client = _relay_client(
+            tmp_path,
+            broadcaster,
+            registry_row_toml("browser", refusing_app.http_url, message_handlers=[("open:url", "/api/open-url")]),
+        )
+
+        relayed = _relay(client, {"type": "open:url", "client_id": "c1", "payload": {"url": "http://localhost:3000/"}})
+
+    assert relayed.status_code == 502
+    assert relayed.get_json()["deliveries"] == [
+        {"app": "browser", "status": 503, "detail": "Chromium is not installed yet"}
+    ]
+    assert relayed.get_json()["detail"] == "browser did not take it: Chromium is not installed yet"

@@ -148,11 +148,23 @@ def deliver_forwarded_message(forwarded: ForwardedMessage) -> MessageDelivery:
         logger.warning("Posted {} to {} slowly, in {:.1f}s", forwarded.body["type"], forwarded.app, elapsed)
     if response.is_success:
         return MessageDelivery(app=forwarded.app, status=response.status_code, detail="", is_delivered=True)
-    detail = response.text.strip()[:_REFUSAL_DETAIL_LIMIT] or f"answered {response.status_code}"
+    detail = _refusal_detail(response) or f"answered {response.status_code}"
     logger.warning(
         "Posted {} to {} and it answered {}: {}", forwarded.body["type"], forwarded.app, response.status_code, detail
     )
     return MessageDelivery(app=forwarded.app, status=response.status_code, detail=detail, is_delivered=False)
+
+
+def _refusal_detail(response: httpx.Response) -> str:
+    """Why an app refused a message, in its own words: the ``detail`` of a JSON answer (as a launch path's refusal
+    carries it), else the answer's text."""
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("detail"), str):
+        return body["detail"].strip()[:_REFUSAL_DETAIL_LIMIT]
+    return response.text.strip()[:_REFUSAL_DETAIL_LIMIT]
 
 
 @pure
