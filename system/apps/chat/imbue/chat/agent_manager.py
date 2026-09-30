@@ -2674,7 +2674,8 @@ class AgentManager:
         self._broadcast_chats_updated()
 
     def _start_session_sweep(self) -> None:
-        """Start the background sweep that connects tracked agents' live backends once they come up."""
+        """Start the background sweep that connects tracked agents' live backends once they come up and keeps
+        the spare agents for new chats (``ensure_spare_chat``)."""
         thread = threading.Thread(target=self._run_session_sweep, daemon=True, name="agent-session-sweep")
         self._session_sweep_thread = thread
         thread.start()
