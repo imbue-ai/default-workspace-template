@@ -34,9 +34,8 @@ import {
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { windowPageZIndex } from "../geometry/stacking";
-import { TASKBAR_ENTRY_ATTRIBUTE } from "../gestures/pointerGestures";
 import { windowPageUrl } from "../model/pageUrl";
-import type { AppRecord, Desktop, Placement, WindowRecord } from "../model/records";
+import type { AppRecord, Desktop, WindowRecord } from "../model/records";
 import { navigationsToFollow } from "../reducers/following";
 import type { PageReport } from "../reducers/following";
 import {

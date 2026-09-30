@@ -288,9 +288,7 @@ def _relief_layers() -> list[tuple[tuple[int, int, int], float]]:
     """Each edge of ``--desk-icon-relief`` as the colour it paints and the alpha it paints at."""
     token = re.search(r"--desk-icon-relief:\s*([^;]+);", _THEME_CSS.read_text())
     assert token is not None, "the shell's theme no longer defines --desk-icon-relief"
-    layers = [
-        ((int(r), int(g), int(b)), float(alpha)) for r, g, b, alpha in _RELIEF_LAYER.findall(token.group(1))
-    ]
+    layers = [((int(r), int(g), int(b)), float(alpha)) for r, g, b, alpha in _RELIEF_LAYER.findall(token.group(1))]
     assert layers, f"--desk-icon-relief paints no rgb() layer this test can read: {token.group(1)}"
     return layers
 
@@ -309,17 +307,23 @@ def _lightness(rgb: tuple[float, float, float]) -> float:
     return 116 * luminance ** (1 / 3) - 16 if luminance > 0.008856 else 903.3 * luminance
 
 
+def _composited(
+    source: tuple[int, int, int], alpha: float, tile: tuple[float, float, float]
+) -> tuple[float, float, float]:
+    """``source`` (0..255 channels) painted at ``alpha`` over an opaque tile colour."""
+    red, green, blue = (
+        alpha * (channel / 255) + (1 - alpha) * base for channel, base in zip(source, tile, strict=True)
+    )
+    return (red, green, blue)
+
+
 def test_the_icon_relief_reads_on_every_colour_in_the_palette() -> None:
     layers = _relief_layers()
     offenders = []
     for background in _palette_backgrounds():
-        tile = tuple(int(background[index : index + 2], 16) / 255 for index in (1, 3, 5))
-        best = max(
-            abs(_lightness(tuple(alpha * (c / 255) + (1 - alpha) * t for c, t in zip(source, tile))) - _lightness(tile))
-            for source, alpha in layers
-        )
+        red, green, blue = (int(background[index : index + 2], 16) / 255 for index in (1, 3, 5))
+        tile = (red, green, blue)
+        best = max(abs(_lightness(_composited(source, alpha, tile)) - _lightness(tile)) for source, alpha in layers)
         if best < _RELIEF_MIN_CONTRAST:
             offenders.append(f"{background}: best edge moves L* by {best:.1f}")
-    assert offenders == [], (
-        _RELIEF_RULE.rule_description + "\n" + "\n".join(f"  - {line}" for line in offenders)
-    )
+    assert offenders == [], _RELIEF_RULE.rule_description + "\n" + "\n".join(f"  - {line}" for line in offenders)

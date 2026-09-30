@@ -113,11 +113,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
             (isOpen ? "ring-2 ring-accent" : ""),
         },
         [
-          m(
-            "span",
-            { class: "flex h-8.5 shrink-0 items-center text-faint" },
-            m.trust(glyph("plus", FIELD_MARK_SIZE)),
-          ),
+          m("span", { class: "flex h-8.5 shrink-0 items-center text-faint" }, m.trust(glyph("plus", FIELD_MARK_SIZE))),
           m("textarea", {
             rows: 1,
             "aria-label": LAUNCHER_PLACEHOLDER,

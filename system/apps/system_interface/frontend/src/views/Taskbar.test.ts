@@ -131,12 +131,15 @@ describe("Taskbar", () => {
     expect(entries.map((entry) => entry.querySelector(".opacity-70") !== null)).toEqual([true, false]);
   });
 
-  it("writes no text on an entry, naming it by its title in a tooltip that goes up above and at once", () => {
+  it("writes each window's title on its entry, with the whole of it in a bubble above", () => {
     const taskbar = render();
-    expect(taskbar.querySelectorAll(".taskbar-entry-title")).toHaveLength(0);
     const entries = [...taskbar.querySelectorAll("[data-taskbar-entry]")];
     expect(entries).toHaveLength(3);
-    expect(entries.map((entry) => entry.textContent)).toEqual(["", "", ""]);
+    expect(entries.map((entry) => entry.querySelector(".taskbar-entry-title")?.textContent)).toEqual([
+      "Plan",
+      "Docs",
+      "Docs",
+    ]);
     expect(entries.map((entry) => entry.getAttribute("aria-label"))).toEqual(["Plan", "Docs", "Docs"]);
     expect(entries.map((entry) => entry.getAttribute("data-hover-tooltip"))).toEqual(["Plan", "Docs", "Docs"]);
     expect(entries.map((entry) => entry.getAttribute("data-hover-tooltip-placement"))).toEqual([
@@ -144,11 +147,8 @@ describe("Taskbar", () => {
       "above",
       "above",
     ]);
-    expect(entries.map((entry) => entry.getAttribute("data-hover-tooltip-delay"))).toEqual([
-      "instant",
-      "instant",
-      "instant",
-    ]);
+    // The entry names itself, so the bubble is an aside and waits out the shared hover pause.
+    expect(entries.map((entry) => entry.getAttribute("data-hover-tooltip-delay"))).toEqual([null, null, null]);
   });
 
   it("draws the avatar in place of the icon for an avatar-style entry, wearing the mood", () => {
@@ -174,25 +174,30 @@ describe("Taskbar", () => {
     expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40, expect.any(Element));
   });
 
-  it("carries the launcher field and the Desktops widget with a glyph per desktop, and nothing else in the tray while nobody is recorded", () => {
+  it("carries the launcher field and the parked Desktops widget, and nothing else in the tray while nobody is recorded", () => {
     const onSwitchDesktop = vi.fn();
+    const onOpenDesktopsMenu = vi.fn();
     const taskbar = render({
       tray: {
         desktops: [desktopRecord("home"), desktopRecord("work")],
         activeDesktopId: "home",
         isDesktopsMenuOpen: false,
         onSwitchDesktop,
-        onOpenDesktopsMenu: vi.fn(),
+        onOpenDesktopsMenu,
         onDesktopContextMenu: vi.fn(),
       },
     });
     expect(taskbar.querySelector("[data-launcher-field]")).not.toBeNull();
-    const switches = [...taskbar.querySelectorAll("[data-desktop-switch]")];
-    expect(switches.map((element) => element.getAttribute("data-desktop-switch"))).toEqual(["home", "work"]);
-    expect(switches.map((element) => element.getAttribute("data-active"))).toEqual(["true", "false"]);
-    (switches[1] as HTMLElement).click();
-    expect(onSwitchDesktop).toHaveBeenCalledWith("work");
-    expect(taskbar.querySelector('[data-tray-widget="desktops"]')).not.toBeNull();
+    // Parked: one button standing for the desktops, with no glyph per desktop behind it and nothing
+    // happening when it is pressed. The switching it used to do is still there to be wired back up.
+    const widget = taskbar.querySelector('[data-tray-widget="desktops"]') as HTMLElement;
+    expect(widget).not.toBeNull();
+    expect(widget.querySelectorAll("[data-desktop-switch]")).toHaveLength(0);
+    const buttons = [...widget.querySelectorAll("button")];
+    expect(buttons).toHaveLength(1);
+    (buttons[0] as HTMLElement).click();
+    expect(onSwitchDesktop).not.toHaveBeenCalled();
+    expect(onOpenDesktopsMenu).not.toHaveBeenCalled();
     expect(taskbar.querySelector("[data-system-tray]")?.children).toHaveLength(1);
   });
 

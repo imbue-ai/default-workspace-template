@@ -283,6 +283,30 @@ def _navigate_chat_window(server: RunningWorkspace, client_id: str, path: str) -
     assert navigated == 200
 
 
+def _create_desktop(server: RunningWorkspace, name: str) -> str:
+    """Create a desktop over the shell's API, as the Desktops widget's menu did before it was parked; its id."""
+    request = urllib.request.Request(
+        f"{server.shell_url}/api/desktops",
+        data=json.dumps({"name": name, "color": "#12B5A5", "glyph": 4}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return str(json.loads(response.read())["id"])
+
+
+def _seat_client_on_desktop(server: RunningWorkspace, client_id: str, desktop_id: str) -> None:
+    """Move a client to a desktop, as a click on the widget's glyph did before it was parked: the ``load`` op is
+    the other way in, and it reaches the client the same way, over the socket."""
+    body = {"op": "load", "args": {"desktop": desktop_id, "client": client_id}, "requester": None}
+    wait_for(
+        lambda: _post_op(server, body) == 200,
+        timeout=15.0,
+        poll_interval=0.2,
+        error_message=f"the load op never seated the client on desktop {desktop_id}",
+    )
+
+
 def _open_fixture_chat_by_op(server: RunningWorkspace, client_id: str) -> None:
     """Open the chat root on the fixture chat on the client's active desktop with the desktop ``open`` op, as an
     agent does, whatever other desktops show. Retried until the shell has registered the client."""
@@ -665,21 +689,21 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
     Windows belong to a desktop: opening the chat on a second desktop (through the agent's open
     op) is a window of its own there, and switching back shows the first desktop's window, whose
     page was held hidden.
+
+    The Desktops widget is parked (DesktopsWidget.ts), so the desktop and the switches come in over
+    the shell's API and the ``load`` op rather than off the tray.
     """
     with _running_e2e_server(tmp_path) as server:
         _open_fixture_chat(page, server)
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         home_window = _the_chat_window(server)["id"]
 
-        page.locator("[data-desktops-menu]").click()
-        expect(page.locator(".desktops-menu")).to_be_visible(timeout=5000)
-        page.locator('[data-menu-row="new-desktop"]').click()
-        wait_for(lambda: len(_desktops(server)) == 2, timeout=10.0, poll_interval=0.1)
-        (created,) = [desktop["id"] for desktop in _desktops(server) if desktop["id"] != _HOME_DESKTOP_ID]
+        client_id = _client_id(page)
+        created = _create_desktop(server, "Research")
+        assert [desktop["id"] for desktop in _desktops(server)] == [_HOME_DESKTOP_ID, created]
+        _seat_client_on_desktop(server, client_id, created)
         expect(page.locator(f'[data-desktop-id="{created}"]')).to_be_visible(timeout=15000)
         expect(_taskbar_entry(page, home_window)).to_have_count(0)
-
-        client_id = _client_id(page)
         _wait_for_client_on_desktop(server, client_id, created)
         _open_fixture_chat_by_op(server, client_id)
         wait_for(lambda: len(_chat_windows(server, created)) == 1, timeout=15.0, poll_interval=0.1)
@@ -687,7 +711,7 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         assert [window["id"] for window in _chat_windows(server)] == [home_window]
 
-        page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]').click()
+        _seat_client_on_desktop(server, client_id, _HOME_DESKTOP_ID)
         expect(_taskbar_entry(page, home_window)).to_be_visible(timeout=15000)
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         expect(_chat(page).locator(".message-list-empty")).to_have_count(0)

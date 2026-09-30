@@ -255,7 +255,7 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
         "files": [
             {
                 "id": "open",
-                "label": "Open Files",
+                "label": "Files",
                 "path": "/",
                 "method": "GET",
                 "params": [],

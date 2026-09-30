@@ -114,7 +114,7 @@ _CELL_WIDTH = 96
 _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
-# --desk-touch-target under [data-touch], which a taskbar entry's tile takes there.
+# --desk-touch-target under [data-touch], which a taskbar entry takes there.
 _TOUCH_TARGET = 44
 _GEOMETRY_TOLERANCE_PX = 4
 
@@ -613,9 +613,16 @@ def _wait_for_own_window_path(base_url: str, client_id: str, window_id: str, pat
     )
 
 
-def _open_desktops_menu(page: Page) -> None:
-    page.locator("[data-desktops-menu]").click()
-    expect(page.locator(".desktops-menu")).to_be_visible(timeout=5000)
+def _create_desktop(base_url: str, name: str) -> dict[str, Any]:
+    """Create a desktop, as the Desktops widget's menu did before it was parked; answers the created record."""
+    return dict(_post_json(f"{base_url}/api/desktops", {"name": name, "color": "#12B5A5", "glyph": 4}))
+
+
+def _seat_client_on_desktop(base_url: str, client_id: str, desktop_id: str) -> None:
+    """Move a client to a desktop, as a click on the widget's glyph did before it was parked: the ``load`` op is
+    the other way in, and it reaches the client the same way, over the socket."""
+    answer = _broadcast_op(base_url, "load", {"desktop": desktop_id, "client": client_id})
+    assert answer["desktop_id"] == desktop_id, answer
 
 
 def _open_entry_menu(page: Page, entry: Locator) -> Locator:
@@ -655,7 +662,7 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     e2e_server: E2EServer, page: Page
 ) -> None:
     """A fresh browser lands on the home desktop over the bundled wallpaper: the seeded shortcut sits in the first
-    cell, nothing is open, the taskbar carries the launcher field and the Desktops tray widget, and the shell soon
+    cell, nothing is open, the taskbar carries the launcher field and the parked Desktops widget, and the shell soon
     knows the client with home as its active desktop."""
     _land(page, e2e_server)
     expect(page).to_have_title("System Interface")
@@ -664,7 +671,8 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     expect(shortcut.locator(".shortcut-label")).to_have_text(_STUB_APP_DISPLAY_NAME)
     expect(_shown_windows(page)).to_have_count(0)
     expect(page.locator("[data-taskbar] [data-launcher-field]")).to_be_visible()
-    expect(page.locator('[data-tray-widget="desktops"] [data-desktop-switch]')).to_have_count(1)
+    expect(page.locator('[data-tray-widget="desktops"] [data-desktops-menu]')).to_have_count(1)
+    expect(page.locator("[data-desktop-switch]")).to_have_count(0)
     expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible()
     # The wallpaper is the app layout's, so it spans the taskbar too; the backdrop is clear over it.
     assert (
@@ -1344,8 +1352,7 @@ def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tm
 
         page.mouse.up()
         wait_for(
-            lambda: _shortcut_cells(server.base_url)
-            == {_STUB_SHORTCUT_KEY: (1, 2), _SECOND_SHORTCUT_KEY: (2, 2)},
+            lambda: _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (1, 2), _SECOND_SHORTCUT_KEY: (2, 2)},
             timeout=15.0,
             poll_interval=0.1,
             error_message="the drop did not keep the room that was made for it",
@@ -1382,59 +1389,35 @@ def test_shortcut_menu_changes_mode_and_removes(e2e_server: E2EServer, page: Pag
 
 
 @pytest.mark.timeout(90, func_only=False)
-def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: E2EServer, page: Page) -> None:
-    """The Desktops widget's menu creates a desktop (the client switches to it, with the seeded shortcut), its
-    settings dialog renames it, the widget switches back and forth (each desktop keeps its own windows), and the
-    delete confirmation removes it, moving the client home."""
+def test_a_client_seated_on_another_desktop_sees_its_windows_and_the_way_back(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """Each desktop keeps its own windows: a client seated on a desktop created beside home finds the seeded
+    shortcut and none of home's windows, and coming back shows home's window where it was.
+
+    The Desktops widget is parked (DesktopsWidget.ts), so there is no way in the chrome to create a desktop or
+    to switch between them; what the widget used to drive is driven here the other way, over the API and the
+    ``load`` op. The create, rename and delete themselves are covered at the API in shell/routes_test.py.
+    """
     _land(page, e2e_server)
     home_window = _open_via_shortcut(page, e2e_server)
+    client_id = _client_id(page)
 
-    _open_desktops_menu(page)
-    page.locator('[data-menu-row="new-desktop"]').click()
-    wait_for(
-        lambda: len(_desktops(e2e_server.base_url)) == 2,
-        timeout=10.0,
-        poll_interval=0.1,
-        error_message="no second desktop was created",
-    )
-    (created,) = [desktop for desktop in _desktops(e2e_server.base_url) if desktop["id"] != _HOME_DESKTOP_ID]
+    created = _create_desktop(e2e_server.base_url, "Research")
+    assert [desktop["id"] for desktop in _desktops(e2e_server.base_url)] == [_HOME_DESKTOP_ID, created["id"]]
+    _seat_client_on_desktop(e2e_server.base_url, client_id, created["id"])
     expect(page.locator(f'[data-desktop-id="{created["id"]}"]')).to_be_visible(timeout=15000)
-    expect(page.locator(f'[data-desktop-switch="{created["id"]}"]')).to_have_attribute("data-active", "true")
     expect(page.locator(f'[data-desktop-id="{created["id"]}"] [data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible()
     expect(_taskbar_entry(page, home_window)).to_have_count(0)
 
-    _open_desktops_menu(page)
-    page.locator('[data-menu-row="settings"]').click()
-    dialog = page.locator(f'[data-desktop-settings="{created["id"]}"]')
-    expect(dialog).to_be_visible(timeout=5000)
-    dialog.locator('input[placeholder="desktop name"]').fill("Research")
-    dialog.locator(".desktop-settings-save").click()
-    expect(dialog).to_be_hidden(timeout=5000)
-    wait_for(
-        lambda: _desktop(e2e_server.base_url, created["id"])["name"] == "Research",
-        timeout=10.0,
-        poll_interval=0.1,
-        error_message="the rename never landed",
-    )
-
-    page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]').click()
+    _seat_client_on_desktop(e2e_server.base_url, client_id, _HOME_DESKTOP_ID)
     expect(_taskbar_entry(page, home_window)).to_be_visible(timeout=15000)
     expect(_window(page, home_window)).to_be_visible()
-    page.locator(f'[data-desktop-switch="{created["id"]}"]').click()
-    expect(_taskbar_entry(page, home_window)).to_have_count(0, timeout=15000)
 
-    _open_desktops_menu(page)
-    page.locator('[data-menu-row="delete"]').click()
-    expect(dialog).to_be_visible(timeout=5000)
-    dialog.locator(".desktop-settings-confirm-delete").click()
-    wait_for(
-        lambda: [desktop["id"] for desktop in _desktops(e2e_server.base_url)] == [_HOME_DESKTOP_ID],
-        timeout=10.0,
-        poll_interval=0.1,
-        error_message="the desktop was never deleted",
-    )
-    expect(page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]')).to_have_attribute("data-active", "true")
-    expect(_window(page, home_window)).to_be_visible(timeout=15000)
+    _seat_client_on_desktop(e2e_server.base_url, client_id, created["id"])
+    expect(_taskbar_entry(page, home_window)).to_have_count(0, timeout=15000)
+    assert [window["id"] for window in _windows(e2e_server.base_url)] == [home_window]
+    assert _windows(e2e_server.base_url, created["id"]) == []
 
 
 # Pinned windows (pinned-taskbar-entries plan sections 3.2, 4.1, 4.3, 4.4)
@@ -1525,16 +1508,10 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
         assert "minimize" in refused.value.read().decode()
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
 
-        # A new desktop is born with its own pinned window, and an open at the home path finds it.
-        _open_desktops_menu(page)
-        page.locator('[data-menu-row="new-desktop"]').click()
-        wait_for(
-            lambda: len(_desktops(server.base_url)) == 2,
-            timeout=10.0,
-            poll_interval=0.1,
-            error_message="no second desktop was created",
-        )
-        (created,) = [desktop for desktop in _desktops(server.base_url) if desktop["id"] != _HOME_DESKTOP_ID]
+        # A new desktop is born with its own pinned window, and an open at the home path finds it. The
+        # client is seated there, as the widget's own create used to seat it, so its entry is in this bar.
+        created = _create_desktop(server.base_url, "Research")
+        _seat_client_on_desktop(server.base_url, client_id, created["id"])
         born = _pinned_window(server.base_url, created["id"])
         assert born["id"] != pinned["id"]
         expect(_taskbar_entry(page, born["id"])).to_have_attribute("data-pinned", "true", timeout=15000)
@@ -1886,12 +1863,14 @@ _MOBILE_CONTEXT_ARGS: dict[str, Any] = {
 
 
 @pytest.mark.timeout(90, func_only=False)
-def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server: E2EServer, page: Page) -> None:
+def test_phone_shows_every_window_maximized_with_finger_sized_taskbar_entries(
+    e2e_server: E2EServer, page: Page
+) -> None:
     """On a phone the shell is compact and touch: a tap on the shortcut opens the window, every window fills the
     backdrop with no resize edges or maximize controls, the taskbar's entries grow to the finger's touch target
-    (they are bare icon tiles on every client, and this is the client where that size has to be reachable), the
-    launcher field is a button that opens the overlay, and the stored placement is the client's own (still a
-    normal frame, since compactness is how this client renders, not what it saves)."""
+    (this is the client where an entry has to be reachable by thumb), the launcher field is a button that opens
+    the overlay, and the stored placement is the client's own (still a normal frame, since compactness is how
+    this client renders, not what it saves)."""
     with _second_client(page, e2e_server, **_MOBILE_CONTEXT_ARGS) as phone_page:
         expect(phone_page.locator("html")).to_have_attribute("data-compact", "")
         expect(phone_page.locator("html")).to_have_attribute("data-touch", "")
@@ -1905,10 +1884,13 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         backdrop = _box(phone_page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
         _assert_same_box(_box(window), backdrop, "phone window")
         expect(_taskbar_entry(phone_page, window_id)).to_be_visible()
-        # A square tile at the touch target: --desk-taskbar-entry-size takes --desk-touch-target here.
+        # As tall as the finger's target, with the window's name on it: --desk-taskbar-entry-size takes
+        # --desk-touch-target here, and the chip is the whole of the target rather than a tile inside one.
         entry_box = _box(_taskbar_entry(phone_page, window_id))
-        assert abs(entry_box["width"] - entry_box["height"]) <= 1, entry_box
         assert entry_box["height"] >= _TOUCH_TARGET - 1, entry_box
+        expect(_taskbar_entry(phone_page, window_id).locator(".taskbar-entry-title")).to_have_text(
+            f"Stub {_STUB_LAUNCH_PATH}"
+        )
         assert _placements(e2e_server.base_url, _client_id(phone_page))[window_id]["state"] == "NORMAL"
         frame = _page_frame(phone_page, window_id)
         assert frame.url == f"{e2e_server.stub_url}{_STUB_LAUNCH_PATH}"
@@ -1990,7 +1972,6 @@ def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_se
         # The copy is hers to arrange: it starts minimized in her taskbar, and Home's window is untouched.
         expect(_taskbar_entry(visitor, copied["id"])).to_be_visible(timeout=15000)
         assert [window["id"] for window in _windows(e2e_server.base_url)] == [home_window]
-        expect(page.locator('[data-desktop-switch="alice"]')).to_be_visible(timeout=15000)
         expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)
 
         with _visiting_client(page, e2e_server, "user-alice", "alice", "alice"):

@@ -188,9 +188,7 @@ def effective_launch_paths(row: RegistryRow) -> tuple[RegistryLaunchPath, ...]:
         return row.launch_paths
     display = str(row.display_name) if row.display_name is not None else str(row.name)
     return (
-        RegistryLaunchPath(
-            id=OPEN_LAUNCH_PATH_ID, label=NonEmptyStr(display), path=OPEN_LAUNCH_PATH_VALUE, params=()
-        ),
+        RegistryLaunchPath(id=OPEN_LAUNCH_PATH_ID, label=NonEmptyStr(display), path=OPEN_LAUNCH_PATH_VALUE, params=()),
     )
 
 
