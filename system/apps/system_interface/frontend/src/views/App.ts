@@ -48,6 +48,7 @@ import { nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
 import { PINNED_ENTRY_ATTRIBUTE, SHORTCUT_ATTRIBUTE } from "../gestures/pointerGestures";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
+import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
@@ -308,8 +309,16 @@ export function App(): m.Component<AppAttrs> {
    *  in the DOM), and place the pages now: when every load had already landed no further redraw follows. */
   function startPagesLayer(current: DesktopStore, host: HTMLElement, attrs: AppAttrs): void {
     pages = new LivePagesLayer(host, current, { host: attrs.host, protocol: attrs.protocol });
+    // Before the first reconcile: under the desktop's policy a phone's first pass would create a page for every
+    // window its layout shows, only for the next pass to destroy them.
+    pages.setMountPolicy(mountPolicyOf(current));
     pages.start();
     pages.reconcile();
+  }
+
+  /** Which pages the layout mounts: the phone's shown page and the pages it keeps, else every page. */
+  function mountPolicyOf(current: DesktopStore): MountPolicy {
+    return current.isPhoneLayout() ? phoneMountPolicy(current) : { kind: "all" };
   }
 
   /** The window a transition belongs to, else null: the chrome's root is the only element whose
@@ -921,7 +930,7 @@ export function App(): m.Component<AppAttrs> {
       const windowToPaint = movingWindowId ?? draggedWindowId;
       if (store !== null && windowToPaint !== null) paintWindow(store, windowToPaint);
       draggedWindowId = movingWindowId;
-      pages?.setMountPolicy(store?.isPhoneLayout() === true ? phoneMountPolicy(store) : { kind: "all" });
+      if (store !== null) pages?.setMountPolicy(mountPolicyOf(store));
       pages?.reconcile();
     },
     onremove() {

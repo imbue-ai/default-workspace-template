@@ -704,3 +704,19 @@ describe("the desktop's wallpaper", () => {
     expect(layoutStyle()).toContain("var(--desk-default-wallpaper)");
   });
 });
+
+describe("the switch to the phone layout", () => {
+  it("creates no page for a window the phone does not show", () => {
+    // win-1 is shown on the desktop; the phone lands on its home grid, where no window's page lives.
+    const createElement = vi.spyOn(document, "createElement");
+    try {
+      store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+      m.redraw.sync();
+      expect(document.querySelector("[data-phone-layout]")).not.toBeNull();
+      expect(store.getState().phone.shown).toEqual({ kind: "home" });
+      expect(createElement.mock.calls.filter(([tag]) => tag === "iframe")).toEqual([]);
+    } finally {
+      createElement.mockRestore();
+    }
+  });
+});
