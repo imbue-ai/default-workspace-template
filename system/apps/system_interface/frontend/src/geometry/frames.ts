@@ -153,8 +153,7 @@ export function frameFromPixels(rect: PixelRect, backdrop: PixelSize): Frame {
 }
 
 /** A frame in fractions of the whole viewport, as the embedding chrome measures a drop back onto the desktop,
- *  as a frame in fractions of the backdrop, which sits at ``backdrop`` within the viewport. Read as backdrop
- *  fractions unmapped, the frame would lose the taskbar's share of its height on every return. */
+ *  as a frame in fractions of the backdrop, which sits at ``backdrop`` within the viewport. */
 export function frameFromViewportFractions(frame: Frame, viewport: PixelSize, backdrop: PixelRect): Frame {
   return frameFromPixels(
     {
