@@ -97,6 +97,16 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 - `windows` is in opening order; ids are unique across every desktop; `path` and `title` obey section 1; `is_pinned` (default `false`) marks the app's pinned window, and `scope` (default `linked`) is `linked` or `independent` (pinned-taskbar-entries plan section 3.2). An independent window's `path` stays its home path.
 - A file whose `version` is not 1, or that fails validation, is logged and treated as absent: the shell then creates the default desktop. The old `projects.json` is never read. A desktop that still carries the retired `sharing` key is read with the key dropped, and so is a window that still carries the retired `is_settling` key.
 
+### 4.1a `default_shortcuts_offered.json`
+
+`{"version": 1, "apps": ["browser", "chat", "files", "getting-started", "terminal"]}`: every app whose default shortcut the shell has offered (plan section 3.2), names sorted.
+
+- A desktop's creation (the default desktop's seeding, `POST /api/desktops`, a visiting user's desktop) adds the apps whose default shortcut it was made with. The reconcile that runs on every read of the desktops and after every change of the registry's rows adds each app whose default shortcut it has just offered to every desktop.
+- A listed app is not offered again, so a default shortcut the user removed stays removed, and an app that deregisters stays listed.
+- A desktop created while no other desktop stands, such as the default desktop seeded over a `desktops.json` read as absent (section 4.1), starts the file over: it then lists only the apps whose default shortcut that desktop was made with.
+- A missing file, or one whose `version` is not 1 or that fails validation (logged), reads as listing every app with a shortcut on any desktop, and the next reconcile writes it; with no `desktops.json` either, the default desktop's seeding writes it.
+- `desktops.json` carries none of it.
+
 ### 4.2 `placements/<desktop_id>/<client_id>.json`
 
 ```json
@@ -339,6 +349,7 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 - **Un-snap**: a drag of a snapped or maximized window beyond the un-snap distance makes it `NORMAL` at its kept frame's width and height, positioned so the pointer sits at the same horizontal fraction of the title bar it was pressed at, then clamped.
 - **Drag threshold**: a press becomes a drag after the drag threshold; below it, it is a click.
 - **Press focus** (fixed): a press on a handle (a title bar, a resize edge, a shortcut, an entry) takes the document's focus back from any other window's page that holds it, as the browser would have on a press whose default the gesture source did not prevent; the pressed window's own page keeps it. A page left holding the document's focus would be raised again on every return of the embedder window's focus (section 7, `shell:focused`), over the window the user chose.
+- **Focus follows the focused window** (fixed): whenever the focused window changes, by any route (a press on a lower window's content, an agent's focus, a menu, a window a page opens), the document's focus is taken off every other window's page, for the reason Press focus gives. Only the focused window's page ever keeps it, so an agent opening or focusing a window takes the keyboard from the page the user was typing in.
 - **Gestured window on top** (fixed): while a move or resize is in progress, a raise of any other window is dropped, whatever asks for it (a page's focus report, a notification); the gesture's end raises its own window again.
 - **Grid**: origin at the inset from the backdrop's top-left; `columns = max(1, floor((backdrop.width - inset) / cell.width))`, `rows = max(1, floor((backdrop.height - inset) / cell.height))`.
 - **Nearest free cell** (fixed): among free cells, the one at the least Euclidean distance in cell units from the clamped target cell, ties by lower column then lower row.

@@ -135,6 +135,14 @@ function buildRows(
             chatId,
           }),
       });
+      for (const statusEvent of section.trailing_status) {
+        rows.push({
+          key: statusEvent.event_id,
+          estimate: ESTIMATED_USER_HEIGHT_PX,
+          anchorEventId: statusEvent.event_id,
+          render: () => renderUserMessage(statusEvent) as m.Vnode,
+        });
+      }
       continue;
     }
 
@@ -203,7 +211,7 @@ function buildRows(
               secretNotesByRequestId,
             ),
         });
-      } else if (item.kind === "chip") {
+      } else if (item.kind === "chip" || item.kind === "status") {
         const chipEvent = item.event;
         if (!isHiddenUserMessage(chipEvent)) {
           rows.push({
@@ -247,6 +255,14 @@ function buildRows(
         estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
         anchorEventId: event.event_id,
         render: () => renderAssistantMessage(event, toolResults, chatId),
+      });
+    }
+    for (const statusEvent of section.trailing_status) {
+      rows.push({
+        key: statusEvent.event_id,
+        estimate: ESTIMATED_USER_HEIGHT_PX,
+        anchorEventId: statusEvent.event_id,
+        render: () => renderUserMessage(statusEvent) as m.Vnode,
       });
     }
   }
