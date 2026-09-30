@@ -66,7 +66,8 @@ names everything below.
 
 | Thing | Value |
 |---|---|
-| Run folder (plan, tasks, reports) | `data/.tasks/build-app/$APP/` (call it `$RUN`) |
+| Run folder (plan, tasks, reports) | `$PWD/data/.tasks/build-app/$APP/` (call it `$RUN`) |
+| | Keep it **absolute**: a worker resolves the report path out of its task file while working in `$BUILD`, so a relative one would put its report under `$BUILD` instead. |
 | Integration folder | `$HOME/worktrees/build-app-$APP` (call it `$BUILD`) |
 | Build branch | `build-app/$APP`, checked out in `$BUILD` |
 | Worker for node N | `$APP-node-N`, in a worktree mngr makes for it |
@@ -357,11 +358,6 @@ Repeat until every node is done.
    ```bash
    python3 .agents/skills/build-app/scripts/plan_orchestration.py write-task \
        --run-dir "$RUN" --node N
-   # `launch` syncs the node folder into the worker for you; `reply` sends text and nothing
-   # else, so put the folder where the task file says it is before sending it. Without this
-   # the worker is told to write its report into a directory that is not there.
-   mkdir -p "$BUILD/$RUN/nodes/N/reports"
-   cp "$RUN/nodes/N/task.md" "$BUILD/$RUN/nodes/N/task.md"
    uv run .agents/skills/launch-task/scripts/create_worker.py reply \
        --name "$APP-<agent>" \
        --task-file "$RUN/nodes/N/task.md" \
@@ -369,20 +365,17 @@ Repeat until every node is done.
        --message-with-mngr
    ```
 
+   Nothing is copied into `$BUILD`. The task file names an absolute `finish_report_path` under
+   `$RUN`, the worker writes there directly, and `report` makes the directory itself -- so the
+   report lands where `await` and `write-task` already look.
+
    The task file is named twice on purpose: `--message-file` is what the agent receives, and
    `--task-file` is the required argument `reply` normally reads a worker id out of, which
    `--message-with-mngr` addresses by name instead.
 
-   **Read the report from `$BUILD`, not from `$RUN`.** A tier agent writes to the copy you
-   made, so `await` has to look there:
-
    ```bash
    uv run .agents/skills/launch-task/scripts/create_worker.py await \
-       --name "$APP-<agent>" --task-file "$BUILD/$RUN/nodes/N/task.md" --timeout 9m
-   # `await` archives the report under the copy it read. Put it back where `write-task`
-   # looks, or the next node that depends on this one cannot have its task written at all.
-   mkdir -p "$RUN/nodes/N/reports/consumed"
-   cp "$BUILD/$RUN/nodes/N/reports/consumed/"* "$RUN/nodes/N/reports/consumed/"
+       --name "$APP-<agent>" --task-file "$RUN/nodes/N/task.md" --timeout 9m
    ```
 
    One agent does its nodes **one at a time**, so two nodes of the same capability never run
