@@ -299,8 +299,10 @@ class DesktopStore(MutableModel):
         write_json_atomic(self._offered_path(), document.model_dump(mode="json"))
 
     def _record_offered_unlocked(self, apps: AbstractSet[AppName], desktops_before: Sequence[Desktop]) -> None:
-        """Add ``apps``, whose default shortcuts a write just placed, to the offered record; with no record yet, or no
-        desktop before that write, the record starts over from the apps with a shortcut on the desktops before it."""
+        """Add ``apps``, whose default shortcuts the desktops write that follows places, to the offered record; with no
+        record yet, or no desktop before that write, the record starts over from the apps with a shortcut on the
+        desktops before it. It is written first, so a failure between the two never leaves the record of replaced
+        desktops beside new ones."""
         recorded = self._read_offered_unlocked()
         kept = recorded if recorded is not None and desktops_before else apps_with_a_shortcut_on(desktops_before)
         offered = kept | apps
@@ -321,8 +323,8 @@ class DesktopStore(MutableModel):
             if document is not None and document.desktops:
                 return list(document.desktops)
             seeded = DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=(default_desktop(seed_shortcuts()),))
-            self._write_unlocked(seeded)
             self._record_offered_unlocked(apps_with_a_shortcut_on(seeded.desktops), ())
+            self._write_unlocked(seeded)
             logger.info(
                 "Created the default desktop {!r} with {} shortcut(s)",
                 DEFAULT_DESKTOP_NAME,
@@ -399,10 +401,10 @@ class DesktopStore(MutableModel):
                     f"Desktop name {desktop.name!r} conflicts with existing desktop {existing.name!r} "
                     f"(both shorten to '{desktop.id}')"
                 )
+            self._record_offered_unlocked(default_shortcut_apps, existing_desktops)
             self._write_unlocked(
                 DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=(*existing_desktops, desktop))
             )
-            self._record_offered_unlocked(default_shortcut_apps, existing_desktops)
         return desktop
 
     def update_settings(self, desktop_id: str, name: str, color: str, glyph: int) -> Desktop:

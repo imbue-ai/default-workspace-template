@@ -34,6 +34,7 @@ from imbue.system_interface.shell.errors import DesktopConflictError
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
+from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
@@ -200,6 +201,30 @@ def test_a_desktop_added_where_no_desktop_stands_starts_the_offered_record_over(
     store.create_desktop("Alpha", "#111111", 1, (), ())
 
     assert read_default_shortcuts_offered(tmp_path)["apps"] == []
+
+
+def _seed_the_default_desktop(store: DesktopStore) -> None:
+    store.ensure_default(lambda: _SEED)
+
+
+def _create_a_desktop(store: DesktopStore) -> None:
+    store.create_desktop("Alpha", "#111111", 1, _SEED, ())
+
+
+@pytest.mark.parametrize("make_a_desktop_where_none_stands", [_seed_the_default_desktop, _create_a_desktop])
+def test_a_desktop_made_where_none_stands_is_not_written_when_its_offered_record_cannot_be(
+    tmp_path: Path, make_a_desktop_where_none_stands: Callable[[DesktopStore], None]
+) -> None:
+    """The record starts over before desktops.json is written, so the record of replaced desktops never stays beside
+    a new one."""
+    store = DesktopStore(state_directory=tmp_path)
+    # A directory where the offered record goes makes every write of it fail.
+    (tmp_path / DEFAULT_SHORTCUTS_OFFERED_FILENAME).mkdir()
+
+    with pytest.raises(ShellStateError):
+        make_a_desktop_where_none_stands(store)
+
+    assert not (tmp_path / "desktops.json").exists()
 
 
 def test_with_no_desktop_nothing_is_offered_or_recorded(tmp_path: Path) -> None:
