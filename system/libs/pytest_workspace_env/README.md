@@ -17,6 +17,12 @@ holds inside a workspace too (a check that needs a non-root user, say), so it
 is left alone. Without the variable the plugin does nothing. The session header
 says when it is on.
 
+The plugin acts on the skips of collected tests: a `skipif`, a `pytest.skip()`
+from the test body or from a fixture. A module that skips itself at collection
+(`pytest.importorskip(...)`, or `pytest.skip(allow_module_level=True)` at module
+level) is outside its reach and cannot carry the marker, so skip per test
+rather than per module.
+
 It is registered through the `pytest11` entry point, so every pytest run in the
 workspace venv loads it: the root pass and the isolated `system/apps/chat` and
 `system/apps/system_interface` passes alike.
