@@ -1,5 +1,6 @@
 """Tests for the services event stream the shell writes for the minds desktop."""
 
+import gzip
 import json
 from pathlib import Path
 from typing import Any
@@ -8,9 +9,13 @@ import pytest
 from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
 
+from imbue.imbue_common.logging import ROTATED_JSONL_PATTERN
+from imbue.mngr.utils.polling import wait_for
+from imbue.system_interface.app_announcements import ANNOUNCEMENTS_ARCHIVE_THRESHOLD_BYTES
 from imbue.system_interface.app_announcements import ANNOUNCEMENTS_REL
 from imbue.system_interface.app_announcements import AppAnnouncementWriter
 from imbue.system_interface.app_announcements import announcements_path_from_environment
+from imbue.system_interface.app_announcements import compress_staged_announcements
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 
@@ -124,3 +129,81 @@ def test_the_stream_path_comes_from_the_agent_state_directory(monkeypatch: pytes
     assert announcements_path_from_environment() == tmp_path / ANNOUNCEMENTS_REL
     monkeypatch.delenv("MNGR_AGENT_STATE_DIR")
     assert announcements_path_from_environment() is None
+
+
+def _legacy_stream_over_the_archive_threshold() -> bytes:
+    """A stream shaped like one the retired app watcher grew: one app re-announced over and over."""
+    line = (
+        json.dumps(
+            {
+                "timestamp": "2026-09-01T00:00:00.000000000Z",
+                "type": "service_registered",
+                "event_id": "evt-legacy",
+                "source": "services",
+                "service": "relationships",
+                "url": "http://localhost:8083",
+            }
+        )
+        + "\n"
+    ).encode()
+    return line * (ANNOUNCEMENTS_ARCHIVE_THRESHOLD_BYTES // len(line) + 1)
+
+
+def _stream_neighbours(announcement_writer: AppAnnouncementWriter) -> list[Path]:
+    events_path = announcement_writer.events_path
+    return sorted(events_path.parent.glob(f"{events_path.name}.*"))
+
+
+def test_an_oversized_stream_is_archived_out_of_the_replay_and_restarted_fresh(
+    announcement_writer: AppAnnouncementWriter, tmp_path: Path
+) -> None:
+    """Consumers replay the whole stream each time they attach, so a stream past the threshold when the shell
+    starts is moved to a compressed archive they do not replay, and the first announcement starts a new stream
+    holding only the current apps."""
+    legacy = _legacy_stream_over_the_archive_threshold()
+    announcement_writer.events_path.write_bytes(legacy)
+
+    announcement_writer.announce(_rows(tmp_path, _registered("relationships", "http://localhost:8085")))
+
+    assert [(event["type"], event["service"], event["url"]) for event in _events(announcement_writer.events_path)] == [
+        ("service_registered", "relationships", "http://localhost:8085")
+    ]
+    wait_for(
+        lambda: [path.suffix for path in _stream_neighbours(announcement_writer)] == [".gz"],
+        timeout=30.0,
+        error_message="the staged stream was never compressed",
+    )
+    (archive,) = _stream_neighbours(announcement_writer)
+    assert gzip.decompress(archive.read_bytes()) == legacy
+    # mngr replays rotated files named ``events.jsonl.<digits>``; the archive is not one.
+    assert ROTATED_JSONL_PATTERN.match(archive.name) is None
+
+
+def test_a_stream_under_the_threshold_is_left_in_place(
+    announcement_writer: AppAnnouncementWriter, tmp_path: Path
+) -> None:
+    announcement_writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010")))
+    before = announcement_writer.events_path.read_bytes()
+
+    restarted_writer = AppAnnouncementWriter(events_path=announcement_writer.events_path)
+    restarted_writer.announce(_rows(tmp_path, _registered("chat", "http://localhost:8010")))
+
+    assert announcement_writer.events_path.read_bytes().startswith(before)
+    assert _stream_neighbours(announcement_writer) == []
+
+
+def test_an_interrupted_archive_is_finished_and_only_the_newest_archives_are_kept(tmp_path: Path) -> None:
+    events_path = tmp_path / "events.jsonl"
+    for month in range(1, 5):
+        (tmp_path / f"events.jsonl.20260{month}01000000000000.gz").write_bytes(gzip.compress(b"old\n"))
+    # Left behind by a shell stopped after staging a stream but before compressing it.
+    (tmp_path / "events.jsonl.20260501000000000000.archiving").write_bytes(b"staged\n")
+
+    compress_staged_announcements(events_path)
+
+    assert sorted(path.name for path in tmp_path.glob("events.jsonl.*")) == [
+        "events.jsonl.20260301000000000000.gz",
+        "events.jsonl.20260401000000000000.gz",
+        "events.jsonl.20260501000000000000.gz",
+    ]
+    assert gzip.decompress((tmp_path / "events.jsonl.20260501000000000000.gz").read_bytes()) == b"staged\n"

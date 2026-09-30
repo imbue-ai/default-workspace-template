@@ -9,10 +9,13 @@ and one ``service_deregistered`` per app that left. Only changed rows are announ
 the whole registry whenever any app registers, so a write says nothing about which apps moved, and an app
 restarting in a loop would otherwise re-announce every app in the file on every restart. The first read after
 the shell starts remembers nothing and announces every app, which is what a consumer reading the stream from its
-start needs. The stream is plumbing the shell writes; it imports nothing from mngr.
+start needs. A stream over the archive threshold at that first read is moved aside before it and gzipped off-thread
+after, to a name mngr does not replay. The stream is plumbing the shell writes; it imports nothing from mngr.
 """
 
+import gzip
 import os
+import shutil
 import threading
 from collections.abc import Sequence
 from datetime import datetime
@@ -42,6 +45,14 @@ ANNOUNCEMENTS_REL: Final[str] = "events/services/events.jsonl"
 ANNOUNCEMENT_SOURCE: Final[EventSource] = EventSource("services")
 REGISTERED_ANNOUNCEMENT_TYPE: Final[EventType] = EventType("service_registered")
 DEREGISTERED_ANNOUNCEMENT_TYPE: Final[EventType] = EventType("service_deregistered")
+
+# Consumers replay the whole stream each time they attach, and the retired app-watcher service, which re-announced
+# every app on each registry rewrite, grew some streams past a gigabyte.
+ANNOUNCEMENTS_ARCHIVE_THRESHOLD_BYTES: Final[int] = 5 * 1024 * 1024
+_KEPT_ANNOUNCEMENTS_ARCHIVE_COUNT: Final[int] = 3
+# Neither suffix fits mngr's replayed rotation name (``events.jsonl.<digits>``).
+_STAGED_ANNOUNCEMENTS_SUFFIX: Final[str] = ".archiving"
+_ANNOUNCEMENTS_ARCHIVE_SUFFIX: Final[str] = ".gz"
 
 
 class AppRegisteredAnnouncement(EventEnvelope):
@@ -102,6 +113,44 @@ def announcements_path_from_environment() -> Path | None:
     return Path(state_dir) / ANNOUNCEMENTS_REL
 
 
+def _staged_announcements(events_path: Path) -> list[Path]:
+    return sorted(events_path.parent.glob(f"{events_path.name}.*{_STAGED_ANNOUNCEMENTS_SUFFIX}"))
+
+
+def stage_oversized_announcements(events_path: Path) -> bool:
+    """Move a stream over the archive threshold aside, so the next write starts a new one; answers whether it did.
+
+    Only renames, so it is quick enough to run before a write; ``compress_staged_announcements`` compresses.
+    """
+    try:
+        stream_size = events_path.stat().st_size
+    except FileNotFoundError:
+        return False
+    if stream_size <= ANNOUNCEMENTS_ARCHIVE_THRESHOLD_BYTES:
+        return False
+    rotation_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+    events_path.rename(events_path.with_name(f"{events_path.name}.{rotation_timestamp}{_STAGED_ANNOUNCEMENTS_SUFFIX}"))
+    return True
+
+
+def compress_staged_announcements(events_path: Path) -> None:
+    """Gzip every stream staged beside ``events_path`` into its archive, then keep only the newest archives."""
+    for staged_path in _staged_announcements(events_path):
+        archive_path = staged_path.with_name(
+            staged_path.name.removesuffix(_STAGED_ANNOUNCEMENTS_SUFFIX) + _ANNOUNCEMENTS_ARCHIVE_SUFFIX
+        )
+        partial_path = archive_path.with_name(archive_path.name + ".partial")
+        # The fastest level keeps the one-off CPU burst short in a container shared with the user's agents.
+        with open(staged_path, "rb") as source, gzip.open(partial_path, "wb", compresslevel=1) as target:
+            shutil.copyfileobj(source, target)
+        partial_path.rename(archive_path)
+        staged_path.unlink()
+
+    archive_paths = sorted(events_path.parent.glob(f"{events_path.name}.*{_ANNOUNCEMENTS_ARCHIVE_SUFFIX}"))
+    for expired_path in archive_paths[:-_KEPT_ANNOUNCEMENTS_ARCHIVE_COUNT]:
+        expired_path.unlink()
+
+
 def _new_event_id() -> EventId:
     return EventId(f"evt-{uuid4().hex}")
 
@@ -121,6 +170,7 @@ class AppAnnouncementWriter(MutableModel):
     )
 
     _announced: dict[str, AnnouncedRow] = PrivateAttr(default_factory=dict)
+    _is_stream_size_checked: bool = PrivateAttr(default=False)
     # The inventory announces from more than one thread.
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
@@ -132,6 +182,9 @@ class AppAnnouncementWriter(MutableModel):
             self._announce_locked(rows)
 
     def _announce_locked(self, rows: Sequence[RegistryRow]) -> None:
+        if not self._is_stream_size_checked:
+            self._is_stream_size_checked = True
+            self._archive_oversized_stream()
         current = announced_rows_of(rows)
         diff = diff_announced_rows(current, self._announced)
         if not diff.changed and not diff.gone:
@@ -167,3 +220,23 @@ class AppAnnouncementWriter(MutableModel):
             return
         self._announced = current
         logger.info("Announced apps to the services stream: registered={} deregistered={}", diff.changed, diff.gone)
+
+    def _archive_oversized_stream(self) -> None:
+        """Move an oversized stream aside before the first write, and compress it on a thread of its own, so the
+        new stream holds only the current apps and a gigabyte's compression does not hold up the shell's start."""
+        try:
+            if stage_oversized_announcements(self.events_path):
+                logger.info("Moved the oversized services stream {} aside for archiving", self.events_path)
+        except OSError as e:
+            logger.opt(exception=e).warning("Failed to move the oversized services stream {} aside", self.events_path)
+        # A stream a stopped shell staged but never compressed is finished here too.
+        if _staged_announcements(self.events_path):
+            threading.Thread(
+                target=self._compress_staged_streams, daemon=True, name="app-announcements-archive"
+            ).start()
+
+    def _compress_staged_streams(self) -> None:
+        try:
+            compress_staged_announcements(self.events_path)
+        except OSError as e:
+            logger.opt(exception=e).warning("Failed to archive the staged services stream beside {}", self.events_path)

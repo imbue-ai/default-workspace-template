@@ -202,8 +202,13 @@ one `service_registered` event per app whose URL, label, or icon differs from
 the last announced, and one `service_deregistered` per app that left, appended
 to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
 event envelope; the first read after the shell starts announces every app. The
-stream is what `mngr forward` and the desktop resolve app origins from. A
-preview shell announces nothing, since its registry is a copy.
+stream is what `mngr forward` and the desktop resolve app origins from, and
+they replay it whole each time they attach, so a stream over 5 MiB at that
+first read is renamed aside before it and gzipped to
+`events.jsonl.<timestamp>.gz` (a name mngr does not replay) on a thread of its
+own; the newest three archives are kept. Streams that large were left by the
+retired `app-watcher` service, which re-announced every app on each registry
+rewrite. A preview shell announces nothing, since its registry is a copy.
 
 The shell also owns each stoppable app's process (`shell/app_lifecycle.py`,
 the stop-when-no-windows spec): an app whose manifest declares
