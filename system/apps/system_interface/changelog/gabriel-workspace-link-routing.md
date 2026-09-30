@@ -5,3 +5,5 @@ The desktop delivers messages that apps send each other, and opens the links Imb
 - When a message cannot be delivered, a notice says why in the words of the app that refused it (for example, that Chromium is not installed yet).
 
 - Popups a workspace page opens to a local address, which Imbue Studio now turns back into the workspace, open where they belong: a local page in the browser, one of this workspace's app addresses as that app's window, and another workspace's address is refused with a notice.
+
+- A link in an app's page to another app of the workspace opens as that app's window (`shell:open-link`), and a link in the desktop's own chrome to a local address opens the same way a forwarded popup does.
