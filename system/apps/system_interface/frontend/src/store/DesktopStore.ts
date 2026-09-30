@@ -235,8 +235,9 @@ export interface StoreDependencies {
   readonly popOut?: PopOutBridge;
   /** The one window this shell shows edge to edge (a pulled-out window's own desktop window), else null. */
   readonly soloWindowId?: string | null;
-  /** Whether the chrome reopened the solo window's desktop window (a session restore, a dock reopen, a backend
-   *  retry) rather than opening it for a tear-out just now; absent means a tear-out, as an older chrome says. */
+  /** Whether the chrome reopened the solo window's desktop window (a session restore, a reopen of the app, a
+   *  backend retry) rather than opening it for a tear-out just now; absent means a tear-out, as an older chrome
+   *  says. */
   readonly isSoloReopened?: boolean;
 }
 
@@ -1763,7 +1764,7 @@ export class DesktopStore {
   }
 
   /** A solo shell exists because its window is pulled out; the first layout it loads may say otherwise. A
-   *  desktop window the chrome reopened (a relaunch, a dock reopen, a backend retry) takes the layout as the
+   *  desktop window the chrome reopened (a relaunch, a reopen of the app, a backend retry) takes the layout as the
    *  truth at once: the window was brought back while it was away, and the report without it closes this
    *  window. A freshly torn-out one cannot: during a drag the desktop's shell writes the detach as the window
    *  goes out and that save is on its way while this shell boots, so a load that does not yet say it waits for

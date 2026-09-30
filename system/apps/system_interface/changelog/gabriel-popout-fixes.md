@@ -4,4 +4,4 @@ Three fixes for a window pulled out into its own Imbue Studio window:
 
 - Reloading the interface (`refresh_workspace_view.py`, an update) no longer turns a pulled-out window into a whole desktop: its page keeps `?solo=<window>` in its URL, so any reload comes back as the same pulled-out window.
 
-- A pulled-out window Imbue Studio reopens at launch (a restored session, a dock reopen, a backend retry), whose window was brought back to the desktop while the app was away, now closes instead of pulling the window out again. Studio marks such a window `reopened=1` next to `solo`; only a freshly torn-out one (or one from an older Studio that sends no mark) waits the grace for the desktop's save before marking the window out itself.
+- A pulled-out window Imbue Studio reopens at launch (a restored session, a reopen of the app, a backend retry), whose window was brought back to the desktop while the app was away, now closes instead of pulling the window out again. Studio marks such a window `reopened=1` next to `solo`; only a freshly torn-out one (or one from an older Studio that sends no mark) waits the grace for the desktop's save before marking the window out itself.
