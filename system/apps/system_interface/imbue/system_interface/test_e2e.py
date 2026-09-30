@@ -1404,7 +1404,7 @@ def test_shortcut_menu_changes_mode_and_removes(e2e_server: E2EServer, page: Pag
     expect(shortcut.locator(".shortcut-label")).to_have_text(_STUB_APP_DISPLAY_NAME)
 
     shortcut.click(button="right")
-    page.locator('[data-menu-row="remove"]').click()
+    page.locator('[data-menu-row="remove-from-desktop"]').click()
     expect(shortcut).to_have_count(0, timeout=10000)
     wait_for(
         lambda: _desktop(e2e_server.base_url)["shortcuts"] == [],
