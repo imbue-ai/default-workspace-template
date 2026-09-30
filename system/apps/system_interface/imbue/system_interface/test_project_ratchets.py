@@ -262,9 +262,13 @@ _THEME_CSS = _FRONTEND_SRC / "theme" / "default.css"
 _ICON_DOC = _PACKAGE_ROOT.parents[2] / "docs" / "system" / "app-icons.md"
 
 # How the derived hairline lights a tile whose own colour the shell could read: the direction it
-# moves oklch's lightness. A minus here is the same shade the rule below forbids, arrived at the
-# long way round.
+# moves oklch's lightness, and the size of the move. A minus in either is the same shade the rule
+# below forbids, arrived at the long way round. The recipe is in style.css rather than the theme
+# because a custom property carrying a var() resolves on the element that declares it; the theme
+# holds only the amount it spends.
 _LIT_FROM_TILE = re.compile(r"--desk-icon-lit:\s*oklch\(\s*from\s+.*?calc\(\s*l\s*([+-])")
+_LIT_LIFT = re.compile(r"--desk-icon-lit-lift:\s*(-?[\d.]+)\s*;")
+_STYLE_CSS = _FRONTEND_SRC / "style.css"
 
 _HIGHLIGHT_RULE = RatchetRuleInfo(
     rule_name="a shade along the bottom edge of an icon tile",
@@ -333,6 +337,8 @@ def test_the_bottom_edge_of_an_icon_tile_is_lit_and_never_shaded() -> None:
 
 def test_the_hairline_lit_from_a_tile_lightens_it_too() -> None:
     """The derived hairline is the same rule by another route, so it moves the same way."""
-    direction = _LIT_FROM_TILE.search(_THEME_CSS.read_text())
-    assert direction is not None, "--desk-icon-lit no longer raises or lowers oklch lightness readably"
-    assert direction.group(1) == "+", _HIGHLIGHT_RULE.rule_description
+    direction = _LIT_FROM_TILE.search(_STYLE_CSS.read_text())
+    assert direction is not None, "style.css no longer builds --desk-icon-lit by moving oklch lightness"
+    lift = _LIT_LIFT.search(_THEME_CSS.read_text())
+    assert lift is not None, "the theme no longer sets --desk-icon-lit-lift"
+    assert direction.group(1) == "+" and float(lift.group(1)) > 0, _HIGHLIGHT_RULE.rule_description

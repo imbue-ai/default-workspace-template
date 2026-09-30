@@ -104,8 +104,17 @@
 
 /* A tile whose own colour the view could read lights its hairline from that colour instead of from
    white. `data-tile` is the view saying it set `--desk-icon-tile`; without it the relative colour
-   would have nothing to resolve against and the whole box-shadow would drop. */
+   would have nothing to resolve against and the whole box-shadow would drop.
+
+   The recipe is declared HERE rather than beside `--desk-icon-lit-lift` in the theme, and it has to
+   be: a custom property whose value carries a `var()` is substituted on the element that DECLARES
+   it, not the one that uses it. Written at `:root`, `var(--desk-icon-tile)` would resolve against
+   `:root` -- where no tile colour is set -- and the property would inherit down already invalid,
+   taking the whole `box-shadow` with it and leaving the tile with no hairline at all. */
 .taskbar-entry-tile[data-tile]::after,
 .shortcut-icon[data-tile]::after {
-  box-shadow: var(--desk-icon-tile-highlight);
+  --desk-icon-lit: oklch(from var(--desk-icon-tile) calc(l + var(--desk-icon-lit-lift)) c h);
+  box-shadow:
+    inset 0 1px 0 0 var(--desk-icon-lit),
+    inset 0 -1px 0 0 var(--desk-icon-lit);
 }

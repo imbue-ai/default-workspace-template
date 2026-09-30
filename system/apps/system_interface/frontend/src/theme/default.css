@@ -56,14 +56,14 @@
      of the palette (`docs/system/app-icons.md`), where white has nowhere to go and the hairline does
      not read; the cast is what separates those tiles. */
   --desk-icon-highlight: inset 0 1px 0 0 rgb(255 255 255 / 0.3), inset 0 -1px 0 0 rgb(255 255 255 / 0.3);
-  /* The same hairline, for a tile whose own colour the shell could read (`--desk-icon-tile`, set by
-     the views from the icon's background). White is a film laid over a colour -- it flattens a deep
-     tile toward grey, and on a pale one it has nowhere to go at all. Raising lightness in oklch and
-     leaving chroma and hue alone is that colour catching light instead: it keeps the tile's own hue,
-     and on the pale end, where lightness runs out of the sRGB gamut, the mapping sheds chroma
-     instead, so the edge still parts from the tile. */
-  --desk-icon-lit: oklch(from var(--desk-icon-tile) calc(l + 0.18) c h);
-  --desk-icon-tile-highlight: inset 0 1px 0 0 var(--desk-icon-lit), inset 0 -1px 0 0 var(--desk-icon-lit);
+  /* How far a tile whose own colour the shell could read (`--desk-icon-tile`, set by the views from
+     the icon's background) raises that colour's oklch lightness for its hairline. White is a film
+     laid over a colour -- it flattens a deep tile toward grey, and on a pale one it has nowhere to
+     go at all. Raising lightness and leaving chroma and hue alone is that colour catching light
+     instead: it keeps the tile's own hue, and on the pale end, where lightness runs out of the sRGB
+     gamut, the mapping sheds chroma instead, so the edge still parts from the tile. The recipe that
+     spends this is in style.css, which is the only place it can live -- see the note there. */
+  --desk-icon-lit-lift: 0.18;
   /* Drop shadows rather than a text-shadow: the name is clamped to two lines, so its own box
      clips anything painted inside it, and a filter draws the same silhouette from outside. */
   --desk-shortcut-label-shadow: drop-shadow(0 2px 4px rgb(0 0 0 / 0.45)) drop-shadow(0 1px 0.5px rgb(0 0 0 / 0.4));
