@@ -2,10 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { applyUiTheme, currentUiTheme, resetUiThemeForTests, retroAppIconUrl } from "./uiTheme";
 
-afterEach(() => {
-  resetUiThemeForTests();
-  document.documentElement.removeAttribute("data-ui-theme");
-});
+afterEach(() => resetUiThemeForTests());
 
 describe("the UI theme the chrome hands the workspace", () => {
   it("wears a theme it knows on the root element, and says the look changed only when it did", () => {

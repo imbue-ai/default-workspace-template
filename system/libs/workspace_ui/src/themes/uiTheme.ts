@@ -44,6 +44,7 @@ export function applyUiTheme(root: Element, name: unknown): boolean {
 // Test-only: back to a freshly loaded page.
 export function resetUiThemeForTests(): void {
   current = DEFAULT_UI_THEME;
+  document.documentElement.removeAttribute(UI_THEME_ATTRIBUTE);
 }
 
 // One folder per retro theme, keyed by the app's registry name; `app.png` is the icon for an app
