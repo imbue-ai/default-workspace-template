@@ -230,7 +230,7 @@ class AppAnnouncementWriter(MutableModel):
             if stage_oversized_announcements(self.events_path):
                 logger.info("Moved the oversized services stream {} aside for archiving", self.events_path)
         except OSError as e:
-            logger.opt(exception=e).warning("Failed to move the oversized services stream {} aside", self.events_path)
+            logger.opt(exception=e).warning("Failed to check the services stream {} for archiving", self.events_path)
         # A stream a stopped shell staged but never compressed is finished here too.
         if _staged_announcements(self.events_path):
             threading.Thread(
