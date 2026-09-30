@@ -404,7 +404,8 @@ export class DesktopStore {
    *  stands where the drag began. "in": the chrome dropped that window, and this one is brought back and shown
    *  again where the drag has it, saved at once too. "released": the button came up while out, and the gesture
    *  is over; the placement is already what it is to be, so nothing is written. This shell is the one writer
-   *  during a drag; the chrome's window only reads. */
+   *  during a drag; the chrome's window only reads. A word on a watched drag this shell already ended on its own
+   *  release still stands (``takeLateTearOut``). */
   setTearOut(windowId: string, phase: TearOutPhase): void {
     const gesture = this.moveGestureOf(windowId);
     if (gesture === null) {
