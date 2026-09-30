@@ -2199,9 +2199,11 @@ def test_a_page_for_a_free_running_browser_opens_as_a_tab_in_front() -> None:
     assert browser._pending_url is None
 
 
-def test_a_page_asked_for_while_an_agent_drives_waits_and_opens_when_the_human_takes_control() -> None:
+def test_a_page_asked_for_while_an_agent_drives_waits_and_opens_when_the_human_takes_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bsession.LiveBrowser, "_wake_agent", _noop_wake)
     browser, cdp = _running_browser_with_tabs(["https://a.example/"], shown_target_id="t1", active_target_id="t1")
-    browser._wake_agent = _noop_wake.__get__(browser)  # type: ignore[method-assign]
 
     async def go() -> list[dict[str, Any]]:
         fleet = _fleet_of(browser)
