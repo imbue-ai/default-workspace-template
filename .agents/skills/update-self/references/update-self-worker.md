@@ -274,7 +274,9 @@ command).
    system interface HTTP API, a shared data file's format, a script's CLI
    flags) has callers that reference no file of it.
 4. **Bias toward "impacted" when uncertain**, and record what you checked and
-   how, so the lead sees the coverage.
+   how, so the lead sees the coverage. List each impacted creation in
+   `data/.tasks/update-self/impacted-paths.txt` as 4b's suites step describes,
+   so its tests run in the same gate.
 5. **Verify "workspace-added" by provenance, not directory**: a path is
    built-in if it exists at the target ref (`git ls-tree -r --name-only
    "$TARGET_REF" -- <dir>`; empty output = genuinely workspace-added).
@@ -314,14 +316,52 @@ in your report.
   merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
   is a precise blocker (an unparseable root lock means no service in the
   workspace can start); fix it before running anything else.
-- **Suites, lint, ratchets** for each project in `projects_to_validate` plus
-  that of any file you edited yourself in the branch, and for no other (with
-  neither, no suite runs at all): root
-  `.` (`uv run pytest` + `uv run ruff check`); `system/apps/system_interface`
-  and `system/apps/chat` each its own `uv run pytest` (and, when any frontend
-  or the shared `system/libs/workspace_ui` merged, `npm run lint && npm run
-  test` at `system/`, the npm workspace root). mngr's own suite runs in its
-  repo, not here.
+- **Suites, lint, ratchets** for what the merged set, the update's changes to
+  your creations, 4a's impacted consumers, and your own edits can reach, and
+  for nothing else (with none of them, no suite runs at all). The test
+  selector names them from those paths -- each changed package's or skill's
+  own tests, the suites of whatever declares a dependency on it, the frontend
+  checks, the repo guards, and the full root suite for a path in no package or
+  skill or in a package the root project depends on; a set made only of
+  documentation selects nothing.
+  The update's changes inside a creation that carries local content (every
+  creation whose Step 4 `.local.json` and `.update.json` both list files
+  inside its footprint) go in by rule, so the user's own tests of it run
+  whether or not a file changed on both sides. What 4a found impacted by
+  search or reasoning goes in through `impacted-paths.txt`: one line per
+  impacted creation, naming a file that stands for its whole suite (an app's
+  `app.toml`, a skill's `SKILL.md`, a package's `pyproject.toml`, or a flat
+  script itself); no file means 4a found none, or did not run:
+
+  ```bash
+  MERGE="$(git log --merges -1 --format=%H --fixed-strings \
+      --grep "update-self: merge upstream template ($TARGET_REF)")"
+  python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+      classify-merge --local "$MERGE^1" --target "$TARGET_REF" \
+      > data/.tasks/update-self/classify.json
+  { jq -r '.merged[].path' data/.tasks/update-self/classify.json
+    for update in data/.tasks/update-self/scopes/*.update.json; do
+        [ -e "$update" ] || continue
+        jq -e '.diff.inside_footprint | length > 0' "${update%.update.json}.local.json" >/dev/null \
+            && jq -r '.diff.inside_footprint[]' "$update"
+    done
+    cat data/.tasks/update-self/impacted-paths.txt 2>/dev/null
+    git diff --name-only --no-renames "$MERGE" HEAD; } | sed '/^[[:space:]]*$/d' | sort -u \
+      > data/.tasks/update-self/validate-paths.txt
+  [ -s data/.tasks/update-self/validate-paths.txt ] \
+      && uv run --frozen --package app-manifest app-manifest select-tests \
+          --diff-base "$MERGE^1" \
+          $(sed 's/^/--path /' data/.tasks/update-self/validate-paths.txt)
+  ```
+
+  Commit your own edits first: the `git diff` line reads commits.
+  `--diff-base` here only names what a merged `uv.lock` is compared against,
+  so a lock that upgraded a package selects the suites that depend on it. Run
+  every printed line, in order, plus `uv run ruff check` when a Python file is
+  in the list, and handle a failing test and a shed command the way
+  `.agents/shared/worker/references/harden-creation.md` ("The test gate")
+  says, naming a flaky test under your report's Validation. mngr's own suite
+  runs in its repo, not here.
 - **Isolated-service boots** for each service with a file in the merged set,
   and for each service 4a found impacted that carries local content of its
   own -- one the workspace created, or a built-in one it has modified (a
@@ -375,8 +415,10 @@ even though `classify-merge` cannot see it; Step 1's rollback reverts are not,
 as git made them or with a `both added` file taken at the target's version,
 when `git diff <merge-sha> HEAD` is empty). **Otherwise run
 the real gates**,
-scoped to every file whose merged content differs from the target release. The
-full rule, its scope, and the keep/revert disposition for fix commits are in
+scoped to every file whose merged content differs from the target release; 4b's
+suites run is their test gate, so select tests again only over what you commit
+after it. The full rule, its scope, and the keep/revert disposition for fix
+commits are in
 `references/worker-review-gates.md`. If you believe the gates should not run,
 or should run at another scope, in a situation the rule does not cover, that is
 a `question` gate for the lead -- never a silent adaptation.
@@ -456,7 +498,9 @@ Valid `name:` values:
   - **Validation** -- **which branch of the 4b scope rule applied, with its
     evidence** (each item's condition and whether it held; on a clean pull
     with no footprint, that nothing ran and why), then the suites, boots and
-    Playwright that did run, all passing; **which branch of the 4c rule
+    Playwright that did run, all passing, and any test that failed and then
+    passed when rerun alone, here or after a 4c commit, as flaky; **which
+    branch of the 4c rule
     applied, with its evidence** (the clean-pull skip's three conditions, or
     the gate run's kept/reverted fix commits -- or "gate ran clean" -- and the
     architecture-gate verdicts); any validation gap called out honestly. A

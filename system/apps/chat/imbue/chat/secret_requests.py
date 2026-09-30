@@ -455,6 +455,8 @@ class SecretRequestStore(MutableModel):
             return path.read_text(encoding="utf-8")
         except OSError as e:
             raise SecretFileWriteError(path, f"the existing file could not be read: {e.strerror}") from e
+        except UnicodeDecodeError as e:
+            raise SecretFileWriteError(path, "the existing file is not UTF-8 text") from e
 
     def _write_env_file(self, file: SecretFileName, value_by_name: Mapping[str, str]) -> None:
         """Merge the values into the env file, atomically and owner-readable only."""
