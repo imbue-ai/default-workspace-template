@@ -196,6 +196,37 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
     assert missing.returncode == 1 and window_id in missing.stderr
 
 
+def test_show_raises_a_window_already_showing_the_page_and_moves_only_what_repoint_names(
+    layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
+) -> None:
+    """``show`` opens a window only when none shows the page: a second ``show`` of the page, or of another page
+    that names it with ``--showing``, raises the same window; ``--repoint`` lets it move that window, and without
+    it another page gets a window of its own."""
+    sandbox = _sandbox(tmp_path)
+
+    def show(*argv: str) -> subprocess.CompletedProcess[str]:
+        result = _run_layout_command(["show", PIPELINE_STUB_APP_NAME, *argv], layout_server, sandbox)
+        assert result.returncode == 0, f"stderr={result.stderr!r}"
+        return result
+
+    first = show("--path", "/a")
+    window_id = first.stdout.strip()
+    assert first.stderr.startswith(f"opened window {window_id} ({PIPELINE_STUB_APP_NAME} at /a)")
+
+    assert show("--path", "/a").stdout.strip() == window_id
+    showing = show("--path", "/b", "--showing", "/a")
+    assert showing.stdout.strip() == window_id and showing.stderr.startswith("raised window")
+    assert [window["path"] for window in _windows(layout_server, sandbox)] == ["/a"]
+
+    repointed = show("--path", "/b", "--repoint", "/a")
+    assert repointed.stdout.strip() == window_id and repointed.stderr.startswith("navigated window")
+    assert [window["path"] for window in _windows(layout_server, sandbox)] == ["/b"]
+
+    elsewhere = show("--path", "/c")
+    assert elsewhere.stdout.strip() != window_id
+    assert [window["path"] for window in _windows(layout_server, sandbox)] == ["/b", "/c"]
+
+
 def test_open_at_a_path_names_the_page_and_self_names_the_callers_window(
     layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
 ) -> None:
