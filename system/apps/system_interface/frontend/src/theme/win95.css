@@ -53,7 +53,7 @@
   --desk-grid-inset: 8px;
   --desk-window-radius: 0px;
   --desk-window-control-inset: 4px;
-  --desk-window-shadow: var(--win95-outset);
+  --desk-window-shadow: none;
   --desk-taskbar-surface: #c0c0c0;
   --desk-taskbar-blur: 0px;
   --desk-backdrop: #008080;
@@ -67,10 +67,17 @@
   --desk-launcher-menu-width: 12.5rem;
 }
 
-/* Windows: a silver frame with the raised bevel, the title bar and content inside it. */
+/* Windows: a silver frame with the raised bevel, the title bar and content inside it. The frame
+   paints nothing of its own: a window's live page sits under its chrome in the stacking order and
+   shows through the content box, so an opaque frame would hide it. The bevel and the silver rim
+   are inset shadows, which only reach the 3px padding the content stays clear of. */
 .window-frame {
-  background: #c0c0c0;
+  background: transparent;
   padding: 3px;
+  box-shadow:
+    var(--win95-outset),
+    inset 3px 3px #c0c0c0,
+    inset -3px -3px #c0c0c0;
 }
 
 .title-bar {
