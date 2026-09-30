@@ -202,6 +202,11 @@ def test_a_shell_that_cannot_be_reached_raises_unreachable(loopback_shell: Loopb
         client.connected_clients()
 
 
+def test_a_shell_url_without_a_scheme_raises_unreachable() -> None:
+    with pytest.raises(ShellUnreachableError, match="unknown url type"):
+        _client("").show(_SHOW)
+
+
 @pytest.mark.parametrize(
     "answer",
     ["not json", [], {"ok": True}, {**_SHOWN_ANSWER, "window_id": None}, {**_SHOWN_ANSWER, "window_id": "win-1"}],
