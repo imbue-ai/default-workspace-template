@@ -168,6 +168,22 @@ def test_a_chat_named_any_other_way_is_left_alone_without_asking_the_model(tmp_p
     assert harness.naming_state().is_settled
 
 
+def test_a_chat_named_while_its_name_is_generated_keeps_that_name_and_shows_no_other(tmp_path: Path) -> None:
+    harness = _NamingHarness(tmp_path, "Chat 3", ["Rome trip: plan five days in May"])
+
+    def rename_by_hand() -> None:
+        harness.is_placeholder_named = False
+
+    harness.completion.on_call = rename_by_hand
+
+    harness.namer.consider_message(_CHAT_ID, "Help me plan 5 days in Rome in May")
+
+    assert harness.completion.prompts == ["Help me plan 5 days in Rome in May"]
+    assert harness.shown_titles == []
+    assert harness.renames == []
+    assert harness.naming_state().is_settled
+
+
 def test_a_harness_with_no_one_shot_completion_keeps_its_minted_name(tmp_path: Path) -> None:
     harness = _NamingHarness(tmp_path, "Chat 3", [])
     harness.binding = ChatAccountBinding(harness=HarnessType.CODEX, account_dir=tmp_path / "account")

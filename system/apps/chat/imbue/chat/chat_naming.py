@@ -183,8 +183,7 @@ class ChatNamer(MutableModel):
             logger.debug("Skipped naming chat {}: no account to ask on", chat_id)
             return
         chat_dir = self.chat_files_root / chat_id
-        if not self.has_placeholder_name(chat_id):
-            write_chat_naming_state(chat_dir, ChatNamingState(is_settled=True))
+        if self._settle_if_named(chat_id, chat_dir):
             return
         completion = self.build_one_shot_completion(binding.harness)
         if completion is None:
@@ -202,6 +201,9 @@ class ChatNamer(MutableModel):
         if name is None:
             logger.debug("Left chat {} unnamed: the answer {!r} gave no name", chat_id, answer)
             self._record_attempt(chat_dir)
+            return
+        # The model takes a second or more, time enough for the chat to be named some other way.
+        if self._settle_if_named(chat_id, chat_dir):
             return
 
         # Show it at once; the rename that makes it the chat's name follows once the chat is listed
@@ -225,6 +227,13 @@ class ChatNamer(MutableModel):
         write_chat_naming_state(chat_dir, ChatNamingState(is_settled=True))
         if is_renamed:
             logger.info("Named chat {} {!r}", chat_id, name)
+
+    def _settle_if_named(self, chat_id: ChatId, chat_dir: Path) -> bool:
+        """Whether the chat has a name somebody chose, which settles it for good (recorded here)."""
+        if self.has_placeholder_name(chat_id):
+            return False
+        write_chat_naming_state(chat_dir, ChatNamingState(is_settled=True))
+        return True
 
     def _wait_for_active_agent(self, chat_id: ChatId) -> AgentInfo | None:
         deadline = time.monotonic() + self.agent_wait_seconds
