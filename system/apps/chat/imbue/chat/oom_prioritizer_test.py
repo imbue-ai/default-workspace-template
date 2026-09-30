@@ -266,6 +266,20 @@ def test_an_untouched_long_running_process_ages_out() -> None:
     assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_STALE_CEILING
 
 
+def test_a_chat_started_on_a_long_running_agent_begins_fresh_and_unranked() -> None:
+    # A spare the chat app handed a new chat started long before the chat did: the chat
+    # must not inherit that age, nor rank as recently messaged.
+    h = _Harness(chat_ids=["a", "b"], pids={"a": 10, "b": 20})
+    h.process_started_at[ChatId("a")] = h.now - 3 * 24 * _HOUR
+    h.prioritizer.record_message(ChatId("b"))
+    assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_STALE_CEILING
+
+    h.prioritizer.record_chat_started(ChatId("a"))
+
+    assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_BASE
+    assert h.latest_adj_by_pid()[20] == _fresh(is_open=False, is_visible=False, recency_rank=0)
+
+
 def test_seeded_message_times_restore_recency_across_a_restart() -> None:
     # Rebuilt-from-scratch prioritizer (a system-interface restart): seeding from
     # the durable client-activity log must rank the chats as it did before, rather

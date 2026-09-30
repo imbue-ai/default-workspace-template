@@ -176,6 +176,19 @@ class ChatOomPrioritizer:
             self._stamp_message_locked(chat_id, now)
         self.reapply()
 
+    def record_chat_started(self, chat_id: ChatId) -> None:
+        """Stamp a chat that just began on an agent started earlier (a spare the chat app handed
+        it) as engaged now, then re-tag every chat.
+
+        Without it the staleness clock would run from that agent's process start, so a spare
+        that waited a day for a chat would begin as an abandoned one. It is not a message, so
+        the chat gets no recency rank from it.
+        """
+        now = self._clock()
+        with self._lock:
+            self._stamp_engagement_locked(chat_id, now)
+        self.reapply()
+
     def forget_chat(self, chat_id: ChatId) -> None:
         """Drop a destroyed chat's presence so its reports never count again."""
         self._presence.forget_chat(chat_id)

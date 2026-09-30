@@ -3270,8 +3270,8 @@ class AgentManager:
         if provisional is None:
             _loguru_logger.info("Handed spare agent {} to a new chat", spare.chat_id)
             self._broadcast_chats_updated()
-            # Out of the spares' shedding band and into the chat band, now that it is a chat.
-            self._oom_prioritizer.reapply()
+            # Out of the spares' shedding band and into the chat band, as a chat just started.
+            self._oom_prioritizer.record_chat_started(spare.chat_id)
             if model_pick is not None or message:
                 self._creation_cg.start_new_thread(
                     target=self._settle_new_chat,
@@ -3576,7 +3576,7 @@ class AgentManager:
             if error is None:
                 _loguru_logger.info("Handed claimed spare agent {} to its chat", chat_id)
                 self._broadcast_chats_updated()
-                self._oom_prioritizer.reapply()
+                self._oom_prioritizer.record_chat_started(chat_id)
                 self._settle_new_chat(chat_id, str(chat_id), claim.model_pick, claim.message)
         finally:
             if settled is not None:
