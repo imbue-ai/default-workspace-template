@@ -656,6 +656,25 @@ describe("the contract", () => {
     expect(document.activeElement).toBe(host);
   });
 
+  it("takes the document's focus off a page whose window another window is raised over, however it was raised", () => {
+    frameOf("win-1").focus();
+    // A raise that no press on a handle made.
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    expect(document.activeElement).toBe(host);
+  });
+
+  it("leaves the document's focus in a page that reported taking it", () => {
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    frameOf("win-1").focus();
+    messageFromPage("win-1", { type: SHELL_FOCUSED });
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(document.activeElement).toBe(frameOf("win-1"));
+  });
+
   it("leaves the dragged window on top when another page says it took focus mid-drag", () => {
     store.restoreWindow("win-2");
     layer.reconcile();

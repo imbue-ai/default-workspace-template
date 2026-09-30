@@ -91,6 +91,10 @@ let defaultAccountId: string | null = null;
 let lanesLoaded = false;
 // Whether the account list has been fetched once, so an empty list can be told from one not read yet.
 let accountsLoaded = false;
+let markAccountsLoaded: () => void = () => {};
+const firstAccountsLoad = new Promise<void>((resolve) => {
+  markAccountsLoaded = resolve;
+});
 
 export function getLanes(): Lane[] {
   return lanes;
@@ -128,6 +132,19 @@ export function areAccountsLoaded(): boolean {
   return accountsLoaded;
 }
 
+/** Settles once the account list can choose a new chat's account, so a list not read yet or read stale is never taken
+ *  for "nothing signed in": after its first read, and after a fresh read when it names no account, since a sign-in
+ *  made on another page (the chat list, another chat) does not reach this page's copy. */
+export async function whenAccountsReadyToChoose(): Promise<void> {
+  await firstAccountsLoad;
+  if (getSelectedAccount() !== null) return;
+  try {
+    await loadAccounts();
+  } catch (error) {
+    console.warn("Could not read the account list again; choosing from the one read before", error);
+  }
+}
+
 export function areLanesLoaded(): boolean {
   return lanesLoaded;
 }
@@ -148,6 +165,7 @@ export async function loadAccounts(): Promise<void> {
   mru = body.mru;
   defaultAccountId = body.default;
   accountsLoaded = true;
+  markAccountsLoaded();
 }
 
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.

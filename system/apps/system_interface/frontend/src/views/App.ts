@@ -401,6 +401,7 @@ export function App(): m.Component<AppAttrs> {
       onPressStart: (binding) => {
         const pressedWindowId =
           binding.kind === "window-move" || binding.kind === "window-resize" ? binding.windowId : null;
+        // What the browser would have done with a press whose default the gesture source did not prevent.
         pages?.takeFocusFromOtherPages(pressedWindowId);
         pages?.setGestureActive(true);
         root.setAttribute(WINDOW_MOTION_ATTRIBUTE, "off");
@@ -1081,7 +1082,10 @@ export function App(): m.Component<AppAttrs> {
               onRunSecondary: () => runSecondaryRow(current),
               onRise: (rise) => {
                 launcherFieldRise = rise;
-                m.redraw();
+                // Told from the field's render hooks, where no redraw can run; m.redraw() would wait for the next
+                // frame and paint one with the menu where the field was. A microtask runs once the render is over,
+                // still before the browser paints, so the menu moves in the frame the field did.
+                queueMicrotask(() => m.redraw.sync());
               },
             },
             tray: {
