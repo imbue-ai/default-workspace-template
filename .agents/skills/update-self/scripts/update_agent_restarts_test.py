@@ -1,7 +1,8 @@
-"""Tests for restarting the workspace's agents after an update: which chats are restarted, the
-chat list's retries, and the pass's own restart from a detached helper.
+"""Tests for restarting the workspace's agents after an update: which chats are asked to restart
+and how each answer lands in the report, the chat list's retries, the self-restart's wait, and
+the pass's own restart from a detached helper.
 
-The chat app is the ``fake_chat_list`` fixture over loopback; ``message_chat.py`` is a recorder
+The chat app is the ``fake_chat_app`` fixture over loopback; ``message_chat.py`` is a recorder
 installed in the workspace's tree, as the release's own copy would be.
 """
 
@@ -24,35 +25,22 @@ import update_runtime
 _OWN_CHAT = "agent-00000000000000000000000000000001"
 _UPDATE_SELF_SCRIPT = Path(__file__).with_name("update_self.py")
 _DELIVERY_DEADLINE_SECONDS = 8.0
+_ONLY_IF_IDLE = {"only_if_idle": True}
 
 
-def _chat(
-    chat_id: str,
-    title: str,
-    status: str,
-    state: str,
-    name: str = "",
-    handoff: dict[str, str] | None = None,
-    is_connecting: bool = False,
-) -> dict[str, Any]:
+def _chat(chat_id: str, title: str, status: str, name: str = "") -> dict[str, Any]:
     """One chat of ``GET /api/chats``, in the chat app's ``ChatSnapshot`` shape (the fields read here)."""
     return {
         "chat_id": chat_id,
         "title": title,
         "name": name or title.lower().replace(" ", "-"),
         "status": status,
-        "handoff": handoff,
-        "active_agent": {
-            "agent_id": chat_id,
-            "state": state,
-            "is_connecting": is_connecting,
-        },
     }
 
 
 def _install_message_chat_recorder(workspace: Path) -> Path:
     """A ``message_chat.py`` that records its argv, the note it was given, and whether it ran
-    with an agent id, and fails an ``--interrupt`` of the chat ids in ``$FAKE_INTERRUPT_FAILS``."""
+    with an agent id."""
     record = workspace / "message-chat-calls.jsonl"
     script = workspace / "system" / "scripts" / "message_chat.py"
     script.parent.mkdir(parents=True, exist_ok=True)
@@ -63,9 +51,6 @@ def _install_message_chat_recorder(workspace: Path) -> Path:
         "note = open(argv[argv.index('--message-file') + 1]).read() if '--message-file' in argv else None\n"
         f"with open({str(record)!r}, 'a') as handle:\n"
         "    handle.write(json.dumps({'argv': argv, 'note': note, 'agent_id': os.environ.get('MNGR_AGENT_ID')}) + '\\n')\n"
-        "if '--interrupt' in argv and argv[0] in os.environ.get('FAKE_INTERRUPT_FAILS', '').split(','):\n"
-        "    sys.stderr.write('the chat is converging')\n"
-        "    raise SystemExit(1)\n"
     )
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     return record
@@ -77,162 +62,100 @@ def _calls(record: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in record.read_text().splitlines()]
 
 
-def test_only_idle_chats_other_than_the_pass_and_its_worker_are_restarted(
-    fake_chat_list: Any, monkeypatch: pytest.MonkeyPatch
+def test_every_chat_but_the_pass_its_worker_and_stopped_ones_is_asked_and_its_answer_reported(
+    fake_chat_app: Any,
 ) -> None:
-    workspace = fake_chat_list.workspace
-    record = _install_message_chat_recorder(workspace)
-    monkeypatch.setenv("FAKE_INTERRUPT_FAILS", "agent-failing")
-    fake_chat_list.answers = [
+    fake_chat_app.answers = [
         (
             200,
             {
                 "chats": [
-                    _chat(_OWN_CHAT, "Update", "idle", "WAITING"),
-                    _chat(
-                        "agent-worker",
-                        "Update worker",
-                        "idle",
-                        "WAITING",
-                        name="update-self",
-                    ),
-                    _chat("agent-idle", "Trip planning", "idle", "WAITING"),
-                    _chat("agent-failing", "Budget", "idle", "WAITING"),
-                    _chat("agent-working", "Research", "working", "RUNNING"),
-                    # Between an assistant message and its next tool call the transcript reads
-                    # idle while the harness is still mid-turn.
-                    _chat("agent-between-steps", "Drafts", "idle", "RUNNING"),
-                    _chat("agent-dialog", "Inbox", "attention", "WAITING"),
-                    _chat(
-                        "agent-handoff",
-                        "Notes",
-                        "working",
-                        "WAITING",
-                        handoff={"phase": "summarizing"},
-                    ),
-                    _chat("agent-stopped", "Old chat", "stopped", "STOPPED"),
-                    # A send waiting for the harness to come up; a restart would land under it.
-                    _chat(
-                        "agent-connecting",
-                        "Letters",
-                        "idle",
-                        "WAITING",
-                        is_connecting=True,
-                    ),
+                    _chat(_OWN_CHAT, "Update", "idle"),
+                    _chat("agent-worker", "Update worker", "idle", name="update-self"),
+                    _chat("agent-idle", "Trip planning", "idle"),
+                    _chat("agent-working", "Research", "working"),
+                    _chat("agent-dialog", "Inbox", "attention"),
+                    _chat("agent-handoff", "Notes", "working"),
+                    _chat("agent-stopped", "Old chat", "stopped"),
+                    _chat("agent-deleted", "Gone", "idle"),
+                    _chat("agent-failing", "Budget", "idle"),
                 ]
             },
         )
     ]
+    fake_chat_app.interrupt_answers = {
+        "agent-working": [(409, {"detail": "busy", "busy_with": "working"})],
+        "agent-dialog": [(409, {"detail": "busy", "busy_with": "waiting on a dialog"})],
+        "agent-handoff": [(409, {"detail": "switching", "phase": "summarizing"})],
+        "agent-deleted": [(404, {"detail": "Chat 'agent-deleted' not found"})],
+        "agent-failing": [
+            (500, {"detail": "Failed to interrupt agent 'budget': mngr start failed"})
+        ],
+    }
 
     report = update_agent_restarts.restart_idle_agents(
-        workspace, _OWN_CHAT, update_runtime.HttpClient(), update_runtime.Runner()
+        fake_chat_app.workspace, _OWN_CHAT, update_runtime.HttpClient()
     )
 
-    assert [call["argv"] for call in _calls(record)] == [
-        ["agent-idle", "--interrupt"],
-        ["agent-failing", "--interrupt"],
-    ]
-    assert report["restarted"] == [{"chat_id": "agent-idle", "title": "Trip planning"}]
-    assert report["failed"] == [
-        {
-            "chat_id": "agent-failing",
-            "title": "Budget",
-            "detail": "the chat is converging",
-        }
-    ]
-    assert [
-        (chat["chat_id"], chat["busy_with"]) for chat in report["left_running"]
-    ] == [
-        ("agent-working", "working"),
-        ("agent-between-steps", "working"),
-        ("agent-dialog", "waiting on a dialog"),
-        ("agent-handoff", "switching to another agent"),
-        ("agent-connecting", "receiving a message"),
-    ]
-    assert (
-        json.loads(
-            (workspace / update_agent_restarts.AGENT_RESTARTS_REPORT_REL).read_text()
+    assert fake_chat_app.interrupts == [
+        (chat_id, _ONLY_IF_IDLE)
+        for chat_id in (
+            "agent-idle",
+            "agent-working",
+            "agent-dialog",
+            "agent-handoff",
+            "agent-deleted",
+            "agent-failing",
         )
-        == report
-    )
-
-
-@pytest.mark.parametrize(
-    "answer_by_then, expected_report",
-    [
-        (
-            (
-                200,
-                {"chats": [_chat("agent-idle", "Trip planning", "working", "RUNNING")]},
-            ),
-            {
-                "restarted": [],
-                "left_running": [
-                    {
-                        "chat_id": "agent-idle",
-                        "title": "Trip planning",
-                        "busy_with": "working",
-                    }
-                ],
-                "failed": [],
-            },
-        ),
-        (
-            (200, {"chats": []}),
-            {"restarted": [], "left_running": [], "failed": []},
-        ),
-        # With the chat app down, the restart would bypass its checks for a turn or a handoff.
-        (
-            (503, {}),
-            {
-                "restarted": [],
-                "left_running": [],
-                "failed": [
-                    {
-                        "chat_id": "agent-idle",
-                        "title": "Trip planning",
-                        "detail": "the chat app could not show its state just before the restart",
-                    }
-                ],
-            },
-        ),
-    ],
-    ids=["started-a-turn", "deleted", "unreadable"],
-)
-def test_a_chat_that_changed_before_its_restart_is_not_restarted(
-    fake_chat_list: Any,
-    answer_by_then: tuple[int, dict[str, Any]],
-    expected_report: dict[str, list[dict[str, str]]],
-) -> None:
-    """The restarts run one after another, so a chat idle in the first read of the list may be
-    mid-turn, or gone, by the time its restart comes up; it is read again first, and a busy
-    one is left running, a deleted one is dropped, and one that cannot be read is not
-    restarted blind."""
-    workspace = fake_chat_list.workspace
-    record = _install_message_chat_recorder(workspace)
-    fake_chat_list.answers = [
-        (200, {"chats": [_chat("agent-idle", "Trip planning", "idle", "WAITING")]}),
-        answer_by_then,
     ]
-
-    report = update_agent_restarts.restart_idle_agents(
-        workspace, _OWN_CHAT, update_runtime.HttpClient(), update_runtime.Runner()
-    )
-
-    assert _calls(record) == []
-    assert report == expected_report
+    assert report == {
+        "restarted": [{"chat_id": "agent-idle", "title": "Trip planning"}],
+        "left_running": [
+            {"chat_id": "agent-working", "title": "Research", "busy_with": "working"},
+            {
+                "chat_id": "agent-dialog",
+                "title": "Inbox",
+                "busy_with": "waiting on a dialog",
+            },
+            {
+                "chat_id": "agent-handoff",
+                "title": "Notes",
+                "busy_with": "switching to another agent",
+            },
+        ],
+        "failed": [
+            {
+                "chat_id": "agent-failing",
+                "title": "Budget",
+                "detail": "Failed to interrupt agent 'budget': mngr start failed",
+            }
+        ],
+    }
 
 
 class _ScriptedHttp(update_runtime.HttpClient):
-    """Answers the chat-list reads from a script, one page (or None for no answer) per read."""
+    """Answers the chat-list reads and the interrupt posts from scripts, one page (or None for no
+    answer) per call, the last one repeating."""
 
-    def __init__(self, pages: list[update_runtime.FetchedPage | None]) -> None:
+    def __init__(
+        self,
+        pages: list[update_runtime.FetchedPage | None],
+        posts: list[update_runtime.FetchedPage | None] | None = None,
+    ) -> None:
         self._pages = pages
+        self._posts = posts or [None]
         self.reads = 0
+        self.posted: list[str] = []
 
     def get_page(self, url: str, timeout: float) -> update_runtime.FetchedPage | None:
         self.reads += 1
         return self._pages.pop(0) if len(self._pages) > 1 else self._pages[0]
+
+    def post_json(
+        self, url: str, body: Any, timeout: float
+    ) -> update_runtime.FetchedPage | None:
+        self.posted.append(url)
+        return self._posts.pop(0) if len(self._posts) > 1 else self._posts[0]
 
 
 class _FakeClock:
@@ -254,23 +177,40 @@ def _registered_workspace(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _chat_list_page(*chats: dict[str, Any]) -> update_runtime.FetchedPage:
+def _page(status: int, body: object) -> update_runtime.FetchedPage:
     return update_runtime.FetchedPage(
-        status=200,
-        body=json.dumps({"chats": list(chats)}),
+        status=status,
+        body=json.dumps(body),
         headers={"content-type": "application/json"},
     )
+
+
+def test_a_restart_the_chat_app_cannot_take_is_reported_failed_not_forced(
+    tmp_path: Path,
+) -> None:
+    """Nothing here restarts an agent behind the chat app's back: with the app gone between the
+    list and the restart, the chat is reported failed for the user to decide about."""
+    http = _ScriptedHttp(
+        [_page(200, {"chats": [_chat("agent-idle", "Trip", "idle")]})], [None]
+    )
+
+    report = update_agent_restarts.restart_idle_agents(
+        _registered_workspace(tmp_path), _OWN_CHAT, http
+    )
+
+    assert report["restarted"] == [] and report["left_running"] == []
+    assert [entry["chat_id"] for entry in report["failed"]] == ["agent-idle"]
+    assert "did not answer" in report["failed"][0]["detail"]
 
 
 def test_the_chat_list_is_retried_while_the_restarted_chat_app_comes_back(
     tmp_path: Path,
 ) -> None:
-    not_ready = update_runtime.FetchedPage(status=503, body="{}", headers={})
     http = _ScriptedHttp(
         [
             None,
-            not_ready,
-            _chat_list_page(_chat("agent-idle", "Trip", "idle", "WAITING")),
+            _page(503, {}),
+            _page(200, {"chats": [_chat("agent-idle", "Trip", "idle")]}),
         ]
     )
     slept: list[float] = []
@@ -286,9 +226,7 @@ def test_the_chat_list_is_retried_while_the_restarted_chat_app_comes_back(
 def test_a_chat_app_that_never_answers_restarts_nothing_and_says_why(
     tmp_path: Path,
 ) -> None:
-    http = _ScriptedHttp(
-        [update_runtime.FetchedPage(status=503, body="{}", headers={})]
-    )
+    http = _ScriptedHttp([_page(503, {})])
 
     with pytest.raises(
         update_agent_restarts.ChatListUnavailableError, match="HTTP 503"
@@ -300,56 +238,89 @@ def test_a_chat_app_that_never_answers_restarts_nothing_and_says_why(
             lambda _: None,
         )
     assert http.reads > 1
+    assert http.posted == []
 
 
-def test_the_pass_waits_for_its_own_turn_to_end_not_a_transcript_that_reads_idle(
-    tmp_path: Path,
-) -> None:
-    workspace = _registered_workspace(tmp_path)
+def test_the_pass_is_restarted_once_the_chat_app_finds_it_idle(tmp_path: Path) -> None:
+    """Busy and unanswered restarts are asked again; the chat app decides when the turn is over."""
     http = _ScriptedHttp(
-        [
-            _chat_list_page(_chat(_OWN_CHAT, "Update", "working", "RUNNING")),
-            _chat_list_page(_chat(_OWN_CHAT, "Update", "idle", "RUNNING")),
-            None,
-            _chat_list_page(_chat(_OWN_CHAT, "Update", "idle", "WAITING")),
-        ]
+        [_page(200, {"chats": []})],
+        [_page(409, {"busy_with": "working"}), None, _page(200, {"status": "ok"})],
     )
 
-    is_idle = update_agent_restarts.wait_for_idle_chat(
-        lambda: update_agent_restarts.read_listed_chat(workspace, _OWN_CHAT, http),
-        deadline_seconds=60.0,
-        poll_seconds=1.0,
-        monotonic=_FakeClock(0.0),
-        sleep=lambda _: None,
+    problem = update_agent_restarts.restart_when_idle(
+        _registered_workspace(tmp_path),
+        _OWN_CHAT,
+        http,
+        _FakeClock(0.0),
+        lambda _: None,
     )
 
-    assert is_idle
-    assert http.reads == 4
+    assert problem is None
+    assert len(http.posted) == 3
 
 
-def test_the_note_stands_on_its_own_and_carries_the_chats_not_restarted() -> None:
+def test_a_pass_still_busy_at_the_deadline_is_not_restarted(tmp_path: Path) -> None:
+    http = _ScriptedHttp(
+        [_page(200, {"chats": []})], [_page(409, {"busy_with": "working"})]
+    )
+
+    problem = update_agent_restarts.restart_when_idle(
+        _registered_workspace(tmp_path),
+        _OWN_CHAT,
+        http,
+        _FakeClock(update_agent_restarts.SELF_RESTART_DEADLINE_SECONDS),
+        lambda _: None,
+    )
+
+    assert problem == "it was still working after 30 minutes"
+
+
+@pytest.mark.parametrize(
+    "restart_report, expected_line",
+    [
+        (
+            {
+                "restarted": [],
+                "left_running": [
+                    {
+                        "chat_id": "agent-working",
+                        "title": "Research",
+                        "busy_with": "working",
+                    }
+                ],
+                "failed": [
+                    {"chat_id": "agent-failing", "title": "Budget", "detail": "x"}
+                ],
+            },
+            'still running the previous version: "Research" (agent-working), "Budget" (agent-failing).',
+        ),
+        (None, "Restarting the workspace's other chats did not run"),
+    ],
+    ids=["some-not-restarted", "restart-agents-failed"],
+)
+def test_the_note_names_every_chat_not_restarted_or_that_none_were(
+    restart_report: dict[str, list[dict[str, str]]] | None, expected_line: str
+) -> None:
     note = update_agent_restarts.compose_self_restart_note(
-        "Claude Code  2.1.300\n",
-        [{"chat_id": "agent-working", "title": "Research", "busy_with": "working"}],
+        "Claude Code  2.1.300\n", restart_report
     )
 
     assert note.startswith(
         "<background-task-report>\n<summary>Restarted to finish the update</summary>\n"
     )
     assert "what the update installed: Claude Code 2.1.300." in note
-    assert '"Research"' in note
-    assert str(update_agent_restarts.AGENT_RESTARTS_REPORT_REL) in note
+    assert expected_line in note
 
 
 def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
-    fake_chat_list: Any,
+    fake_chat_app: Any,
 ) -> None:
     """The helper is detached and carries no agent id, so the stop half of the restart, which
     kills every process carrying the chat's agent id, leaves it alive to send the note."""
-    workspace = fake_chat_list.workspace
+    workspace = fake_chat_app.workspace
     record = _install_message_chat_recorder(workspace)
-    report_path = workspace / update_agent_restarts.AGENT_RESTARTS_REPORT_REL
-    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path = workspace / "agent-restarts.json"
     report_path.write_text(
         json.dumps(
             {
@@ -361,19 +332,10 @@ def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
                         "busy_with": "working",
                     }
                 ],
-                "failed": [
-                    {
-                        "chat_id": "agent-failing",
-                        "title": "Budget",
-                        "detail": "the chat is converging",
-                    }
-                ],
+                "failed": [],
             }
         )
     )
-    fake_chat_list.answers = [
-        (200, {"chats": [_chat(_OWN_CHAT, "Update", "idle", "WAITING")]})
-    ]
     env = {key: value for key, value in os.environ.items() if key != "MINDS_CHAT_ID"}
     env["MNGR_AGENT_ID"] = _OWN_CHAT
 
@@ -384,6 +346,8 @@ def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
             "restart-self",
             "--reason",
             "Claude Code 2.1.300",
+            "--restart-report",
+            str(report_path),
             "--repo-root",
             str(workspace),
         ],
@@ -397,39 +361,37 @@ def test_restart_self_restarts_the_chat_from_a_helper_the_restart_cannot_kill(
 
     deadline = time.monotonic() + _DELIVERY_DEADLINE_SECONDS
     while not _calls(record):
-        assert time.monotonic() < deadline, "the helper never restarted the chat"
-        time.sleep(0.1)
-    while len(_calls(record)) < 2:
         assert time.monotonic() < deadline, "the helper never sent the note"
         time.sleep(0.1)
-    restart_call, note_call = _calls(record)
-    assert restart_call["argv"] == [_OWN_CHAT, "--interrupt"]
+    assert fake_chat_app.interrupts == [(_OWN_CHAT, _ONLY_IF_IDLE)]
+    [note_call] = _calls(record)
     assert note_call["argv"][:2] == [_OWN_CHAT, "--message-file"]
-    assert restart_call["agent_id"] is None and note_call["agent_id"] is None
+    assert note_call["agent_id"] is None
     assert "Claude Code 2.1.300" in note_call["note"]
-    assert '"Research"' in note_call["note"]
-    assert '"Budget"' in note_call["note"]
+    assert '"Research" (agent-working)' in note_call["note"]
 
 
-def test_a_self_restart_that_is_refused_tells_the_chat_it_did_not_happen(
-    fake_chat_list: Any, monkeypatch: pytest.MonkeyPatch
+def test_a_self_restart_that_never_happens_tells_the_chat_so(
+    fake_chat_app: Any,
 ) -> None:
     """The results message has told the user this chat restarts; when it does not, the chat
     is told so instead of the success note."""
-    workspace = fake_chat_list.workspace
+    workspace = fake_chat_app.workspace
     record = _install_message_chat_recorder(workspace)
-    monkeypatch.setenv("FAKE_INTERRUPT_FAILS", _OWN_CHAT)
-    fake_chat_list.answers = [
-        (200, {"chats": [_chat(_OWN_CHAT, "Update", "idle", "WAITING")]})
-    ]
+    fake_chat_app.interrupt_answers = {
+        _OWN_CHAT: [(500, {"detail": "mngr start failed"})]
+    }
 
     rc = update_agent_restarts.restart_self_when_idle(
-        workspace, _OWN_CHAT, update_runtime.HttpClient(), update_runtime.Runner()
+        workspace,
+        _OWN_CHAT,
+        update_runtime.HttpClient(),
+        update_runtime.Runner(),
+        _FakeClock(update_agent_restarts.SELF_RESTART_DEADLINE_SECONDS),
+        lambda _: None,
     )
 
     assert rc == 1
-    restart_call, failure_call = _calls(record)
-    assert restart_call["argv"] == [_OWN_CHAT, "--interrupt"]
+    [failure_call] = _calls(record)
     assert failure_call["argv"][:2] == [_OWN_CHAT, "--message-file"]
-    assert "not restarted" in failure_call["note"]
-    assert "the chat is converging" in failure_call["note"]
+    assert "the restart kept failing (mngr start failed)" in failure_call["note"]

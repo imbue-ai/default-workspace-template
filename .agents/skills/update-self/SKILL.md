@@ -582,19 +582,22 @@ resumes), and how to honor a rollback request are in
 
   ```bash
   python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-      restart-agents
+      restart-agents > data/.tasks/update-self/agent-restarts.json
+  cat data/.tasks/update-self/agent-restarts.json
   ```
 
-  Its JSON lists what it `restarted`, what it `left_running` because it was
-  mid-turn, waiting on a dialog, mid-handoff, or receiving a message
-  (`busy_with` says which), and what `failed`. No turn is interrupted, but a
-  restart does end a background command an idle chat was waiting on; the chat
-  then gets that command's report saying it was killed, and can run it again.
-  The results message names each chat left running or failed, says it is still
-  on the previous version, and asks the user whether to interrupt and restart
-  it (`python3 system/scripts/message_chat.py <chat-id> --interrupt` on a
-  yes). A non-zero exit with no JSON means no chat was restarted; say so in
-  the same place.
+  Its JSON lists what it `restarted`, what it `left_running` because the chat
+  app found it busy (`busy_with` says with what: working, waiting on a dialog,
+  switching to another agent, receiving a message, holding queued messages),
+  and what `failed`. The chat app checks each chat at the moment of its
+  restart, so a chat mid-turn is left running, but a restart does end a
+  background command an idle chat was waiting on; the chat then gets that
+  command's report saying it was killed, and can run it again. The results
+  message names each chat left running or failed, says it is still on the
+  previous version, and asks the user whether to interrupt and restart it
+  (`python3 system/scripts/message_chat.py <chat-id> --interrupt` on a yes). A
+  non-zero exit with no JSON means no chat was restarted; say so in the same
+  place.
 
 ### 5d. Escalate the built-in defects this pass found
 
@@ -687,11 +690,14 @@ to end, restarts this chat, and sends it a note asking you to confirm the
 restart to the user (and to repeat the offer for any chat left running or
 whose restart failed); when the restart does not happen, its note says so
 instead. `--reason` is the report's one-line **Agent restarts** summary of
-what the restart picks up:
+what the restart picks up, and `--restart-report` is the file §5c's
+`restart-agents` wrote (the note says the other chats were not restarted when
+it holds no report):
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    restart-self --reason "<what the restart picks up, one plain line>"
+    restart-self --reason "<what the restart picks up, one plain line>" \
+    --restart-report data/.tasks/update-self/agent-restarts.json
 ```
 
 Then end the turn with the results message, which says this chat restarts

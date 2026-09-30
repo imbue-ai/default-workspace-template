@@ -4,15 +4,16 @@ An agent's harness process loads its binary, its extensions and some of its conf
 it starts, so an update that changes one of them reaches a running agent only when that agent
 is restarted. A restart keeps the conversation: each harness resumes its own session.
 
-``restart_idle_agents`` restarts every agent the chat app lists that has ended its turn, other
-than the pass's own chat and its worker, and reports the ones it left running because they
-were busy. ``start_self_restart`` restarts the pass's own chat once its last turn ends,
-from a detached helper, and sends it a note to confirm the restart to the user (or, when
-the restart does not happen, a note saying so).
+``restart_idle_agents`` asks the chat app to restart every chat it lists, other than the
+pass's own chat and its worker, if that chat has ended its turn, and reports the ones the chat
+app left running because they were busy. ``start_self_restart`` restarts the pass's own chat
+once its last turn ends, from a detached helper, and sends it a note to confirm the restart to
+the user (or, when the restart does not happen, a note saying so).
 
-Every restart goes through ``system/scripts/message_chat.py --interrupt``, the chat app's
-interrupt route: the chat app knows which agent a chat runs on and refuses a restart during
-a handoff. These run only after a successful apply, so the tree is the release's and has it.
+Every restart is the chat app's interrupt route with ``only_if_idle``: the chat app knows which
+agent a chat runs on and what it is doing, decides at the moment of the restart, and refuses
+one during a handoff. The route is posted to directly, never through ``mngr``, which would
+check none of that. These run only after a successful apply, so the chat app is the release's.
 """
 
 from __future__ import annotations
@@ -21,8 +22,9 @@ import json
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from run_in_background import wrap_background_task_report
@@ -32,14 +34,12 @@ from update_runtime import HttpClient, Runner
 CHAT_APP_NAME = "chat"
 CHATS_PATH = "/api/chats"
 MESSAGE_CHAT_REL = Path("system") / "scripts" / "message_chat.py"
+# The staged copy of the flow the pass ran from, which it leaves in place.
+RESTART_AGENTS_COMMAND_REL = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
 
 # The flow's worker, which the pass stops itself once it has consumed the worker's report.
 UPDATE_WORKER_NAME = "update-self"
 
-# ``restart-agents`` leaves its report here for ``restart-self`` to carry into the note.
-AGENT_RESTARTS_REPORT_REL = (
-    Path("data") / ".tasks" / "update-self" / "agent-restarts.json"
-)
 SELF_RESTART_DIR_REL = Path("data") / ".tasks" / "update-self" / "self-restart"
 SELF_RESTART_NOTE_NAME = "note.md"
 SELF_RESTART_FAILURE_NOTE_NAME = "failure-note.md"
@@ -48,13 +48,9 @@ SELF_RESTART_LOG_NAME = "helper.log"
 # The variable mngr tags an agent's processes with and kills them by on a stop.
 AGENT_ID_ENV = "MNGR_AGENT_ID"
 
-# The chat app's status for a chat whose agent has ended its turn, and the mngr lifecycle
-# state its Stop hook leaves behind. A transcript-derived "idle" alone can show for a moment
-# between an assistant message and the tool call after it.
-IDLE_CHAT_STATUS = "idle"
 STOPPED_CHAT_STATUS = "stopped"
-ATTENTION_CHAT_STATUS = "attention"
-WAITING_LIFECYCLE_STATE = "WAITING"
+# What the chat app's 409 for a chat mid-handoff carries instead of ``busy_with``.
+HANDOFF_PHASE_FIELD = "phase"
 
 # How long the chat list is retried while the chat app is unreachable or not ready: the apply
 # has just restarted it.
@@ -62,6 +58,8 @@ CHAT_LIST_RETRY_WINDOW_SECONDS = 60.0
 CHAT_LIST_RETRY_INTERVAL_SECONDS = 2.0
 CHAT_LIST_REQUEST_TIMEOUT_SECONDS = 10.0
 
+# The interrupt route answers once its ``mngr start --restart`` has finished.
+INTERRUPT_REQUEST_TIMEOUT_SECONDS = 120.0
 MESSAGE_CHAT_TIMEOUT_SECONDS = 180.0
 
 # How long the self-restart helper waits for the pass's last turn to end.
@@ -75,57 +73,38 @@ class ChatListUnavailableError(Exception):
 
 @dataclass(frozen=True)
 class ListedChat:
-    """One chat from the chat app's list, as much of it as a restart decision reads."""
+    """One chat from the chat app's list, as much of it as choosing what to restart reads."""
 
     chat_id: str
     name: str
     title: str
     # The chat app's status for the chat (its ``ChatStatus`` wire value).
     status: str
-    # The mngr lifecycle state of the agent the chat runs on.
-    lifecycle_state: str
-    is_converging: bool
-    # A send is in flight, waiting for the agent's harness to come up; a restart would land
-    # underneath it.
-    is_receiving_message: bool
 
-    @property
-    def is_idle(self) -> bool:
-        return (
-            self.status == IDLE_CHAT_STATUS
-            and self.lifecycle_state == WAITING_LIFECYCLE_STATE
-            and not self.is_converging
-            and not self.is_receiving_message
-        )
 
-    @property
-    def busy_with(self) -> str:
-        """What a chat that is not idle is doing, in the words the results message uses."""
-        if self.is_converging:
-            return "switching to another agent"
-        if self.status == ATTENTION_CHAT_STATUS:
-            return "waiting on a dialog"
-        if self.is_receiving_message:
-            return "receiving a message"
-        return "working"
+class InterruptVerdict(Enum):
+    RESTARTED = "restarted"
+    BUSY = "busy"
+    GONE = "gone"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True)
-class AgentRestartPlan:
-    to_restart: tuple[ListedChat, ...]
-    left_running: tuple[ListedChat, ...]
+class InterruptOutcome:
+    verdict: InterruptVerdict
+    # What a busy chat is doing, or why the restart failed; empty otherwise.
+    detail: str
 
 
-def parse_chat_list(body: object) -> list[ListedChat]:
+def parse_chat_list(answer_text: str) -> list[ListedChat]:
     """The chats in a ``GET /api/chats`` answer; raises ``ValueError`` for one of another shape."""
-    if not isinstance(body, dict) or not isinstance(body.get("chats"), list):
+    body = json.loads(answer_text)
+    raw_chats = body.get("chats") if isinstance(body, dict) else None
+    if not isinstance(raw_chats, list):
         raise ValueError("the chat list answer carries no `chats` list")
     chats: list[ListedChat] = []
-    for raw in body["chats"]:
-        active_agent = raw.get("active_agent") if isinstance(raw, dict) else None
-        if not isinstance(active_agent, dict):
-            raise ValueError(f"a chat in the list has no active agent: {raw!r}")
-        chat_id = raw.get("chat_id")
+    for raw in raw_chats:
+        chat_id = raw.get("chat_id") if isinstance(raw, dict) else None
         if not isinstance(chat_id, str) or not chat_id:
             raise ValueError(f"a chat in the list has no id: {raw!r}")
         chats.append(
@@ -134,37 +113,9 @@ def parse_chat_list(body: object) -> list[ListedChat]:
                 name=str(raw.get("name") or ""),
                 title=str(raw.get("title") or raw.get("name") or chat_id),
                 status=str(raw.get("status") or ""),
-                lifecycle_state=str(active_agent.get("state") or ""),
-                is_converging=raw.get("handoff") is not None,
-                is_receiving_message=active_agent.get("is_connecting") is True,
             )
         )
     return chats
-
-
-def plan_agent_restarts(
-    chats: Sequence[ListedChat], own_chat_id: str
-) -> AgentRestartPlan:
-    """Which chats to restart now: every idle one but the pass's own and its worker's.
-
-    A stopped chat needs nothing, since its next start loads what the update installed; any
-    other is mid-turn, waiting on a dialog, or mid-handoff, and is left running for the user
-    to decide about.
-    """
-    to_restart: list[ListedChat] = []
-    left_running: list[ListedChat] = []
-    for chat in chats:
-        if chat.chat_id == own_chat_id or chat.name == UPDATE_WORKER_NAME:
-            continue
-        if chat.status == STOPPED_CHAT_STATUS:
-            continue
-        if chat.is_idle:
-            to_restart.append(chat)
-        else:
-            left_running.append(chat)
-    return AgentRestartPlan(
-        to_restart=tuple(to_restart), left_running=tuple(left_running)
-    )
 
 
 def fetch_chat_list(
@@ -184,7 +135,7 @@ def fetch_chat_list(
             )
             if page is not None and page.status == 200:
                 try:
-                    return parse_chat_list(json.loads(page.body))
+                    return parse_chat_list(page.body)
                 except ValueError as exc:
                     raise ChatListUnavailableError(
                         f"the chat app's chat list did not parse: {exc}"
@@ -199,116 +150,93 @@ def fetch_chat_list(
         sleep(CHAT_LIST_RETRY_INTERVAL_SECONDS)
 
 
-def interrupt_argv(repo_root: Path, chat_id: str) -> list[str]:
-    """The ``message_chat.py --interrupt`` call that restarts a chat."""
-    return [sys.executable, str(repo_root / MESSAGE_CHAT_REL), chat_id, "--interrupt"]
-
-
-def send_note_argv(repo_root: Path, chat_id: str, note_path: Path) -> list[str]:
-    """The ``message_chat.py`` call that sends a chat the note at ``note_path``."""
-    return [
-        sys.executable,
-        str(repo_root / MESSAGE_CHAT_REL),
-        chat_id,
-        "--message-file",
-        str(note_path),
-    ]
-
-
-def _run_message_chat(
-    argv: Sequence[str], repo_root: Path, runner: Runner
-) -> str | None:
-    """Run one ``message_chat.py`` call; None when it worked, else what went wrong."""
-    try:
-        result = runner.run(
-            argv,
-            cwd=str(repo_root),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=MESSAGE_CHAT_TIMEOUT_SECONDS,
+def interrupt_if_idle(
+    repo_root: Path, chat_id: str, http: HttpClient
+) -> InterruptOutcome:
+    """Ask the chat app to restart ``chat_id`` only if it has ended its turn, and report what it did."""
+    base_url = registry_app_url(repo_root, CHAT_APP_NAME)
+    if base_url is None:
+        return InterruptOutcome(
+            InterruptVerdict.FAILED, "the chat app has no row in the app registry"
         )
-    except subprocess.TimeoutExpired:
-        return f"it did not finish within {MESSAGE_CHAT_TIMEOUT_SECONDS:g}s"
-    except OSError as exc:
-        return f"it could not be run: {exc}"
-    if result.returncode != 0:
-        return (result.stderr or "").strip() or f"exit code {result.returncode}"
-    return None
+    page = http.post_json(
+        f"{base_url.rstrip('/')}{CHATS_PATH}/{chat_id}/interrupt",
+        {"only_if_idle": True},
+        INTERRUPT_REQUEST_TIMEOUT_SECONDS,
+    )
+    if page is None:
+        return InterruptOutcome(
+            InterruptVerdict.FAILED, f"the chat app at {base_url} did not answer"
+        )
+    if 200 <= page.status < 300:
+        return InterruptOutcome(InterruptVerdict.RESTARTED, "")
+    if page.status == 404:
+        return InterruptOutcome(InterruptVerdict.GONE, "")
+    try:
+        body = json.loads(page.body)
+    except ValueError:
+        body = None
+    body = body if isinstance(body, dict) else {}
+    if page.status == 409:
+        if HANDOFF_PHASE_FIELD in body:
+            return InterruptOutcome(InterruptVerdict.BUSY, "switching to another agent")
+        return InterruptOutcome(
+            InterruptVerdict.BUSY, str(body.get("busy_with") or "working")
+        )
+    return InterruptOutcome(
+        InterruptVerdict.FAILED,
+        str(body.get("detail") or f"the chat app answered HTTP {page.status}"),
+    )
 
 
 def restart_idle_agents(
     repo_root: Path,
     own_chat_id: str,
     http: HttpClient,
-    runner: Runner,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, list[dict[str, str]]]:
     """Restart every idle chat but the pass's own and its worker's; the report of what happened.
 
-    Each chat is read again just before its restart, since the restarts run one after another
-    and a chat that was idle in the first read may have started a turn since; one that has is
-    left running instead, one no longer listed is skipped, and one that cannot be read again
-    is reported as failed rather than restarted blind. The report is also written to
-    ``AGENT_RESTARTS_REPORT_REL``. Raises ``ChatListUnavailableError`` when there is no chat
-    list to act on.
+    A stopped chat needs nothing, since its next start loads what the update installed; one
+    deleted since the list was read is skipped. Raises ``ChatListUnavailableError`` when there
+    is no chat list to act on.
     """
-    report_path = repo_root / AGENT_RESTARTS_REPORT_REL
-    report_path.unlink(missing_ok=True)
-    plan = plan_agent_restarts(
-        fetch_chat_list(repo_root, http, monotonic, sleep), own_chat_id
-    )
     report: dict[str, list[dict[str, str]]] = {
         "restarted": [],
-        "left_running": [_left_running_entry(chat) for chat in plan.left_running],
+        "left_running": [],
         "failed": [],
     }
-    for planned in plan.to_restart:
-        listed_now = read_chat_list_once(repo_root, http)
-        if listed_now is None:
-            # With the chat app unreachable, message_chat.py's backoff would restart the agent
-            # through mngr, which checks neither for a turn nor for a handoff in progress.
-            report["failed"].append(
-                {
-                    "chat_id": planned.chat_id,
-                    "title": planned.title,
-                    "detail": "the chat app could not show its state just before the restart",
-                }
-            )
+    for chat in fetch_chat_list(repo_root, http, monotonic, sleep):
+        if chat.chat_id == own_chat_id or chat.name == UPDATE_WORKER_NAME:
             continue
-        current = _find_chat(listed_now, planned.chat_id)
-        if current is None:
-            # Deleted since the first read: there is nothing left to restart.
+        if chat.status == STOPPED_CHAT_STATUS:
             continue
-        recheck = plan_agent_restarts([current], own_chat_id)
-        report["left_running"].extend(
-            _left_running_entry(entry) for entry in recheck.left_running
-        )
-        if not recheck.to_restart:
-            continue
-        chat = recheck.to_restart[0]
-        problem = _run_message_chat(
-            interrupt_argv(repo_root, chat.chat_id), repo_root, runner
-        )
-        if problem is None:
-            report["restarted"].append({"chat_id": chat.chat_id, "title": chat.title})
-        else:
-            report["failed"].append(
-                {"chat_id": chat.chat_id, "title": chat.title, "detail": problem}
-            )
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, indent=2) + "\n")
+        outcome = interrupt_if_idle(repo_root, chat.chat_id, http)
+        entry = {"chat_id": chat.chat_id, "title": chat.title}
+        match outcome.verdict:
+            case InterruptVerdict.RESTARTED:
+                report["restarted"].append(entry)
+            case InterruptVerdict.BUSY:
+                report["left_running"].append({**entry, "busy_with": outcome.detail})
+            case InterruptVerdict.FAILED:
+                report["failed"].append({**entry, "detail": outcome.detail})
+            case InterruptVerdict.GONE:
+                pass
     return report
 
 
-def _left_running_entry(chat: ListedChat) -> dict[str, str]:
-    return {"chat_id": chat.chat_id, "title": chat.title, "busy_with": chat.busy_with}
+def read_restart_report(path: Path) -> Mapping[str, list[dict[str, str]]] | None:
+    """What ``restart-agents`` printed into ``path``; None when it printed no report (it failed)."""
+    try:
+        report = json.loads(path.read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+    return report if isinstance(report, dict) else None
 
 
 def compose_self_restart_note(
-    reason: str, not_restarted: Sequence[Mapping[str, str]]
+    reason: str, restart_report: Mapping[str, Sequence[Mapping[str, str]]] | None
 ) -> str:
     """The note the pass's own chat gets once it is back: all of it for the agent, one line for the user.
 
@@ -324,14 +252,27 @@ def compose_self_restart_note(
         "If you do not remember the update, the earlier conversation could not be resumed: say "
         "so plainly, and do not guess at what was said before.",
     ]
-    if not_restarted:
-        names = ", ".join(f'"{chat["title"]}"' for chat in not_restarted)
+    restart_command = "`python3 system/scripts/message_chat.py <chat-id> --interrupt`"
+    if restart_report is None:
         lines.append(
-            f"These were not restarted and are still running the previous version: {names}. Ask the user "
-            "whether to interrupt and restart them now (`python3 system/scripts/message_chat.py "
-            "<chat-id> --interrupt`); their ids are in "
-            f"`{AGENT_RESTARTS_REPORT_REL}`. Do not restart them without a yes."
+            "Restarting the workspace's other chats did not run, so they may all still be on the "
+            "previous version. Tell the user, and offer to restart the idle ones now (`python3 "
+            f"{RESTART_AGENTS_COMMAND_REL} restart-agents`); do not run it without a yes."
         )
+    else:
+        not_restarted = [
+            *restart_report.get("left_running", []),
+            *restart_report.get("failed", []),
+        ]
+        if not_restarted:
+            names = ", ".join(
+                f'"{chat["title"]}" ({chat["chat_id"]})' for chat in not_restarted
+            )
+            lines.append(
+                f"These were not restarted and are still running the previous version: {names}. "
+                f"Ask the user whether to interrupt and restart them now ({restart_command}); "
+                "do not restart them without a yes."
+            )
     return wrap_background_task_report(
         "Restarted to finish the update", "\n\n".join(lines)
     )
@@ -353,16 +294,6 @@ def compose_self_restart_failure_note(problem: str) -> str:
     return wrap_background_task_report(
         "The restart after the update did not happen", body
     )
-
-
-def read_chats_not_restarted(repo_root: Path) -> list[dict[str, str]]:
-    """The chats ``restart-agents`` left running or failed to restart this pass; none when it
-    has not run."""
-    try:
-        report = json.loads((repo_root / AGENT_RESTARTS_REPORT_REL).read_text())
-    except FileNotFoundError:
-        return []
-    return [*report["left_running"], *report["failed"]]
 
 
 def start_self_restart(
@@ -395,54 +326,70 @@ def start_self_restart(
     return note_path
 
 
-def wait_for_idle_chat(
-    read_chat: Callable[[], ListedChat | None],
-    deadline_seconds: float,
-    poll_seconds: float,
+def send_note_argv(repo_root: Path, chat_id: str, note_path: Path) -> list[str]:
+    """The ``message_chat.py`` call that sends a chat the note at ``note_path``."""
+    return [
+        sys.executable,
+        str(repo_root / MESSAGE_CHAT_REL),
+        chat_id,
+        "--message-file",
+        str(note_path),
+    ]
+
+
+def _send_note(
+    repo_root: Path, chat_id: str, note_path: Path, runner: Runner
+) -> str | None:
+    """Send one note through ``message_chat.py``; None when it was sent, else what went wrong."""
+    try:
+        result = runner.run(
+            send_note_argv(repo_root, chat_id, note_path),
+            cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=MESSAGE_CHAT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return f"it did not finish within {MESSAGE_CHAT_TIMEOUT_SECONDS:g}s"
+    except OSError as exc:
+        return f"it could not be run: {exc}"
+    if result.returncode != 0:
+        return (result.stderr or "").strip() or f"exit code {result.returncode}"
+    return None
+
+
+def restart_when_idle(
+    repo_root: Path,
+    chat_id: str,
+    http: HttpClient,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
-) -> bool:
-    """Poll until the chat has ended its turn; False when the deadline passes first.
+) -> str | None:
+    """Keep asking the chat app to restart ``chat_id`` if idle until it does; None once it has,
+    else why it never did.
 
-    A chat the list cannot show right now (the chat app restarting, a read that failed) is
-    not idle, and is polled again.
+    A busy chat and a chat app that cannot answer right now are both asked again; only a chat
+    that no longer exists, or the deadline, ends the wait.
     """
     started_at = monotonic()
     while True:
-        chat = read_chat()
-        if chat is not None and chat.is_idle:
-            return True
-        if monotonic() - started_at >= deadline_seconds:
-            return False
-        sleep(poll_seconds)
-
-
-def read_chat_list_once(repo_root: Path, http: HttpClient) -> list[ListedChat] | None:
-    """One read of the chat list; None when the chat app cannot give it now."""
-    base_url = registry_app_url(repo_root, CHAT_APP_NAME)
-    if base_url is None:
-        return None
-    page = http.get_page(
-        f"{base_url.rstrip('/')}{CHATS_PATH}", CHAT_LIST_REQUEST_TIMEOUT_SECONDS
-    )
-    if page is None or page.status != 200:
-        return None
-    try:
-        return parse_chat_list(json.loads(page.body))
-    except ValueError:
-        return None
-
-
-def _find_chat(chats: Iterable[ListedChat], chat_id: str) -> ListedChat | None:
-    return next((chat for chat in chats if chat.chat_id == chat_id), None)
-
-
-def read_listed_chat(
-    repo_root: Path, chat_id: str, http: HttpClient
-) -> ListedChat | None:
-    """One read of ``chat_id`` from the chat list; None when the chat app cannot show it now."""
-    chats = read_chat_list_once(repo_root, http)
-    return None if chats is None else _find_chat(chats, chat_id)
+        outcome = interrupt_if_idle(repo_root, chat_id, http)
+        match outcome.verdict:
+            case InterruptVerdict.RESTARTED:
+                return None
+            case InterruptVerdict.GONE:
+                return "the chat no longer exists"
+            case InterruptVerdict.BUSY | InterruptVerdict.FAILED:
+                pass
+        if monotonic() - started_at >= SELF_RESTART_DEADLINE_SECONDS:
+            return (
+                f"it was still {outcome.detail} after {SELF_RESTART_DEADLINE_SECONDS / 60:g} minutes"
+                if outcome.verdict is InterruptVerdict.BUSY
+                else f"the restart kept failing ({outcome.detail})"
+            )
+        sleep(SELF_RESTART_POLL_SECONDS)
 
 
 def restart_self_when_idle(
@@ -453,45 +400,29 @@ def restart_self_when_idle(
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    """The detached helper's work: wait for the chat's turn to end, restart it, then send it the note.
+    """The detached helper's work: restart the chat once its turn has ended, then send it the note.
 
     A restart that does not happen is told to the chat instead, in a note of its own.
     """
     _log(f"Waiting for chat {chat_id} to end its turn")
     work_dir = repo_root / SELF_RESTART_DIR_REL
-    if not wait_for_idle_chat(
-        lambda: read_listed_chat(repo_root, chat_id, http),
-        deadline_seconds=SELF_RESTART_DEADLINE_SECONDS,
-        poll_seconds=SELF_RESTART_POLL_SECONDS,
-        monotonic=monotonic,
-        sleep=sleep,
-    ):
-        problem = f"its turn did not end within {SELF_RESTART_DEADLINE_SECONDS / 60:g} minutes"
-    else:
-        restart_problem = _run_message_chat(
-            interrupt_argv(repo_root, chat_id), repo_root, runner
+    problem = restart_when_idle(repo_root, chat_id, http, monotonic, sleep)
+    if problem is None:
+        note_problem = _send_note(
+            repo_root, chat_id, work_dir / SELF_RESTART_NOTE_NAME, runner
         )
-        if restart_problem is None:
-            note_problem = _run_message_chat(
-                send_note_argv(repo_root, chat_id, work_dir / SELF_RESTART_NOTE_NAME),
-                repo_root,
-                runner,
+        if note_problem is not None:
+            _log(
+                f"Restarted chat {chat_id}, but sending it the note failed: {note_problem}"
             )
-            if note_problem is not None:
-                _log(
-                    f"Restarted chat {chat_id}, but sending it the note failed: {note_problem}"
-                )
-                return 1
-            _log(f"Restarted chat {chat_id} and sent it the note")
-            return 0
-        problem = f"the restart failed ({restart_problem})"
+            return 1
+        _log(f"Restarted chat {chat_id} and sent it the note")
+        return 0
     _log(f"Chat {chat_id} was not restarted: {problem}")
     failure_note_path = work_dir / SELF_RESTART_FAILURE_NOTE_NAME
     work_dir.mkdir(parents=True, exist_ok=True)
     failure_note_path.write_text(compose_self_restart_failure_note(problem))
-    send_problem = _run_message_chat(
-        send_note_argv(repo_root, chat_id, failure_note_path), repo_root, runner
-    )
+    send_problem = _send_note(repo_root, chat_id, failure_note_path, runner)
     if send_problem is not None:
         _log(
             f"Telling chat {chat_id} its restart did not happen failed too: {send_problem}"
