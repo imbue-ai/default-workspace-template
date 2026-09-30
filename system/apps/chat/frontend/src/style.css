@@ -4,6 +4,8 @@
    system/libs/workspace_ui). What follows is the chat page's own: the transcript, the
    markdown, the card and its terminal face, the progress view. */
 @import "@imbue/workspace-ui/src/base.css";
+/* The Windows 95 theme, over the shared tokens. */
+@import "./win95.css";
 
 /* Why explicit sources (`source(none)` + `@source`): the utility classes live in
    the TS views' class strings, so enumerating the sources keeps the scan

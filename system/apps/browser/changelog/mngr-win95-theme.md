@@ -1,0 +1,1 @@
+The app's icon is a white pixel-art glyph (from the mind-sketches Windows 95 desktop prototype) drawn in `currentColor`, so it takes the colour of the text beside it: white on the desktop, black in the taskbar and the Start menu.

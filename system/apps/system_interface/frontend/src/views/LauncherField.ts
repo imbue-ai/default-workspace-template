@@ -1,14 +1,14 @@
 /**
- * The launcher field at the taskbar's left (launcher-and-getting-started plan section 4.1): a
- * one-row text area whose focus opens the menu and whose typing filters it. Shift+Enter breaks
- * the line and the field grows with its text (to a cap, then scrolls), so a longer message can be
- * written here; with a line break in it the text is a message, and the menu offers the free-text
- * rows alone. The field grows upward out of a one-row footprint in the taskbar, over the backdrop,
- * and tells its owner how far it rose so the menu can sit above it. Its keys are the menu's (plan
- * section 4.8): the arrows move the highlight (the caret, once the text has lines), Enter runs the
- * highlight, Ctrl+Enter (Cmd+Enter on a Mac) runs the secondary text action, and Escape clears the
- * text, then closes. In compact mode it collapses to an icon that expands over the taskbar's
- * entries while the menu is open.
+ * The Start button at the taskbar's left (launcher-and-getting-started plan section 4.1, in
+ * Windows 95 dress): a click opens the launcher menu, and a second click closes it. The typed
+ * filter and message field of the launcher still exists, as the foot of the open menu: a one-row
+ * text area hidden while the menu is closed, focused when it opens, whose typing filters the menu.
+ * Shift+Enter breaks the line and the field grows with its text (to a cap, then scrolls), so a
+ * longer message can be written here; with a line break in it the text is a message, and the menu
+ * offers the free-text rows alone. The field tells its owner how tall it stands so the menu can sit
+ * above it. Its keys are the menu's (plan section 4.8): the arrows move the highlight (the caret,
+ * once the text has lines), Enter runs the highlight, Ctrl+Enter (Cmd+Enter on a Mac) runs the
+ * secondary text action, and Escape clears the text, then closes.
  */
 
 import m from "mithril";
@@ -20,6 +20,13 @@ export const LAUNCHER_PLACEHOLDER = "Start app or send message...";
 const FIELD_GLYPH_SIZE = 14;
 /** Past this many lines the field scrolls rather than growing. */
 export const MAX_FIELD_LINES = 8;
+
+/** The four-pane flag on the Start button, drawn as pixels. */
+const START_FLAG_MARKUP =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="14" viewBox="0 0 16 14" shape-rendering="crispEdges" aria-hidden="true">' +
+  '<rect x="1" y="3" width="6" height="4" fill="#ff0000"/><rect x="8" y="2" width="7" height="4" fill="#00a000"/>' +
+  '<rect x="1" y="8" width="6" height="4" fill="#0000ff"/><rect x="8" y="7" width="7" height="4" fill="#ffff00"/>' +
+  "</svg>";
 
 export interface LauncherFieldAttrs {
   readonly query: string;
@@ -34,7 +41,7 @@ export interface LauncherFieldAttrs {
   readonly onRunHighlight: () => void;
   /** Run the secondary text action, whatever is highlighted. */
   readonly onRunSecondary: () => void;
-  /** How far the field stands above its one-row height, in px, each time that changes. */
+  /** How far the field stands above the taskbar, in px, each time that changes (0 while it is hidden). */
   readonly onRise: (risePx: number) => void;
 }
 
@@ -50,26 +57,27 @@ export function isLineBreakChord(
   return event.key === "Enter" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
 }
 
-/** Size the text area to its text: one line until it has more, and at most MAX_FIELD_LINES before it scrolls.
- *  Answers how far it stands above one row, in px; 0 where nothing can be measured (a DOM without layout). */
-function fitField(field: HTMLTextAreaElement): number {
+/** Size the text area to its text: one line until it has more, and at most MAX_FIELD_LINES before it scrolls. */
+function fitField(field: HTMLTextAreaElement): void {
   field.style.height = "";
   const lineHeight = Number.parseFloat(getComputedStyle(field).lineHeight);
-  if (field.scrollHeight === 0 || Number.isNaN(lineHeight)) return 0;
+  if (field.scrollHeight === 0 || Number.isNaN(lineHeight)) return;
   // With no height set, the one-row text area is its line plus its padding.
   const oneRowHeight = field.offsetHeight;
   const cap = lineHeight * MAX_FIELD_LINES + Math.max(0, oneRowHeight - lineHeight);
-  const height = Math.min(Math.max(field.scrollHeight, oneRowHeight), cap);
-  field.style.height = `${height}px`;
-  return height - oneRowHeight;
+  field.style.height = `${Math.min(Math.max(field.scrollHeight, oneRowHeight), cap)}px`;
 }
 
 export function LauncherField(): m.Component<LauncherFieldAttrs> {
   // The rise last told to the owner, told again only when it changes (a redraw follows each telling).
   let reportedRise = 0;
+  // Whether the last render had the menu open: the field takes the focus on the render that opens it.
+  let wasOpen = false;
 
   function fit(area: HTMLTextAreaElement, attrs: LauncherFieldAttrs): void {
-    const rise = fitField(area);
+    fitField(area);
+    // The whole field stands above the taskbar while the menu is open, and nothing does while it is closed.
+    const rise = attrs.isOpen ? (area.parentElement?.offsetHeight ?? 0) : 0;
     if (rise === reportedRise) return;
     reportedRise = rise;
     attrs.onRise(rise);
@@ -77,29 +85,29 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
 
   return {
     view(vnode) {
-      const { query, isOpen, isCompact, onOpen, onClose, onQuery } = vnode.attrs;
-      if (isCompact && !isOpen) {
-        return m(
-          Button,
-          {
-            variant: "ghost",
-            icon: true,
-            "aria-label": LAUNCHER_PLACEHOLDER,
-            extra: "launcher-field-toggle shrink-0",
-            "data-launcher-field": "",
-            onclick: onOpen,
+      const { query, isOpen, onOpen, onClose, onQuery } = vnode.attrs;
+      const start = m(
+        "button",
+        {
+          type: "button",
+          "data-launcher-start": "",
+          class: "launcher-start",
+          "aria-haspopup": "menu",
+          "aria-expanded": isOpen ? "true" : "false",
+          onclick: () => {
+            if (isOpen) onClose();
+            else onOpen();
           },
-          m.trust(icon("search", { size: FIELD_GLYPH_SIZE })),
-        );
-      }
+        },
+        [m.trust(START_FLAG_MARKUP), "Start"],
+      );
       const field = m(
         "div",
         {
-          "data-launcher-field": "",
           class:
-            "launcher-field absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-lg border bg-surface " +
-            "px-2.5 " +
-            (isOpen ? "border-accent" : "border-default"),
+            "launcher-field absolute bottom-full left-0 z-(--z-content) flex min-h-9 w-(--desk-launcher-menu-width) " +
+            "items-end gap-2 border bg-surface px-2.5 " +
+            (isOpen ? "border-accent" : "hidden border-default"),
         },
         [
           m(
@@ -117,16 +125,18 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
               "text-(length:--font-size-row) text-primary outline-none placeholder:text-faint",
             oncreate: (created: m.VnodeDOM) => {
               fit(created.dom as HTMLTextAreaElement, vnode.attrs);
-              if (isCompact) (created.dom as HTMLTextAreaElement).focus();
+              if (isOpen) (created.dom as HTMLTextAreaElement).focus();
+              wasOpen = isOpen;
             },
-            // A row that ran closed the menu under a focused field: the focus goes with it, so the next keys do not
-            // land in the field, and a click on the field (already focused, so no focus event) opens the menu again.
+            // The field takes the keys the moment the Start button opens the menu. A row that ran closed the menu
+            // under a focused field: the focus goes with it, so the next keys do not land in the field.
             onupdate: (updated: m.VnodeDOM) => {
-              fit(updated.dom as HTMLTextAreaElement, vnode.attrs);
-              if (!vnode.attrs.isOpen && document.activeElement === updated.dom)
-                (updated.dom as HTMLTextAreaElement).blur();
+              const area = updated.dom as HTMLTextAreaElement;
+              fit(area, vnode.attrs);
+              if (vnode.attrs.isOpen && !wasOpen) area.focus();
+              if (!vnode.attrs.isOpen && document.activeElement === area) area.blur();
+              wasOpen = vnode.attrs.isOpen;
             },
-            // The compact field collapses with the menu, and nothing stands above one row then.
             onremove: () => {
               if (reportedRise === 0) return;
               reportedRise = 0;
@@ -190,17 +200,12 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
               ),
         ],
       );
-      // The field keeps a one-row footprint and grows upward out of it, so the taskbar's height and its entries'
-      // places hold whatever the text's length. The slot is a flex item in the taskbar's flow; in compact mode it
-      // lies over the entries, centred in the taskbar by their alignment, as the collapsed button is.
+      // The slot spans the taskbar's height, so the field's foot (bottom-full) meets the backdrop's foot exactly
+      // where the menu's bottom offset is measured from.
       return m(
         "div",
-        {
-          class:
-            "launcher-field-slot h-9 " +
-            (isCompact ? "absolute inset-x-2 z-(--z-content)" : "relative w-72 max-w-[40vw] shrink-0"),
-        },
-        field,
+        { "data-launcher-field": "", class: "launcher-field-slot relative flex h-full shrink-0 items-center" },
+        [start, field],
       );
     },
   };

@@ -4,6 +4,8 @@
    system/libs/workspace_ui). The desktop's own tokens follow it. */
 @import "@imbue/workspace-ui/src/base.css";
 @import "./theme/default.css";
+/* The Windows 95 theme, over the default tokens. */
+@import "./theme/win95.css";
 
 /* Why explicit sources (`source(none)` + `@source`): the utility classes live in the TS views'
    class strings, so enumerating the sources keeps the scan deterministic and off the rest of the
