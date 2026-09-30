@@ -19,7 +19,7 @@ import { isMessageCarriedBySwitch } from "./models/Response";
 import { ChatPanel } from "./views/ChatPanel";
 import { SubagentView } from "./views/SubagentView";
 import { initShellPermissionResolutions } from "./views/permission-card";
-import { connectChatToShell, getShellHandshake, isFrameRendered } from "./shell";
+import { connectChatToShell, getShellHandshake, isFrameRendered, isShellAbove } from "./shell";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import { installLinkRouting, pageLinkRoutingContext } from "@imbue/workspace-ui/src/links";
@@ -73,11 +73,13 @@ async function bootstrap(): Promise<void> {
     isPresenceReported: isChatPage,
     path: isChatPage ? `/${chatId}` : `/${chatId}.${agentId}.${sessionId}`,
   });
+  // What a link opens through: the shell when one stands above the page, else the page's own fallbacks.
+  const linkConnection = { ...connection, isFramed: isShellAbove(window) };
   // The element menu (element-reference-menu plan section 7.3): a chat page drafts a reference straight into its
   // own composer (which attaches it as a file), whoever frames it; a sub-agent view has no composer and asks the
   // shell, through the root.
   installElementContextMenu({
-    connection,
+    connection: linkConnection,
     handshake: getShellHandshake,
     draft: isChatPage ? (text) => prependToComposer(chatId, text) : undefined,
     isDraftAvailable: isChatPage ? () => true : undefined,
@@ -90,7 +92,7 @@ async function bootstrap(): Promise<void> {
   if (rootElement) {
     // A link in a message opens inside the workspace or in the user's browser, and never takes the chat's own page
     // with it.
-    installLinkRouting(rootElement, MESSAGE_LINK_SELECTOR, pageLinkRoutingContext(window, connection));
+    installLinkRouting(rootElement, MESSAGE_LINK_SELECTOR, pageLinkRoutingContext(window, linkConnection));
     m.mount(rootElement, ChatDocument(chatId, agentId, sessionId));
     await runHook("ready");
   }

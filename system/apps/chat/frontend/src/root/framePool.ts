@@ -10,7 +10,7 @@
 
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
-import type { ChatPageEmbedApi } from "../embedApi";
+import { CHAT_ROOT_FRAME_CLASS, type ChatPageEmbedApi } from "../embedApi";
 
 export const MAX_HELD_FRAMES = 4;
 
@@ -91,7 +91,7 @@ export class InnerFramePool {
     frame.title = "Chat";
     frame.setAttribute("sandbox", FRAME_SANDBOX);
     frame.setAttribute("allow", FRAME_ALLOW);
-    frame.className = "chat-root-frame absolute inset-0 h-full w-full border-0";
+    frame.className = `${CHAT_ROOT_FRAME_CLASS} absolute inset-0 h-full w-full border-0`;
     frame.dataset.chatId = chatId;
     frame.hidden = true;
     const held: HeldFrame = { frame, lastShownAt: Date.now(), isLoaded: false };
