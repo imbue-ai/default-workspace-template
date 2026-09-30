@@ -855,7 +855,7 @@ describe("MessageInput switching harness", () => {
     expect(renderedText(findByAttr(rendered, "aria-label", "Switch and send"))).toContain("Switch and send");
     const strip = findByClass(rendered, "message-input-switch-strip");
     expect(renderedText(strip)).toContain(
-      "Your next message switches this chat to OpenAI (Codex), GPT-6 Astra · High",
+      "Next message switches this chat to OpenAI (Codex), GPT-6 Astra · High",
     );
     // Nothing has gone out: the switch waits for the send.
     expect(mocks.switchChat).not.toHaveBeenCalled();
@@ -905,16 +905,15 @@ describe("MessageInput switching harness", () => {
     expect(findByTag(after, "textarea")?.attrs?.value).toBe("Carry on in Codex");
   });
 
-  it("offers the dialog again from the strip, and a way to call the choice off", () => {
+  it("offers a way to call the choice off from the strip (the demo branch leaves the Change button out)", () => {
     mocks.switching.target = TARGET;
     const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
-    press(findByClass(rendered, "message-input-switch-change"));
-    expect(mocks.openSwitchDialog).toHaveBeenCalledWith("agent-1", TARGET);
+    expect(findByClass(rendered, "message-input-switch-change")).toBeUndefined();
     press(findByClass(rendered, "message-input-switch-cancel"));
     expect(mocks.setPendingAccount).toHaveBeenCalledWith("agent-1", null);
   });
 
-  it("offers the dialog for an armed rebind too, which was armed without one, and carries the pick made there", async () => {
+  it("names an armed rebind in the strip too, and carries the pick made for it", async () => {
     const target = { id: "acct-anthropic-2", harness: "claude", label: "Anthropic 2 (Claude Code)" };
     mocks.switching.target = target;
     mocks.switching.kind = "rebind";
@@ -923,8 +922,6 @@ describe("MessageInput switching harness", () => {
     expect(renderedText(findByClass(rendered, "message-input-switch-strip"))).toContain(
       "switches this chat to Anthropic 2 (Claude Code)",
     );
-    press(findByClass(rendered, "message-input-switch-change"));
-    expect(mocks.openSwitchDialog).toHaveBeenCalledWith("agent-1", target);
 
     mocks.switching.pick = { identity: { model_id: "haiku", effort: "low", fast: false }, label: "Haiku 4.5 · Low" };
     const armed = typeDraft(component, "agent-1", "Carry on here");

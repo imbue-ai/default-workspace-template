@@ -44,6 +44,9 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { icon, stopIcon } from "@imbue/workspace-ui/src/components/icons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 
+// Whether the switch strip offers its Change button; the demo branch leaves it out so the strip fits one line.
+const IS_SWITCH_CHANGE_BUTTON_SHOWN = false;
+
 const MAX_TEXTAREA_HEIGHT_PX = 200;
 
 /* Styling.
@@ -1035,31 +1038,38 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
             m(
               "span",
               { class: "message-input-switch-strip-text" },
-              `Your next message switches this chat to ${destination}`,
+              `Next message switches this chat to ${destination}`,
             ),
+            // The demo branch keeps the strip to one line: the cancel is a glyph, and the way to change the
+            // pick is the provider menu itself.
+            IS_SWITCH_CHANGE_BUTTON_SHOWN
+              ? m(
+                  Button,
+                  {
+                    variant: "ghost",
+                    sm: true,
+                    extra: "message-input-switch-change",
+                    onclick: () => {
+                      if (chatId) openSwitchDialog(chatId, target);
+                    },
+                  },
+                  "Change",
+                )
+              : null,
             m(
               Button,
               {
                 variant: "ghost",
                 sm: true,
-                extra: "message-input-switch-change",
-                onclick: () => {
-                  if (chatId) openSwitchDialog(chatId, target);
-                },
-              },
-              "Change",
-            ),
-            m(
-              Button,
-              {
-                variant: "ghost",
-                sm: true,
+                icon: true,
                 extra: "message-input-switch-cancel",
+                ...hoverTooltipAttrs("Cancel switch", "above"),
+                "aria-label": "Cancel switch",
                 onclick: () => {
                   if (chatId) setPendingAccount(chatId, null);
                 },
               },
-              "Cancel",
+              m.trust(icon("close", { size: 14, strokeWidth: 2.5 })),
             ),
           ],
         );
