@@ -3426,12 +3426,16 @@ class AgentManager:
     def _follow_live_spares(self, live_spare_store: SpareChatStore) -> None:
         """A secondary chat's view of the live chat's spares: re-read on every sweep, so a spare the
         live chat hands over appears here and one it starts stays hidden. Never written."""
+        if self._refresh_live_spares(live_spare_store):
+            self._broadcast_chats_updated()
+
+    def _refresh_live_spares(self, live_spare_store: SpareChatStore) -> bool:
+        """Re-read the live chat's spares into a secondary's view; True when they changed."""
         live_spares = live_spare_store.read()
         with self._lock:
             is_changed = live_spares != self._spares
             self._spares = live_spares
-        if is_changed:
-            self._broadcast_chats_updated()
+        return is_changed
 
     def ensure_spare_chat_in_background(self) -> None:
         """``ensure_spare_chat`` on a thread of its own, for a caller that must not wait on or fail by it (a sign-in, a hand-over)."""
@@ -4033,6 +4037,10 @@ class AgentManager:
         after_ids = set(details_by_id)
         added_agent_ids = after_ids - before_ids
         removed_agent_ids = before_ids - after_ids
+        # The live chat records a spare before its create, but a secondary reads that record only
+        # on its sweep: re-read it now, so a spare the stream just reported is never listed here.
+        if added_agent_ids and self._is_secondary and self._spare_chat_store is not None:
+            self._refresh_live_spares(self._spare_chat_store)
         # Persisting agents whose lifecycle state changed (e.g. RUNNING -> STOPPED
         # when a process dies) need their activity indicator re-gated below.
         state_changed_ids = {

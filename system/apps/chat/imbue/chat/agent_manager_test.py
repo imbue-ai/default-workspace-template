@@ -5618,6 +5618,38 @@ def test_a_secondary_chat_hides_the_live_spares_follows_their_changes_and_never_
         manager.stop()
 
 
+def test_a_secondary_chat_hides_a_live_spare_the_stream_reports_before_its_next_sweep(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The live chat records a spare before its create, and the stream reports the agent once mngr
+    provisions it, which can be seconds before the secondary's sweep re-reads the record."""
+    mngr_binary, _ = write_recording_mngr_binary(tmp_path)
+    manager, live_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1, is_secondary=True)
+    spare_id = MngrAgentId()
+    live_store.write(
+        (
+            SpareChatAgent(
+                chat_id=ChatId(str(spare_id)),
+                display_name="Chat 3",
+                terms=SpareChatTerms(account_id=read_index().accounts[0].id, project_label="", is_fast=True),
+                phase=SpareChatPhase.CREATING,
+            ),
+        )
+    )
+    try:
+        manager._handle_observe_event(
+            make_agent_state_event(
+                _agent_details("Chat-3", agent_id=spare_id, labels={"user_created": "true", "display_name": "Chat 3"})
+            )
+        )
+
+        assert manager.get_agent_by_id(str(spare_id)) is not None
+        assert manager.get_chat_snapshots() == []
+        assert not manager.knows_chat(ChatId(str(spare_id)))
+    finally:
+        manager.stop()
+
+
 def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_takes_it(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
