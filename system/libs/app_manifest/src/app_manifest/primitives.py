@@ -325,19 +325,23 @@ def _percent_encoded_field_value(value: str) -> str:
 @pure
 def render_page_template(template: PageTemplate, fields: Mapping[str, Any]) -> str:
     """The page ``template`` names for a message's ``fields``: each placeholder replaced by its field's string value,
-    percent-encoded one path segment at a time.
+    percent-encoded one path segment at a time. A value ending in ``/`` that the template follows with ``/`` joins it
+    as one slash, so ``{path}/`` of the root ``/`` is ``/``.
 
     Raises PageTemplateFieldError when a field is missing or not a string, or when the result is not a rooted path.
     """
+    path_part, separator, query = str(template).partition("?")
 
     def _field_value(match: re.Match[str]) -> str:
         name = match.group(1)
         value = fields.get(name)
         if not isinstance(value, str):
             raise PageTemplateFieldError(f"the message's {name!r} field is missing or not a string")
-        return _percent_encoded_field_value(value)
+        encoded = _percent_encoded_field_value(value)
+        if encoded.endswith("/") and path_part.startswith("/", match.end()):
+            return encoded[:-1]
+        return encoded
 
-    path_part, separator, query = str(template).partition("?")
     page = PAGE_TEMPLATE_PLACEHOLDER_PATTERN.sub(_field_value, path_part) + separator + query
     if not page.startswith("/") or page.startswith("//"):
         raise PageTemplateFieldError(f"the page {page!r} built from {str(template)!r} is not a rooted path")

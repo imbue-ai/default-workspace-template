@@ -50,6 +50,8 @@ def test_is_name_conflict_compares_canonical_forms_case_insensitively(
         ("{path}", {"path": "/home/user/caf\u00e9/\u2603.md"}, "/home/user/caf%C3%A9/%E2%98%83.md"),
         ("{path}/?view", {"path": "/data/q4 (final)"}, "/data/q4%20(final)/?view"),
         ("/open/{name}", {"name": "a/b"}, "/open/a/b"),
+        ("{path}/", {"path": "/"}, "/"),
+        ("{path}/?view", {"path": "/"}, "/?view"),
     ],
 )
 def test_a_page_template_percent_encodes_each_field_one_path_segment_at_a_time(
