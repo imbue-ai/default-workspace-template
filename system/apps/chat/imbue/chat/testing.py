@@ -384,11 +384,19 @@ def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: 
 
 
 class InlineExecutor(Executor):
-    """Runs each submitted call at once, so work a request hands off has finished when the request returns."""
+    """Runs each submitted call at once, so work a request hands off has finished when the request returns.
+
+    A call that raises leaves its exception on the future, as a real executor does, rather than raising from ``submit``.
+    """
 
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
         future: Future[Any] = Future()
-        future.set_result(fn(*args, **kwargs))
+        try:
+            result = fn(*args, **kwargs)
+        except BaseException as e:
+            future.set_exception(e)
+        else:
+            future.set_result(result)
         return future
 
 
