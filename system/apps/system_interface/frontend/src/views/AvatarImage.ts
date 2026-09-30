@@ -9,6 +9,7 @@ import m from "mithril";
 import { avatarImageUrl } from "../model/api";
 import type { AvatarMood, AvatarStatus } from "../model/records";
 import type { AvatarState, TaskbarEntry } from "../reducers/desktopState";
+import { appTileBackgroundForApp } from "./components/appIcon";
 import { appGlyph } from "./glyphs";
 
 export interface AvatarImageAttrs {
@@ -50,6 +51,9 @@ export interface EntryStyleParts {
   readonly tooltip: string;
   /** The avatar wearing the mood in the avatar style, else the app's icon at ``glyphSize``. */
   readonly image: m.Children;
+  /** The flat colour under the app's tile, for the edge light the entry draws from it; null in the
+   *  avatar style, whose image is a photograph with no one colour, and for an app with no tile. */
+  readonly tileColour: string | null;
 }
 
 export function entryStyleParts(
@@ -74,5 +78,6 @@ export function entryStyleParts(
           class: imageClass,
         })
       : m.trust(appGlyph(entry.app, glyphSize)),
+    tileColour: isAvatar ? null : appTileBackgroundForApp(entry.app, glyphSize),
   };
 }

@@ -101,3 +101,11 @@
   box-shadow: var(--desk-icon-highlight);
   pointer-events: none;
 }
+
+/* A tile whose own colour the view could read lights its hairline from that colour instead of from
+   white. `data-tile` is the view saying it set `--desk-icon-tile`; without it the relative colour
+   would have nothing to resolve against and the whole box-shadow would drop. */
+.taskbar-entry-tile[data-tile]::after,
+.shortcut-icon[data-tile]::after {
+  box-shadow: var(--desk-icon-tile-highlight);
+}

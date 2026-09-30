@@ -165,6 +165,18 @@ describe("Taskbar", () => {
     expect(ordinary.querySelector("svg")).not.toBeNull();
   });
 
+  it("lights an ordinary entry's hairline from its tile colour, and an avatar's not at all", () => {
+    // An avatar is a photograph with no one colour behind it, so there is nothing to light from and
+    // the entry keeps the plain white hairline.
+    const taskbar = render();
+    const ordinary = taskbar.querySelector('[data-taskbar-entry="win-1"] .taskbar-entry-tile') as HTMLElement;
+    expect(ordinary.getAttribute("data-tile")).toBe("true");
+    expect(ordinary.style.getPropertyValue("--desk-icon-tile")).not.toBe("");
+    const avatar = taskbar.querySelector('[data-taskbar-entry="win-3"] .taskbar-entry-tile') as HTMLElement;
+    expect(avatar.hasAttribute("data-tile")).toBe(false);
+    expect(avatar.style.getPropertyValue("--desk-icon-tile")).toBe("");
+  });
+
   it("asks for an entry's menu on a right click", () => {
     const onEntryContextMenu = vi.fn();
     const taskbar = render({ onEntryContextMenu });

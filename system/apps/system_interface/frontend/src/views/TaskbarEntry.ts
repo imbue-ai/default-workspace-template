@@ -35,7 +35,12 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
     // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
     const isDimmed = entry.isMinimized || entry.isDetached;
     const look = entry.look;
-    const { isAvatar, attrs, tooltip, image } = entryStyleParts(entry, avatar, ENTRY_GLYPH_MARKUP_SIZE, "size-full");
+    const { isAvatar, attrs, tooltip, image, tileColour } = entryStyleParts(
+      entry,
+      avatar,
+      ENTRY_GLYPH_MARKUP_SIZE,
+      "size-full",
+    );
     return m(
       "button",
       {
@@ -94,6 +99,10 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
               "justify-center shadow-(--desk-taskbar-entry-shadow) " +
               (isAvatar ? "rounded-2xl [&>img]:size-full " : "rounded-[32%] [&>svg]:size-full ") +
               (isDimmed ? "opacity-70 group-hover:opacity-100" : ""),
+            // The tile's own colour, for the hairline the theme lights from it. An entry without one
+            // (an avatar, an app with no tile) sets neither, and takes the plain white hairline.
+            "data-tile": tileColour === null ? undefined : "true",
+            style: tileColour === null ? undefined : { "--desk-icon-tile": tileColour },
           },
           image,
         ),

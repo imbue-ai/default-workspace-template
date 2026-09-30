@@ -261,6 +261,11 @@ def test_the_shell_names_no_app() -> None:
 _THEME_CSS = _FRONTEND_SRC / "theme" / "default.css"
 _ICON_DOC = _PACKAGE_ROOT.parents[2] / "docs" / "system" / "app-icons.md"
 
+# How the derived hairline lights a tile whose own colour the shell could read: the direction it
+# moves oklch's lightness. A minus here is the same shade the rule below forbids, arrived at the
+# long way round.
+_LIT_FROM_TILE = re.compile(r"--desk-icon-lit:\s*oklch\(\s*from\s+.*?calc\(\s*l\s*([+-])")
+
 _HIGHLIGHT_RULE = RatchetRuleInfo(
     rule_name="a shade along the bottom edge of an icon tile",
     rule_description=(
@@ -316,3 +321,10 @@ def test_the_bottom_edge_of_an_icon_tile_is_lit_and_never_shaded() -> None:
         if moved < 0:
             offenders.append(f"{background}: the bottom edge moves L* by {moved:.1f}")
     assert offenders == [], _HIGHLIGHT_RULE.rule_description + "\n" + "\n".join(f"  - {line}" for line in offenders)
+
+
+def test_the_hairline_lit_from_a_tile_lightens_it_too() -> None:
+    """The derived hairline is the same rule by another route, so it moves the same way."""
+    direction = _LIT_FROM_TILE.search(_THEME_CSS.read_text())
+    assert direction is not None, "--desk-icon-lit no longer raises or lowers oklch lightness readably"
+    assert direction.group(1) == "+", _HIGHLIGHT_RULE.rule_description

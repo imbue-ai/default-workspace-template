@@ -142,6 +142,22 @@ describe("ShortcutIcon", () => {
     expect(drawing.querySelector("rect")?.getAttribute("fill")).toBe("#4B4C08");
   });
 
+  it("hands the theme the tile's own colour, so the hairline is lit from it rather than from white", () => {
+    const tile =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">' +
+      '<rect width="48" height="48" rx="15.36" fill="#4B4C08"/>' +
+      '<path d="M12 12h24v24H12z" fill="#F5D6A0"/></svg>';
+    const box = render({ app: appRecord("docs", { icon: tile }) }).querySelector(".shortcut-icon") as HTMLElement;
+    expect(box.getAttribute("data-tile")).toBe("true");
+    expect(box.style.getPropertyValue("--desk-icon-tile")).toBe("#4B4C08");
+  });
+
+  it("says nothing about a colour for an app it has no tile for, which keeps the white hairline", () => {
+    const box = render({ app: undefined }).querySelector(".shortcut-icon") as HTMLElement;
+    expect(box.hasAttribute("data-tile")).toBe(false);
+    expect(box.style.getPropertyValue("--desk-icon-tile")).toBe("");
+  });
+
   it("draws an unknown app as connecting only while no app list has landed", () => {
     const connecting = render({ app: undefined, isAppsLoaded: false });
     expect(connecting.getAttribute("data-connecting")).toBe("true");
