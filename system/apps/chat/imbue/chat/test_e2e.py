@@ -1472,7 +1472,6 @@ def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_
             expect(page.locator(f'[data-window-id="{viewer["id"]}"]')).to_have_attribute(
                 "data-focused", "true", timeout=15000
             )
-            page.wait_for_timeout(1000)
             assert [window["id"] for window in _app_windows(server, "files")] == [viewer["id"]]
 
             _bring_the_chat_over(page, server, client_id, viewer["id"])
@@ -1552,7 +1551,6 @@ def test_a_folder_link_raises_the_file_viewer_window_that_reached_the_folder_thr
             expect(page.locator(f'[data-window-id="{viewer["id"]}"]')).to_have_attribute(
                 "data-focused", "true", timeout=15000
             )
-            page.wait_for_timeout(1000)
             assert [(window["id"], window["path"]) for window in _app_windows(server, "files")] == [
                 (viewer["id"], listed_path)
             ]
