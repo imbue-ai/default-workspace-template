@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_WINDOW_PATH_LENGTH,
   appLaunchesOf,
+  appShortcutOf,
   fillParamOf,
   freeTextParams,
   freeTextRowsOf,
@@ -73,6 +74,15 @@ describe("launch paths of an app", () => {
   it("finds a launch path by id", () => {
     expect(launchPathOf(docs, "new")?.label).toBe("New docs");
     expect(launchPathOf(docs, "other")).toBeNull();
+  });
+
+  it("gives an app one desktop shortcut by the shell's seeding rule, never of a launch path taking text", () => {
+    expect(appShortcutOf(notes)).toEqual({ launch: "new", mode: "focus" });
+    expect(appShortcutOf(appRecord("chatty", { launch_paths: docs.launch_paths }))).toBeNull();
+    const undeclared = { default_shortcut: null, launch_paths: buddy.launch_paths };
+    expect(appShortcutOf(appRecord("own", undeclared))).toEqual({ launch: "root", mode: "focus" });
+    expect(appShortcutOf(appRecord("preview-1", { ...undeclared, program: "" }))).toBeNull();
+    expect(appShortcutOf(hidden)).toBeNull();
   });
 });
 

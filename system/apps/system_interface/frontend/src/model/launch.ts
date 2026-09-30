@@ -86,13 +86,16 @@ export function launchPathOf(app: AppRecord, launchId: string): LaunchPath | nul
 
 /** The app's one desktop shortcut, by the rule the shell seeds desktops with (desktop-interface plan section 3.6),
  *  never of a launch path that takes text: its ``default_shortcut`` when that names such a launch path it offers,
- *  else its first launch path taking no text, focusing. */
+ *  else, for an app a program runs, its first launch path taking no text, focusing. An internal app has none, and
+ *  so does a row with no program (a preview frame, an isolated test server) that declares none. */
 export function appShortcutOf(app: AppRecord): DefaultShortcut | null {
+  if (app.internal) return null;
   const declared = app.default_shortcut;
   if (declared !== null) {
     const launchPath = launchPathOf(app, declared.launch);
     return launchPath === null || fillParamOf(launchPath) !== null ? null : declared;
   }
+  if (app.program === "") return null;
   const first = app.launch_paths.find((launchPath) => fillParamOf(launchPath) === null);
   return first === undefined ? null : { launch: first.id, mode: "focus" };
 }
