@@ -146,7 +146,7 @@ class ChatAutoCompactor:
     def _is_autocompact_enabled(self) -> bool:
         try:
             return self._is_enabled()
-        except MngrError as e:
+        except (MngrError, OSError) as e:
             # The command reads the same config and decides for itself, so an unreadable
             # config costs a launch rather than silently turning compaction off.
             logger.warning("Could not read the autocompact mode from the mngr config, checking anyway: {}", e)

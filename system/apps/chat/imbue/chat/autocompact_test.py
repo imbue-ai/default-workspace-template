@@ -148,7 +148,11 @@ def test_sweep_checks_every_running_chat_in_one_command() -> None:
     assert recorded_commands == [["mngr", "autocompact", "run", "chat-alpha", "chat-beta", "chat-gamma"]]
 
 
-def test_an_unreadable_mode_still_runs_the_sweep(loguru_records: list[str]) -> None:
+@pytest.mark.parametrize(
+    "read_error",
+    [ConfigParseError("Invalid config for 'plugins.autocompact'"), PermissionError("settings.toml")],
+)
+def test_an_unreadable_mode_still_runs_the_sweep(read_error: Exception, loguru_records: list[str]) -> None:
     """An unreadable config must cost a launch, not silently turn compaction off."""
     recorded_commands: list[list[str]] = []
 
@@ -157,7 +161,7 @@ def test_an_unreadable_mode_still_runs_the_sweep(loguru_records: list[str]) -> N
         return _make_finished_process(command=command, returncode=0)
 
     def unreadable_mode() -> bool:
-        raise ConfigParseError("Invalid config for 'plugins.autocompact'")
+        raise read_error
 
     compactor = ChatAutoCompactor.build(
         list_running_chat_agent_names=lambda: ["chat-alpha", "chat-beta"],
