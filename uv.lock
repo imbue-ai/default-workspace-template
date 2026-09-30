@@ -3837,7 +3837,6 @@ version = "0.1.0"
 source = { editable = "system/libs/workspace_layout" }
 dependencies = [
     { name = "app-manifest" },
-    { name = "httpx" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
@@ -3847,7 +3846,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
-    { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=b28ef08e0df8730c6c229a9753ddc383d18943e5" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },

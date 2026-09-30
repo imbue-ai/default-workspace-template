@@ -1,11 +1,13 @@
+import http.client
 import json
 import os
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Mapping
 from typing import Any
 from typing import Final
 
-import httpx
 from app_manifest.primitives import AppName
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -79,14 +81,27 @@ def _json_object_or_text(text: str) -> dict[str, Any] | str:
     return parsed if isinstance(parsed, dict) else text
 
 
+def _exchange(request: urllib.request.Request, timeout_seconds: float) -> tuple[int, bytes]:
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+
 def request_shell(method: str, url: str, body: Mapping[str, Any] | None, timeout_seconds: float) -> ShellResponse:
     """One request to a shell route, answered as it came; raises ShellUnreachableError when it could not be made
     (refused, timed out, or cut off)."""
+    # The stdlib rather than httpx: the workspace-layout command starts once per agent action, and importing httpx
+    # (which loads rich and pygments for its own CLI) was a large share of that startup.
+    data = None if body is None else json.dumps(dict(body)).encode("utf-8")
+    headers = {} if data is None else {"Content-Type": "application/json"}
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        response = httpx.request(method, url, json=None if body is None else dict(body), timeout=timeout_seconds)
-    except httpx.HTTPError as e:
+        status_code, raw = _exchange(request, timeout_seconds)
+    except (OSError, http.client.HTTPException) as e:
         raise ShellUnreachableError(str(e) or type(e).__name__) from e
-    return ShellResponse(status_code=response.status_code, body=_json_object_or_text(response.text))
+    return ShellResponse(status_code=status_code, body=_json_object_or_text(raw.decode("utf-8", errors="replace")))
 
 
 def requester_from_environment() -> OpRequester | None:
