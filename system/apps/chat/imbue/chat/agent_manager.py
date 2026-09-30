@@ -3578,9 +3578,8 @@ class AgentManager:
 
         # Drop the resident transcript of every chat that just stopped (its active agent
         # died), its archived segments included; an archived member dying drops only its
-        # own. Edge-triggered (transition into dead, never dead-as-a-level): a user viewing
-        # a stopped chat's history rebuilds the watcher on read, and a level-triggered evict
-        # would tear that rebuild down again on the next observe tick.
+        # own. A read of a stopped chat rebuilds its transcript after that, so the release
+        # then drops what any stopped chat holds, sparing a chat whose stream is open.
         for agent_id in newly_dead_ids:
             self._evict_chat_transcripts(agent_id)
         if self._unviewed_transcript_release is not None:
