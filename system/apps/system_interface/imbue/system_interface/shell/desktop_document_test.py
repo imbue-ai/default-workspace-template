@@ -515,6 +515,34 @@ def test_a_supervised_app_declaring_no_default_shortcut_is_seeded_at_its_first_l
             # A preview frame or an isolated test server registers with no program.
             registry_row_toml("preview-1", "http://localhost:3"),
             registry_row_toml("vm-exec", "http://localhost:4", program="vm-exec", is_internal=True),
+            # A launch path that takes typed or drafted text is never a shortcut: the first that takes none is.
+            registry_row_toml(
+                "journal",
+                "http://localhost:5",
+                program="journal",
+                launch_paths=[("write", "Write", "/write"), ("draft", "Draft", "/draft"), ("read", "Read", "/")],
+                launch_params={"write": ["entry"], "draft": ["entry"]},
+                launch_text_params={"write": "entry"},
+                launch_draft_params={"draft": "entry"},
+            ),
+            registry_row_toml(
+                "asker",
+                "http://localhost:6",
+                program="asker",
+                launch_paths=[("ask", "Ask", "/ask")],
+                launch_params={"ask": ["question"]},
+                launch_text_params={"ask": "question"},
+            ),
+            # A declared default shortcut naming a text launch path gives none, whatever else the app offers.
+            registry_row_toml(
+                "intake",
+                "http://localhost:7",
+                program="intake",
+                default_shortcut=("send", "new"),
+                launch_paths=[("send", "Send", "/send"), ("home", "Home", "/")],
+                launch_params={"send": ["message"]},
+                launch_text_params={"send": "message"},
+            ),
         )
     )
 
@@ -523,8 +551,9 @@ def test_a_supervised_app_declaring_no_default_shortcut_is_seeded_at_its_first_l
     assert [(str(shortcut.target.app), str(shortcut.target.launch), shortcut.mode) for shortcut in seeded] == [
         ("notes", "open", ShortcutMode.FOCUS),
         ("recipes", "browse", ShortcutMode.FOCUS),
+        ("journal", "read", ShortcutMode.FOCUS),
     ]
-    assert apps_with_a_default_shortcut(rows) == {"notes", "recipes"}
+    assert apps_with_a_default_shortcut(rows) == {"notes", "recipes", "journal"}
 
 
 def _targets_and_cells(desktop: Desktop) -> list[tuple[str, str, int, int]]:

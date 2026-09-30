@@ -21,6 +21,7 @@ from app_manifest.manifest import LocationScope
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
+from app_manifest.registry import RegistryLaunchPath
 from app_manifest.registry import RegistryRow
 from pydantic import Field
 
@@ -654,19 +655,28 @@ class _ShortcutChoice(FrozenModel):
 
 
 @pure
+def _takes_text(launch_path: RegistryLaunchPath) -> bool:
+    return launch_path.text_param is not None or launch_path.draft_param is not None
+
+
+@pure
 def _default_shortcut_choice(row: RegistryRow) -> _ShortcutChoice | None:
-    """The shortcut an app is given on a desktop: its ``default_shortcut`` when it declares one that names a launch path
-    it offers; else, for a supervised app (one whose row names a ``program``), its first launch path, focusing. A
-    manifest-less row with no program (a preview, an isolated test server) gets none, and neither does an internal
-    app."""
+    """The shortcut an app is given on a desktop, never of a launch path that takes typed or drafted text: its
+    ``default_shortcut`` when it declares one that names such a launch path it offers; else, for a supervised app (one
+    whose row names a ``program``), its first launch path that takes no text, focusing. A manifest-less row with no
+    program (a preview, an isolated test server) gets none, and neither does an internal app."""
     if row.internal:
         return None
+    offered = effective_launch_paths(row)
     if row.default_shortcut is not None:
-        launch = default_launch_path_id(row)
-        return None if launch is None else _ShortcutChoice(launch=launch, mode=row.default_shortcut.mode)
+        declared = next((path for path in offered if path.id == row.default_shortcut.launch), None)
+        if declared is None or _takes_text(declared):
+            return None
+        return _ShortcutChoice(launch=declared.id, mode=row.default_shortcut.mode)
     if row.program is None:
         return None
-    return _ShortcutChoice(launch=effective_launch_paths(row)[0].id, mode=ShortcutMode.FOCUS)
+    first = next((path for path in offered if not _takes_text(path)), None)
+    return None if first is None else _ShortcutChoice(launch=first.id, mode=ShortcutMode.FOCUS)
 
 
 @pure

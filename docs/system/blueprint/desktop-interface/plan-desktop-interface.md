@@ -112,7 +112,7 @@ A shortcut is `{target, mode, cell}` where `target` is `{kind: "launch", app, la
 `focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs the launch path only when there is none; `new` always runs it.
 A desktop holds at most one shortcut per `(app, launch)`.
 
-Every registered, non-internal app has a default shortcut, except as follows: its manifest's `default_shortcut` when it declares one (none when that names a launch path the app does not offer); otherwise, when its row names a `program`, its first launch path in `focus` mode.
+Every registered, non-internal app has at most one default shortcut, and never of a launch path that takes typed or drafted text (one declaring a `text_param` or `draft_param`): its manifest's `default_shortcut` when it declares one (none when that names a launch path the app does not offer, or one that takes text); otherwise, when its row names a `program`, its first launch path that takes no text, in `focus` mode.
 A row naming no program has none: it is a preview frame or an isolated test server rather than an app a supervisord program runs, while an app built from a manifest names one, and so does an app registered before manifests existed.
 A new desktop is seeded from every app's default shortcut, in launcher order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
 An app that registers after a desktop was made is added to it as 3.2 says.

@@ -48,7 +48,7 @@ function render(
     bottomOffsetPx: 0,
     onRun: vi.fn(),
     onHighlight: vi.fn(),
-    onLaunchContextMenu: vi.fn(),
+    onAppShortcutContextMenu: vi.fn(),
     ...overrides,
   };
   return { root: mountView(() => m(LauncherMenu, attrs)), attrs };
@@ -129,18 +129,21 @@ describe("the launcher menu", () => {
     expect(tooLong.attrs.onHighlight).not.toHaveBeenCalled();
   });
 
-  it("reports a right-click on a launch-path row with its app and launch path, and takes it from the page", () => {
+  it("reports a right-click on the row of an app's own desktop shortcut, and leaves every other row's alone", () => {
     const { root, attrs } = render(launcherRowsOf(stateWithWindows(), ""));
     const row = root.querySelector('[data-launch="terminal:new"]') as HTMLElement;
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 12, clientY: 34 });
     row.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
-    expect(attrs.onLaunchContextMenu).toHaveBeenCalledWith("terminal", "new", 12, 34, row);
-    // A free-text row keeps the right-click every other surface gets.
-    const textEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-    root.querySelector('[data-text-action="primary"]')!.dispatchEvent(textEvent);
-    expect(textEvent.defaultPrevented).toBe(false);
-    expect(attrs.onLaunchContextMenu).toHaveBeenCalledTimes(1);
+    expect(attrs.onAppShortcutContextMenu).toHaveBeenCalledWith("terminal", 12, 34, row);
+    // The chat-like app's default shortcut names its text launch path, so it has no desktop shortcut and its root
+    // row, like a free-text row, keeps the right-click every other surface gets.
+    for (const selector of ['[data-launch="chatty:root"]', '[data-text-action="primary"]']) {
+      const other = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      root.querySelector(selector)!.dispatchEvent(other);
+      expect(other.defaultPrevented).toBe(false);
+    }
+    expect(attrs.onAppShortcutContextMenu).toHaveBeenCalledTimes(1);
   });
 
   it("spells the secondary key for the platform and previews the first words of the text", () => {

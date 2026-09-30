@@ -7,7 +7,7 @@
  * every page a launch opens; nothing here builds a URL.
  */
 
-import type { AppRecord, DefaultShortcut, LaunchPath, ShortcutMode } from "./records";
+import type { AppRecord, DefaultShortcut, LaunchPath } from "./records";
 
 /** One launch path of one app: what a launcher row runs. */
 export interface AppLaunch {
@@ -84,18 +84,16 @@ export function launchPathOf(app: AppRecord, launchId: string): LaunchPath | nul
   return app.launch_paths.find((candidate) => candidate.id === launchId) ?? null;
 }
 
-/** The mode a shortcut of ``launch`` is added in: the app's ``default_shortcut`` mode when that names ``launch``,
- *  else focus. */
-export function shortcutModeFor(app: AppRecord, launch: string): ShortcutMode {
-  return app.default_shortcut?.launch === launch ? app.default_shortcut.mode : "focus";
-}
-
-/** The app's own desktop shortcut, by the rule the shell seeds desktops with (desktop-interface plan section 3.6):
- *  its ``default_shortcut`` when that names a launch path it offers, else its first launch path, focusing. */
+/** The app's one desktop shortcut, by the rule the shell seeds desktops with (desktop-interface plan section 3.6),
+ *  never of a launch path that takes text: its ``default_shortcut`` when that names such a launch path it offers,
+ *  else its first launch path taking no text, focusing. */
 export function appShortcutOf(app: AppRecord): DefaultShortcut | null {
   const declared = app.default_shortcut;
-  if (declared !== null) return launchPathOf(app, declared.launch) === null ? null : declared;
-  const first = app.launch_paths[0];
+  if (declared !== null) {
+    const launchPath = launchPathOf(app, declared.launch);
+    return launchPath === null || fillParamOf(launchPath) !== null ? null : declared;
+  }
+  const first = app.launch_paths.find((launchPath) => fillParamOf(launchPath) === null);
   return first === undefined ? null : { launch: first.id, mode: "focus" };
 }
 

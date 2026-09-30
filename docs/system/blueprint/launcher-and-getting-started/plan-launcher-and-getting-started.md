@@ -203,10 +203,10 @@ A disabled free-text row is drawn faint with its reason as the tooltip.
 The highlighted row wears the active fill and `data-highlighted="true"`.
 The menu renders no loading state at any point; every row comes from state the browser already holds.
 
-A right-click on a launch-path row opens the desktop's menu for that launch path, ending with the reference rows every right-click menu of the shell ends with.
-It offers `Add to desktop` when the active desktop holds no shortcut of that `(app, launch)`: the shortcut is added at the first free cell in reading order, in the mode of the app's `default_shortcut` when that names this launch path and `focus` otherwise.
-When the active desktop holds one, it offers `Remove from desktop` instead.
-A taskbar entry's menu carries the same row for its window's app, naming the app's own shortcut: its `default_shortcut` when that names a launch path it offers, else its first launch path, in `focus` mode.
+An app's desktop icon is its default shortcut (desktop-interface plan section 3.6) and nothing else: one per app, never of a launch path that takes text.
+A right-click on the launch-path row of that shortcut opens the desktop's menu for the app, ending with the reference rows every right-click menu of the shell ends with; every other row keeps the plain reference menu.
+It offers `Add to desktop` when the active desktop does not hold the shortcut, added at the first free cell in reading order in the shortcut's mode, and `Remove from desktop` when it does.
+A taskbar entry's menu carries the same row for its window's app.
 Either way the desktop shows the change at once, and puts it back if the shell refuses it.
 
 ### 4.3 Running a row

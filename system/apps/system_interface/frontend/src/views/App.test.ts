@@ -555,7 +555,7 @@ describe("a launcher row's menu", () => {
     store.setBackdropSize({ width: 1000, height: 800 });
 
     openLaunchMenu("chat:new");
-    expect(document.querySelector(".launch-menu")).not.toBeNull();
+    expect(document.querySelector(".app-shortcut-menu")).not.toBeNull();
     chooseRow("add-to-desktop");
     await settle();
 
@@ -614,18 +614,32 @@ describe("a launcher row's menu", () => {
     expect(api.calls).toContain("removeDesktopShortcut:home:docs:new");
   });
 
-  it("adds a launch path of an app that declares no default shortcut focusing", async () => {
+  it("offers only an app's own desktop shortcut: its first launch path taking no text, focusing", async () => {
     const notes = appRecord("notes", {
-      launch_paths: [launchPathRecord({ id: "browse", path: "/" }), launchPathRecord({ id: "add", path: "/add" })],
+      launch_paths: [
+        launchPathRecord({ id: "ask", path: "/ask", params: ["question"], text_param: "question" }),
+        launchPathRecord({ id: "browse", path: "/" }),
+        launchPathRecord({ id: "add", path: "/add" }),
+      ],
       default_shortcut: null,
     });
     socket.deliver().onAppsUpdated([appRecord("docs"), notes]);
     store.setBackdropSize({ width: 1000, height: 800 });
-    openLaunchMenu("notes:add");
+
+    store.openLauncher();
+    m.redraw.sync();
+    const other = document.querySelector('[data-launcher-overlay] [data-launch="notes:add"]') as HTMLElement;
+    other.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+    m.redraw.sync();
+    expect(document.querySelector(".app-shortcut-menu")).toBeNull();
+    expect(document.querySelector(".element-menu")).not.toBeNull();
+    pressEscape();
+
+    openLaunchMenu("notes:browse");
     chooseRow("add-to-desktop");
     await settle();
     expect(api.desktops[0].shortcuts.map((shortcut) => [shortcut.target.launch, shortcut.mode])).toEqual([
-      ["add", "focus"],
+      ["browse", "focus"],
     ]);
   });
 });
