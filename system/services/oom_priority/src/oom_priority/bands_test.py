@@ -115,6 +115,15 @@ def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
     assert bands.supervisord_program_band("browser", {}) == bands.SERVICE_BANDS["browser"]
 
 
+def test_a_spare_chat_agent_is_shed_before_every_agent_and_agent_subprocess() -> None:
+    # A spare holds no one's work, so it goes before any chat, worker, or an agent's
+    # subprocess -- at the ceiling, since the kernel rejects an oom_score_adj above 1000.
+    assert bands.SPARE_AGENT > bands.AGENT_SUBPROCESS
+    assert bands.SPARE_AGENT > bands.CHAT_AGENT_STALE_CEILING
+    assert bands.SPARE_AGENT > bands.WORKER_AGENT
+    assert bands.SPARE_AGENT == 1000
+
+
 def test_primary_agent_is_pinned_to_the_never_shed_band() -> None:
     # The primary (services) agent must be at least as protected as the never-kill
     # infrastructure, and strictly below every service and agent band, so it is
