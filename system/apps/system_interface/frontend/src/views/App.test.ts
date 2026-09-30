@@ -569,6 +569,51 @@ describe("a launcher row's menu", () => {
     expect(api.calls).toContain("removeDesktopShortcut:home:chat:new");
   });
 
+  it("draws an added or removed shortcut at once, and puts the desktop back when the shell refuses", async () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    const shownApps = (): string[] =>
+      (store.getState().desktops[0]?.shortcuts ?? []).map((shortcut) => shortcut.target.app);
+
+    openLaunchMenu("docs:new");
+    chooseRow("add-to-desktop");
+    expect(shownApps()).toEqual(["docs"]);
+    await settle();
+    expect(shownApps()).toEqual(["docs"]);
+
+    api.refusal = "the shell said no";
+    openLaunchMenu("docs:new");
+    chooseRow("remove-from-desktop");
+    expect(shownApps()).toEqual([]);
+    await settle();
+    expect(shownApps()).toEqual(["docs"]);
+
+    void store.addShortcut("docs", "other", "focus");
+    expect(shownApps()).toEqual(["docs", "docs"]);
+    await settle();
+    expect(shownApps()).toEqual(["docs"]);
+  });
+
+  it("offers the same row on a taskbar entry's menu, for the app's own shortcut", async () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
+    const openEntryMenu = (): void => {
+      entry.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }),
+      );
+      m.redraw.sync();
+    };
+
+    openEntryMenu();
+    chooseRow("add-to-desktop");
+    await settle();
+    expect(api.calls).toContain("setDesktopShortcut:home:docs:new:0,0");
+
+    openEntryMenu();
+    chooseRow("remove-from-desktop");
+    await settle();
+    expect(api.calls).toContain("removeDesktopShortcut:home:docs:new");
+  });
+
   it("adds a launch path of an app that declares no default shortcut focusing", async () => {
     const notes = appRecord("notes", {
       launch_paths: [launchPathRecord({ id: "browse", path: "/" }), launchPathRecord({ id: "add", path: "/add" })],

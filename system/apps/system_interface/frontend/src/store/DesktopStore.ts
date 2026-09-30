@@ -84,6 +84,7 @@ import {
   activeDesktop,
   activeFocusedWindowId,
   appByName,
+  desktopById,
   detachedWindowsOf,
   draftTargetOf,
   effectiveWindow,
@@ -100,7 +101,13 @@ import {
   renderedState,
 } from "../reducers/desktopState";
 import type { DesktopEvent, DesktopState, DetachedWindowReport } from "../reducers/desktopState";
-import { STILL_CONNECTING_NOTICE, cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
+import {
+  STILL_CONNECTING_NOTICE,
+  cellForAddedShortcut,
+  findShortcut,
+  isShortcutOf,
+  resolveLaunchRun,
+} from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
 import type {
   ActiveDesktopChangedEvent,
@@ -968,14 +975,32 @@ export class DesktopStore {
     this.dispatch({ type: "desktops_updated", desktops });
   }
 
-  /** Add a launch path to the active desktop at the first free cell in reading order over the current grid;
-   *  nothing when it is already there (the shell would move the shortcut and reset its mode). */
+  /** Add a launch path to the active desktop at the first free cell in reading order over the current grid, drawn
+   *  at once and taken off again if the shell refuses; nothing when it is already there (the shell would move the
+   *  shortcut and reset its mode). */
   async addShortcut(app: string, launch: string, mode: ShortcutMode): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
-    if (desktop.shortcuts.some((shortcut) => shortcut.target.app === app && shortcut.target.launch === launch)) return;
+    if (findShortcut(desktop, app, launch) !== undefined) return;
     const cell = cellForAddedShortcut(desktop, this.gridDimensions());
-    await this.setShortcut(desktop.id, { target: { kind: "launch", app, launch }, mode, cell });
+    const shortcut: DesktopShortcut = { target: { kind: "launch", app, launch }, mode, cell };
+    this.takeDesktop({ ...desktop, shortcuts: [...desktop.shortcuts, shortcut] });
+    try {
+      this.takeDesktop(await this.deps.api.setDesktopShortcut(desktop.id, shortcut));
+    } catch (error) {
+      this.withoutShortcutShown(desktop.id, app, launch);
+      this.deps.notify(`Could not add the shortcut: ${(error as Error).message}`);
+    }
+  }
+
+  /** The desktop of record, if it is still there, without the shortcut of ``(app, launch)``. */
+  private withoutShortcutShown(desktopId: string, app: string, launch: string): void {
+    const desktop = desktopById(this.state, desktopId);
+    if (desktop === null) return;
+    this.takeDesktop({
+      ...desktop,
+      shortcuts: desktop.shortcuts.filter((shortcut) => !isShortcutOf(shortcut, app, launch)),
+    });
   }
 
   async setShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<void> {
@@ -1041,12 +1066,20 @@ export class DesktopStore {
     });
   }
 
+  /** Take a shortcut off the active desktop at once, putting it back if the shell refuses. */
   async removeShortcut(app: string, launch: string): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
+    const removed = findShortcut(desktop, app, launch);
+    if (removed === undefined) return;
+    this.withoutShortcutShown(desktop.id, app, launch);
     try {
       this.takeDesktop(await this.deps.api.removeDesktopShortcut(desktop.id, app, launch));
     } catch (error) {
+      const now = desktopById(this.state, desktop.id);
+      if (now !== null && findShortcut(now, app, launch) === undefined) {
+        this.takeDesktop({ ...now, shortcuts: [...now.shortcuts, removed] });
+      }
       this.deps.notify(`Could not remove the shortcut: ${(error as Error).message}`);
     }
   }

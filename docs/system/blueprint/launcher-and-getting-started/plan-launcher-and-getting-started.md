@@ -206,6 +206,8 @@ The menu renders no loading state at any point; every row comes from state the b
 A right-click on a launch-path row opens the desktop's menu for that launch path, ending with the reference rows every right-click menu of the shell ends with.
 It offers `Add to desktop` when the active desktop holds no shortcut of that `(app, launch)`: the shortcut is added at the first free cell in reading order, in the mode of the app's `default_shortcut` when that names this launch path and `focus` otherwise.
 When the active desktop holds one, it offers `Remove from desktop` instead.
+A taskbar entry's menu carries the same row for its window's app, naming the app's own shortcut: its `default_shortcut` when that names a launch path it offers, else its first launch path, in `focus` mode.
+Either way the desktop shows the change at once, and puts it back if the shell refuses it.
 
 ### 4.3 Running a row
 
