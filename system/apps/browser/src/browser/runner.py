@@ -67,6 +67,10 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from loguru import logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
+from workspace_layout.client import ShellLayoutClient
+from workspace_layout.errors import InvalidLayoutValueError, ShellOpError
+from workspace_layout.ops import ShowRequest
+from workspace_layout.primitives import ClientId
 from workspace_layout.shell_url import shell_base_url
 
 from browser import mediastream, telemetry
@@ -79,7 +83,7 @@ from browser.errors import (
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
-from browser.primitives import AbsoluteHttpUrl, BrowserName, browser_page_path
+from browser.primitives import APP_NAME, AbsoluteHttpUrl, BrowserName, LocalHttpUrl, browser_page_path
 from browser.session import (
     _WINDOW_SWEEP_INTERVAL_SECONDS,
     BrowserSessionManager,
@@ -105,6 +109,11 @@ NEW_PATH = "/new"
 # Where the shell posts a closed window of ours (the manifest's ``window_closed_path``): a sweep runs at once.
 WINDOW_CLOSED_PATH = "/api/window-closed"
 HTTP_NO_CONTENT = 204
+# The ``open:url`` message handler's route (the manifest's ``[[message_handlers]]``): a link to a local address
+# clicked in the workspace, which the browser opens for the human.
+OPEN_URL_PATH = "/api/open-url"
+# The shell answers a ``show`` at once; the relay that posted the message gives the whole delivery ten seconds.
+_SHELL_SHOW_TIMEOUT_SECONDS = 5.0
 # The launch path's one parameter (the manifest's ``params``): the start page. The shell posts it
 # in a JSON object beside its own envelope fields, which are ignored here.
 START_URL_PARAM = "url"
@@ -336,6 +345,70 @@ def new_browser() -> Response:
     if isinstance(started, _StartRefusal):
         return _launch_refusal(started.reason, started.status)
     return jsonify({"path": browser_page_path(BrowserName(started.browser_id))})
+
+
+def open_url() -> Response:
+    """``POST /api/open-url``, the ``open:url`` handler: open a local page the human asked for in the one browser, and
+    show the browser's page to the client that asked.
+
+    The shell posts ``{"type", "client_id", "url"}``. The URL opens as ``open_url_for_human`` says (a new tab in
+    front, or held while an agent drives the browser or while it launches), and the browser's page is then shown to
+    that client through the shell's ``show`` op, raising a browser window or opening one. A refusal carries its
+    reason under ``detail``, which the shell quotes to the user: a URL that is not an absolute http(s) URL on this
+    machine or a bad client is 400, a fleet with no room 409, Chromium not installed (or the fleet still restoring)
+    503, and a window the shell would not show 502.
+    """
+    if not _init_done.is_set():
+        return _launch_refusal("The browser is still restoring its saved browsers; try again in a moment.", 503)
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        return _launch_refusal("the message body must be a JSON object", 400)
+    raw_url = body.get(START_URL_PARAM)
+    if not isinstance(raw_url, str):
+        return _launch_refusal("url: must be a string", 400)
+    try:
+        url = LocalHttpUrl(raw_url)
+    except InvalidStartUrlError as e:
+        return _launch_refusal(f"url: {e}", 400)
+    raw_client_id = body.get("client_id")
+    try:
+        client_id = ClientId(raw_client_id if isinstance(raw_client_id, str) else "")
+    except InvalidLayoutValueError as e:
+        return _launch_refusal(f"client_id: {e}", 400)
+    ready, reason = deferred_install_ready()
+    if not ready:
+        return _launch_refusal(reason, 503)
+    try:
+        browser = bridge.run(manager.open_url_for_human(str(url)), timeout=_ROUTE_TIMEOUT)
+    except FleetFullError as e:
+        return _launch_refusal(str(e), 409)
+    except _STARTUP_ERRORS as e:
+        logger.error("could not open {} for the human: {}", url, e)
+        return _launch_refusal(f"Could not start the browser: {e}", 503)
+    page = browser_page_path(BrowserName(browser.browser_id))
+    shell = ShellLayoutClient(shell_url=shell_base_url(), requester=None, timeout_seconds=_SHELL_SHOW_TIMEOUT_SECONDS)
+    try:
+        shown = shell.show(ShowRequest(app=APP_NAME, path=page, showing=(), repoint=(), client_id=client_id))
+    except ShellOpError as e:
+        logger.warning("Opened {} in browser {} but could not show its window: {}", url, browser.browser_id, e)
+        return _launch_refusal(f"The browser has the page, but its window could not be shown: {e}", 502)
+    return jsonify({"browser": browser.browser_id, "window_id": shown.window_id, "shown": shown.shown})
+
+
+async def _cancel_pending_url(browser: LiveBrowser) -> bool:
+    return browser.cancel_pending_url()
+
+
+def cancel_pending_url(browser_id: str) -> Response:
+    """``POST /browsers/<name>/pending-url/cancel``: drop the page the human asked for and the browser is holding
+    (the viewer's Cancel on the agent overlay), leaving whoever drives the browser as they were."""
+    if not is_valid_browser_name(browser_id):
+        return jsonify({"error": "invalid browser name"}), 404
+    browser = _resolve_sync(browser_id)
+    if isinstance(browser, Response):
+        return browser
+    was_held = bridge.run(_cancel_pending_url(browser), timeout=_ROUTE_TIMEOUT)
+    return jsonify({"cancelled": was_held})
 
 
 def health() -> Response:
@@ -882,6 +955,10 @@ def _register_routes() -> None:
     application.add_url_rule(NEW_PATH, view_func=new_browser, methods=["POST"])
     application.add_url_rule(
         "/browsers/<string:browser_id>/telemetry/client", view_func=telemetry_client, methods=["POST"]
+    )
+    application.add_url_rule(OPEN_URL_PATH, view_func=open_url, methods=["POST"])
+    application.add_url_rule(
+        "/browsers/<string:browser_id>/pending-url/cancel", view_func=cancel_pending_url, methods=["POST"]
     )
     application.add_url_rule("/health", view_func=health, methods=["GET"])
     application.add_url_rule(WINDOW_CLOSED_PATH, view_func=window_closed, methods=["POST"])

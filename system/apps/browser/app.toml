@@ -26,3 +26,9 @@ params = [{name = "url", label = "Start page", required = false}]
 # Xvfb exists only to give Chromium a display; it is the browser's wiring.
 [wiring]
 programs = ["xvfb"]
+
+# A link to a local address clicked in the workspace (a chat's ``http://localhost:3000/`` link, or a page's popup
+# Imbue Studio hands back) opens as a tab in the one browser, whose window the route then shows.
+[[message_handlers]]
+type = "open:url"
+path = "/api/open-url"

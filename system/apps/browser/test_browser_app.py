@@ -12,6 +12,7 @@ from browser import session as bsession
 from browser.primitives import APP_NAME
 from imbue.mngr.utils.polling import wait_for
 from mock_cdp_client_test import TabClosingCdpClient
+from workspace_layout.testing import FAKE_WINDOW_ID, LoopbackShell, desktop_answer
 
 # The manifest the supervisord program line registers with ``forward_port.py --manifest``.
 _APP_MANIFEST_PATH = Path(__file__).parent / "app.toml"
@@ -169,3 +170,99 @@ def test_the_viewer_module_script_reads_no_state_from_the_classic_script() -> No
     module_block = page.split('<script type="module">', 1)[1].split("</script>", 1)[0]
     assert "browserId" not in module_block
     assert '"browsers/" + session + "/close-tab"' in module_block
+
+
+# ``POST /api/open-url``, the ``open:url`` message handler: a local page the human asked for
+
+
+def _running_browser_one() -> tuple[bsession.LiveBrowser, TabClosingCdpClient]:
+    browser = bsession.LiveBrowser(browser_id="browser-1")
+    browser._lifecycle = "running"
+    cdp = TabClosingCdpClient([{"targetId": "t1", "url": "https://one.example"}], shown_target_id="t1")
+    browser._cdp = cdp
+    browser._active_target_id = "t1"
+    runner.manager._browsers["browser-1"] = browser
+    return browser, cdp
+
+
+def _showing(shell: LoopbackShell, shown: str) -> None:
+    shell.op_answer = {**desktop_answer("home", "c-link", [], FAKE_WINDOW_ID, []), "shown": shown}
+
+
+def test_open_url_opens_the_page_in_front_and_shows_the_browser_to_the_client_that_asked(
+    monkeypatch: pytest.MonkeyPatch, loopback_shell: LoopbackShell
+) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    _, cdp = _running_browser_one()
+    _showing(loopback_shell, "raised")
+
+    response = runner.application.test_client().post(
+        runner.OPEN_URL_PATH, json={"type": "open:url", "client_id": "c-link", "url": "http://localhost:3000/app"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.get_json() == {"browser": "browser-1", "window_id": FAKE_WINDOW_ID, "shown": "raised"}
+    assert cdp.created == ["http://localhost:3000/app"]
+    assert loopback_shell.posted_ops() == [
+        ("show", {"app": "browser", "path": "/?session=browser-1", "showing": [], "repoint": [], "client": "c-link"})
+    ]
+
+
+def test_open_url_holds_the_page_while_an_agent_drives_and_the_viewer_can_cancel_it(
+    monkeypatch: pytest.MonkeyPatch, loopback_shell: LoopbackShell
+) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    browser, cdp = _running_browser_one()
+    _showing(loopback_shell, "raised")
+    assert runner.bridge.run(browser.acquire("agent-7", "Plan"), timeout=5) == "acquired"
+    client = runner.application.test_client()
+
+    held = client.post(runner.OPEN_URL_PATH, json={"client_id": "c-link", "url": "http://localhost:3000/"})
+    cancelled = client.post("/browsers/browser-1/pending-url/cancel")
+    cancelled_again = client.post("/browsers/browser-1/pending-url/cancel")
+
+    assert held.status_code == 200, held.text
+    assert [op for op, _ in loopback_shell.posted_ops()] == ["show"]
+    assert cancelled.get_json() == {"cancelled": True}
+    assert cancelled_again.get_json() == {"cancelled": False}
+    assert cdp.created == []
+    assert browser._state_tuple() == ("agent", "agent-7", False)
+
+
+@pytest.mark.parametrize(
+    ("body", "detail"),
+    [
+        pytest.param({"client_id": "c-link", "url": "https://example.com/"}, "only an address on this machine", id="external"),
+        pytest.param({"client_id": "c-link", "url": "ftp://localhost/"}, "absolute http or https URL", id="not-http"),
+        pytest.param({"client_id": "c-link", "url": 7}, "url: must be a string", id="not-a-string"),
+        pytest.param({"client_id": "not a client", "url": "http://localhost:3000/"}, "client_id", id="bad-client"),
+    ],
+)
+def test_open_url_refuses_what_it_cannot_open_with_the_reason_under_detail(
+    monkeypatch: pytest.MonkeyPatch, loopback_shell: LoopbackShell, body: dict[str, object], detail: str
+) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    _, cdp = _running_browser_one()
+
+    response = runner.application.test_client().post(runner.OPEN_URL_PATH, json=body)
+
+    assert response.status_code == 400
+    assert detail in response.get_json()["detail"]
+    assert cdp.created == []
+    assert loopback_shell.posted_ops() == []
+
+
+def test_open_url_says_why_when_the_shell_will_not_show_the_browser(
+    monkeypatch: pytest.MonkeyPatch, loopback_shell: LoopbackShell
+) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    _, cdp = _running_browser_one()
+    loopback_shell.op_refusal = (404, {"detail": "No client 'c-gone'"})
+
+    response = runner.application.test_client().post(
+        runner.OPEN_URL_PATH, json={"client_id": "c-gone", "url": "http://localhost:3000/"}
+    )
+
+    assert response.status_code == 502
+    assert "No client 'c-gone'" in response.get_json()["detail"]
+    assert cdp.created == ["http://localhost:3000/"]
