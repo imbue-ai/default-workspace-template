@@ -67,7 +67,7 @@ The app files the message under this chat's name and its workspace. In the
 feed it reads as "<workspace> -- <this chat>" with your sentence beneath; the
 system banner carries the same three lines. Clicking or clearing it removes
 it; the user starting to read this chat marks it read, and it stays in the
-feed as a receipt. It never asks them to do anything. When
-the user is already reading this chat (its page is shown and focused) the
-script says so, and the app files the message as read without showing
-anything. Do not expect a reply through it: it is one-way.
+feed as a receipt. It never asks them to do anything. When the user is
+already reading this chat (its page is shown and focused) the script says so,
+and the app files the message as read without showing anything. Do not expect
+a reply through it: it is one-way.
