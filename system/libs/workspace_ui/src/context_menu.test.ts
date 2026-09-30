@@ -73,6 +73,21 @@ describe("installElementContextMenu", () => {
     expect(connection.sendMessage.mock.calls).toEqual([["open:file", { path: "/home/user/plan 1.md" }]]);
   });
 
+  it("says why Open link did nothing for a link the workspace cannot open", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    document.body.innerHTML = '<a id="script" href="javascript:void(0)">run</a>';
+    uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
+    rightClick(document.getElementById("script") as Element);
+    row("open-link").click();
+    expect(
+      [connection.sendMessage, connection.openPath, connection.openLink].map((fn) => vi.mocked(fn).mock.calls),
+    ).toEqual([[], [], []]);
+    expect(warn.mock.calls.map((call) => String(call[0]))).toEqual([
+      "[context-menu] Open link ignored: javascript:void(0) is not a link the workspace can open",
+    ]);
+    warn.mockRestore();
+  });
+
   it("installs on a document with no window, where Open link warns rather than routing", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const windowless = document.implementation.createHTMLDocument("");

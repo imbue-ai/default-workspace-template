@@ -92,7 +92,9 @@ function routesOf(options: ContextMenuOptions): {
         console.warn(`[context-menu] Open link ignored: ${anchor.href} is in a document with no window`);
         return;
       }
-      void routeLinkElement(anchor, pageLinkRoutingContext(view, connection));
+      if (!routeLinkElement(anchor, pageLinkRoutingContext(view, connection))) {
+        console.warn(`[context-menu] Open link ignored: ${anchor.href} is not a link the workspace can open`);
+      }
     },
   };
 }
