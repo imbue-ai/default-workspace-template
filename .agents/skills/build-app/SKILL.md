@@ -236,7 +236,11 @@ Repeat until every node is done.
 3. **Launch each node whose `has_worker` is true, one node per command.** Never put
    two launches in one shell command: they run one after the other anyway, and a
    batched launch hides every worker after the first from the evidence an eval
-   collects. Look up the node's `model` in `$RUN/plan.json`, then:
+   collects. Read the node's `model` and `agent` from `$RUN/plan.json`, and
+   `plan.json`'s `settings` for which of the two shapes below this build runs.
+
+   **`settings.shared_worktree` false and `settings.tier_agents` false** -- the default,
+   a fresh worktree and a fresh agent per node:
 
    ```bash
    python3 .agents/skills/build-app/scripts/plan_orchestration.py write-task \
@@ -251,6 +255,47 @@ Repeat until every node is done.
        --create-arg=agent_types.claude.settings_overrides.model=<model> \
        --message-with-mngr
    ```
+
+   **`settings.shared_worktree` true** -- every worker runs in `$BUILD`, which you made and
+   synced in Step 2, so there is no worktree to cut and no sync to pay. Use the
+   `shared_worker` template and `--work-folder "$BUILD"`, and drop `--branch`: nobody
+   commits per node here, so there is nothing to merge either, and **item 6's merge does not
+   apply** -- a node is done when its report lands.
+
+   ```bash
+   uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+       --name "$APP-<agent>" \
+       --template shared_worker \
+       --work-folder "$BUILD" \
+       --runtime-dir "$RUN/nodes/N/" \
+       --task-file "$RUN/nodes/N/task.md" \
+       --create-arg=-S \
+       --create-arg=agent_types.claude.settings_overrides.model=<model> \
+       --message-with-mngr
+   ```
+
+   **`settings.tier_agents` true** -- the node's `agent` is a capability (`low`, `medium`,
+   `high`), not a node number, and several nodes name the same one. **Launch it the first
+   time you meet that agent; after that send the node's task to the agent already running**,
+   which is what saves the cold start and lets it keep what the last node taught it:
+
+   ```bash
+   python3 .agents/skills/build-app/scripts/plan_orchestration.py write-task \
+       --run-dir "$RUN" --node N
+   uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+       --name "$APP-<agent>" \
+       --task-file "$RUN/nodes/N/task.md" \
+       --message-file "$RUN/nodes/N/task.md" \
+       --message-with-mngr
+   ```
+
+   The task file is named twice on purpose: `--message-file` is what the agent receives, and
+   `--task-file` is the required argument `reply` normally reads a worker id out of, which
+   `--message-with-mngr` addresses by name instead.
+
+   One agent does its nodes **one at a time**, so two nodes of the same capability never run
+   at once; nodes of different capabilities still do. Send a node only once every node in its
+   access list is done, exactly as `ready` says.
 
    Launch every ready node before you wait for any of them -- that is what makes
    them run at once -- and put the bookkeeping after the launches, not between
