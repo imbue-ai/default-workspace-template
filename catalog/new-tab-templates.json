@@ -218,22 +218,6 @@
       ]
     },
     {
-      "slug": "latchkey-dev-workbench",
-      "title": "Latchkey Dev Workbench",
-      "description": "Toolkit and playbook for building and live-testing a custom latchkey connector (with a Playwright browser-login flow) from a Minds agent, including how to hot-mod a running Minds gateway to prove it end-to-end.",
-      "what_it_is": "Toolkit and playbook for building and live-testing a custom latchkey connector (with a Playwright browser-login flow) from a Minds agent, including how to hot-mod a running Minds gateway to prove it end-to-end.\n\nThis is a developer TOOLKIT and playbook, not a user-facing app -- its \"user\"\nis a developer (working through a Minds agent) who wants to add a new latchkey\nconnector for some third-party service and test it against a real Minds gateway\nbefore shipping it. Adding a connector normally touches three separate layers\nthat all have to line up, and a mistake in the wrong order can lock the agent\nout of its own permissions entirely; there is also no easy way to iterate,\nbecause the running desktop app reverts hand-edits on every restart and its app\nbundle is protected by the OS. This workbench solves both problems. It provides\na connector template (a latchkey TypeScript `Service` with URL matching,\ncredential injection, and an optional Playwright browser-login flow), the\ncatalog and Detent enforcement-schema pieces that make a permission grant\nactually work, and a set of tools for driving and hot-modding a live gateway\nfrom the agent: a shell channel to the developer's Mac, a one-call remote-command\nhelper, a self-restart loop, and cache/bundle patch scripts that make dev edits\nsurvive restarts. The worked example, ngrok, is carried all the way through --\nbrowser login, a stored credential, an authenticated `latchkey curl` returning\n200, a minted tunnel authtoken, and a real public tunnel -- so the whole loop is\ndemonstrated end-to-end. When it is \"running,\" what you get is a live iteration\nloop: change the connector, push it into the gateway, restart, and re-test,\nall driven from the agent, plus a build journal (`PROGRESS.md`) that records the\nexact procedure, the hard-won gotchas, and the durable upstream path.",
-      "author": "boweiliu",
-      "repository_url": "https://github.com/boweiliu/latchkey-dev-workbench",
-      "thumbnail": "thumbnails/boweiliu--latchkey-dev-workbench.svg",
-      "version": "v4",
-      "updated_at": "2026-09-01T05:23:35Z",
-      "required_accounts": [],
-      "required_secrets": [],
-      "needs_ai": false,
-      "apt_packages": [],
-      "choices": []
-    },
-    {
       "slug": "orchard",
       "title": "Orchard (Email Read-receipt)",
       "description": "A recruiter's candidate pipeline with templated, multi-inbox outreach and email open-tracking.",
@@ -271,38 +255,6 @@
       ]
     },
     {
-      "slug": "glm-pi-foreman",
-      "title": "GLM-5.2 pi agent with Foreman web UI",
-      "description": "A working GLM-5.2 coding agent running through OpenRouter (no Claude credits) with a web UI to drive it — Foreman for the live agent dashboard/chat/terminal, pi-console for a lightweight polling chat, with Node 22 auto-provisioned on boot.",
-      "what_it_is": "A working GLM-5.2 coding agent running through OpenRouter (no Claude credits) with a web UI to drive it -- Foreman for the live agent dashboard/chat/terminal, pi-console for a lightweight polling chat, with Node 22 auto-provisioned on boot.\n\nRunning a coding agent normally burns Claude credits. This inspiration turns a\nfresh mind into a workspace where the coding agent runs on GLM-5.2 through\nOpenRouter instead, and gives you a web UI to drive it -- no terminal required.\nWhen a mind is created from this snapshot, first boot provisions the Node 22\nruntime the agent needs, registers the GLM-5.2-on-OpenRouter agent type so\n`uv run mngr create <name> pi-coding -- --provider openrouter --model\nz-ai/glm-5.2` works out of the box, and stands up two browser tabs. The\n**Foreman** tab is a live control panel: a list of every running mngr agent,\neach one's chat transcript with a box to send it messages, and a real in-browser\nterminal (xterm.js) that attaches to any agent -- so a GLM-5.2 pi agent shows\nits actual TUI right in the tab. The **pi-console** tab is a lighter-weight chat\nconsole for the same agents that polls for new messages instead of streaming, so\nit stays responsive behind the workspace's tab proxy. The user supplies their\nown OpenRouter API key; nothing else is needed to start coding with GLM-5.2.",
-      "author": "boweiliu",
-      "repository_url": "https://github.com/boweiliu/glm-pi-foreman",
-      "thumbnail": "thumbnails/boweiliu--glm-pi-foreman.svg",
-      "version": "v2",
-      "updated_at": "2026-08-14T08:48:33Z",
-      "required_accounts": [],
-      "required_secrets": [],
-      "needs_ai": false,
-      "apt_packages": [],
-      "choices": []
-    },
-    {
-      "slug": "github-repos-table-view",
-      "title": "GitHub Repos Table View",
-      "description": "An AG-Grid table view of an authenticated GitHub user's recent repositories, highlighting minds-inspiration repos, with live GitHub fetch via latchkey, caching, PR-enriched Updated column, and persisted Relation/Pairing annotations.",
-      "what_it_is": "An AG-Grid table view of an authenticated GitHub user's recent repositories, highlighting minds-inspiration repos, with live GitHub fetch via latchkey, caching, PR-enriched Updated column, and persisted Relation/Pairing annotations.\n\nIt solves the problem of keeping an eye on all of your active GitHub work in\none place. It is a Flask + AG-Grid web app that renders an authenticated GitHub\nuser's recent repositories as a single sortable, filterable table, served as a\nMinds workspace tab at `/service/github-repos/`. Each row is one repository,\nwith columns for Repository, Owner, Stars, Language, Visibility, Fork, Openhost,\nDescription, Relation (editable), Pairing (editable), and Updated. Repos tagged\n`minds-inspiration` are highlighted so publishable snapshots stand out at a\nglance. When it is running the user opens the tab and sees their repos laid out\nas a spreadsheet-like grid they can sort, filter, and annotate -- with controls\nto choose how many of the latest repos to show, hide forks, show only\ninspirations, and group repositories into \"pairings\" -- backed by a live fetch\nof their own GitHub account.",
-      "author": "boweiliu",
-      "repository_url": "https://github.com/boweiliu/github-repos-table-view",
-      "thumbnail": "thumbnails/boweiliu--github-repos-table-view.svg",
-      "version": "v1",
-      "updated_at": "2026-08-13T06:44:40Z",
-      "required_accounts": [],
-      "required_secrets": [],
-      "needs_ai": false,
-      "apt_packages": [],
-      "choices": []
-    },
-    {
       "slug": "officina",
       "title": "Officina (Thought Workshop)",
       "description": "Merged-persona invention & design council for dropping in raw ideas and half-formed concepts — stress-test a concept, brainstorm across disciplines, \"pitch this to the room\", \"tear this apart\", \"what am I missing\".",
@@ -320,7 +272,7 @@
     },
     {
       "slug": "minds-rqlite-wip",
-      "title": "minds-rqlite-wip",
+      "title": "Database (SQL)",
       "description": "A private rqlite (SQLite-over-HTTP) database exposed to the internet behind one bearer token: run arbitrary SQL via /api, manage it in a console at /db, try a demo todo app at /demo, and read agent-facing docs at /llms.txt.",
       "what_it_is": "A private rqlite (SQLite-over-HTTP) database exposed to the internet behind one bearer token: run arbitrary SQL via /api, manage it in a console at /db, try a demo todo app at /demo, and read agent-facing docs at /llms.txt.\n\nThis gives the user their own small database that lives in the workspace and can\nbe reached from anywhere on the internet, guarded by a single secret token. The\nproblem it solves: you (or your own scripts, apps, and coding agents) want a\ndurable place to keep structured data -- notes, todos, records of any shape --\nthat you can read and write with plain SQL over HTTP, without standing up and\nsecuring a database server yourself. Under the hood it runs rqlite (SQLite made\ndurable and reachable over HTTP), fronted by a small web app. When it is running\nthe user sees a workspace tab with four things: a landing page (`/`) showing the\npublic connection URL and a scannable QR code; a management console (`/db`, also\nreachable as `/manage`) that browses the tables, runs SQL, and rotates the token;\na live demo -- a drag-and-drop todo app (`/demo`) built on the same API to prove\nit works end to end; and agent-facing API docs at `/llms.txt`. External clients\nhit a separate public URL and run arbitrary SQL against `/api/query`,\n`/api/execute`, and `/api/request`, sending `Authorization: Bearer <token>` on\nevery call. There is no imposed schema -- callers create whatever tables they\nwant -- and the single 256-bit bearer token is the whole gate.",
       "author": "boweiliu",
@@ -634,7 +586,6 @@
         "orchard",
         "spec-workbench",
         "kriteek",
-        "github-repos-table-view",
         "vscode-web-lean",
         "officina",
         "rubric-review"
@@ -664,9 +615,7 @@
       "slugs": [
         "local-print-bridge",
         "minds-apps-homepage",
-        "latchkey-dev-workbench",
         "red-scribble",
-        "glm-pi-foreman",
         "minds-rqlite-wip"
       ]
     }
