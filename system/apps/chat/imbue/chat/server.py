@@ -553,8 +553,9 @@ def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) ->
         state.chat_namer.consider_message(chat_id, message)
 
 
-# The send-failure kind a chat whose account was signed out answers with; the composer shows its
-# own "choose a provider" state for it rather than a failed send.
+# The send-failure kind a chat whose account was signed out answers with. The composer already
+# offers "Choose a provider" in place of the input from the account list, so only a page whose
+# list has not caught up with the sign-out sends and meets this.
 ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND: Final[str] = "account_signed_out"
 
 
