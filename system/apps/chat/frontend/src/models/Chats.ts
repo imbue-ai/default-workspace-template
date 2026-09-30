@@ -464,6 +464,15 @@ export function createChat(
   return postCreateChat({ project_id: projectId, account_id: accountId, message, model: pick });
 }
 
+/** The chat a chat list with none to show opens on: one waiting for its first send, which launches it on the
+ *  selected account. Nothing is created until then, and a list asking while another waits gets that one. */
+export async function awaitingChatForEmptyList(): Promise<string> {
+  const response = await fetch(apiUrl("/api/chats/awaiting"), { method: "POST" });
+  if (!response.ok) throw new Error(`The chat list could not open a new chat (${response.status})`);
+  const data = (await response.json()) as { chat_id: string };
+  return data.chat_id;
+}
+
 /**
  * Launch a chat minted earlier (a seeded one awaiting its first send, or one whose create
  * failed) on ``accountId``: it keeps its id and name, so the window showing it becomes the chat.
