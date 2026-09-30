@@ -51,15 +51,29 @@
 }
 
 .chat-rail {
-  width: 176px;
   border-right: none;
   background: #ffffff;
   box-shadow: var(--win95-inset);
   padding: 2px;
 }
 
+.chat-rail[data-collapsed="false"] {
+  width: 176px;
+}
+
+/* The collapsed rail is a strip of monograms: just wide enough for one, plus the well's bevel. */
+.chat-rail[data-collapsed="true"] {
+  width: 44px;
+}
+
 .chat-rail-head {
   padding: 4px;
+}
+
+.chat-rail[data-collapsed="true"] .chat-rail-head,
+.chat-rail[data-collapsed="true"] .chat-rail-list {
+  padding-left: 2px;
+  padding-right: 2px;
 }
 
 .chat-rail-new {
