@@ -5049,6 +5049,30 @@ def _record_cut_short_spare(tmp_path: Path) -> SpareChatAgent:
     return cut_short
 
 
+def _band_recording_spare_manager(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mngr_binary: str
+) -> tuple[AgentManager, list[tuple[int, int]], dict[str, int]]:
+    """A one-spare manager whose ``oom_score_adj`` writes land in the returned list, with the agents' pids
+    read from the returned map (empty until a test gives an agent one)."""
+    adj_writes: list[tuple[int, int]] = []
+    pid_by_agent_id: dict[str, int] = {}
+
+    def record_adj_write(pid: int, adj: int) -> bool:
+        adj_writes.append((pid, adj))
+        return True
+
+    manager, _ = _spare_manager(
+        broadcaster,
+        monkeypatch,
+        tmp_path,
+        mngr_binary,
+        1,
+        oom_score_adj_writer=record_adj_write,
+        agent_pid_resolver=pid_by_agent_id.get,
+    )
+    return manager, adj_writes, pid_by_agent_id
+
+
 @pytest.mark.parametrize("pool_size", [1, 2])
 def test_the_pool_fills_with_silent_spares_on_the_default_account_that_no_listing_shows(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pool_size: int
@@ -5596,21 +5620,8 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
-    adj_writes: list[tuple[int, int]] = []
-    pid_by_agent_id: dict[str, int] = {}
-
-    def record_adj_write(pid: int, adj: int) -> bool:
-        adj_writes.append((pid, adj))
-        return True
-
-    manager, _ = _spare_manager(
-        broadcaster,
-        monkeypatch,
-        tmp_path,
-        mngr_binary,
-        1,
-        oom_score_adj_writer=record_adj_write,
-        agent_pid_resolver=pid_by_agent_id.get,
+    manager, adj_writes, pid_by_agent_id = _band_recording_spare_manager(
+        broadcaster, monkeypatch, tmp_path, mngr_binary
     )
     try:
         manager.ensure_spare_chat()
@@ -5640,21 +5651,8 @@ def test_a_spare_claimed_while_it_starts_takes_the_chat_band_once_its_chat_settl
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, _argv_log = _write_booting_mngr_binary(tmp_path)
-    adj_writes: list[tuple[int, int]] = []
-    pid_by_agent_id: dict[str, int] = {}
-
-    def record_adj_write(pid: int, adj: int) -> bool:
-        adj_writes.append((pid, adj))
-        return True
-
-    manager, _ = _spare_manager(
-        broadcaster,
-        monkeypatch,
-        tmp_path,
-        mngr_binary,
-        1,
-        oom_score_adj_writer=record_adj_write,
-        agent_pid_resolver=pid_by_agent_id.get,
+    manager, adj_writes, pid_by_agent_id = _band_recording_spare_manager(
+        broadcaster, monkeypatch, tmp_path, mngr_binary
     )
     manager.set_handoff_capabilities(_handoff_capabilities([]))
     try:
