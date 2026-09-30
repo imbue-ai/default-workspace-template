@@ -1,0 +1,1 @@
+The workspace app model and desktop interface contracts now list the chat preview's `CHAT_STATE_DIR`: a chat preview reads the live chat's `data/.state/chat` by absolute path, so the spare agents the live chat keeps for new chats stay hidden in the preview too.

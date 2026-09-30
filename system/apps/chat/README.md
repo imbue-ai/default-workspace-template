@@ -227,7 +227,8 @@ spare sits in `oom_priority`'s ceiling band (`SPARE_AGENT`, shared with the
 browser's renderers) until a chat takes it, so memory pressure sheds it before
 any agent or agent subprocess; one that dies is replaced after the same
 backoff. A secondary chat (a preview) keeps none of its own: it reads the live
-chat's `spare_chat.json` on every sweep, never writing it, so the live spares
+chat's `spare_chat.json` on every sweep (its manifest's `CHAT_STATE_DIR` names the
+live state dir, since a preview runs from a worktree), never writing it, so the live spares
 stay hidden there too and a spare the live chat hands over appears.
 
 The send route is also how anything inside the workspace messages a chat:

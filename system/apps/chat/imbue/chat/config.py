@@ -32,6 +32,9 @@ class Config(BaseSettings):
     # A secondary chat (a preview) points this at a scratch copy so its writes never land
     # in the live chat's data.
     chat_data_dir: Path = Field(default=DEFAULT_CHAT_DATA_DIR)
+    # A secondary chat runs from a worktree, where the relative default names no file, so its
+    # manifest points this at the live chat's state dir, which it only reads.
+    chat_state_dir: Path = Field(default=CHAT_STATE_DIR)
 
     @field_validator("chat_javascript_plugins", "chat_static_paths", mode="before")
     @classmethod

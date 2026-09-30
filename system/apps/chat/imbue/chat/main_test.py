@@ -84,14 +84,19 @@ def test_chat_writes_land_in_the_configured_data_dir(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("is_secondary", [False, True], ids=["live", "secondary"])
-def test_the_spares_record_is_the_live_chats_machine_state_whatever_the_data_dir(
+def test_the_spares_record_is_in_the_configured_state_dir_whatever_the_data_dir(
     tmp_path: Path, is_secondary: bool
 ) -> None:
-    """A secondary reads the live chat's spares, to hide them, rather than its scratch copy's."""
-    state = build_production_state(Config(chat_data_dir=tmp_path / "scratch"), is_secondary=is_secondary)
+    """A secondary reads the live chat's spares, to hide them, rather than its scratch copy's: a
+    preview runs from a worktree, so its manifest names the live state dir outright."""
+    assert Config().chat_state_dir == CHAT_STATE_DIR
+    live_state_dir = tmp_path / "live-state"
+    state = build_production_state(
+        Config(chat_data_dir=tmp_path / "scratch", chat_state_dir=live_state_dir), is_secondary=is_secondary
+    )
     try:
         spare_store = state.agent_manager._spare_chat_store
         assert spare_store is not None
-        assert spare_store.path == CHAT_STATE_DIR / SPARE_CHAT_FILENAME
+        assert spare_store.path == live_state_dir / SPARE_CHAT_FILENAME
     finally:
         state.shutdown()

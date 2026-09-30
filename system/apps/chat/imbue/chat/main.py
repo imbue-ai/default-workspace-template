@@ -23,7 +23,6 @@ from imbue.chat.chat_records import CHAT_RECORDS_DIRNAME
 from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.chat_settings import SETTINGS_FILENAME
-from imbue.chat.config import CHAT_STATE_DIR
 from imbue.chat.config import Config
 from imbue.chat.config import load_config
 from imbue.chat.event_queues import AgentEventQueues
@@ -120,7 +119,7 @@ def build_production_state(
 
     Everything the chat keeps about the user's things lands under ``config.chat_data_dir``, so a
     secondary chat pointed at a scratch copy never writes the live chat's data; the spare agents'
-    record is machine state, under ``CHAT_STATE_DIR``, which a secondary only reads. A secondary also
+    record is machine state, under ``config.chat_state_dir``, which a secondary only reads. A secondary also
     opens no windows: the auto-open ledger and the shell it would drive belong to the live chat.
     """
     broadcaster = WebSocketBroadcaster()
@@ -144,7 +143,7 @@ def build_production_state(
         is_secondary=is_secondary,
         # The agents kept started for the next new chats: machine state, so a secondary reads the
         # live chat's record (only to hide them) whatever data dir it was pointed at.
-        spare_chat_store=SpareChatStore(path=CHAT_STATE_DIR / SPARE_CHAT_FILENAME),
+        spare_chat_store=SpareChatStore(path=config.chat_state_dir / SPARE_CHAT_FILENAME),
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
