@@ -3198,6 +3198,9 @@ class AgentManager:
         """Whether a ready spare can be handed to a new chat on ``terms``: started on them, and still running. Lock held."""
         if spare.phase is not SpareChatPhase.READY or spare.terms != terms:
             return False
+        return self._is_spare_process_alive_locked(spare)
+
+    def _is_spare_process_alive_locked(self, spare: SpareChatAgent) -> bool:
         agent = self._agents.get(spare.chat_id)
         return agent is not None and not is_lifecycle_dead(agent.state)
 
@@ -3366,10 +3369,6 @@ class AgentManager:
                 name=f"create-spare-{str(new_spare.chat_id)[:8]}",
                 is_checked=False,
             )
-
-    def _is_spare_process_alive_locked(self, spare: SpareChatAgent) -> bool:
-        agent = self._agents.get(spare.chat_id)
-        return agent is not None and not is_lifecycle_dead(agent.state)
 
     def _tag_spares_for_shedding_first(self) -> None:
         """Put every spare's process in the ``SPARE_AGENT`` band, the first to be shed under memory
