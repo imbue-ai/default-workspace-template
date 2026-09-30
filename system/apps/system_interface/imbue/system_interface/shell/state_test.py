@@ -26,6 +26,7 @@ from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import Desktop
+from imbue.system_interface.shell.data_types import DesktopShortcut
 from imbue.system_interface.shell.data_types import StoredWindowPath
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
@@ -446,6 +447,11 @@ def _pinned_apps_on(desktop: Desktop) -> list[str]:
     return [str(window.app) for window in desktop.windows if window.is_pinned]
 
 
+def _seed_of_the_registry(shell: ShellState) -> tuple[DesktopShortcut, ...]:
+    """The shortcuts a desktop is seeded with from the rows the shell's inventory holds."""
+    return seed_desktop_shortcuts([entry.row for entry in shell.inventory.entries()])
+
+
 def _register_chat(registry_path: Path) -> None:
     write_registry(registry_path, *builtin_rows_toml_before_chat(), builtin_chat_row_toml())
 
@@ -503,7 +509,7 @@ def test_a_registry_change_before_the_first_read_of_the_desktops_seeds_nothing(
     assert not (tmp_path / "state" / DEFAULT_SHORTCUTS_OFFERED_FILENAME).exists()
     assert _desktops_updates(client_queue) == []
     (home,) = shell.list_desktops()
-    assert home.shortcuts == seed_desktop_shortcuts([entry.row for entry in shell.inventory.entries()])
+    assert home.shortcuts == _seed_of_the_registry(shell)
     assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(BUILTIN_SHORTCUT_APPS_WITH_CHAT)
 
 
@@ -521,7 +527,7 @@ def test_an_app_registering_after_home_was_seeded_reaches_it_through_the_registr
     # Read straight from the store, so nothing but the registry change can have added the chat.
     (stored,) = shell.desktops.list_desktops()
     assert shortcut_apps_on(stored) == BUILTIN_SHORTCUT_APPS_WITH_CHAT
-    assert stored.shortcuts == seed_desktop_shortcuts([entry.row for entry in shell.inventory.entries()])
+    assert stored.shortcuts == _seed_of_the_registry(shell)
     assert _pinned_apps_on(stored) == ["chat"]
     assert _desktops_updates(client_queue) == [BUILTIN_SHORTCUT_APPS_WITH_CHAT]
 
@@ -575,7 +581,7 @@ def test_a_visiting_users_desktop_made_before_a_late_app_registered_gets_its_sho
     _register_chat(shell.inventory.registry_path)
     shell.inventory.reload_registry()
 
-    seeded_with_chat = seed_desktop_shortcuts([entry.row for entry in shell.inventory.entries()])
+    seeded_with_chat = _seed_of_the_registry(shell)
     home, visitors = shell.desktops.list_desktops()
     assert visitors.id == arrival.created_desktop.id
     assert home.shortcuts == seeded_with_chat and visitors.shortcuts == seeded_with_chat
