@@ -114,12 +114,20 @@ def test_a_late_apps_default_shortcut_is_offered_once_on_every_desktop_and_a_rem
     assert "chat" not in shortcut_apps_on(store.list_desktops()[0])
 
 
-def test_a_desktops_file_from_before_the_offered_record_counts_its_shortcuts_as_offered(tmp_path: Path) -> None:
-    """A workspace whose default desktop was seeded before the chat registered, by a shell that kept no record: the
-    chat is added once, the record is created, and desktops.json keeps the shape every release reads."""
+@pytest.mark.parametrize(
+    "offered_record_text", [None, '{"version": 2, "apps": []}', '{"version": 1}', "not json"]
+)
+def test_a_desktops_file_with_no_usable_offered_record_counts_its_shortcuts_as_offered(
+    tmp_path: Path, offered_record_text: str | None
+) -> None:
+    """A workspace whose default desktop was seeded before the chat registered, by a shell that kept no record or
+    beside a record this shell cannot read: the chat is added once, as if registered first, the record is written,
+    and desktops.json keeps the shape every release reads."""
     before_chat, with_chat = builtin_registry_rows(tmp_path / "registry")
     state_directory = tmp_path / "state"
     write_desktops_file(state_directory, default_desktop(seed_desktop_shortcuts(before_chat)))
+    if offered_record_text is not None:
+        (state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME).write_text(offered_record_text)
     store = DesktopStore(state_directory=state_directory)
 
     offered = store.ensure_default_shortcuts_offered(with_chat)
