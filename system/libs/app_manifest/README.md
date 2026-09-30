@@ -31,9 +31,13 @@ The models behind a workspace app's two descriptions:
   shell's launch envelope and can name neither a param nor a preset; `open` is
   reserved for the root launch path the shell synthesizes for an app that
   declares none), `LaunchPathMethod`,
-  `MessageHandler` (`type`, a `MessageType`: `minds:` and a lowercase kebab-case
-  name, unique within the manifest; `path`, the route under the app's origin the
-  shell posts each message of that type to, shaped like a launch path),
+  `MessageHandler` (`type`, a `MessageType`: a lowercase prefix, `:`, and a
+  lowercase kebab-case name, never `shell:`, unique within the manifest; and
+  exactly one of `path`, the route under the app's origin the shell posts each
+  message of that type to, shaped like a launch path, or `show`, the
+  `PageTemplate` of the app's page the shell shows for it, with `showing`, the
+  templates of the app's other pages that count as already showing it, only
+  beside `show`),
   `DefaultShortcut`
   (`launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
@@ -93,6 +97,8 @@ The models behind a workspace app's two descriptions:
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `LaunchPathId`, `LaunchParamName`, `LaunchPathValue` (rooted with one
   slash, no query string or fragment, nothing a URL would escape), `MessageType`,
+  `PageTemplate` (a path with `{field}` placeholders, starting with one `/` or a
+  placeholder, optionally ending in a fixed query string, no fragment),
   `PriorityName`, `ProgramName`,
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
   gitignore negation would re-include a built-in exclude), `ReferenceNote`) and
@@ -100,7 +106,12 @@ The models behind a workspace app's two descriptions:
   `system/scripts/forward_port_test.py` keeps them identical), with
   `canonical_name_from_title(title)` (the name a user-facing title registers
   as) and `is_name_conflict(candidate_title, taken_names)` (whether a title
-  would collide with a name already taken) for apps that mint names from titles.
+  would collide with a name already taken) for apps that mint names from titles,
+  and `render_page_template(template, fields)`, the page a `show` handler's
+  template names for a message: each placeholder replaced by its string field,
+  percent-encoded one path segment at a time, a trailing `/` of the value joining
+  the template's following `/` as one slash; it raises `PageTemplateFieldError`
+  when a field is missing or not a string or the page is not a rooted path.
 - The `app-manifest validate-manifest <path> [--repo-root DIR]` command, for the
   build-app scaffold and tests. Without `--repo-root` the reference location
   checks run against the root the `system/apps/<package>/app.toml` layout
