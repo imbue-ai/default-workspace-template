@@ -1,0 +1,1 @@
+- The desktop-interface plan (sections 3.2 and 3.6), the launcher plan (section 4.2) and the window-bound-resources spec now say that every app a program runs has a default shortcut (its `default_shortcut`, else its first launch path in focus mode), and that a right-click on a launcher row adds that launch path to the desktop or removes it.

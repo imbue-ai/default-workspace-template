@@ -1,0 +1,1 @@
+- `manage-desktop` says that every app gets a desktop shortcut once, whether or not its manifest declares `default_shortcut`, and that the user can add or remove one from the launcher's right-click menu. The `build-app` scaffold's comment no longer says a new app stays off the desktop until the user asks.

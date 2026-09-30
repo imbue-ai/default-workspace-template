@@ -203,6 +203,10 @@ A disabled free-text row is drawn faint with its reason as the tooltip.
 The highlighted row wears the active fill and `data-highlighted="true"`.
 The menu renders no loading state at any point; every row comes from state the browser already holds.
 
+A right-click on a launch-path row opens the desktop's menu for that launch path, ending with the reference rows every right-click menu of the shell ends with.
+It offers `Add to desktop` when the active desktop holds no shortcut of that `(app, launch)`: the shortcut is added at the first free cell in reading order, in the mode of the app's `default_shortcut` when that names this launch path and `focus` otherwise.
+When the active desktop holds one, it offers `Remove from desktop` instead.
+
 ### 4.3 Running a row
 
 | Row | What happens |

@@ -115,7 +115,8 @@ and the profile cache.
   which folds mngr's agents event file into a mood (working when any agent
   but the services agent is running) and pushes `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
-  every registered app's `default_shortcut` on the first read after the
+  every registered app's default shortcut (its `default_shortcut`, else the
+  first launch path of an app a program runs) on the first read after the
   registry has been read. An app that registers later has its default
   shortcut added to every desktop once, on the registry change and on every
   read; `default_shortcuts_offered.json` lists the apps offered so far, so a

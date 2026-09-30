@@ -74,6 +74,12 @@ type OpenMenu =
   | { readonly kind: "size"; readonly windowId: string }
   | { readonly kind: "entry"; readonly windowId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut; readonly referenceRows: readonly MenuRow[] }
+  | {
+      readonly kind: "launch";
+      readonly app: string;
+      readonly launch: string;
+      readonly referenceRows: readonly MenuRow[];
+    }
   | { readonly kind: "desktops" }
   | { readonly kind: "desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
@@ -653,6 +659,36 @@ export function App(): m.Component<AppAttrs> {
     return rows;
   }
 
+  /** The menu of a launcher row's launch path: add it to the desktop on screen, or take it off when it is there. */
+  function rowsOfLaunchMenu(current: DesktopStore, appName: string, launch: string): MenuRow[] | null {
+    const state = current.getState();
+    const desktop = activeDesktop(state);
+    const app = appByName(state, appName);
+    if (desktop === null || app === undefined) return null;
+    const isOnDesktop = desktop.shortcuts.some(
+      (shortcut) => shortcut.target.app === appName && shortcut.target.launch === launch,
+    );
+    if (isOnDesktop) {
+      return [
+        {
+          kind: "action",
+          key: "remove-from-desktop",
+          label: "Remove from desktop",
+          onSelect: () => void current.removeShortcut(appName, launch),
+        },
+      ];
+    }
+    const mode = app.default_shortcut?.launch === launch ? app.default_shortcut.mode : "focus";
+    return [
+      {
+        kind: "action",
+        key: "add-to-desktop",
+        label: "Add to desktop",
+        onSelect: () => void current.addShortcut(appName, launch, mode),
+      },
+    ];
+  }
+
   function rowsOfDesktopsMenu(current: DesktopStore): MenuRow[] {
     const state = current.getState();
     const active = state.activeDesktopId;
@@ -719,6 +755,8 @@ export function App(): m.Component<AppAttrs> {
         return withReferenceRows(rowsOfEntryMenu(current, open.windowId), open.referenceRows);
       case "shortcut":
         return withReferenceRows(rowsOfShortcutMenu(current, open.shortcut), open.referenceRows);
+      case "launch":
+        return withReferenceRows(rowsOfLaunchMenu(current, open.app, open.launch), open.referenceRows);
       case "desktops":
         return rowsOfDesktopsMenu(current);
       case "desktop":
@@ -1044,6 +1082,12 @@ export function App(): m.Component<AppAttrs> {
                     onRun: (row) => runLauncherRow(current, row),
                     onHighlight: (index) => {
                       launcherHighlight = index;
+                    },
+                    onLaunchContextMenu: (app, launch, x, y, target) => {
+                      openMenuAt(
+                        { kind: "launch", app, launch, referenceRows: referenceRowsFor(current, target, x, y) },
+                        anchorForPoint(x, y),
+                      );
                     },
                   })
                 : null,

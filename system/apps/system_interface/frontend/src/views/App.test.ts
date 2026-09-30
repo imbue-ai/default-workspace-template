@@ -528,6 +528,63 @@ describe("the element menu", () => {
   });
 });
 
+describe("a launcher row's menu", () => {
+  function openLaunchMenu(key: string): void {
+    store.openLauncher();
+    m.redraw.sync();
+    const row = document.querySelector(`[data-launcher-overlay] [data-launch="${key}"]`) as HTMLElement;
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 });
+    row.dispatchEvent(event);
+    m.redraw.sync();
+    expect(event.defaultPrevented).toBe(true);
+  }
+
+  function chooseRow(key: string): void {
+    const row = document.querySelector(`[data-menu-part="menu"] [data-menu-row="${key}"]`) as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+    m.redraw.sync();
+  }
+
+  it("adds the launch path to the desktop on screen in its default mode, then offers to take it off", async () => {
+    const chat = appRecord("chat", {
+      launch_paths: [launchPathRecord({ id: "new", path: "/new" })],
+      default_shortcut: { launch: "new", mode: "new" },
+    });
+    socket.deliver().onAppsUpdated([appRecord("docs"), chat]);
+    store.setBackdropSize({ width: 1000, height: 800 });
+
+    openLaunchMenu("chat:new");
+    expect(document.querySelector(".launch-menu")).not.toBeNull();
+    chooseRow("add-to-desktop");
+    await settle();
+
+    expect(api.calls).toContain("setDesktopShortcut:home:chat:new:0,0");
+    expect(api.desktops[0].shortcuts.map((shortcut) => shortcut.mode)).toEqual(["new"]);
+    expect(store.isLauncherOpen()).toBe(false);
+
+    openLaunchMenu("chat:new");
+    chooseRow("remove-from-desktop");
+    await settle();
+    expect(api.calls).toContain("removeDesktopShortcut:home:chat:new");
+  });
+
+  it("adds a launch path of an app that declares no default shortcut focusing", async () => {
+    const notes = appRecord("notes", {
+      launch_paths: [launchPathRecord({ id: "browse", path: "/" }), launchPathRecord({ id: "add", path: "/add" })],
+      default_shortcut: null,
+    });
+    socket.deliver().onAppsUpdated([appRecord("docs"), notes]);
+    store.setBackdropSize({ width: 1000, height: 800 });
+    openLaunchMenu("notes:add");
+    chooseRow("add-to-desktop");
+    await settle();
+    expect(api.desktops[0].shortcuts.map((shortcut) => [shortcut.target.launch, shortcut.mode])).toEqual([
+      ["add", "focus"],
+    ]);
+  });
+});
+
 describe("a press outside what is open", () => {
   it("closes an open menu through its own sheet, with the focused page shielded under it", () => {
     expect(focusedShield()).toBeNull();

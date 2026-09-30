@@ -5,13 +5,15 @@
  * section with no rows draws nothing. The rows themselves come from ``reducers/launcherRows``;
  * this draws them and reports a hover (which moves the highlight) and a click (which runs a row).
  * The highlighted row, whatever its kind, carries the ``Enter`` caption; the secondary text row
- * carries its chord's.
+ * carries its chord's. A right-click on a launch-path row reports it, for the menu that adds it to
+ * the desktop.
  * Markers the tests use are data attributes (plan section 6.2): ``data-launcher-overlay`` on
  * the card, and on each row ``data-launcher-row``, ``data-launch``, ``data-launcher-window``,
  * ``data-text-action``, ``data-highlighted``, and ``data-disabled``.
  */
 
 import m from "mithril";
+import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import {
   MENU_ROW_FOCUS,
@@ -45,6 +47,7 @@ export interface LauncherMenuAttrs {
   readonly bottomOffsetPx: number;
   readonly onRun: (row: LauncherRow) => void;
   readonly onHighlight: (index: number) => void;
+  readonly onLaunchContextMenu: (app: string, launch: string, x: number, y: number, target: Element) => void;
 }
 
 /** The key that runs the secondary text action, as the platform spells it. */
@@ -115,7 +118,20 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherMenuAttrs): m.V
     case "launch":
       return m(
         "button",
-        { ...rowAttrs(row, index, attrs), "data-launch": shortcutKey(row.app.name, row.launchPath.id) },
+        {
+          ...rowAttrs(row, index, attrs),
+          "data-launch": shortcutKey(row.app.name, row.launchPath.id),
+          oncontextmenu: (event: MouseEvent) => {
+            event.preventDefault();
+            attrs.onLaunchContextMenu(
+              row.app.name,
+              row.launchPath.id,
+              event.clientX,
+              event.clientY,
+              targetElementOf(event),
+            );
+          },
+        },
         [
           glyphCell(appGlyph(row.app, APP_GLYPH_SIZE)),
           m("span", { class: "min-w-0 flex-1 truncate" }, row.label),

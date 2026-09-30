@@ -498,6 +498,35 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
     }
 
 
+def test_a_supervised_app_declaring_no_default_shortcut_is_seeded_at_its_first_launch_path_focusing(
+    tmp_path: Path,
+) -> None:
+    rows = read_registry(
+        write_registry(
+            tmp_path / "apps.toml",
+            # A user-built app: a manifest with no launch paths and no default shortcut.
+            registry_row_toml("notes", "http://localhost:1", program="notes"),
+            registry_row_toml(
+                "recipes",
+                "http://localhost:2",
+                program="recipes",
+                launch_paths=[("browse", "Browse", "/"), ("add", "Add a recipe", "/add")],
+            ),
+            # A preview frame or an isolated test server registers with no program.
+            registry_row_toml("preview-1", "http://localhost:3"),
+            registry_row_toml("vm-exec", "http://localhost:4", program="vm-exec", is_internal=True),
+        )
+    )
+
+    seeded = seed_desktop_shortcuts(rows)
+
+    assert [(str(shortcut.target.app), str(shortcut.target.launch), shortcut.mode) for shortcut in seeded] == [
+        ("notes", "open", ShortcutMode.FOCUS),
+        ("recipes", "browse", ShortcutMode.FOCUS),
+    ]
+    assert apps_with_a_default_shortcut(rows) == {"notes", "recipes"}
+
+
 def _targets_and_cells(desktop: Desktop) -> list[tuple[str, str, int, int]]:
     return [
         (str(shortcut.target.app), str(shortcut.target.launch), shortcut.cell.column, shortcut.cell.row)

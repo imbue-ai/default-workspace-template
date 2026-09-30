@@ -1,0 +1,3 @@
+- Every app you have gets an icon on the desktop, not only the built-in ones. An app that declares no `default_shortcut` in its manifest, including every app built with `build-app` and every app registered before manifests existed, now gets a shortcut of its first launch path, in focus mode. It is added once to every desktop, including desktops made before this change, and a shortcut you remove stays removed. Previews and isolated test servers, which register without a program, get none.
+
+- Right-clicking an app in the launcher now offers `Add to desktop`, which puts that launch path's shortcut on the desktop on screen, or `Remove from desktop` when it is already there.
