@@ -560,9 +560,18 @@ ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND: Final[str] = "account_signed_out"
 
 
 def _is_account_signed_out(agent_info: AgentInfo) -> bool:
-    """Whether the agent's ``account`` label names an account no longer signed in (a chat from before accounts has none)."""
+    """Whether the agent's ``account`` label names an account no longer signed in (a chat from before accounts has none).
+
+    An index that cannot be read says nothing about this account, so the send goes through.
+    """
     account_id = agent_info.labels.get("account", "")
-    return account_id != "" and not account_exists(account_id)
+    if account_id == "":
+        return False
+    try:
+        return not account_exists(account_id)
+    except AccountError as e:
+        logger.warning("Could not check whether account {} is still signed in: {}", account_id, e)
+        return False
 
 
 def _send_to_chat(

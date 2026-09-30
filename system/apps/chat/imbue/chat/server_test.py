@@ -23,8 +23,10 @@ from flask.testing import FlaskClient
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 
+from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account
+from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
@@ -628,6 +630,22 @@ def test_a_secret_request_notice_still_reaches_a_chat_whose_account_was_signed_o
         bridge.deliver_notice(agent_id, "The secret you asked for is ready.")
 
     assert messenger.sent == [(agent_id, "The secret you asked for is ready.")]
+
+
+def test_an_unreadable_account_index_does_not_refuse_a_chats_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account_id, _account_path = mint_account_dir()
+    commit_account(account_id, "openai", "OpenAI")
+    # An index written by a newer build is refused as unreadable, which says nothing about this account.
+    index_path().write_text(json.dumps({"version": INDEX_VERSION + 1, "accounts": []}))
+    agent_id = "agent-00000000000000000000000000000735"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, account_id)
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "hello")]
 
 
 def test_a_chat_on_a_signed_in_account_still_takes_messages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
