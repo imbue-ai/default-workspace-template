@@ -15,6 +15,7 @@ the agent manager.
 from __future__ import annotations
 
 import fcntl
+import importlib.util
 import json
 import os
 import queue
@@ -644,6 +645,28 @@ class FakePexpectProcess:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+def load_script(path: Path, module_name: str) -> Any:
+    """Import a standard-library-only script that cannot import this package, with its own directory on the path."""
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    modules_before = set(sys.modules)
+    # Registered while it runs: a dataclass resolves its string annotations through its module.
+    sys.modules[module_name] = module
+    sys.path.insert(0, str(path.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(path.parent))
+        # Its sibling imports go too, so their bare names do not outlive this load in the session.
+        for name in set(sys.modules) - modules_before:
+            loaded_spec = sys.modules[name].__spec__
+            origin = loaded_spec.origin if loaded_spec is not None else None
+            if name == module_name or (origin is not None and Path(origin).parent == path.parent):
+                del sys.modules[name]
+    return module
 
 
 def wait_until_true(predicate: Callable[[], bool], timeout_seconds: float, what: str) -> None:

@@ -1,11 +1,9 @@
 """Tests for the Flask server."""
 
 import fcntl
-import importlib.util
 import io
 import json
 import os
-import sys
 from collections.abc import Callable
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -77,6 +75,7 @@ from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
+from imbue.chat.testing import load_script
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
@@ -1817,27 +1816,6 @@ def test_interrupt_keep_queue_restarts_and_resends_what_was_queued(client: Flask
     assert fake_watcher.clear_calls == [True]
 
 
-def _load_script(path: Path, module_name: str) -> Any:
-    """Import a standard-library-only script that cannot import this package, with its own directory on the path."""
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    modules_before = set(sys.modules)
-    # Registered while it runs: a dataclass resolves its string annotations through its module.
-    sys.modules[module_name] = module
-    sys.path.insert(0, str(path.parent))
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.path.remove(str(path.parent))
-        # Its sibling imports go too, so their bare names do not outlive this load in the session.
-        for name in set(sys.modules) - modules_before:
-            origin = getattr(sys.modules[name], "__file__", None)
-            if name == module_name or (origin is not None and Path(origin).parent == path.parent):
-                del sys.modules[name]
-    return module
-
-
 def test_the_restart_clients_ask_for_what_the_interrupt_route_takes_and_read_what_it_answers(
     client: FlaskClient, app: Flask
 ) -> None:
@@ -1846,11 +1824,11 @@ def test_the_restart_clients_ask_for_what_the_interrupt_route_takes_and_read_wha
     leave update-self restarting busy chats, or ``--interrupt`` dropping their queues, with no
     failing test."""
     workspace_root = Path(__file__).resolve().parents[5]
-    restarts = _load_script(
+    restarts = load_script(
         workspace_root / ".agents" / "skills" / "update-self" / "scripts" / "update_agent_restarts.py",
         "update_agent_restarts_for_interrupt_pin",
     )
-    messenger = _load_script(
+    messenger = load_script(
         workspace_root / "system" / "scripts" / "message_chat.py", "message_chat_for_interrupt_pin"
     )
 
@@ -2647,7 +2625,7 @@ def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) ->
     pinned here. ``CreateChatRequest`` forbids unknown fields, and the script reads that refusal as
     a chat app from before them: a rename on this side would send every Imbue Studio chat back to the
     bare ``mngr create`` without a single failing test."""
-    module = _load_script(
+    module = load_script(
         Path(__file__).resolve().parents[4] / "scripts" / "message_chat.py", "message_chat_for_create_pin"
     )
 

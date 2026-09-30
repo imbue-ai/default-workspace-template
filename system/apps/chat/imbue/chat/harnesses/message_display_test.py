@@ -5,7 +5,6 @@ backend-side, and these cases pin the exact same precedence (explicit detectors 
 ``is_meta``; the compaction chip is keyed off its flag, not its text).
 """
 
-import importlib.util
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -22,6 +21,7 @@ from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 from imbue.chat.harnesses.message_display import split_background_task_reports
+from imbue.chat.testing import load_script
 
 _SEED_BLOCK = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
 
@@ -340,11 +340,7 @@ def test_permission_resolution_reads_the_machine_tag_first() -> None:
 def _load_system_script(filename: str) -> Any:
     """A standard-library-only script from ``system/scripts/``, which this package cannot import."""
     script = Path(__file__).resolve().parents[5] / "scripts" / filename
-    spec = importlib.util.spec_from_file_location(f"{script.stem}_for_tag_pin", script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_script(script, f"{script.stem}_for_tag_pin")
 
 
 def test_the_messaging_scripts_browser_fleet_tag_is_the_one_this_classifier_strips() -> None:
