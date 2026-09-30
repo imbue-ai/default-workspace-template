@@ -102,8 +102,8 @@ it.
 
 ### The app's port
 
-Pick a free port -- or let the scaffolder do it. The scaffolder (canonical path) auto-picks the lowest free
-port at or above 8080 by parsing `system/supervisord.conf`, every
+Pick a free port -- or let the scaffolder do it. The scaffolder (canonical
+path) auto-picks the lowest free port at or above 8080 by parsing `system/supervisord.conf`, every
 `system/supervisord.conf.d/*.conf`, and `data/.state/apps.toml`, so running
 manual port checks (`ss -tln`) is unnecessary. If you are picking a port
 manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
@@ -129,8 +129,9 @@ motivates it -- never a technical term (this system serves non-technical users):
 "should everyone see the same list?" not "do we need multi-tenancy?".
 
 Record your stated defaults -- they are the architecture you build once, after
-the mock converges. Do not build any of it yet. Then propose a small plan and
-wait for approval.
+the mock converges. Do not wait for approval of a plan before starting: the mock
+is the user's first checkpoint, and `SKILL.md` names it as the only one before
+the working site.
 
 ### Which path: author routes or wrap a server
 
