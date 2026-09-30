@@ -522,6 +522,23 @@ def test_a_watcher_released_before_it_starts_leaves_no_watch_thread_running(tmp_
         state.shutdown()
 
 
+def _fake_watcher(
+    get_all_events: Callable[[], list[dict[str, Any]]],
+    start: Callable[[], None],
+    stop: Callable[[], None] = lambda: None,
+) -> SimpleNamespace:
+    """A stand-in for ``build_watcher``'s result: no-op queue hooks around the given seed, start, and stop."""
+    return SimpleNamespace(
+        set_queue_snapshot_callback=lambda _callback: None,
+        notify_idle=lambda: [],
+        notify_busy=lambda: None,
+        set_flush_hooks=lambda _send, _is_alive: None,
+        get_all_events=get_all_events,
+        start=start,
+        stop=stop,
+    )
+
+
 def test_a_watcher_released_while_it_starts_is_stopped_once_after_its_start() -> None:
     state = build_test_state()
     seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
@@ -532,15 +549,7 @@ def test_a_watcher_released_while_it_starts_is_stopped_once_after_its_start() ->
         state.release_unviewed_stopped_transcripts()
         calls.append("started")
 
-    fake_watcher = SimpleNamespace(
-        set_queue_snapshot_callback=lambda _callback: None,
-        notify_idle=lambda: [],
-        notify_busy=lambda: None,
-        set_flush_hooks=lambda _send, _is_alive: None,
-        get_all_events=lambda: [],
-        start=start_while_released,
-        stop=lambda: calls.append("stop"),
-    )
+    fake_watcher = _fake_watcher(lambda: [], start_while_released, lambda: calls.append("stop"))
     try:
         with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
             state.get_or_create_watcher(_agent_info(agent_id="stopped-agent"))
@@ -2418,14 +2427,7 @@ def test_get_or_create_watcher_seeds_activity_before_starting_the_watcher() -> N
         calls.append("get_all_events")
         return []
 
-    fake_watcher = SimpleNamespace(
-        set_queue_snapshot_callback=lambda _callback: None,
-        notify_idle=lambda: [],
-        notify_busy=lambda: None,
-        set_flush_hooks=lambda _send, _is_alive: None,
-        get_all_events=_record_get_all_events,
-        start=lambda: calls.append("start"),
-    )
+    fake_watcher = _fake_watcher(_record_get_all_events, lambda: calls.append("start"))
     state = build_test_state()
     with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
         state.get_or_create_watcher(_agent_info())
