@@ -3301,7 +3301,8 @@ class AgentManager:
         a spare's failed create or destroy or its process dying (most likely shed for memory); with
         no account to start one on, the ready spares are destroyed and none is started. The mngr
         commands run on threads of their own; the sweep calls this every few seconds, and so do a
-        sign-in, a hand-over, and a spare coming up.
+        sign-in, a hand-over, and a spare coming up. In a secondary chat it does none of this: it
+        only re-reads the live chat's spares, so they stay hidden there and a handed-over one appears.
         """
         if self._spare_chat_store is None or self._shutdown_event.is_set():
             return
