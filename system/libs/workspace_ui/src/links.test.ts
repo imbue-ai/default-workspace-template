@@ -33,8 +33,16 @@ describe("classifyLink", () => {
     ["mailto", "mailto:someone@example.com", { kind: "external", url: "mailto:someone@example.com" }],
     ["tel", "tel:+15551234567", { kind: "external", url: "tel:+15551234567" }],
     ["a malformed web link", "http://exa mple.com/x", { kind: "external", url: "http://exa mple.com/x" }],
-    ["userinfo naming a local host", "http://localhost@evil.example/", { kind: "external", url: "http://localhost@evil.example/" }],
-    ["localhost with a port", "http://localhost:3000/x?y=1", { kind: "local-url", url: "http://localhost:3000/x?y=1" }],
+    [
+      "userinfo naming a local host",
+      "http://localhost@evil.example/",
+      { kind: "external", url: "http://localhost@evil.example/" },
+    ],
+    [
+      "localhost with a port",
+      "http://localhost:3000/x?y=1",
+      { kind: "local-url", url: "http://localhost:3000/x?y=1" },
+    ],
     ["uppercase localhost", "HTTP://LOCALHOST:3000", { kind: "local-url", url: "http://localhost:3000/" }],
     ["127.0.0.1", "http://127.0.0.1:8080/", { kind: "local-url", url: "http://127.0.0.1:8080/" }],
     ["IPv6 loopback", "http://[::1]:5000/app", { kind: "local-url", url: "http://[::1]:5000/app" }],
@@ -55,7 +63,11 @@ describe("classifyLink", () => {
       { kind: "other-workspace", url: `http://files-ab12cd34.${OTHER_COORDINATE}/` },
     ],
     ["this workspace's bare address", `http://${COORDINATE}/`, { kind: "unroutable" }],
-    ["an absolute path", "/home/user/workspace/data/q4.pdf", { kind: "file", path: "/home/user/workspace/data/q4.pdf" }],
+    [
+      "an absolute path",
+      "/home/user/workspace/data/q4.pdf",
+      { kind: "file", path: "/home/user/workspace/data/q4.pdf" },
+    ],
     [
       "an encoded path with the chat's cache key",
       "/home/user/my%20notes/plan%23.md?requested_at=2026-09-29",
@@ -111,10 +123,26 @@ function recordingContext(isFramed: boolean): RecordingContext {
 describe("routeLink", () => {
   it.each<[string, string, unknown[]]>([
     ["a file as open:file", "/home/user/a%20b.md", ["sendMessage", "open:file", { path: "/home/user/a b.md" }]],
-    ["a local URL as open:url", "http://localhost:3000/", ["sendMessage", "open:url", { url: "http://localhost:3000/" }]],
-    ["the page's own app address in place", `http://chat-ab12cd34.${COORDINATE}/?chat=agent-1`, ["openPath", "/?chat=agent-1", "focus"]],
-    ["another app's address through the shell", `http://files-ab12cd34.${COORDINATE}/`, ["openLink", `http://files-ab12cd34.${COORDINATE}/`]],
-    ["another workspace's address through the shell", `http://x-ab12cd34.${OTHER_COORDINATE}/`, ["openLink", `http://x-ab12cd34.${OTHER_COORDINATE}/`]],
+    [
+      "a local URL as open:url",
+      "http://localhost:3000/",
+      ["sendMessage", "open:url", { url: "http://localhost:3000/" }],
+    ],
+    [
+      "the page's own app address in place",
+      `http://chat-ab12cd34.${COORDINATE}/?chat=agent-1`,
+      ["openPath", "/?chat=agent-1", "focus"],
+    ],
+    [
+      "another app's address through the shell",
+      `http://files-ab12cd34.${COORDINATE}/`,
+      ["openLink", `http://files-ab12cd34.${COORDINATE}/`],
+    ],
+    [
+      "another workspace's address through the shell",
+      `http://x-ab12cd34.${OTHER_COORDINATE}/`,
+      ["openLink", `http://x-ab12cd34.${OTHER_COORDINATE}/`],
+    ],
     ["an external link to the browser", "https://example.com/", ["openInNewTab", "https://example.com/"]],
   ])("framed, routes %s", (_what, href, expected) => {
     const context = recordingContext(true);
@@ -123,10 +151,22 @@ describe("routeLink", () => {
   });
 
   it.each<[string, string, unknown[]]>([
-    ["a file as a download of the link as written", "/home/user/a.md?requested_at=1", ["download", "/home/user/a.md?requested_at=1"]],
+    [
+      "a file as a download of the link as written",
+      "/home/user/a.md?requested_at=1",
+      ["download", "/home/user/a.md?requested_at=1"],
+    ],
     ["a local URL in a new tab", "http://localhost:3000/", ["openInNewTab", "http://localhost:3000/"]],
-    ["the page's own app address in a new tab", `http://chat-ab12cd34.${COORDINATE}/`, ["openInNewTab", `http://chat-ab12cd34.${COORDINATE}/`]],
-    ["another app's address in a new tab", `http://files-ab12cd34.${COORDINATE}/`, ["openInNewTab", `http://files-ab12cd34.${COORDINATE}/`]],
+    [
+      "the page's own app address in a new tab",
+      `http://chat-ab12cd34.${COORDINATE}/`,
+      ["openInNewTab", `http://chat-ab12cd34.${COORDINATE}/`],
+    ],
+    [
+      "another app's address in a new tab",
+      `http://files-ab12cd34.${COORDINATE}/`,
+      ["openInNewTab", `http://files-ab12cd34.${COORDINATE}/`],
+    ],
   ])("unframed, falls back for %s", (_what, href, expected) => {
     const context = recordingContext(false);
     expect(routeLink(href, context)).toBe(true);

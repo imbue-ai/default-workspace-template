@@ -94,7 +94,11 @@ describe("standardContextMenuRows", () => {
   it("offers Copy but not Cut on an editable target when the selection lies elsewhere on the page", () => {
     const field = byId("field") as HTMLInputElement;
     field.setSelectionRange(0, 0);
-    expect(keysOf(standardContextMenuRows(targetOf(field, "plain words"), openLink))).toEqual(["copy", "paste", "select-all"]);
+    expect(keysOf(standardContextMenuRows(targetOf(field, "plain words"), openLink))).toEqual([
+      "copy",
+      "paste",
+      "select-all",
+    ]);
     selectContentsOf(byId("para"));
     expect(keysOf(standardContextMenuRows(targetOf(byId("note"), "plain words"), openLink))).toEqual([
       "copy",
