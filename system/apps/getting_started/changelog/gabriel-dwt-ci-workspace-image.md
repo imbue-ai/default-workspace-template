@@ -1,0 +1,1 @@
+Registers the `may_skip_in_workspace` pytest marker alongside the others, so a test here can declare that its skip holds inside a provisioned workspace too (pytest-workspace-env, which CI's workspace-image run switches on, then leaves that skip alone). No test in this app uses it yet.
