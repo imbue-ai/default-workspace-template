@@ -132,8 +132,8 @@ function bootstrap(): void {
     if (phase !== "out" && phase !== "in" && phase !== "released") return;
     desktopStore.setTearOut(windowId, phase);
   });
-  // The chrome's theme. A theme carries its own title bar and taskbar sizes, so the metrics the
-  // geometry reads are taken again under it.
+  // The chrome's theme. A theme can redeclare metric tokens (the title bar height), so the metrics
+  // the geometry reads are taken again under it.
   setEmbedderMessageHandler(UI_THEME, (message) => {
     if (!applyUiTheme(root, message.theme)) return;
     desktopStore.setThemeMetrics(readThemeMetrics(readStyle(root)), currentRenderModes(root));
