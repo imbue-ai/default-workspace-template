@@ -2415,7 +2415,12 @@ def test_seeding_a_chat_is_refused_until_the_agent_list_is_known() -> None:
 
 def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: FlaskClient) -> None:
     assert client.get("/api/settings").get_json() == {
-        "settings": {"fast_mode_default": "auto", "fast_mode_turn_limit": 2, "is_fast_mode_notice_shown": False}
+        "settings": {
+            "fast_mode_default": "auto",
+            "fast_mode_turn_limit": 2,
+            "is_fast_mode_notice_shown": False,
+            "is_switch_confirmed_automatically": False,
+        }
     }
 
     response = client.put(

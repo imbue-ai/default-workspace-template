@@ -226,9 +226,8 @@
   const TIPS_SEEN_STORAGE_KEY = "minds-browser-tips-seen";
   let tipsAutoOpened = false;
   function readTipsSeen() {
-    // Storage denied means the flag could never be written either, so a viewer there would
-    // get the card on every open; treat that as already seen rather than nag.
-    try { return localStorage.getItem(TIPS_SEEN_STORAGE_KEY) === "true"; } catch (_) { return true; }
+    // The tips card is never raised on its own: the Tips button still opens it.
+    return true;
   }
   function closeTips() {
     tipsModal.classList.remove("show");

@@ -688,6 +688,18 @@
   display: none;
 }
 
+/* A short conversation sits against the composer rather than at the top of
+   the panel: the scroller is a column and the list is pushed to its end. A
+   list taller than the scroller fills it and scrolls as before. */
+.transcript-scroll {
+  display: flex;
+  flex-direction: column;
+}
+
+.transcript-scroll > .message-list-wrapper {
+  margin-top: auto;
+}
+
 /* Overlay track along the panel's right edge. Auto-hides: transparent unless
    scrolled recently, hovered, or mid-drag (the -shown class). Pointer events
    stay on so the edge is grabbable even while faded out. */

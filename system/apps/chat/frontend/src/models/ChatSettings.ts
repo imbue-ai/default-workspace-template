@@ -15,6 +15,8 @@ export interface ChatSettings {
   // User turns a chat in auto mode runs fast for before it is switched to standard speed.
   fast_mode_turn_limit: number;
   is_fast_mode_notice_shown: boolean;
+  // Whether picking another account in the provider menu arms the switch at once, with no dialog.
+  is_switch_confirmed_automatically: boolean;
 }
 
 /** The backend's defaults, so a page that has not loaded yet behaves as a fresh workspace would. */
@@ -22,6 +24,7 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   fast_mode_default: "auto",
   fast_mode_turn_limit: 2,
   is_fast_mode_notice_shown: false,
+  is_switch_confirmed_automatically: false,
 };
 
 let settings: ChatSettings | null = null;

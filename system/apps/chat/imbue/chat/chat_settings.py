@@ -56,6 +56,10 @@ class ChatSettings(FrozenModel):
         default=False,
         description="Whether the one-time notice explaining the first automatic switch to standard speed has been shown",
     )
+    is_switch_confirmed_automatically: bool = Field(
+        default=False,
+        description="Whether picking another account in the provider menu arms the switch at once, with no confirmation dialog",
+    )
 
 
 class ChatSettingsStore(MutableModel):

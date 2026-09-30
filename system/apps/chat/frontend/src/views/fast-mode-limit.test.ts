@@ -19,7 +19,12 @@ vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("../models/ModelSettings", () => ({ getChatFastMode: vi.fn(), setFastMode: vi.fn() }));
 vi.mock("../models/HarnessCatalog", () => ({ hasFastModeLimit: vi.fn() }));
 vi.mock("../models/ChatSettings", () => ({
-  DEFAULT_CHAT_SETTINGS: { fast_mode_default: "auto", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false },
+  DEFAULT_CHAT_SETTINGS: {
+    fast_mode_default: "auto",
+    fast_mode_turn_limit: 2,
+    is_fast_mode_notice_shown: false,
+    is_switch_confirmed_automatically: false,
+  },
   getChatSettings: vi.fn(),
   ensureChatSettings: vi.fn(),
   updateChatSettings: vi.fn(),
@@ -40,7 +45,12 @@ const getFastModeStateMock = vi.mocked(getFastModeState);
 const ensureFastModeStateMock = vi.mocked(ensureFastModeState);
 const updateFastModeStateMock = vi.mocked(updateFastModeState);
 
-const SETTINGS = { fast_mode_default: "auto" as const, fast_mode_turn_limit: 3, is_fast_mode_notice_shown: false };
+const SETTINGS = {
+  fast_mode_default: "auto" as const,
+  fast_mode_turn_limit: 3,
+  is_fast_mode_notice_shown: false,
+  is_switch_confirmed_automatically: false,
+};
 
 function userMsg(content: string, id: string, extra: Partial<UserMessageEvent> = {}): UserMessageEvent {
   return {
@@ -144,7 +154,11 @@ describe("maybeApplyFastModeLimit", () => {
     getFastModeStateMock.mockReturnValue({ mode: "auto", is_switched: false });
     ensureChatSettingsMock.mockResolvedValue(SETTINGS);
     ensureFastModeStateMock.mockResolvedValue({ mode: "auto", is_switched: false });
-    updateChatSettingsMock.mockResolvedValue({ ...SETTINGS, is_fast_mode_notice_shown: true });
+    updateChatSettingsMock.mockResolvedValue({
+      ...SETTINGS,
+      is_fast_mode_notice_shown: true,
+      is_switch_confirmed_automatically: false,
+    });
     updateFastModeStateMock.mockResolvedValue({ mode: "auto", is_switched: true });
   });
 
@@ -167,7 +181,11 @@ describe("maybeApplyFastModeLimit", () => {
     expect(setFastModeMock).toHaveBeenCalledWith("agent-1", false);
     expect(updateFastModeStateMock).toHaveBeenCalledWith("agent-1", { mode: "auto", is_switched: true });
     expect(getFastModeNoticeChatId()).toBe("agent-1");
-    expect(updateChatSettingsMock).toHaveBeenCalledWith({ ...SETTINGS, is_fast_mode_notice_shown: true });
+    expect(updateChatSettingsMock).toHaveBeenCalledWith({
+      ...SETTINGS,
+      is_fast_mode_notice_shown: true,
+      is_switch_confirmed_automatically: false,
+    });
     // The chat remembers the switch, so a later render with fast mode turned back on leaves it alone.
     getFastModeStateMock.mockReturnValue({ mode: "auto", is_switched: true });
     maybeApplyFastModeLimit(chat, conversation(9), true);
@@ -184,7 +202,11 @@ describe("maybeApplyFastModeLimit", () => {
   });
 
   it("raises no notice once the workspace has seen it", () => {
-    getChatSettingsMock.mockReturnValue({ ...SETTINGS, is_fast_mode_notice_shown: true });
+    getChatSettingsMock.mockReturnValue({
+      ...SETTINGS,
+      is_fast_mode_notice_shown: true,
+      is_switch_confirmed_automatically: false,
+    });
     maybeApplyFastModeLimit(chatSnapshotFixture("agent-2"), conversation(3), true);
     expect(setFastModeMock).toHaveBeenCalledWith("agent-2", false);
     expect(getFastModeNoticeChatId()).toBeNull();

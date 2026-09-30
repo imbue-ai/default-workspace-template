@@ -426,6 +426,11 @@ export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning
  */
 const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
 
+/** Whether an auth error is shown as a bare "Usage limit reached" card, without the provider's own words or the
+ *  sign-in / switch note under it; the provider menu is where the switch is made then. */
+export const IS_AUTH_ERROR_SHOWN_AS_USAGE_LIMIT = true;
+export const USAGE_LIMIT_REACHED_TEXT = "Usage limit reached";
+
 function renderReauthAction(chatId: string): m.Children {
   const chat = getChatById(chatId);
   const accountId = chat?.active_agent.account_id ?? "";
@@ -639,11 +644,13 @@ function appendEventParts(
       // throwing a sign-in screen over whatever the user was doing.
       children.push(
         m("div", { class: "message-api-error rounded-md bg-danger/8 px-[0.75em] py-[0.5em] text-danger" }, [
-          m(MarkdownContent, {
-            content: textContent,
-            requestedAt: event.timestamp,
-            expansionKeyPrefix: event.event_id,
-          }),
+          event.is_auth_error && IS_AUTH_ERROR_SHOWN_AS_USAGE_LIMIT
+            ? m("div", USAGE_LIMIT_REACHED_TEXT)
+            : m(MarkdownContent, {
+                content: textContent,
+                requestedAt: event.timestamp,
+                expansionKeyPrefix: event.event_id,
+              }),
           event.is_provider_fault
             ? m(
                 "div",
@@ -651,7 +658,7 @@ function appendEventParts(
                 providerFaultNote(event.api_error_kind),
               )
             : null,
-          event.is_auth_error ? renderReauthAction(chatId) : null,
+          event.is_auth_error && !IS_AUTH_ERROR_SHOWN_AS_USAGE_LIMIT ? renderReauthAction(chatId) : null,
         ]),
       );
     } else {
