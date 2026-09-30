@@ -528,15 +528,19 @@ describe("the element menu", () => {
   });
 });
 
-describe("a launcher row's menu", () => {
+describe("the desktop shortcut rows", () => {
+  function rightClick(element: Element): MouseEvent {
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 });
+    element.dispatchEvent(event);
+    m.redraw.sync();
+    return event;
+  }
+
   function openLaunchMenu(key: string): void {
     store.openLauncher();
     m.redraw.sync();
     const row = document.querySelector(`[data-launcher-overlay] [data-launch="${key}"]`) as HTMLElement;
-    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 });
-    row.dispatchEvent(event);
-    m.redraw.sync();
-    expect(event.defaultPrevented).toBe(true);
+    expect(rightClick(row).defaultPrevented).toBe(true);
   }
 
   function chooseRow(key: string): void {
@@ -596,19 +600,13 @@ describe("a launcher row's menu", () => {
   it("offers the same row on a taskbar entry's menu, for the app's own shortcut", async () => {
     store.setBackdropSize({ width: 1000, height: 800 });
     const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
-    const openEntryMenu = (): void => {
-      entry.dispatchEvent(
-        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }),
-      );
-      m.redraw.sync();
-    };
 
-    openEntryMenu();
+    rightClick(entry);
     chooseRow("add-to-desktop");
     await settle();
     expect(api.calls).toContain("setDesktopShortcut:home:docs:new:0,0");
 
-    openEntryMenu();
+    rightClick(entry);
     chooseRow("remove-from-desktop");
     await settle();
     expect(api.calls).toContain("removeDesktopShortcut:home:docs:new");
@@ -626,9 +624,7 @@ describe("a launcher row's menu", () => {
     socket.deliver().onDesktopsUpdated(api.desktops);
     store.setBackdropSize({ width: 1000, height: 800 });
     m.redraw.sync();
-    const icon = document.querySelector('[data-shortcut="docs:new"]') as HTMLElement;
-    icon.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
-    m.redraw.sync();
+    rightClick(document.querySelector('[data-shortcut="docs:new"]') as HTMLElement);
     const row = document.querySelector('[data-menu-part="menu"] [data-menu-row="remove-from-desktop"]') as HTMLElement;
     expect(row.textContent?.trim()).toBe("Remove from desktop");
     // Taking an icon off the desktop deletes nothing, so it reads as an ordinary verb: no danger tone, no trash.
@@ -652,9 +648,7 @@ describe("a launcher row's menu", () => {
 
     store.openLauncher();
     m.redraw.sync();
-    const other = document.querySelector('[data-launcher-overlay] [data-launch="notes:add"]') as HTMLElement;
-    other.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
-    m.redraw.sync();
+    rightClick(document.querySelector('[data-launcher-overlay] [data-launch="notes:add"]') as HTMLElement);
     expect(document.querySelector(".app-shortcut-menu")).toBeNull();
     expect(document.querySelector(".element-menu")).not.toBeNull();
     pressEscape();
