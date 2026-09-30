@@ -145,7 +145,7 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 - The shell imports nothing from `imbue.mngr` or any app, never runs the `mngr` binary, names no app, and has no vocabulary for what is inside an app. The existing ratchets (`test_project_ratchets.py`) hold, and the instance vocabulary leaves the package.
 - The shell's state lives under `data/.state/system_interface/` and `data/.apps/system_interface/`; it reads and writes nothing under an mngr directory.
 - The only app the shell needs to boot and render is itself. With no other app registered, a desktop shows its wallpaper and an empty launcher.
-- A page's iframe is created once per window per client and is never re-parented; only a window's close, or its desktop's deletion, destroys it.
+- A page's iframe is created once per window per client and is never re-parented; only a window's close, or its desktop's deletion, destroys it. The phone layout is the exception: it keeps only the shown window's page and the pinned chat window's, and destroys the rest (`plan-phone-interface.md`).
 - Rendering never writes: no frame, cell, or state is rewritten by a fit or a clamp, and a phone showing a window writes no placement.
 - `postMessage` and `message` listeners exist only in the contract module, the shell's relay, the embed module, and an app's own declared relay module (the chat root page's), enforced by `test_embed_ratchets.py`.
 
@@ -400,7 +400,7 @@ Each keeps its pages, its own state, and its own verbs, and adopts the contract:
 
 The chat app serves three kinds of page on its origin:
 
-- `/` is the **chat root**: the chat list on the left (Gleb's rail, moved into the chat frontend: grouping of helper agents under their lead chat, status dots, rename, stop and start, delete, the account chooser, new-chat rows for chats still waiting for an account), and an inner iframe on the right showing the selected chat's page. The selection is the query parameter `chat`, so the root's path is `/?chat=<chat-id>`, which is what it reports as its location, with the selected chat's display name as the title. With no selection the root shows the most recent chat, or with no chats one awaiting its first send; on a phone it shows its list alone.
+- `/` is the **chat root**: the chat list on the left (Gleb's rail, moved into the chat frontend: grouping of helper agents under their lead chat, status dots, rename, stop and start, delete, the account chooser, new-chat rows for chats still waiting for an account), and an inner iframe on the right showing the selected chat's page. The selection is the query parameter `chat`, so the root's path is `/?chat=<chat-id>`, which is what it reports as its location, with the selected chat's display name as the title. With no selection the root shows the most recent chat, or with no chats one awaiting its first send; on a phone the list is a drawer over the chat, open while nothing is selected.
 - `POST /api/chats/intake` is where a text enters a chat from outside a chat page (the `new`, `send`, and `draft` launch paths, all POST): it creates or picks the chat and answers the root's path with it selected, `/?chat=<id>`, or with a pending intake for the root to finish (`/?intake=<token>`; the post-launch-paths plan section 3).
 - `/<chat-id>` is one chat and nothing else, exactly today's chat page, for direct launches (an agent's `open chat /<id>`, minds deep links, the inner frame); `/<chat-id>.<agent-id>.<session-id>` is a sub-agent view, also as today.
 

@@ -210,10 +210,10 @@ const NULL_POP_OUT_BRIDGE: PopOutBridge = {
   reportDetachedWindows: () => undefined,
 };
 
-// The layout verbs a solo shell (the pull-out-window spec, section 7.5) never applies: it is a view of one
-// window, and the desktop's arrangement belongs to the client's main window. The two exceptions are its own
-// window's detach (the first load's fallback, when no desktop shell wrote it) and reattach (the way back
-// when no desktop shell can take it).
+// The layout verbs that edit a placement, which two shells never apply. A solo shell (the pull-out-window spec,
+// section 7.5) is a view of one window, and the desktop's arrangement belongs to the client's main window; its
+// two exceptions are its own window's detach (the first load's fallback, when no desktop shell wrote it) and
+// reattach (the way back when no desktop shell can take it). The phone layout shows windows without placing them.
 const PLACEMENT_EDIT_EVENTS: ReadonlySet<DesktopEvent["type"]> = new Set([
   "window_raised",
   "window_minimized",

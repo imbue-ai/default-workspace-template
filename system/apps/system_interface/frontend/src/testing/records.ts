@@ -223,7 +223,7 @@ export function noticeWire(apps: string[], overrides: Partial<UpdateNoticeWire> 
   };
 }
 
-/** The theme metrics at the contract's default (non-compact) values. */
+/** The theme metrics at the contract's default (non-touch) values. */
 export function themeMetricsRecord(overrides: Partial<ThemeMetrics> = {}): ThemeMetrics {
   return {
     titleBarHeight: 36,

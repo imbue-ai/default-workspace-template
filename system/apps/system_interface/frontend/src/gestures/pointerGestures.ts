@@ -40,7 +40,7 @@ export type GestureBinding =
 export interface GestureListener {
   /** The distance a press travels before it is a drag, in pixels. */
   thresholdPx(): number;
-  /** Whether a binding may start a drag right now (compact mode turns window drags off). */
+  /** Whether a binding may start a drag right now. */
   isDraggable(binding: GestureBinding): boolean;
   /** A press landed on a handle, before it is known to be a drag. The live pages go inert from here:
    *  only a move the root sees crosses the threshold, and a handle sits close enough to a page that

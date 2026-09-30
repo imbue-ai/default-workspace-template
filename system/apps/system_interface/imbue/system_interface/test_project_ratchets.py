@@ -197,7 +197,7 @@ _PIXEL_METRIC_RULE = RatchetRuleInfo(
 # A pixel length inside a balanced string literal on a code line: a Tailwind utility (``h-[36px]``),
 # an inline style, a class. Comment lines and trailing comments do not count, and neither do the
 # container-query breakpoints (``@max-[620px]``), which are breakpoints rather than metrics and,
-# like the compact breakpoint, live in the code by design. The length is bounded by lookarounds
+# like the phone breakpoint, live in the code by design. The length is bounded by lookarounds
 # rather than ``\b`` so an underscore-joined arbitrary value (``shadow-[0_2px_8px_...]``) counts.
 _PIXEL_METRIC_PATTERN = RegexPattern(
     r"""^(?![ \t]*(?://|\*|/\*)).*?(["'`])(?:(?!\1)[^\n])*?(?<!@max-\[)(?<!@min-\[)(?<![A-Za-z0-9.])\d+(?:\.\d+)?px(?![A-Za-z0-9])(?:(?!\1)[^\n])*\1""",
