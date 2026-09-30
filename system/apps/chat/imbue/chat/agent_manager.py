@@ -3583,8 +3583,6 @@ class AgentManager:
         # would tear that rebuild down again on the next observe tick.
         for agent_id in newly_dead_ids:
             self._evict_chat_transcripts(agent_id)
-        # The level-triggered half: a stopped chat read after its stop is rebuilt on that
-        # read, and no transition is coming to evict it again.
         if self._unviewed_transcript_release is not None:
             self._unviewed_transcript_release()
 
