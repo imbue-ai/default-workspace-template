@@ -94,6 +94,7 @@ from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import SummaryOutcome
 from imbue.chat.models import TransitionKind
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
+from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
@@ -189,6 +190,10 @@ def _agent_details(
             state=HostState.RUNNING,
         ),
     )
+
+
+def _visible_report() -> PresenceReport:
+    return PresenceReport(instance_id="page-1", client_id="client-1", state=PresenceState.VISIBLE, is_focused=False)
 
 
 def _drain(q: queue.Queue[str | None]) -> list[dict[str, Any]]:
@@ -3086,7 +3091,7 @@ def test_agent_removed_event_drops_pending_permissions_and_presence(
     agent_manager._handle_observe_event(make_agent_state_event(agent))
     with agent_manager._lock:
         agent_manager._pending_permission_ids_by_agent[str_id] = {"evt-1"}
-    agent_manager.record_presence(ChatId(str_id), "client-1", PresenceState.VISIBLE)
+    agent_manager.record_presence(ChatId(str_id), _visible_report())
     assert agent_manager.has_pending_permission(ChatId(str_id))
     assert agent_manager._oom_prioritizer._presence.is_open(ChatId(str_id))
 
@@ -3893,7 +3898,7 @@ def test_an_archived_members_removal_leaves_its_chats_records_and_transcripts_st
     evicted: list[str] = []
     manager.set_watcher_eviction_callback(evicted.append)
     try:
-        manager.record_presence(ChatId(first), "client-1", PresenceState.VISIBLE)
+        manager.record_presence(ChatId(first), _visible_report())
         manager.remove_agent(first)
         # The chat's per-chat state (its presence, here) belongs to the chat, not the member.
         assert manager._oom_prioritizer._presence.is_open(ChatId(first))
@@ -3941,7 +3946,7 @@ def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
 ) -> None:
     manager, _store, first, second = _recorded_chat(broadcaster)
     try:
-        manager.record_presence(ChatId(first), "client-1", PresenceState.VISIBLE)
+        manager.record_presence(ChatId(first), _visible_report())
         manager._handle_observe_event(make_agent_state_event(_agent_details("Chat-1", agent_id=MngrAgentId(second))))
         first_details = _agent_details(f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first))
         manager._handle_observe_event(make_agent_state_event(first_details))

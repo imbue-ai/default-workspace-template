@@ -1,15 +1,20 @@
-"""Per-chat, per-client presence: which clients have a chat's page open, and whether it is showing.
+"""Per-chat, per-page presence: which pages have a chat open, whether it is showing, and who is watching it.
 
-The chat page reports its own presence to the chat app (contracts.md section 10):
-``hidden`` once the shell has handed it its handshake,
+The chat page reports its own presence to the chat app (desktop-interface contracts.md
+section 7, "Chat presence"): ``hidden`` once the shell has handed it its handshake,
 ``visible`` on ``shell:shown``, ``hidden`` again on ``shell:hidden``, ``closed`` on
-``pagehide``, and a heartbeat of its current state every minute. Only the chat's own page
-reports: a subagent view is a second page of the same chat in the same client, and one
-standing report per chat and client is kept here, so its reports would overwrite the chat
-page's. The OOM prioritizer reads the aggregate: a chat is *open* while any client has an
-unexpired report, and *visible* while any client's last report says so. A report expires
+``pagehide``, whether its document has focus on every ``focus`` and ``blur``, and a heartbeat
+of all of it every thirty seconds. Each report names the page instance that sent it (minted
+once per page load), and one standing report per chat and instance is kept here, so two pages
+of one chat in the same client (a pulled-out chat and its hidden copy in the main window)
+never overwrite each other. Only the chat's own page reports, never a subagent view.
+
+Two readers. The OOM prioritizer reads the aggregate: a chat is *open* while any instance has
+an unexpired report, and *visible* while any instance's last report says so; a report expires
 after ten minutes, so a page that vanished without its ``pagehide`` (a crashed tab, a lost
-laptop) stops counting on its own.
+laptop) stops counting on its own. The notify path reads the *watchers*: the instances whose
+last report is visible and focused and younger than ninety seconds, three heartbeats, so a
+watcher that went away unannounced stops suppressing notifications quickly.
 """
 
 import threading
@@ -26,16 +31,18 @@ from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 
-# A report that has not been refreshed for this long no longer counts. Ten heartbeats,
-# so a page has to miss every one before its chat reads as closed.
+# A report that has not been refreshed for this long no longer counts as open or visible.
 PRESENCE_EXPIRY_SECONDS: Final[float] = 600.0
 
 # How often the page re-reports its current state.
-PRESENCE_HEARTBEAT_SECONDS: Final[float] = 60.0
+WATCH_HEARTBEAT_SECONDS: Final[float] = 30.0
+
+# A report older than this no longer makes its page a watcher.
+WATCHING_STALE_SECONDS: Final[float] = 90.0
 
 
 class PresenceState(LowerCaseStrEnum):
-    """What one client last said about one chat's page (a wire value of the presence route)."""
+    """What one page instance last said about its chat (a wire value of the presence route)."""
 
     VISIBLE = auto()
     HIDDEN = auto()
@@ -45,22 +52,34 @@ class PresenceState(LowerCaseStrEnum):
 class PresenceReport(FrozenModel):
     """The body of ``POST /api/chats/<id>/presence``."""
 
-    client_id: str = Field(min_length=1, description="The reporting client, as the shell's handshake named it")
-    state: PresenceState = Field(description="The page's state in that client")
+    instance_id: str = Field(min_length=1, description="The reporting page, minted once per page load")
+    client_id: str = Field(
+        min_length=1, description="The client the page is in, as the shell's handshake named it; informational"
+    )
+    state: PresenceState = Field(description="The page's state")
+    is_focused: bool = Field(description="Whether the page's document has focus")
 
 
-class _ClientPresence(FrozenModel):
-    """One client's standing report about one chat."""
+class PresenceTransition(FrozenModel):
+    """What one report changed about its chat, judged under the tracker's lock."""
+
+    is_newly_visible: bool = Field(description="The chat was not visible before the report and is now")
+    is_newly_watched: bool = Field(description="The chat had no watcher before the report and has one now")
+
+
+class _InstancePresence(FrozenModel):
+    """One page instance's standing report about its chat."""
 
     state: PresenceState = Field(description="visible or hidden; a closed report deletes the record instead")
-    reported_at: float = Field(description="Wall-clock epoch seconds of the report, for expiry")
+    is_focused: bool = Field(description="Whether the page's document had focus")
+    reported_at: float = Field(description="Wall-clock epoch seconds of the report, for expiry and staleness")
 
 
 class PresenceTracker(MutableModel):
-    """Holds every client's last presence report per chat and answers the aggregate questions.
+    """Holds every page instance's last presence report per chat and answers the aggregate questions.
 
-    Thread-safe: reports arrive on request threads while the prioritizer's sweep reads.
-    ``clock`` supplies wall-clock epoch seconds so tests can advance time explicitly.
+    Thread-safe: reports arrive on request threads while the prioritizer's sweep and the watchers
+    route read. ``clock`` supplies wall-clock epoch seconds so tests can advance time explicitly.
     """
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
@@ -69,55 +88,92 @@ class PresenceTracker(MutableModel):
     expiry_seconds: float = Field(
         default=PRESENCE_EXPIRY_SECONDS, frozen=True, description="How long an unrefreshed report counts"
     )
+    watching_stale_seconds: float = Field(
+        default=WATCHING_STALE_SECONDS, frozen=True, description="How long a report can make its page a watcher"
+    )
 
-    _presence_by_client_by_chat: dict[ChatId, dict[str, _ClientPresence]] = PrivateAttr(default_factory=dict)
+    _presence_by_instance_by_chat: dict[ChatId, dict[str, _InstancePresence]] = PrivateAttr(default_factory=dict)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
-    def record(self, chat_id: ChatId, client_id: str, state: PresenceState) -> None:
-        """Replace ``client_id``'s standing report about ``chat_id``; ``CLOSED`` drops it."""
+    def record(self, chat_id: ChatId, report: PresenceReport) -> PresenceTransition:
+        """Replace the instance's standing report about ``chat_id`` (``CLOSED`` drops it), and say what changed."""
+        now = self.clock()
         with self._lock:
-            by_client = self._presence_by_client_by_chat.setdefault(chat_id, {})
-            if state is PresenceState.CLOSED:
-                by_client.pop(client_id, None)
-                if not by_client:
-                    del self._presence_by_client_by_chat[chat_id]
-                return
-            by_client[client_id] = _ClientPresence(state=state, reported_at=self.clock())
+            by_instance = self._live_reports_locked(chat_id, now)
+            was_visible = _is_any_visible(by_instance)
+            was_watched = len(self._watchers_among(by_instance, now)) > 0
+            if report.state is PresenceState.CLOSED:
+                by_instance.pop(report.instance_id, None)
+            else:
+                by_instance[report.instance_id] = _InstancePresence(
+                    state=report.state, is_focused=report.is_focused, reported_at=now
+                )
+            if by_instance:
+                self._presence_by_instance_by_chat[chat_id] = by_instance
+            else:
+                self._presence_by_instance_by_chat.pop(chat_id, None)
+            return PresenceTransition(
+                is_newly_visible=not was_visible and _is_any_visible(by_instance),
+                is_newly_watched=not was_watched and len(self._watchers_among(by_instance, now)) > 0,
+            )
 
     def forget_chat(self, chat_id: ChatId) -> None:
         with self._lock:
-            self._presence_by_client_by_chat.pop(chat_id, None)
+            self._presence_by_instance_by_chat.pop(chat_id, None)
 
     def is_open(self, chat_id: ChatId) -> bool:
-        """Whether any client holds an unexpired report about the chat, visible or hidden."""
-        return len(self._live_reports(chat_id)) > 0
+        """Whether any instance holds an unexpired report about the chat, visible or hidden."""
+        with self._lock:
+            return len(self._live_reports_locked(chat_id, self.clock())) > 0
 
     def is_visible(self, chat_id: ChatId) -> bool:
-        """Whether any client's unexpired last report says the chat is showing."""
-        return any(report.state is PresenceState.VISIBLE for report in self._live_reports(chat_id))
+        """Whether any instance's unexpired last report says the chat is showing."""
+        with self._lock:
+            return _is_any_visible(self._live_reports_locked(chat_id, self.clock()))
+
+    def watchers(self, chat_id: ChatId) -> list[str]:
+        """The instances watching the chat: last report visible and focused, and fresher than the staleness bound."""
+        now = self.clock()
+        with self._lock:
+            return self._watchers_among(self._live_reports_locked(chat_id, now), now)
+
+    def is_watched(self, chat_id: ChatId) -> bool:
+        return len(self.watchers(chat_id)) > 0
 
     def open_chat_ids(self) -> set[ChatId]:
         with self._lock:
-            chat_ids = list(self._presence_by_client_by_chat)
+            chat_ids = list(self._presence_by_instance_by_chat)
         return {chat_id for chat_id in chat_ids if self.is_open(chat_id)}
 
     def visible_chat_ids(self) -> set[ChatId]:
         with self._lock:
-            chat_ids = list(self._presence_by_client_by_chat)
+            chat_ids = list(self._presence_by_instance_by_chat)
         return {chat_id for chat_id in chat_ids if self.is_visible(chat_id)}
 
-    def _live_reports(self, chat_id: ChatId) -> list[_ClientPresence]:
+    def _live_reports_locked(self, chat_id: ChatId, now: float) -> dict[str, _InstancePresence]:
         """The unexpired reports about ``chat_id``, dropping the expired ones as they are found."""
-        now = self.clock()
-        with self._lock:
-            by_client = self._presence_by_client_by_chat.get(chat_id)
-            if by_client is None:
-                return []
-            expired_client_ids = [
-                client_id for client_id, report in by_client.items() if now - report.reported_at > self.expiry_seconds
-            ]
-            for client_id in expired_client_ids:
-                del by_client[client_id]
-            if not by_client:
-                del self._presence_by_client_by_chat[chat_id]
-            return list(by_client.values())
+        by_instance = self._presence_by_instance_by_chat.get(chat_id)
+        if by_instance is None:
+            return {}
+        for instance_id in [
+            instance_id
+            for instance_id, report in by_instance.items()
+            if now - report.reported_at > self.expiry_seconds
+        ]:
+            del by_instance[instance_id]
+        if not by_instance:
+            del self._presence_by_instance_by_chat[chat_id]
+        return by_instance
+
+    def _watchers_among(self, by_instance: dict[str, _InstancePresence], now: float) -> list[str]:
+        return sorted(
+            instance_id
+            for instance_id, report in by_instance.items()
+            if report.state is PresenceState.VISIBLE
+            and report.is_focused
+            and now - report.reported_at < self.watching_stale_seconds
+        )
+
+
+def _is_any_visible(by_instance: dict[str, _InstancePresence]) -> bool:
+    return any(report.state is PresenceState.VISIBLE for report in by_instance.values())

@@ -65,8 +65,8 @@ async function bootstrap(): Promise<void> {
   addActiveAgentChangedListener((chatId) => forgetPendingChoice(chatId));
   initShellPermissionResolutions();
   const isChatPage = sessionId === "";
-  // Only the chat's own page reports the chat's presence: a subagent view is a second page
-  // of the same chat in the same client, and its reports would overwrite the chat page's.
+  // Only the chat's own page reports the chat's presence: a subagent view on screen is not the
+  // chat being read.
   const connection = connectChatToShell(chatId, {
     isPresenceReported: isChatPage,
     path: isChatPage ? `/${chatId}` : `/${chatId}.${agentId}.${sessionId}`,

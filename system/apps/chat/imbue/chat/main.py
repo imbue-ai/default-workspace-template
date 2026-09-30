@@ -1,5 +1,6 @@
 import argparse
 import atexit
+import os
 import signal
 from collections.abc import Sequence
 from pathlib import Path
@@ -29,6 +30,7 @@ from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
+from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
@@ -117,7 +119,8 @@ def build_production_state(
 
     Everything the chat keeps on disk lands under ``config.chat_data_dir``, so a secondary
     chat pointed at a scratch copy never writes the live chat's data. A secondary also
-    opens no windows: the auto-open ledger and the shell it would drive belong to the live chat.
+    opens no windows and marks no chat read: the auto-open ledger, the shell it would drive,
+    and the Imbue Studio app's notification feed belong to the live chat.
     """
     broadcaster = WebSocketBroadcaster()
     data_dir = config.chat_data_dir
@@ -138,6 +141,8 @@ def build_production_state(
         chat_files_root=chat_records_root,
         chat_settings=chat_settings,
         is_secondary=is_secondary,
+        # Reading a chat marks it read in the Imbue Studio app; a secondary's windows are a preview's, not the user's.
+        minds_gateway=None if is_secondary else GatewayAccess.from_environ(os.environ),
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
@@ -239,7 +244,8 @@ def main() -> None:
     same observer and tracks the same agents, but withholds the writes a second instance
     must not make (the account reconcile, the memory scores, the registration, the
     automatic compaction, the switches, the window auto-opening, the client-activity
-    reports to the shell, the answers to secret cards).
+    reports to the shell, the answers to secret cards, the read marks in the Imbue Studio
+    app's notification feed).
     """
     args = _parse_args(None)
     config = load_config()
