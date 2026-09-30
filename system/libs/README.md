@@ -25,9 +25,8 @@ README for details.
   temporary files where a stub executable written there can run, or stops
   the session before any test starts.
 - `pytest_workspace_env/` - Test-only pytest plugin that, with
-  `DWT_REQUIRE_WORKSPACE_ENV=1` set, fails rather than skips any test, unless
-  it is marked `may_skip_in_workspace` (the CI job that runs the suites inside
-  the workspace image sets it).
+  `DWT_REQUIRE_WORKSPACE_ENV=1` set, fails rather than skips any test (the CI
+  job that runs the suites inside the workspace image sets it).
 - `tk_command_parsing/` - Parsing helpers for the vendored `tk` ticket
   tracker's command output.
 

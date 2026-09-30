@@ -180,8 +180,7 @@ jobs:
   # (offload-modal*.toml at the repo root). The bare runner above has none of
   # what a workspace has (Fortress, Xvfb, claude, mngr, tmux, jq, restic, ...),
   # so the tests that need them skip there; here they run, and any test that
-  # skips fails the job unless it is marked `may_skip_in_workspace`
-  # (pytest-workspace-env).
+  # skips fails the job (pytest-workspace-env).
   #
   # Opt-in through the TEST_IN_WORKSPACE_IMAGE repository variable, like
   # check-changelog: workspace repos made from the template inherit this

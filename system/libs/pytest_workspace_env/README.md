@@ -12,16 +12,14 @@ missing something, and a green run would hide it.
 With `DWT_REQUIRE_WORKSPACE_ENV=1` in the environment, a test that skips is
 reported as failed (a `pytest.skip()` call from the test body) or as an error
 (a `skipif` condition, which skips at setup), with the skip's own reason in the
-message. The one exception is a test marked `may_skip_in_workspace`: its skip
-holds inside a workspace too (a check that needs a non-root user, say), so it
-is left alone. Without the variable the plugin does nothing. The session header
-says when it is on.
+message. There is no way to exempt a test: one that cannot run inside a
+workspace is rewritten until it can. Without the variable the plugin does
+nothing. The session header says when it is on.
 
 The plugin acts on the skips of collected tests: a `skipif`, a `pytest.skip()`
 from the test body or from a fixture. A module that skips itself at collection
 (`pytest.importorskip(...)`, or `pytest.skip(allow_module_level=True)` at module
-level) is outside its reach and cannot carry the marker, so skip per test
-rather than per module.
+level) is outside its reach, so skip per test rather than per module.
 
 It is registered through the `pytest11` entry point, so every pytest run in the
 workspace venv loads it: the root pass and the isolated `system/apps/chat` and

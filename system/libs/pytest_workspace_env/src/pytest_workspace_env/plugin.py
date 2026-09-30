@@ -5,9 +5,6 @@ from typing import Final
 import pytest
 
 REQUIRE_WORKSPACE_ENV_VAR: Final[str] = "DWT_REQUIRE_WORKSPACE_ENV"
-# A test that skips for a reason that holds inside a provisioned workspace too (a check that
-# needs a non-root user, say) carries this marker; each pytest root registers it.
-MAY_SKIP_MARKER: Final[str] = "may_skip_in_workspace"
 
 _IS_REQUIRED_KEY: Final[pytest.StashKey[bool]] = pytest.StashKey[bool]()
 
@@ -19,8 +16,7 @@ def is_workspace_env_required(environ: Mapping[str, str]) -> bool:
 def skipped_test_message(skip_reason: str) -> str:
     return (
         f"pytest-workspace-env: this test skipped, but {REQUIRE_WORKSPACE_ENV_VAR}=1 says this environment must "
-        f"be able to run every test. If the skip is right inside a provisioned workspace too, mark the test "
-        f"@pytest.mark.{MAY_SKIP_MARKER}. The skip's reason: {skip_reason}"
+        f"be able to run every test. The skip's reason: {skip_reason}"
     )
 
 
@@ -38,7 +34,7 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_report_header(config: pytest.Config) -> str | None:
     if not config.stash[_IS_REQUIRED_KEY]:
         return None
-    return f"a skipped test fails unless marked {MAY_SKIP_MARKER}: {REQUIRE_WORKSPACE_ENV_VAR}=1"
+    return f"a skipped test fails: {REQUIRE_WORKSPACE_ENV_VAR}=1"
 
 
 @pytest.hookimpl(wrapper=True)
@@ -52,8 +48,6 @@ def pytest_runtest_makereport(
         or hasattr(report, "wasxfail")
         or not item.config.stash[_IS_REQUIRED_KEY]
     ):
-        return report
-    if item.get_closest_marker(MAY_SKIP_MARKER) is not None:
         return report
     # A skip at setup (a skipif condition) becomes a setup error, one from the test body a failure.
     report.outcome = "failed"

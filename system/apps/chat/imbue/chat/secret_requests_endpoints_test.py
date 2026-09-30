@@ -1,10 +1,8 @@
 """Tests for the `/api/secret-requests` routes: filing, the card's submit and decline, hydration,
 and the notice each verdict puts into the chat -- over a recording bridge in place of the router's."""
 
-import os
 from pathlib import Path
 
-import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
@@ -160,17 +158,13 @@ def test_filing_answers_like_the_message_route_for_an_unknown_or_not_yet_known_c
     assert not_ready_client.post("/api/secret-requests", json=body).status_code == 503
 
 
-@pytest.mark.may_skip_in_workspace
-@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file, so there is nothing to refuse")
 def test_an_unreadable_existing_env_file_answers_with_a_reason_rather_than_crashing(tmp_path: Path) -> None:
     """Filing reads the file already there to report what a submit would replace, so a
-    file the chat app cannot open has to come back as the route's own error body."""
+    file the chat app cannot read as text has to come back as the route's own error body."""
     client, _ = _client(tmp_path, RecordingSecretRequestBridge(known_chat_ids=frozenset({_CHAT})))
     secrets_directory = tmp_path / "data" / ".secrets"
     secrets_directory.mkdir(parents=True)
-    unreadable = secrets_directory / "svc.env"
-    unreadable.write_text("SVC_TOKEN='v'\n")
-    unreadable.chmod(0o000)
+    (secrets_directory / "svc.env").write_bytes(b"SVC_TOKEN='\xff\xfe'\n")
 
     response = client.post(
         "/api/secret-requests",

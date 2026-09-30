@@ -48,7 +48,6 @@ markers = [
     "browser: marks tests that drive a browser",
     "frontend: marks tests that read an app's frontend source",
     "real_claude: marks tests that run the real claude binary",
-    "may_skip_in_workspace: marks a test whose skip holds inside a provisioned workspace too, so pytest-workspace-env leaves it alone",
     "flaky: marks tests as known-flaky (retried by offload with a separate retry count)",
 ]
 junit_family = "xunit1"
