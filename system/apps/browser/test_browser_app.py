@@ -23,6 +23,9 @@ def test_the_daemon_names_itself_after_its_manifest() -> None:
     assert manifest.name == APP_NAME
     assert [launch_path.path for launch_path in manifest.launch_paths] == [runner.NEW_PATH]
     assert manifest.window_closed_path == runner.WINDOW_CLOSED_PATH
+    assert [(handler.type, handler.path, handler.show) for handler in manifest.message_handlers] == [
+        ("open:url", runner.OPEN_URL_PATH, None)
+    ]
 
 
 def test_the_viewer_page_imports_the_app_contract_from_its_own_origin() -> None:
