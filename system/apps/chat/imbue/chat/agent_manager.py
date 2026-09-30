@@ -1293,8 +1293,8 @@ class AgentManager:
     def _listed_chats_locked(self) -> list[tuple[AgentStateItem, _ResolvedChat]]:
         """Every chat the pages list, as its active agent and its resolution. Lock held.
 
-        One entry per non-primary agent that is not an archived member: an agent a record
-        names as anything but its active agent is excluded because the record names it,
+        One entry per non-primary agent that is not an archived member or a spare: an agent a
+        record names as anything but its active agent is excluded because the record names it,
         never because of an ``archived_at`` label (a bare ``mngr list`` hides no such agent).
         A record whose active agent is not tracked lists nothing.
         """
@@ -1448,7 +1448,8 @@ class AgentManager:
         Excludes workers (``agent_created=true``), the primary services agent
         (``is_primary=true``), and archived members of a chat; those keep their launch
         bands -- workers maximally expendable, the primary pinned -- so no UI activity
-        moves their score. Remote agents are left in (they have no local pid, so the
+        moves their score. Spare agents are excluded too: they keep the ``SPARE_AGENT``
+        band ``ensure_spare_chat`` tags them with until a chat takes one. Remote agents are left in (they have no local pid, so the
         prioritizer's pid lookup skips them harmlessly).
         """
         with self._lock:
