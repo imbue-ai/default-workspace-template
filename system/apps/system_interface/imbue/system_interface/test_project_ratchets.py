@@ -278,9 +278,7 @@ _HIGHLIGHT_RULE = RatchetRuleInfo(
 )
 
 # One edge of the token: its vertical offset (negative for the bottom edge) and what it paints there.
-_HIGHLIGHT_EDGE = re.compile(
-    r"inset\s+0\s+(-?[\d.]+)px[^,]*?rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*/\s*([\d.]+)\s*\)"
-)
+_HIGHLIGHT_EDGE = re.compile(r"inset\s+0\s+(-?[\d.]+)px[^,]*?rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*/\s*([\d.]+)\s*\)")
 _PALETTE_COLOUR = re.compile(r"#[0-9A-F]{6}")
 
 
@@ -311,13 +309,23 @@ def _lightness(rgb: tuple[float, float, float]) -> float:
     return 116 * luminance ** (1 / 3) - 16 if luminance > 0.008856 else 903.3 * luminance
 
 
+def _composited(
+    source: tuple[int, int, int], alpha: float, tile: tuple[float, float, float]
+) -> tuple[float, float, float]:
+    """``source`` (0..255 channels) painted at ``alpha`` over an opaque tile colour."""
+    red, green, blue = (
+        alpha * (channel / 255) + (1 - alpha) * base for channel, base in zip(source, tile, strict=True)
+    )
+    return (red, green, blue)
+
+
 def test_the_bottom_edge_of_an_icon_tile_is_lit_and_never_shaded() -> None:
     source, alpha = _bottom_edge()
     offenders = []
     for background in _palette_backgrounds():
-        tile = tuple(int(background[index : index + 2], 16) / 255 for index in (1, 3, 5))
-        lit = tuple(alpha * (channel / 255) + (1 - alpha) * base for channel, base in zip(source, tile, strict=True))
-        moved = _lightness(lit) - _lightness(tile)
+        red, green, blue = (int(background[index : index + 2], 16) / 255 for index in (1, 3, 5))
+        tile = (red, green, blue)
+        moved = _lightness(_composited(source, alpha, tile)) - _lightness(tile)
         if moved < 0:
             offenders.append(f"{background}: the bottom edge moves L* by {moved:.1f}")
     assert offenders == [], _HIGHLIGHT_RULE.rule_description + "\n" + "\n".join(f"  - {line}" for line in offenders)
