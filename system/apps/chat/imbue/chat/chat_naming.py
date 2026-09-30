@@ -9,8 +9,8 @@ next message, up to ``MAX_NAMING_ATTEMPTS`` messages. A seeded chat (the Mind ap
 "Welcome") is named the same way from the first message the user sends in it; a chat named any
 other way (by the user, by an agent) is never touched.
 
-What has been tried is kept in the chat's own folder, beside its fast mode, so a restart of
-the app neither renames a named chat nor retries past the limit.
+What has been tried is kept in the chat's own folder, so a restart of the app neither renames a
+named chat nor retries past the limit.
 """
 
 import json
@@ -178,7 +178,6 @@ class ChatNamer(MutableModel):
                 self._in_flight_chat_ids.discard(chat_id)
 
     def _name_chat(self, chat_id: ChatId, message: str) -> None:
-        # Known as soon as the create starts, so the model is asked while the chat is still coming up
         binding = self.resolve_chat_account_binding(chat_id)
         if binding is None:
             logger.debug("Skipped naming chat {}: no account to ask on", chat_id)
@@ -191,7 +190,6 @@ class ChatNamer(MutableModel):
         if completion is None:
             return
 
-        # Ask for a name; a failed call or a message with no subject yet costs one attempt
         try:
             answer = completion.complete(
                 binding.account_dir, CHAT_NAMING_SYSTEM_PROMPT, message[:_MAX_PROMPT_CHARACTERS]

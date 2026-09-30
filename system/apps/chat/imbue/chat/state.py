@@ -75,7 +75,7 @@ class ChatAppState(MutableModel):
     chat_namer: ChatNamer | None = Field(
         default=None,
         description="Names new chats from their first messages; None where chats are not named (a secondary "
-        "chat, whose renames would be the live chat's, and tests that do not exercise naming)",
+        "chat, whose renames would be the live chat's)",
     )
     claude_auth_service: ClaudeAuthService
     auth_flows: AuthFlowService

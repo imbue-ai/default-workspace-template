@@ -394,9 +394,9 @@ def delete_account(account_id: str, home: Path | None = None) -> None:
 
     This takes the credential off DISK. It does not reach into a process that already read it:
     a running agent holds what it loaded at startup, so a chat bound to this account could keep
-    answering until it next restarts -- observed, not assumed. What stops immediately is
-    anything that reads the folder afresh, which includes starting a new chat on it, and the
-    chat app's send path, which refuses the user's messages to a chat whose account is gone.
+    answering until it next restarts. What stops immediately is anything that reads the folder
+    afresh, which includes starting a new chat on it, and the chat app's send path, which refuses
+    the user's messages to a chat whose account is gone.
 
     Agents bound here keep their transcripts (see `KEPT_ON_DISCARD`) and nothing rebinds them:
     their `account` label becomes a dangling reference, which is the cost of delete-and-re-add
