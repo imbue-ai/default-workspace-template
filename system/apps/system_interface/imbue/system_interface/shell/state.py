@@ -275,7 +275,7 @@ class ShellState(MutableModel):
         now = datetime.now(timezone.utc)
         with STATE_FILES_LOCK:
             is_registry_read = self.inventory.is_registry_read
-            rows = self._registry_rows()
+            rows = self._registry_rows() if is_registry_read else []
             if is_registry_read:
                 self._reconcile_desktops_with(rows)
             desktop = self.desktops.create_desktop(
