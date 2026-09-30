@@ -597,6 +597,21 @@ describe("the desktop shortcut rows", () => {
     expect(shownApps()).toEqual(["docs"]);
   });
 
+  it("keeps a shortcut a broadcast put on the desktop while a refused add was in flight", async () => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+    api.refusal = "the answer was lost";
+    void store.addShortcut("docs", "new", "focus");
+    const broadcast = desktopRecord("home", {
+      windows: [windowRecord("win-1", "docs", "/a")],
+      shortcuts: [
+        { target: { kind: "launch", app: "docs", launch: "new" }, mode: "focus", cell: { column: 0, row: 0 } },
+      ],
+    });
+    socket.deliver().onDesktopsUpdated([broadcast]);
+    await settle();
+    expect(store.getState().desktops[0].shortcuts).toEqual(broadcast.shortcuts);
+  });
+
   it("offers the same row on a taskbar entry's menu, for the app's own shortcut", async () => {
     store.setBackdropSize({ width: 1000, height: 800 });
     const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;

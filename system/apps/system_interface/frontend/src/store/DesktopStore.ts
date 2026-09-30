@@ -977,7 +977,8 @@ export class DesktopStore {
 
   /** Add a launch path to the active desktop at the first free cell in reading order over the current grid, drawn
    *  at once and taken off again if the shell refuses; nothing when it is already there (the shell would move the
-   *  shortcut and reset its mode). */
+   *  shortcut and reset its mode). A refusal takes off only the shortcut drawn here: one a broadcast put there in
+   *  the meantime is the shell's and stays. */
   async addShortcut(app: string, launch: string, mode: ShortcutMode): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
@@ -988,7 +989,10 @@ export class DesktopStore {
     try {
       this.takeDesktop(await this.deps.api.setDesktopShortcut(desktop.id, shortcut));
     } catch (error) {
-      this.withoutShortcutShown(desktop.id, app, launch);
+      const now = desktopById(this.state, desktop.id);
+      if (now !== null && findShortcut(now, app, launch) === shortcut) {
+        this.takeDesktop({ ...now, shortcuts: now.shortcuts.filter((candidate) => candidate !== shortcut) });
+      }
       this.deps.notify(`Could not add the shortcut: ${(error as Error).message}`);
     }
   }
