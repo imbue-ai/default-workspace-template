@@ -34,9 +34,11 @@ exists to prevent is building (and testing, and hardening) a whole site before t
 user has confirmed the basic shape is what they want.
 
 The rest of this file is a set of **parts** a build is made of, not a sequence.
-Nothing below is numbered, because almost none of it has to happen in a fixed
-order: an app needs a name, an icon, a port, a scaffolded service, a mock the user
-reacts to, real routes, verification and a window, and the order those arrive in is
+Nothing below is numbered, because almost none of it has to happen in a fixed order.
+A build needs its blocking questions asked, a name, an icon, a port, a decision
+about which path it takes, a scaffolded service, a throwaway mock the user reacts
+to, real routes, any calls it makes to Claude, verification, a window surfaced to
+the user, and a finalizing pass in the background. The order those arrive in is
 yours to choose.
 
 **Do as much at once as you can.** Work out what a part actually depends on rather
