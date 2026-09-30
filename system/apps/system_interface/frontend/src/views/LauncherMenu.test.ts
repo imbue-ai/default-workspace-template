@@ -48,6 +48,7 @@ function render(
     bottomOffsetPx: 0,
     onRun: vi.fn(),
     onHighlight: vi.fn(),
+    onLaunchContextMenu: vi.fn(),
     ...overrides,
   };
   return { root: mountView(() => m(LauncherMenu, attrs)), attrs };
@@ -126,6 +127,20 @@ describe("the launcher menu", () => {
     disabled.dispatchEvent(new PointerEvent("pointerenter"));
     expect(tooLong.attrs.onRun).not.toHaveBeenCalled();
     expect(tooLong.attrs.onHighlight).not.toHaveBeenCalled();
+  });
+
+  it("reports a right-click on a launch-path row with its app and launch path, and takes it from the page", () => {
+    const { root, attrs } = render(launcherRowsOf(stateWithWindows(), ""));
+    const row = root.querySelector('[data-launch="terminal:new"]') as HTMLElement;
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 12, clientY: 34 });
+    row.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(attrs.onLaunchContextMenu).toHaveBeenCalledWith("terminal", "new", 12, 34, row);
+    // A free-text row keeps the right-click every other surface gets.
+    const textEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    root.querySelector('[data-text-action="primary"]')!.dispatchEvent(textEvent);
+    expect(textEvent.defaultPrevented).toBe(false);
+    expect(attrs.onLaunchContextMenu).toHaveBeenCalledTimes(1);
   });
 
   it("spells the secondary key for the platform and previews the first words of the text", () => {
