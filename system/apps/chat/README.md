@@ -83,10 +83,11 @@ opening snapshot replaces the folded view and the health recovers.
 The chat page talks to the shell only through the browser-side contract
 (`shell:open`, `shell:focused`, the handshake); the shell calls the chat only to
 post the messages its manifest registers for (`minds:focus-chat`).
-Sends are reported to the shell's client-activity route (`shell_client.py`) so
-agents can attribute a request to a client, and the app asks the shell for
-windows through the one layout client there (`ShellLayoutClient`), which the
-auto-open reactor and the focus-chat route share. A chat's status (`ChatStatus` in
+Sends are reported to the shell's client-activity route so agents can
+attribute a request to a client, and the app asks the shell for windows,
+through one client of the `workspace_layout` library that asks as the chat app
+(`shell_client.py`), which the send routes, the auto-open reactor, and the
+focus-chat route share. A chat's status (`ChatStatus` in
 `primitives.py`: working, idle, attention, stopped, or error) comes from its
 active agent's activity state, a pending permission request, and the lifecycle,
 and rides the `chats_updated` snapshots the chat root's list draws its status

@@ -4,21 +4,24 @@ import json
 from pathlib import Path
 
 import pytest
+from workspace_layout.errors import ShellAnswerMalformedError
+from workspace_layout.errors import ShellOpError
+from workspace_layout.errors import ShellUnreachableError
+from workspace_layout.ops import ShowRequest
+from workspace_layout.primitives import ClientId
+from workspace_layout.testing import FakeShell
+from workspace_layout.testing import connected_client
 
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import is_auto_open_labeled
 from imbue.chat.primitives import ChatId
-from imbue.chat.shell_client import ShellAnswerMalformedError
-from imbue.chat.shell_client import ShellOpError
-from imbue.chat.shell_client import ShellUnreachableError
-from imbue.chat.shell_client import ShowRequest
-from imbue.chat.testing import RecordingShell
+from imbue.chat.shell_client import chat_show_request
 
 _LABELED = {"assist": "true"}
 
 
-def _reactor(shell: RecordingShell, ledger: AutoOpenLedger | None = None) -> AutoOpenReactor:
+def _reactor(shell: FakeShell, ledger: AutoOpenLedger | None = None) -> AutoOpenReactor:
     return AutoOpenReactor(ledger=ledger if ledger is not None else AutoOpenLedger(path=None), shell=shell)
 
 
@@ -26,7 +29,7 @@ def _shown(chat_id: str, client_id: str) -> ShowRequest:
     """The show the reactor owes a chat for one client: the chat root on the chat, with no other path counting as
     showing it and no window to repoint, so the shell raises a window already there, else takes the pinned window,
     else opens one."""
-    return ShowRequest(path=f"/?chat={chat_id}", showing=(), repoint=(), client_id=client_id)
+    return chat_show_request(f"/?chat={chat_id}", showing=(), repoint=(), client_id=ClientId(client_id))
 
 
 def test_only_the_two_auto_open_labels_ask_for_a_window() -> None:
@@ -37,7 +40,7 @@ def test_only_the_two_auto_open_labels_ask_for_a_window() -> None:
 
 
 def test_a_labeled_chat_is_opened_once_in_every_connected_client_and_recorded() -> None:
-    shell = RecordingShell(client_ids=["c1", "c2"])
+    shell = FakeShell(clients=[connected_client("c1"), connected_client("c2")])
     reactor = _reactor(shell)
 
     reactor.note_appeared(ChatId("chat-1"), _LABELED)
@@ -50,7 +53,7 @@ def test_a_labeled_chat_is_opened_once_in_every_connected_client_and_recorded() 
 
 
 def test_an_unlabeled_chat_is_ignored() -> None:
-    shell = RecordingShell(client_ids=["c1"])
+    shell = FakeShell(clients=[connected_client("c1")])
     reactor = _reactor(shell)
 
     reactor.note_appeared(ChatId("chat-1"), {"user_created": "true"})
@@ -62,7 +65,7 @@ def test_an_unlabeled_chat_is_ignored() -> None:
 
 def test_with_no_client_the_open_is_held_until_one_arrives() -> None:
     """The app starts the chat while the user is still on their way in; the open must wait for them."""
-    shell = RecordingShell()
+    shell = FakeShell()
     reactor = _reactor(shell)
     reactor.note_appeared(ChatId("chat-1"), _LABELED)
 
@@ -71,14 +74,14 @@ def test_with_no_client_the_open_is_held_until_one_arrives() -> None:
     assert reactor.pending_chat_ids() == {ChatId("chat-1")}
     assert not reactor.ledger.is_delivered(ChatId("chat-1"))
 
-    shell.client_ids = ["c1"]
+    shell.clients = [connected_client("c1")]
     reactor.flush()
     assert shell.shows == [_shown("chat-1", "c1")]
     assert reactor.ledger.is_delivered(ChatId("chat-1"))
 
 
 def test_a_refused_show_keeps_the_chat_pending() -> None:
-    shell = RecordingShell(client_ids=["c1"], refused_client_ids=["c1"])
+    shell = FakeShell(clients=[connected_client("c1")], refused_client_ids=[ClientId("c1")])
     reactor = _reactor(shell)
     reactor.note_appeared(ChatId("chat-1"), _LABELED)
 
@@ -96,7 +99,7 @@ def test_a_refused_show_keeps_the_chat_pending() -> None:
 def test_a_show_the_shell_did_not_carry_out_keeps_the_chat_pending_and_the_next_flush_retries_it(
     error: ShellOpError,
 ) -> None:
-    shell = RecordingShell(client_ids=["c1"], error=error)
+    shell = FakeShell(clients=[connected_client("c1")], error=error)
     reactor = _reactor(shell)
     reactor.note_appeared(ChatId("chat-1"), _LABELED)
 
@@ -110,8 +113,26 @@ def test_a_show_the_shell_did_not_carry_out_keeps_the_chat_pending_and_the_next_
     assert reactor.ledger.is_delivered(ChatId("chat-1"))
 
 
+def test_a_client_list_the_shell_could_not_give_keeps_the_chat_held_without_ending_the_flush() -> None:
+    """The flush thread's own catch does not cover a failed listing, so it must be answered here: an escape would
+    end the thread and silently stop surfacing every window."""
+    shell = FakeShell(
+        clients=[connected_client("c1")], listing_error=ShellAnswerMalformedError("the shell answered []")
+    )
+    reactor = _reactor(shell)
+    reactor.note_appeared(ChatId("chat-1"), _LABELED)
+
+    reactor.flush()
+    assert shell.shows == []
+    assert reactor.pending_chat_ids() == {ChatId("chat-1")}
+
+    shell.listing_error = None
+    reactor.flush()
+    assert shell.shows == [_shown("chat-1", "c1")]
+
+
 def test_one_client_that_is_shown_the_chat_delivers_it_though_another_refused() -> None:
-    shell = RecordingShell(client_ids=["c1", "c2"], refused_client_ids=["c1"])
+    shell = FakeShell(clients=[connected_client("c1"), connected_client("c2")], refused_client_ids=[ClientId("c1")])
     reactor = _reactor(shell)
     reactor.note_appeared(ChatId("chat-1"), _LABELED)
 
@@ -125,11 +146,11 @@ def test_one_client_that_is_shown_the_chat_delivers_it_though_another_refused() 
 def test_a_delivered_chat_survives_a_ledger_reload(tmp_path: Path) -> None:
     """The update run restarts this app; the window it already surfaced must not pop again."""
     path = tmp_path / "ledger.json"
-    first = _reactor(RecordingShell(client_ids=["c1"]), AutoOpenLedger(path=path))
+    first = _reactor(FakeShell(clients=[connected_client("c1")]), AutoOpenLedger(path=path))
     first.note_appeared(ChatId("chat-1"), _LABELED)
     first.flush()
 
-    shell = RecordingShell(client_ids=["c1"])
+    shell = FakeShell(clients=[connected_client("c1")])
     second = _reactor(shell, AutoOpenLedger(path=path))
     second.note_appeared(ChatId("chat-1"), _LABELED)
     second.flush()
@@ -142,7 +163,7 @@ def test_the_startup_seed_holds_every_undelivered_chat_the_ledger_does_not_name(
     waited; one the ledger names is left as the saved layout has it and never pops later."""
     ledger = AutoOpenLedger(path=None)
     ledger.mark_delivered(ChatId("delivered"))
-    shell = RecordingShell()
+    shell = FakeShell()
     reactor = _reactor(shell, ledger)
 
     reactor.seed_at_startup(
@@ -151,7 +172,7 @@ def test_the_startup_seed_holds_every_undelivered_chat_the_ledger_does_not_name(
 
     assert reactor.pending_chat_ids() == {ChatId("waiting")}
     assert not ledger.is_delivered(ChatId("plain"))
-    shell.client_ids = ["c1"]
+    shell.clients = [connected_client("c1")]
     reactor.flush()
     assert shell.shows == [_shown("waiting", "c1")]
 
@@ -163,7 +184,7 @@ def test_a_workspace_with_no_ledger_adopts_what_it_already_has_instead_of_poppin
     the workspace's first day, and cannot tell the one owed a window from the rest -- so it opens none
     of them, and leaves the ledger the next boot reads for real."""
     path = tmp_path / "ledger.json"
-    shell = RecordingShell(client_ids=["c1"])
+    shell = FakeShell(clients=[connected_client("c1")])
     reactor = _reactor(shell, AutoOpenLedger(path=path))
 
     reactor.seed_at_startup(
@@ -185,7 +206,7 @@ def test_a_fresh_workspace_adopting_nothing_still_leaves_a_ledger_behind(tmp_pat
     """Without the file the next boot cannot tell "nothing was ever delivered here" from "the record
     is gone", and would adopt away the very chat this feature exists to surface."""
     path = tmp_path / "ledger.json"
-    shell = RecordingShell()
+    shell = FakeShell()
     reactor = _reactor(shell, AutoOpenLedger(path=path))
 
     reactor.seed_at_startup({})
@@ -196,7 +217,7 @@ def test_a_fresh_workspace_adopting_nothing_still_leaves_a_ledger_behind(tmp_pat
 
 def test_a_removed_chat_is_forgotten_everywhere() -> None:
     ledger = AutoOpenLedger(path=None)
-    reactor = _reactor(RecordingShell(), ledger)
+    reactor = _reactor(FakeShell(), ledger)
     reactor.note_appeared(ChatId("pending"), _LABELED)
     ledger.mark_delivered(ChatId("done"))
 

@@ -643,6 +643,7 @@ dependencies = [
     { name = "tomlkit" },
     { name = "watchdog" },
     { name = "werkzeug" },
+    { name = "workspace-layout" },
 ]
 
 [package.dev-dependencies]
@@ -684,6 +685,7 @@ requires-dist = [
     { name = "tomlkit", specifier = ">=0.12" },
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [package.metadata.requires-dev]

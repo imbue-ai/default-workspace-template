@@ -9,6 +9,7 @@ from flask import current_app
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from workspace_layout.interfaces import ShellLayoutInterface
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
@@ -25,7 +26,6 @@ from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
-from imbue.chat.shell_client import ShellLayoutInterface
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
