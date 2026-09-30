@@ -1,1 +1,1 @@
-- Pinned mngr to public commit `26f3726695` (the mirror of mngr `02e09ffc9a`) for the minds 0.8.1 release (`minds-v0.8.1`).
+- Pinned mngr to public commit `7fe907d6e2` (the mirror of mngr `471209218e`) for the minds 0.8.1 release (`minds-v0.8.1`).
