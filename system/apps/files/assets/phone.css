@@ -1,0 +1,519 @@
+/* minds patch: the phone layout's styles (phone.js). Every rule is scoped to the attribute
+   phone.js sets on <html> under 700px, so the desktop table is untouched. Measurements follow
+   docs/system/blueprint/desktop-interface/phone-mock/mock.html. */
+
+html[data-files-phone] {
+  --phone-border: #e4e3df;
+  --phone-fill-hover: rgb(0 0 0 / 0.07);
+  --phone-fill-active: rgb(0 0 0 / 0.11);
+  --phone-text-secondary: #5c5c5c;
+  --phone-text-faint: #8c8c8c;
+  --phone-link: #0366d6;
+  --phone-glyph: rgba(3, 47, 98, 0.5);
+  --phone-surface: #fff;
+  --phone-row-active: #fafafa;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html[data-files-phone] body {
+  min-width: 0;
+}
+
+html[data-files-phone] .head,
+html[data-files-phone] .paths-table {
+  display: none !important;
+}
+
+html[data-files-phone] .main {
+  padding: 0;
+}
+
+/* The header, breadcrumb or search bar, and sort keys stay on screen while the list scrolls. */
+.phone-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background-color: var(--phone-surface);
+  line-height: normal;
+}
+
+.phone-hdr {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 44px;
+  padding: 0 6px;
+}
+
+.phone-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #202020;
+  cursor: pointer;
+}
+
+.phone-btn:active,
+.phone-btn.on {
+  background: var(--phone-fill-hover);
+}
+
+.phone-btn:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.phone-btn svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+}
+
+.phone-title {
+  flex: 1;
+  min-width: 0;
+  margin-left: 2px;
+  font-size: 17px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.phone-save {
+  flex: none;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--phone-link);
+  cursor: pointer;
+}
+
+.phone-save:active {
+  background: var(--phone-fill-hover);
+}
+
+.phone-save:disabled {
+  color: var(--phone-text-faint);
+  pointer-events: none;
+}
+
+/* dufs's own breadcrumb, lent to the strip. */
+.phone-crumb {
+  padding: 0 14px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--phone-border);
+}
+
+.phone-crumb::-webkit-scrollbar {
+  display: none;
+}
+
+.phone-crumb .breadcrumb {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  font-size: 13px;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.phone-crumb .breadcrumb>a:first-child {
+  display: flex;
+}
+
+.phone-crumb .breadcrumb svg {
+  width: 15px;
+  height: 15px;
+}
+
+.phone-crumb .breadcrumb>b {
+  font-weight: 600;
+}
+
+.phone-crumb .breadcrumb>.separator {
+  padding: 0 4px;
+}
+
+/* dufs's own search bar, lent to the strip, inside a pill that adds the close button. */
+.phone-search {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  margin: 0 12px 8px;
+  padding: 0 4px 0 10px;
+  border: 1px solid #ddd;
+  border-radius: 18px;
+  background-color: #fafafa;
+}
+
+.phone-search .searchbar {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  height: 100%;
+  align-items: center;
+  margin: 0;
+  border: 0;
+  background: transparent;
+}
+
+.phone-search .searchbar .icon {
+  display: flex;
+  padding: 0;
+}
+
+.phone-search .searchbar .icon svg {
+  fill: #9a9a9a;
+}
+
+/* 16px keeps iOS from zooming the page when the field takes focus. */
+.phone-search #search {
+  padding: 0 8px;
+  font-size: 16px;
+}
+
+.phone-search .phone-search-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  color: var(--phone-text-faint);
+}
+
+.phone-search .phone-search-close svg {
+  width: 14px;
+  height: 14px;
+}
+
+.phone-sort {
+  display: flex;
+  gap: 18px;
+  padding: 8px 16px 2px;
+  font-size: 12px;
+}
+
+.phone-sort-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--phone-text-secondary);
+  text-decoration: none;
+}
+
+.phone-sort-key.on {
+  color: #24292e;
+}
+
+.phone-sort-key span {
+  display: flex;
+}
+
+.phone-sort-key svg {
+  fill: currentColor;
+  opacity: 0.7;
+}
+
+.phone-list {
+  padding-bottom: 12px;
+  line-height: normal;
+}
+
+.phone-row {
+  display: flex;
+  align-items: center;
+  height: 54px;
+  padding: 0 4px 0 16px;
+}
+
+.phone-row:active {
+  background: var(--phone-row-active);
+}
+
+.phone-row-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 100%;
+  text-decoration: none;
+}
+
+.phone-row-icon {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  width: 20px;
+}
+
+.phone-row-icon svg {
+  width: auto;
+  height: 18px;
+  fill: var(--phone-glyph);
+}
+
+.phone-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.phone-row-name,
+.phone-row-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.phone-row-name {
+  font-size: 15px;
+  color: var(--phone-link);
+}
+
+.phone-row-sub {
+  font-size: 12px;
+  color: var(--phone-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.phone-row-dot {
+  padding: 0 5px;
+}
+
+.phone-row .phone-row-more {
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+  color: var(--phone-text-faint);
+}
+
+.phone-row .phone-row-more:active {
+  background: var(--phone-fill-active);
+}
+
+.phone-row .phone-row-more svg {
+  width: 18px;
+  height: 18px;
+}
+
+html[data-files-phone] .empty-folder {
+  padding: 28px 16px;
+  color: var(--phone-text-secondary);
+  text-align: center;
+}
+
+html[data-files-phone] .uploaders-table {
+  width: 100%;
+  padding: 8px 16px;
+}
+
+/* The editor page is a column: header, breadcrumb, then the editor filling the rest. */
+html[data-files-phone="Edit"] body,
+html[data-files-phone="View"] body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+}
+
+html[data-files-phone="Edit"] .main,
+html[data-files-phone="View"] .main,
+html[data-files-phone="Edit"] .editor-page,
+html[data-files-phone="View"] .editor-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 16px, like the search field, keeps iOS from zooming on focus. */
+html[data-files-phone] .editor {
+  flex: 1;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  margin: 8px 12px 12px;
+  padding: 8px;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  box-sizing: border-box;
+  font: 16px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  resize: none;
+  white-space: pre;
+  overflow: auto;
+}
+
+html[data-files-phone] .not-editable {
+  padding: 24px 16px;
+}
+
+html[data-files-phone] .editor-page iframe {
+  flex: 1;
+  height: auto;
+  border: 0;
+}
+
+.phone-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+}
+
+.phone-scrim.dim {
+  background: rgb(0 0 0 / 0.18);
+  animation: phone-fade 160ms ease-out;
+}
+
+.phone-menu {
+  position: fixed;
+  z-index: 9;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid var(--phone-border);
+  border-radius: 12px;
+  background: var(--phone-surface);
+  box-shadow: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08), 0 8px 24px rgb(0 0 0 / 0.1);
+  font-size: 15px;
+  line-height: normal;
+}
+
+.phone-menu-top {
+  top: 46px;
+  right: 10px;
+  width: 264px;
+  max-width: calc(100vw - 20px);
+  animation: phone-fade 160ms ease-out;
+}
+
+.phone-menu-sheet {
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  animation: phone-rise 160ms ease-out;
+}
+
+.phone-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--phone-border);
+  font-size: 13px;
+  color: #666;
+}
+
+.phone-menu-title span:last-child {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.phone-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 44px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.phone-menu-item:active {
+  background: var(--phone-fill-hover);
+}
+
+.phone-menu-glyph {
+  display: flex;
+  justify-content: center;
+  width: 20px;
+}
+
+.phone-menu-glyph svg {
+  width: 16px;
+  height: 16px;
+  fill: #24292e;
+}
+
+.phone-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--phone-border);
+}
+
+@keyframes phone-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes phone-rise {
+  from {
+    transform: translateY(24px);
+    opacity: 0.6;
+  }
+}
+
+/* dark theme, following index.css's */
+@media (prefers-color-scheme: dark) {
+  html[data-files-phone] {
+    --phone-border: #333;
+    --phone-fill-hover: rgb(255 255 255 / 0.1);
+    --phone-fill-active: rgb(255 255 255 / 0.16);
+    --phone-text-secondary: #aaa;
+    --phone-text-faint: #888;
+    --phone-link: #3191ff;
+    --phone-glyph: #fff;
+    --phone-surface: #111;
+    --phone-row-active: #1a1a1a;
+  }
+
+  .phone-btn,
+  .phone-sort-key.on {
+    color: #fff;
+  }
+
+  .phone-search {
+    border-color: #fff6;
+    background-color: #111;
+  }
+
+  .phone-search .searchbar .icon svg {
+    fill: #fff6;
+  }
+
+  .phone-menu-title {
+    color: #aaa;
+  }
+
+  .phone-menu-glyph svg {
+    fill: #fff;
+  }
+
+  html[data-files-phone] .editor {
+    border-color: #333;
+  }
+}

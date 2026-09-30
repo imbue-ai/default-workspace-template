@@ -30,20 +30,35 @@ folder.
 
 Beyond the manifest (`app.toml`) and its icon (`icon.svg`), this directory
 holds `assets/`: a vendored copy of dufs's own frontend (its `assets/`
-directory at the pinned release, served via `--assets`), carrying three
+directory at the pinned release, served via `--assets`), carrying four
 workspace patches -- a toolbox toggle that hides "system files" (any path
 whose name, or any segment of a search result's path, starts with `.`) by
 default, with the choice kept in the browser's localStorage; the `?path=`
-redirect (a rooted path on this origin, honoured before anything renders); and a
+redirect (a rooted path on this origin, honoured before anything renders); a
 location beacon that posts the path being viewed and the folder's name one hop up
 (`window.parent.postMessage({type: "shell:location", path, title})`, the message
 of desktop-interface contracts.md section 7; the title is the last segment of the
 folder shown, or `Files` at the served root) on each page load, so the workspace
 shell can reopen a file-viewer window at the folder it was looking at and title
-it after the folder. Hiding is purely client-side: the server lists everything,
-so flipping the toggle needs no reload and direct navigation into dotted paths
-keeps working. The patched blocks are marked with `minds patch` comments in
-`assets/index.js` / the `.toggle-hidden-files` control in `assets/index.html`.
+it after the folder; and a phone layout (below). Hiding is purely client-side:
+the server lists everything, so flipping the toggle needs no reload and direct
+navigation into dotted paths keeps working. The patched blocks are marked with
+`minds patch` comments in `assets/index.js` / the `.toggle-hidden-files` control
+in `assets/index.html`.
+
+The phone layout (`docs/system/blueprint/desktop-interface/plan-phone-interface.md`,
+"The file viewer") takes over under 700px of the frame's own width, live across a
+resize: the table and toolbox give way to a header (up, the folder's name, search,
+and a kebab holding the toolbox verbs), a scrollable breadcrumb strip that dufs's
+search bar replaces while searching, sort keys, and one row per entry (octicon,
+name, and "<mtime> · <size>" beneath) whose kebab opens a sheet of the table's
+actions; the editor page gets a Save button and the file's kebab. It is all in
+its own `assets/phone.js` and `assets/phone.css`, included by the two
+`minds patch` lines in `assets/index.html`. It drives dufs's own state and
+functions (`DATA`, `PARAMS`, `movePath`, `deletePath`, `saveChange`, the toolbox
+controls' handlers, the breadcrumb and search bar dufs built) and wraps `ready()`
+rather than editing it, so re-applying it after a dufs bump is those two lines;
+its test then checks that the names it leans on still behave.
 
 When `install_dufs.sh` bumps the pinned dufs version, re-vendor `assets/` from
 the new tag and re-apply the marked patches -- the vendored frontend and the
@@ -54,10 +69,15 @@ dufs serves the js/css/favicon with a year-long immutable cache under a path
 that encodes only ITS version, so a change to the vendored assets is invisible
 to any browser that has already loaded the viewer. `index.html` (which dufs
 serves no-cache) therefore references the assets with a `?v=minds-N` query:
-bump that revision in all three URLs whenever anything under `assets/`
-changes, patch or re-vendor alike.
+bump that revision in every asset URL (the favicon, `index.css`, `index.js`,
+`phone.css` and `phone.js`) whenever anything under `assets/` changes, patch or
+re-vendor alike.
 
 ## Tests
 
 `system/test_app_manifests.py` checks the manifest against the program line, and
-`system/test_supervisord_layout.py` the program block.
+`system/test_supervisord_layout.py` the program block. `test_phone_layout.py`
+(marked `browser`) serves `assets/` from a stand-in for dufs (`conftest.py`) and
+drives the phone layout in Chromium: rows, the sheets' actions reaching dufs's
+handlers (the page's `fetch` is stubbed and the requests dufs makes are
+asserted), sort, search, and the table at a desktop width.
