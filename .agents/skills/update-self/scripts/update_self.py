@@ -395,13 +395,15 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
 
 def _file_at(ref: str, path: str, repo_root: Path) -> str:
     """``path`` as it is at ``ref``; empty when it does not exist there."""
-    result = subprocess.run(
+    if not _git(["ls-tree", "--name-only", ref, "--", path], repo_root):
+        return ""
+    return subprocess.run(
         ["git", "show", f"{ref}:{path}"],
         cwd=repo_root,
+        check=True,
         capture_output=True,
         text=True,
-    )
-    return result.stdout if result.returncode == 0 else ""
+    ).stdout
 
 
 def _cmd_agent_restart_verdict(args: argparse.Namespace) -> int:
