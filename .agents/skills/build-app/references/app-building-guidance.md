@@ -128,8 +128,11 @@ If you *do* hit a real blocker, phrase it as the user-visible consequence that
 motivates it -- never a technical term (this system serves non-technical users):
 "should everyone see the same list?" not "do we need multi-tenancy?".
 
-Record your stated defaults -- they are the architecture you build once, after
-the mock converges. Do not wait for approval of a plan before starting: the mock
+Record your stated defaults -- they are the architecture you build once. Hold back
+whatever the mock could still reshape, and build the rest whenever you like: a
+storage layer, a data model or a call contract the look-and-feel cannot change is
+work the mock conversation is not waiting on, and doing it during that
+conversation costs nothing. What you must not do is build the *look* twice. Do not wait for approval of a plan before starting: the mock
 is the user's first checkpoint, and `SKILL.md` names it as the only one before
 the working site.
 
