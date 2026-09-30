@@ -86,3 +86,18 @@
     transition: none;
   }
 }
+
+/* The hairline of light along an icon's top and bottom (--desk-icon-highlight) is painted OVER the
+   art rather than under it. An inset box-shadow belongs to the element's background layer, and an
+   app's tile is an opaque rectangle edge to edge (`docs/system/app-icons.md`), so a highlight on the
+   box itself is drawn and then covered. This is a layer of its own on top, taking the tile's corner
+   from it and passing every press through. */
+.taskbar-entry-tile::after,
+.shortcut-icon::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: var(--desk-icon-highlight);
+  pointer-events: none;
+}

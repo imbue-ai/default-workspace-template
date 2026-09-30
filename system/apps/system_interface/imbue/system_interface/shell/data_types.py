@@ -189,7 +189,10 @@ class ClientReportOutcome(FrozenModel):
 
 
 # The launch path every app that declares none has, at its root, synthesized by the shell (desktop
-# contracts.md section 2). ``label`` is ``Open <display name>`` per app, filled in by ``effective_launch_paths``.
+# contracts.md section 2). Its ``label`` is the app's display name, filled in by
+# ``effective_launch_paths``: it stands in a list beside rows an app labelled for itself, and every
+# app that bothers to label one calls it by its name -- so a verb here reads as a different KIND of
+# row rather than as the same row with a word in front of it.
 OPEN_LAUNCH_PATH_VALUE: Final[LaunchPathValue] = LaunchPathValue("/")
 
 
@@ -201,7 +204,7 @@ def effective_launch_paths(row: RegistryRow) -> tuple[RegistryLaunchPath, ...]:
     display = str(row.display_name) if row.display_name is not None else str(row.name)
     return (
         RegistryLaunchPath(
-            id=OPEN_LAUNCH_PATH_ID, label=NonEmptyStr(f"Open {display}"), path=OPEN_LAUNCH_PATH_VALUE, params=()
+            id=OPEN_LAUNCH_PATH_ID, label=NonEmptyStr(display), path=OPEN_LAUNCH_PATH_VALUE, params=()
         ),
     )
 
