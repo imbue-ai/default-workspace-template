@@ -838,8 +838,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           kind: "submenu",
           key: "providers",
           label: "Provider",
-          value: pending.provider,
-          sub: `${pending.harness_label}, next message`,
+          value: pending.harness_label,
+          sub: `${pending.provider}, next message`,
           content: () => providerSubmenu(chatId, account),
         });
         rows.push({ kind: "divider" });
@@ -859,8 +859,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
           kind: "submenu",
           key: "providers",
           label: "Provider",
-          value: account?.provider ?? "No account",
-          sub: account?.harness_label ?? "Pick one to move this chat to it",
+          value: account?.harness_label ?? "No account",
+          sub: account?.provider ?? "Pick one to move this chat to it",
           content: () => providerSubmenu(chatId, account),
         });
         rows.push({ kind: "divider" });
