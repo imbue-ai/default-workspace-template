@@ -188,10 +188,10 @@ _NO_WALLPAPER: Final[str] = "none"
 READ_TIMEOUT_SECONDS: Final[float] = 10.0
 OP_TIMEOUT_SECONDS: Final[float] = 30.0
 
-# Exit codes: 0 / 1 / 3 / 4. Agents branch on "did it work"; the distinct codes worth their own
-# slot are a shell or app that cannot act right now (a 409 or a 503), where retry-with-backoff
-# is the right response, and a window the user popped out into its own window, where the answer
-# is --force or telling the user, never a retry. Slot 2 is left to argparse's usage exit.
+# Agents branch on "did it work"; the distinct exit codes worth their own slot are a shell or app
+# that cannot act right now (a 409 or a 503), where retry-with-backoff is the right response, and a
+# window the user popped out into its own window, where the answer is --force or telling the user,
+# never a retry. Slot 2 is left to argparse's usage exit.
 EXIT_OK: Final[int] = 0
 EXIT_ERROR: Final[int] = 1
 EXIT_CONFLICT: Final[int] = 3
