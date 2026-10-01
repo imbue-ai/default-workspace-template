@@ -1881,6 +1881,14 @@ describe("the phone layout", () => {
     expect(api.calls).toContain(`recordShown:${CLIENT}:home`);
   });
 
+  it("leaves the windows sheet open when the window it shows is closed from the sheet", async () => {
+    const store = await phoneStore(["win-2"]);
+    store.openPhoneSheet("windows");
+    await store.closeWindow("win-2");
+    await settle();
+    expect(store.getState().phone).toEqual(expect.objectContaining({ shown: { kind: "home" }, sheet: "windows" }));
+  });
+
   it("shows the window an agent op put on this client, once the desktops that hold it arrive", async () => {
     const store = await phoneStore();
     socket.deliver().onLayoutOp({ op: "open", args: { window: "win-9" }, requester: "chat" });

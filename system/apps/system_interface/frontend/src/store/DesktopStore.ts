@@ -535,7 +535,12 @@ export class DesktopStore {
       this.showOnPhone({ kind: "window", windowId: pending });
       return;
     }
-    if (isShownWindowGone(this.state)) this.showOnPhone({ kind: "home" });
+    if (isShownWindowGone(this.state)) {
+      // A sheet open when the window went (its own X, Close all, another client's close) stays open over home.
+      const sheet = this.state.phone.sheet;
+      this.showOnPhone({ kind: "home" });
+      if (sheet !== null) this.openPhoneSheet(sheet);
+    }
   }
 
   /** Put ``shown`` on the phone's screen and record it with the shell, which keeps it as this client's history: a
