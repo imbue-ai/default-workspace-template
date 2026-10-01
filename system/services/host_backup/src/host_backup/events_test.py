@@ -20,6 +20,7 @@ from host_backup.events import (
     rotate_events_log_if_over,
     write_event,
 )
+from host_backup.testing import write_tick
 
 
 def test_a_huge_restic_stdout_is_capped_at_both_ends_when_it_is_written(
@@ -101,26 +102,21 @@ def test_a_log_under_the_threshold_is_left_alone(tmp_path: Path) -> None:
     assert _rotated_logs(tmp_path) == []
 
 
-def _write_tick(events_dir: Path, *types: BackupEventType, tick_id: str) -> None:
-    for event_type in types:
-        write_event(events_dir, make_event(event_type, tick_id=tick_id))
-
-
 def test_inflight_scan_treats_every_tick_ending_as_finished(tmp_path: Path) -> None:
     """A tick that ended without a restic event is not in flight, so nothing waits on it."""
-    _write_tick(
+    write_tick(
         tmp_path,
         BackupEventType.BACKUP_STARTED,
         BackupEventType.SNAPSHOT_FAILED,
         tick_id="tick-snapshot",
     )
-    _write_tick(
+    write_tick(
         tmp_path,
         BackupEventType.BACKUP_STARTED,
         BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS,
         tick_id="tick-skip",
     )
-    _write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-running")
+    write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-running")
     pending = find_inflight_tick_id(tmp_path / "events.jsonl")
     assert pending == "tick-running"
 
@@ -130,8 +126,8 @@ def test_a_tick_that_never_finished_is_not_in_flight_once_a_later_tick_started(
 ) -> None:
     """A tick killed mid-restic (an OOM shed, a services restart) never emits a terminal
     event. The runner runs one tick at a time, so a later tick starting means it is dead."""
-    _write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-killed")
-    _write_tick(
+    write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-killed")
+    write_tick(
         tmp_path,
         BackupEventType.BACKUP_STARTED,
         BackupEventType.RESTIC_BACKUP_SUCCEEDED,
@@ -226,13 +222,13 @@ def test_the_tail_read_drops_the_line_its_window_cut_in_half(tmp_path: Path) -> 
 def test_a_restarted_service_records_the_tick_it_was_killed_out_of(
     tmp_path: Path,
 ) -> None:
-    _write_tick(
+    write_tick(
         tmp_path,
         BackupEventType.BACKUP_STARTED,
         BackupEventType.RESTIC_BACKUP_SUCCEEDED,
         tick_id="tick-done",
     )
-    _write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-killed")
+    write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-killed")
 
     record_abandoned_tick(tmp_path)
 
@@ -245,7 +241,7 @@ def test_a_restarted_service_records_the_tick_it_was_killed_out_of(
 
 
 def test_a_service_that_stopped_between_ticks_records_nothing(tmp_path: Path) -> None:
-    _write_tick(
+    write_tick(
         tmp_path,
         BackupEventType.BACKUP_STARTED,
         BackupEventType.RESTIC_BACKUP_SUCCEEDED,
