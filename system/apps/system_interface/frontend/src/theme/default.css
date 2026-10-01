@@ -88,7 +88,9 @@
   --desk-phone-pill-icon: 32px;
   /* The bar's height above its bottom padding, which is --desk-phone-safe-bottom. */
   --desk-phone-bar-height: calc(var(--desk-phone-pill-height) + var(--desk-phone-bar-padding));
-  --desk-phone-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--desk-phone-bar-padding));
+  /* Only the inset: in a browser tab the page ends at the toolbar, which already sets the bar off
+     from the screen's edge, and the inset is 0 there. */
+  --desk-phone-safe-bottom: env(safe-area-inset-bottom, 0px);
   --desk-phone-sheet-radius: 18px;
   /* How far below the top a sheet stops, so the page it covers still shows above it. */
   --desk-phone-sheet-top: max(96px, calc(env(safe-area-inset-top, 0px) + 40px));

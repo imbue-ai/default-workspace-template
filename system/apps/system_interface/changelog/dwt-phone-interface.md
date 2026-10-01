@@ -1,6 +1,6 @@
 The workspace has a phone layout. On a screen whose shorter side is under 700px (any phone, upright or on its side, but no iPad), the squeezed desktop is gone and the workspace shows one thing at a time:
 
-- A bar at the bottom: home, a pill naming what is on screen (the avatar and "Chat" for the chat window, the workspace's name on the home screen) with how many other windows are open, and a plus.
+- A bar at the bottom: home, a pill naming what is on screen (the avatar and "Chat" for the chat window, the workspace's name on the home screen) with how many other windows are open, and a plus. It clears the home indicator when saved to the home screen and sits right on the browser's toolbar in a browser tab.
 
 - A home screen of every app on the desktop's wallpaper. Tapping an app shows its window, or opens one if it has none; holding it offers the app's ways to start something, so a second terminal is one gesture away.
 

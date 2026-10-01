@@ -23,7 +23,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 
 ### The bar
 
-- A bottom bar of three controls: home, the pill, plus. It sits above the safe-area inset and stays visible while the soft keyboard is up. Geometry: 64px by 42px controls with a circular press highlight, a 48px pill that flexes between them, 12px above the inset.
+- A bottom bar of three controls: home, the pill, plus. It sits above the safe-area inset and stays visible while the soft keyboard is up. Geometry: 64px by 42px controls with a circular press highlight, a 48px pill that flexes between them, 12px of padding above the controls and only the safe-area inset below them (none in a browser tab, where the browser's toolbar sits under the bar).
 - Home is disabled on the home grid. Tapping it shows the home grid and records "home" as the phone's shown state.
 - The pill shows the shown window's app icon and title, or the avatar and "Chat" for the pinned chat window; on the home grid it shows the workspace name. It carries a count of open windows excluding the pinned chat, and shows none when that is zero. Tapping it opens the windows sheet; long-pressing it opens the shown window's menu.
 - Plus opens the start sheet.
