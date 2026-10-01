@@ -153,9 +153,14 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
         },
         [
           glyphCell(appGlyph(row.app, appSize), attrs.isSheet),
-          m("span", { class: "min-w-0 flex-1 truncate" + (row.isMinimized ? " text-faint" : "") }, row.title),
+          // A phone names no desktop and places what it shows minimized, so the sheet carries neither mark.
+          m(
+            "span",
+            { class: "min-w-0 flex-1 truncate" + (row.isMinimized && !attrs.isSheet ? " text-faint" : "") },
+            row.title,
+          ),
           m("span", { class: CAPTION_CLASS }, row.app?.display_name ?? row.window.app),
-          row.isOnActiveDesktop ? null : m("span", { class: CAPTION_CLASS }, row.desktopName),
+          row.isOnActiveDesktop || attrs.isSheet ? null : m("span", { class: CAPTION_CLASS }, row.desktopName),
           keys,
         ],
       );

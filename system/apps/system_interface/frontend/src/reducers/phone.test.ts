@@ -15,7 +15,15 @@ import {
 } from "../testing/records";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopEvent, DesktopState } from "./desktopState";
-import { focusTargetOf, homeGridApps, openWindowCount, phoneLanding, phonePillOf, windowsSheetRows } from "./phone";
+import {
+  focusTargetOf,
+  homeGridApps,
+  openWindowCount,
+  phoneLanding,
+  phonePillOf,
+  startSheetRows,
+  windowsSheetRows,
+} from "./phone";
 
 const chat = chatLikeAppRecord("chat", { launcher_rank: 1 });
 const docs = appRecord("docs");
@@ -118,6 +126,34 @@ describe("the windows sheet", () => {
         .map((row) => row.window.id)
         .slice(0, 2),
     ).toEqual(["docs-old", "notes-1"]);
+  });
+});
+
+describe("the start sheet", () => {
+  it("offers the windows the sheet lists, one pinned window among them, and nothing for other desktops' pinned", () => {
+    const menu = startSheetRows(phoneState(), "chat");
+    expect(menu.windowRows.map((row) => row.window.id)).toEqual(["chat-home"]);
+    expect(menu.rows.filter((row) => row.kind === "window")).toEqual(menu.windowRows);
+    // A query only another desktop's pinned window matched is no match on the phone.
+    const work = phoneState({
+      type: "desktops_updated",
+      desktops: desktops().map((desktop) =>
+        desktop.id === "work"
+          ? { ...desktop, windows: desktop.windows.map((window) => ({ ...window, title: "Quarterly review" })) }
+          : desktop,
+      ),
+    });
+    expect(startSheetRows(work, "Quarterly").isNoMatch).toBe(false);
+    const onlyPinned = phoneState({
+      type: "desktops_updated",
+      desktops: [
+        desktopRecord("home", { windows: [windowRecord("chat-home", "chat", "/", { is_pinned: true })] }),
+        desktopRecord("work", {
+          windows: [windowRecord("chat-work", "chat", "/", { is_pinned: true, title: "Quarterly review" })],
+        }),
+      ],
+    });
+    expect(startSheetRows(onlyPinned, "Quarterly")).toMatchObject({ windowRows: [], isNoMatch: true });
   });
 });
 

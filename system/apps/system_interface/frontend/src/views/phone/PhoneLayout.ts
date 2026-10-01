@@ -13,7 +13,7 @@ import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { appLaunchesOf, launchRowKindOf } from "../../model/launch";
 import { appByName, isAppShownStopped } from "../../reducers/desktopState";
-import { defaultHighlightIndex, isRowEnabled, launcherRowsOf } from "../../reducers/launcherRows";
+import { defaultHighlightIndex, isRowEnabled } from "../../reducers/launcherRows";
 import type { LauncherRow } from "../../reducers/launcherRows";
 import {
   homeGridApps,
@@ -21,6 +21,7 @@ import {
   phonePillOf,
   pinnedChatWindowOf,
   shownWindowOf,
+  startSheetRows,
   windowsSheetRows,
 } from "../../reducers/phone";
 import type { DesktopStore } from "../../store/DesktopStore";
@@ -114,7 +115,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
   }
 
   function startRows(store: DesktopStore): readonly LauncherRow[] {
-    return launcherRowsOf(store.getState(), startQuery).rows;
+    return startSheetRows(store.getState(), startQuery).rows;
   }
 
   function startHighlightIndex(rows: readonly LauncherRow[]): number {
@@ -165,7 +166,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
           onDismiss: () => store.openPhoneSheet(null),
         });
       case "start": {
-        const menuRows = launcherRowsOf(state, startQuery);
+        const menuRows = startSheetRows(state, startQuery);
         return m(StartSheet, {
           menu: menuRows,
           highlightIndex: startHighlightIndex(menuRows.rows),
