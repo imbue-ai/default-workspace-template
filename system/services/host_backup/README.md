@@ -14,9 +14,9 @@ A backup's time follows how many files and directories restic walks, not how
 many bytes changed. It checks every entry against the previous snapshot, and
 under gVisor each check costs a few hundred microseconds, so a home tree of a
 million entries takes five minutes or more every hour even when only a few
-dozen files changed. A slow backup therefore almost always means a large tree that nothing
-excludes, usually something that can be rebuilt: a cache, downloads, extracted
-archives, clones.
+dozen files changed. A slow backup therefore almost always means a large tree
+that nothing excludes, usually something that can be rebuilt: a cache,
+downloads, extracted archives, clones.
 
 1. Confirm it. A backup that takes longer than `slow_backup_threshold_seconds`
    (default 300) records a `BACKUP_SLOW` event, at most once a day, carrying
