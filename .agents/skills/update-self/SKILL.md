@@ -511,7 +511,9 @@ instead of proceeding. Release them afterwards.
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
 
-Have Step 1's backup result before running it (Step 1 says how). Run the
+Have Step 1's backup result before running it (Step 1 says how; a pass whose
+local Step 1 ran the backup in the foreground already has it, or, if that
+backup was abandoned, reports the outcome as not observed). Run the
 apply from the staged copy, in the **foreground**: its output (refusal
 and resume messages, any provisioner warning, the `apply phase timings:` line)
 is what you read before recording a verdict.
