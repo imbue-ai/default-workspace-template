@@ -218,31 +218,37 @@ chat app keeps a pool of spare agents (one by default, `SPARE_CHAT_POOL_SIZE` in
 `agent_manager.py`) started on the terms the next new chat would get (the
 default account, the primary agent's project, and the fast mode a new chat
 starts in), each created silent under the id and "Chat N" name of the chat it
-will become, and hidden from every chat listing, send, and route. A spare is
-ready once its harness says it accepts input, not when `mngr create` returns. A
-create that fits those terms and names no chat id, name, labels, templates, or
+will become, with the label `chat_spare=true`. Every chat listing, send, and
+route hides an agent so labelled, so a secondary chat (a preview), which keeps
+no spares of its own, hides the live chat's too. A spare is ready once its
+harness says it accepts input, not when `mngr create` returns. A create that
+fits those terms and names no chat id, name, labels, templates, or
 installation-check waiver of its own is handed a ready spare instead of running
 `mngr create`: the chat is listed at once, running, so its first message never
-waits on "Connecting...". With none ready it claims one still starting, and is
+waits on "Connecting...", and `mngr label <id> --label chat_spare=false` runs
+in the background (the session sweep retries one that fails; a preview shows
+the chat once it lands). With none ready it claims one still starting, and is
 provisional until that one is up, which is sooner than a create of its own that
 would queue behind it on mngr's host lock. Its message and model pick follow
 through the send path. The pool is topped up one spare at a time; with a pool
 larger than one, while another spare is still ready, 30 seconds after a
 hand-over, so the next boot does not compete with the new chat's first turn. A
 sign-in starts the spares at once, and the session sweep keeps them current: one
-whose terms went stale or whose process died is destroyed and replaced, and
-after a failed create or destroy the spares wait five minutes. The spares are
-recorded in `data/.state/chat/spare_chat.json` before their create starts, so
-a restart of the app keeps a ready spare and destroys one whose create it cut
-short. `GET /api/agents`, the plain mngr listing, does list the spares. A
-spare sits in `oom_priority`'s ceiling band (`SPARE_AGENT`, shared with the
-browser's renderers) until a chat takes it, so memory pressure sheds it before
-any agent or agent subprocess; one that dies is replaced after the same
-backoff. The chat that takes it sits at the engaged chat floor for its first
-minute (`CHAT_JUST_STARTED_GRACE_SECONDS`), then is prioritized like any chat.
-A secondary chat (a preview) keeps none of its own: it reads the live chat's
-`spare_chat.json` on every sweep, never writing it, so the live spares stay
-hidden there too and a spare the live chat hands over appears.
+whose terms went stale, that has been ready for six hours
+(`SPARE_CHAT_MAX_AGE_SECONDS`, since it carries the date and git state its
+harness loaded at start, and may predate a code update), or whose process died
+is destroyed and replaced, and after a failed create or destroy the spares wait
+five minutes. Nothing about the spares is kept on disk but the label: on its
+first agent list after a restart, the app relabels an agent still labelled a
+spare whose chat folder holds its fast mode (a chat took it, and its relabel
+never landed) and destroys every other one. `GET /api/agents`, the plain mngr
+listing, does list the spares. The label also starts a spare and every process
+it spawns in `oom_priority`'s ceiling band (`SPARE_AGENT`, 1000, above the
+browser's renderers at 990), so memory pressure sheds it before anything else;
+one that dies is replaced after the same backoff. A hand-over moves its
+processes down to the chat band, and the chat that takes it sits at the engaged
+chat floor for its first minute (`CHAT_JUST_STARTED_GRACE_SECONDS`), then is
+prioritized like any chat.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
@@ -474,10 +480,8 @@ real, but a switch to another account is refused, since it would write the chat'
 record into the scratch copy only, and so is an answer to a secret card, since the
 answer belongs to the live chat. Point `CHAT_DATA_DIR` at a scratch copy of
 `data/.apps/chat/` so its writes (the message stamps, settings, chat records, and
-secret requests) never land in the live chat's data. It starts, hands over, and
-destroys no spare agent; point `CHAT_STATE_DIR` at the live chat's
-`data/.state/chat/` by absolute path (a preview runs from a worktree, where the
-relative default names nothing) so it reads the live spares and hides them.
+secret requests) never land in the live chat's data. It starts, hands over,
+relabels, and destroys no spare agent; it hides the live chat's by their label.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm

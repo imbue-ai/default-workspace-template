@@ -73,8 +73,8 @@ docker, lima), earlyoom logs that once and uses `/proc/meminfo` alone.
 - **`app_registry`** -- the narrow, stdlib-only reader of the app registry the
   backstop listener uses: each registered app's `priority` band name, by the
   supervisord program that runs it.
-- **`agent_identity`** -- classifies an agent from its label (primary, chat, or
-  worker), used by the launch wrapper to pick the band. An agent whose record
+- **`agent_identity`** -- classifies an agent from its label (primary, spare
+  chat agent, chat, or worker), used by the launch wrapper to pick the band. An agent whose record
   can't be read matches none of these and is tagged least-protected (worker band).
 - **`registry`** -- one file per agent recording its main-process pid, so a
   killed pid can be mapped back to "which agent" (earlyoom's after-kill hook is
@@ -90,8 +90,8 @@ without inspecting the process tree:
 | a built-in supervisord service or app | launch | its `SERVICE_BANDS` value (an app's is the `priority` its manifest declares) | `system/services/oom_priority/bin/oom_tag_service.py <service>` (command prefix) |
 | a user-created supervisord service or app | launch | user service (above every built-in) | `system/services/oom_priority/bin/oom_tag_service.py user` (command prefix) |
 | a workspace terminal's shell (a `terminal-N` tmux session's pane, and everything run in it) | session creation | `terminal-session` (the user-service level, 200) | `system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l`, the session command the terminal app gives `tmux new-session` (a pane otherwise inherits the tmux server's protected 0) |
-| an agent's main process | launch | chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/agent_oom_launch.py` |
-| a spare chat agent's registered processes (codex registers two) and the subprocesses its harness started | right after its create, and on every chat-app sweep (a restart relaunches it at the chat band) | spare agent (1000, the ceiling); once a chat takes it, the chat band, and its harness's subprocesses the chat launch band (560) | the chat app's `AgentManager` (`system/apps/chat/imbue/chat/agent_manager.py`) |
+| an agent's main process | launch | spare chat agent (`chat_spare=true`) -> spare agent (1000, the ceiling); chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/agent_oom_launch.py` |
+| a spare chat agent a chat just took: its registered processes (codex registers two) and the subprocesses its harness started | the hand-over | its main process the chat band, from the engaged floor; everything else the chat launch band (560) | the chat app's `AgentManager` (`system/apps/chat/imbue/chat/agent_manager.py`), which also relabels it `chat_spare=false` so a relaunch starts it as a chat |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/agent_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
 | the browser coordinator | launch | its `SERVICE_BANDS` value (70, an ordinary service band; the file viewer and Getting Started sit above it) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |
 | Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-990), renderers at the top of the band | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
@@ -325,9 +325,9 @@ It lists:
   - is a chat (`user_created=true`) or a worker (`agent_created=true`). The
     primary services agent and any agent with neither label (an automation, for
     example) are never listed;
-  - is not one of the chat app's spare agents, which its
-    `data/.state/chat/spare_chat.json` records. A spare is no chat until a chat
-    takes it, and the chat app replaces one that is stopped;
+  - is not one of the chat app's spare agents (`chat_spare=true`). A spare is
+    no chat until a chat takes it, and the chat app replaces one that is
+    stopped;
   - is `WAITING`, meaning its turn has ended. A `RUNNING` agent is mid-turn, and
     a `STOPPED` or `DONE` agent holds no memory to free;
   - has had no activity for `IDLE_AFTER_SECONDS` (15 minutes). Its last
