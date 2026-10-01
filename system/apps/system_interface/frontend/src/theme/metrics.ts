@@ -8,8 +8,9 @@
  */
 
 /** The viewport side under which the shell renders its phone layout (plan-phone-interface.md): the shorter side,
- *  so rotating a phone keeps the layout and no tablet gets it. */
-export const PHONE_MAX_SIDE_PX = 700;
+ *  so rotating a phone keeps the layout and no tablet gets it. The demo branch turns the phone layout off: the
+ *  launch video's app window holds a shell about 696 CSS px tall at the demo's zoom, which would otherwise get it. */
+export const PHONE_MAX_SIDE_PX = 0;
 
 export const PHONE_MEDIA_QUERY = `(max-width: ${PHONE_MAX_SIDE_PX}px), (max-height: ${PHONE_MAX_SIDE_PX}px)`;
 export const TOUCH_MEDIA_QUERY = "(pointer: coarse)";
