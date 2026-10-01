@@ -611,11 +611,12 @@ describe("a hidden ghost", () => {
   });
 });
 
-describe("a solo shell", () => {
-  /** What the App observes for its size, recorded so a test can resize it: under jsdom every box measures as
-   *  empty and the real observer never fires. */
-  const observed: { element: Element; callback: ResizeObserverCallback }[] = [];
+/** What the App observes for its size, recorded so a test can resize it: under jsdom every box measures as
+ *  empty and the real observer never fires. */
+const observed: { element: Element; callback: ResizeObserverCallback }[] = [];
 
+/** Record the App's size observations for the tests of the enclosing describe. */
+function recordResizeObservers(): void {
   beforeEach(() => {
     observed.length = 0;
     vi.stubGlobal(
@@ -634,20 +635,24 @@ describe("a solo shell", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
+}
+
+/** Give a pages host a size and fire the App's observation of it, as a resize of the viewport does. */
+function resizeHost(host: HTMLElement, width: number, height: number): void {
+  host.getBoundingClientRect = () => ({ left: 0, top: 0, width, height }) as DOMRect;
+  const watch = observed.find((candidate) => candidate.element === host);
+  if (watch === undefined) throw new Error("the pages host is not observed");
+  watch.callback([], {} as ResizeObserver);
+  m.redraw.sync();
+}
+
+describe("a solo shell", () => {
+  recordResizeObservers();
 
   /** Mount the App over a fresh store opened to show win-1 alone, the window pulled out in the stored layout. */
   async function mountSolo(): Promise<void> {
     unmountViews();
     await mountApp({ isDetached: true, soloWindowId: "win-1" });
-  }
-
-  /** Give the host a size and fire the App's observation of it, as a resize of the desktop window does. */
-  function resizeHost(host: HTMLElement, width: number, height: number): void {
-    host.getBoundingClientRect = () => ({ left: 0, top: 0, width, height }) as DOMRect;
-    const watch = observed.find((candidate) => candidate.element === host);
-    if (watch === undefined) throw new Error("the solo host is not observed");
-    watch.callback([], {} as ResizeObserver);
-    m.redraw.sync();
   }
 
   it("lays its one page over the whole host, live, and re-lays it as the host's size changes", async () => {
@@ -706,6 +711,23 @@ describe("the desktop's wallpaper", () => {
 });
 
 describe("the switch to the phone layout", () => {
+  recordResizeObservers();
+
+  it("re-lays the shown page as its host shrinks under a keyboard and turns with the phone", () => {
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    store.showOnPhone({ kind: "window", windowId: "win-1" });
+    m.redraw.sync();
+    const host = document.querySelector("[data-phone-page-host] .live-pages") as HTMLElement;
+    resizeHost(host, 393, 760);
+    const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+    expect([page.style.display, page.style.width, page.style.height]).toEqual(["", "393px", "760px"]);
+    resizeHost(host, 393, 420);
+    expect([page.style.width, page.style.height]).toEqual(["393px", "420px"]);
+    resizeHost(host, 852, 300);
+    expect([page.style.width, page.style.height]).toEqual(["852px", "300px"]);
+  });
+
   it("creates no page for a window the phone does not show", () => {
     // win-1 is shown on the desktop; the phone lands on its home grid, where no window's page lives.
     const createElement = vi.spyOn(document, "createElement");

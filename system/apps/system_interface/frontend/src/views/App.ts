@@ -293,7 +293,7 @@ export function App(): m.Component<AppAttrs> {
   }
 
   /** Feed ``element``'s size to the store as the backdrop's, now and whenever it changes: the backdrop area of a
-   *  desktop, or the pages host of a solo shell, whose one page is laid over it on every redraw. */
+   *  desktop, or the pages host of a solo shell or a phone, whose one page is laid over it on every redraw. */
   function observeBackdropSize(current: DesktopStore, element: HTMLElement): void {
     const measure = (): void => {
       const box = element.getBoundingClientRect();
@@ -968,7 +968,11 @@ export function App(): m.Component<AppAttrs> {
       if (current.isPhoneLayout()) {
         return m(PhoneLayout, {
           store: current,
-          onPagesHostCreated: (host) => startPagesLayer(current, host, vnode.attrs),
+          onPagesHostCreated: (host) => {
+            startPagesLayer(current, host, vnode.attrs);
+            // The host shrinks under a soft keyboard and turns with the phone; the shown page follows it.
+            observeBackdropSize(current, host);
+          },
         });
       }
       const desktop: Desktop | null = activeDesktop(state);
