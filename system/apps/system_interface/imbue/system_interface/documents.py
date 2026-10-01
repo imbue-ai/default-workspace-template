@@ -96,9 +96,11 @@ def set_meta_tag(html_content: str, name: str, content: str) -> str:
     return _in_head(html_content, tag)
 
 
-def set_link_tag(html_content: str, rel: str, href: str) -> str:
-    """The document with one ``<link rel=...>`` pointing at ``href`` (escaped), replacing one the build carries."""
-    tag = f'<link rel="{rel}" href="{html.escape(href, quote=True)}">'
+def set_link_tag(html_content: str, rel: str, href: str, *, is_credentialed: bool) -> str:
+    """The document with one ``<link rel=...>`` pointing at ``href`` (escaped), replacing one the build carries.
+    A credentialed link is fetched with the page's cookies (``crossorigin="use-credentials"``)."""
+    credentials = ' crossorigin="use-credentials"' if is_credentialed else ""
+    tag = f'<link rel="{rel}" href="{html.escape(href, quote=True)}"{credentials}>'
     pattern = _tag_pattern("link", "rel", rel)
     if pattern.search(html_content) is not None:
         return pattern.sub(lambda _match: tag, html_content, count=1)
@@ -132,5 +134,9 @@ def inject_install_tags(html_content: str, workspace_name: str, root_path: str) 
     html_content = set_meta_tag(html_content, APPLE_WEB_APP_TITLE_META_NAME, workspace_name)
     html_content = set_meta_tag(html_content, THEME_COLOR_META_NAME, SHELL_BACKGROUND_COLOR)
     html_content = with_viewport_fit_cover(html_content)
-    html_content = set_link_tag(html_content, "apple-touch-icon", f"{root_path}{TOUCH_ICON_PATH}")
-    return set_link_tag(html_content, "manifest", f"{root_path}{MANIFEST_PATH}")
+    html_content = set_link_tag(
+        html_content, "apple-touch-icon", f"{root_path}{TOUCH_ICON_PATH}", is_credentialed=False
+    )
+    # A browser fetches a manifest without cookies, even from the page's own origin, unless the link asks for them;
+    # the workspace's forwarder refuses a request that carries no session.
+    return set_link_tag(html_content, "manifest", f"{root_path}{MANIFEST_PATH}", is_credentialed=True)

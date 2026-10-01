@@ -121,9 +121,9 @@ def test_the_page_carries_the_workspaces_name_and_what_a_phone_saves_to_its_home
     assert '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">' in page
     assert page.count('name="viewport"') == 1
     assert '<link rel="apple-touch-icon" href="/apple-touch-icon.png">' in page
-    assert '<link rel="manifest" href="/manifest.webmanifest">' in page
+    assert '<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">' in page
     assert '<link rel="apple-touch-icon" href="/shell/apple-touch-icon.png">' in prefixed
-    assert '<link rel="manifest" href="/shell/manifest.webmanifest">' in prefixed
+    assert '<link rel="manifest" href="/shell/manifest.webmanifest" crossorigin="use-credentials">' in prefixed
     assert client.get("/api/inventory").get_json()["workspace_name"] == 'Tom & Jerry\'s <"Lab">'
 
 
