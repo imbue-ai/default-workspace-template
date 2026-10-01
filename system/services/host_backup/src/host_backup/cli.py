@@ -200,14 +200,26 @@ def _wait_for_tick_to_end(
     inflight_tick_id: str,
     deadline: float,
 ) -> bool:
-    """Block until `inflight_tick_id` emits a terminal event, or the deadline passes.
-    Returns False when the deadline passed first."""
+    """Block until the tick in flight emits a terminal event, or the deadline passes.
+    Returns False when the deadline passed first.
+
+    A tick that starts meanwhile becomes the one waited for: the runner runs one tick
+    at a time, so `inflight_tick_id` died (its runner was shed or restarted) and will
+    never end.
+    """
     logger.info("Waiting for the in-flight backup tick to complete...")
     while time.monotonic() < deadline:
         for event in follower.read_new_events():
-            if (
-                event.get("tick_id") == inflight_tick_id
-                and event.get("type") in TICK_TERMINAL_EVENT_TYPES
+            if event.get("source") != BACKUP_EVENT_SOURCE:
+                continue
+            tick_id = event.get("tick_id")
+            if not isinstance(tick_id, str):
+                continue
+            event_type = event.get("type")
+            if event_type == BackupEventType.BACKUP_STARTED.value:
+                inflight_tick_id = tick_id
+            elif (
+                tick_id == inflight_tick_id and event_type in TICK_TERMINAL_EVENT_TYPES
             ):
                 return True
         time.sleep(_POLL_INTERVAL_SECONDS)

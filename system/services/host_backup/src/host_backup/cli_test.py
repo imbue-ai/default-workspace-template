@@ -339,6 +339,23 @@ def test_the_inflight_wait_ends_on_its_own_tick_only(tmp_path: Path) -> None:
     )
 
 
+def test_the_inflight_wait_follows_a_tick_that_started_after_the_one_it_waited_for(
+    tmp_path: Path,
+) -> None:
+    """The waited tick's runner was restarted mid-wait: its startup tick is the one in
+    flight now, and the dead tick never ends."""
+    follower = _EventsLogFollower(tmp_path / "events.jsonl")
+    _write_tick(
+        tmp_path,
+        BackupEventType.BACKUP_STARTED,
+        BackupEventType.RESTIC_BACKUP_SUCCEEDED,
+        tick_id="tick-after-restart",
+    )
+    assert _wait_for_tick_to_end(
+        follower, "tick-killed", time.monotonic() + _GENEROUS_TIMEOUT_SECONDS
+    )
+
+
 @pytest.mark.parametrize(
     ("ticks", "expected_exit_code", "expected_report"),
     [
