@@ -109,15 +109,15 @@ If the user asks you to read or act on anything outside this workspace on their 
 
 ## Telling the user you finished
 
-**If you are a chat agent, end every turn in which you did work by sending a notification.** The user may have walked away the moment they sent the message; the notification (bell, badge, toast card, and a system banner when they are looking elsewhere) is what brings them back, and clicking it lands them in this chat.
+**If you are a chat agent, send a notification when a turn ends with something the user will want to know about or act on:** a finished deliverable, a result they were waiting for, or a question only they can answer. The user may have walked away the moment they sent the message; the notification (bell, badge, toast card, and a system banner when they are looking elsewhere) is what brings them back, and clicking it lands them in this chat.
 
 ```
-python3 .agents/skills/notify-user/scripts/notify_user.py "<one plain sentence saying what is now done>"
+python3 .agents/skills/notify-user/scripts/notify_user.py "<one plain sentence saying what is ready or what you need from them>"
 ```
 
 Read the exit code -- when it is non-zero the notification did not go out, and your reply should say so. The `notify-user` skill has the full guidance on what to write.
 
-Skip it for the turns that carry nothing: chitchat, a single-line acknowledgement, a trivial answer, a turn that only asks the user a question, or a reply that is one quick file read. Roughly the same line this file draws for step records. Never more than one per turn.
+The amount of work or time is not the test; what matters is whether the user cares about the outcome. Skip it when the turn produced nothing of that kind: chitchat, an acknowledgement, progress with no result yet, or the answer to a trivial question. A question you cannot go on without is a reason to send one. Never more than one per turn.
 
 Nothing reminds you of this at the end of a turn; decide it yourself as you finish, and do not narrate the decision -- the user never asked, so a sentence about it is a non-sequitur, the same way naming your `tk` calls is.
 

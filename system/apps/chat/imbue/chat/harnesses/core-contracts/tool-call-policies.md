@@ -117,17 +117,21 @@ before the next turn, at stop, or riding a tool result -- because harnesses diff
 those can reach the model at all. The invariant is only that an agent with open steps is told
 about them before it does more work.
 
-### P8. A chat agent tells the user when it is finished
+### P8. A chat agent tells the user when a turn leaves them something
 **Prose-only** (`AGENTS.md` and the `notify-user` skill); no hook on any harness.
 
 The user may have walked away the moment they sent the message, and nothing about a finished
-turn reaches them on its own. At the end of every turn in which it did work a chat agent sends
-one notification (`.agents/skills/notify-user`), so the app's feed -- and its banner, when the
-user is looking elsewhere -- can bring them back to the chat.
+turn reaches them on its own. When a turn ends with something the user will want to know about
+or act on -- a finished deliverable, a result they were waiting for, or a question only they can
+answer -- a chat agent sends one notification (`.agents/skills/notify-user`), so the app's feed
+-- and its banner, when the user is looking elsewhere -- can bring them back to the chat. The
+amount of work or time is not the test: a turn that produced nothing of that kind (chitchat, an
+acknowledgement, progress with no result yet, the answer to a trivial question) sends none, and
+no turn sends more than one.
 
-**The judgement stays with the agent.** Whether a given turn is worth a notification is not
-decidable from outside: a step record is a decent proxy and still wrong on the turns that
-matter. The agent decides as it finishes, and never narrates the decision.
+**The judgement stays with the agent.** Whether the user cares about a turn's outcome is not
+decidable from outside, and no count of steps or minutes stands in for it. The agent decides as
+it finishes, and never narrates the decision.
 
 **Why there is no hook.** A Stop hook reaches the model only by refusing the stop; claude then
 injects the hook's text as a user message and runs a further assistant turn, which the chat

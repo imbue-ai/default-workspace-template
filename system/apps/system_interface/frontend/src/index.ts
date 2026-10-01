@@ -21,6 +21,7 @@ import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/dee
 import type { DeepLink } from "./model/deepLinks";
 import { parseSoloWindowId, stripSoloParam } from "./model/soloMode";
 import type { Frame } from "./model/records";
+import { frameFromViewportFractions } from "./geometry/frames";
 import type { PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
 import { startPresenceHeartbeat } from "./model/Presence";
@@ -29,7 +30,7 @@ import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
 import { followRenderModes } from "./theme/metrics";
-import { App } from "./views/App";
+import { App, BACKDROP_AREA_ATTRIBUTE } from "./views/App";
 
 /** Rewrite the page's URL with its query string put through ``strip``, leaving the path, the hash, and the
  *  history entry as they are: how a boot-time parameter is removed once it has been read. */
@@ -53,21 +54,32 @@ function takeSoloWindowIdFromLocation(): string | null {
   return soloWindowId;
 }
 
-/** The frame a reattach message names, when it names one: four finite fractions (clamped by the verb). */
+/** The frame a reattach message names, when it names one: four finite fractions of this page's viewport, which is
+ *  how the chrome measures a drop back onto the desktop, mapped onto the backdrop the desktop's frames are
+ *  fractions of (and clamped by the verb). */
 function frameFromMessage(value: unknown): Frame | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
   const numbers = ["x", "y", "width", "height"].map((key) => record[key]);
   if (!numbers.every((number) => typeof number === "number" && Number.isFinite(number))) return null;
   const [x, y, width, height] = numbers as number[];
-  return { x, y, width, height };
+  const frame = { x, y, width, height };
+  const backdrop = document.querySelector<HTMLElement>(`[${BACKDROP_AREA_ATTRIBUTE}]`);
+  if (backdrop === null) return frame;
+  const box = backdrop.getBoundingClientRect();
+  return frameFromViewportFractions(
+    frame,
+    { width: window.innerWidth, height: window.innerHeight },
+    { x: box.x, y: box.y, width: box.width, height: box.height },
+  );
 }
 
 /** The shell's side of the pull-out conversation: every ask goes to the embedding chrome. */
 const popOutBridge: PopOutBridge = {
   requestPopOut: (request) => sendToEmbedder(POP_OUT_WINDOW, { ...request }),
   beginWindowDrag: (request) => sendToEmbedder(WINDOW_DRAG_STARTED, { ...request }),
-  endWindowDrag: (windowId, isDetached) => sendToEmbedder(WINDOW_DRAG_ENDED, { windowId, isDetached }),
+  endWindowDrag: (windowId, isDetached, isCancelled) =>
+    sendToEmbedder(WINDOW_DRAG_ENDED, { windowId, isDetached, isCancelled }),
   reportDetachedWindows: (windows) => sendToEmbedder(DETACHED_WINDOWS, { windows: [...windows] }),
 };
 

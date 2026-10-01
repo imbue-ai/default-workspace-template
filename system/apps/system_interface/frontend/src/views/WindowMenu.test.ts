@@ -125,6 +125,7 @@ describe("taskbarEntryMenuRows", () => {
     unmaximize: vi.fn(),
     close: vi.fn(),
     presentation: null,
+    desktopShortcut: null,
   };
 
   it("offers a pinned entry the float and style verbs in place of Close", () => {
@@ -181,6 +182,22 @@ describe("taskbarEntryMenuRows", () => {
       "|",
       "close",
     ]);
+  });
+
+  it("offers the app's desktop row, when there is one, between the other verbs and Close", () => {
+    const onSelect = vi.fn();
+    const rows = taskbarEntryMenuRows(
+      {
+        ...actions,
+        isMinimized: false,
+        isMaximized: false,
+        desktopShortcut: { kind: "action", key: "add-to-desktop", label: "Add to desktop", onSelect },
+      },
+      false,
+    );
+    expect(keysOf(rows)).toEqual(["minimize", "maximize", "|", "add-to-desktop", "|", "close"]);
+    rowOf(rows, "add-to-desktop").onSelect();
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
   it("offers Close for a pinned window's entry too (the caller minimizes it)", () => {
