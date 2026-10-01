@@ -49,9 +49,12 @@ def document_response(html_content: str, *, is_frontend_built: bool) -> Response
     return response
 
 
+def _meta_tag(name: str, content: str) -> str:
+    return f'<meta name="{name}" content="{html.escape(content, quote=True)}">'
+
+
 def inject_meta_tag(html_content: str, name: str, content: str) -> str:
-    meta_tag = f'<meta name="{name}" content="{html.escape(content, quote=True)}">'
-    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+    return html_content.replace("</head>", f"{_meta_tag(name, content)}\n</head>")
 
 
 def inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
@@ -74,26 +77,22 @@ def _tag_pattern(tag: str, attribute: str, value: str) -> re.Pattern[str]:
     return re.compile(rf'<{tag}\s(?:[^>]*\s)?{attribute}="{re.escape(value)}"[^>]*>', re.IGNORECASE)
 
 
-def _in_head(html_content: str, tag: str) -> str:
+def _replaced_or_added(html_content: str, pattern: re.Pattern[str], tag: str) -> str:
+    """The document with the first match of ``pattern`` replaced by ``tag``, or ``tag`` added to the head."""
+    if pattern.search(html_content) is not None:
+        return pattern.sub(lambda _match: tag, html_content, count=1)
     return html_content.replace("</head>", f"{tag}\n</head>", 1)
 
 
 def set_document_title(html_content: str, title: str) -> str:
     """The document titled ``title`` (escaped): its ``<title>`` replaced, or one added to the head."""
-    tag = f"<title>{html.escape(title, quote=False)}</title>"
-    if _TITLE_PATTERN.search(html_content) is not None:
-        return _TITLE_PATTERN.sub(lambda _match: tag, html_content, count=1)
-    return _in_head(html_content, tag)
+    return _replaced_or_added(html_content, _TITLE_PATTERN, f"<title>{html.escape(title, quote=False)}</title>")
 
 
 def set_meta_tag(html_content: str, name: str, content: str) -> str:
     """The document with the ``name`` meta tag carrying ``content`` (escaped): an existing tag of that name is
     replaced, so the build may already carry it."""
-    tag = f'<meta name="{name}" content="{html.escape(content, quote=True)}">'
-    pattern = _tag_pattern("meta", "name", name)
-    if pattern.search(html_content) is not None:
-        return pattern.sub(lambda _match: tag, html_content, count=1)
-    return _in_head(html_content, tag)
+    return _replaced_or_added(html_content, _tag_pattern("meta", "name", name), _meta_tag(name, content))
 
 
 def set_link_tag(html_content: str, rel: str, href: str, *, is_credentialed: bool) -> str:
@@ -101,10 +100,7 @@ def set_link_tag(html_content: str, rel: str, href: str, *, is_credentialed: boo
     A credentialed link is fetched with the page's cookies (``crossorigin="use-credentials"``)."""
     credentials = ' crossorigin="use-credentials"' if is_credentialed else ""
     tag = f'<link rel="{rel}" href="{html.escape(href, quote=True)}"{credentials}>'
-    pattern = _tag_pattern("link", "rel", rel)
-    if pattern.search(html_content) is not None:
-        return pattern.sub(lambda _match: tag, html_content, count=1)
-    return _in_head(html_content, tag)
+    return _replaced_or_added(html_content, _tag_pattern("link", "rel", rel), tag)
 
 
 def with_viewport_fit_cover(html_content: str) -> str:
