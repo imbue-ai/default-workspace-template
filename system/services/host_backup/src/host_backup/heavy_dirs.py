@@ -87,12 +87,13 @@ def count_snapshot_listing(
             continue
         if not isinstance(record, dict):
             continue
-        if record.get("struct_type") == "snapshot":
+        message_type = record.get("message_type")
+        if message_type == "snapshot":
             snapshot_short_id = str(record.get("short_id", ""))
             snapshot_time = str(record.get("time", ""))
             continue
         path = record.get("path")
-        if record.get("struct_type") != "node" or not isinstance(path, str):
+        if message_type != "node" or not isinstance(path, str):
             continue
 
         # Credit the entry to the root and to each ancestor directory within the depth limit
