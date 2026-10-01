@@ -128,6 +128,28 @@ def test_all_test_ratchets_files_have_same_tests() -> None:
 # Repo-wide ratchets
 
 
+def _git_considered_files(pathspec: str) -> list[str]:
+    """The repo-relative paths matching `pathspec` that git considers: tracked, or
+    untracked but not ignored."""
+    listed = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            pathspec,
+        ],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return list(filter(None, listed.stdout.split("\0")))
+
+
 def _find_bash_scripts_without_strict_mode() -> list[str]:
     """Find bash scripts missing 'set -euo pipefail', excluding vendored code.
 
@@ -139,24 +161,8 @@ def _find_bash_scripts_without_strict_mode() -> list[str]:
     the non-source trees that hold no template code (virtualenvs, node_modules,
     git internals), all of which are gitignored.
     """
-    candidates = subprocess.run(
-        [
-            "git",
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "--",
-            "*.sh",
-        ],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
     violations: list[str] = []
-    for rel in filter(None, candidates.stdout.split("\0")):
+    for rel in _git_considered_files("*.sh"):
         script = _REPO_ROOT / rel
         if _VENDORED_DIR in script.parents or not script.is_file():
             continue
@@ -361,25 +367,9 @@ def _conftest_fixture_names(test_file: Path) -> set[str]:
 
 
 def _find_playwright_session_fixture_uses() -> list[str]:
-    candidates = subprocess.run(
-        [
-            "git",
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "--",
-            "*.py",
-        ],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
     ignored = _root_suite_ignored_paths()
     violations: list[str] = []
-    for rel in sorted(filter(None, candidates.stdout.split("\0"))):
+    for rel in sorted(_git_considered_files("*.py")):
         path = _REPO_ROOT / rel
         if not (
             path.name.startswith("test_")
