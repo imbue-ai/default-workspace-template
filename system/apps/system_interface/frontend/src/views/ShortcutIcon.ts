@@ -21,7 +21,7 @@ import { appGlyph } from "./glyphs";
 import { rectStyle } from "./pixelStyle";
 
 /** The intrinsic width and height the glyph markup carries; the drawing is sized by its token-sized box
- *  (``[&>svg]:size-full``), so the theme's ``--desk-icon-size`` governs, in compact mode too. */
+ *  (``[&>svg]:size-full``), so the theme's ``--desk-icon-size`` governs. */
 export const ICON_MARKUP_SIZE = 48;
 
 export interface ShortcutIconAttrs {

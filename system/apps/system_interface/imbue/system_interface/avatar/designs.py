@@ -296,6 +296,11 @@ def _apply_bundled_motion(root: Element, design: BundledDesign) -> None:
 def render_design_svg(svg: str, mood: AvatarMood, is_preview: bool, design_id: str) -> str:
     """One isolated image of a design wearing ``mood``: the source stays untouched, the copy carries the mood, the
     shared stylesheet, and (for a bundled design) its expression and motion; a preview holds every pose still."""
+    return tostring(render_design_element(svg, mood, is_preview, design_id), encoding="unicode")
+
+
+def render_design_element(svg: str, mood: AvatarMood, is_preview: bool, design_id: str) -> Element:
+    """``render_design_svg``'s image as a tree, for a caller that places it inside a drawing of its own."""
     root = parse_design_svg(svg)
     root.set("data-mood", mood.value)
     styles = list(root.iter(_STYLE_TAG))
@@ -311,4 +316,4 @@ def render_design_svg(svg: str, mood: AvatarMood, is_preview: bool, design_id: s
             _apply_bundled_motion(root, design)
     if is_preview:
         SubElement(root, _STYLE_TAG).text = _PREVIEW_CSS
-    return tostring(root, encoding="unicode")
+    return root

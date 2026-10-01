@@ -53,7 +53,6 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
     launcher: {
       query: "",
       isOpen: false,
-      isCompact: false,
       onOpen: vi.fn(),
       onClose: vi.fn(),
       onQuery: vi.fn(),
@@ -217,7 +216,6 @@ describe("Taskbar", () => {
         launcher: {
           query: "docs",
           isOpen: true,
-          isCompact: false,
           onOpen: vi.fn(),
           onClose,
           onQuery,

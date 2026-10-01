@@ -25,7 +25,7 @@ const chatty = chatLikeAppRecord("chatty");
 const terminal = appRecord("terminal", { launch_paths: [launchPathRecord({ id: "new", label: "New Terminal" })] });
 
 function stateWithWindows(): DesktopState {
-  let next = initialDesktopState("client-1", { isCompact: false, isTouch: false });
+  let next = initialDesktopState("client-1", { isPhone: false, isTouch: false });
   next = reduceDesktopState(next, { type: "apps_updated", apps: [terminal, chatty] });
   next = reduceDesktopState(next, {
     type: "desktops_updated",
@@ -43,7 +43,6 @@ function render(
   const attrs: LauncherMenuAttrs = {
     menu,
     highlightIndex: defaultHighlightIndex(menu.rows),
-    isCompact: false,
     isApplePlatform: false,
     bottomOffsetPx: 0,
     onRun: vi.fn(),
@@ -144,6 +143,13 @@ describe("the launcher menu", () => {
       expect(other.defaultPrevented).toBe(false);
     }
     expect(attrs.onAppShortcutContextMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the shortcut row's right-click alone with no handler, as the phone's start sheet passes", () => {
+    const { root } = render(launcherRowsOf(stateWithWindows(), ""), { onAppShortcutContextMenu: null });
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    root.querySelector('[data-launch="terminal:new"]')!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("spells the secondary key for the platform and previews the first words of the text", () => {

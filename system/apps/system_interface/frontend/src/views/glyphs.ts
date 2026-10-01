@@ -1,7 +1,7 @@
 /**
  * The small glyphs the desktop's chrome draws that the shared icon set does not carry: the
  * window controls (minimize, maximize, restore), the kebab, the size menu's zone pictograms,
- * and the launcher's plus and app fallback. Same Feather-style 24x24 frame as ``icons.ts``,
+ * the launcher's plus and app fallback, and the phone bar's home. Same Feather-style 24x24 frame as ``icons.ts``,
  * produced as SVG strings for ``m.trust``.
  *
  * Some of these are Lucide's own shapes as well as its frame -- the plus, the minus the minimize
@@ -25,6 +25,7 @@ const GLYPH_PATHS = {
     '<circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/>' +
     '<circle cx="12" cy="19" r="2" fill="currentColor" stroke="none"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  home: '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>',
   app: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>',
 } as const;
 

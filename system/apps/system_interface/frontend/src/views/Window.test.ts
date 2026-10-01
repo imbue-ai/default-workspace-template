@@ -18,7 +18,6 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     state: "NORMAL",
     stackIndex: 1,
     isFocused: true,
-    isCompact: false,
     isTouch: false,
     isMenuOpen: false,
     sizeMenuTrigger: {},
@@ -99,14 +98,9 @@ describe("Window", () => {
     expect(onControl).toHaveBeenCalledWith("close", expect.anything());
   });
 
-  it("shows Restore when maximized, and hides the maximize controls and resize edges in compact mode", () => {
+  it("shows Restore when maximized, and no resize edges on a touch screen", () => {
     const maximized = render({ state: "MAXIMIZED" });
     expect(maximized.querySelector('[data-window-control="restore"]')).not.toBeNull();
-    unmountViews();
-    const compact = render({ isCompact: true, state: "MAXIMIZED" });
-    expect(compact.querySelector('[data-window-control="restore"]')).toBeNull();
-    expect(compact.querySelector('[data-window-control="maximize"]')).toBeNull();
-    expect(compact.querySelectorAll("[data-resize-edge]")).toHaveLength(0);
     unmountViews();
     expect(render({ isTouch: true }).querySelectorAll("[data-resize-edge]")).toHaveLength(0);
   });

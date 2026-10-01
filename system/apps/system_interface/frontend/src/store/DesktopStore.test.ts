@@ -21,7 +21,7 @@ import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
 import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
 
 const METRICS = themeMetricsRecord();
-const MODES = { isCompact: false, isTouch: false };
+const MODES = { isPhone: false, isTouch: false };
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
 const PLAIN_BAR = { mode: "bar", style: "plain", position: null } as const;
@@ -32,8 +32,13 @@ function last<T>(items: readonly T[]): T | undefined {
 
 let api: FakeDesktopApi;
 let socket: FakeDesktopSocket;
-let notices: string[];
+let stores: DesktopStore[];
 let reloads: number;
+
+/** The toasts every store of the test has on screen, oldest first. */
+function notices(): string[] {
+  return stores.flatMap((store) => store.toasts.current().map((toast) => toast.message));
+}
 
 function makeStore(
   redraw: () => void = () => undefined,
@@ -46,11 +51,11 @@ function makeStore(
     metrics: METRICS,
     modes: MODES,
     redraw,
-    notify: (message) => void notices.push(message),
     reloadInterface: () => void (reloads += 1),
     ...extra,
   });
   store.setBackdropSize({ width: 1000, height: 800 });
+  stores.push(store);
   return store;
 }
 
@@ -65,7 +70,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
-  notices = [];
+  stores = [];
   reloads = 0;
   api.apps = [appRecord("docs"), appRecord("notes")];
   api.desktops = [
@@ -110,7 +115,7 @@ describe("bootstrap", () => {
       launch: "new",
     });
     await store.runLaunch("gone", "new", "focus");
-    expect(notices).toEqual(["Cannot open: gone is not registered"]);
+    expect(notices()).toEqual(["Cannot open: gone is not registered"]);
   });
 
   it("is connecting, not missing apps, until the inventory answers; the socket's app list also ends the wait", async () => {
@@ -121,7 +126,7 @@ describe("bootstrap", () => {
     expect(store.getState().isAppsLoaded).toBe(false);
     expect(resolveLaunchRun(store.getState(), "docs", "new", "focus")).toEqual({ kind: "connecting" });
     await store.runLaunch("docs", "new", "focus");
-    expect(notices).toEqual([STILL_CONNECTING_NOTICE]);
+    expect(notices()).toEqual([STILL_CONNECTING_NOTICE]);
     let isAppsLoaded = false;
     void store.whenAppsLoaded().then(() => {
       isAppsLoaded = true;
@@ -218,7 +223,7 @@ describe("bootstrap", () => {
     api.refusal = "the shell is restarting";
     const store = makeStore();
     await store.start(NO_LINK);
-    expect(notices).toEqual(["Could not read the desktops and apps: the shell is restarting"]);
+    expect(notices()).toEqual(["Could not read the desktops and apps: the shell is restarting"]);
     expect(store.getState().activeDesktopId).toBeNull();
     expect(store.getState().isAppsLoaded).toBe(false);
   });
@@ -467,7 +472,7 @@ describe("opening", () => {
       false,
     );
     await store.runLaunchRow("buddy", "missing");
-    expect(last(notices)).toBe("Cannot open: buddy has no launch path missing");
+    expect(last(notices())).toBe("Cannot open: buddy has no launch path missing");
   });
 
   it("a free-text row launches into this client's view of the app's pinned window", async () => {
@@ -493,7 +498,7 @@ describe("opening", () => {
     expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(`launch:home:buddy:new:{}:window:win-9`);
     // A text over a GET launch path's path bound is refused here, before the shell sees it.
     expect(await store.runFreeText("buddy", "new", "x".repeat(2100))).toBe(false);
-    expect(last(notices)).toBe("Too long to send from here");
+    expect(last(notices())).toBe("Too long to send from here");
     // A POST launch path carries the text in a body: no bound, and the window lands where the app answers.
     offerApps(api, socket, [
       appRecord("buddy", {
@@ -545,7 +550,7 @@ describe("opening", () => {
   it("shell:start-with-text runs the primary text action, and says so when there is none", async () => {
     const store = await startedStore();
     expect(await store.startWithText("hello")).toBe(false);
-    expect(last(notices)).toBe("No app on this machine can start a chat");
+    expect(last(notices())).toBe("No app on this machine can start a chat");
     socket.deliver().onAppsUpdated([
       appRecord("docs", { launcher_rank: 20 }),
       appRecord("notes", {
@@ -565,7 +570,7 @@ describe("opening", () => {
   it("shell:draft-text drafts through the first draft row when no pinned window takes one, and says so with none", async () => {
     const store = await startedStore();
     expect(await store.draftText("Explain this element:")).toBe(false);
-    expect(last(notices)).toBe("No app on this machine can take a draft");
+    expect(last(notices())).toBe("No app on this machine can take a draft");
     offerApps(api, socket, [
       appRecord("docs", {
         launch_paths: [launchPathRecord({ id: "new", path: "/new", params: ["message"], text_param: "message" })],
@@ -596,7 +601,7 @@ describe("opening", () => {
     expect(await store.openWindowAt("docs", "/x", "focus")).toBeNull();
     api.refusal = null;
     await store.runLaunch("gone", "new", "new");
-    expect(notices).toEqual([
+    expect(notices()).toEqual([
       "Could not open docs: No registered app named 'docs'",
       "Cannot open: gone is not registered",
     ]);
@@ -707,13 +712,13 @@ describe("windows", () => {
     expect(isLayoutDirty(store.getState())).toBe(false);
   });
 
-  it("toggles maximize, except in compact mode", async () => {
+  it("toggles maximize, and writes no placement on a phone", async () => {
     const store = await startedStore();
     store.toggleMaximized("win-1");
     expect(last(activePlacements(store.getState()))?.state).toBe("MAXIMIZED");
     store.toggleMaximized("win-1");
     expect(last(activePlacements(store.getState()))?.state).toBe("NORMAL");
-    store.setThemeMetrics(METRICS, { isCompact: true, isTouch: false });
+    store.setThemeMetrics(METRICS, { isPhone: true, isTouch: false });
     store.toggleMaximized("win-1");
     expect(last(activePlacements(store.getState()))?.state).toBe("NORMAL");
   });
@@ -847,13 +852,6 @@ describe("gestures", () => {
     expect(redraws).toBeGreaterThan(afterResizeBegin);
   });
 
-  it("in compact mode window gestures do nothing", async () => {
-    const store = await startedStore();
-    store.setThemeMetrics(METRICS, { isCompact: true, isTouch: true });
-    store.beginWindowMove("win-1", { x: 100, y: 60 });
-    expect(store.getGesture()).toBeNull();
-  });
-
   /** A store whose home desktop carries two shortcuts: docs at (0,0) and notes beside it at (1,0), or at
    *  ``notesCell`` when one is given. */
   async function shortcutStore(options: { notesCell?: GridCell; redraw?: () => void } = {}): Promise<DesktopStore> {
@@ -951,7 +949,7 @@ describe("gestures", () => {
     store.endShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
     await settle();
     expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
-    expect(notices).toEqual(["Could not move the shortcut: down"]);
+    expect(notices()).toEqual(["Could not move the shortcut: down"]);
   });
 });
 
@@ -1105,7 +1103,7 @@ describe("pinned entries", () => {
     expect(api.calls.length).toBe(callsBefore);
     api.refusal = "no such client";
     expect(await store.navigateOwnWindow("win-9", "/?doc=5")).toBe(false);
-    expect(notices).toEqual(["Could not move the window: no such client"]);
+    expect(notices()).toEqual(["Could not move the window: no such client"]);
     expect(store.getDesktopsRevision()).toBe(desktopsBefore + 1);
     expect(store.takeOwnNavigation()).toBeNull();
   });
@@ -1141,7 +1139,7 @@ describe("pinned entries", () => {
     expect(store.getState().entries.buddy).toEqual({ mode: "bar", style: "avatar", position: null });
     api.refusal = "no such client";
     await store.setEntryMode("buddy", "floating");
-    expect(notices).toEqual(["Could not change the entry: no such client"]);
+    expect(notices()).toEqual(["Could not change the entry: no such client"]);
     expect(store.getState().entries.buddy.mode).toBe("bar");
     // An app with no pinned window on the active desktop has nothing to write.
     api.refusal = null;
@@ -1164,7 +1162,7 @@ describe("pinned entries", () => {
     expect(store.getState().entries.buddy.mode).toBe("floating");
     socket.deliver().onClientEntriesChanged({ clientId: CLIENT, entries: { buddy: PLAIN_BAR } });
     await refused;
-    expect(notices).toEqual(["Could not change the entry: no such client"]);
+    expect(notices()).toEqual(["Could not change the entry: no such client"]);
     expect(store.getState().entries).toEqual({ buddy: PLAIN_BAR });
   });
 
@@ -1196,12 +1194,7 @@ describe("pinned entries", () => {
       height: 56,
     });
     expect(store.gestureRectFor("win-9")).toBeNull();
-    // Compact mode has no floating entries to drag.
-    store.setThemeMetrics(METRICS, { isCompact: true, isTouch: true });
-    store.beginFloatingEntryDrag("buddy", { x: 10, y: 10 }, { x: 0, y: 0 });
-    expect(store.getGesture()).toBeNull();
-    // Nor does an app with no pinned window on the active desktop.
-    store.setThemeMetrics(METRICS, { isCompact: false, isTouch: false });
+    // An app with no pinned window on the active desktop has no entry to drag.
     store.beginFloatingEntryDrag("docs", { x: 10, y: 10 }, { x: 0, y: 0 });
     expect(store.getGesture()).toBeNull();
   });
@@ -1242,7 +1235,7 @@ describe("the avatar", () => {
     // The window follows the broadcast, not the answer.
     expect(store.getState().avatar.design).toBe("gummy-seal");
     await store.selectAvatar("nobody");
-    expect(notices).toEqual(["Could not change the avatar: No design nobody"]);
+    expect(notices()).toEqual(["Could not change the avatar: No design nobody"]);
   });
 
   it("keeps the initial design when the catalog cannot be read", async () => {
@@ -1291,7 +1284,7 @@ describe("desktops and shortcuts", () => {
     api.refusal = "critical";
     await store.quitApp("docs");
     expect(api.calls).toContain("quitApp:docs");
-    expect(notices).toEqual(["Failed to quit docs: critical"]);
+    expect(notices()).toEqual(["Failed to quit docs: critical"]);
   });
 });
 
@@ -1642,7 +1635,10 @@ describe("pulled-out windows", () => {
     const { store, calls } = makePopOutStore();
     await store.start(NO_LINK);
 
-    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1" }, requester: "buddy" });
+    // A show the shell raised in the layout asks nothing of the chrome; one that left the window out does.
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1", is_detached: false }, requester: "buddy" });
+    expect(calls).toEqual([]);
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-1", is_detached: true }, requester: "buddy" });
 
     expect(calls).toEqual([["request", expect.objectContaining({ windowId: "win-1", title: "Docs" })]]);
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
@@ -1903,5 +1899,250 @@ describe("pulled-out windows", () => {
     expect(savedCalls()).toHaveLength(1);
     await store.reattachWindow("win-9", null);
     expect(savedCalls()).toHaveLength(1);
+  });
+});
+
+describe("the phone layout", () => {
+  const PHONE = { isPhone: true, isTouch: true };
+  const chat = appRecord("chat", { pin: { path: "/", style: "avatar", scope: "linked", default_mode: "bar" } });
+
+  /** A phone on ``home``, whose pinned chat window is chat-1; ``work`` holds win-3. */
+  async function phoneStore(history: string[] = []): Promise<DesktopStore> {
+    api.apps = [appRecord("docs"), appRecord("notes"), chat];
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("chat-1", "chat", "/", { is_pinned: true }),
+          windowRecord("win-1", "docs", "/a"),
+          windowRecord("win-2", "notes", "/b"),
+        ],
+      }),
+      desktopRecord("work", { windows: [windowRecord("win-3", "docs", "/c")] }),
+    ];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", shown_history: history })];
+    const store = makeStore();
+    store.setThemeMetrics(METRICS, PHONE);
+    await store.start(NO_LINK);
+    return store;
+  }
+
+  it("lands on what it recorded last, else on the pinned chat window, without recording the landing", async () => {
+    expect((await phoneStore(["win-3", "win-2"])).getState().phone.shown).toEqual({
+      kind: "window",
+      windowId: "win-2",
+    });
+    expect((await phoneStore()).getState().phone.shown).toEqual({ kind: "window", windowId: "chat-1" });
+    expect((await phoneStore(["win-1", "home"])).getState().phone.shown).toEqual({ kind: "home" });
+    expect(api.calls.filter((call) => call.startsWith("recordShown"))).toEqual([]);
+  });
+
+  it("shows a window by recording it with the shell, writing no placement and moving no desktop", async () => {
+    const store = await phoneStore();
+    store.showOnPhone({ kind: "window", windowId: "win-3" });
+    await settle();
+    vi.runAllTimers();
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-3" });
+    expect(api.calls).toContain(`recordShown:${CLIENT}:win-3`);
+    expect(api.clients.find((client) => client.id === CLIENT)?.shown_history).toEqual(["win-3"]);
+    expect(store.getState().activeDesktopId).toBe("home");
+    // A restore (a launcher row, a shortcut's raise) shows the window too, and raises nothing.
+    store.restoreWindow("win-1");
+    vi.runAllTimers();
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
+    expect(api.calls.filter((call) => call.startsWith("savePlacements"))).toEqual([]);
+  });
+
+  it("opens on the first desktop out of every client's sight, and shows what it opened", async () => {
+    const store = await phoneStore();
+    // The client sits on work; the phone still opens on home, the first desktop, and stays on work.
+    await store.switchDesktop("work");
+    await store.runLaunch("docs", "new", "new");
+    await settle();
+    const opened = last(api.desktops[0].windows);
+    expect(opened?.app).toBe("docs");
+    expect(api.calls).toContain(`launch:home:docs:new:{}:new:minimized`);
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: opened?.id });
+    expect(api.layoutOf("home", CLIENT).placements.find((placement) => placement.window_id === opened?.id)).toEqual(
+      expect.objectContaining({ is_minimized: true }),
+    );
+  });
+
+  it("goes home when the window it shows is closed anywhere", async () => {
+    const store = await phoneStore(["win-2"]);
+    socket
+      .deliver()
+      .onDesktopsUpdated(
+        api.desktops.map((desktop) => ({ ...desktop, windows: desktop.windows.filter((w) => w.id !== "win-2") })),
+      );
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "home" });
+    expect(api.calls).toContain(`recordShown:${CLIENT}:home`);
+  });
+
+  it("shows the pinned chat of the desktop it is moved to, which is the one it lists", async () => {
+    const store = await phoneStore();
+    socket.deliver().onDesktopsUpdated([
+      api.desktops[0],
+      {
+        ...api.desktops[1],
+        windows: [...api.desktops[1].windows, windowRecord("chat-2", "chat", "/", { is_pinned: true })],
+      },
+    ]);
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "chat-1" });
+    await store.switchDesktop("work");
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "chat-2" });
+    expect(api.calls).toContain(`recordShown:${CLIENT}:chat-2`);
+  });
+
+  it("shows a second pinned app's window, and on a move that app's pinned window of the new desktop", async () => {
+    const store = await phoneStore();
+    const board = appRecord("board", { pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" } });
+    api.apps = [...api.apps, board];
+    socket.deliver().onAppsUpdated(api.apps);
+    socket.deliver().onDesktopsUpdated([
+      {
+        ...api.desktops[0],
+        windows: [...api.desktops[0].windows, windowRecord("board-1", "board", "/", { is_pinned: true })],
+      },
+      {
+        ...api.desktops[1],
+        windows: [
+          ...api.desktops[1].windows,
+          windowRecord("chat-2", "chat", "/", { is_pinned: true }),
+          windowRecord("board-2", "board", "/", { is_pinned: true }),
+        ],
+      },
+    ]);
+    await settle();
+
+    await store.runHomeTile("board");
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "board-1" });
+    await store.switchDesktop("work");
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "board-2" });
+  });
+
+  it("closes the window it shows on the close chord, and leaves the pinned chat it shows open", async () => {
+    const store = await phoneStore(["win-2"]);
+    await store.closeFocusedWindow();
+    await settle();
+    expect(api.desktops[0].windows.map((window) => window.id)).toEqual(["chat-1", "win-1"]);
+
+    store.showOnPhone({ kind: "window", windowId: "chat-1" });
+    await store.closeFocusedWindow();
+    await settle();
+    expect(api.desktops[0].windows.map((window) => window.id)).toEqual(["chat-1", "win-1"]);
+  });
+
+  it("leaves the windows sheet open when the window it shows is closed from the sheet", async () => {
+    const store = await phoneStore(["win-2"]);
+    store.openPhoneSheet("windows");
+    await store.closeWindow("win-2");
+    await settle();
+    expect(store.getState().phone).toEqual(expect.objectContaining({ shown: { kind: "home" }, sheet: "windows" }));
+  });
+
+  it("shows the window an agent op put on this client, once the desktops that hold it arrive", async () => {
+    const store = await phoneStore();
+    socket.deliver().onLayoutOp({ op: "open", args: { window: "win-9" }, requester: "chat" });
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "chat-1" });
+    socket
+      .deliver()
+      .onDesktopsUpdated([
+        { ...api.desktops[0], windows: [...api.desktops[0].windows, windowRecord("win-9", "docs", "/z")] },
+        api.desktops[1],
+      ]);
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-9" });
+    socket.deliver().onLayoutOp({ op: "focus", args: { window: "win-1" }, requester: "chat" });
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-1" });
+  });
+
+  it("runs a home tile: an existing window is shown, an app with none is launched", async () => {
+    const store = await phoneStore();
+    await store.runHomeTile("notes");
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-2" });
+    api.apps = [...api.apps, appRecord("sheets")];
+    offerApps(api, socket, api.apps);
+    await store.runHomeTile("sheets");
+    await settle();
+    const opened = last(api.desktops[0].windows);
+    expect(opened?.app).toBe("sheets");
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: opened?.id });
+  });
+
+  it("launches a home tile's app by its desktop shortcut, passing over a first launch path that takes text", async () => {
+    const store = await phoneStore();
+    api.apps = [
+      ...api.apps,
+      appRecord("sheets", {
+        default_shortcut: null,
+        launch_paths: [
+          launchPathRecord({ id: "ask", label: "Ask sheets", params: ["message"], text_param: "message" }),
+          launchPathRecord({ id: "open", label: "Open sheets", path: "/" }),
+        ],
+      }),
+    ];
+    offerApps(api, socket, api.apps);
+    await store.runHomeTile("sheets");
+    await settle();
+    expect(api.calls).toContain("launch:home:sheets:open:{}:new:minimized");
+  });
+
+  it("closes every window but the pinned one, and says why in a toast when the shell refuses an open", async () => {
+    const store = await phoneStore();
+    await store.closeAllWindows();
+    expect(api.desktops.flatMap((desktop) => desktop.windows).map((window) => window.id)).toEqual(["chat-1"]);
+    api.refusal = "the shell is restarting";
+    await store.runLaunch("docs", "new", "new");
+    expect(notices()).toEqual(["Could not open docs: the shell is restarting"]);
+  });
+
+  it("reads the shell again on coming back into sight, following a desktop deleted meanwhile", async () => {
+    const store = await phoneStore(["win-3"]);
+    store.onVisibilityChange(false);
+    api.desktops = api.desktops.filter((desktop) => desktop.id !== "home");
+    socket.reports.length = 0;
+    store.onVisibilityChange(true);
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(socket.reports).toEqual([{ activeDesktop: "work", previousDesktop: "" }]);
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-3" });
+  });
+
+  it("tells the shell again what it shows when a reread finds the show unrecorded", async () => {
+    const store = await phoneStore(["win-1"]);
+    api.refusal = "the shell is restarting";
+    store.showOnPhone({ kind: "window", windowId: "win-2" });
+    await settle();
+    api.refusal = null;
+    store.onVisibilityChange(false);
+    store.onVisibilityChange(true);
+    await settle();
+    expect(store.getState().phone.history).toEqual(["win-1", "win-2"]);
+    expect(api.clients.find((client) => client.id === CLIENT)?.shown_history).toEqual(["win-1", "win-2"]);
+  });
+
+  it("reloads the shown page when the socket comes back after the page was out of sight", async () => {
+    const store = await phoneStore(["win-1"]);
+    const reloaded: string[] = [];
+    store.setPageDriver({
+      reload: (id) => void reloaded.push(id),
+      reloadApp: () => undefined,
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+    });
+    socket.deliver().onConnected();
+    socket.deliver().onConnected();
+    expect(reloaded).toEqual([]);
+    store.onVisibilityChange(false);
+    socket.deliver().onConnected();
+    expect(reloaded).toEqual(["win-1"]);
   });
 });

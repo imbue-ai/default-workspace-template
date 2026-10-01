@@ -42,10 +42,13 @@ active belong to one client.
 ## Which client an op targets
 
 Every op targets exactly one client. With no `--client`, that is the client
-that most recently messaged you, else the one connected client. When neither
-settles it (several clients, an agent nobody messaged), the op is refused with
-the connected clients listed; pass `--client <id>` (from `context`). Ops are
-never applied to every client at once.
+that most recently messaged you while it is connected, else the one connected
+client if it is the same user's (a user who messaged you from a phone's browser
+tab and carried on in its home-screen app is on that client now; a visitor's
+screen is not the owner's), else the client that messaged you though it has
+gone. When none of those settles it (several clients, an agent nobody messaged),
+the op is refused with the connected clients listed; pass `--client <id>` (from
+`context`). Ops are never applied to every client at once.
 
 - **An op with no `--desktop` edits the client's active desktop.** That is what
   you want nearly always; just run the op.
@@ -207,8 +210,11 @@ and never closed; `scope`: `linked`, or `independent` for a window whose path
 is each client's own, in which case the listed `path` is the shared home path
 and `client_paths` says where each client's page is, by client id) and shortcuts,
 and every client with its `active_desktop`,
-`is_connected`, and `shown` (the windows of its active desktop it has not
-minimized). `list` prints every app with its launch paths, whether it is
+`is_connected`, `shown` (the windows of its active desktop it has not
+minimized), and `shown_history` (what its phone layout showed, most recent
+last: window ids, and `home` for the home grid; a phone places the windows it
+shows minimized, so its `shown` is usually empty and the last entry here is
+what is on its screen). `list` prints every app with its launch paths, whether it is
 running, and where its windows are, plus the same desktops and clients. Both
 print JSON.
 

@@ -157,14 +157,16 @@ describe("ShellSocket", () => {
     current().receive({ type: "layout_op", op: "refresh", args: { window: "win-1" }, target_client_id: "client-1" });
     current().receive({ type: "layout_op", op: "reload_system_interface", args: {}, requester: "chat:agent-1" });
     current().receive({ type: "layout_op", op: "refresh", args: { window: "win-2" }, target_client_id: "client-2" });
-    current().receive({ type: "layout_op", op: "focus", args: { window: "win-1" } });
+    current().receive({ type: "layout_op", op: "minimize", args: { window: "win-1" } });
     current().receive({ type: "layout_op", op: "refresh", args: null });
     current().receive({ type: "layout_op", op: "show", args: { window: "win-1" }, target_client_id: "client-1" });
+    current().receive({ type: "layout_op", op: "open", args: { window: "win-3" }, target_client_id: "client-1" });
     expect(vi.mocked(handlers.onLayoutOp).mock.calls.map((call) => call[0])).toEqual([
       { op: "refresh", args: { window: "win-1" }, requester: "" },
       { op: "reload_system_interface", args: {}, requester: "chat:agent-1" },
       { op: "refresh", args: {}, requester: "" },
       { op: "show", args: { window: "win-1" }, requester: "" },
+      { op: "open", args: { window: "win-3" }, requester: "" },
     ]);
   });
 
