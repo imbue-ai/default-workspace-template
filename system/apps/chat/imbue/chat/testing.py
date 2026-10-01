@@ -31,6 +31,9 @@ from collections.abc import Generator
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
+from concurrent.futures import Executor
+from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from contextlib import contextmanager
 from datetime import datetime
@@ -42,6 +45,7 @@ from unittest.mock import patch
 
 import httpx
 import pexpect
+import pytest
 import simple_websocket
 from flask import Flask
 from flask import request
@@ -54,6 +58,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
 from imbue.chat.chat_records import ChatRebindRecord
@@ -372,6 +377,33 @@ def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
     return str(script), log_path
 
 
+def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Put a shell script named ``name`` first on PATH that logs its argv, then runs ``body``; returns the log.
+
+    One line per invocation, the arguments space-joined.
+    """
+    bin_dir = tmp_path / "stand-in-bin"
+    bin_dir.mkdir(exist_ok=True)
+    log_path = tmp_path / f"{name}-argv.log"
+    script = bin_dir / name
+    script.write_text(f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "{log_path}"\n{body}\n')
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    return log_path
+
+
+class InlineExecutor(Executor):
+    """Runs each submitted call to completion before ``submit`` returns, so work a request hands off has finished
+    when the request returns.
+
+    The call runs on a one-off pool, so a call that raises leaves its exception on the future, as with any executor.
+    """
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(fn, *args, **kwargs)
+
+
 class RecordingMngrMessenger(MngrMessenger):
     """A `MngrMessenger` that records sends and key-chord presses and never contacts mngr.
 
@@ -513,6 +545,7 @@ def build_test_state(
     is_secondary: bool = False,
     shell: ShellLayoutInterface | None = None,
     secret_requests: SecretRequestStore | None = None,
+    chat_namer: ChatNamer | None = None,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -549,6 +582,7 @@ def build_test_state(
         # under this package's own data/. A test that reads the files back injects a store
         # rooted in its tmp_path.
         secret_requests=secret_requests if secret_requests is not None else build_temporary_secret_request_store(),
+        chat_namer=chat_namer,
     )
     # Match production: eviction drops a destroyed/stopped agent's watcher.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)

@@ -23,8 +23,10 @@ from flask.testing import FlaskClient
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 
+from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account
+from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
@@ -33,6 +35,7 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
@@ -47,6 +50,7 @@ from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
+from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -69,6 +73,7 @@ from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
+from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import VanishedAgentMngrMessenger
 from imbue.chat.testing import build_test_state
@@ -553,6 +558,109 @@ def test_send_message_success() -> None:
     assert response.get_json()["status"] == "ok"
     # The endpoint routes through AgentManager.send_message_to_agent, which addresses
     # the agent by id (the live cache supplies the known location as the 3rd arg).
+    assert messenger.sent == [(agent_id, "hello")]
+
+
+def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    agent_id = "agent-00000000000000000000000000000731"
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id, name="Chat-4", state="RUNNING", labels={"display_name": "Chat 4"}, work_dir=None
+        )
+    completion = ScriptedOneShotCompletion(["Rome trip: plan five days in May"])
+    renames: list[tuple[ChatId, str]] = []
+    namer = ChatNamer(
+        chat_files_root=tmp_path / "chats",
+        get_active_agent_info=manager.get_active_agent_info,
+        resolve_chat_account_binding=manager.resolve_chat_account_binding,
+        show_automatic_title=manager.show_automatic_title,
+        clear_automatic_title=manager.clear_automatic_title,
+        has_placeholder_name=manager.has_placeholder_name,
+        rename_placeholder_named_chat=lambda chat_id, name: (renames.append((chat_id, name)), True)[1],
+        build_one_shot_completion=lambda _harness: completion,
+        executor=InlineExecutor(),
+    )
+    client = create_application(build_test_state(agent_manager=manager, chat_namer=namer)).test_client()
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "Help me plan 5 days in Rome"})
+
+    assert response.status_code == 200
+    assert completion.prompts == ["Help me plan 5 days in Rome"]
+    assert renames == [(ChatId(agent_id), "Rome trip: plan five days in May")]
+
+
+def _client_with_account_labeled_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_id: str, account_id: str
+) -> tuple[FlaskClient, RecordingMngrMessenger]:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id, name="Chat-7", state="RUNNING", labels={"account": account_id}, work_dir=None
+        )
+    return create_application(build_test_state(agent_manager=manager)).test_client(), messenger
+
+
+def test_a_chat_whose_account_was_signed_out_takes_no_more_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000732"
+    # The agent's label names an account the index no longer has: it was signed out.
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8812")
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "are you still there?"})
+
+    assert response.status_code == 409
+    assert response.get_json()["kind"] == "account_signed_out"
+    assert messenger.sent == []
+
+
+def test_a_secret_request_notice_still_reaches_a_chat_whose_account_was_signed_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000734"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8813")
+    bridge = state_of(client.application).secret_request_bridge
+    assert bridge is not None
+
+    with client.application.app_context():
+        bridge.deliver_notice(agent_id, "The secret you asked for is ready.")
+
+    assert messenger.sent == [(agent_id, "The secret you asked for is ready.")]
+
+
+def test_an_unreadable_account_index_does_not_refuse_a_chats_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account_id, _account_path = mint_account_dir()
+    commit_account(account_id, "openai", "OpenAI")
+    # An index written by a newer build is refused as unreadable, which says nothing about this account.
+    index_path().write_text(json.dumps({"version": INDEX_VERSION + 1, "accounts": []}))
+    agent_id = "agent-00000000000000000000000000000735"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, account_id)
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "hello")]
+
+
+def test_a_chat_on_a_signed_in_account_still_takes_messages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    account_id, _account_path = mint_account_dir()
+    commit_account(account_id, "openai", "OpenAI")
+    agent_id = "agent-00000000000000000000000000000733"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, account_id)
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
+
+    assert response.status_code == 200
     assert messenger.sent == [(agent_id, "hello")]
 
 
