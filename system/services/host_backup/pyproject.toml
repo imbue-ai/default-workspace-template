@@ -13,6 +13,7 @@ dependencies = [
 [project.scripts]
 host-backup = "host_backup.runner:main"
 host-backup-now = "host_backup.cli:backup_now_main"
+host-backup-heavy-dirs = "host_backup.heavy_dirs:heavy_dirs_main"
 
 [build-system]
 requires = ["hatchling"]

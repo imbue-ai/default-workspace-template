@@ -109,15 +109,15 @@ If the user asks you to read or act on anything outside this workspace on their 
 
 ## Telling the user you finished
 
-**If you are a chat agent, end every turn in which you did work by sending a notification.** The user may have walked away the moment they sent the message; the notification (bell, badge, toast card, and a system banner when they are looking elsewhere) is what brings them back, and clicking it lands them in this chat.
+**If you are a chat agent, send a notification when a turn ends with something the user will want to know about or act on:** a finished deliverable, a result they were waiting for, or a question only they can answer. The user may have walked away the moment they sent the message; the notification (bell, badge, toast card, and a system banner when they are looking elsewhere) is what brings them back, and clicking it lands them in this chat.
 
 ```
-python3 .agents/skills/notify-user/scripts/notify_user.py "<one plain sentence saying what is now done>"
+python3 .agents/skills/notify-user/scripts/notify_user.py "<one plain sentence saying what is ready or what you need from them>"
 ```
 
 Read the exit code -- when it is non-zero the notification did not go out, and your reply should say so. The `notify-user` skill has the full guidance on what to write.
 
-Skip it for the turns that carry nothing: chitchat, a single-line acknowledgement, a trivial answer, a turn that only asks the user a question, or a reply that is one quick file read. Roughly the same line this file draws for step records. Never more than one per turn.
+The amount of work or time is not the test; what matters is whether the user cares about the outcome. Skip it when the turn produced nothing of that kind: chitchat, an acknowledgement, progress with no result yet, or the answer to a trivial question. A question you cannot go on without is a reason to send one. Never more than one per turn.
 
 Nothing reminds you of this at the end of a turn; decide it yourself as you finish, and do not narrate the decision -- the user never asked, so a sentence about it is a non-sequitur, the same way naming your `tk` calls is.
 
@@ -225,6 +225,8 @@ If you get a failure when trying to commit the first time, just try committing a
 If something unexpected happens -- errors, confusing state, things not working as documented -- use the `dealing-with-the-unexpected` skill for guidance.
 
 A background OOM-prevention daemon (earlyoom) kills ("sheds") memory-heavy processes under sustained memory pressure -- most-expendable first (an agent's build/test/browser subprocesses before the agent itself). If a command of yours dies with exit 137 (or SIGKILL/SIGTERM) and you did not kill it, confirm by checking the shed ledger at `/home/user/workspace/data/.state/oom_priority/events/shed.jsonl` for a record naming it (matched by pid or process name). If it was shed, do NOT blindly re-run a memory-heavy command -- it will likely be shed again; find a lower-memory approach (smaller batches, streaming, releasing data you no longer need) and only retry if you can. That advice is for your own ad-hoc commands. A shed command of a harden worker's test gate follows the gate's own shed handling (`.agents/shared/worker/references/harden-creation.md`, "The test gate"), and memory pressure is never a reason to skip one. When an agent reports a shed to you, free memory with the user per `.agents/shared/references/freeing-memory.md`.
+
+A backup that takes minutes (a slow `host-backup-now`, or a `BACKUP_SLOW` event in the backup events log) is caused by how many files the home tree holds, not how big they are. Follow "Slow backups" in `system/services/host_backup/README.md`, which uses `uv run host-backup-heavy-dirs` to find the directories responsible.
 
 `/tmp` is a small RAM disk: a tmpfs capped at about 1 GiB, whose contents count against the container's memory limit until deleted. A write past the cap fails with "No space left on device" (ENOSPC), and until you delete what filled it, everything else that writes to `/tmp` fails the same way. Keep it to small files. Anything that can run to gigabytes -- a copy of an app's data, a clone, a download, a backup export or restore -- goes on disk: a throwaway file under `/var/tmp` (outside the backup), and a copy of an app's data through `serve_isolated_instance.py --copy` (see the `update-app` skill), which checks that it fits.
 

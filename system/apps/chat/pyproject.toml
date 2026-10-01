@@ -17,6 +17,7 @@ dependencies = [
     "imbue-mngr-pi-coding",
     "imbue-mngr-opencode",
     "imbue-mngr-antigravity",
+    "imbue-mngr-autocompact",
     "oom-priority",
     "pexpect>=4.9",
     "pydantic-settings>=2.13.1",

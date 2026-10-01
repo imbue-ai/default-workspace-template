@@ -1,0 +1,1 @@
+- `AGENTS.md` ("Telling the user you finished") now tells chat agents to notify when a turn ends with something the user will want to know about or act on -- a finished deliverable, a result they were waiting for, or a question only they can answer -- instead of after every turn that did work; a turn that only asks the user a question is no longer skipped.

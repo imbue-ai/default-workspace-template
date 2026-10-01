@@ -46,7 +46,6 @@ export interface WindowAttrs {
   readonly state: WindowState;
   readonly stackIndex: number;
   readonly isFocused: boolean;
-  readonly isCompact: boolean;
   readonly isTouch: boolean;
   readonly isMenuOpen: boolean;
   /** Spread onto the maximize control: resting on it opens the window's size menu. */
@@ -66,7 +65,7 @@ export interface WindowAttrs {
 
 /** What a window shows in place of its page while the app behind it is stopped and the workspace cannot bring
  *  it back on a request. */
-function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
+export function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
   const label = app?.display_name ?? "This app";
   const detail = app !== undefined && app.program !== "" ? "stopped" : "not running (managed outside the workspace)";
   return m(
@@ -83,8 +82,8 @@ export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const { window, app, title, rect, state, stackIndex, isFocused, isCompact, isTouch, isStopped } = attrs;
-      const isResizable = !isCompact && !isTouch;
+      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, isStopped } = attrs;
+      const isResizable = !isTouch;
       return m(
         "div",
         {
@@ -119,7 +118,6 @@ export function Window(): m.Component<WindowAttrs> {
                 app,
                 state,
                 isFocused,
-                isCompact,
                 isMenuOpen: attrs.isMenuOpen,
                 sizeMenuTrigger: attrs.sizeMenuTrigger,
                 onControl: attrs.onControl,

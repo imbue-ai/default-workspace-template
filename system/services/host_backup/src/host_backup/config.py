@@ -37,6 +37,12 @@ from host_backup.capabilities import (
 BACKUP_TOML_PATH: Final[Path] = Path("data/system/backup.toml")
 RESTIC_ENV_PATH: Final[Path] = Path("data/.secrets/restic.env")
 PRUNE_TIMESTAMP_PATH: Final[Path] = Path("data/.state/last-restic-prune")
+SLOW_BACKUP_NOTICE_TIMESTAMP_PATH: Final[Path] = Path(
+    "data/.state/last-slow-backup-notice"
+)
+# Resolved from this file because the service's directory depends on the
+# workspace's layout (an injected update lands wherever the old one lived).
+HOST_BACKUP_README_PATH: Final[Path] = Path(__file__).resolve().parents[2] / "README.md"
 
 # Top-level backup.toml keys that are known-stale rather than unknown: old
 # bootstraps rewrite a `[snapshot]` section into backup.toml on every boot
@@ -143,6 +149,24 @@ class BackupConfig(FrozenModel):
         ),
         description="Glob patterns passed to `restic backup --exclude=...`",
     )
+    extra_excludes: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Glob patterns excluded on top of `excludes`, so a pattern can be added "
+            "without restating the defaults (setting `excludes` replaces them)"
+        ),
+    )
+    slow_backup_threshold_seconds: float = Field(
+        default=300.0,
+        description=(
+            "A `restic backup` that takes longer than this records a `backup_slow` "
+            "event, at most once a day"
+        ),
+    )
+
+    @property
+    def effective_excludes(self) -> tuple[str, ...]:
+        return self.excludes + self.extra_excludes
 
 
 def load_backup_config(path: Path = BACKUP_TOML_PATH) -> BackupConfig:

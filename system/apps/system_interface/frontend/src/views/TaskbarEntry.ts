@@ -93,7 +93,9 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
               // differently on it.
               "justify-center shadow-(--desk-taskbar-entry-shadow) " +
               (isAvatar ? "rounded-2xl [&>img]:size-full " : "rounded-[32%] [&>svg]:size-full ") +
-              (isDimmed ? "opacity-70 group-hover:opacity-100" : ""),
+              // Not the avatar, though: the fade reads as "not on screen" on an app's icon and as
+              // unwell on a character.
+              (isDimmed && !isAvatar ? "opacity-70 group-hover:opacity-100" : ""),
           },
           image,
         ),

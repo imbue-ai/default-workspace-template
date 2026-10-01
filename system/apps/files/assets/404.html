@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width" />
+  <title>Not found</title>
+  <style>
+    html {
+      font-family: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      color: #24292e;
+    }
+
+    body {
+      margin: 0;
+      padding: 1.5em 1em;
+    }
+
+    h1 {
+      font-size: 1.25em;
+      margin: 0 0 0.5em;
+    }
+
+    .asked-path {
+      word-break: break-all;
+    }
+
+    a {
+      color: #0366d6;
+      text-decoration: none;
+      word-break: break-all;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Not found</h1>
+  <p>There is nothing at <code class="asked-path"></code>.</p>
+  <p class="nearest hidden">The nearest folder above it is <a class="nearest-folder"></a>.</p>
+  <script>
+    // The File Viewer's page for a path that does not exist. dufs serves this file as it is,
+    // with status 404, for every such path, so everything here is read from the address.
+    (async () => {
+      const segments = location.pathname.split("/").filter((segment) => segment !== "");
+      const decode = (text) => {
+        try {
+          return decodeURIComponent(text);
+        } catch {
+          return text;
+        }
+      };
+      document.querySelector(".asked-path").textContent = decode(location.pathname);
+
+      // The same beacon the listing and file pages post, so the window keeps this address and
+      // is titled after the name that was asked for.
+      if (window.parent !== window) {
+        const title = segments.length === 0 ? "Files" : decode(segments[segments.length - 1]);
+        window.parent.postMessage(
+          { type: "shell:location", path: location.pathname + location.search, title },
+          "*",
+        );
+      }
+
+      // Walk up to the first folder that exists. A folder's listing is asked for with a trailing
+      // slash, since dufs answers a missing one that way with a listing whose ``dir_exists`` is
+      // false rather than with this page.
+      for (let depth = segments.length - 1; depth >= 0; depth--) {
+        const folder = depth === 0 ? "/" : `/${segments.slice(0, depth).join("/")}/`;
+        let listing = null;
+        try {
+          const response = await fetch(`${folder}?json`);
+          listing = response.ok ? await response.json() : null;
+        } catch {
+          listing = null;
+        }
+        if (listing !== null && listing.kind === "Index" && listing.dir_exists === true) {
+          const $link = document.querySelector(".nearest-folder");
+          $link.href = folder;
+          $link.textContent = decode(folder);
+          document.querySelector(".nearest").classList.remove("hidden");
+          return;
+        }
+      }
+    })();
+  </script>
+</body>
+
+</html>

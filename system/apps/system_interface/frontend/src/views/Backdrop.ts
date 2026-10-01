@@ -12,7 +12,7 @@ import { cellRect } from "../geometry/grid";
 import type { PixelPoint } from "../geometry/frames";
 import type { Desktop, DesktopShortcut, Placement } from "../model/records";
 import { shortcutKey } from "../model/records";
-import { appByName, effectiveWindowTitle, isAppShownStopped, renderedState } from "../reducers/desktopState";
+import { appByName, effectiveWindowTitle, isAppShownStopped } from "../reducers/desktopState";
 import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
 import { DetachedWindowGhost } from "./DetachedWindowGhost";
@@ -151,10 +151,9 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   app,
                   title: effectiveWindowTitle(state, window, app),
                   rect: store.windowRect(window.id),
-                  state: renderedState(placement, state.modes),
+                  state: placement.state,
                   stackIndex: index,
                   isFocused: window.id === focusedWindowId,
-                  isCompact: state.modes.isCompact,
                   isTouch: state.modes.isTouch,
                   isMenuOpen: attrs.openMenuWindowId === window.id,
                   sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),

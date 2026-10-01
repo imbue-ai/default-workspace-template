@@ -42,10 +42,13 @@ active belong to one client.
 ## Which client an op targets
 
 Every op targets exactly one client. With no `--client`, that is the client
-that most recently messaged you, else the one connected client. When neither
-settles it (several clients, an agent nobody messaged), the op is refused with
-the connected clients listed; pass `--client <id>` (from `context`). Ops are
-never applied to every client at once.
+that most recently messaged you while it is connected, else the one connected
+client if it is the same user's (a user who messaged you from a phone's browser
+tab and carried on in its home-screen app is on that client now; a visitor's
+screen is not the owner's), else the client that messaged you though it has
+gone. When none of those settles it (several clients, an agent nobody messaged),
+the op is refused with the connected clients listed; pass `--client <id>` (from
+`context`). Ops are never applied to every client at once.
 
 - **An op with no `--desktop` edits the client's active desktop.** That is what
   you want nearly always; just run the op.
@@ -164,10 +167,14 @@ uv run workspace-layout place "$(uv run workspace-layout open terminal)" --zone 
 ## Shortcuts and the wallpaper
 
 Each desktop's backdrop carries **shortcuts**: one per (app, launch path), in
-grid cells. A new desktop is seeded with every app's `default_shortcut` from
-its manifest, and an app that registers after a desktop was made (one you
-just built included) has its `default_shortcut` added to every desktop once:
-there is no need to add it by hand, and one taken off after that stays off.
+grid cells. A new desktop is seeded with a shortcut of every app: its
+manifest's `default_shortcut` (which may be a launch path that takes typed
+text), or, when it declares none and a program runs it, its first launch path
+taking no text (its first of all when every one takes text), focusing.
+An app that registers after a desktop was made (one you just built included)
+has its shortcut added to every desktop once: there is no need to add it by
+hand, and one taken off after that stays off. The user can also add or remove
+an app's own shortcut by right-clicking it in the launcher or the taskbar.
 
 ```bash
 # The target client's active desktop's shortcuts: app, launch path, mode, cell.
@@ -204,8 +211,11 @@ and never closed; `scope`: `linked`, or `independent` for a window whose path
 is each client's own, in which case the listed `path` is the shared home path
 and `client_paths` says where each client's page is, by client id) and shortcuts,
 and every client with its `active_desktop`,
-`is_connected`, and `shown` (the windows of its active desktop it has not
-minimized). `list` prints every app with its launch paths, whether it is
+`is_connected`, `shown` (the windows of its active desktop it has not
+minimized), and `shown_history` (what its phone layout showed, most recent
+last: window ids, and `home` for the home grid; a phone places the windows it
+shows minimized, so its `shown` is usually empty and the last entry here is
+what is on its screen). `list` prints every app with its launch paths, whether it is
 running, and where its windows are, plus the same desktops and clients. Both
 print JSON.
 

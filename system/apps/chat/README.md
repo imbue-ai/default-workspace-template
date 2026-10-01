@@ -11,7 +11,7 @@ contract; everything about chats lives in this app's own pages and routes.
 
 The `chat` program (declared in `system/supervisord.conf.d/chat.conf`) runs
 `chat-app`, the console script of this package, from its own uv tool environment
-(installed by `system/scripts/build_workspace.sh` with the mngr harness plugins
+(installed by `system/scripts/build_workspace.sh` with the mngr plugins
 `system/config/mngr_plugins.toml` assigns to `chat`). At startup it registers
 its manifest and port 8010 through `system/scripts/forward_port.py`, follows
 the agent lifecycle event file the workspace's `agent-observer` program (`mngr
@@ -24,8 +24,16 @@ observe`, its own supervised service) writes, and serves:
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title. Loading the page sends and writes nothing. With nothing selected it
   shows the most recent chat, and with no chats one awaiting its first send
-  (`POST /api/chats/awaiting`, held in memory until that send launches it); on a
-  phone the list alone is the page until a chat is picked. An
+  (`POST /api/chats/awaiting`, held in memory until that send launches it). At
+  700px wide or less (a phone, or a narrow window) the root takes its phone
+  layout (`frontend/src/compactLayout.ts`, docs/system/blueprint/desktop-interface/plan-phone-interface.md):
+  a 44px header with a list button, the chat's title and a kebab of its verbs,
+  and the list in a drawer over the chat, each row carrying a kebab with the
+  right-click menu's verbs; with nothing selected the drawer is open over an
+  empty chat. The root tells each chat page it frames which layout it is in, and
+  a page in the phone layout opens its model menu from a settings button at the
+  composer's left, with submenus sliding over the card, effort as segments, and
+  the Source view switch as a row. An
   `intake` query parameter names a pending intake (below) the root applies once
   (`docs/system/blueprint/post-launch-paths/`): the text goes into a composer,
   unsent, a chat is picked from a picker the root opens over the list, or a chat
@@ -313,6 +321,38 @@ new chats are set; `/fast on` and `/fast off` typed in the composer choose the
 mode too. The first time auto switches a chat in a workspace, a one-time notice
 over the model bar explains it.
 
+## Chat names
+
+A new chat is minted as "Chat N". Its first message is sent, in the background
+and outside the chat, to the cheapest model the chat's account offers
+(`chat_naming.py`, through the harness's `OneShotCompletion`, from an empty
+directory with no session kept), and the answer, in the form "Short name: brief
+description", renames the chat the way the rail's rename does. Models are named
+by family rather than by id, so a change to a provider's model list moves the
+call to the new model instead of breaking it:
+
+- Claude: `claude -p` with no tools and thinking off, trying the `haiku` alias,
+  then `sonnet`, then the account's default model.
+- Codex: `codex exec`, read-only and ignoring the account's config, on the newest
+  "luna" model in the account's own model list (the sidecar a model probe keeps
+  in the account folder, probed once when there is none) at its lowest reasoning
+  effort; the account's default model when it offers no luna, or refuses it.
+
+The question goes out alongside the send, not after it: the account is known
+from the moment a create starts (`resolve_chat_account_binding`), so a chat still
+coming up is asked about too. The answer is shown in the chat list as soon as it
+arrives (`show_automatic_title`), ahead of the slower `mngr rename` that makes it
+the chat's own name; a rename that does not land takes the shown name back. The
+name is set once and does not follow the chat as its topic drifts. An opening
+with no clear subject ("hi") leaves "Chat N" and the next message is tried, up to
+three messages. Only a chat still wearing a name nobody chose is renamed: exactly
+"Chat N", or a seeded chat's seed title (the Mind app's "Welcome"), named from
+the first message the user sends in it. A name the user or an agent chose is left
+alone. What has been tried is kept in `naming.json` in the chat's folder, so a
+restart neither renames a named chat nor retries past the limit. A harness with
+no `OneShotCompletion` (Pi, Antigravity, OpenCode) keeps the minted name, and a
+secondary chat names nothing.
+
 ## Provider accounts
 
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per
@@ -326,6 +366,15 @@ one (the account of the latest sign-in, chat create, or switch); pressing
 another account in that menu switches the chat to it (through the dialog, or at
 once for a chat with nothing to hand over -- see the switch above).
 `system/scripts/migrate_claude_auth.py` imports this package from the root venv.
+
+Removing (signing out of) an account deletes its credential files and its index
+row; its chats keep running, since their harness already holds the credential,
+but take no more of the user's messages. The message route and the intake answer
+409 with `kind: account_signed_out` for a chat whose `account` label names an
+account the index no longer has (a send held for a chat already switching is
+still held), and the composer shows "Choose a provider" in place of the input
+until a switch to another account is armed. A notice the chat app delivers for
+the agent's own secret request still goes through.
 
 The same default reaches every `mngr create` in the workspace that names no
 harness and no account -- workers, automations, the caretaker, and the bare

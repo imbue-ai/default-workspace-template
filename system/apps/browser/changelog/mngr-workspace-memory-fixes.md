@@ -1,0 +1,1 @@
+The browser service now reaps each browser's Xvfb the moment it exits, as it already did for the PulseAudio daemon. It waited on an Xvfb only when the browser closed, so an Xvfb that earlyoom shed under memory pressure stayed a zombie. earlyoom releases before v1.9.0-imbue.3 kept picking that zombie, which freed nothing. One production workspace was found in that loop.

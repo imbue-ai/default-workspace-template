@@ -19,6 +19,8 @@ export interface ChatPageEmbedApi {
   hidden(): void;
   /** Put ``text`` in this page's composer above whatever is there, unsent (the root's ``draft`` param). */
   prependDraft(text: string): void;
+  /** Whether the root draws its phone layout, which the page's composer follows (``compactLayout.ts``). */
+  setCompact(isCompact: boolean): void;
 }
 
 declare global {

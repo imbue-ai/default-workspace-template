@@ -1,5 +1,6 @@
 import argparse
 import atexit
+import os
 import signal
 from collections.abc import Sequence
 from pathlib import Path
@@ -24,6 +25,7 @@ from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.state_files import DEFAULT_STATE_DIRECTORY
+from imbue.system_interface.workspace_name import workspace_name_source
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -92,6 +94,7 @@ def build_production_state(
         presence=presence,
         presence_sweep=build_presence_sweep(presence, profiles, broadcaster),
         profiles=profiles,
+        workspace_name=workspace_name_source(config.system_interface_workspace_name, os.environ),
         is_preview=is_preview,
     )
 
