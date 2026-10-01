@@ -2,4 +2,6 @@
 
 When the in-flight tick is still running at the timeout, `host-backup-now` exits 2 without triggering a new tick, instead of starting one nobody was waiting for.
 
-New `host-backup-now --wait-only` waits for the in-flight tick and triggers nothing, printing `{"inflight_tick_id": ..., "finished": ...}` and exiting 0 once no tick is in flight or 2 when it was still running at the timeout. The update apply runs it before restarting the services.
+New `host-backup-now --wait-only` waits for the in-flight tick and triggers nothing, printing `{"inflight_tick_id": ..., "finished": ...}` and exiting 0 once no tick is in flight or 2 when it was still running at the timeout. With `--timeout 0` it only reports; the update apply runs it that way before restarting the services, to note a tick the restart interrupts.
+
+The service now records a tick it was killed in as `TICK_ABANDONED` when it starts again, so the events log no longer holds a tick that never ends. The wait for a triggered tick skips that record and reports the restarted service's first tick, which backs up again, instead of waiting out its timeout.

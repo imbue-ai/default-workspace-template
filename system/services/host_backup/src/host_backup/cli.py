@@ -34,18 +34,13 @@ from host_backup.config import BACKUP_TOML_PATH, resolve_service_events_dir
 from host_backup.events import (
     BACKUP_EVENT_SOURCE,
     EVENTS_FILENAME,
-    EVENTS_LOG_ROTATION_BYTES,
     TICK_TERMINAL_EVENT_TYPES,
     BackupEventType,
+    find_inflight_tick_id,
 )
 
 DEFAULT_TIMEOUT_SECONDS = 1800.0  # 30 minutes
 _POLL_INTERVAL_SECONDS = 0.5
-
-# How much of the end of the events log the in-flight scan may read. Comfortably
-# more than the events of one tick, and small enough that this command cannot be
-# the reason the workspace runs out of memory.
-_TAIL_READ_MAX_BYTES = EVENTS_LOG_ROTATION_BYTES
 
 # Exit codes. "Backups are not configured" is a distinct outcome from "the
 # backup attempt failed": callers that take a backup as a precondition (e.g. the
@@ -85,7 +80,7 @@ def backup_now_main(timeout_seconds: float, wait_only: bool) -> None:
     # Opened before the scan, so a tick that ends between the scan and the first poll
     # is still seen ending.
     with closing(_EventsLogFollower(events_path)) as follower:
-        inflight_tick_id = _scan_for_inflight_tick_id(events_path, max_lines=200)
+        inflight_tick_id = find_inflight_tick_id(events_path)
         is_idle = inflight_tick_id is None or _wait_for_tick_to_end(
             follower, inflight_tick_id, deadline
         )
@@ -234,75 +229,14 @@ def _wait_for_next_completion(
     deadline passes."""
     while time.monotonic() < deadline:
         for event in follower.read_new_events():
+            # An abandoned tick is one the service restarted out of; the backup it was
+            # running starts over as the restarted service's first tick.
+            if event.get("type") == BackupEventType.TICK_ABANDONED.value:
+                continue
             if event.get("type") in TICK_TERMINAL_EVENT_TYPES:
                 return event
         time.sleep(_POLL_INTERVAL_SECONDS)
     return None
-
-
-def _read_tail_lines(events_path: Path, *, max_lines: int, max_bytes: int) -> list[str]:
-    """The last `max_lines` lines of `events_path`, reading at most `max_bytes` from its end.
-
-    Reads `max_bytes` at most, however large the file is. A log written before the
-    runner rotated it and capped each event's fields runs to gigabytes on an old
-    workspace, one line to hundreds of kilobytes -- reading it whole is what got this
-    command killed by the OOM watchdog before it did anything at all.
-
-    The byte ceiling binds first on such a workspace, yielding fewer than `max_lines`
-    events. That is the right trade for the one question asked of this: only a tick
-    whose BACKUP_STARTED has no completion after it matters, and the events a tick
-    emits before it completes are the small ones (the large ones all report a finished
-    restic command), so an in-flight tick is always inside the window.
-    """
-    try:
-        with events_path.open("rb") as fh:
-            size = fh.seek(0, os.SEEK_END)
-            fh.seek(max(0, size - max_bytes))
-            blob = fh.read()
-    except OSError:
-        return []
-    lines = blob.decode(errors="replace").splitlines()
-    # A window that started mid-file almost certainly cut its first line in half.
-    if size > max_bytes and lines:
-        lines = lines[1:]
-    return lines[-max_lines:]
-
-
-def _scan_for_inflight_tick_id(
-    events_path: Path, *, max_lines: int, max_bytes: int = _TAIL_READ_MAX_BYTES
-) -> str | None:
-    """Return the tick_id of the tick in flight, judged from the last `max_lines` events
-    that fit in the final `max_bytes` of the log, or None when none is.
-
-    Only the newest tick to start can be in flight: the runner runs one tick at a time,
-    so an earlier tick with no terminal event was killed mid-run (an OOM shed, a
-    services restart) and will never emit one.
-    """
-    if not events_path.exists():
-        return None
-    lines = _read_tail_lines(events_path, max_lines=max_lines, max_bytes=max_bytes)
-    newest_started: str | None = None
-    finished: set[str] = set()
-    for raw in lines:
-        try:
-            event = json.loads(raw)
-        except ValueError:
-            continue
-        if not isinstance(event, dict):
-            continue
-        if event.get("source") != BACKUP_EVENT_SOURCE:
-            continue
-        tick_id = event.get("tick_id")
-        if not isinstance(tick_id, str):
-            continue
-        event_type = event.get("type")
-        if event_type == BackupEventType.BACKUP_STARTED.value:
-            newest_started = tick_id
-        elif event_type in TICK_TERMINAL_EVENT_TYPES:
-            finished.add(tick_id)
-    if newest_started is None or newest_started in finished:
-        return None
-    return newest_started
 
 
 def _parse_event_lines(raw_lines: Sequence[bytes]) -> list[dict[str, object]]:

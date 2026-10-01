@@ -10,15 +10,12 @@ import pytest
 from click.testing import CliRunner
 
 from host_backup.cli import (
-    _TAIL_READ_MAX_BYTES,
     EXIT_BACKUP_FAILED,
     EXIT_BACKUP_SUCCEEDED,
     EXIT_BACKUPS_NOT_CONFIGURED,
     EXIT_NO_COMPLETION_OBSERVED,
     _EventsLogFollower,
     _exit_code_for_completion,
-    _read_tail_lines,
-    _scan_for_inflight_tick_id,
     _wait_for_next_completion,
     _wait_for_tick_to_end,
     backup_now_main,
@@ -169,40 +166,6 @@ def test_wait_follows_the_log_across_a_rotation(
     )
 
 
-def test_inflight_scan_treats_every_tick_ending_as_finished(tmp_path: Path) -> None:
-    """A tick that ended without a restic event is not in flight, so nothing waits on it."""
-    _write_tick(
-        tmp_path,
-        BackupEventType.BACKUP_STARTED,
-        BackupEventType.SNAPSHOT_FAILED,
-        tick_id="tick-snapshot",
-    )
-    _write_tick(
-        tmp_path,
-        BackupEventType.BACKUP_STARTED,
-        BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS,
-        tick_id="tick-skip",
-    )
-    _write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-running")
-    pending = _scan_for_inflight_tick_id(tmp_path / "events.jsonl", max_lines=200)
-    assert pending == "tick-running"
-
-
-def test_a_tick_that_never_finished_is_not_in_flight_once_a_later_tick_started(
-    tmp_path: Path,
-) -> None:
-    """A tick killed mid-restic (an OOM shed, a services restart) never emits a terminal
-    event. The runner runs one tick at a time, so a later tick starting means it is dead."""
-    _write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-killed")
-    _write_tick(
-        tmp_path,
-        BackupEventType.BACKUP_STARTED,
-        BackupEventType.RESTIC_BACKUP_SUCCEEDED,
-        tick_id="tick-after-restart",
-    )
-    assert _scan_for_inflight_tick_id(tmp_path / "events.jsonl", max_lines=200) is None
-
-
 @pytest.fixture
 def backup_events_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """The events dir `host-backup-now` resolves, with backup.toml's relative path under
@@ -243,89 +206,6 @@ def test_backup_now_triggers_past_a_tick_that_never_finished(
     # No runner is reading the bumped config here, so the triggered tick never ends.
     assert result.exit_code == EXIT_NO_COMPLETION_OBSERVED
     assert (tmp_path / BACKUP_TOML_PATH).exists()
-
-
-def test_inflight_scan_ignores_foreign_event_sources(tmp_path: Path) -> None:
-    """Only `backup`-sourced events are considered, so a shared log cannot wedge the wait."""
-    events_path = tmp_path / "events.jsonl"
-    events_path.write_text(
-        json.dumps(
-            {
-                "type": BackupEventType.BACKUP_STARTED.value,
-                "source": "something-else",
-                "tick_id": "tick-foreign",
-            }
-        )
-        + "\n"
-    )
-    assert _scan_for_inflight_tick_id(events_path, max_lines=200) is None
-
-
-def test_the_inflight_scan_never_reads_the_whole_events_log(tmp_path: Path) -> None:
-    """The reported OOM kill: every event embeds the full stdout of the restic command
-    it reports, so the log reaches gigabytes on an old workspace and reading it whole
-    got `host-backup-now` killed by the watchdog before it did anything at all."""
-    events_path = tmp_path / "events.jsonl"
-    padding = "x" * 200_000
-    with events_path.open("w") as fh:
-        fh.write(
-            json.dumps(
-                {
-                    "source": "backup",
-                    "type": BackupEventType.BACKUP_STARTED.value,
-                    "tick_id": "older-than-the-window",
-                }
-            )
-            + "\n"
-        )
-        for index in range(50):
-            fh.write(
-                json.dumps(
-                    {
-                        "source": "backup",
-                        "type": BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
-                        "tick_id": f"old-{index}",
-                        "stdout": padding,
-                    }
-                )
-                + "\n"
-            )
-    assert events_path.stat().st_size > _TAIL_READ_MAX_BYTES
-
-    # The log is 51 lines, so `max_lines` excludes nothing: the only thing that can
-    # keep the tick at the top of the file out of this answer is a window that never
-    # reached it. A scan that read the file whole reports it as in flight.
-    assert _scan_for_inflight_tick_id(events_path, max_lines=200) is None
-
-    with events_path.open("a") as fh:
-        fh.write(
-            json.dumps(
-                {
-                    "source": "backup",
-                    "type": BackupEventType.BACKUP_STARTED.value,
-                    "tick_id": "in-flight",
-                }
-            )
-            + "\n"
-        )
-    assert _scan_for_inflight_tick_id(events_path, max_lines=200) == "in-flight"
-
-
-def test_the_tail_read_drops_the_line_its_window_cut_in_half(tmp_path: Path) -> None:
-    # A window that starts mid-file lands mid-line; that fragment is not an event and
-    # must not be handed to the caller as one.
-    events_path = tmp_path / "events.jsonl"
-    events_path.write_text("first-line-is-long\nsecond\nthird\n")
-
-    assert _read_tail_lines(events_path, max_lines=10, max_bytes=14) == [
-        "second",
-        "third",
-    ]
-    assert _read_tail_lines(events_path, max_lines=10, max_bytes=10_000) == [
-        "first-line-is-long",
-        "second",
-        "third",
-    ]
 
 
 def test_the_inflight_wait_ends_on_its_own_tick_only(tmp_path: Path) -> None:
@@ -388,3 +268,27 @@ def test_wait_only_reports_the_inflight_tick_and_triggers_nothing(
     assert result.exit_code == expected_exit_code
     assert json.loads(result.stdout) == expected_report
     assert not (tmp_path / BACKUP_TOML_PATH).exists()
+
+
+def test_the_wait_for_the_triggered_tick_skips_a_restart_and_reports_the_next_tick(
+    tmp_path: Path,
+) -> None:
+    """A services restart kills the triggered tick; the restarted service records it
+    abandoned and backs up again as its first tick, which is the outcome to report."""
+    follower = _EventsLogFollower(tmp_path / "events.jsonl")
+    _write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-triggered")
+    _write_tick(tmp_path, BackupEventType.TICK_ABANDONED, tick_id="tick-triggered")
+    _write_tick(
+        tmp_path,
+        BackupEventType.BACKUP_STARTED,
+        BackupEventType.RESTIC_BACKUP_SUCCEEDED,
+        tick_id="tick-startup",
+    )
+
+    completion = _wait_for_next_completion(
+        follower, time.monotonic() + _GENEROUS_TIMEOUT_SECONDS
+    )
+
+    assert completion is not None
+    assert completion["tick_id"] == "tick-startup"
+    assert _exit_code_for_completion(completion) == EXIT_BACKUP_SUCCEEDED

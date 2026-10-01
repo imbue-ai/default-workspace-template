@@ -220,12 +220,14 @@ still running at the timeout, either.
 
 Only the newest tick to start counts as in flight: the service runs one tick at a
 time, so an earlier tick with no terminal event was killed mid-run (an OOM shed, a
-services restart) and will never finish.
+services restart) and will never finish. The service records such a tick as
+`tick_abandoned` when it starts again, and the wait for a triggered tick skips that
+record and reports the restarted service's first tick instead, which backs up again.
 
 `uv run host-backup-now --wait-only` waits for the in-flight tick and triggers
 nothing. It prints `{"inflight_tick_id": <id or null>, "finished": <bool>}` and exits
 `0` once no tick is in flight, or `2` when the tick was still running at the timeout.
-The update apply runs it before restarting the services, which would kill the tick.
+With `--timeout 0` it only reports whether a tick is in flight.
 
 The service writes its events under the *primary* agent's state dir (it
 inherits `MNGR_AGENT_STATE_DIR` from the bootstrap shell that started
@@ -252,6 +254,7 @@ Structured events at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`:
 - `forget_completed`, `prune_completed`, `prune_skipped`
 - `config_reloaded`
 - `tick_skipped_due_to_missing_secrets`, `tick_error`
+- `tick_abandoned` (at startup, for a tick the previous run was killed in)
 
 Each restic command's stdout / stderr is captured into the matching
 `*_succeeded` / `*_failed` event for forensic debugging, capped at 16 KB per
