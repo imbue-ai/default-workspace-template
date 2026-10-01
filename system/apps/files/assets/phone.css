@@ -1,7 +1,6 @@
 /* minds patch: the phone layout's styles (phone.js). The rules that touch dufs's own elements are scoped
    to the attribute phone.js sets on <html> in the phone layout, and the .phone-* rules style only what
-   phone.js adds while that layout is on, so the desktop table is untouched. Measurements follow
-   docs/system/blueprint/desktop-interface/phone-mock/mock.html. */
+   phone.js adds while that layout is on, so the desktop table is untouched. */
 
 html[data-files-phone] {
   --phone-border: #e4e3df;

@@ -1,6 +1,6 @@
 # The workspace on a phone
 
-Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compact mode), and the compact-mode rules of `../launcher-and-getting-started/plan-launcher-and-getting-started.md` and `../pinned-taskbar-entries/plan-pinned-taskbar-entries.md`; touch mode stays as those sections describe it. Contracts this plan changes are called out against `contracts.md` by section. The interactive mock the layout was iterated in lives beside this plan at `phone-mock/mock.html`; it is the reference for measurements, spacing and copy this plan does not restate, and where the two disagree, this plan wins.
+Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compact mode), and the compact-mode rules of `../launcher-and-getting-started/plan-launcher-and-getting-started.md` and `../pinned-taskbar-entries/plan-pinned-taskbar-entries.md`; touch mode stays as those sections describe it. Contracts this plan changes are called out against `contracts.md` by section.
 
 ## Overview
 
@@ -23,7 +23,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 
 ### The bar
 
-- A bottom bar of three controls: home, the pill, plus. It sits above the safe-area inset and stays visible while the soft keyboard is up. Geometry as the mock: 64px by 42px controls with a circular press highlight, a 48px pill that flexes between them, 12px above the inset.
+- A bottom bar of three controls: home, the pill, plus. It sits above the safe-area inset and stays visible while the soft keyboard is up. Geometry: 64px by 42px controls with a circular press highlight, a 48px pill that flexes between them, 12px above the inset.
 - Home is disabled on the home grid. Tapping it shows the home grid and records "home" as the phone's shown state.
 - The pill shows the shown window's app icon and title, or the avatar and "Chat" for the pinned chat window; on the home grid it shows the workspace name. It carries a count of open windows excluding the pinned chat, and shows none when that is zero. Tapping it opens the windows sheet; long-pressing it opens the shown window's menu.
 - Plus opens the start sheet.
@@ -148,10 +148,9 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 
 - `#app` height `100dvh`, `viewport-fit=cover`; the resize path sends a new size on `orientationchange`. No other change.
 
-### Docs, mock, changelogs
+### Docs and changelogs
 
 - `plan-desktop-interface.md`: section 4.12 becomes a pointer to this plan (touch mode text kept); section 4.11's placeholder corrected to "Open an app or send a message"; section 4.10 notes that compact mode is gone. `contracts.md`: sections 4.3, 5.3, 5.5, 11, 12 as above. `system/apps/system_interface/README.md`, chat, files and terminal READMEs updated.
-- The mock moves from `/tmp/simock` to `docs/system/blueprint/desktop-interface/phone-mock/` (`mock.html`, `assets/`; screenshots excluded).
 - Changelog entries for `system_interface`, `chat`, `files`, `terminal`, `browser`.
 
 ## Implementation phases
@@ -163,7 +162,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 5. **Chat app phone layout.** Header, drawer, row and header kebabs, composer settings button and menu variant, empty state; chat e2e.
 6. **File viewer rows.** The two asset files and their test.
 7. **Terminal and browser.** Key strip, tap-to-raise, refit nudge; browser sizing.
-8. **Docs and mock.** Plan and contracts amendments, READMEs, mock checked in, changelogs.
+8. **Docs.** Plan and contracts amendments, READMEs, changelogs.
 
 ## Testing strategy
 
