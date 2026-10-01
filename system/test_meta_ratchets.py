@@ -3,6 +3,7 @@ import io
 import re
 import subprocess
 import tokenize
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -282,6 +283,121 @@ def test_dockerignore_is_symlink_to_gitignore() -> None:
     target = dockerignore.readlink()
     assert str(target) == ".gitignore", (
         f"{dockerignore} symlink target is {target!r}, expected '.gitignore'"
+    )
+
+
+# --- Root-suite browser tests use module_browser ---
+#
+# pytest-playwright's fixtures share one session-scoped Playwright, whose asyncio loop
+# stays running in the xdist worker until the session ends, so every later browser
+# test on that worker fails (the root conftest's `module_browser` docstring). The chat
+# and the shell run their own pytest sessions and are out of scope, as is any test the
+# root config ignores.
+
+_PLAYWRIGHT_SESSION_FIXTURES = frozenset(
+    {
+        "page",
+        "context",
+        "browser",
+        "browser_context",
+        "new_context",
+        "browser_type",
+        "playwright",
+    }
+)
+
+
+def _root_suite_ignored_paths() -> tuple[str, ...]:
+    """The paths the root pytest config's `--ignore=` options keep out of the root run."""
+    pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
+    addopts: list[str] = pyproject["tool"]["pytest"]["ini_options"]["addopts"]
+    return tuple(
+        option.removeprefix("--ignore=")
+        for option in addopts
+        if option.startswith("--ignore=")
+    )
+
+
+def _fixture_names(tree: ast.Module) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            target = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if not ast.unparse(target).endswith("fixture"):
+                continue
+            names.add(node.name)
+            if isinstance(decorator, ast.Call):
+                for keyword in decorator.keywords:
+                    if keyword.arg == "name" and isinstance(
+                        keyword.value, ast.Constant
+                    ):
+                        names.add(str(keyword.value.value))
+    return names
+
+
+def _conftest_fixture_names(test_file: Path) -> set[str]:
+    """The fixtures every conftest.py from the test's directory up to the repo root defines."""
+    names: set[str] = set()
+    for directory in test_file.parents:
+        conftest = directory / "conftest.py"
+        if conftest.is_file():
+            names |= _fixture_names(ast.parse(conftest.read_text()))
+        if directory == _REPO_ROOT:
+            break
+    return names
+
+
+def _find_playwright_session_fixture_uses() -> list[str]:
+    candidates = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "*.py",
+        ],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    ignored = _root_suite_ignored_paths()
+    violations: list[str] = []
+    for rel in sorted(filter(None, candidates.stdout.split("\0"))):
+        path = _REPO_ROOT / rel
+        if not (path.name.startswith("test_") or path.name.endswith("_test.py")):
+            continue
+        if any(rel == prefix or rel.startswith(f"{prefix}/") for prefix in ignored):
+            continue
+        if _VENDORED_DIR in path.parents or not path.is_file():
+            continue
+        tree = ast.parse(path.read_text())
+        defined = _fixture_names(tree) | _conftest_fixture_names(path)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.name.startswith("test"):
+                continue
+            arguments = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+            for name in sorted({argument.arg for argument in arguments}):
+                if name in _PLAYWRIGHT_SESSION_FIXTURES and name not in defined:
+                    violations.append(
+                        f"{rel}:{node.lineno}: {node.name} takes `{name}`"
+                    )
+    return violations
+
+
+def test_prevent_playwright_session_fixtures_in_root_suite_tests() -> None:
+    """A root-suite test drives a browser through `module_browser`, never pytest-playwright's session-scoped fixtures."""
+    violations = _find_playwright_session_fixture_uses()
+    assert len(violations) <= snapshot(0), (
+        "Tests taking a pytest-playwright fixture (use `module_browser` from the root conftest):\n"
+        + "\n".join(f"  - {v}" for v in violations)
     )
 
 
