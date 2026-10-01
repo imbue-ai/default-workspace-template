@@ -275,8 +275,8 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
           }),
           m(Toasts, {
             toasts: store.toasts.current(),
-            bottomClass:
-              "bottom-[calc(var(--desk-phone-bar-height)+var(--desk-phone-safe-bottom)+var(--desk-toast-gap))]",
+            placementClass:
+              "absolute bottom-[calc(var(--desk-phone-bar-height)+var(--desk-phone-safe-bottom)+var(--desk-toast-gap))]",
           }),
           sheetView(store),
           menuRows === null ? null : menu.view(menuRows),

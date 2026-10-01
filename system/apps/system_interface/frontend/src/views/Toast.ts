@@ -9,13 +9,14 @@ import type { Toast } from "../model/Toasts";
 
 export interface ToastsAttrs {
   readonly toasts: readonly Toast[];
-  /** How far above the foot of the screen the stack sits: over the taskbar, or over the phone's bar. */
-  readonly bottomClass: string;
+  /** Where the stack sits: fixed over the viewport above the taskbar, or inside the phone's layout (which follows
+   *  the visual viewport, so a soft keyboard does not cover it) above its bar. */
+  readonly placementClass: string;
 }
 
 export const Toasts: m.Component<ToastsAttrs> = {
   view(vnode) {
-    const { toasts, bottomClass } = vnode.attrs;
+    const { toasts, placementClass } = vnode.attrs;
     if (toasts.length === 0) return null;
     return m(
       "div",
@@ -23,8 +24,8 @@ export const Toasts: m.Component<ToastsAttrs> = {
         role: "status",
         "aria-live": "polite",
         class:
-          `toasts pointer-events-none fixed inset-x-0 z-(--z-overlay) flex flex-col items-center gap-2 px-4 ` +
-          bottomClass,
+          `toasts pointer-events-none inset-x-0 z-(--z-overlay) flex flex-col items-center gap-2 px-4 ` +
+          placementClass,
       },
       toasts.map((toast) =>
         m(
