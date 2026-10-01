@@ -243,7 +243,8 @@ class WebSocketBroadcaster(MutableModel):
         interface reload, which are the whole effect of their ops, and the ``show``, ``open`` (unless minimized),
         and ``focus`` of a targeted op, which name the window the op put in front of the client after its edit was
         written, for the phone layout to switch to; a ``show`` also says whether the window is pulled out, since only
-        the client's page can bring a pulled-out window's own desktop window forward.
+        the client's pages (the desktop's, and that window's own solo page) can bring a pulled-out window's own
+        desktop window forward, and a ``focus`` on a window popped out travels as such a ``show``.
 
         ``requester`` is the app and marker of the chat that invoked ``workspace-layout``, spelled
         ``<app>:<marker>``. ``target_client_id`` names the client whose windows apply the op; None reaches
