@@ -18,6 +18,7 @@ import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialo
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { fetchAccountModelOptions } from "../models/AccountModelOptions";
+import { ensureChatSettings, getChatSettings } from "../models/ChatSettings";
 import { getChatById } from "../models/Chats";
 import type { ChatSnapshot, TransitionKind } from "../models/Chats";
 import { switchChat } from "../models/Handoffs";
@@ -83,6 +84,14 @@ export function beginSwitchTo(chatId: string, target: ProviderAccount): void {
   }
   if (switchKind(chat, target) === "rebind") {
     setPendingSwitch(chatId, target.id, getPendingAccountId(chatId) === target.id ? getPendingPick(chatId) : null);
+    m.redraw();
+    return;
+  }
+  // The workspace may ask for the switch to be armed without the dialog (a chat setting); the
+  // settings are loaded with the page, so the answer is at hand by the time an account is pressed.
+  void ensureChatSettings();
+  if (getChatSettings()?.is_switch_confirmed_automatically === true) {
+    setPendingSwitch(chatId, target.id, null);
     m.redraw();
     return;
   }

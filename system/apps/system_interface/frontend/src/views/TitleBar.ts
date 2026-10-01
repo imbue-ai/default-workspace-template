@@ -23,6 +23,9 @@ const TITLE_ACTION_GLYPH_SIZE = 12;
  *  at a control's size it reads as mud. 20 in a 36 bar leaves 8 above and below. */
 const APP_GLYPH_SIZE = 20;
 
+/** Whether the Refresh and window-menu actions are drawn on a focused window's bar. */
+const ARE_TITLE_ACTIONS_SHOWN = false;
+
 export type WindowControl = "minimize" | "maximize" | "restore" | "close" | "menu" | "refresh";
 
 export interface TitleBarAttrs {
@@ -128,12 +131,13 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           // and what is left then is the window's name and the controls every window owes you.
           // They come back with the click that focuses the window, and nothing to their right
           // moves, since the spacer beside them takes up the room.
-          !isFocused
+          // Hidden for the launch video: the bar shows the window's name and the controls alone.
+          !isFocused || !ARE_TITLE_ACTIONS_SHOWN
             ? null
             : control("refresh", "Refresh", icon("refresh", { size: TITLE_ACTION_GLYPH_SIZE }), false, onControl, {
                 extra: "ml-2",
               }),
-          !isFocused
+          !isFocused || !ARE_TITLE_ACTIONS_SHOWN
             ? null
             : control("menu", "Window menu", glyph("kebab", TITLE_ACTION_GLYPH_SIZE), isMenuOpen, onControl, {
                 extra: "ml-0.5",

@@ -1127,7 +1127,7 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
         expect(chat.locator(".message-input-send-button--switch")).to_have_count(0)
         chat.locator(".message-input-textbox").fill("")
 
-        _choose_pending_account(chat, "OpenAI", "OpenAI (Codex)")
+        _choose_pending_account(chat, "OpenAI", "Codex (OpenAI)")
         _switch_and_send(chat, "Carry on in Codex")
 
         # The typed message stays visible as a held bubble, the handoff node reports the switch's
@@ -1174,11 +1174,11 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         chat.locator('[data-menu-part="submenu"] button', has_text="Anthropic 2").first.click()
         # A rebind keeps the agent and its conversation, so nothing asks: the press arms the switch at
         # once. The strip's Change opens the dialog, whose picker starts from the model the agent keeps.
-        expect(chat.locator(".message-input-switch-strip")).to_contain_text("Anthropic 2 (Claude Code)")
+        expect(chat.locator(".message-input-switch-strip")).to_contain_text("Claude Code (Anthropic 2)")
         expect(chat.locator(".modal-card")).to_have_count(0)
         chat.locator(".message-input-switch-change").click()
         dialog = chat.locator(".modal-card")
-        expect(dialog).to_contain_text("Switch to Anthropic 2 (Claude Code)?")
+        expect(dialog).to_contain_text("Switch to Claude Code (Anthropic 2)?")
         model = dialog.locator("select.switch-dialog-model")
         expect(model).to_have_value("")
         expect(model.locator("option").first).to_have_text("Keep the current model")
@@ -1186,7 +1186,7 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         dialog.locator("select.switch-dialog-effort").select_option("high")
         dialog.get_by_role("button", name="Switch this chat").click()
         expect(chat.locator(".message-input-switch-strip")).to_contain_text(
-            "Your next message switches this chat to Anthropic 2 (Claude Code), Haiku 4.5 · High"
+            "Your next message switches this chat to Claude Code (Anthropic 2), Haiku 4.5 · High"
         )
 
         chat.locator(".message-input-textbox").fill("Carry on on the other account")
@@ -1276,7 +1276,7 @@ def test_a_chat_whose_turn_failed_on_its_login_hands_off_from_the_error_note(tmp
         expect(dialog).to_contain_text("Switch to Codex?")
         dialog.get_by_role("button", name="Switch this chat").click()
         expect(chat.locator(".message-input-switch-strip")).to_contain_text(
-            "Your next message switches this chat to OpenAI (Codex)"
+            "Your next message switches this chat to Codex (OpenAI)"
         )
         _switch_and_send(chat, "Carry on in Codex")
 
@@ -1300,7 +1300,7 @@ def test_a_chat_whose_turn_failed_on_its_login_rebinds_from_the_error_note(tmp_p
         _pick_from_auth_error_note(chat, server, server.account_ids[1])
 
         expect(chat.locator(".message-input-switch-strip")).to_contain_text(
-            "Your next message switches this chat to Anthropic 2 (Claude Code)"
+            "Your next message switches this chat to Claude Code (Anthropic 2)"
         )
         expect(chat.locator(".modal-card")).to_have_count(0)
         _switch_and_send(chat, "Carry on on the other account")
@@ -1319,7 +1319,7 @@ def test_a_switch_is_cancelled_while_the_summary_is_written_and_the_message_come
         _open_fixture_chat(page, server)
         chat = _chat(page)
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
-        _choose_pending_account(chat, "OpenAI", "OpenAI (Codex)")
+        _choose_pending_account(chat, "OpenAI", "Codex (OpenAI)")
         _switch_and_send(chat, "Carry on in Codex")
 
         # The recording messenger never writes the summary, so summarizing lasts the idle grace
@@ -1355,7 +1355,7 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         _open_fixture_chat(page, server)
         chat = _chat(page)
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
-        _choose_pending_account(chat, "OpenAI", "OpenAI (Codex)")
+        _choose_pending_account(chat, "OpenAI", "Codex (OpenAI)")
         # The fake mngr's create fails while this is set; the successor's create inherits it.
         monkeypatch.setenv("FAKE_MNGR_CREATE_EXIT_CODE", "3")
         _switch_and_send(chat, "Carry on in Codex")

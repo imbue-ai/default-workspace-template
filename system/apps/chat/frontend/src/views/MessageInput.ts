@@ -50,6 +50,9 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { icon, stopIcon } from "@imbue/workspace-ui/src/components/icons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 
+// Whether the switch strip offers its Change button; the demo branch leaves it out so the strip fits one line.
+const IS_SWITCH_CHANGE_BUTTON_SHOWN = false;
+
 const MAX_TEXTAREA_HEIGHT_PX = 200;
 
 /* Styling.
@@ -1080,31 +1083,38 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             m(
               "span",
               { class: "message-input-switch-strip-text" },
-              `Your next message switches this chat to ${destination}`,
+              `Next message switches this chat to ${destination}`,
             ),
+            // The demo branch keeps the strip to one line: the cancel is a glyph, and the way to change the
+            // pick is the provider menu itself.
+            IS_SWITCH_CHANGE_BUTTON_SHOWN
+              ? m(
+                  Button,
+                  {
+                    variant: "ghost",
+                    sm: true,
+                    extra: "message-input-switch-change",
+                    onclick: () => {
+                      if (chatId) openSwitchDialog(chatId, target);
+                    },
+                  },
+                  "Change",
+                )
+              : null,
             m(
               Button,
               {
                 variant: "ghost",
                 sm: true,
-                extra: "message-input-switch-change",
-                onclick: () => {
-                  if (chatId) openSwitchDialog(chatId, target);
-                },
-              },
-              "Change",
-            ),
-            m(
-              Button,
-              {
-                variant: "ghost",
-                sm: true,
+                icon: true,
                 extra: "message-input-switch-cancel",
+                ...hoverTooltipAttrs("Cancel switch", "above"),
+                "aria-label": "Cancel switch",
                 onclick: () => {
                   if (chatId) setPendingAccount(chatId, null);
                 },
               },
-              "Cancel",
+              m.trust(icon("close", { size: 14, strokeWidth: 2.5 })),
             ),
           ],
         );
@@ -1287,16 +1297,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                             {
                               variant: "secondary",
                               sm: true,
+                              icon: true,
                               extra: "message-input-cancel-switch-button shrink-0",
                               readonly: isCancelSwitchInFlight,
                               ...hoverTooltipAttrs(
-                                "Keep this chat on its current agent; your message comes back here",
+                                isCancelSwitchInFlight
+                                  ? "Cancelling the switch…"
+                                  : "Cancel switch: keep this chat on its current agent; your message comes back here",
                                 "above",
                               ),
                               "aria-label": "Cancel switch",
                               onclick: () => void handleCancelSwitch(),
                             },
-                            isCancelSwitchInFlight ? "Cancelling…" : "Cancel switch",
+                            // A glyph rather than words, so the composer's button row stays short.
+                            m.trust(icon("close", { size: 14, strokeWidth: 2.5 })),
                           )
                         : null,
                       isStopButtonVisible
@@ -1319,27 +1333,22 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                             m.trust(stopIcon(14)),
                           )
                         : null,
-                      // The send button reads "Switch and send" while a pending lane differs from the
-                      // chat's harness (spec 5.1): the next send moves the chat, so the button says so.
+                      // While a pending lane differs from the chat's harness the next send moves the chat: the
+                      // demo branch keeps the plain send glyph for it (the strip above says what the send does)
+                      // and names the switch only in the button's label and tooltip.
                       canSend && switchTarget !== null
                         ? m(
                             Button,
                             {
                               variant: "primary",
-                              sm: true,
+                              icon: true,
+                              round: true,
                               extra: "message-input-send-button message-input-send-button--switch shrink-0",
                               ...hoverTooltipAttrs(`Switch this chat to ${switchTarget.label} and send`, "above"),
                               "aria-label": "Switch and send",
                               onclick: handleSubmit,
                             },
-                            [
-                              m("span", "Switch and send"),
-                              m(
-                                "span",
-                                { class: "ml-1.5 inline-flex items-center" },
-                                m.trust(icon("send", { size: 14, strokeWidth: 2.5 })),
-                              ),
-                            ],
+                            m.trust(icon("send", { size: 16, strokeWidth: 2.5 })),
                           )
                         : canSend
                           ? m(

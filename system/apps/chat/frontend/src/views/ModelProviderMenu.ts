@@ -82,7 +82,17 @@ import {
   type MenuRow,
 } from "@imbue/workspace-ui/src/components/menu";
 import { slidersGlyph } from "../glyphs";
-import { accountRow, emptyAccountRowState } from "./accountRow";
+import { accountRow, decorativeAccountRow, emptyAccountRowState } from "./accountRow";
+
+// Rows the Provider submenu lists under the signed-in accounts for the launch video: harnesses and providers
+// the studio could run, named as the real rows are ("Codex (OpenAI)"), pressable to no effect.
+const DECORATIVE_PROVIDER_ROWS: ReadonlyArray<readonly [string, string]> = [
+  ["Muse", "Meta"],
+  ["Dot", "OpenAI"],
+  ["GLM-5.3", "Z.ai"],
+  ["qwen-3.8", "Ollama"],
+  ["Antigravity", "Google"],
+];
 import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import * as css from "./modelProviderMenuStyles";
 import { createSlidingMenuTrack } from "./slidingMenuTrack";
@@ -699,7 +709,8 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         { class: css.SUBMENU_SCROLL },
         rows.length === 0
           ? [m("div", { class: css.SUBMENU_EMPTY }, "No providers yet.")]
-          : rows.map((row) => {
+          : [
+              ...rows.map((row) => {
               const isCurrent = current !== null && row.id === current.id;
               const isPending = row.id === pendingId;
               return accountRow({
@@ -719,7 +730,11 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                 },
                 state: rowState,
               });
-            }),
+              }),
+              ...DECORATIVE_PROVIDER_ROWS.map(([harnessLabel, provider]) =>
+                decorativeAccountRow(harnessLabel, provider, css.ACCOUNT_ROW),
+              ),
+            ],
       ),
       m(
         "button",
@@ -953,8 +968,8 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
           kind: "submenu",
           key: "providers",
           label: "Provider",
-          value: pending.provider,
-          sub: `${pending.harness_label}, next message`,
+          value: pending.harness_label,
+          sub: `${pending.provider}, next message`,
           content: () => providerSubmenu(chatId, account),
         });
         rows.push({ kind: "divider" });
@@ -974,8 +989,8 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
           kind: "submenu",
           key: "providers",
           label: "Provider",
-          value: account?.provider ?? "No account",
-          sub: account?.harness_label ?? "Pick one to move this chat to it",
+          value: account?.harness_label ?? "No account",
+          sub: account?.provider ?? "Pick one to move this chat to it",
           content: () => providerSubmenu(chatId, account),
         });
         rows.push({ kind: "divider" });

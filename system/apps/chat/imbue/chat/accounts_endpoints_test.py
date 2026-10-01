@@ -102,7 +102,7 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
     assert set(row) == {"id", "lane", "harness", "provider", "harness_label", "seq", "name", "label"}
     assert row["provider"] == "Anthropic"
     assert row["harness_label"] == "Claude Code"
-    assert row["label"] == "Anthropic (Claude Code)"
+    assert row["label"] == "Claude Code (Anthropic)"
     assert payload["mru"] == account_id
     assert payload["default"] is None
 
@@ -258,7 +258,7 @@ def test_a_key_paste_mints_an_account_and_lists_it(tmp_path: Path) -> None:
 
         (row,) = client.get("/api/accounts").get_json()["accounts"]
 
-    assert row["label"] == "Opencode Go (Pi)"
+    assert row["label"] == "Pi (Opencode Go)"
     assert row["harness"] == "pi-coding"
     assert len(read_index().accounts) == 1
 

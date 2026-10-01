@@ -179,7 +179,7 @@
   /* Font stacks on Tailwind's own namespace: --font-sans re-bases the preflight
      default (so body text needs no explicit font-family) and backs font-sans;
      --font-mono re-bases the font-mono utility onto the workspace's mono stack. */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
   /* Spacing — one knob: Tailwind's stock 0.25rem `--spacing` base. The
      `p-N`/`m-N`/`gap-N`/`w-N` utilities generate from it, and hand-written CSS
