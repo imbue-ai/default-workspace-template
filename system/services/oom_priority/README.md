@@ -74,8 +74,9 @@ docker, lima), earlyoom logs that once and uses `/proc/meminfo` alone.
   backstop listener uses: each registered app's `priority` band name, by the
   supervisord program that runs it.
 - **`agent_identity`** -- classifies an agent from its label (primary, spare
-  chat agent, chat, or worker), used by the launch wrapper to pick the band. An agent whose record
-  can't be read matches none of these and is tagged least-protected (worker band).
+  chat agent, chat, or worker), used by the launch wrapper to pick the band. An
+  agent whose record can't be read matches none of these and is tagged
+  least-protected (worker band).
 - **`registry`** -- one file per agent recording its main-process pid, so a
   killed pid can be mapped back to "which agent" (earlyoom's after-kill hook is
   handed only a pid that is already gone).
