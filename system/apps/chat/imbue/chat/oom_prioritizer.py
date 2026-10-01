@@ -18,7 +18,10 @@ Signals, and where each comes from:
   stream via ``record_running_chats``. Entering a running state counts as
   engagement (it is the only evidence of a message sent outside the UI -- by
   ``mngr message`` or by another agent), and staying in one marks the chat
-  mid-turn, which suspends its staleness climb until the turn ends.
+  mid-turn, which suspends its staleness climb until the turn ends,
+- **started** -- the chat app handing a new chat a spare agent it started ahead of
+  it, via ``record_chat_started``; the chat sits at the engaged floor for
+  ``CHAT_JUST_STARTED_GRACE_SECONDS``, then is scored like any chat.
 
 Idle time is measured against the most recent of those events, wall-clock, with
 the agent's own process-start time as a floor so a freshly revived chat counts as
@@ -35,9 +38,9 @@ process exists.
 
 Re-tagging is event-driven plus a slow sweep. The events (presence reports,
 sends, and lifecycle changes) cover everything that *raises* a chat's
-protection; the sweep exists because staleness is the one signal that changes
-with no event to announce it -- a chat crosses a ramp threshold simply by sitting
-there. The messaged-revive path is race-free without the sweep: the send blocks
+protection; the sweep exists because staleness, and the end of a started chat's
+grace, change with no event to announce them -- a chat crosses a ramp threshold
+simply by sitting there. The messaged-revive path is race-free without the sweep: the send blocks
 until the revived process is ready (and the launch wrapper registers its pid
 before that), and the send route records the message only after the send
 returns, so ``reapply``'s pid lookup finds the live process.
