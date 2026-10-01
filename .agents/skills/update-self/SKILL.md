@@ -37,17 +37,26 @@ Address that path by literal each time (each bash invocation is a fresh shell).
 
 ## 1. Preconditions
 
-**Back up first.** Capture a restore point of the whole workspace; it is the
-last-resort recovery path if the apply's own rollback and `recover` both fail:
+**Back up first.** Start a restore point of the whole workspace; it is the
+last-resort recovery path if the apply's own rollback and `recover` both fail.
+It runs in the background, beside the worker:
 
 ```bash
-uv run host-backup-now
+python3 .agents/skills/update-self/scripts/run_in_background.py \
+    --description "Back up the workspace before the update" -- \
+    uv run host-backup-now --timeout 1800
 ```
 
-Exit 0 means `restic_backup_succeeded`; 3 (not configured), 1 (failed) and 2
-(outcome not observable) mean there is **no** confirmed restore point. **None
-of them blocks the pass**: note which it was, carry it into the results message
-as a caveat, and continue -- git still holds every version of the tree. Do not
+The timeout covers two restic runs back to back (a tick already in flight,
+then the one this triggers) at the 8 to 13 minutes each takes on a two-core
+workspace. Its report arrives as a message carrying `host-backup-now`'s exit
+code; note the code, and if you were waiting on the worker, end the turn again
+(its poll stays armed). **Have it before 5b's apply**: if it has not arrived
+by then, end your turn and let it wake you. Exit 0 means
+`restic_backup_succeeded`; 3 (not configured), 1 (failed) and 2 (outcome not
+observable) mean there is **no** confirmed restore point. **None of them
+blocks the pass**: carry the real outcome into the results message as a
+caveat, and continue -- git still holds every version of the tree. Do not
 stop to ask for a go-ahead.
 
 **Take the "updating workspace" lease.** One update flow at a time (worker
@@ -382,8 +391,10 @@ report, re-arm the poll.
    question about whether its impact analysis runs, whether a validation item
    runs, or whether and at what scope the review gates run. Answer it by the
    rule it names as written; where the rule is silent, the fallback is more
-   coverage, never less. Escalate only if it contains a real question of user
-   intent.
+   coverage, never less. The rule is not silent on a commit made after the
+   suites ran: the `select-tests` lines for it are its whole gate (worker
+   guide §4b), so never ask for a whole-suite rerun on top. Escalate only if
+   it contains a real question of user intent.
 3. **A customization hold** (its §4b verdict): something the user built that
    the update **cannot keep**, after the worker genuinely tried to re-fit it.
    This is the one gate that reaches the user; see below. A cosmetic shift
@@ -417,8 +428,13 @@ carry on into §5 and get their verdict there.
 
 ## 5. Terminal status
 
-- **`stuck`** or a dead-worker timeout -> surface per
-  `.agents/skills/launch-task/references/worker-failure.md`. Nothing is merged
+- **`stuck`** -> first check its reason against the worker contract: a
+  `stuck` whose stated reason is a rebuild-only or unverifiable-dependent
+  finding misapplies the rule and goes back to the worker as 5a says.
+- **A `stuck` that stands, or a dead-worker timeout** -> surface per
+  `.agents/skills/launch-task/references/worker-failure.md`, which ends by
+  stopping the worker; "Resuming after `stuck`" below revives it if the user
+  overrides. Nothing is merged
   or applied. Compose it as a plain-language lead ("I couldn't complete this
   update cleanly; your workspace is untouched") followed by a clearly-marked
   technical block with the specifics **verbatim** (target ref, failing step,
@@ -448,7 +464,16 @@ via the Step 4 cycle (say what is missing, consume the report into
 `data/.tasks/update-self/reports/consumed/`, re-arm). Do not run the apply
 over the gap. A deviation stands only when the worker is gone and the gap
 cannot be closed from here, and then the results message states it plainly as
-a caveat.
+a caveat. A `stuck` whose stated reason is a rebuild-only or
+unverifiable-dependent finding goes back the same way: that is a `done` with
+the finding reported (`references/worker-provisioning-changes.md`). Never send
+back for a whole-suite rerun after a post-suite fix commit: the `select-tests`
+lines for that commit are its gate.
+
+Do not relay a deviation the worker reports about itself (a skill it did or
+did not read, a step it took out of order) unless it changed the outcome; one
+that did is a caveat in the results message, per
+`references/results-message.md`.
 
 There is no approval gate: the audit, not the user, authorizes the apply. The
 `done` report is your raw material, not the user's message; the results
@@ -456,9 +481,11 @@ message is composed *after* the apply, per `references/results-message.md`.
 
 ### 5b. Apply the update (one atomic motion)
 
-**Rebuild-only findings do not block the apply**; they become leading caveats
-of the results message (a global-dependency bump coupled to a user-created
-dependent: name it, check it, offer rollback or a workspace recreate; a
+**Rebuild-only findings do not block the apply**, and neither does a
+user-created dependent the worker could not verify; they become leading
+caveats of the results message (a global-dependency bump coupled to a
+user-created dependent: name it, check it after the apply, offer rollback or a
+workspace recreate; a
 container build/launch parameter a running container cannot adopt: say it
 stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
@@ -484,7 +511,8 @@ instead of proceeding. Release them afterwards.
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
 
-Run the apply from the staged copy, in the **foreground**: its output (refusal
+Have Step 1's backup result before running it (Step 1 says how). Run the
+apply from the staged copy, in the **foreground**: its output (refusal
 and resume messages, any provisioner warning, the `apply phase timings:` line)
 is what you read before recording a verdict.
 
@@ -520,7 +548,9 @@ Exit codes:
   broken beforehand still exits 0 naming the breakage (report it separately);
   `applied with incomplete provisioning` means one tool-install step is still
   pending and the record at `data/.state/update-apply/provision-incomplete.json`
-  is yours to close.
+  is yours to close. An `interrupted an in-flight backup tick` line (the
+  restart stopped a backup the apply could not wait out) is a caveat for the
+  results message.
 - **`2` -- automatically rolled back.** The entire merge was reverted and the
   workspace confirmed healthy on the previous revision; the update did not
   land. Record `run-status verdict REFUSED --detail "<what failed, one plain
@@ -579,6 +609,30 @@ message with the submission offered. A flaky test of a creation the workspace
 built is not built-in: file a regular ticket for it (`tk create`).
 
 Then compose the results message per `references/results-message.md`.
+
+## Resuming after `stuck`
+
+When the user overrides a `stuck` verdict (apply it anyway, or an answer to
+what blocked the worker), resume the same pass with the same worker. Never
+finish its validation yourself: the worker runs the passes, you proxy, audit
+and apply (`.agents/shared/references/lead-proxy.md`). Each `tk` call as its
+own command, as in Step 1:
+
+1. Re-take the `updating workspace` lease exactly as Step 1 does.
+2. Record the run again, and recover the target the task file carries:
+
+   ```bash
+   python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+       run-status start
+   REF=$(sed -n 's/^target_ref: //p' data/.tasks/update-self/task.md)
+   ```
+
+3. Rebuild the history bridge with Step 3a's two commands (the forced tag
+   fetch, then `bridge-history --ref "$REF"`).
+4. Revive the worker Step 5 stopped: `mngr start update-self --restart`.
+5. Send it the user's decision with `create_worker.py reply`, as in Step 4,
+   then `run-status delegate update-self` and the `await` poll exactly as in
+   Step 3b, and end your turn.
 
 ## Migration-required updates
 

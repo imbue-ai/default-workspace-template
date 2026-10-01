@@ -42,7 +42,10 @@ is not where worker bugs get fixed.
    processes go, and the `archived_at` label the stop leaves marks it as
    stopped on purpose (so nobody restarts it as a crash). A stopped failure
    is destroyed only when a later pass supersedes it
-   (`.agents/shared/references/harden-contention.md`) or the user asks.
+   (`.agents/shared/references/harden-contention.md`) or the user asks. When
+   the user overrides the failure, a calling skill with a resume path (such as
+   update-self's "Resuming after `stuck`") revives it with `mngr start
+   <worker> --restart` and continues the same task.
 4. **Update any outstanding tickets** (e.g. `tk` lifecycle tickets) with a
    note describing the failure; do not close them -- leave them open so the
    user can resume.

@@ -115,6 +115,10 @@ auto-merge and regenerate before committing, even with no conflict reported.
 
 No conflicts at all -- after the lockfile check -- means a clean pull; commit.
 
+Resolving the merge, in app files included, is governed by this guide, not by
+`update-app` or any other skill: not following one here is not a deviation, so
+there is nothing to report about it.
+
 ## 3. Commit with the marker subject
 
 Commit with the exact subject (tools classify built-in code by the
@@ -291,8 +295,9 @@ gets validated below; an impacted skill gets validated per its own contract.
 **Provisioning files** (`system/scripts/setup_system.sh`, the installers it
 chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
 even though nothing imports them; work them per
-`references/worker-provisioning-changes.md` and report each as
-live-applicable, rebuild-only, or `stuck`.
+`references/worker-provisioning-changes.md` and report each there. `stuck` has
+one condition: leaving the running workspace on the old provisioning would
+break it.
 
 ### 4b. Validate
 
@@ -362,6 +367,21 @@ in your report.
   `.agents/shared/worker/references/harden-creation.md` ("The test gate")
   says, naming a flaky test under your report's Validation. mngr's own suite
   runs in its repo, not here.
+
+  **Attribute a failing test before you change it.** A test that failed after
+  the merge, flaky or not, runs on the pre-merge tree before any edit to it:
+  with everything committed, `git checkout --detach "$MERGE^1"`, rerun its
+  node id the way the failing line ran it but with `uv run --no-sync` (the
+  merged venv stays), then `git checkout mngr/update-self`. Report whether the
+  update caused the failure or it was already there (a test absent at
+  `$MERGE^1` arrived with the update); a fix to a workspace-built test that
+  already failed is reported as a fix to a pre-existing failure.
+
+  **A commit after the suites ran** (a test repair, a re-fit) is gated by
+  `select-tests --diff-base <the commit before the first of them>`, and every
+  line it prints, run and passing, *is* the gate for it: 4b is complete.
+  Re-running a suite it did not print -- the full root suite "to confirm" --
+  is a scope widening, so it goes through the `question` gate like any other.
 - **Isolated-service boots** for each service with a file in the merged set,
   and for each service 4a found impacted that carries local content of its
   own -- one the workspace created, or a built-in one it has modified (a
@@ -492,14 +512,18 @@ Valid `name:` values:
   - **Provisioning changes** and **global-dependency bumps** (if any) -- per
     `references/worker-provisioning-changes.md`: each classified
     live-applicable (naming the in-branch mirror edits you made) or
-    rebuild-only, with the version delta (and, for a user-created dependent,
-    what your research turned up); a genuinely breaking, unapplyable change
-    is a `stuck` report, not a `done`.
+    rebuild-only, with the version delta; a user-created dependent of a pin
+    bump is "applied live, unverified in the worktree; the lead checks it
+    after the apply", with what your research turned up. Only a change whose
+    absence would break the running workspace is a `stuck` report.
   - **Validation** -- **which branch of the 4b scope rule applied, with its
     evidence** (each item's condition and whether it held; on a clean pull
     with no footprint, that nothing ran and why), then the suites, boots and
     Playwright that did run, all passing, and any test that failed and then
-    passed when rerun alone, here or after a 4c commit, as flaky; **which
+    passed when rerun alone, here or after a 4c commit, as flaky; each
+    failing test's attribution (caused by the update, or pre-existing);
+    for commits after the suites ran, the post-suite `select-tests` lines as
+    their gate (not a rerun of a whole suite); **which
     branch of the 4c rule
     applied, with its evidence** (the clean-pull skip's three conditions, or
     the gate run's kept/reverted fix commits -- or "gate ran clean" -- and the
