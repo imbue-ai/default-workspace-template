@@ -820,12 +820,22 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         event.dataTransfer.dropEffect = "copy";
       }
 
+      // An image dragged out of Chrome arrives twice (the file and a copy of it); one of each name and size is kept.
       function handleDrop(event: DragEvent): void {
         if (!chatId || event.dataTransfer === null) {
           return;
         }
         event.preventDefault();
-        uploadFilesToComposer(chatId, event.dataTransfer.files);
+        const seen = new Set<string>();
+        const files: File[] = [];
+        for (const file of Array.from(event.dataTransfer.files)) {
+          const key = `${file.name}:${file.size}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            files.push(file);
+          }
+        }
+        uploadFilesToComposer(chatId, files);
       }
 
       function dismissAuthCommandNotice(): void {
