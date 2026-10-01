@@ -212,10 +212,10 @@ def test_browser_remap_lands_inside_the_band_and_preserves_chromes_order() -> No
 def test_renderers_land_at_the_very_top_of_the_browser_band() -> None:
     # A renderer holds most of a browser's memory and costs a single tab to shed,
     # so it must be the most expendable thing the browser runs -- not merely
-    # somewhere inside the band. Only a spare chat agent sits above it. Scaling Chrome's gradation against 0..1000
-    # rather than its real 0..300 range put renderers at 937, leaving the top of
-    # the band to processes that had only *inherited* a high value and held
-    # almost no memory.
+    # somewhere inside the band. Only a spare chat agent sits above it. Scaling
+    # Chrome's gradation against 0..1000 rather than its real 0..300 range would
+    # put renderers at 934, leaving the top of the band to processes that had
+    # only *inherited* a high value and held almost no memory.
     assert (
         bands.shared_browser_oom_score_adj(bands.CHROMIUM_SELF_ASSIGNED_MAX)
         == bands.SHARED_BROWSER
