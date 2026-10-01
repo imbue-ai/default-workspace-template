@@ -743,7 +743,7 @@ def test_by_default_every_node_has_an_agent_of_its_own() -> None:
     assert plan["settings"] == {
         "shared_worktree": False,
         "tier_agents": False,
-        "worker_pool": 0,
+        "worker_pool": {},
         "reduce_access": False,
     }
 
@@ -813,7 +813,7 @@ def test_models_are_printed_for_the_skill_to_read() -> None:
         assert plan_orchestration._run_models() == 0
 
     printed = dict(line.split() for line in out.getvalue().splitlines())
-    assert printed == {"pool": plan_orchestration.POOL_MODEL, **plan_orchestration.MODEL_BY_CAPABILITY}
+    assert printed == plan_orchestration.MODEL_BY_CAPABILITY
 
 
 def test_every_printed_capability_can_be_an_agent_name() -> None:
@@ -830,34 +830,56 @@ _POOL_PLAN = _plan_text(
 )
 
 
+_POOL = {"high": 2, "medium": 2, "low": 1}
+
+
 def test_a_pool_leaves_the_agent_to_the_orchestrator() -> None:
     """With a pool no node names an agent: which worker runs it is decided when it starts,
-    from who is free, not when the plan is written."""
-    plan = plan_orchestration.parse_plan(_POOL_PLAN, worker_pool=3)
+    from who of that capability is free, not when the plan is written."""
+    plan = plan_orchestration.parse_plan(_POOL_PLAN, worker_pool=_POOL)
     assert all(node["has_worker"] for node in plan["nodes"])
     assert [node["agent"] for node in plan["nodes"]] == [None, None, None, None]
-    assert plan["settings"]["worker_pool"] == 3
+    assert plan["settings"]["worker_pool"] == _POOL
 
 
-def test_every_node_in_a_pool_runs_on_the_one_model() -> None:
-    """The pool is one model, so the planner's difficulty no longer picks a cheaper one."""
-    plan = plan_orchestration.parse_plan(_POOL_PLAN, worker_pool=3)
-    assert {node["model"] for node in plan["nodes"]} == {plan_orchestration.POOL_MODEL}
+def test_a_pool_still_runs_each_node_on_its_capability_s_model() -> None:
+    """A pool adds workers per capability; it does not flatten the models. A `low` node is
+    still Haiku's, which is the whole reason the planner grades difficulty."""
+    plan = plan_orchestration.parse_plan(_POOL_PLAN, worker_pool=_POOL)
+    by_capability = {n["capability"]: n["model"] for n in plan["nodes"]}
+    assert by_capability == {
+        c: plan_orchestration.MODEL_BY_CAPABILITY[c] for c in by_capability
+    }
 
 
-def test_the_pool_size_caps_how_many_nodes_run_at_once() -> None:
-    """A pool of two can have two nodes going, so a third ready node waits for a worker."""
+def test_each_capability_has_its_own_cap() -> None:
+    """Two `medium` workers run two `medium` nodes at once, and the third waits -- while a
+    `low` node starts regardless, because it needs a different worker."""
     plan = plan_orchestration.parse_plan(
         _plan_text(
-            '["high", "high", "high", "high"]',
+            '["medium", "medium", "medium", "low"]',
             '["a", "b", "c", "d"]',
             "[[], [], [], []]",
         ),
-        worker_pool=2,
+        worker_pool={"medium": 2, "low": 1},
     )
-    assert plan_orchestration.find_ready_nodes(plan, [], []) == [0, 1]
-    assert plan_orchestration.find_ready_nodes(plan, [], [0]) == [1]
-    assert plan_orchestration.find_ready_nodes(plan, [], [0, 1]) == []
+    assert plan_orchestration.find_ready_nodes(plan, [], []) == [0, 1, 3]
+    assert plan_orchestration.find_ready_nodes(plan, [], [0]) == [1, 3]
+    assert plan_orchestration.find_ready_nodes(plan, [], [0, 1]) == [3]
+    assert plan_orchestration.find_ready_nodes(plan, [], [0, 1, 3]) == []
+
+
+def test_a_capability_with_no_workers_starts_nothing() -> None:
+    """A pool that names no `high` workers cannot start a `high` node at all."""
+    plan = plan_orchestration.parse_plan(
+        _plan_text(
+            '["high", "low", "low", "high"]',
+            '["a", "b", "c", "d"]',
+            "[[], [], [], []]",
+        ),
+        worker_pool={"low": 1},
+    )
+    assert plan_orchestration.find_ready_nodes(plan, [], []) == [1]
 
 
 def test_without_a_pool_the_flows_own_cap_still_applies() -> None:
