@@ -1,12 +1,11 @@
 /**
- * The phone's home grid (plan-phone-interface.md): every openable app as a tile on the first desktop's
- * wallpaper, in the launcher's order, read-only. A tap shows the app's window or launches it (the store decides
+ * The phone's home grid (plan-phone-interface.md): every openable app as a tile, over the first desktop's
+ * wallpaper (which the layout draws), in the launcher's order, read-only. A tap shows the app's window or launches it (the store decides
  * which); a long press offers the app's launch rows. An app that is stopped draws faint, as on the desktop.
  */
 
 import m from "mithril";
-import { wallpaperBackgroundImage } from "../../model/api";
-import type { AppRecord, Desktop } from "../../model/records";
+import type { AppRecord } from "../../model/records";
 import { appGlyph } from "../glyphs";
 import { longPressAttrs } from "./longPress";
 
@@ -15,8 +14,6 @@ const TILE_GLYPH_SIZE = 58;
 
 export interface HomeGridAttrs {
   readonly apps: readonly AppRecord[];
-  /** The desktop whose wallpaper the grid sits on: the first one. */
-  readonly desktop: Desktop | null;
   readonly isStopped: (app: AppRecord) => boolean;
   readonly onTap: (app: AppRecord) => void;
   readonly onLongPress: (app: AppRecord, target: HTMLElement) => void;
@@ -25,14 +22,12 @@ export interface HomeGridAttrs {
 
 export const HomeGrid: m.Component<HomeGridAttrs> = {
   view(vnode) {
-    const { apps, desktop, isStopped, onTap, onLongPress, thresholdPx } = vnode.attrs;
-    const wallpaper = desktop?.wallpaper ?? null;
+    const { apps, isStopped, onTap, onLongPress, thresholdPx } = vnode.attrs;
     return m(
       "div",
       {
         "data-phone-home-grid": "",
-        class: "phone-home absolute inset-0 bg-page bg-cover bg-center bg-(image:--desk-default-wallpaper)",
-        style: wallpaper === null ? {} : { backgroundImage: wallpaperBackgroundImage(wallpaper) },
+        class: "phone-home absolute inset-0",
       },
       m(
         "div",

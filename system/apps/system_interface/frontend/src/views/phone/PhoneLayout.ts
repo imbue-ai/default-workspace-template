@@ -11,6 +11,7 @@
 import m from "mithril";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import { wallpaperBackgroundImage } from "../../model/api";
 import { appLaunchesOf, launchRowKindOf } from "../../model/launch";
 import { appByName, findWindow, isAppShownStopped } from "../../reducers/desktopState";
 import { defaultHighlightIndex, isRowEnabled } from "../../reducers/launcherRows";
@@ -208,6 +209,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
       const shownApp = shownWindow === null ? undefined : appByName(state, shownWindow.app);
       const isHome = state.phone.shown === null || state.phone.shown.kind === "home";
       const thresholdPx = store.getMetrics().dragThreshold;
+      const wallpaper = state.desktops[0]?.wallpaper ?? null;
       const menuRows =
         openMenu === null
           ? null
@@ -218,9 +220,12 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
         "div",
         {
           "data-phone-layout": "",
+          // On the home grid the wallpaper is the layout's, so it runs up under the status bar as well.
           class:
             "app-layout phone-layout fixed inset-x-0 top-0 flex h-dvh flex-col overflow-hidden bg-page " +
-            "pt-[env(safe-area-inset-top)]",
+            "pt-[env(safe-area-inset-top)]" +
+            (isHome ? " bg-cover bg-center bg-(image:--desk-default-wallpaper)" : ""),
+          style: isHome && wallpaper !== null ? { backgroundImage: wallpaperBackgroundImage(wallpaper) } : {},
         },
         [
           m(UpdateStalenessBanner),
@@ -243,7 +248,6 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
               isHome
                 ? m(HomeGrid, {
                     apps: homeGridApps(state),
-                    desktop: state.desktops[0] ?? null,
                     isStopped: (app) => isAppShownStopped(state, app),
                     onTap: (app) => void store.runHomeTile(app.name),
                     onLongPress: (app, target) => openMenuAt({ kind: "app", app: app.name }, target),
