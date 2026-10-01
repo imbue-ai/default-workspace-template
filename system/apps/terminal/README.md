@@ -41,13 +41,13 @@ like every Python app with a manifest):
   before its closing body tag, and serves it via `ttyd -I`, falling back to
   the stock client (with a warning) when the asset is missing or will not decompress,
   and serving the client without the script (with a warning) when it has no closing
-  body tag. The script feeds the wrapper's strip keys to xterm (`window.term`, which the
+  body tag; then it registers its manifest and port, and execs
+  `ttyd -p 7683 -a -t disableLeaveAlert=true [-I index.html] -W bash -c <dispatch>`.
+  The script feeds the wrapper's strip keys to xterm (`window.term`, which the
   patched client exposes) with the sequences xterm sends for them, applies an armed
   Ctrl to the next typed key by wrapping xterm's internal `triggerDataEvent`, and
   focuses xterm when the terminal is tapped (iOS raises the soft keyboard only for a
-  focus made in a tap on the focused frame itself),
-  registers its manifest and port, and execs
-  `ttyd -p 7683 -a -t disableLeaveAlert=true [-I index.html] -W bash -c <dispatch>`.
+  focus made in a tap on the focused frame itself).
 
 ## Terminals
 
