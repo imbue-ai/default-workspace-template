@@ -202,14 +202,14 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
           [
             m(
               "div",
-              { class: "w-1/2 flex-none", inert: isSubmenuShown ? "" : undefined },
+              { class: "w-1/2 flex-none", inert: isSubmenuShown },
               rows.map((row) => renderRow(row, close)),
             ),
             // Emptied the moment the track heads back, rather than held for the slide: an empty pane sliding out
             // reads the same as a full one, and the card is back to the menu's own height at once.
             m(
               "div",
-              { class: "flex w-1/2 flex-none flex-col", inert: isSubmenuShown ? undefined : "" },
+              { class: "flex w-1/2 flex-none flex-col", inert: !isSubmenuShown },
               submenu === null ? null : submenuPane(submenu, close),
             ),
           ],

@@ -1019,21 +1019,41 @@ describe("the phone layout's card", () => {
   });
 
   it("slides a submenu in over the card's rows, and its back row slides it out", () => {
-    renderPhone();
-    tap("[data-composer-settings]");
-    const track = (): string | null =>
-      document.querySelector("[data-menu-track]")?.getAttribute("data-menu-track") ?? null;
-    expect(track()).toBe("menu");
+    // Browsers reflect `inert` as a boolean property, which mithril assigns rather than setting the attribute;
+    // jsdom has none.
+    Object.defineProperty(HTMLElement.prototype, "inert", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("inert");
+      },
+      set(this: HTMLElement, value: unknown) {
+        this.toggleAttribute("inert", Boolean(value));
+      },
+    });
+    try {
+      renderPhone();
+      tap("[data-composer-settings]");
+      const track = (): string | null =>
+        document.querySelector("[data-menu-track]")?.getAttribute("data-menu-track") ?? null;
+      const inertPanes = (): boolean[] =>
+        [...document.querySelectorAll<HTMLElement>(".sliding-menu-track > div")].map((pane) => pane.inert);
+      expect(track()).toBe("menu");
+      expect(inertPanes()).toEqual([false, true]);
 
-    tap('[data-menu-row="providers"]');
-    expect(track()).toBe("submenu");
-    // A slide, not a flyout: the submenu is inside the card, and there is no second box beside it.
-    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
-    expect(screenText()).toContain("+ Add a provider");
+      tap('[data-menu-row="providers"]');
+      expect(track()).toBe("submenu");
+      expect(inertPanes()).toEqual([true, false]);
+      // A slide, not a flyout: the submenu is inside the card, and there is no second box beside it.
+      expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+      expect(screenText()).toContain("+ Add a provider");
 
-    tap("[data-menu-track-back]");
-    expect(track()).toBe("menu");
-    expect(screenText()).not.toContain("+ Add a provider");
+      tap("[data-menu-track-back]");
+      expect(track()).toBe("menu");
+      expect(inertPanes()).toEqual([false, true]);
+      expect(screenText()).not.toContain("+ Add a provider");
+    } finally {
+      delete (HTMLElement.prototype as { inert?: boolean }).inert;
+    }
   });
 
   it("carries the Source view switch as a row, whose press turns the card over and closes the menu", () => {
