@@ -1759,11 +1759,7 @@ def _pull_out(
 
 
 def _show_messages(client_queue: "queue.Queue[str | None]") -> list[tuple[Any, Any, Any]]:
-    return [
-        (message["args"], message["target_client_id"], message["requester"])
-        for message in drain_messages(client_queue)
-        if message["type"] == "layout_op" and message["op"] == "show"
-    ]
+    return [(args, target, requester) for op, args, target, requester in _layout_ops(client_queue) if op == "show"]
 
 
 def test_show_leaves_a_pulled_out_window_already_showing_the_path_out_and_asks_its_client_to_show_it(
