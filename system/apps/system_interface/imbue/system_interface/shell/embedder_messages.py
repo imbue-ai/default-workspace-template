@@ -29,6 +29,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.primitives import ShowOutcome
+from imbue.system_interface.shell.primitives import WindowPath
 
 # A handler is one loopback request to an app that answers once it has asked the shell for what it wants; past the
 # first threshold it is suspicious, past the second it is broken.
@@ -78,8 +79,8 @@ class ShownPage(FrozenModel):
     message, or why they could not be built."""
 
     app: AppName = Field(description="The app whose row registered the message's type")
-    page: str | None = Field(description="The page to show; None when the message could not fill the template")
-    showing: tuple[str, ...] = Field(description="The app's other pages that count as already showing it")
+    page: WindowPath | None = Field(description="The page to show; None when the message could not fill the template")
+    showing: tuple[WindowPath, ...] = Field(description="The app's other pages that count as already showing it")
     refusal: str = Field(description="Empty when the pages were built; otherwise why they could not be")
 
 
@@ -122,7 +123,7 @@ def shown_pages(rows: Sequence[RegistryRow], request: EmbedderMessageRelayReques
                 continue
             try:
                 page, showing = _built_pages(handler.show, handler.showing, request.payload)
-            except PageTemplateFieldError as e:
+            except (PageTemplateFieldError, InvalidShellValueError) as e:
                 pages.append(ShownPage(app=row.name, page=None, showing=(), refusal=str(e)))
                 continue
             pages.append(ShownPage(app=row.name, page=page, showing=showing, refusal=""))
@@ -132,8 +133,9 @@ def shown_pages(rows: Sequence[RegistryRow], request: EmbedderMessageRelayReques
 @pure
 def _built_pages(
     show: PageTemplate, showing: Sequence[PageTemplate], payload: Mapping[str, Any]
-) -> tuple[str, tuple[str, ...]]:
-    return render_page_template(show, payload), tuple(render_page_template(template, payload) for template in showing)
+) -> tuple[WindowPath, tuple[WindowPath, ...]]:
+    page = WindowPath(render_page_template(show, payload))
+    return page, tuple(WindowPath(render_page_template(template, payload)) for template in showing)
 
 
 def deliver_forwarded_message(forwarded: ForwardedMessage) -> MessageDelivery:

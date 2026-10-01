@@ -865,8 +865,8 @@ def _show(
 def show_page_for_client(
     shell: ShellState,
     app: AppName,
-    page: str,
-    showing: Sequence[str],
+    page: WindowPath,
+    showing: Sequence[WindowPath],
     client_id: ClientId,
     requester: OpRequester,
 ) -> ShowResult:
@@ -876,9 +876,7 @@ def show_page_for_client(
     Raises the op's own errors (a ShellError) when the page cannot be shown.
     """
     target = _resolve_target(shell, {"client": str(client_id)}, requester)
-    return _show_page(
-        shell, app, WindowPath(page), {WindowPath(candidate) for candidate in showing}, set(), target, requester
-    )
+    return _show_page(shell, app, page, set(showing), set(), target, requester)
 
 
 def _beside_anchor(
