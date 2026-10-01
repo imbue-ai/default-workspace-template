@@ -13,7 +13,11 @@ import pytest
 from imbue.imbue_common.logging import ROTATED_JSONL_PATTERN
 
 from host_backup.capabilities import BackupCapabilities, SnapshotMethod
-from host_backup.config import BackupConfig, RetentionSettings
+from host_backup.config import (
+    SLOW_BACKUP_NOTICE_TIMESTAMP_PATH,
+    BackupConfig,
+    RetentionSettings,
+)
 from host_backup.events import EVENTS_LOG_ROTATION_BYTES, TICK_TERMINAL_EVENT_TYPES
 from host_backup.runner import (
     CONSECUTIVE_FAILURE_ALARM_THRESHOLD,
@@ -617,8 +621,6 @@ _SLOW_BACKUP_SUMMARY_STDOUT = json.dumps(
     }
 )
 
-_SLOW_BACKUP_NOTICE_PATH = "data/.state/last-slow-backup-notice"
-
 
 def _run_backup_with_threshold(
     tmp_path: Path, *, slow_backup_threshold_seconds: float
@@ -654,7 +656,7 @@ def test_a_backup_over_the_threshold_records_a_slow_notice_with_restics_counts(
     assert slow[0]["total_files_processed"] == 865766
     assert slow[0]["files_unmodified"] == 865722
     assert slow[0]["dirs_unmodified"] == 150112
-    assert (tmp_path / _SLOW_BACKUP_NOTICE_PATH).exists()
+    assert (tmp_path / SLOW_BACKUP_NOTICE_TIMESTAMP_PATH).exists()
 
 
 def test_a_backup_under_the_threshold_records_no_slow_notice(
@@ -664,7 +666,7 @@ def test_a_backup_under_the_threshold_records_no_slow_notice(
     state = _run_backup_with_threshold(tmp_path, slow_backup_threshold_seconds=3600.0)
 
     assert _slow_events(state) == []
-    assert not (tmp_path / _SLOW_BACKUP_NOTICE_PATH).exists()
+    assert not (tmp_path / SLOW_BACKUP_NOTICE_TIMESTAMP_PATH).exists()
 
 
 @pytest.mark.parametrize(
@@ -685,7 +687,7 @@ def test_the_slow_notice_is_recorded_at_most_once_a_day(
     expected_notice_count: int,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    gate = tmp_path / _SLOW_BACKUP_NOTICE_PATH
+    gate = tmp_path / SLOW_BACKUP_NOTICE_TIMESTAMP_PATH
     gate.parent.mkdir(parents=True)
     gate.write_text("earlier notice")
     noticed_at = time.time() - last_notice_age_seconds
