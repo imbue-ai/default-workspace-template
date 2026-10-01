@@ -620,8 +620,8 @@ export class DesktopStore {
       return;
     }
     this.takeApps(inventory.apps);
-    this.desktopsRevision += 1;
-    this.dispatch({ type: "desktops_updated", desktops: inventory.desktops });
+    // As a push: a desktop deleted while the page was away moves this client to the fallback, told to the shell.
+    this.takeDesktops(inventory.desktops);
     this.dispatch({ type: "workspace_name_updated", workspaceName: inventory.workspace_name });
     const own = inventory.clients.find((client) => client.id === this.deps.clientId);
     if (own !== undefined) this.dispatch({ type: "phone_history_loaded", history: own.shown_history });
@@ -820,7 +820,7 @@ export class DesktopStore {
     this.deps.socket.reportClientState(active, previousDesktop);
   }
 
-  private takeDesktops(desktops: Desktop[]): void {
+  private takeDesktops(desktops: readonly Desktop[]): void {
     const previous = this.state.activeDesktopId;
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });

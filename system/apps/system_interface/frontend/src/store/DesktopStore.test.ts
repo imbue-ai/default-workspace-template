@@ -1927,6 +1927,18 @@ describe("the phone layout", () => {
     expect(notices()).toEqual(["Could not open docs: the shell is restarting"]);
   });
 
+  it("reads the shell again on coming back into sight, following a desktop deleted meanwhile", async () => {
+    const store = await phoneStore(["win-3"]);
+    store.onVisibilityChange(false);
+    api.desktops = api.desktops.filter((desktop) => desktop.id !== "home");
+    socket.reports.length = 0;
+    store.onVisibilityChange(true);
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(socket.reports).toEqual([{ activeDesktop: "work", previousDesktop: "" }]);
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-3" });
+  });
+
   it("reloads the shown page when the socket comes back after the page was out of sight", async () => {
     const store = await phoneStore(["win-1"]);
     const reloaded: string[] = [];
