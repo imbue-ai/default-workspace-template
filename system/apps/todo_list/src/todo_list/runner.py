@@ -16,6 +16,7 @@ process adds (``POST /api/items``, the calendar sync) and a theme change (``POST
 reach every window live.
 """
 
+import html
 import json
 import os
 import threading
@@ -131,9 +132,32 @@ def _broadcast(message: dict[str, Any]) -> None:
             _clients.discard(ws)
 
 
+def _theme_root_attributes(theme: dict[str, str]) -> str:
+    """The saved theme as ``<html>`` attributes, the same properties the page's ``applyTheme`` sets, so the first
+    paint already wears it instead of the stylesheet's defaults until ``/api/state`` answers."""
+    properties: list[tuple[str, str]] = []
+    if theme["accent"]:
+        properties.append(("--done", theme["accent"]))
+    if theme["background"]:
+        properties.append(("--bg", theme["background"]))
+    heading = theme["heading"]
+    if heading:
+        properties.extend(
+            [
+                ("--tape-promise", heading),
+                ("--tape-request", f"color-mix(in srgb, {heading} 72%, #fff)"),
+                ("--tape-know", f"color-mix(in srgb, {heading} 20%, #fff)"),
+                ("--tape-know-ink", heading),
+            ]
+        )
+    style = "; ".join(f"{name}: {value}" for name, value in properties)
+    return f' data-style="{html.escape(theme["style"])}" style="{html.escape(style)}"'
+
+
 @app.route("/")
 def index() -> Response:
     page = (ASSETS_DIR / "index.html").read_text()
+    page = page.replace('<html lang="en">', f'<html lang="en"{_theme_root_attributes(_load_theme())}>', 1)
     return Response(page.replace("</body>", SHELL_PAGE_SCRIPT + "\n</body>"), mimetype="text/html")
 
 
