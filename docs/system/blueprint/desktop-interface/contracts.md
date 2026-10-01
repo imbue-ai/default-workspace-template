@@ -325,10 +325,12 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 3. `pinned`: the app's pinned window on the active desktop is set to `path` the same way and restored.
 4. `opened`: a window of `app` at `path` is opened on the active desktop for the client, shown and on top.
 
-A window the first three settle on that is pulled out for the client stays out: its placement is left as it stands, the client is not switched to its desktop, and the client's windows are sent a `show` `layout_op` naming it, on which the desktop's page (not a solo page) asks the embedder to raise the window's own desktop window, as the ghost's and taskbar entry's "Show" does.
+A window the first three settle on that is pulled out for the client stays out: its placement is left as it stands, and the client is not switched to its desktop.
+Whichever of the four it is, once its edit is written the client's windows are sent a `show` `layout_op` naming the window and whether it is pulled out (`{"window", "is_detached"}`): for a pulled-out one the desktop's page (not a solo page) asks the embedder to raise the window's own desktop window, as the ghost's and taskbar entry's "Show" does, and a phone layout shows the window (`plan-phone-interface.md`).
+An `open` that places its window for a client (not `minimized`) and a `focus` likewise send that client's windows an `open` or `focus` `layout_op` naming the window (`{"window"}`) once written, which only a phone layout acts on.
 
 `show` is answered like the document ops, with `desktop_id`, `desktop`, and `layout` those of the desktop the path is shown on, and `"shown"` one of the four above.
-Document ops are applied to the files and answered with `{"ok", "desktop_id", "client_id", "desktop", "layout", "window_id"?}`; the two transient ops travel as `layout_op`.
+Document ops are applied to the files and answered with `{"ok", "desktop_id", "client_id", "desktop", "layout", "window_id"?}`; the two transient ops travel only as `layout_op`.
 `split`, `move`, and every instance verb (`rename`, `delete`, `stop`, `start`, `replace-url`) are refused with an error naming the replacement; `chat:`, `terminal:`, and `app:` spellings are refused with an error saying to give an app name and a path.
 Exit codes are `0`, `1`, `3`.
 
