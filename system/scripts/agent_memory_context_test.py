@@ -27,6 +27,8 @@ truncate_index = memory_context.truncate_index
 latest_changes = memory_context.latest_changes
 render_changes_notice = memory_context.render_changes_notice
 claude_hook_output = memory_context.claude_hook_output
+stamp_note_text = memory_context.stamp_note_text
+stamp_note = memory_context.stamp_note
 CHANGE_MAX_AGE = memory_context.CHANGE_MAX_AGE
 
 _NOW = datetime(2026, 10, 1, 18, 7, 56, tzinfo=timezone.utc)
@@ -46,21 +48,19 @@ def test_the_shipped_protocol_names_the_folder_the_harness_and_the_index() -> No
         None,
         Path("/home/user/workspace/data/memories"),
         "pi-coding",
-        _NOW,
     )
 
     assert (
         "persistent, file-based memory at `/home/user/workspace/data/memories/`"
         in rendered
     )
-    assert "  source: pi-coding\n" in rendered
-    assert "`/home/user/workspace/data/memories/MEMORY.md`" in rendered
+    assert "  source: pi-coding\n---" in rendered
     assert (
-        "  modified: <when you save it: it is 2026-10-01T18:07:56Z now>\n" in rendered
+        "is filled in for you each time you save; don't write it yourself." in rendered
     )
+    assert "`/home/user/workspace/data/memories/MEMORY.md`" in rendered
     assert "{notes_dir}" not in rendered
     assert "{harness}" not in rendered
-    assert "{now}" not in rendered
 
 
 def test_the_index_follows_the_protocol() -> None:
@@ -69,19 +69,18 @@ def test_the_index_follows_the_protocol() -> None:
         "- [Units](units.md) — Prefers metric\n",
         Path("/n"),
         "pi-coding",
-        _NOW,
     )
 
     assert rendered == (
         "Protocol.\n\n## Your memory index\n\n"
-        "The contents of /n/MEMORY.md as of this message (open a note's file when it looks relevant):\n\n"
+        "The current contents of /n/MEMORY.md (open a note's file when it looks relevant):\n\n"
         "- [Units](units.md) — Prefers metric\n"
     )
 
 
 @pytest.mark.parametrize("index", [None, "", "  \n\n"])
 def test_a_missing_or_empty_index_says_nothing_is_saved_yet(index: str | None) -> None:
-    rendered = render_memory_context("Protocol.", index, Path("/n"), "pi-coding", _NOW)
+    rendered = render_memory_context("Protocol.", index, Path("/n"), "pi-coding")
 
     assert (
         rendered
@@ -184,38 +183,91 @@ def test_the_script_runs_under_a_plain_python3_with_the_home_folders_notes(
     assert result.stdout.endswith("- [Role](role.md) — Is a designer\n")
 
 
-def test_the_time_is_written_in_utc_whatever_zone_it_was_read_in() -> None:
-    lisbon_summer = timezone(timedelta(hours=1))
-
-    rendered = render_memory_context(
-        "Saved at {now}.", None, Path("/n"), "pi-coding", _NOW.astimezone(lisbon_summer)
-    )
-
-    assert rendered.startswith("Saved at 2026-10-01T18:07:56Z.")
-
-
-def test_main_stamps_the_current_time(
+def test_json_keeps_the_fixed_protocol_apart_from_the_index_and_notices(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    notes_dir = _notes_dir(tmp_path, "- [Units](units.md) — Prefers metric\n")
     protocol = tmp_path / "protocol.md"
-    protocol.write_text("{now}")
-    before = datetime.now(timezone.utc).replace(microsecond=0)
+    protocol.write_text("Keep notes in {notes_dir} as {harness}.")
+    changes = tmp_path / "user-changes.jsonl"
+    changes.write_text(_change("profile.md", "DELETED", datetime.now(timezone.utc)))
+    argv = [
+        "--harness",
+        "pi-coding",
+        "--notes-dir",
+        str(notes_dir),
+        "--protocol",
+        str(protocol),
+        "--changes",
+        str(changes),
+        "--json",
+    ]
 
-    main(
-        [
-            "--harness",
-            "pi-coding",
-            "--notes-dir",
-            str(tmp_path),
-            "--protocol",
-            str(protocol),
-        ]
+    main(argv)
+    first = json.loads(capsys.readouterr().out)
+    main(argv)
+    second = json.loads(capsys.readouterr().out)
+
+    assert first == second
+    assert first["protocol"] == f"Keep notes in {notes_dir} as pi-coding."
+    assert first["memory"].startswith("## Your memory index")
+    assert "- [Units](units.md) — Prefers metric" in first["memory"]
+    assert "`profile.md` was deleted" in first["memory"]
+    assert "## Your memory index" not in first["protocol"]
+
+
+def test_stamping_sets_modified_and_adds_source_inside_metadata() -> None:
+    note = "---\nname: job\ndescription: engineer\nmetadata:\n  type: user\n---\n\nx\n"
+
+    assert stamp_note_text(note, "pi-coding", _NOW) == (
+        "---\nname: job\ndescription: engineer\nmetadata:\n  type: user\n"
+        "  source: pi-coding\n  modified: 2026-10-01T18:07:56Z\n---\n\nx\n"
     )
 
-    stamped = datetime.strptime(
-        capsys.readouterr().out.splitlines()[0], "%Y-%m-%dT%H:%M:%SZ"
-    ).replace(tzinfo=timezone.utc)
-    assert before <= stamped <= datetime.now(timezone.utc)
+
+def test_stamping_replaces_a_guessed_date_and_keeps_an_existing_source() -> None:
+    note = (
+        "---\nname: job\nmodified: 2025-06-18T00:00:00Z\nmetadata:\n  type: user\n  source: codex\n"
+        "  modified: 2025-06-18T00:00:00Z\n  node_type: memory\n---\nx\n"
+    )
+
+    assert stamp_note_text(note, "pi-coding", _NOW) == (
+        "---\nname: job\nmetadata:\n  type: user\n  source: codex\n  node_type: memory\n"
+        "  modified: 2026-10-01T18:07:56Z\n---\nx\n"
+    )
+
+
+def test_stamping_adds_a_metadata_block_when_there_is_none_and_skips_notes_without_frontmatter() -> (
+    None
+):
+    assert stamp_note_text("---\nname: job\n---\nx\n", "pi-coding", _NOW) == (
+        "---\nname: job\nmetadata:\n  source: pi-coding\n  modified: 2026-10-01T18:07:56Z\n---\nx\n"
+    )
+    assert stamp_note_text("No frontmatter.\n", "pi-coding", _NOW) is None
+    assert stamp_note_text("---\nname: never closed\n", "pi-coding", _NOW) is None
+
+
+def test_stamp_note_rewrites_a_note_in_the_folder_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _notes_dir(tmp_path, "- [Job](job.md) — engineer\n")
+    job = notes_dir / "job.md"
+    job.write_text("---\nname: job\nmetadata:\n  type: user\n---\nx\n")
+    job.chmod(0o640)
+    outside = tmp_path / "job.md"
+    outside.write_text("---\nname: job\n---\nx\n")
+    index_before = (notes_dir / "MEMORY.md").read_text()
+
+    assert stamp_note(job, notes_dir, "pi-coding", _NOW) is True
+    assert stamp_note(outside, notes_dir, "pi-coding", _NOW) is False
+    assert stamp_note(notes_dir / "MEMORY.md", notes_dir, "pi-coding", _NOW) is False
+    assert stamp_note(notes_dir / "missing.md", notes_dir, "pi-coding", _NOW) is False
+
+    assert "  modified: 2026-10-01T18:07:56Z\n" in job.read_text()
+    assert oct(job.stat().st_mode & 0o777) == oct(0o640)
+    assert outside.read_text() == "---\nname: job\n---\nx\n"
+    assert (notes_dir / "MEMORY.md").read_text() == index_before
+    assert sorted(path.name for path in notes_dir.iterdir()) == ["MEMORY.md", "job.md"]
 
 
 def _change(file_name: str, change: str, at: datetime) -> str:

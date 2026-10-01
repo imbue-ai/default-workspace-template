@@ -27,6 +27,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -553,28 +554,33 @@ def test_stop_nudge_reports_open_steps_on_stderr(
 _MEMORY_INDEX_LINE = "- [Units](units.md) — Prefers metric units"
 
 
+def _memory_notes_dir(tmp_path: Path) -> Path:
+    return tmp_path / "home" / "workspace" / "data" / "memories"
+
+
 def _memory_output(
     tmp_path: Path,
     payload: dict[str, Any],
     *,
     work_dir: Path = _REPO_ROOT,
     changes: str | None = None,
+    event: str = "before_agent_start",
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
-    """Fire ``before_agent_start`` through memory.ts, with one note in the shared index under a temp HOME."""
+    """Fire ``event`` through memory.ts, with one note in the shared index under a temp HOME."""
     home = tmp_path / "home"
-    notes_dir = home / "workspace" / "data" / "memories"
-    notes_dir.mkdir(parents=True)
+    notes_dir = _memory_notes_dir(tmp_path)
+    notes_dir.mkdir(parents=True, exist_ok=True)
     (notes_dir / "MEMORY.md").write_text(_MEMORY_INDEX_LINE + "\n")
     if changes is not None:
         record = (
             home / "workspace" / "data" / ".state" / "memories" / "user-changes.jsonl"
         )
-        record.parent.mkdir(parents=True)
+        record.parent.mkdir(parents=True, exist_ok=True)
         record.write_text(changes)
     proc = _run_event(
         tmp_path,
         _MEMORY,
-        "before_agent_start",
+        event,
         payload,
         work_dir=work_dir,
         env={"HOME": str(home)},
@@ -595,10 +601,74 @@ def test_memory_adds_the_protocol_and_index_as_their_own_system_prompt_section(
     assert out["result"] is None
     sections = out["payload"]["systemPromptOptions"]["sections"]
     assert sections["tool_guidance"] == "unchanged"
-    memory = sections["workspace_memory"]
-    assert memory.startswith("# Workspace memory")
-    assert "  source: pi-coding" in memory
-    assert memory.endswith(_MEMORY_INDEX_LINE)
+    assert list(sections) == [
+        "tool_guidance",
+        "workspace_memory_protocol",
+        "workspace_memory",
+    ]
+    assert sections["workspace_memory_protocol"].startswith("# Workspace memory")
+    assert "  source: pi-coding" in sections["workspace_memory_protocol"]
+    assert sections["workspace_memory"].startswith("## Your memory index")
+    assert sections["workspace_memory"].endswith(_MEMORY_INDEX_LINE)
+
+
+def test_memory_sections_are_identical_on_messages_where_no_note_changed(
+    tmp_path: Path,
+) -> None:
+    """pi re-appends a section to the conversation whenever its text differs from last time."""
+    payload = {"systemPrompt": "BASE", "systemPromptOptions": {"sections": {}}}
+
+    _, first = _memory_output(tmp_path, payload)
+    _, second = _memory_output(tmp_path, payload)
+
+    assert (
+        first["payload"]["systemPromptOptions"]["sections"]
+        == second["payload"]["systemPromptOptions"]["sections"]
+    )
+
+
+def test_memory_stamps_a_note_pi_just_wrote(tmp_path: Path) -> None:
+    notes_dir = _memory_notes_dir(tmp_path)
+    notes_dir.mkdir(parents=True)
+    job = notes_dir / "user-profession.md"
+    job.write_text(
+        "---\nname: user-profession\nmetadata:\n  type: user\n  modified: 2025-06-18T00:00:00Z\n---\nx\n"
+    )
+    elsewhere = tmp_path / "notes.md"
+    elsewhere.write_text("---\nname: other\n---\nx\n")
+
+    _memory_output(
+        tmp_path,
+        {"toolName": "write", "input": {"path": str(job)}, "isError": False},
+        event="tool_result",
+    )
+    _memory_output(
+        tmp_path,
+        {"toolName": "write", "input": {"path": str(elsewhere)}, "isError": False},
+        event="tool_result",
+    )
+
+    stamped = job.read_text()
+    assert "  source: pi-coding\n" in stamped
+    assert "2025-06-18" not in stamped
+    assert re.search(r"  modified: \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n", stamped)
+    assert elsewhere.read_text() == "---\nname: other\n---\nx\n"
+
+
+def test_memory_leaves_a_failed_write_and_other_tools_alone(tmp_path: Path) -> None:
+    notes_dir = _memory_notes_dir(tmp_path)
+    notes_dir.mkdir(parents=True)
+    job = notes_dir / "job.md"
+    original = "---\nname: job\n---\nx\n"
+    job.write_text(original)
+
+    for payload in (
+        {"toolName": "write", "input": {"path": str(job)}, "isError": True},
+        {"toolName": "read", "input": {"path": str(job)}, "isError": False},
+    ):
+        _memory_output(tmp_path, payload, event="tool_result")
+
+    assert job.read_text() == original
 
 
 def test_memory_appends_to_a_prompt_another_extension_already_replaced(

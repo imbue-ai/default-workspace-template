@@ -6,10 +6,17 @@ in ``.claude/settings.json``): Claude Code tells the model how to write a note a
 ``MEMORY.md`` at the start of every session. Other harnesses have no such feature, so this prints the same two things
 for them -- the protocol in ``.agents/shared/references/memory-protocol.md``, adapted from Claude Code's own memory
 prompt so both write notes in one format, followed by the index as it is now -- and each harness's own wiring puts
-the text in front of its model (for pi, ``.pi/extensions/memory.ts``, on every prompt).
+the text in front of its model (for pi, ``.pi/extensions/memory.ts``, on every prompt). With ``--json`` the two parts
+come apart, the protocol (fixed) and the index with any notices (changing only when a note does), so a harness that
+records prompt changes in the conversation, as pi does, records the protocol once and the index only when it changes.
+Nothing in either part depends on the clock for that reason.
 
-The index is cut the way Claude Code cuts it: at 200 lines or 25KB, whichever comes first. The current UTC time is
-filled in too, since Claude Code stamps a note's ``modified`` itself and a model left to guess the date gets it wrong.
+The index is cut the way Claude Code cuts it: at 200 lines or 25KB, whichever comes first.
+
+Claude Code stamps ``modified`` on a note itself; a model left to write the date guesses it. So ``--stamp PATH`` does
+the same for another harness: right after it writes or edits a note, it sets the note's ``metadata.modified`` to now
+and adds ``metadata.source`` when the note names none. pi's memory extension runs it after every ``write`` or ``edit``
+of a note.
 
 It also prints the notes the user deleted or edited in the "What agents know" app, from the record that app keeps
 (``data/.state/memories/user-changes.jsonl``: a file name, what was done and when, never the content). An open chat
@@ -29,7 +36,9 @@ hooks run it under a plain ``python3``.
 
 import argparse
 import json
+import os
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -67,27 +76,89 @@ def truncate_index(index_text: str) -> str:
     return "\n".join(kept)
 
 
-def render_memory_context(
-    protocol_text: str,
-    index_text: str | None,
-    notes_dir: Path,
-    harness: str,
-    now: datetime,
-) -> str:
-    protocol = (
+def render_protocol(protocol_text: str, notes_dir: Path, harness: str) -> str:
+    return (
         protocol_text.replace("{notes_dir}", str(notes_dir))
         .replace("{harness}", harness)
-        .replace("{now}", now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
         .strip()
     )
+
+
+def render_index_section(index_text: str | None, notes_dir: Path) -> str:
     index_path = notes_dir / INDEX_FILENAME
     if index_text is None or not index_text.strip():
-        return f"{protocol}\n\n## Your memory index\n\n{index_path} is empty: nothing has been saved yet.\n"
+        return f"## Your memory index\n\n{index_path} is empty: nothing has been saved yet.\n"
     return (
-        f"{protocol}\n\n## Your memory index\n\n"
-        f"The contents of {index_path} as of this message (open a note's file when it looks relevant):\n\n"
+        "## Your memory index\n\n"
+        f"The current contents of {index_path} (open a note's file when it looks relevant):\n\n"
         f"{truncate_index(index_text)}\n"
     )
+
+
+def render_memory_context(
+    protocol_text: str, index_text: str | None, notes_dir: Path, harness: str
+) -> str:
+    return f"{render_protocol(protocol_text, notes_dir, harness)}\n\n{render_index_section(index_text, notes_dir)}"
+
+
+def stamp_note_text(text: str, harness: str, now: datetime) -> str | None:
+    """The note with ``metadata.modified`` set to ``now`` and ``metadata.source`` added when it names no source.
+
+    Returns None for a note with no frontmatter, which is left as written.
+    """
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None
+    closing_idx = next(
+        (idx for idx in range(1, len(lines)) if lines[idx].strip() == "---"), None
+    )
+    if closing_idx is None:
+        return None
+    frontmatter = lines[1:closing_idx]
+    has_source = any(line.strip().startswith("source:") for line in frontmatter)
+    kept = [line for line in frontmatter if not line.strip().startswith("modified:")]
+    stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    additions = ([] if has_source else [f"  source: {harness}"]) + [
+        f"  modified: {stamp}"
+    ]
+    metadata_idx = next(
+        (idx for idx, line in enumerate(kept) if line.rstrip() == "metadata:"), None
+    )
+    if metadata_idx is None:
+        stamped = [*kept, "metadata:", *additions]
+    else:
+        block_end = metadata_idx + 1
+        while block_end < len(kept) and kept[block_end][:1] in (" ", "\t"):
+            block_end += 1
+        stamped = [*kept[:block_end], *additions, *kept[block_end:]]
+    return "\n".join(["---", *stamped, *lines[closing_idx:]])
+
+
+def stamp_note(path: Path, notes_dir: Path, harness: str, now: datetime) -> bool:
+    """Stamp one note file in place; False (and the file untouched) when it is not a note or cannot be read."""
+    if (
+        path.parent.resolve() != notes_dir.resolve()
+        or path.suffix != ".md"
+        or path.name in NON_NOTE_FILENAMES
+    ):
+        return False
+    try:
+        text = path.read_text(encoding="utf-8")
+        mode = path.stat().st_mode
+    except OSError:
+        return False
+    stamped = stamp_note_text(text, harness, now)
+    if stamped is None or stamped == text:
+        return False
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(stamped, encoding="utf-8")
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        return False
+    return True
 
 
 def read_index(notes_dir: Path) -> str | None:
@@ -278,8 +349,21 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="Run as Claude's UserPromptSubmit hook: read its input on stdin, print only what is new",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help='Print {"protocol": ..., "memory": ...}: the fixed protocol apart from the index and notices',
+    )
+    parser.add_argument(
+        "--stamp",
+        type=Path,
+        help="Stamp metadata.modified (and metadata.source when missing) on this just-written note, then exit",
+    )
     arguments = parser.parse_args(argv)
     now = datetime.now(timezone.utc)
+    if arguments.stamp is not None:
+        stamp_note(arguments.stamp, arguments.notes_dir, arguments.harness, now)
+        return 0
     if arguments.claude_hook:
         sys.stdout.write(
             claude_hook_output(
@@ -298,12 +382,22 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 0
+    index_text = read_index(arguments.notes_dir)
+    if arguments.json:
+        memory = render_index_section(index_text, arguments.notes_dir)
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "protocol": render_protocol(
+                        protocol_text, arguments.notes_dir, arguments.harness
+                    ),
+                    "memory": f"{memory}\n{notice}" if notice else memory,
+                }
+            )
+        )
+        return 0
     context = render_memory_context(
-        protocol_text,
-        read_index(arguments.notes_dir),
-        arguments.notes_dir,
-        arguments.harness,
-        now,
+        protocol_text, index_text, arguments.notes_dir, arguments.harness
     )
     sys.stdout.write(f"{context}\n{notice}" if notice else context)
     return 0
