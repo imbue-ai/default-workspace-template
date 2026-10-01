@@ -1,8 +1,8 @@
 /**
  * A phone sheet (plan-phone-interface.md): a panel risen from the foot of the screen over a scrim, a grab handle
- * and a heading row at its top. Tapping the scrim dismisses it, and so does dragging its head down far enough;
- * a shorter drag springs back. The drag moves the panel straight in the DOM, as a window drag does on the
- * desktop, so nothing redraws per pointer move.
+ * and a heading row at its top. Tapping the scrim dismisses it, and so does dragging its head down far enough
+ * (a shorter drag springs back) or Escape, unless a menu or dialog open over the sheet takes that Escape. The drag
+ * moves the panel straight in the DOM, as a window drag does on the desktop, so nothing redraws per pointer move.
  */
 
 import m from "mithril";
@@ -22,14 +22,29 @@ export interface SheetAttrs {
 export function Sheet(): m.Component<SheetAttrs> {
   let panel: HTMLElement | null = null;
   let drag: { readonly pointerId: number; readonly startY: number; offset: number } | null = null;
+  let dismiss: () => void = () => undefined;
 
   function place(offset: number): void {
     if (panel !== null) panel.style.transform = offset === 0 ? "" : `translateY(${offset}px)`;
   }
 
+  function onKeydown(event: KeyboardEvent): void {
+    if (event.key !== "Escape" || event.isComposing) return;
+    // One layer per Escape, as on the desktop: a dialog or menu open over the sheet is the one it is for.
+    if (document.querySelector('.modal-overlay, [data-menu-part="menu"]') !== null) return;
+    dismiss();
+  }
+
   return {
+    oncreate() {
+      document.addEventListener("keydown", onKeydown);
+    },
+    onremove() {
+      document.removeEventListener("keydown", onKeydown);
+    },
     view(vnode) {
       const { name, onDismiss, head } = vnode.attrs;
+      dismiss = onDismiss;
       const headAttrs: m.Attributes = {
         class: "phone-sheet-head shrink-0 touch-none",
         onpointerdown: (event: PointerEvent) => {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * A phone sheet's drag: dragging its head down past a quarter of the panel dismisses it, a shorter drag springs
- * it back, and a press on a control in the head is the control's.
+ * A phone sheet's dismissal: dragging its head down past a quarter of the panel dismisses it, a shorter drag springs
+ * it back, and a press on a control in the head is the control's; Escape dismisses it unless a menu over it is open.
  */
 import "../../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
@@ -55,5 +55,29 @@ describe("a phone sheet's drag", () => {
     const { grip, button } = mountSheet();
     drag(button, grip, PANEL_HEIGHT);
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+});
+
+function pressKey(key: string): void {
+  document.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+}
+
+describe("a phone sheet's Escape", () => {
+  it("dismisses the sheet, leaves it to a menu open over it, and stops listening once the sheet is gone", () => {
+    mountSheet();
+    pressKey("Enter");
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    const menu = document.body.appendChild(document.createElement("div"));
+    menu.setAttribute("data-menu-part", "menu");
+    pressKey("Escape");
+    expect(onDismiss).not.toHaveBeenCalled();
+    menu.remove();
+
+    pressKey("Escape");
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    unmountViews();
+    pressKey("Escape");
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });

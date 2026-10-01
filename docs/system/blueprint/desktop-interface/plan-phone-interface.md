@@ -39,7 +39,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 - Rows are icon and title only. Order: the windows this phone has shown, most recent first; then every other window, newest first. The pinned chat appears once, as the window on the client's active desktop, and has no X.
 - Tapping a row shows that window. Each row has an X that closes the window (`409` for the pinned window never arises since it has no X) and a kebab that opens the window menu.
 - "Close all" closes every non-pinned window one by one after a confirm naming the count. A search field appears when more than six windows are open and filters rows by title and app name.
-- Sheets dismiss by dragging down or tapping the scrim.
+- Sheets dismiss by dragging down, tapping the scrim, or Escape (a desktop window short enough for the phone layout has a keyboard).
 
 ### The start sheet
 
