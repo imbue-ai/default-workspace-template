@@ -38,6 +38,29 @@ export function openShareSettings(app: AppRecord): void {
   sendToEmbedder(OPEN_SHARE_SETTINGS, { serviceName: app.name });
 }
 
+/** Share and Quit, each where it applies. */
+function shareAndQuitRows(
+  app: AppRecord | undefined,
+  share: (() => void) | null,
+  quit: (() => void) | null,
+): MenuRow[] {
+  if (app === undefined) return [];
+  const rows: MenuRow[] = [];
+  if (share !== null) {
+    rows.push({
+      kind: "action",
+      key: "share",
+      label: `Share ${app.display_name}`,
+      icon: "user-plus",
+      onSelect: share,
+    });
+  }
+  if (quit !== null) {
+    rows.push({ kind: "action", key: "quit", label: `Quit ${app.display_name}`, icon: "power", onSelect: quit });
+  }
+  return rows;
+}
+
 /** The window menu's rows, in display order. */
 export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuActions): MenuRow[] {
   const rows: MenuRow[] = [];
@@ -51,24 +74,7 @@ export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuAc
       onSelect: actions.popOut,
     });
   }
-  if (actions.share !== null && app !== undefined) {
-    rows.push({
-      kind: "action",
-      key: "share",
-      label: `Share ${app.display_name}`,
-      icon: "user-plus",
-      onSelect: actions.share,
-    });
-  }
-  if (actions.quit !== null && app !== undefined) {
-    rows.push({
-      kind: "action",
-      key: "quit",
-      label: `Quit ${app.display_name}`,
-      icon: "power",
-      onSelect: actions.quit,
-    });
-  }
+  rows.push(...shareAndQuitRows(app, actions.share, actions.quit));
   // A rule, not a second one, and none at all above the first row: with neither Share nor Quit
   // between them, the divider under Move and resize is already the one Close needs.
   if (rows.length > 0 && rows[rows.length - 1]?.kind !== "divider") rows.push({ kind: "divider" });
@@ -88,28 +94,10 @@ export interface PhoneWindowMenuActions {
 
 /** The phone's window menu: Refresh, then Share and Quit where they apply. */
 export function phoneWindowMenuRows(app: AppRecord | undefined, actions: PhoneWindowMenuActions): MenuRow[] {
-  const rows: MenuRow[] = [
+  return [
     { kind: "action", key: "refresh", label: "Refresh", icon: "refresh", onSelect: actions.refresh },
+    ...shareAndQuitRows(app, actions.share, actions.quit),
   ];
-  if (actions.share !== null && app !== undefined) {
-    rows.push({
-      kind: "action",
-      key: "share",
-      label: `Share ${app.display_name}`,
-      icon: "user-plus",
-      onSelect: actions.share,
-    });
-  }
-  if (actions.quit !== null && app !== undefined) {
-    rows.push({
-      kind: "action",
-      key: "quit",
-      label: `Quit ${app.display_name}`,
-      icon: "power",
-      onSelect: actions.quit,
-    });
-  }
-  return rows;
 }
 
 /** The presentation verbs of a pinned entry's menu (pinned-taskbar-entries plan section 4.4). */

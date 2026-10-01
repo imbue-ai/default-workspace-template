@@ -11,9 +11,9 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
 import type { AvatarState } from "../../reducers/desktopState";
 import type { PhoneWindowRow } from "../../reducers/phone";
-import { AvatarImage } from "../AvatarImage";
-import { appGlyph, glyph } from "../glyphs";
+import { glyph } from "../glyphs";
 import { Sheet } from "./Sheet";
+import { windowIcon } from "./windowIcon";
 
 const ROW_GLYPH_SIZE = 32;
 const ACTION_GLYPH_SIZE = 16;
@@ -31,26 +31,6 @@ export interface WindowsSheetAttrs {
   readonly onMenu: (windowId: string, target: HTMLElement) => void;
   readonly onCloseAll: () => void;
   readonly onDismiss: () => void;
-}
-
-function rowIcon(row: PhoneWindowRow, avatar: AvatarState): m.Children {
-  const isAvatar = row.window.is_pinned && row.app?.pin?.style === "avatar";
-  return m(
-    "span",
-    {
-      class:
-        "flex size-(--desk-phone-row-icon) shrink-0 items-center justify-center overflow-hidden [&>svg]:size-full " +
-        (isAvatar ? "rounded-full bg-surface" : "rounded-(--desk-icon-radius)"),
-    },
-    isAvatar
-      ? m(AvatarImage, {
-          design: avatar.design,
-          defaultDesign: avatar.defaultDesign,
-          mood: avatar.status.mood,
-          class: "size-full object-contain",
-        })
-      : m.trust(appGlyph(row.app, ROW_GLYPH_SIZE)),
-  );
 }
 
 const ROW_ACTION_CLASS =
@@ -126,7 +106,7 @@ export const WindowsSheet: m.Component<WindowsSheetAttrs> = {
                 onclick: () => onShow(row.window.id),
               },
               [
-                rowIcon(row, avatar),
+                windowIcon(row.window, row.app, avatar, "size-(--desk-phone-row-icon)", ROW_GLYPH_SIZE),
                 m("span", { class: "min-w-0 flex-1 truncate text-(length:--font-size-body) text-primary" }, row.title),
                 m(
                   "button",

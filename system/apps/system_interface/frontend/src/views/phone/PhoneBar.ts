@@ -8,9 +8,9 @@
 import m from "mithril";
 import type { AvatarState } from "../../reducers/desktopState";
 import type { PhonePill } from "../../reducers/phone";
-import { AvatarImage } from "../AvatarImage";
-import { appGlyph, glyph } from "../glyphs";
+import { glyph } from "../glyphs";
 import { longPressAttrs } from "./longPress";
+import { windowIcon } from "./windowIcon";
 
 const CONTROL_GLYPH_SIZE = 26;
 const PILL_GLYPH_SIZE = 32;
@@ -36,23 +36,7 @@ const CONTROL_CLASS =
 
 function pillIcon(pill: PhonePill, avatar: AvatarState): m.Children {
   if (pill.kind === "home") return null;
-  const isAvatar = pill.window.is_pinned && pill.app?.pin?.style === "avatar";
-  return m(
-    "span",
-    {
-      class:
-        "phone-pill-icon flex size-(--desk-phone-pill-icon) shrink-0 items-center justify-center overflow-hidden " +
-        (isAvatar ? "rounded-full bg-surface" : "rounded-(--desk-icon-radius)"),
-    },
-    isAvatar
-      ? m(AvatarImage, {
-          design: avatar.design,
-          defaultDesign: avatar.defaultDesign,
-          mood: avatar.status.mood,
-          class: "size-full object-contain",
-        })
-      : m.trust(appGlyph(pill.app, PILL_GLYPH_SIZE)),
-  );
+  return windowIcon(pill.window, pill.app, avatar, "phone-pill-icon size-(--desk-phone-pill-icon)", PILL_GLYPH_SIZE);
 }
 
 export const PhoneBar: m.Component<PhoneBarAttrs> = {
