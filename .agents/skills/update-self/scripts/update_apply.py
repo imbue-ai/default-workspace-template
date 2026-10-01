@@ -147,9 +147,8 @@ _FRONTEND_BUILD_TIMEOUT_SECONDS = 1200.0
 
 _RESTART_TIMEOUT_SECONDS = 600.0
 
-# The in-flight backup check waits for nothing (`--timeout 0`); this bounds only its
-# own startup.
-_BACKUP_CHECK_TIMEOUT_SECONDS = 60.0
+# What `host-backup-now`'s own startup may add to the backup wait the caller asked for.
+_BACKUP_CHECK_STARTUP_SECONDS = 60.0
 
 _ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
 
@@ -910,14 +909,24 @@ def parse_backup_wait_report(stdout: str) -> BackupWaitReport | None:
     return BackupWaitReport(inflight_tick_id=tick_id, is_finished=is_finished)
 
 
-def _note_inflight_backup_tick(repo_root: Path, runner: Runner) -> None:
-    """Say on stderr when the services restart is about to interrupt a backup tick.
+def _note_inflight_backup_tick(
+    repo_root: Path, runner: Runner, wait_seconds: float
+) -> None:
+    """Let a backup tick in flight finish for up to ``wait_seconds`` before the services
+    restart interrupts it, and say on stderr when it waited or interrupted one.
 
-    It does not wait for the tick: the restarted backup service records the tick as
-    abandoned and backs up again as its first tick, and the update's own restore point
-    was taken before the apply. Never fails the apply.
+    The default is no wait: the restarted backup service records the tick as abandoned
+    and backs up again as its first tick. The caller passes a wait when the tick may be
+    the update's own restore point, still running. Never fails the apply.
     """
-    argv = ["uv", "run", "host-backup-now", "--wait-only", "--timeout", "0"]
+    argv = [
+        "uv",
+        "run",
+        "host-backup-now",
+        "--wait-only",
+        "--timeout",
+        f"{wait_seconds:g}",
+    ]
     try:
         result = runner.run(
             argv,
@@ -925,7 +934,7 @@ def _note_inflight_backup_tick(repo_root: Path, runner: Runner) -> None:
             capture_output=True,
             text=True,
             check=False,
-            timeout=_BACKUP_CHECK_TIMEOUT_SECONDS,
+            timeout=wait_seconds + _BACKUP_CHECK_STARTUP_SECONDS,
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         sys.stderr.write(
@@ -940,7 +949,12 @@ def _note_inflight_backup_tick(repo_root: Path, runner: Runner) -> None:
             f"--wait-only` exited {getattr(result, 'returncode', '?')}: {stderr}).\n"
         )
         return
-    if report.inflight_tick_id is None or report.is_finished:
+    if report.inflight_tick_id is None:
+        return
+    if report.is_finished:
+        sys.stderr.write(
+            "note: waited for an in-flight backup tick to finish before restarting.\n"
+        )
         return
     sys.stderr.write(
         "note: interrupted an in-flight backup tick: the services restart stops it, and "
@@ -1028,6 +1042,7 @@ def apply_update(
     expend: ExpendWrapper = as_expendable,
     sweep_homes: Sequence[Path],
     keep_rollback_point: bool = False,
+    backup_wait_seconds: float = 0.0,
 ) -> int:
     """Land ``merge_ref`` and make the live workspace consistent with it, as one
     atomic, idempotent, rollback-on-failure motion. Returns the process exit
@@ -1040,6 +1055,9 @@ def apply_update(
     (merge already landed -> skip; snapshot already taken -> reuse; ledger
     entry present -> skip), so re-running ``apply`` after any interruption is
     safe -- that re-run *is* the DRI agent's recovery path.
+
+    ``backup_wait_seconds`` is how long the restart waits for a backup tick in flight
+    (:func:`_note_inflight_backup_tick`).
 
     With ``keep_rollback_point`` a successful apply leaves its snapshots in
     place and writes the rollback-point record the shell raises its notice
@@ -1377,7 +1395,7 @@ def apply_update(
             )
             _advance(PHASE_BUILT)
 
-        _note_inflight_backup_tick(repo_root, runner)
+        _note_inflight_backup_tick(repo_root, runner, backup_wait_seconds)
 
         # Every apply restarts the services agent, whatever the diff: the
         # running chat app imports mngr in-process, the shell and

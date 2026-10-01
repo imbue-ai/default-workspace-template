@@ -10,6 +10,6 @@ SKILL.md has a "Resuming after `stuck`" path for when the user overrides the ver
 
 Step 1's backup now runs in the background through `run_in_background.py` (`host-backup-now --timeout 1800`) and overlaps the worker; the lead reads its exit code before the apply, so the results message reports the real outcome.
 
-Before restarting the services, the apply checks for a backup tick in flight and notes on stderr when the restart interrupts one; it does not wait, since the restarted backup service records the tick as abandoned and backs up again as its first tick, and Step 1's restore point is complete before the apply. A pass that ends before the apply leaves the Step 1 backup running, and its late report needs nothing.
+Before restarting the services, the apply checks for a backup tick in flight and notes on stderr when the restart interrupts one. By default it does not wait, since the restarted backup service records the tick as abandoned and backs up again as its first tick. When Step 1's backup exited 2 (its tick, the update's restore point, may still be running), the lead passes `--backup-wait-seconds 900` and the restart waits for it; an interrupted tick is then a results-message caveat. A pass that ends before the apply leaves the Step 1 backup running, and its late report needs nothing.
 
 launch-task's recovery docs treat a STOPPED worker as deliberately stopped only when its `archived_at` label is non-empty, so a worker revived after `stuck` is restarted like any other if it later crashes.

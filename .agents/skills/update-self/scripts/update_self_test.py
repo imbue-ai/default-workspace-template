@@ -2042,6 +2042,7 @@ def _apply(
     is_pid_live: Callable[[int], bool] = lambda pid: False,
     expend: Callable[[Sequence[str]], list[str]] = _tagging_expend,
     sweep_homes: Sequence[Path] = (),
+    backup_wait_seconds: float = 0.0,
 ) -> int:
     return update_apply.apply_update(
         merge_ref,
@@ -2059,6 +2060,7 @@ def _apply(
         is_pid_live=is_pid_live,
         expend=expend,
         sweep_homes=sweep_homes,
+        backup_wait_seconds=backup_wait_seconds,
     )
 
 
@@ -7138,6 +7140,30 @@ def test_a_backup_check_that_cannot_run_is_a_note_not_a_rollback(
     assert code == 0
     assert runner.ran(*_RESTART)
     assert expected_line in capsys.readouterr().err
+
+
+def test_the_apply_waits_for_a_backup_tick_only_when_asked(
+    apply_repo: Path, capsys
+) -> None:
+    """The lead asks for a wait when Step 1's backup did not report an outcome: its tick,
+    the update's restore point, may still be running, and the restart would kill it."""
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    runner.respond(
+        ("uv", "run", "host-backup-now"), _backup_wait_result("tick-1", True)
+    )
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        backup_wait_seconds=900,
+    )
+
+    assert code == 0
+    [check] = runner.argvs_starting(*_BACKUP_CHECK)
+    assert check[check.index("--timeout") + 1] == "900"
+    assert "waited for an in-flight backup tick" in capsys.readouterr().err
 
 
 def test_the_apply_says_nothing_of_backups_when_none_is_in_flight(

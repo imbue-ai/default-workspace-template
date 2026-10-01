@@ -694,6 +694,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         spawner=Spawner(),
         sweep_homes=default_sweep_homes(),
         keep_rollback_point=args.keep_rollback_point,
+        backup_wait_seconds=args.backup_wait_seconds,
     )
 
 
@@ -1005,6 +1006,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "careful flow for a critical app): the shell raises a notice offering "
         "the previous version back until a person confirms the update, and the "
         "next apply replaces the point.",
+    )
+    apply_parser.add_argument(
+        "--backup-wait-seconds",
+        type=float,
+        default=0.0,
+        help="How long the services restart waits for a backup tick in flight, which "
+        "it would interrupt (default: no wait; the backup service backs up again as "
+        "it comes back).",
     )
     apply_parser.set_defaults(func=_cmd_apply)
 
