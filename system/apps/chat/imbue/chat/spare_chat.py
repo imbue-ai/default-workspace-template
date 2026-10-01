@@ -62,9 +62,17 @@ class SpareChatAgent(FrozenModel):
     display_name: str = Field(description="The name it was created with, reserved like any chat's")
     terms: SpareChatTerms = Field(description="What it was started with")
     phase: SpareChatPhase = Field(description="Where it is in its life")
+    ready_at: float | None = Field(
+        default=None, description="``time.monotonic()`` when its harness came up; None until it is ready"
+    )
 
     def with_phase(self, phase: SpareChatPhase) -> "SpareChatAgent":
         return self.model_copy_update(to_update(self.field_ref().phase, phase))
+
+    def as_ready(self, ready_at: float) -> "SpareChatAgent":
+        return self.model_copy_update(
+            to_update(self.field_ref().phase, SpareChatPhase.READY), to_update(self.field_ref().ready_at, ready_at)
+        )
 
 
 @pure

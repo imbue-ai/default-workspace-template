@@ -34,6 +34,7 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
+from imbue.chat.agent_manager import SPARE_CHAT_MAX_AGE_SECONDS
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
@@ -5716,6 +5717,39 @@ def test_spares_on_an_account_that_is_no_longer_the_default_are_replaced(
         for spare in stale_spares:
             assert manager.get_agent_by_id(spare.chat_id) is None
         assert manager.get_chat_snapshots() == []
+    finally:
+        manager.stop()
+
+
+def test_a_spare_ready_for_longer_than_the_maximum_age_is_not_handed_over_and_is_replaced_at_once(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        # Just short of the maximum age, it is still the spare.
+        with manager._lock:
+            manager._spares = (spare.as_ready(time.monotonic() - SPARE_CHAT_MAX_AGE_SECONDS + 60.0),)
+        manager.ensure_spare_chat()
+        assert _mngr_calls(argv_log, "destroy") == []
+        with manager._lock:
+            manager._spares = (spare.as_ready(time.monotonic() - SPARE_CHAT_MAX_AGE_SECONDS),)
+
+        assert manager.create_chat("").chat_id != spare.chat_id
+        manager.ensure_spare_chat()
+
+        wait_until_true(
+            lambda: _mngr_calls(argv_log, "destroy") == [["destroy", spare.chat_id, "--force"]]
+            and spare.chat_id not in [other.chat_id for other in manager._spares],
+            timeout_seconds=15.0,
+            what="the aged spare destroyed",
+        )
+        # Like a change of terms, not a death: the replacement waits out no backoff.
+        assert manager._spare_retry_not_before == 0.0
+        (replacement,) = _wait_for_ready_spares(manager, 1)
+        assert replacement.chat_id != spare.chat_id
     finally:
         manager.stop()
 

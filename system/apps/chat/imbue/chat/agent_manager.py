@@ -242,6 +242,10 @@ SPARE_CHAT_BOOT_POLL_SECONDS: Final[float] = 0.5
 # How long the spares are left alone after a create or a destroy failed, so a workspace where mngr
 # keeps refusing does not run a create every sweep.
 SPARE_CHAT_RETRY_BACKOFF_SECONDS: Final[float] = 300.0
+# How long a ready spare may wait for a chat before it is replaced: its harness loaded its context
+# (the date, the git state) when it started, and a long wait also leaves it on code older than the
+# workspace's.
+SPARE_CHAT_MAX_AGE_SECONDS: Final[float] = 6 * 3600.0
 # The reason a chat that claimed a spare is given when the spare's creation stopped on an unexpected
 # error (its traceback is in the log).
 _SPARE_CREATION_BROKE_OFF_ERROR: Final[str] = "Starting this chat's agent stopped on an unexpected error"
@@ -3373,8 +3377,11 @@ class AgentManager:
         )
 
     def _is_spare_usable_locked(self, spare: SpareChatAgent, terms: SpareChatTerms | None) -> bool:
-        """Whether a ready spare can be handed to a new chat on ``terms``: started on them, and still running. Lock held."""
-        if spare.phase is not SpareChatPhase.READY or spare.terms != terms:
+        """Whether a ready spare can be handed to a new chat on ``terms``: started on them, ready for less than
+        the maximum age, and still running. Lock held."""
+        if spare.phase is not SpareChatPhase.READY or spare.terms != terms or spare.ready_at is None:
+            return False
+        if time.monotonic() - spare.ready_at >= SPARE_CHAT_MAX_AGE_SECONDS:
             return False
         return self._is_spare_process_alive_locked(spare)
 
@@ -3494,7 +3501,8 @@ class AgentManager:
         """Keep the pool of spare agents full on the terms the next new chat would get.
 
         A ready spare whose terms went stale (the default account, the project, or the fast mode a
-        new chat starts in changed) or whose process died is destroyed, and a spare is started
+        new chat starts in changed), that has waited ``SPARE_CHAT_MAX_AGE_SECONDS``, or whose
+        process died is destroyed, and a spare is started
         while the pool holds fewer than its size, one at a time (mngr's host lock runs creates one
         at a time anyway). Nothing happens in a manager that keeps no spares (a secondary chat),
         once the app is stopping, before the agent list is known, or during the backoff that
@@ -3847,7 +3855,10 @@ class AgentManager:
                 self._hand_over_spare_locked(spare.chat_id)
                 self._provisional_chats.pop(spare.chat_id, None)
             elif error is None:
-                self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.READY)
+                ready_at = time.monotonic()
+                self._spares = tuple(
+                    other.as_ready(ready_at) if other.chat_id == spare.chat_id else other for other in self._spares
+                )
             else:
                 self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.DISCARDING)
                 self._spare_retry_not_before = time.monotonic() + SPARE_CHAT_RETRY_BACKOFF_SECONDS
