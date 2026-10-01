@@ -1747,8 +1747,13 @@ export class DesktopStore {
     // carried nothing new for it): only the client's window paths, which change without moving the stamp, are
     // taken, and a gesture still waiting to be saved is kept rather than thrown away with a reload.
     if (this.state.isLayoutLoaded && layout.updated_at === this.state.layout.updated_at) {
-      if (isSameWindowPaths(layout.window_paths, this.state.layout.window_paths)) return;
       this.layoutLoadsRevision += 1;
+      if (isSameWindowPaths(layout.window_paths, this.state.layout.window_paths)) {
+        // Nothing to take, but the pages still follow: the shell handing back the paths this window already
+        // holds is what confirms a page's own location report, so the page stops guarding the path it left.
+        this.notifyListeners();
+        return;
+      }
       this.dispatch({ type: "window_paths_loaded", desktopId, windowPaths: layout.window_paths });
       return;
     }
