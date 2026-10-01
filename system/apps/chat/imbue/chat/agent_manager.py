@@ -3415,7 +3415,7 @@ class AgentManager:
             # The chat it boots for is the user's from now on, so memory pressure must not shed it
             # first; it reaches the engaged floor once it is up (``_settle_claimed_spare``).
             self._move_spare_tree_into_chat_launch_band(spare.chat_id, is_main_process_moved=True)
-            self._broadcaster.broadcast_provisional_chat_created(provisional)
+            self._broadcast_provisional(provisional)
         self.ensure_spare_chat_in_background()
         return CreatedChat(
             chat_id=spare.chat_id, name=canonical_agent_name(spare.display_name), display_name=spare.display_name
