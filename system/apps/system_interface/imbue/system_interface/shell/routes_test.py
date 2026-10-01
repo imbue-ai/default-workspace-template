@@ -1800,8 +1800,12 @@ def test_an_op_that_fails_leaves_the_client_on_its_desktop(
     assert recorded is not None and recorded.active_desktop == "home"
 
 
+@pytest.mark.parametrize(
+    ("op", "is_minimized"),
+    [pytest.param("minimize", True, id="minimize"), pytest.param("open", False, id="open-finding-it")],
+)
 def test_a_disconnected_clients_pulled_out_window_is_not_a_pop_out_and_comes_back(
-    client: FlaskClient, app: Flask
+    client: FlaskClient, app: Flask, op: str, is_minimized: bool
 ) -> None:
     """A client with no window connected has no pop-out on screen, only a record of one: the op applies without
     ``force``, and brings the window back, so the pop-out reopened at the client's next launch closes."""
@@ -1810,12 +1814,13 @@ def test_a_disconnected_clients_pulled_out_window_is_not_a_pop_out_and_comes_bac
     _pull_out(client, window_id)
     _shell(app).broadcaster.shutdown()
 
-    minimized = _op(client, "minimize", {"window": window_id, "client": "c1"}, None)
+    names_window = {"window": window_id} if op == "minimize" else {"app": "terminal", "path": "/?session=t1"}
+    applied = _op(client, op, {**names_window, "client": "c1"}, None)
 
-    assert minimized.status_code == 200
-    assert minimized.get_json()["is_brought_back"] is True
+    assert applied.status_code == 200
+    assert (applied.get_json()["window_id"], applied.get_json()["is_brought_back"]) == (window_id, True)
     placement = _placement_of(client, window_id)
-    assert (placement["is_detached"], placement["is_minimized"]) == (False, True)
+    assert (placement["is_detached"], placement["is_minimized"]) == (False, is_minimized)
 
 
 def test_focus_raises_a_popped_out_window_in_its_own_window_and_leaves_it_out(client: FlaskClient, app: Flask) -> None:

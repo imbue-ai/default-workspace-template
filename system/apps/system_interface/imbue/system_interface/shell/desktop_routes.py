@@ -567,16 +567,10 @@ def _switch_as_asked(shell: ShellState, target: _DesktopOpTarget) -> None:
         shell.set_client_active_desktop(target.client_id, target.desktop.id)
 
 
-def _is_popped_out(shell: ShellState, desktop: Desktop, client_id: ClientId, window_id: WindowId) -> bool:
-    """Whether the client has the window popped out into its own window: the client's own placement says so, and the
-    client is connected. A disconnected client's placement is only a record, which the pop-out reopened at its next
-    launch reconciles with whatever an op made of it."""
-    return _is_detached_while_connected(
-        shell, client_id, placement_of(shell.read_desktop_layout(desktop, client_id), window_id).is_detached
-    )
-
-
 def _is_detached_while_connected(shell: ShellState, client_id: ClientId, is_detached: bool) -> bool:
+    """Whether the client has a window popped out into its own window: its own placement is detached, and the client
+    is connected. A disconnected client's placement is only a record, which the pop-out reopened at its next launch
+    reconciles with whatever an op made of it."""
     return is_detached and str(client_id) in shell.broadcaster.connected_client_ids()
 
 
@@ -1046,10 +1040,9 @@ def _open(
     its own window rather than pulled back; a ``beside`` naming a popped-out window opens the window unpaired unless
     the open is forced, which brings that window back to pair with."""
     anchor = _beside_anchor(shell, arguments, target, requester)
+    layout = shell.read_desktop_layout(target.desktop, target.client_id)
     unpaired_beside: WindowId | None = None
-    is_anchor_detached = anchor is not None and (
-        placement_of(shell.read_desktop_layout(target.desktop, target.client_id), anchor.id).is_detached
-    )
+    is_anchor_detached = anchor is not None and placement_of(layout, anchor.id).is_detached
     if (
         anchor is not None
         and _is_detached_while_connected(shell, target.client_id, is_anchor_detached)
@@ -1063,14 +1056,15 @@ def _open(
         if request.if_present is IfPresent.FOCUS and not arguments.minimized
         else None
     )
-    if found is not None and _is_popped_out(shell, target.desktop, target.client_id, found.id):
+    is_found_detached = found is not None and placement_of(layout, found.id).is_detached
+    if found is not None and _is_detached_while_connected(shell, target.client_id, is_found_detached):
         _raise_in_own_window(shell, found.id, target.client_id, requester)
         return found.id, _PopOutNotes(is_raised_in_own_window=True, unpaired_beside=unpaired_beside)
     window_id = shell.open_window(target.desktop.id, request, arguments.minimized).window.id
     _pair_beside(shell, target, anchor, window_id)
     _switch_as_asked(shell, target)
     return window_id, _PopOutNotes(
-        is_brought_back=anchor is not None and anchor.id != window_id and is_anchor_detached,
+        is_brought_back=is_found_detached or (anchor is not None and anchor.id != window_id and is_anchor_detached),
         unpaired_beside=unpaired_beside,
         has_no_desktop_window=not arguments.minimized and _has_no_desktop_window(shell, target.client_id),
     )
