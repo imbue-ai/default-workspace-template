@@ -26,6 +26,7 @@ import { installLinkRouting, pageLinkRoutingContext } from "@imbue/workspace-ui/
 import { MESSAGE_LINK_SELECTOR } from "./markdown";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { prependToComposer } from "./views/MessageInput";
+import { COMPACT_MEDIA_QUERY, isCompactLayout } from "./compactLayout";
 
 declare global {
   interface Window {
@@ -44,7 +45,7 @@ function ChatDocument(chatId: string, agentId: string, sessionId: string): m.Com
       // below (the transcript's scroll container, the composer) is laid out from this height.
       return m("div", { class: "chat-document flex flex-col", style: "height: 100vh" }, [
         sessionId === ""
-          ? m(ChatPanel, { chatId, isVisible: isFrameRendered() })
+          ? m(ChatPanel, { chatId, isVisible: isFrameRendered(), isCompact: isCompactLayout() })
           : m(SubagentView, { chatId, agentId, subagentSessionId: sessionId }),
         // The provider chooser: the chat root offers it when nothing is signed in, and the model
         // bar's "+ Add a provider" and a provider-fault notice open it from inside a chat.
@@ -89,6 +90,8 @@ async function bootstrap(): Promise<void> {
   // The pointer hides while text is typed into the composer.
   installCursorHidingWhileTyping(document);
   void loadAccountsWithRetry();
+  // A page visited directly follows its own width into and out of the phone layout; a framed one is told.
+  window.matchMedia(COMPACT_MEDIA_QUERY).addEventListener("change", () => m.redraw());
   const rootElement = document.getElementById("app");
   if (rootElement) {
     // A link in a message opens inside the workspace or in the user's browser, and never takes the chat's own page

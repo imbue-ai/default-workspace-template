@@ -12,12 +12,14 @@ from workspace_layout.primitives import DesktopId
 from imbue.system_interface.shell.clients import CLIENTS_FILENAME
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
+from imbue.system_interface.shell.clients import SHOWN_HISTORY_LIMIT
 from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import FloatingPosition
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.primitives import UserId
+from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.testing import TEST_NOW
 
 
@@ -46,6 +48,7 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
         "is_connected": True,
         "user_id": None,
         "entries": {},
+        "shown_history": [],
     }
     assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 2
 
@@ -122,7 +125,7 @@ def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_a
     written = json.loads((tmp_path / CLIENTS_FILENAME).read_text())
     assert written["version"] == 2
     assert set(written["clients"]) == {"viewer", "desktopper", "c3"}
-    assert set(written["clients"]["viewer"]) == {"active_desktop", "last_seen", "user_id", "entries"}
+    assert set(written["clients"]["viewer"]) == {"active_desktop", "last_seen", "user_id", "entries", "shown_history"}
 
 
 def test_a_file_of_an_unknown_version_or_shape_is_treated_as_empty(tmp_path: Path) -> None:
@@ -148,3 +151,67 @@ def test_an_arrival_records_the_user_and_the_landing_desktop_and_a_report_keeps_
         is False
     )
     assert client_wire_json(reported, False)["user_id"] == "user-alice"
+
+
+def _window_id(index: int) -> str:
+    return f"win-{index:016x}"
+
+
+def test_the_shown_history_holds_the_newest_distinct_entries_most_recent_last(tmp_path: Path) -> None:
+    store = ClientStore(state_directory=tmp_path)
+    store.record_report(_report("c1", "home"), TEST_NOW)
+    for index in range(SHOWN_HISTORY_LIMIT + 5):
+        store.record_shown(ClientId("c1"), WindowId(_window_id(index)), TEST_NOW)
+    store.record_shown(ClientId("c1"), None, TEST_NOW)
+    # Showing a window again moves it to the end rather than listing it twice.
+    again = store.record_shown(ClientId("c1"), WindowId(_window_id(10)), TEST_NOW + timedelta(minutes=1))
+
+    expected = (
+        *(_window_id(index) for index in range(6, SHOWN_HISTORY_LIMIT + 5) if index != 10),
+        "home",
+        _window_id(10),
+    )
+    assert again.shown_history == expected
+    assert len(again.shown_history) == SHOWN_HISTORY_LIMIT
+    assert again.last_seen == TEST_NOW + timedelta(minutes=1)
+    # A later report and arrival keep it, and it is what the store reads back.
+    store.record_report(_report("c1", "research"), TEST_NOW + timedelta(minutes=2))
+    store.record_arrival(ClientId("c1"), None, DesktopId("home"), TEST_NOW + timedelta(minutes=3))
+    reread = ClientStore(state_directory=tmp_path).get_client("c1")
+    assert reread is not None and reread.shown_history == expected
+    assert client_wire_json(reread, False)["shown_history"] == list(expected)
+    with pytest.raises(ClientNotFoundError):
+        store.record_shown(ClientId("nobody"), None, TEST_NOW)
+
+
+def test_dropping_closed_windows_prunes_every_clients_history_and_writes_nothing_otherwise(tmp_path: Path) -> None:
+    store = ClientStore(state_directory=tmp_path)
+    for client_id in ("c1", "c2"):
+        store.record_report(_report(client_id, "home"), TEST_NOW)
+    for shown in (WindowId(_window_id(1)), None, WindowId(_window_id(2))):
+        store.record_shown(ClientId("c1"), shown, TEST_NOW)
+    store.record_shown(ClientId("c2"), WindowId(_window_id(2)), TEST_NOW)
+
+    store.drop_windows([WindowId(_window_id(2))])
+
+    by_id = {str(client.id): client.shown_history for client in store.list_clients()}
+    assert by_id == {"c1": (_window_id(1), "home"), "c2": ()}
+    written = (tmp_path / CLIENTS_FILENAME).stat().st_ino
+    store.drop_windows([WindowId(_window_id(9))])
+    assert (tmp_path / CLIENTS_FILENAME).stat().st_ino == written
+
+
+def test_a_version_two_file_written_before_the_shown_history_reads_it_as_empty(tmp_path: Path) -> None:
+    earlier = {
+        "version": 2,
+        "clients": {
+            "c1": {"active_desktop": "home", "last_seen": "2026-09-01T00:00:00+00:00", "user_id": None, "entries": {}}
+        },
+    }
+    (tmp_path / CLIENTS_FILENAME).write_text(json.dumps(earlier))
+    store = ClientStore(state_directory=tmp_path)
+
+    (client,) = store.list_clients()
+    assert client.shown_history == ()
+    assert store.record_shown(ClientId("c1"), WindowId(_window_id(1)), TEST_NOW).shown_history == (_window_id(1),)
+    assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 2

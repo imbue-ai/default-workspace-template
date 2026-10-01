@@ -14,6 +14,7 @@ from workspace_layout.interfaces import ShellLayoutInterface
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.chat_intakes import PendingIntakeStore
+from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
@@ -72,6 +73,11 @@ class ChatAppState(MutableModel):
     # that need an account; in memory, so a restart drops them.
     pending_intakes: PendingIntakeStore = Field(default_factory=PendingIntakeStore)
     event_queues: AgentEventQueues
+    chat_namer: ChatNamer | None = Field(
+        default=None,
+        description="Names new chats from their first messages; None where chats are not named (a secondary "
+        "chat, whose renames would be the live chat's)",
+    )
     claude_auth_service: ClaudeAuthService
     auth_flows: AuthFlowService
     http_client: httpx.Client
@@ -97,6 +103,10 @@ class ChatAppState(MutableModel):
     )
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    # Watchers whose start has not returned, by id() (identity, not equality). Stop is not safe
+    # beside start, so a release that pops one of these leaves stopping it to the
+    # get_or_create_watcher starting it.
+    _starting_watchers: dict[int, AgentSessionWatcher] = PrivateAttr(default_factory=dict)
     _latchkey_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _is_shut_down: bool = PrivateAttr(default=False)
 
@@ -160,6 +170,7 @@ class ChatAppState(MutableModel):
                 lambda: self.agent_manager.is_agent_alive(agent_info.id),
             )
             self.watchers[agent_info.id] = watcher
+            self._starting_watchers[id(watcher)] = watcher
 
         # Seed transcript-derived activity signals BEFORE starting the watcher
         # thread (seeding needs no running thread -- ``get_all_events`` reads
@@ -170,8 +181,15 @@ class ChatAppState(MutableModel):
         # Seeding also keeps the indicator from lagging a turn behind on first
         # connect. Done outside the watchers lock to avoid holding it across the
         # agent manager's own lock.
-        self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
-        watcher.start()
+        try:
+            self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
+            watcher.start()
+        finally:
+            with self._watchers_lock:
+                del self._starting_watchers[id(watcher)]
+                is_evicted = self.watchers.get(agent_info.id) is not watcher
+            if is_evicted:
+                watcher.stop()
         return watcher
 
     def get_or_create_loader(self, agent_info: AgentInfo) -> TranscriptLoader:
@@ -247,17 +265,34 @@ class ChatAppState(MutableModel):
         with self._watchers_lock:
             watcher = self.watchers.pop(agent_id, None)
             loader = self.loaders.pop(agent_id, None)
+            is_watcher_starting = id(watcher) in self._starting_watchers
         if watcher is not None:
             logger.debug("Evicting the session watcher for agent {}", agent_id)
-            watcher.stop()
+            if not is_watcher_starting:
+                watcher.stop()
         if loader is not None:
             logger.debug("Evicting the loaded transcript of agent {}", agent_id)
             loader.close()
 
+    def release_unviewed_stopped_transcripts(self) -> None:
+        """Evict what each stopped chat holds resident, unless a stream of it is open.
+
+        Reading a stopped chat rebuilds its transcript, which the manager's eviction (on the
+        chat's transition into stopped) never sees. A chat with an open stream keeps its
+        transcript while its viewer reads it; the first call after the stream closes drops it.
+        """
+        with self._watchers_lock:
+            resident_agent_ids = set(self.watchers) | set(self.loaders)
+        for agent_id in resident_agent_ids:
+            chat_id = self.agent_manager.chat_id_of_agent(agent_id)
+            if self.agent_manager.is_chat_stopped(chat_id) and not self.event_queues.has_consumers(str(chat_id)):
+                self.stop_and_remove_watcher(agent_id)
+
     def stop_all_watchers(self) -> None:
         with self._watchers_lock:
             for watcher in self.watchers.values():
-                watcher.stop()
+                if id(watcher) not in self._starting_watchers:
+                    watcher.stop()
             self.watchers.clear()
             for loader in self.loaders.values():
                 loader.close()
@@ -268,6 +303,8 @@ class ChatAppState(MutableModel):
         if self._is_shut_down:
             return
         self._is_shut_down = True
+        if self.chat_namer is not None:
+            self.chat_namer.stop()
         self.event_queues.shutdown()
         self.broadcaster.shutdown()
         self.agent_manager.stop()

@@ -26,6 +26,7 @@ from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.client_activity import summarize_client_activity
 from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
+from imbue.system_interface.shell.data_types import ClientShownRequest
 from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
@@ -278,6 +279,15 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
     return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
+def record_client_shown(client_id: str) -> ResponseReturnValue:
+    """What a client's phone layout now shows (the phone plan's shown history): a window some desktop holds, or
+    ``null`` for its home grid; answers the client record."""
+    body = parse_request_body(ClientShownRequest)
+    shell = _shell()
+    record = shell.record_client_shown(ClientId(client_id), body.window_id)
+    return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
+
+
 # Section 5.6: the embedder-message relay
 
 
@@ -451,6 +461,12 @@ def register_shell_routes(application: Flask) -> None:
         view_func=set_client_entry,
         methods=["POST"],
         endpoint="set_client_entry",
+    )
+    application.add_url_rule(
+        "/api/clients/<client_id>/shown",
+        view_func=record_client_shown,
+        methods=["POST"],
+        endpoint="record_client_shown",
     )
     application.add_url_rule(
         "/api/inventory",

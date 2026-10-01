@@ -17,7 +17,7 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
 
 - A **window** is `{app, path, title}` on one desktop, shared by every client ([plan 3.3](../blueprint/desktop-interface/plan-desktop-interface.md)).
   A close removes the window for everyone and does nothing else: "the shell has no notion of stopping or deleting what the window showed" (plan 4.5; concepts decision 9 took "close means stop" from neither prototype).
-- A **shortcut** runs a launch path in `focus` or `new` mode; the desktop is seeded from each manifest's `default_shortcut`.
+- A **shortcut** runs a launch path in `focus` or `new` mode; the desktop is seeded from each app's default shortcut: its manifest's `default_shortcut`, else, for an app a program runs, its first launch path taking no text (its first when every one takes text).
   Chat seeds `{new, mode = new}`; terminal, files, and browser seed `{new, mode = focus}`.
   `ShortcutIcon.ts` labels a `new` shortcut with the launch path's label (then "New Terminal") and a `focus` shortcut with the app's display name ("Terminal"), so today's desktop reads "New Chat, Terminal, File Viewer, Browser", and flipping a mode from the context menu renames the icon.
 - The **terminal** (`system/apps/terminal`) allocates `terminal-<N>` at `/new`, remembers it in `data/.apps/terminal/instances.json`, and recreates remembered sessions at startup.

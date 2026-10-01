@@ -54,7 +54,7 @@ export const POP_OUT_WINDOW: "minds:pop-out-window" =
 export const WINDOW_DRAG_STARTED: "minds:window-drag-started" =
   "WINDOW_DRAG_STARTED" in embedContract ? embedContract.WINDOW_DRAG_STARTED : "minds:window-drag-started";
 // Workspace -> embedder: the shell's own end of a watched drag (a release it saw, or Escape).
-// Payload: { windowId, isDetached }.
+// Payload: { windowId, isDetached, isCancelled }.
 export const WINDOW_DRAG_ENDED: "minds:window-drag-ended" =
   "WINDOW_DRAG_ENDED" in embedContract ? embedContract.WINDOW_DRAG_ENDED : "minds:window-drag-ended";
 // Workspace -> embedder: the pulled-out windows of this shell's active desktop, with their titles.

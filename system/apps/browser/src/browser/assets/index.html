@@ -2,13 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Browser</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; background: #1e1e1e; color: #ddd; }
-  #app { display: flex; flex-direction: column; height: 100vh; min-width: 0; }
+  /* The pane is the dynamic viewport (a phone's browser bars come and go) less its safe areas, which the
+     page reaches into under viewport-fit=cover. */
+  #app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; min-width: 0; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 
   /* Control strip laid OVER the top of the streamed picture (it covers the browser's own
      tab row rather than pushing the canvas down), and only while an agent is involved:
@@ -664,10 +666,17 @@
     streamWs.send("r," + key);
   }
   let resizeTimer = null;
-  new ResizeObserver(() => {
+  function scheduleSendPaneSize() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(sendPaneSize, 150);
-  }).observe(stage);
+  }
+  new ResizeObserver(scheduleSendPaneSize).observe(stage);
+  // A phone's rotation can settle on a pane the size it already reported, which the dedup would
+  // drop: send the size it settles on regardless.
+  window.addEventListener("orientationchange", () => {
+    lastSentSize = "";
+    scheduleSendPaneSize();
+  });
 
   // Stream conductor client: exactly ONE viewer streams across the whole app and every
   // device -- the pane you're attending to. We tell the server "i" (I'm the attended pane

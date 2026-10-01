@@ -160,7 +160,7 @@ async function ready() {
   // to any embedder.
   if (window.parent !== window) {
     window.parent.postMessage(
-      { type: "shell:location", path: location.pathname + location.search, title: folderTitle(DATA.href) },
+      { type: "shell:location", path: location.pathname + location.search, title: pageTitle(DATA.href) },
       "*",
     );
   }
@@ -197,9 +197,9 @@ async function ready() {
   }
 }
 
-// minds patch: the title a file viewer's window wears: the last segment of the folder it
-// shows, or the served root's own name at the top.
-function folderTitle(href) {
+// minds patch: the title a file viewer's window wears: the last segment of the folder or
+// file it shows, or the served root's own name at the top.
+function pageTitle(href) {
   const segments = decodeURIComponent(href).split("/").filter((segment) => segment !== "");
   return segments.length === 0 ? "Files" : segments[segments.length - 1];
 }
@@ -424,6 +424,7 @@ async function setupIndexPage() {
   renderPathsTableHead();
   setupHiddenFilesToggle();
   renderPathsTableBody();
+  setupWorkspaceWindowLinks();
 
   if (DATA.user) {
     setupDownloadWithToken();
@@ -551,6 +552,33 @@ function setupHiddenFilesToggle() {
   syncToggle();
 }
 
+// minds patch: files open in workspace windows. Framed by the workspace shell, a click on a
+// file's name or its View button asks the shell for a file viewer window on the file's view
+// page, and the Edit button for one on its edit page, raising a window already on that page
+// (``shell:open``, desktop-interface contracts.md section 7) rather than letting
+// ``target="_blank"`` open a bare browser window. A modified or middle click is taken the same
+// way. Unframed, the anchors keep dufs's own behaviour.
+function setupWorkspaceWindowLinks() {
+  if (window.parent === window) {
+    return;
+  }
+  const openInWorkspaceWindow = (event) => {
+    const $anchor = event.target.closest("a[data-minds-page]");
+    if ($anchor === null) {
+      return;
+    }
+    event.preventDefault();
+    const path = `${new URL($anchor.href).pathname}?${$anchor.dataset.mindsPage}`;
+    window.parent.postMessage({ type: "shell:open", path, ifPresent: "focus" }, "*");
+  };
+  $pathsTableBody.addEventListener("click", openInWorkspaceWindow);
+  $pathsTableBody.addEventListener("auxclick", (event) => {
+    if (event.button === 1) {
+      openInWorkspaceWindow(event);
+    }
+  });
+}
+
 /**
  * Add pathitem
  * @param {PathItem} file
@@ -583,14 +611,14 @@ function addPath(file, index) {
     if (DATA.allow_upload) {
       actionMove = `<div onclick="movePath(${index})" class="action-btn" id="moveBtn${index}" title="Move & Rename">${ICONS.move}</div>`;
       if (!isDir) {
-        actionEdit = `<a class="action-btn" title="Edit file" target="_blank" href="${url}?edit">${ICONS.edit}</a>`;
+        actionEdit = `<a class="action-btn" title="Edit file" target="_blank" href="${url}?edit" data-minds-page="edit">${ICONS.edit}</a>`;
       }
     }
     actionDelete = `
     <div onclick="deletePath(${index})" class="action-btn" id="deleteBtn${index}" title="Delete">${ICONS.delete}</div>`;
   }
   if (!actionEdit && !isDir) {
-    actionView = `<a class="action-btn" title="View file" target="_blank" href="${url}?view">${ICONS.view}</a>`;
+    actionView = `<a class="action-btn" title="View file" target="_blank" href="${url}?view" data-minds-page="view">${ICONS.view}</a>`;
   }
   let actionCell = `
   <td class="cell-actions">
@@ -609,7 +637,7 @@ function addPath(file, index) {
     ${getPathSvg(file.path_type)}
   </td>
   <td class="path cell-name">
-    <a href="${url}" ${isDir ? "" : `target="_blank"`}>${encodedName}</a>
+    <a href="${url}" ${isDir ? "" : `target="_blank" data-minds-page="view"`}>${encodedName}</a>
   </td>
   <td class="cell-mtime">${formatMtime(file.mtime)}</td>
   <td class="cell-size">${sizeDisplay}</td>
@@ -765,6 +793,15 @@ async function setupEditorPage() {
     }
   } else if (DATA.kind == "View") {
     $editor.readonly = true;
+    // minds patch: the view page offers Edit wherever the listing would have, and it takes this
+    // same page (and so its window) to the file's edit page.
+    if (DATA.allow_upload && DATA.allow_delete) {
+      const $editFile = document.querySelector(".edit-file");
+      $editFile.classList.remove("hidden");
+      $editFile.addEventListener("click", () => {
+        location.href = `${url}?edit`;
+      });
+    }
   }
 
   if (!DATA.editable) {

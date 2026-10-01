@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { parseSoloWindowId, stripSoloParam } from "./soloMode";
+import { parseSoloMode } from "./soloMode";
 
 describe("solo mode", () => {
-  it("reads the window the page is to show alone, and strips only that parameter", () => {
-    expect(parseSoloWindowId("?solo=win-0123")).toBe("win-0123");
-    expect(parseSoloWindowId("?desktop=home&solo=win-0123")).toBe("win-0123");
-    expect(parseSoloWindowId("?solo=")).toBeNull();
-    expect(parseSoloWindowId("")).toBeNull();
-    expect(stripSoloParam("?solo=win-0123")).toBe("");
-    expect(stripSoloParam("?desktop=home&solo=win-0123")).toBe("?desktop=home");
-    expect(stripSoloParam("?desktop=home")).toBe("?desktop=home");
+  it("reads the window the page is to show alone, and whether the chrome reopened its desktop window", () => {
+    expect(parseSoloMode("?solo=win-0123")).toEqual({ windowId: "win-0123", isReopened: false });
+    expect(parseSoloMode("?desktop=home&solo=win-0123&reopened=1")).toEqual({
+      windowId: "win-0123",
+      isReopened: true,
+    });
+    expect(parseSoloMode("?solo=win-0123&reopened=0")).toEqual({ windowId: "win-0123", isReopened: false });
+    expect(parseSoloMode("?solo=")).toBeNull();
+    expect(parseSoloMode("?reopened=1")).toBeNull();
+    expect(parseSoloMode("")).toBeNull();
   });
 });

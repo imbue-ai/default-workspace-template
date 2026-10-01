@@ -23,13 +23,12 @@ import {
   isLayoutDirty,
   pinnedWindowOf,
   reduceDesktopState,
-  renderedState,
   taskbarEntries,
   windowTitle,
 } from "./desktopState";
 import type { DesktopEvent, DesktopState } from "./desktopState";
 
-const MODES = { isCompact: false, isTouch: false };
+const MODES = { isPhone: false, isTouch: false };
 const home = desktopRecord("home", {
   windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-2", "notes", "/b", { is_pinned: true })],
 });
@@ -159,6 +158,7 @@ describe("opens and closes this client made", () => {
       desktopId: "home",
       window: opened,
       isNew: true,
+      isMinimized: false,
     });
     expect(state.desktops[0].windows.map((window) => window.id)).toEqual(["win-1", "win-2", "win-3"]);
     const placements = activePlacements(state);
@@ -185,6 +185,7 @@ describe("opens and closes this client made", () => {
       desktopId: "home",
       window: opened,
       isNew: true,
+      isMinimized: false,
     });
     expect(state.layout).toBe(before.layout);
     expect(isLayoutDirty(state)).toBe(false);
@@ -196,9 +197,36 @@ describe("opens and closes this client made", () => {
       desktopId: "home",
       window: home.windows[1],
       isNew: false,
+      isMinimized: false,
     });
     expect(state.desktops[0].windows).toHaveLength(2);
     expect(activeFocusedWindowId(state)).toBe("win-2");
+  });
+
+  it("places a window opened minimized out of sight, and raises nothing for one that was already there", () => {
+    const opened = windowRecord("win-3", "docs", "/new");
+    const state = reduceDesktopState(loaded(), {
+      type: "window_opened_here",
+      desktopId: "home",
+      window: opened,
+      isNew: true,
+      isMinimized: true,
+    });
+    expect(activePlacements(state).find((placement) => placement.window_id === "win-3")).toEqual(
+      expect.objectContaining({ is_minimized: true }),
+    );
+    expect(activeFocusedWindowId(state)).toBe("win-1");
+    expect(isLayoutDirty(state)).toBe(false);
+
+    const before = loaded();
+    const existing = reduceDesktopState(before, {
+      type: "window_opened_here",
+      desktopId: "home",
+      window: home.windows[1],
+      isNew: false,
+      isMinimized: true,
+    });
+    expect(existing.layout).toBe(before.layout);
   });
 
   it("takes a location route's answer in place, and nothing for a window since gone", () => {
@@ -259,6 +287,45 @@ describe("opens and closes this client made", () => {
         window: { ...independent, path: "/?doc=5", title: "Five" },
       }),
     ).toBe(state);
+  });
+
+  it("keeps this client's own path of an independent window on a desktop it is not on", () => {
+    const independent = windowRecord("win-4", "docs", "/", { scope: "independent" });
+    const elsewhere = windowRecord("win-5", "docs", "/", { scope: "independent" });
+    let state = reduceDesktopState(loaded(), {
+      type: "desktops_updated",
+      desktops: [
+        { ...home, windows: [...home.windows, independent] },
+        { ...work, windows: [elsewhere] },
+      ],
+    });
+    state = reduceAll(
+      state,
+      {
+        type: "window_location_reported",
+        desktopId: "home",
+        window: { ...independent, path: "/?doc=4", title: "Four" },
+      },
+      {
+        type: "window_location_reported",
+        desktopId: "work",
+        window: { ...elsewhere, path: "/?doc=5", title: "Five" },
+      },
+    );
+    expect(effectiveWindow(state, elsewhere).path).toBe("/?doc=5");
+    expect(effectiveWindowTitle(state, elsewhere, appRecord("docs"))).toBe("Five");
+    expect(state.desktops[1].windows[0].path).toBe("/");
+
+    // Leaving a desktop keeps what this client knew of its own pages there.
+    state = reduceDesktopState(state, { type: "desktop_activated", desktopId: "work" });
+    expect(effectiveWindow(state, independent).path).toBe("/?doc=4");
+    // The window's own desktop's layout, once loaded, is the shell's word on it.
+    state = reduceDesktopState(state, {
+      type: "layout_loaded",
+      desktopId: "work",
+      layout: { ...layoutRecord([], "t2"), window_paths: { "win-5": { path: "/?doc=6", title: "Six" } } },
+    });
+    expect(effectiveWindow(state, elsewhere).path).toBe("/?doc=6");
   });
 
   it("drops a closed window and its placement", () => {
@@ -324,16 +391,6 @@ describe("pinned entries", () => {
     });
   });
 
-  it("render every entry in the bar while compact without rewriting the mode", () => {
-    const compact = reduceDesktopState(withPinned(), {
-      type: "render_modes_changed",
-      modes: { isCompact: true, isTouch: true },
-    });
-    expect(floatingEntries(compact)).toEqual([]);
-    expect(barEntries(compact).map((entry) => entry.window.id)).toEqual(["win-1", "win-2", "win-9"]);
-    expect(entryLook(compact, pinned, pinnedApp)?.mode).toBe("floating");
-  });
-
   it("find the draft target in a pinned app's launch path declaring a draft param, and none otherwise", () => {
     const draftPath = launchPathRecord({
       id: "draft",
@@ -361,11 +418,7 @@ describe("pinned entries", () => {
 });
 
 describe("selectors", () => {
-  it("render every window maximized while compact, and title windows after their page or their app", () => {
-    expect(renderedState(placementRecord("win-1", { state: "NORMAL" }), { isCompact: true, isTouch: false })).toBe(
-      "MAXIMIZED",
-    );
-    expect(renderedState(placementRecord("win-1", { state: "SNAPPED_LEFT" }), MODES)).toBe("SNAPPED_LEFT");
+  it("title windows after their page or their app", () => {
     expect(windowTitle(windowRecord("win-1", "docs", "/", { title: "Plan" }), appRecord("docs"))).toBe("Plan");
     expect(windowTitle(windowRecord("win-1", "docs", "/"), appRecord("docs"))).toBe("Docs");
     expect(windowTitle(windowRecord("win-1", "docs", "/"), undefined)).toBe("docs");
@@ -374,7 +427,7 @@ describe("selectors", () => {
   it("list the taskbar's entries in opening order with their focus and minimized marks", () => {
     const state = reduceDesktopState(loaded(), {
       type: "render_modes_changed",
-      modes: { isCompact: true, isTouch: true },
+      modes: { isPhone: false, isTouch: true },
     });
     expect(state.modes.isTouch).toBe(true);
     expect(

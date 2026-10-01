@@ -20,9 +20,10 @@ import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCurs
 import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
-import { parseSoloWindowId, stripSoloParam } from "./model/soloMode";
+import { parseSoloMode } from "./model/soloMode";
 import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
+import { frameFromViewportFractions } from "./geometry/frames";
 import type { PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
 import { startPresenceHeartbeat } from "./model/Presence";
@@ -31,7 +32,7 @@ import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
 import { followRenderModes } from "./theme/metrics";
-import { App } from "./views/App";
+import { App, BACKDROP_AREA_ATTRIBUTE } from "./views/App";
 
 /** Rewrite the page's URL with its query string put through ``strip``, leaving the path, the hash, and the
  *  history entry as they are: how a boot-time parameter is removed once it has been read. */
@@ -47,35 +48,39 @@ function takeDeepLinkFromLocation(): DeepLink {
   return link;
 }
 
-/** The window the page was opened to show alone (the pull-out-window spec, section 7.5), removed from the URL as
- *  it is read. */
-function takeSoloWindowIdFromLocation(): string | null {
-  const soloWindowId = parseSoloWindowId(window.location.search);
-  if (soloWindowId !== null) stripLocationSearch(stripSoloParam);
-  return soloWindowId;
-}
-
-/** The frame a reattach message names, when it names one: four finite fractions (clamped by the verb). */
+/** The frame a reattach message names, when it names one: four finite fractions of this page's viewport, which is
+ *  how the chrome measures a drop back onto the desktop, mapped onto the backdrop the desktop's frames are
+ *  fractions of (and clamped by the verb). */
 function frameFromMessage(value: unknown): Frame | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
   const numbers = ["x", "y", "width", "height"].map((key) => record[key]);
   if (!numbers.every((number) => typeof number === "number" && Number.isFinite(number))) return null;
   const [x, y, width, height] = numbers as number[];
-  return { x, y, width, height };
+  const frame = { x, y, width, height };
+  const backdrop = document.querySelector<HTMLElement>(`[${BACKDROP_AREA_ATTRIBUTE}]`);
+  if (backdrop === null) return frame;
+  const box = backdrop.getBoundingClientRect();
+  return frameFromViewportFractions(
+    frame,
+    { width: window.innerWidth, height: window.innerHeight },
+    { x: box.x, y: box.y, width: box.width, height: box.height },
+  );
 }
 
 /** The shell's side of the pull-out conversation: every ask goes to the embedding chrome. */
 const popOutBridge: PopOutBridge = {
   requestPopOut: (request) => sendToEmbedder(POP_OUT_WINDOW, { ...request }),
   beginWindowDrag: (request) => sendToEmbedder(WINDOW_DRAG_STARTED, { ...request }),
-  endWindowDrag: (windowId, isDetached) => sendToEmbedder(WINDOW_DRAG_ENDED, { windowId, isDetached }),
+  endWindowDrag: (windowId, isDetached, isCancelled) =>
+    sendToEmbedder(WINDOW_DRAG_ENDED, { windowId, isDetached, isCancelled }),
   reportDetachedWindows: (windows) => sendToEmbedder(DETACHED_WINDOWS, { windows: [...windows] }),
 };
 
 function bootstrap(): void {
   const clientId = getClientId();
-  const soloWindowId = takeSoloWindowIdFromLocation();
+  // Read and left in the URL, unlike the deep link: a reload of a pulled-out window's page must come back as it.
+  const solo = parseSoloMode(window.location.search);
   const root = document.documentElement;
   const readStyle = (element: HTMLElement): CSSStyleDeclaration => getComputedStyle(element);
   let store: DesktopStore | null = null;
@@ -92,10 +97,10 @@ function bootstrap(): void {
           metrics,
           modes,
           redraw: () => m.redraw(),
-          notify: (message) => alert(message),
           reloadInterface,
           popOut: popOutBridge,
-          soloWindowId,
+          soloWindowId: solo?.windowId ?? null,
+          isSoloReopened: solo?.isReopened ?? false,
         });
       } else {
         store.setThemeMetrics(metrics, modes);
@@ -114,6 +119,10 @@ function bootstrap(): void {
   // shell side of the app contract.
   initEmbedderRelay();
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, () => void desktopStore.closeFocusedWindow());
+  // A phone's page sleeps while it is out of sight; coming back, the store reads the shell's word again.
+  document.addEventListener("visibilitychange", () =>
+    desktopStore.onVisibilityChange(document.visibilityState === "visible"),
+  );
   // Every message the chrome sends also goes to the apps registered for its type.
   setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message, null));
   // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.

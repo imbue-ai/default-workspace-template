@@ -1,6 +1,9 @@
 import asyncio
 import json
+import os
 import queue
+import signal
+import subprocess
 import sys
 import time
 from collections import deque
@@ -330,6 +333,28 @@ def test_should_disable_sandbox_when_running_as_root(monkeypatch: pytest.MonkeyP
     assert bsession._should_disable_sandbox() is True
     monkeypatch.setattr(bsession.os, "geteuid", lambda: 501)
     assert bsession._should_disable_sandbox() is False
+
+
+def test_a_reaped_child_killed_under_memory_pressure_leaves_no_zombie() -> None:
+    # What earlyoom does to the browser's Xvfb or PulseAudio daemon: a SIGKILL from outside.
+    reaped = subprocess.Popen(["sleep", "39117"])
+    unreaped = subprocess.Popen(["sleep", "39118"])
+    try:
+        reaper = bsession._reap_on_exit(reaped, "sleep")
+        os.kill(reaped.pid, signal.SIGKILL)
+        os.kill(unreaped.pid, signal.SIGKILL)
+        reaper.join(timeout=10)
+
+        assert not reaper.is_alive()
+        assert reaped.returncode == -signal.SIGKILL
+        # Nothing waited on the other one, so it is still a zombie, waiting to be reaped.
+        assert unreaped.returncode is None
+        assert os.waitpid(unreaped.pid, 0)[0] == unreaped.pid
+    finally:
+        for process in (reaped, unreaped):
+            if process.returncode is None and process.poll() is None:
+                process.kill()
+                process.wait()
 
 
 def test_launch_args_keep_stealth_and_suppress_the_bad_flag_infobar() -> None:

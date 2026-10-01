@@ -498,6 +498,65 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
     }
 
 
+def test_each_app_is_seeded_with_its_default_shortcut_preferring_one_taking_no_text(tmp_path: Path) -> None:
+    rows = read_registry(
+        write_registry(
+            tmp_path / "apps.toml",
+            # A user-built app: a manifest with no launch paths and no default shortcut.
+            registry_row_toml("notes", "http://localhost:1", program="notes"),
+            registry_row_toml(
+                "recipes",
+                "http://localhost:2",
+                program="recipes",
+                launch_paths=[("browse", "Browse", "/"), ("add", "Add a recipe", "/add")],
+            ),
+            # A preview frame or an isolated test server registers with no program.
+            registry_row_toml("preview-1", "http://localhost:3"),
+            registry_row_toml("vm-exec", "http://localhost:4", program="vm-exec", is_internal=True),
+            # With no default declared, the first launch path taking no typed or drafted text is the shortcut...
+            registry_row_toml(
+                "journal",
+                "http://localhost:5",
+                program="journal",
+                launch_paths=[("write", "Write", "/write"), ("draft", "Draft", "/draft"), ("read", "Read", "/")],
+                launch_params={"write": ["entry"], "draft": ["entry"]},
+                launch_text_params={"write": "entry"},
+                launch_draft_params={"draft": "entry"},
+            ),
+            # ...or the first launch path of all, when every one takes text.
+            registry_row_toml(
+                "asker",
+                "http://localhost:6",
+                program="asker",
+                launch_paths=[("ask", "Ask", "/ask")],
+                launch_params={"ask": ["question"]},
+                launch_text_params={"ask": "question"},
+            ),
+            # A declared default shortcut stands even when its launch path takes text.
+            registry_row_toml(
+                "intake",
+                "http://localhost:7",
+                program="intake",
+                default_shortcut=("send", "new"),
+                launch_paths=[("send", "Send", "/send"), ("home", "Home", "/")],
+                launch_params={"send": ["message"]},
+                launch_text_params={"send": "message"},
+            ),
+        )
+    )
+
+    seeded = seed_desktop_shortcuts(rows)
+
+    assert [(str(shortcut.target.app), str(shortcut.target.launch), shortcut.mode) for shortcut in seeded] == [
+        ("notes", "open", ShortcutMode.FOCUS),
+        ("recipes", "browse", ShortcutMode.FOCUS),
+        ("journal", "read", ShortcutMode.FOCUS),
+        ("asker", "ask", ShortcutMode.FOCUS),
+        ("intake", "send", ShortcutMode.NEW),
+    ]
+    assert apps_with_a_default_shortcut(rows) == {"notes", "recipes", "journal", "asker", "intake"}
+
+
 def _targets_and_cells(desktop: Desktop) -> list[tuple[str, str, int, int]]:
     return [
         (str(shortcut.target.app), str(shortcut.target.launch), shortcut.cell.column, shortcut.cell.row)

@@ -21,7 +21,7 @@ import {
   secondaryTextRow,
 } from "./launcherRows";
 
-const MODES = { isCompact: false, isTouch: false };
+const MODES = { isPhone: false, isTouch: false };
 
 const chatty = chatLikeAppRecord("chatty");
 const terminal = appRecord("terminal", {

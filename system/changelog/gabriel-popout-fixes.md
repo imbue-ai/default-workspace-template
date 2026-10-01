@@ -1,0 +1,1 @@
+The desktop-interface contracts (`docs/system/blueprint/desktop-interface/contracts.md`) describe a pulled-out window's page registering its websocket as a pop-out's (section 6), and solo mode keeping `?solo=` in the URL beside the new `reopened=1` mark, with the rule a reopened pop-out follows on its first layout (section 9).

@@ -163,6 +163,15 @@ def _display_is_free(number: int) -> bool:
     return not Path(f"/tmp/.X{number}-lock").exists() and not _x_socket_live(number)
 
 
+def _reap_on_exit(process: "subprocess.Popen[bytes]", name: str) -> threading.Thread:
+    """Wait for a child on a daemon thread, so it is reaped the moment it exits (shed under
+    memory pressure, or crashed). Left unwaited it stays a zombie of this process, which
+    earlyoom cannot free. Returns the waiting thread."""
+    reaper = threading.Thread(target=process.wait, name=f"{name}-reaper", daemon=True)
+    reaper.start()
+    return reaper
+
+
 def _spawn_xvfb() -> "tuple[str, subprocess.Popen[bytes]]":
     """Allocate a free display :N from the pool and start an Xvfb on it. Blocking --
     call via a thread. Returns (display, process); raises on failure."""
@@ -176,6 +185,7 @@ def _spawn_xvfb() -> "tuple[str, subprocess.Popen[bytes]]":
         ["Xvfb", display, "-screen", "0", f"{_FB_W}x{_FB_H}x24", "-nolisten", "tcp"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
+    _reap_on_exit(xvfb, "xvfb")
     deadline = time.monotonic() + _XVFB_READY_TIMEOUT
     while not _x_socket_live(number):
         if xvfb.poll() is not None or time.monotonic() > deadline:
@@ -238,9 +248,7 @@ def _ensure_pulse_daemon() -> bool:
              "-L", "module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        # Reap it the moment it exits (shed under memory pressure, or crashed). Left
-        # unwaited it stays a zombie of this process, which earlyoom cannot free.
-        threading.Thread(target=daemon.wait, name="pulseaudio-reaper", daemon=True).start()
+        _reap_on_exit(daemon, "pulseaudio")
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
