@@ -1387,6 +1387,26 @@ def test_a_targeted_open_or_focus_names_the_window_to_its_client_alone(client: F
     assert _layout_ops(target_queue) == [] and _layout_ops(other_queue) == []
 
 
+def test_a_focus_on_another_desktop_switches_the_client_before_naming_the_window(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A phone shows the window an op names among its active desktop's, so the switch must reach it first."""
+    client_queue = _register_client(app, "c1", "home")
+    client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
+    window_id = _window_id_at(client, "terminal", "/?session=t1", desktop_id="research")
+    drain_messages(client_queue)
+
+    focused = _op(client, "focus", {"window": window_id, "desktop": "research", "client": "c1"}, None)
+
+    assert focused.status_code == 200
+    types = [
+        message["type"] if message["type"] != "layout_op" else message["op"]
+        for message in drain_messages(client_queue)
+        if message["type"] in ("active_desktop_changed", "layout_op")
+    ]
+    assert types == ["active_desktop_changed", "focus"]
+
+
 def test_an_open_asked_to_sit_beside_a_window_with_room_leaves_that_window_alone(
     client: FlaskClient, app: Flask
 ) -> None:

@@ -870,7 +870,6 @@ def _op_window(
             shell.edit_desktop_layout(
                 desktop, target.client_id, lambda current: with_window_raised(current, window.id)
             )
-            _announce_window_op(shell, "focus", window.id, target.client_id, requester)
             return window.id, _PopOutNotes(is_brought_back=is_detached)
         case _ if op in _POP_OUT_REFUSING_OPS:
             edit = _placement_edit(op, arguments, window.id, is_detached)
@@ -1125,6 +1124,9 @@ def dispatch_desktop_op(
             # desktop window keeps the desktop it shows.
             if not notes.is_raised_in_own_window and not notes.is_brought_back:
                 _switch_as_asked(shell, target)
+            # After the switch, so a phone looks the window up among the desktop it is moved to.
+            if op == "focus" and not notes.is_raised_in_own_window:
+                _announce_window_op(shell, "focus", window_id, target.client_id, requester)
             if op in _DESKTOP_SURFACING_WINDOW_OPS and not notes.is_raised_in_own_window:
                 notes = notes.model_copy_update(
                     to_update(notes.field_ref().has_no_desktop_window, _has_no_desktop_window(shell, target.client_id))
