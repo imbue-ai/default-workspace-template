@@ -11,3 +11,5 @@ SKILL.md has a "Resuming after `stuck`" path for when the user overrides the ver
 Step 1's backup now runs in the background through `run_in_background.py` (`host-backup-now --timeout 1800`) and overlaps the worker; the lead reads its exit code before the apply, so the results message reports the real outcome.
 
 The apply waits up to 15 minutes for a backup tick already in flight before restarting the services, which used to kill it mid-restic, and says on stderr whether it waited, interrupted the tick, or could not check; an interrupted tick is a caveat in the results message.
+
+AGENTS.md now says the `select-tests` gate is the turn-end harden worker's to run, not the chat's. In the foreground a chat verifies a change as a user would through `update-app`'s live loop, and runs at most the selector's `# always_run` line (seconds) and, for a change inside one app with a small suite, that app's own suite, rather than the full root suite.
