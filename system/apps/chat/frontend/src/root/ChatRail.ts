@@ -283,6 +283,10 @@ function railHead(attrs: ChatRailAttrs): m.Vnode {
   ]);
 }
 
+/** A button in the phone layout's bars, the header's and the drawer's, which read as one bar. */
+export const BAR_ICON_BUTTON_CLASS =
+  "flex size-9 flex-none items-center justify-center rounded-lg text-primary hover:bg-fill-hover";
+
 /** The drawer's header: its name, and "New chat" as a plus at the far end. As tall as the phone header it opens
  *  over, so the two read as one bar. */
 function drawerHead(attrs: ChatRailAttrs): m.Vnode {
@@ -295,8 +299,7 @@ function drawerHead(attrs: ChatRailAttrs): m.Vnode {
         "button",
         {
           type: "button",
-          class:
-            "chat-rail-new flex size-9 flex-none items-center justify-center rounded-lg text-primary hover:bg-fill-hover",
+          class: `chat-rail-new ${BAR_ICON_BUTTON_CLASS}`,
           "aria-label": "New chat",
           onclick: () => attrs.onNew(),
         },

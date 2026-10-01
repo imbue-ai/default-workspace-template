@@ -8,7 +8,7 @@
 import m from "mithril";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import { kebabGlyph, listGlyph } from "../glyphs";
-import { isDeleting, isRenaming, renameField, rowMenuRows } from "./ChatRail";
+import { BAR_ICON_BUTTON_CLASS, isDeleting, isRenaming, renameField, rowMenuRows } from "./ChatRail";
 import type { RowMenuContext } from "./ChatRail";
 import type { ChatRow } from "./rows";
 
@@ -21,9 +21,6 @@ export interface ChatHeaderAttrs {
   isListOpen: boolean;
   onOpenList: () => void;
 }
-
-const ICON_BUTTON_CLASS =
-  "flex size-9 flex-none items-center justify-center rounded-lg text-primary hover:bg-fill-hover";
 
 export function ChatHeader(): m.Component<ChatHeaderAttrs> {
   const menu = createMenu({
@@ -51,7 +48,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
             "button",
             {
               type: "button",
-              class: `chat-header-list ${ICON_BUTTON_CLASS}`,
+              class: `chat-header-list ${BAR_ICON_BUTTON_CLASS}`,
               "aria-label": "Chats",
               "data-chat-header-list": "",
               onclick: () => attrs.onOpenList(),
@@ -74,7 +71,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
                 "button",
                 {
                   type: "button",
-                  class: `chat-header-menu-button ${ICON_BUTTON_CLASS}`,
+                  class: `chat-header-menu-button ${BAR_ICON_BUTTON_CLASS}`,
                   "aria-label": "Chat actions",
                   "data-chat-header-menu": "",
                   ...menu.triggerAttrs(),
