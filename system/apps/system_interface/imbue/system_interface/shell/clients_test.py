@@ -8,6 +8,9 @@ from app_manifest.manifest import PinStyle
 from app_manifest.primitives import AppName
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import UserId
+from workspace_layout.records import EntryPresentation
+from workspace_layout.records import FloatingPosition
 
 from imbue.system_interface.shell.clients import CLIENTS_FILENAME
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
@@ -15,10 +18,7 @@ from imbue.system_interface.shell.clients import ClientStore
 from imbue.system_interface.shell.clients import SHOWN_HISTORY_LIMIT
 from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import EntryPresentation
-from imbue.system_interface.shell.data_types import FloatingPosition
 from imbue.system_interface.shell.errors import ClientNotFoundError
-from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WindowId
 from imbue.system_interface.shell.testing import TEST_NOW
 

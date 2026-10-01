@@ -1,41 +1,50 @@
 import json
 import threading
+from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from typing import Final
 
-from app_manifest.manifest import describe_validation_error
+from app_manifest.primitives import AppName
 from imbue.imbue_common.mutable_model import MutableModel
 from pydantic import Field
 from pydantic import PrivateAttr
-from pydantic import ValidationError
 
-from workspace_layout.answers import ConnectedClient
+from workspace_layout.answers import ClientActivitySummary
+from workspace_layout.answers import ClientView
+from workspace_layout.answers import ContextAnswer
 from workspace_layout.answers import DesktopOpAnswer
-from workspace_layout.answers import DesktopSummary
 from workspace_layout.answers import OpenAnswer
 from workspace_layout.answers import ShowAnswer
+from workspace_layout.answers import TransientOpAnswer
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.errors import ShellOpError
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.interfaces import ShellLayoutInterface
-from workspace_layout.ops import TARGET_ARG_KEYS
 from workspace_layout.ops import ClientActivityReport
-from workspace_layout.ops import DesktopOpArguments
 from workspace_layout.ops import NavigateRequest
 from workspace_layout.ops import OpenRequest
 from workspace_layout.ops import PlaceRequest
 from workspace_layout.ops import ShowRequest
 from workspace_layout.ops import WindowRequest
-from workspace_layout.ops import op_only_args
-from workspace_layout.ops import parse_layout_op
-from workspace_layout.ops import parse_op_requester
+from workspace_layout.ops import op_reads_arguments
+from workspace_layout.ops import parse_op_body
+from workspace_layout.ops import read_op_arguments
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import LayoutOp
+from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowTitle
+from workspace_layout.records import DesktopLayoutView
+from workspace_layout.records import DesktopShortcut
+from workspace_layout.records import DesktopView
+from workspace_layout.records import WindowView
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 
@@ -49,9 +58,47 @@ _REFUSED_STATUS: Final[int] = 404
 _SERVE_POLL_INTERVAL_SECONDS: Final[float] = 0.01
 
 
-def connected_client(client_id: str) -> ConnectedClient:
+# When every client, window, and layout the fakes make was last seen, opened, or saved.
+FAKE_TIME: Final[datetime] = datetime(2026, 9, 4, tzinfo=timezone.utc)
+
+
+def connected_client(client_id: str) -> ClientView:
     """A client holding the socket, on no desktop yet."""
-    return ConnectedClient(id=ClientId(client_id), active_desktop=None, is_connected=True)
+    return ClientView(id=ClientId(client_id), last_seen=FAKE_TIME, is_connected=True)
+
+
+def fake_window(window_id: str, app: str, path: str, title: str = "") -> WindowView:
+    """One window of a desktop, linked, as the shell's answers carry it."""
+    return WindowView(
+        id=WindowId(window_id),
+        app=AppName(app),
+        path=WindowPath(path),
+        title=WindowTitle(title),
+        opened_at=FAKE_TIME,
+        client_paths={},
+    )
+
+
+def fake_desktop(
+    desktop_id: str = FAKE_DESKTOP_ID,
+    windows: Sequence[WindowView] = (),
+    shortcuts: Sequence[DesktopShortcut] = (),
+) -> DesktopView:
+    """A desktop named for its id, with no wallpaper, as the shell's answers carry it."""
+    return DesktopView(
+        id=DesktopId(desktop_id),
+        name=desktop_id.capitalize(),
+        color="#4f46e5",
+        glyph=0,
+        wallpaper=None,
+        shortcuts=tuple(shortcuts),
+        windows=tuple(windows),
+    )
+
+
+def empty_layout() -> DesktopLayoutView:
+    """A client's layout of a desktop it never placed anything on."""
+    return DesktopLayoutView(version=1, updated_at=None, placements=(), window_paths={})
 
 
 class FakeShell(ShellLayoutInterface):
@@ -61,9 +108,9 @@ class FakeShell(ShellLayoutInterface):
 
     model_config = {"extra": "forbid", "frozen": False, "arbitrary_types_allowed": True}
 
-    clients: list[ConnectedClient] = Field(default_factory=list, description="The connected clients the shell lists")
-    desktop_list: list[DesktopSummary] = Field(
-        default_factory=lambda: [DesktopSummary(id=FAKE_DESKTOP_ID, name="Home")],
+    clients: list[ClientView] = Field(default_factory=list, description="The connected clients the shell lists")
+    desktop_list: list[DesktopView] = Field(
+        default_factory=lambda: [fake_desktop()],
         description="The desktops the shell lists, the first being the fallback",
     )
     refused_client_ids: list[ClientId] = Field(default_factory=list, description="Clients every op for is refused")
@@ -72,7 +119,7 @@ class FakeShell(ShellLayoutInterface):
     listing_error: ShellOpError | None = Field(
         default=None, description="What the client and desktop lists raise while set"
     )
-    shown: str = Field(default="opened", description="How a show says it put its path on screen")
+    shown: ShowOutcome = Field(default=ShowOutcome.OPENED, description="How a show says it put its path on screen")
     window_id: WindowId = Field(default=FAKE_WINDOW_ID, description="The window every op answers")
     desktop_id: DesktopId = Field(default=FAKE_DESKTOP_ID, description="The desktop every op answers")
     shows: list[ShowRequest] = Field(default_factory=list, description="Every show asked for")
@@ -95,20 +142,24 @@ class FakeShell(ShellLayoutInterface):
                 status_code=_REFUSED_STATUS,
             )
 
-    def _answer(self, client_id: ClientId | None) -> DesktopOpAnswer:
-        return DesktopOpAnswer(desktop_id=self.desktop_id, client_id=client_id, window_id=self.window_id)
+    def _answer(self, client_id: ClientId | None) -> OpenAnswer:
+        return OpenAnswer(
+            desktop_id=self.desktop_id,
+            client_id=client_id,
+            desktop=fake_desktop(self.desktop_id),
+            layout=empty_layout() if client_id is not None else None,
+            window_id=self.window_id,
+        )
 
     def show(self, request: ShowRequest) -> ShowAnswer:
         self.shows.append(request)
         self._check(LayoutOp.SHOW, request.client_id)
-        return ShowAnswer(
-            desktop_id=self.desktop_id, client_id=request.client_id, window_id=self.window_id, shown=self.shown
-        )
+        return ShowAnswer.model_validate({**dict(self._answer(request.client_id)), "shown": self.shown})
 
     def open(self, request: OpenRequest) -> OpenAnswer:
         self.opens.append(request)
         self._check(LayoutOp.OPEN, request.client_id)
-        return OpenAnswer(desktop_id=self.desktop_id, client_id=request.client_id, window_id=self.window_id)
+        return self._answer(request.client_id)
 
     def focus(self, request: WindowRequest) -> DesktopOpAnswer:
         self.focuses.append(request)
@@ -130,16 +181,17 @@ class FakeShell(ShellLayoutInterface):
         self._check(LayoutOp.CLOSE, request.client_id)
         return self._answer(request.client_id)
 
-    def refresh(self, request: WindowRequest) -> None:
+    def refresh(self, request: WindowRequest) -> TransientOpAnswer:
         self.refreshes.append(request)
         self._check(LayoutOp.REFRESH, request.client_id)
+        return TransientOpAnswer(target_client_id=request.client_id)
 
-    def connected_clients(self) -> list[ConnectedClient]:
+    def connected_clients(self) -> list[ClientView]:
         if self.listing_error is not None:
             raise self.listing_error
         return list(self.clients)
 
-    def desktops(self) -> list[DesktopSummary]:
+    def desktops(self) -> list[DesktopView]:
         if self.listing_error is not None:
             raise self.listing_error
         return list(self.desktop_list)
@@ -150,59 +202,26 @@ class FakeShell(ShellLayoutInterface):
 
 def describe_op_body_problem(body: Any) -> str | None:
     """Why the shell's op route would refuse ``body`` as it reads one (desktop contracts.md section 8), or None when
-    it would take it: the op a known one, the requester an ``{app, marker}`` or nothing, and the arguments ones the
-    shared ``DesktopOpArguments`` model accepts."""
-    if not isinstance(body, dict):
-        return "the body is not a JSON object"
-    op = parse_layout_op(body.get("op"))
-    if op is None:
-        return f"unknown op {body.get('op')!r}"
+    it would take it."""
     try:
-        parse_op_requester(body.get("requester"))
+        parsed = parse_op_body(body)
+        if op_reads_arguments(parsed.op):
+            read_op_arguments(parsed.args)
     except InvalidLayoutValueError as e:
         return str(e)
-    arguments = body.get("args", {})
-    if not isinstance(arguments, dict):
-        return "``args`` is not a JSON object"
-    if op in (LayoutOp.CONTEXT, LayoutOp.DESKTOPS, LayoutOp.LIST):
-        return None
-    for key in TARGET_ARG_KEYS & arguments.keys():
-        if not isinstance(arguments[key], str):
-            return f"``args.{key}`` is not a string"
-    try:
-        DesktopOpArguments.model_validate(op_only_args(arguments))
-    except ValidationError as e:
-        return describe_validation_error(e)
     return None
 
 
-def desktop_answer(
-    desktop_id: str,
-    client_id: str | None,
-    windows: list[dict[str, Any]],
-    window_id: str | None,
-    shortcuts: list[dict[str, Any]],
-) -> dict[str, Any]:
+def desktop_answer(desktop: DesktopView, client_id: str | None, window_id: str | None) -> dict[str, Any]:
     """What the shell answers a desktop op with (desktop contracts.md section 8), as the wire spells it."""
-    return {
-        "ok": True,
-        "desktop_id": desktop_id,
-        "client_id": client_id,
-        "desktop": {
-            "id": desktop_id,
-            "name": desktop_id.capitalize(),
-            "wallpaper": None,
-            "shortcuts": shortcuts,
-            "windows": windows,
-        },
-        "layout": {"version": 1, "updated_at": None, "placements": []},
-        "window_id": window_id,
-    }
-
-
-def window_json(window_id: str, app: str, path: str, title: str) -> dict[str, Any]:
-    """One window of a desktop, as the wire spells it."""
-    return {"id": window_id, "app": app, "path": path, "title": title, "opened_at": "2026-09-04T00:00:00+00:00"}
+    answer = DesktopOpAnswer(
+        desktop_id=desktop.id,
+        client_id=None if client_id is None else ClientId(client_id),
+        desktop=desktop,
+        layout=None if client_id is None else empty_layout(),
+        window_id=None if window_id is None else WindowId(window_id),
+    )
+    return answer.model_dump(mode="json")
 
 
 def write_registry(path: Path, app_names: list[str]) -> Path:
@@ -227,14 +246,16 @@ class LoopbackShell(MutableModel):
         description="What each GET route answers, as (status, body): a dict or list is JSON, a str sent as it is",
     )
     op_answer: dict[str, Any] = Field(
-        default_factory=lambda: desktop_answer("home", "c1", [], None, []),
+        default_factory=lambda: desktop_answer(fake_desktop(), "c1", None),
         description="What a document op answers",
     )
     op_refusal: tuple[int, Any] | None = Field(
         default=None, description="A (status, body) every document op is answered with instead, while set"
     )
-    context_clients: list[dict[str, Any]] = Field(default_factory=list, description="What ``context`` lists")
-    refresh_target: str | None = Field(default="c1", description="The client a ``refresh`` says it reached")
+    context_clients: list[ClientActivitySummary] = Field(default_factory=list, description="What ``context`` lists")
+    refresh_target: ClientId | None = Field(
+        default=ClientId("c1"), description="The client a ``refresh`` says it reached"
+    )
     activity_status: int = Field(default=204, description="What the client-activity route answers")
     answer_headers: dict[str, str] = Field(
         default_factory=dict, description="Headers every answer carries besides its Content-Type and Content-Length"
@@ -254,11 +275,11 @@ class LoopbackShell(MutableModel):
         problem = describe_op_body_problem(body)
         if problem is not None:
             return 400, {"detail": problem}
-        op = body["op"]
-        if op == LayoutOp.CONTEXT:
-            return 200, {"ok": True, "clients": self.context_clients}
-        if op == LayoutOp.REFRESH:
-            return 200, {"ok": True, "target_client_id": self.refresh_target}
+        op = parse_op_body(body).op
+        if op is LayoutOp.CONTEXT:
+            return 200, ContextAnswer(clients=tuple(self.context_clients)).model_dump(mode="json")
+        if op is LayoutOp.REFRESH:
+            return 200, TransientOpAnswer(target_client_id=self.refresh_target).model_dump(mode="json")
         if self.op_refusal is not None:
             return self.op_refusal
         return 200, self.op_answer

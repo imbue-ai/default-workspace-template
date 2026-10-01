@@ -34,6 +34,8 @@ from pydantic import PrivateAttr
 from workspace_layout.errors import ShellOpError
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WindowPage
+from workspace_layout.primitives import WindowPath
 
 from imbue.chat.primitives import ChatId
 from imbue.chat.shell_client import chat_show_request
@@ -55,16 +57,16 @@ LEDGER_FILENAME: Final[str] = "auto_opened_chats.json"
 _DELIVERED_KEY: Final = "delivered"
 
 # The chat root: the chat list, beside whichever chat is selected.
-CHAT_ROOT_PAGE: Final[str] = "/"
+CHAT_ROOT_PAGE: Final[WindowPage] = WindowPage("/")
 
 
 def is_auto_open_labeled(labels: Mapping[str, str]) -> bool:
     return any(labels.get(label) == "true" for label in AUTO_OPEN_LABELS)
 
 
-def chat_root_path(chat_id: ChatId) -> str:
+def chat_root_path(chat_id: ChatId) -> WindowPath:
     """The chat root's path with the chat selected (plan section 9.1): where the auto-opened window lands."""
-    return f"{CHAT_ROOT_PAGE}?chat={chat_id}"
+    return WindowPath(f"{CHAT_ROOT_PAGE}?chat={chat_id}")
 
 
 class AutoOpenLedger(MutableModel):

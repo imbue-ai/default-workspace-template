@@ -1,13 +1,17 @@
 from collections.abc import Mapping
 from typing import Any
 from typing import Final
+from typing import assert_never
 
 from app_manifest.manifest import ShortcutMode
+from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from pydantic import Field
+from pydantic import ValidationError
+from pydantic import field_validator
 
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import ClientActivityKind
@@ -15,13 +19,14 @@ from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
 from workspace_layout.primitives import LayoutOp
-from workspace_layout.primitives import WallpaperKind
-from workspace_layout.primitives import WallpaperName
-
-# The one non-id a window argument accepts: the requester's own window, which the op's ``requester`` names.
-SELF_WINDOW: Final[str] = "self"
-# The requester's app's pinned window on the target desktop (pinned-taskbar-entries plan section 4.8).
-PINNED_WINDOW: Final[str] = "pinned"
+from workspace_layout.primitives import SpecialWindow
+from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPage
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowState
+from workspace_layout.records import Frame
+from workspace_layout.records import GridCell
+from workspace_layout.records import Wallpaper
 
 # The keys that pick an op's target rather than describe the op; stripped before the op's own arguments are read.
 CLIENT_ARG_KEY: Final[str] = "client"
@@ -40,6 +45,31 @@ def parse_layout_op(raw: Any) -> LayoutOp | None:
         return None
 
 
+WindowReference = WindowId | SpecialWindow | AppName
+
+
+@pure
+def parse_window_reference(raw: str) -> WindowReference:
+    """What a window argument names: a window id, ``self``, ``pinned``, or an app name (that app's most recently
+    focused window); raises InvalidLayoutValueError for anything else."""
+    if not raw:
+        raise InvalidLayoutValueError("this op needs a window: a window id, 'self', 'pinned', or an app name")
+    try:
+        return SpecialWindow(raw)
+    except ValueError:
+        pass
+    try:
+        return WindowId(raw)
+    except InvalidLayoutValueError:
+        pass
+    try:
+        return AppName(raw)
+    except ValueError as e:
+        raise InvalidLayoutValueError(
+            f"{raw!r} is not a window: give a window id (win-<hex>), 'self', 'pinned', or an app name"
+        ) from e
+
+
 @pure
 def op_only_args(args_raw: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in args_raw.items() if key not in TARGET_ARG_KEYS}
@@ -50,6 +80,14 @@ class OpRequester(FrozenModel):
 
     app: AppName = Field(description="The requesting app")
     marker: str = Field(description="The requester's marker; empty for a bare app")
+
+
+@pure
+def requester_spelling(requester: OpRequester | None) -> str:
+    """The requester as a ``layout_op`` message carries it: ``<app>`` or ``<app>:<marker>``, empty for none."""
+    if requester is None:
+        return ""
+    return str(requester.app) + (f":{requester.marker}" if requester.marker else "")
 
 
 @pure
@@ -72,24 +110,29 @@ def parse_op_requester(raw: Any) -> OpRequester | None:
     raise InvalidLayoutValueError("``requester`` must be null or an object with ``app`` and ``marker``")
 
 
-class Wallpaper(FrozenModel):
-    """A reference to a wallpaper image: bundled with the shell, or a file in the workspace's wallpapers directory."""
-
-    kind: WallpaperKind = Field(description="Bundled or file")
-    name: WallpaperName = Field(description="The file name without its extension")
+# The states ``place`` sets a window to; a window comes back to ``NORMAL`` through ``restore`` or a ``frame``.
+PLACEABLE_STATES: Final[tuple[WindowState, ...]] = (
+    WindowState.SNAPPED_LEFT,
+    WindowState.SNAPPED_RIGHT,
+    WindowState.MAXIMIZED,
+)
 
 
 class DesktopOpArguments(FrozenModel):
     """The arguments of an op, as desktop contracts.md section 8 spells them (the target keys stripped)."""
 
-    window: str = Field(default="", description="A window id, ``self``, or an app name")
-    app: str = Field(default="", description="The app an ``open``, a ``show``, or a whole-app ``refresh`` names")
-    path: str = Field(default="", description="The path an ``open``, a ``navigate``, or a ``show`` names")
-    showing: tuple[str, ...] = Field(
+    window: str = Field(default="", description="A window id, ``self``, ``pinned``, or an app name")
+    app: AppName | None = Field(
+        default=None, description="The app an ``open``, a ``show``, a shortcut op, or a whole-app ``refresh`` names"
+    )
+    path: WindowPath | None = Field(
+        default=None, description="The path an ``open``, a ``navigate``, or a ``show`` names"
+    )
+    showing: tuple[WindowPath, ...] = Field(
         default=(), description="The other paths that count as already showing a ``show``'s path"
     )
-    repoint: tuple[str, ...] = Field(
-        default=(), description="The pages, without a query string, whose windows a ``show`` may point at its path"
+    repoint: tuple[WindowPage, ...] = Field(
+        default=(), description="The pages whose windows a ``show`` may point at its path"
     )
     launch: LaunchPathId | None = Field(
         default=None,
@@ -112,11 +155,21 @@ class DesktopOpArguments(FrozenModel):
         description="A window an ``open`` lays its window beside for the target client: that one snapped to the left "
         "half, the opened one to the right half and on top",
     )
-    zone: str = Field(default="", description="``left``, ``right``, or ``maximized`` for ``place``")
-    frame: str = Field(default="", description="``x,y,width,height`` in fractions for ``place``")
+    state: WindowState | None = Field(default=None, description="The state ``place`` sets, one of PLACEABLE_STATES")
+    frame: Frame | None = Field(default=None, description="The frame ``place`` sets")
     mode: ShortcutMode = Field(default=ShortcutMode.FOCUS, description="A shortcut's mode for ``shortcut_set``")
-    cell: str = Field(default="", description="``column,row`` for ``shortcut_set`` and ``shortcut_move``")
+    cell: GridCell | None = Field(default=None, description="The cell for ``shortcut_set`` and ``shortcut_move``")
     wallpaper: Wallpaper | None = Field(default=None, description="The wallpaper reference for ``wallpaper``")
+
+    @field_validator("state")
+    @classmethod
+    def _check_placeable(cls, state: WindowState | None) -> WindowState | None:
+        if state is not None and state not in PLACEABLE_STATES:
+            raise InvalidLayoutValueError(
+                f"place sets a state of {[placeable.value for placeable in PLACEABLE_STATES]}, not {state.value!r}; "
+                "a frame or a restore puts a window back to normal"
+            )
+        return state
 
 
 class ClientActivityReport(FrozenModel):
@@ -136,11 +189,9 @@ class ShowRequest(FrozenModel):
     """A ``show`` of one of an app's paths on one client's screen."""
 
     app: AppName = Field(description="The app whose page to show")
-    path: str = Field(description="The path to put on the client's screen")
-    showing: tuple[str, ...] = Field(description="The app's other paths that count as already showing it")
-    repoint: tuple[str, ...] = Field(
-        description="The pages (paths without a query string) whose windows the shell may point at the path"
-    )
+    path: WindowPath = Field(description="The path to put on the client's screen")
+    showing: tuple[WindowPath, ...] = Field(description="The app's other paths that count as already showing it")
+    repoint: tuple[WindowPage, ...] = Field(description="The pages whose windows the shell may point at the path")
     client_id: ClientId | None = Field(
         description="The client whose screen it goes on; None leaves it to the shell (the requester's, else the one "
         "connected client)"
@@ -151,7 +202,7 @@ class OpenRequest(FrozenModel):
     """An ``open`` of an app's window at a path."""
 
     app: AppName = Field(description="The app whose window to open")
-    path: str = Field(description="The page to open, a path under the app's origin")
+    path: WindowPath = Field(description="The page to open, a path under the app's origin")
     if_present: IfPresent = Field(description="Focus a window already at the path, or open another")
     is_minimized: bool = Field(description="Whether a window this open creates is placed minimized")
     client_id: ClientId | None = Field(description="The client it opens for; None leaves it to the shell")
@@ -169,27 +220,92 @@ class WindowRequest(FrozenModel):
 class NavigateRequest(WindowRequest):
     """A ``navigate`` of one window to another path under its app."""
 
-    path: str = Field(description="The path to point the window at")
+    path: WindowPath = Field(description="The path to point the window at")
 
 
 class PlaceRequest(WindowRequest):
     """A ``place`` of one window at a frame."""
 
-    frame: str = Field(description="``x,y,width,height`` in fractions of the backdrop")
+    frame: Frame = Field(description="The frame, in fractions of the backdrop")
+
+
+class OpBody(FrozenModel):
+    """The op route's body (desktop contracts.md section 8): the op, its arguments, and who asked."""
+
+    op: LayoutOp = Field(description="The op")
+    args: dict[str, Any] = Field(
+        description="The op's arguments, the target keys among them; read as DesktopOpArguments once they are stripped"
+    )
+    requester: OpRequester | None = Field(description="Who asked; None for a caller outside an agent")
 
 
 @pure
 def op_request_body(op: LayoutOp, arguments: Mapping[str, Any], requester: OpRequester | None) -> dict[str, Any]:
-    """The op route's body: the op, its arguments, and who asked."""
-    return {
-        "op": op,
-        "args": dict(arguments),
-        "requester": None if requester is None else requester.model_dump(mode="json"),
-    }
+    """The op route's body as the wire spells it."""
+    return OpBody(op=op, args=dict(arguments), requester=requester).model_dump(mode="json")
 
 
 @pure
-def _with_target(arguments: DesktopOpArguments, client_id: ClientId | None, desktop: str | None) -> dict[str, Any]:
+def parse_op_body(raw: Any) -> OpBody:
+    """The op route's body as the shell reads one; raises InvalidLayoutValueError naming what is wrong with it."""
+    if not isinstance(raw, dict):
+        raise InvalidLayoutValueError("Request body must be a JSON object")
+    op = parse_layout_op(raw.get("op"))
+    if op is None:
+        raise InvalidLayoutValueError(f"Unknown layout op: {raw.get('op')!r}")
+    requester = parse_op_requester(raw.get("requester"))
+    args = raw.get("args", {})
+    if not isinstance(args, dict):
+        raise InvalidLayoutValueError("``args`` must be a JSON object")
+    return OpBody(op=op, args=args, requester=requester)
+
+
+@pure
+def read_op_arguments(args: Mapping[str, Any]) -> DesktopOpArguments:
+    """An op's arguments as the shell reads them: the target keys strings, the rest ones ``DesktopOpArguments``
+    takes; raises InvalidLayoutValueError naming what is wrong."""
+    for key in TARGET_ARG_KEYS & args.keys():
+        if not isinstance(args[key], str):
+            raise InvalidLayoutValueError(f"``args.{key}`` must be a string")
+    try:
+        return DesktopOpArguments.model_validate(op_only_args(args))
+    except ValidationError as e:
+        raise InvalidLayoutValueError(f"bad op arguments: {describe_validation_error(e)}") from e
+
+
+@pure
+def op_reads_arguments(op: LayoutOp) -> bool:
+    """Whether the shell reads an op's arguments at all: ``context`` and the inventory ops are answered whatever they
+    carry, and every other op is refused for arguments ``DesktopOpArguments`` does not take."""
+    match op:
+        case LayoutOp.CONTEXT | LayoutOp.DESKTOPS | LayoutOp.LIST:
+            return False
+        case (
+            LayoutOp.LOAD
+            | LayoutOp.OPEN
+            | LayoutOp.SHOW
+            | LayoutOp.FOCUS
+            | LayoutOp.MINIMIZE
+            | LayoutOp.RESTORE
+            | LayoutOp.MAXIMIZE
+            | LayoutOp.PLACE
+            | LayoutOp.CLOSE
+            | LayoutOp.NAVIGATE
+            | LayoutOp.SHORTCUTS
+            | LayoutOp.SHORTCUT_SET
+            | LayoutOp.SHORTCUT_MOVE
+            | LayoutOp.SHORTCUT_REMOVE
+            | LayoutOp.WALLPAPER
+            | LayoutOp.REFRESH
+            | LayoutOp.RELOAD_SYSTEM_INTERFACE
+        ):
+            return True
+        case _:
+            assert_never(op)
+
+
+@pure
+def wire_arguments(arguments: DesktopOpArguments, client_id: ClientId | None, desktop: str | None) -> dict[str, Any]:
     """The arguments as the wire spells them (only the fields the caller set), with the target keys it names."""
     wire = arguments.model_dump(mode="json", exclude_unset=True)
     if client_id is not None:
@@ -202,31 +318,31 @@ def _with_target(arguments: DesktopOpArguments, client_id: ClientId | None, desk
 @pure
 def show_op_arguments(request: ShowRequest) -> dict[str, Any]:
     arguments = DesktopOpArguments(
-        app=str(request.app), path=request.path, showing=request.showing, repoint=request.repoint
+        app=request.app, path=request.path, showing=request.showing, repoint=request.repoint
     )
-    return _with_target(arguments, request.client_id, None)
+    return wire_arguments(arguments, request.client_id, None)
 
 
 @pure
 def open_op_arguments(request: OpenRequest) -> dict[str, Any]:
     arguments = DesktopOpArguments(
-        app=str(request.app), path=request.path, if_present=request.if_present, minimized=request.is_minimized
+        app=request.app, path=request.path, if_present=request.if_present, minimized=request.is_minimized
     )
-    return _with_target(arguments, request.client_id, request.desktop)
+    return wire_arguments(arguments, request.client_id, request.desktop)
 
 
 @pure
 def window_op_arguments(request: WindowRequest) -> dict[str, Any]:
-    return _with_target(DesktopOpArguments(window=request.window), request.client_id, request.desktop)
+    return wire_arguments(DesktopOpArguments(window=request.window), request.client_id, request.desktop)
 
 
 @pure
 def navigate_op_arguments(request: NavigateRequest) -> dict[str, Any]:
     arguments = DesktopOpArguments(window=request.window, path=request.path)
-    return _with_target(arguments, request.client_id, request.desktop)
+    return wire_arguments(arguments, request.client_id, request.desktop)
 
 
 @pure
 def place_op_arguments(request: PlaceRequest) -> dict[str, Any]:
     arguments = DesktopOpArguments(window=request.window, frame=request.frame)
-    return _with_target(arguments, request.client_id, request.desktop)
+    return wire_arguments(arguments, request.client_id, request.desktop)

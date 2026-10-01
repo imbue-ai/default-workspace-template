@@ -12,6 +12,7 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from pydantic import BaseModel
 from pydantic import ValidationError
+from workspace_layout.ops import CLIENT_ARG_KEY
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 
@@ -91,7 +92,7 @@ def resolve_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
     Another user's client (a visitor's, while the owner messaged) is not where they are looking, so it never takes
     over from theirs.
     """
-    explicit = args_raw.get("client")
+    explicit = args_raw.get(CLIENT_ARG_KEY)
     if isinstance(explicit, str) and explicit:
         # Held to the client id rule before it names a layout file.
         client_id = ClientId(explicit)

@@ -6,9 +6,16 @@ from typing import Any
 from typing import Final
 
 from app_manifest.primitives import AppName
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from loguru import logger
+from pydantic import Field
+from pydantic import ValidationError
 
+from workspace_layout.answers import DesktopsListing
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPath
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 
 # One loopback read of a small file the shell holds in memory; past this it is not answering.
@@ -44,28 +51,37 @@ def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
 @pure
 def window_paths_of_app(document: Any, app: AppName) -> list[str] | None:
     """The paths of ``app``'s windows in a desktops document, or None when the document is not one."""
-    if not isinstance(document, dict) or not isinstance(document.get("desktops"), list):
+    try:
+        listing = DesktopsListing.model_validate(document, extra="ignore")
+    except ValidationError:
         return None
     paths: list[str] = []
-    for desktop in document["desktops"]:
-        if not isinstance(desktop, dict) or not isinstance(desktop.get("windows"), list):
-            return None
-        for window in desktop["windows"]:
-            if not isinstance(window, dict):
-                return None
-            window_app = window.get("app")
-            path = window.get("path")
-            client_paths = window.get("client_paths", {})
-            if not isinstance(window_app, str) or not isinstance(path, str) or not isinstance(client_paths, dict):
-                return None
-            if not all(isinstance(client_path, str) for client_path in client_paths.values()):
-                return None
-            if window_app == app:
-                paths.append(path)
+    for desktop in listing.desktops:
+        for window in desktop.windows:
+            if window.app == app:
+                paths.append(str(window.path))
                 # An independent window's shared path stays its home path; what each client's page shows rides
                 # beside it, and any one of them keeps a resource alive.
-                paths.extend(client_paths.values())
+                paths.extend(str(client_path) for client_path in window.client_paths.values())
     return paths
+
+
+class WindowClosedHint(FrozenModel):
+    """What the shell posts to an app's ``window_closed_path`` when a window of the app closes
+    (docs/system/specs/window-bound-resources.md section 4.6)."""
+
+    path: WindowPath = Field(description="The path the closed window's page was at")
+    window_id: WindowId = Field(description="The window that closed")
+    desktop_id: DesktopId = Field(description="The desktop it was on")
+
+
+@pure
+def parse_window_closed_hint(body: Any) -> WindowClosedHint | None:
+    """The hint a closed-window post carries, or None for a body of another shape."""
+    try:
+        return WindowClosedHint.model_validate(body, extra="ignore")
+    except ValidationError:
+        return None
 
 
 @pure

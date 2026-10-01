@@ -683,12 +683,18 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: 
     _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
     disconnect_reason = "handler exited"
     try:
-        websocket.send(json.dumps({"type": "apps_updated", "apps": shell.inventory.serialized()}))
+        websocket.send(
+            json.dumps(
+                {"type": "apps_updated", "apps": [app.model_dump(mode="json") for app in shell.inventory.views()]}
+            )
+        )
         websocket.send(
             json.dumps(
                 {
                     "type": "desktops_updated",
-                    "desktops": shell.desktops_wire_json(shell.list_desktops()),
+                    "desktops": [
+                        desktop.model_dump(mode="json") for desktop in shell.desktop_views(shell.list_desktops())
+                    ],
                 }
             )
         )

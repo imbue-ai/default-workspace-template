@@ -28,13 +28,14 @@ from workspace_layout.ops import PlaceRequest
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import WindowPath
+from workspace_layout.records import Frame
 
 # The frame the window is placed at: the left complement of the shell's pinned frame (desktop contracts.md 4.2),
-# clear of the one-column shortcut grid on a wide backdrop (launcher plan section 3.4), as ``x,y,width,height`` in
-# fractions of the backdrop.
-FIRST_WINDOW_FRAME: Final[str] = "0.07,0.05,0.38,0.9"
+# clear of the one-column shortcut grid on a wide backdrop (launcher plan section 3.4).
+FIRST_WINDOW_FRAME: Final[Frame] = Frame(x=0.07, y=0.05, width=0.38, height=0.9)
 # The page the window opens at: the app's root, its one launch path.
-FIRST_WINDOW_PATH: Final[str] = "/"
+FIRST_WINDOW_PATH: Final[WindowPath] = WindowPath("/")
 
 LEDGER_FILENAME: Final[str] = "first_window.json"
 _DELIVERED_KEY: Final[str] = "is_delivered"

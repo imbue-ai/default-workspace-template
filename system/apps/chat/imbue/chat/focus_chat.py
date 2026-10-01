@@ -19,6 +19,7 @@ from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.errors import ShellOpError
 from workspace_layout.ops import ShowRequest
 from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WindowPath
 
 from imbue.chat.auto_open import CHAT_ROOT_PAGE
 from imbue.chat.auto_open import chat_root_path
@@ -51,9 +52,9 @@ class FocusChatRequest(FrozenModel):
     chat_id: str = Field(alias="chatId", description="The chat to show")
 
 
-def chat_page_path(chat_id: ChatId) -> str:
+def chat_page_path(chat_id: ChatId) -> WindowPath:
     """The chat's own page: one chat, no list beside it."""
-    return f"/{chat_id}"
+    return WindowPath(f"/{chat_id}")
 
 
 @pure

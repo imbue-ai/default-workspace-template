@@ -50,7 +50,7 @@ from imbue.mngr.cli.output_helpers import write_human_line, write_stderr_line
 from workspace_layout.client import ShellLayoutClient, requester_from_environment
 from workspace_layout.errors import ShellOpError
 from workspace_layout.ops import OpenRequest
-from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import IfPresent, WindowPath
 from workspace_layout.shell_url import shell_base_url
 
 from browser.primitives import APP_NAME
@@ -196,7 +196,7 @@ def _open_viewer_window(browser_name: str, *, is_minimized: bool) -> None:
     )
     request = OpenRequest(
         app=APP_NAME,
-        path=f"/?session={browser_name}",
+        path=WindowPath(f"/?session={browser_name}"),
         if_present=IfPresent.FOCUS,
         is_minimized=is_minimized,
         client_id=None,

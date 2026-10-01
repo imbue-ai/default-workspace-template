@@ -18,7 +18,13 @@ from app_manifest.primitives import LaunchPathId
 from pydantic import ValidationError
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowTitle
+from workspace_layout.records import Desktop
+from workspace_layout.records import DesktopShortcut
+from workspace_layout.records import StoredWindowPath
 
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
@@ -28,9 +34,6 @@ from imbue.system_interface.shell.app_lifecycle import WAKE_WAIT_SECONDS
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import Desktop
-from imbue.system_interface.shell.data_types import DesktopShortcut
-from imbue.system_interface.shell.data_types import StoredWindowPath
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
@@ -40,9 +43,6 @@ from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
-from imbue.system_interface.shell.primitives import UserId
-from imbue.system_interface.shell.primitives import WindowPath
-from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_BEFORE_CHAT

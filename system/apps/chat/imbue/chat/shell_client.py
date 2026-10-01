@@ -11,6 +11,8 @@ from workspace_layout.client import ShellLayoutClient
 from workspace_layout.ops import OpRequester
 from workspace_layout.ops import ShowRequest
 from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WindowPage
+from workspace_layout.primitives import WindowPath
 from workspace_layout.shell_url import shell_base_url
 
 from imbue.chat.primitives import CHAT_APP_NAME
@@ -30,7 +32,9 @@ def build_live_chat_shell_client() -> ShellLayoutClient:
     return build_chat_shell_client(shell_base_url())
 
 
-def chat_show_request(path: str, showing: Sequence[str], repoint: Sequence[str], client_id: ClientId) -> ShowRequest:
+def chat_show_request(
+    path: WindowPath, showing: Sequence[WindowPath], repoint: Sequence[WindowPage], client_id: ClientId
+) -> ShowRequest:
     """A ``show`` of one of this app's paths on one client's screen."""
     return ShowRequest(
         app=CHAT_APP_NAME, path=path, showing=tuple(showing), repoint=tuple(repoint), client_id=client_id

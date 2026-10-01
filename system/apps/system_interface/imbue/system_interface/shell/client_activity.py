@@ -19,6 +19,12 @@ from typing import Final
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from pydantic import ValidationError
+from workspace_layout.answers import ClientActivitySummary
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.ops import ClientActivityReport
+from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import DesktopId
 
 from imbue.imbue_common.event_envelope import EventEnvelope
 from imbue.imbue_common.event_envelope import EventId
@@ -45,8 +51,8 @@ RECENT_MESSAGES_PER_CLIENT: Final[int] = 5
 class ClientMessageEvent(EventEnvelope):
     """A message a client sent to an app's page."""
 
-    client_id: str = Field(description="The sending client")
-    desktop_id: str = Field(description="The desktop the client was on")
+    client_id: ClientId = Field(description="The sending client")
+    desktop_id: DesktopId = Field(description="The desktop the client was on")
     app: str = Field(description="The app the message went to")
     key: str = Field(
         description="The marker of the page the message went to (a chat id); empty for a page without one"
@@ -91,18 +97,18 @@ class ClientActivityLog(MutableModel):
             with path.open("a", encoding="utf-8") as event_file:
                 event_file.write(event.model_dump_json() + "\n")
 
-    def append_message(self, client_id: str, desktop_id: str, app: str, key: str, text: str) -> None:
-        truncated, is_truncated = truncate_message_text(text)
+    def append_message(self, report: ClientActivityReport) -> None:
+        truncated, is_truncated = truncate_message_text(report.text)
         self._append(
             ClientMessageEvent(
                 timestamp=_now_iso(),
                 type=MESSAGE_EVENT_TYPE,
                 event_id=_new_event_id(),
                 source=CLIENT_ACTIVITY_EVENT_SOURCE,
-                client_id=client_id,
-                desktop_id=desktop_id,
-                app=app,
-                key=key,
+                client_id=report.client_id,
+                desktop_id=report.desktop_id,
+                app=report.app,
+                key=report.key,
                 text=truncated,
                 is_text_truncated=is_truncated,
             )
@@ -165,13 +171,14 @@ def _empty_client_summary(client_id: str) -> dict[str, Any]:
 def summarize_client_activity(
     events: Sequence[dict[str, Any]],
     connected_clients: Sequence[ConnectionRegistration],
-) -> list[dict[str, Any]]:
+) -> list[ClientActivitySummary]:
     """Fold the log into one summary per client, most recently seen first (the ``context`` op).
 
     Every connected client is listed with its live desktop, whether or not the log holds anything
     for it: a client that has neither messaged nor switched desktops yet has no event, and is
     still the one an agent's op should land on. A pop-out's registration makes its client connected
-    but names no desktop, so the client's desktop stays its main window's (or the log's).
+    but names no desktop, so the client's desktop stays its main window's (or the log's). A client
+    whose logged id or desktop is off its rule is left out, with a warning, rather than failing the op.
     """
     summary_by_client_id: dict[str, dict[str, Any]] = {}
     for event in events:
@@ -200,7 +207,13 @@ def summarize_client_activity(
         summary["is_connected"] = True
         if not connected.is_pop_out:
             summary["active_desktop"] = connected.active_desktop or None
-    return sorted(summary_by_client_id.values(), key=lambda summary: summary["last_seen"], reverse=True)
+    summaries: list[ClientActivitySummary] = []
+    for summary in sorted(summary_by_client_id.values(), key=lambda summary: summary["last_seen"], reverse=True):
+        try:
+            summaries.append(ClientActivitySummary.model_validate(summary))
+        except (ValidationError, InvalidLayoutValueError) as e:
+            logger.warning("Left client {!r} out of the activity summary: {}", summary["client_id"], e)
+    return summaries
 
 
 @pure

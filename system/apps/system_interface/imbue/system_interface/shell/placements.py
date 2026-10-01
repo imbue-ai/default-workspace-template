@@ -20,14 +20,14 @@ from pydantic import ValidationError
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WindowId
+from workspace_layout.records import DesktopLayout
+from workspace_layout.records import WindowPlacement
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.shell.data_types import DesktopLayout
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
-from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import PLACEMENTS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import drop_stale_placements
 from imbue.system_interface.shell.desktop_document import is_same_layout

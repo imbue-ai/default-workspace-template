@@ -13,23 +13,24 @@ from flask import jsonify
 from flask import request
 from flask.typing import ResponseReturnValue
 from loguru import logger
+from workspace_layout.answers import ClientsListing
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import parse_layout_op
 from workspace_layout.ops import parse_op_requester
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
+from workspace_layout.records import EntryPresentation
 
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.shell.clients import client_wire_json
+from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientShownRequest
-from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
-from imbue.system_interface.shell.desktop_routes import inventory_document_json
+from imbue.system_interface.shell.desktop_routes import inventory_document
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
-from imbue.system_interface.shell.desktop_routes import resolved_client_wire_json
+from imbue.system_interface.shell.desktop_routes import resolved_client_view
 from imbue.system_interface.shell.embedder_messages import EmbedderMessageRelayRequest
 from imbue.system_interface.shell.embedder_messages import deliver_forwarded_message
 from imbue.system_interface.shell.embedder_messages import forwarded_messages
@@ -154,9 +155,7 @@ def client_activity_route() -> ResponseReturnValue:
     shell = _shell()
     match report.kind:
         case ClientActivityKind.MESSAGE:
-            shell.activity.append_message(
-                str(report.client_id), str(report.desktop_id), report.app, report.key, report.text
-            )
+            shell.activity.append_message(report)
         case _ as unreachable:
             assert_never(unreachable)
     return "", HTTP_NO_CONTENT
@@ -241,18 +240,17 @@ def list_clients() -> ResponseReturnValue:
     shell = _shell()
     desktops = shell.list_desktops()
     connected = shell.broadcaster.connected_client_ids()
-    return jsonify(
-        {
-            "clients": [
-                resolved_client_wire_json(record, str(record.id) in connected, desktops)
-                for record in shell.clients.list_clients()
-            ]
-        }
+    listing = ClientsListing(
+        clients=tuple(
+            resolved_client_view(record, str(record.id) in connected, desktops)
+            for record in shell.clients.list_clients()
+        )
     )
+    return jsonify(listing.model_dump(mode="json"))
 
 
-def inventory_document() -> ResponseReturnValue:
-    return jsonify(inventory_document_json(_shell()))
+def inventory_route() -> ResponseReturnValue:
+    return jsonify(inventory_document(_shell()).model_dump(mode="json"))
 
 
 def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
@@ -269,7 +267,9 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
             f"App {app!r} offers the plain style and {pin.style.value!r}, not {body.style.value!r}"
         )
     record = shell.set_client_entry_presentation(ClientId(client_id), AppName(app), body)
-    return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
+    return jsonify(
+        client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()).model_dump(mode="json")
+    )
 
 
 def record_client_shown(client_id: str) -> ResponseReturnValue:
@@ -278,7 +278,9 @@ def record_client_shown(client_id: str) -> ResponseReturnValue:
     body = parse_request_body(ClientShownRequest)
     shell = _shell()
     record = shell.record_client_shown(ClientId(client_id), body.window_id)
-    return jsonify(client_wire_json(record, str(record.id) in shell.broadcaster.connected_client_ids()))
+    return jsonify(
+        client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()).model_dump(mode="json")
+    )
 
 
 # Section 5.6: the embedder-message relay
@@ -429,7 +431,7 @@ def register_shell_routes(application: Flask) -> None:
     )
     application.add_url_rule(
         "/api/inventory",
-        view_func=inventory_document,
+        view_func=inventory_route,
         methods=["GET"],
         endpoint="inventory_document",
     )

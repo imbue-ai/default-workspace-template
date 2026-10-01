@@ -1,9 +1,9 @@
 import pytest
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowTitle
 
 from imbue.system_interface.shell.errors import InvalidShellValueError
-from imbue.system_interface.shell.primitives import WindowPath
-from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.primitives import mint_window_id
 
 

@@ -16,11 +16,11 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 
-from workspace_layout.answers import ConnectedClient
+from workspace_layout.answers import ClientView
 from workspace_layout.answers import DesktopOpAnswer
-from workspace_layout.answers import DesktopSummary
 from workspace_layout.answers import OpenAnswer
 from workspace_layout.answers import ShowAnswer
+from workspace_layout.answers import TransientOpAnswer
 from workspace_layout.answers import parse_answer
 from workspace_layout.answers import parse_listing
 from workspace_layout.answers import quote_answer
@@ -41,6 +41,7 @@ from workspace_layout.ops import place_op_arguments
 from workspace_layout.ops import show_op_arguments
 from workspace_layout.ops import window_op_arguments
 from workspace_layout.primitives import LayoutOp
+from workspace_layout.records import DesktopView
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import DESKTOPS_ROUTE
@@ -184,18 +185,18 @@ class ShellLayoutClient(ShellLayoutInterface):
             DesktopOpAnswer, self._post_op(LayoutOp.CLOSE, window_op_arguments(request)), LayoutOp.CLOSE
         )
 
-    def refresh(self, request: WindowRequest) -> None:
-        self._post_op(LayoutOp.REFRESH, window_op_arguments(request))
+    def refresh(self, request: WindowRequest) -> TransientOpAnswer:
+        return parse_answer(
+            TransientOpAnswer, self._post_op(LayoutOp.REFRESH, window_op_arguments(request)), LayoutOp.REFRESH
+        )
 
-    def connected_clients(self) -> list[ConnectedClient]:
+    def connected_clients(self) -> list[ClientView]:
         body = self._request("GET", CLIENTS_ROUTE, None, "client list").body
-        return [
-            client for client in parse_listing(ConnectedClient, body, "clients", "client list") if client.is_connected
-        ]
+        return [client for client in parse_listing(ClientView, body, "clients", "client list") if client.is_connected]
 
-    def desktops(self) -> list[DesktopSummary]:
+    def desktops(self) -> list[DesktopView]:
         body = self._request("GET", DESKTOPS_ROUTE, None, "desktops").body
-        return parse_listing(DesktopSummary, body, "desktops", "desktops")
+        return parse_listing(DesktopView, body, "desktops", "desktops")
 
     def record_client_activity(self, report: ClientActivityReport) -> None:
         # The shell may be down or restarting, and the caller keeps working without it, so an unreachable or failing
@@ -238,13 +239,13 @@ class DisconnectedShell(ShellLayoutInterface):
     def close(self, request: WindowRequest) -> DesktopOpAnswer:
         raise _no_shell_error(f"close window {request.window}")
 
-    def refresh(self, request: WindowRequest) -> None:
+    def refresh(self, request: WindowRequest) -> TransientOpAnswer:
         raise _no_shell_error(f"refresh window {request.window}")
 
-    def connected_clients(self) -> list[ConnectedClient]:
+    def connected_clients(self) -> list[ClientView]:
         return []
 
-    def desktops(self) -> list[DesktopSummary]:
+    def desktops(self) -> list[DesktopView]:
         return []
 
     def record_client_activity(self, report: ClientActivityReport) -> None:

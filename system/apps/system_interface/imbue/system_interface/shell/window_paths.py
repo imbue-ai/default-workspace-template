@@ -18,10 +18,10 @@ from pydantic import ValidationError
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import WindowId
+from workspace_layout.records import StoredWindowPath
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
-from imbue.system_interface.shell.data_types import StoredWindowPath
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
