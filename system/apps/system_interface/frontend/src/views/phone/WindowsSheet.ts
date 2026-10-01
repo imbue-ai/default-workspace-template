@@ -61,9 +61,10 @@ export const WindowsSheet: m.Component<WindowsSheetAttrs> = {
     const { rows, shownWindowId, avatar, query, onQuery, onShow, onClose, onMenu, onCloseAll, onDismiss } =
       vnode.attrs;
     const closable = rows.filter((row) => !row.window.is_pinned).length;
-    const shown = rows.filter((row) =>
-      matchesQuery(query.trim(), row.title, row.app?.display_name ?? "", row.window.app),
-    );
+    const isSearchOffered = rows.length > WINDOW_SEARCH_THRESHOLD;
+    // A query left from when the field was offered narrows nothing once it is gone.
+    const filter = isSearchOffered ? query.trim() : "";
+    const shown = rows.filter((row) => matchesQuery(filter, row.title, row.app?.display_name ?? "", row.window.app));
     return m(
       Sheet,
       {
@@ -85,7 +86,7 @@ export const WindowsSheet: m.Component<WindowsSheetAttrs> = {
         ]),
       },
       [
-        rows.length > WINDOW_SEARCH_THRESHOLD
+        isSearchOffered
           ? m(
               "label",
               {
