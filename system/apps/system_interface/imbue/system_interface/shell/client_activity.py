@@ -21,7 +21,6 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
 from workspace_layout.answers import ClientActivitySummary
-from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
@@ -211,7 +210,7 @@ def summarize_client_activity(
     for summary in sorted(summary_by_client_id.values(), key=lambda summary: summary["last_seen"], reverse=True):
         try:
             summaries.append(ClientActivitySummary.model_validate(summary))
-        except (ValidationError, InvalidLayoutValueError) as e:
+        except ValidationError as e:
             logger.warning("Left client {!r} out of the activity summary: {}", summary["client_id"], e)
     return summaries
 
