@@ -1109,13 +1109,14 @@ def dispatch_desktop_op(
         case "open":
             window_id, notes = _open(shell, arguments, target, requester)
         case "refresh":
+            refreshed = _refresh_window(shell, arguments, target, requester)
             _switch_as_asked(shell, target)
-            return _refresh_window(shell, arguments, target, requester)
+            return refreshed
         case "show":
             return _show(shell, arguments, target, requester)
         case _ if op in SHORTCUT_OPS:
-            _switch_as_asked(shell, target)
             _op_shortcuts(shell, op, arguments, target)
+            _switch_as_asked(shell, target)
         case _:
             window_id, notes = _op_window(shell, op, arguments, target, requester)
             # A window raised in its own window, or brought back from it, stays on its own desktop: the client's

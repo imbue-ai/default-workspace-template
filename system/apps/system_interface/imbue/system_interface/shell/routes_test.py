@@ -1779,6 +1779,27 @@ def test_a_forced_placement_verb_brings_the_window_back_onto_its_own_desktop(
     assert "active_desktop_changed" not in [message["type"] for message in drain_messages(client_queue)]
 
 
+@pytest.mark.parametrize(
+    ("op", "args", "status"),
+    [
+        pytest.param("refresh", {"window": "win-00000000000000ff"}, 404, id="refresh-of-a-missing-window"),
+        pytest.param("shortcut_move", {"app": "files", "launch": "new"}, 400, id="shortcut-move-with-no-cell"),
+    ],
+)
+def test_an_op_that_fails_leaves_the_client_on_its_desktop(
+    client: FlaskClient, app: Flask, op: str, args: dict[str, Any], status: int
+) -> None:
+    """``args.desktop`` switches the client only once the op has been applied."""
+    _register_client(app, "c1", "home")
+    client.post("/api/desktops", json={"name": "Research", "color": "#12B5A5", "glyph": 4})
+
+    failed = _op(client, op, {**args, "desktop": "research", "client": "c1"}, None)
+
+    assert failed.status_code == status
+    recorded = _shell(app).clients.get_client("c1")
+    assert recorded is not None and recorded.active_desktop == "home"
+
+
 def test_a_disconnected_clients_pulled_out_window_is_not_a_pop_out_and_comes_back(
     client: FlaskClient, app: Flask
 ) -> None:
