@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from imbue.system_interface.shell.client_activity import ClientActivityLog
+from imbue.system_interface.shell.client_activity import DESKTOP_SWITCH_EVENT_TYPE
 from imbue.system_interface.shell.client_activity import MESSAGE_TEXT_TRUNCATION_LIMIT
 from imbue.system_interface.shell.client_activity import RECENT_MESSAGES_PER_CLIENT
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
@@ -94,6 +95,20 @@ def test_a_message_to_a_page_without_a_marker_is_summarized_with_an_empty_key(tm
     log.append_message(message_report("c1", "home", "files", "", "open the notes"))
     (summary,) = summarize_client_activity(log.read_events(), [])
     assert (summary.recent_messages[0].app, summary.recent_messages[0].key) == ("files", "")
+
+
+def test_a_client_logged_off_its_rules_is_left_out_of_the_summary(tmp_path: Path) -> None:
+    log = _log(tmp_path)
+    log.append_message(message_report("c1", "home", "chat", "agent-1", "hello"))
+    # Lines a writer outside the report model could have left: a client id and a desktop id off their rules.
+    off_rule_events = [
+        {"type": DESKTOP_SWITCH_EVENT_TYPE, "client_id": "not a client id", "to_desktop_id": "home"},
+        {"type": DESKTOP_SWITCH_EVENT_TYPE, "client_id": "c2", "to_desktop_id": "Not A Desktop"},
+    ]
+
+    summaries = summarize_client_activity([*log.read_events(), *off_rule_events], [])
+
+    assert [summary.client_id for summary in summaries] == ["c1"]
 
 
 def test_the_last_client_to_message_a_page_is_found(tmp_path: Path) -> None:
