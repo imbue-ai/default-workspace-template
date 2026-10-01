@@ -1,0 +1,1 @@
+The `browser` and `earlyoom` supervisord programs' comments describe the new shedding order: the chat app's spare chat agents (`SPARE_AGENT`, 1000) go first, and Chromium's processes are remapped into 910-990, with renderers at the top of that band.
