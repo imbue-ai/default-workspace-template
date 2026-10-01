@@ -145,6 +145,13 @@ describe("the launcher menu", () => {
     expect(attrs.onAppShortcutContextMenu).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves the shortcut row's right-click alone with no handler, as the phone's start sheet passes", () => {
+    const { root } = render(launcherRowsOf(stateWithWindows(), ""), { onAppShortcutContextMenu: null });
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    root.querySelector('[data-launch="terminal:new"]')!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("spells the secondary key for the platform and previews the first words of the text", () => {
     expect(secondaryKeyLabel(true)).toBe("Cmd+Enter");
     expect(secondaryKeyLabel(false)).toBe("Ctrl+Enter");
