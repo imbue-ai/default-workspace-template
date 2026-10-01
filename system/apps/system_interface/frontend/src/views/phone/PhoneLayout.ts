@@ -24,6 +24,7 @@ import {
   startSheetRows,
   windowsSheetRows,
 } from "../../reducers/phone";
+import type { ShownMountPolicy } from "../../pages/livePages";
 import type { DesktopStore } from "../../store/DesktopStore";
 import { Toasts } from "../Toast";
 import { UpdateNoticeBanner } from "../UpdateNoticeBanner";
@@ -287,11 +288,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
 }
 
 /** The pages the phone keeps mounted: the shown window's, and the pinned chat window's (where a phone lands). */
-export function phoneMountPolicy(store: DesktopStore): {
-  readonly kind: "shown";
-  readonly windowId: string | null;
-  readonly alsoKeep: readonly string[];
-} {
+export function phoneMountPolicy(store: DesktopStore): ShownMountPolicy {
   const state = store.getState();
   const pinned = pinnedChatWindowOf(state);
   return { kind: "shown", windowId: shownWindowOf(state)?.id ?? null, alsoKeep: pinned === null ? [] : [pinned.id] };

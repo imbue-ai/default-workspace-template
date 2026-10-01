@@ -101,7 +101,13 @@ import {
   pinnedWindowOf,
   reduceDesktopState,
 } from "../reducers/desktopState";
-import type { DesktopEvent, DesktopState, DetachedWindowReport, PhoneShown } from "../reducers/desktopState";
+import type {
+  DesktopEvent,
+  DesktopState,
+  DetachedWindowReport,
+  PhoneSheet,
+  PhoneShown,
+} from "../reducers/desktopState";
 import { focusTargetOf, isShownWindowGone, phoneLanding, pinnedChatWindowOf, shownWindowOf } from "../reducers/phone";
 import { STILL_CONNECTING_NOTICE, cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
@@ -581,7 +587,7 @@ export class DesktopStore {
     this.dispatch({ type: "phone_shown", shown: phoneLanding(this.state) });
   }
 
-  openPhoneSheet(sheet: "windows" | "start" | null): void {
+  openPhoneSheet(sheet: PhoneSheet | null): void {
     this.dispatch({ type: "phone_sheet_set", sheet });
   }
 

@@ -6,13 +6,14 @@
  */
 
 import m from "mithril";
+import type { PhoneSheet } from "../../reducers/desktopState";
 
 /** How far down the head is dragged, as a fraction of the panel's height, before the release dismisses. */
 const DISMISS_FRACTION = 0.25;
 
 export interface SheetAttrs {
   /** ``data-phone-sheet``: which sheet this is. */
-  readonly name: "windows" | "start";
+  readonly name: PhoneSheet;
   readonly onDismiss: () => void;
   /** The heading row's content, beside which the drag starts. */
   readonly head: m.Children;

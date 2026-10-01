@@ -102,10 +102,15 @@ export interface LivePagesOptions {
   readonly protocol: string;
 }
 
+/** The phone's pages: the shown window's, and the ones it keeps beside it. */
+export type ShownMountPolicy = {
+  readonly kind: "shown";
+  readonly windowId: string | null;
+  readonly alsoKeep: readonly string[];
+};
+
 /** Which pages live: every page of the desktop's windows, or the phone's shown page and the ones it keeps. */
-export type MountPolicy =
-  | { readonly kind: "all" }
-  | { readonly kind: "shown"; readonly windowId: string | null; readonly alsoKeep: readonly string[] };
+export type MountPolicy = { readonly kind: "all" } | ShownMountPolicy;
 
 /** A pixel box relative to the pages' host. */
 interface HostRect {
