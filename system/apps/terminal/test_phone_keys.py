@@ -11,7 +11,15 @@ from collections.abc import Callable
 from typing import Final
 
 import pytest
-from playwright.sync_api import Browser, BrowserContext, Frame, Locator, Page, Route, expect
+from playwright.sync_api import (
+    Browser,
+    BrowserContext,
+    Frame,
+    Locator,
+    Page,
+    Route,
+    expect,
+)
 from terminal_app.dispatch import load_ttyd_web_client
 from terminal_app.pages import PageConfig, SessionPage, render_page
 from terminal_app.primitives import TerminalTitle, TmuxSessionName
@@ -240,6 +248,8 @@ def test_the_pty_page_script_turns_strip_keys_into_the_sequences_xterm_sends(
     phone_context: BrowserContext,
 ) -> None:
     page, frame = _open_with_stub_term(phone_context)
+    console: list[str] = []
+    page.on("console", lambda message: console.append(message.text))
 
     for name in ["Esc", "Tab", "Up", "Down", "Right", "Left"]:
         _key(page, name).tap()
@@ -260,6 +270,17 @@ def test_the_pty_page_script_turns_strip_keys_into_the_sequences_xterm_sends(
         ["\x1bOA", True],
         ["\x1b[1;5D", True],
     ]
+    # The stub has none of xterm's internals, so Ctrl reaches no typed key: said once, however often armed.
+    _key(page, "Ctrl").tap()
+    expect(_key(page, "Ctrl")).to_have_attribute("aria-pressed", "true")
+    _key(page, "Ctrl").tap()
+    expect(_key(page, "Ctrl")).to_have_attribute("aria-pressed", "false")
+    _key(page, "Ctrl").tap()
+    frame.evaluate("new Promise((resolve) => setTimeout(resolve, 0))")
+    unsupported = [
+        text for text in console if "Ctrl applies to the key strip only" in text
+    ]
+    assert len(unsupported) == 1
 
 
 def _touch(page: Page) -> Callable[[str, list[tuple[int, int]]], None]:

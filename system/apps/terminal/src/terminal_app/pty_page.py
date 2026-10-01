@@ -40,6 +40,7 @@ PTY_PAGE_SCRIPT: Final[str] = r"""
   const isFramed = window.parent !== window;
   let isCtrlArmed = false;
   let wrappedService = null;
+  let isCtrlUnsupportedWarned = false;
   let touchStart = null;
 
   function withCtrl(char) {
@@ -65,9 +66,12 @@ PTY_PAGE_SCRIPT: Final[str] = r"""
 
   function applyCtrlToTypedKeys(term) {
     const service = term._core?.coreService;
-    if (service === undefined || service === wrappedService) return;
-    if (typeof service.triggerDataEvent !== "function") {
-      console.warn("[terminal] this xterm has no triggerDataEvent: Ctrl applies to the key strip only");
+    if (service !== undefined && service === wrappedService) return;
+    if (typeof service?.triggerDataEvent !== "function") {
+      if (!isCtrlUnsupportedWarned) {
+        console.warn("[terminal] this xterm has no triggerDataEvent: Ctrl applies to the key strip only");
+      }
+      isCtrlUnsupportedWarned = true;
       return;
     }
     const send = service.triggerDataEvent.bind(service);
