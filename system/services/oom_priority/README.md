@@ -323,6 +323,9 @@ It lists:
   - is a chat (`user_created=true`) or a worker (`agent_created=true`). The
     primary services agent and any agent with neither label (an automation, for
     example) are never listed;
+  - is not one of the chat app's spare agents, which its
+    `data/.state/chat/spare_chat.json` records. A spare is no chat until a chat
+    takes it, and the chat app replaces one that is stopped;
   - is `WAITING`, meaning its turn has ended. A `RUNNING` agent is mid-turn, and
     a `STOPPED` or `DONE` agent holds no memory to free;
   - has had no activity for `IDLE_AFTER_SECONDS` (15 minutes). Its last
