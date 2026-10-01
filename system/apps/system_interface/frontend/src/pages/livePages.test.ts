@@ -546,6 +546,27 @@ describe("the contract", () => {
     expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?doc=9" }]);
   });
 
+  it("follows an independent window's stored path back to the one its page reported leaving", async () => {
+    await showIndependentWindow([placementRecord("win-4")]);
+    const spy = spyOnFrame("win-4");
+    load("win-4");
+    messageFromPage("win-4", { type: SHELL_CAPABILITIES, navigation: true });
+    spy.mockClear();
+    // From here the layer reconciles only when the store says something changed, as the app's redraw does.
+    store.subscribe(() => layer.reconcile());
+    // The page moves on by itself, and the shell's broadcast confirms the path it reported.
+    messageFromPage("win-4", { type: SHELL_LOCATION, path: "/?doc=8", title: "Eight" });
+    await settle();
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell-2" });
+    await settle();
+    expect(spy).not.toHaveBeenCalled();
+    // An agent's show then points this client's page back where it was (opening a notification's chat).
+    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell-3" });
+    await settle();
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?doc=7" }]);
+  });
+
   it("leaves an independent window's hidden page alone while another desktop is active", async () => {
     const frame = await showIndependentWindow([placementRecord("win-4")]);
     expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
