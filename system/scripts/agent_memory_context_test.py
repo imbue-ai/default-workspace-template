@@ -129,6 +129,8 @@ def test_main_prints_the_protocol_and_the_live_index(
                 str(notes_dir),
                 "--protocol",
                 str(protocol),
+                "--changes",
+                str(tmp_path / "user-changes.jsonl"),
             ]
         )
         == 0
@@ -154,6 +156,8 @@ def test_main_prints_nothing_and_succeeds_when_the_protocol_is_missing(
             str(notes_dir),
             "--protocol",
             str(tmp_path / "missing.md"),
+            "--changes",
+            str(tmp_path / "user-changes.jsonl"),
         ]
     )
 
