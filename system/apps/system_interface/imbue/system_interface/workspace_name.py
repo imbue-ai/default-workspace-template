@@ -36,7 +36,10 @@ def _read_record(path: Path) -> dict[str, Any] | None:
     except (OSError, ValueError) as e:
         logger.warning("Could not read the workspace name from {}: {}", path, e)
         return None
-    return raw if isinstance(raw, dict) else None
+    if not isinstance(raw, dict):
+        logger.warning("Could not read the workspace name from {}: the record is not a JSON object", path)
+        return None
+    return raw
 
 
 def _nonempty_string(value: Any) -> str | None:
