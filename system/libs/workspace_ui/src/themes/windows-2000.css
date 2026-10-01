@@ -155,7 +155,11 @@
   margin-left: 2px;
   border: none;
   background: transparent;
+  box-shadow: none;
   color: inherit;
+}
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]) > * {
+  display: block;
 }
 :root[data-ui-theme="windows-2000"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]):hover {
   box-shadow: var(--win-thin-raised);
@@ -196,7 +200,14 @@
 }
 
 /* Fields: white and sunk, like win95.css's .form-95. */
-:root[data-ui-theme="windows-2000"] :is(input[type="text"], input[type="search"], input[type="email"], input[type="password"], input[type="url"], input[type="number"], textarea, select) {
+:root[data-ui-theme="windows-2000"] :is(input[type="text"], input[type="search"], input[type="email"], input[type="password"], input[type="url"], input[type="number"], select) {
+  border: none;
+  border-radius: 0;
+  background-color: #ffffff;
+  box-shadow: var(--win-sunken);
+  font-family: var(--font-sans);
+}
+:root[data-ui-theme="windows-2000"] textarea {
   border-radius: 0;
   font-family: var(--font-sans);
 }
@@ -294,10 +305,4 @@
 }
 :root[data-ui-theme="windows-2000"] .getting-started-tile:active {
   box-shadow: var(--win-pressed);
-}
-:root[data-ui-theme="windows-2000"] .getting-started-search {
-  border: none;
-  border-radius: 0;
-  background: #ffffff;
-  box-shadow: var(--win-sunken);
 }
