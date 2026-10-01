@@ -295,9 +295,9 @@ gets validated below; an impacted skill gets validated per its own contract.
 **Provisioning files** (`system/scripts/setup_system.sh`, the installers it
 chains, `.mngr/**`) and **global-dependency bumps** always count as impacted
 even though nothing imports them; work them per
-`references/worker-provisioning-changes.md` and report each there. `stuck` has
-one condition: leaving the running workspace on the old provisioning would
-break it.
+`references/worker-provisioning-changes.md` and report each there. For a
+provisioning finding, `stuck` has one condition: leaving the running workspace
+on the old provisioning would break it.
 
 ### 4b. Validate
 
