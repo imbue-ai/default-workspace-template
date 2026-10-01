@@ -514,10 +514,11 @@ updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
 
 Have Step 1's backup result before running it (Step 1 says how; a pass whose
 local Step 1 ran the backup in the foreground already has it, or, if that
-backup was abandoned, reports the outcome as not observed). When it exited 2,
-its tick -- the update's restore point -- may still be running, so append
-`--backup-wait-seconds 900` to the apply below: the restart then waits up to
-15 minutes (restic takes 8 to 13 on a two-core workspace) rather than kill it.
+backup was abandoned, reports the outcome as not observed). When it exited 2
+or was abandoned, its tick -- the update's restore point -- may still be
+running, so append `--backup-wait-seconds 900` to the apply below: the restart
+then waits up to 15 minutes (restic takes 8 to 13 on a two-core workspace)
+rather than kill it.
 Run the apply from the staged copy, in the **foreground**: its output (refusal
 and resume messages, any provisioner warning, the `apply phase timings:` line)
 is what you read before recording a verdict.
