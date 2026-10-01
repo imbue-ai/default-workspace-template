@@ -347,6 +347,10 @@
   flex-direction: column;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+  /* A face must be its own stacking context, or a z-indexed descendant (a transcript row's
+     z-[2], a timeline bullet) stacks in the turner's context instead and is painted mirrored
+     over the other face: WebKit and Firefox draw it there, Chromium happens not to. */
+  isolation: isolate;
   /* Each face paints the surface, so the card reads as one solid object mid-turn rather than
      as a hole with two pictures behind it. */
   background: var(--c-surface);
