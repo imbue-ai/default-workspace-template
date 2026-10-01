@@ -22,6 +22,7 @@ from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
 from flask import Flask
 from flask import request
+from loguru import logger
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WindowId
 
@@ -521,7 +522,12 @@ def running_file_viewer(root: Path) -> Iterator[str]:
         yield url
     finally:
         process.terminate()
-        process.wait(timeout=5.0)
+        try:
+            process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            logger.warning("dufs at {} did not stop on SIGTERM; killing it", url)
+            process.kill()
+            process.wait(timeout=5.0)
 
 
 def file_viewer_registry_row(url: str) -> str:
