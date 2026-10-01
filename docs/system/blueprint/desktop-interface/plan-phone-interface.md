@@ -86,7 +86,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 ### The file viewer
 
 - Under 700px of its own width the dufs frontend swaps the Name / Last Modified / Size / Actions table for one row per entry: the dufs octicon, the name, and "<mtime> · <size>" beneath it. Folders navigate; files open the editor page. A row kebab opens a bottom sheet with Download, Edit or View, Move & Rename, Delete, calling the same functions the table's action cells call and using dufs's own prompts.
-- The header shows an up button, the folder name, a search toggle and a kebab holding the toolbox verbs: Show or Hide system files, Download folder as .zip, Upload files or folders, New folder, New file. Beneath it a scrollable breadcrumb strip; while searching, the dufs search bar replaces it and results show their relative path. Sort keys sit above the list. The editor page shows a Save button and the file's kebab.
+- The header shows an up button, the folder name, a search toggle and a kebab holding the toolbox verbs: Show or Hide system files, Download folder as .zip, Upload files or folders, New folder, New file. Beneath it a scrollable breadcrumb strip; while searching, the dufs search bar replaces it and results show their relative path. Sort keys sit above the list. The editor page shows a Save button and the file's kebab; a file's view page shows the kebab, with Edit where the table offers it.
 - Everything stays a client-side patch to the vendored copy, in its own asset files, so a dufs bump re-applies two include lines.
 
 ### The terminal
@@ -136,7 +136,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 
 ### File viewer (`system/apps/files/assets/`)
 
-- New `phone.css` and `phone.js`, referenced from `index.html` with `?v=minds-8` (all three existing URLs bumped too). `phone.js` runs after `ready()`: under `(max-width: 700px)` it hides `.paths-table` and `.head`, renders the header, breadcrumb strip, sort keys, rows and sheets from `DATA.paths` and `PARAMS`, honoring `isShowingHiddenFiles()`, and calls `movePath`, `deletePath`, `createFolder`, `createFile` and the download URLs the table uses. The editor page gets the Save button (`saveChange`) and kebab. Marked `minds patch` as the others are; `README.md` lists it as the sixth patch.
+- New `phone.css` and `phone.js`, referenced from `index.html` with `?v=minds-8` (all three existing URLs bumped too). `phone.js` runs after `ready()`: under `(max-width: 700px)` it hides `.paths-table` and `.head`, renders the header, breadcrumb strip, sort keys, rows and sheets from `DATA.paths` and `PARAMS`, honoring `isShowingHiddenFiles()`, and calls `movePath`, `deletePath`, `createFolder`, `createFile` and the download URLs the table uses. The editor page gets the Save button (`saveChange`) and kebab; the view page gets the kebab, whose Edit row clicks the page's `.edit-file` control. Marked `minds patch` as the others are; `README.md` lists it as the sixth patch.
 - `system/apps/files/test_phone_layout.py` (marked `browser`): serves the assets over a static server with a fixture `__INDEX_DATA__`, asserts rows under 700px, the kebab sheet's actions reach the dufs handlers (stubbed `fetch`), sort and search.
 
 ### Terminal (`system/apps/terminal/src/terminal_app/pages.py`, `pty_page.py`, `dispatch.py`)
