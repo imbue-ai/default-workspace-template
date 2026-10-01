@@ -227,22 +227,10 @@ export interface MessageInputAttrs {
 /** The composer's box, beside ``leading`` when there is one. The row is there either way, so the box (and the
  *  textarea in it, with its focus and the soft keyboard) is kept when ``leading`` comes or goes. With no box (a
  *  chat whose account was signed out) the row holds ``leading`` alone, so the phone keeps its settings button. */
-/** What the composer's box does with a file dragged over it and dropped on it (the demo branch: an image dragged
- *  in from a browser lands as an attachment, the way a pasted one does). */
-interface ComposerDropHandlers {
-  readonly ondragenter: (event: DragEvent) => void;
-  readonly ondragover: (event: DragEvent) => void;
-  readonly ondrop: (event: DragEvent) => void;
-}
-
-function composeRow(
-  leading: m.Children | undefined,
-  drop: ComposerDropHandlers,
-  boxChildren: m.Children[] | null,
-): m.Vnode {
+function composeRow(leading: m.Children | undefined, boxChildren: m.Children[] | null): m.Vnode {
   return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
     leading ?? null,
-    boxChildren === null ? null : m("div", { class: `${INPUT_BOX_CLASS} min-w-0 flex-1`, ...drop }, boxChildren),
+    boxChildren === null ? null : m("div", { class: `${INPUT_BOX_CLASS} min-w-0 flex-1` }, boxChildren),
   ]);
 }
 
@@ -811,33 +799,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         fileInputElement?.click();
       }
 
-      // A drop is only offered a target when dragover is answered; the dropped files take the paste's path.
-      function handleDragOver(event: DragEvent): void {
-        if (!chatId || event.dataTransfer === null) {
-          return;
-        }
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "copy";
-      }
-
-      // An image dragged out of Chrome arrives twice (the file and a copy of it); one of each name and size is kept.
-      function handleDrop(event: DragEvent): void {
-        if (!chatId || event.dataTransfer === null) {
-          return;
-        }
-        event.preventDefault();
-        const seen = new Set<string>();
-        const files: File[] = [];
-        for (const file of Array.from(event.dataTransfer.files)) {
-          const key = `${file.name}:${file.size}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            files.push(file);
-          }
-        }
-        uploadFilesToComposer(chatId, files);
-      }
-
       function dismissAuthCommandNotice(): void {
         interceptedAuthCommand = null;
         messageText = "";
@@ -1271,7 +1232,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           }),
           composeRow(
             vnode.attrs.leading,
-            { ondragenter: handleDragOver, ondragover: handleDragOver, ondrop: handleDrop },
             isBlockedBySignedOutAccount
               ? null
               : [
