@@ -728,6 +728,23 @@ describe("the switch to the phone layout", () => {
     expect([page.style.width, page.style.height]).toEqual(["852px", "300px"]);
   });
 
+  it("leaves a right-click to the browser on the phone, and takes it for the element menu again on the desktop", () => {
+    const rightClick = (): MouseEvent => {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
+      document.body.dispatchEvent(event);
+      m.redraw.sync();
+      return event;
+    };
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    expect(rightClick().defaultPrevented).toBe(false);
+    expect(document.body.querySelector(".element-menu")).toBeNull();
+
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: false, isTouch: false });
+    m.redraw.sync();
+    expect(rightClick().defaultPrevented).toBe(true);
+  });
+
   it("creates no page for a window the phone does not show", () => {
     // win-1 is shown on the desktop; the phone lands on its home grid, where no window's page lives.
     const createElement = vi.spyOn(document, "createElement");

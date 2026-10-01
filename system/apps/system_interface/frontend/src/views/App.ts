@@ -897,6 +897,28 @@ export function App(): m.Component<AppAttrs> {
     }
   }
 
+  /** The element menu over the shell's own chrome (element-reference-menu plan section 6), on the desktop layout
+   *  alone: what a right-click the views do not handle themselves opens, drawn as the desktop's one menu. The phone
+   *  has none, and an install there would still take every right-click and long-press from the browser. The shell
+   *  is no frame's page: its draft route is the store's, and a draft can always go. */
+  function syncElementContextMenu(current: DesktopStore): void {
+    if (current.isPhoneLayout()) {
+      uninstallContextMenu?.();
+      uninstallContextMenu = null;
+      return;
+    }
+    if (uninstallContextMenu !== null) return;
+    uninstallContextMenu = installElementContextMenu({
+      draft: (text) => void current.draftText(text),
+      isDraftAvailable: () => true,
+      scope: (target) => shellReferenceScope(current, target.element),
+      open: (rows, point) => {
+        openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));
+        m.redraw();
+      },
+    });
+  }
+
   return {
     oncreate(vnode) {
       const current = vnode.attrs.store;
@@ -904,23 +926,11 @@ export function App(): m.Component<AppAttrs> {
       document.addEventListener("keydown", onDocumentKeyDown);
       document.addEventListener("pointerdown", onDocumentPointerDown, true);
       bindGestures(current, vnode.dom as HTMLElement, vnode.attrs.gestures);
-      // The element menu over the shell's own chrome (element-reference-menu plan section 6): what a right-click
-      // the views do not handle themselves opens, drawn as the desktop's one menu. The shell is no frame's page:
-      // its draft route is the store's, and a draft can always go.
-      uninstallContextMenu = installElementContextMenu({
-        draft: (text) => void current.draftText(text),
-        isDraftAvailable: () => true,
-        scope: (target) => shellReferenceScope(current, target.element),
-        open: (rows, point) => {
-          // The phone has no element menu: a long press there is a tile's or the pill's.
-          if (current.isPhoneLayout()) return;
-          openMenuAt({ kind: "element", rows }, anchorForPoint(point.x, point.y));
-          m.redraw();
-        },
-      });
+      syncElementContextMenu(current);
     },
     onupdate(vnode) {
       if (store !== null) bindGestures(store, vnode.dom as HTMLElement, vnode.attrs.gestures);
+      if (store !== null) syncElementContextMenu(store);
       // The chrome's word on a tear-out arrives between pointer moves (its window has the cursor by then), so
       // the dragged window is painted here too, hidden or shown as the store now has it. Its word can also end
       // the gesture, with no release for the pointer source to end it by, so the window it was dragging is
