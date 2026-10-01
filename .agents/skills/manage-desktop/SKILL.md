@@ -247,10 +247,10 @@ The shell edits the files itself and answers with the result, so every op
 returns as soon as the file is written; a connected window shows it within a
 redraw. Ops print a one-line description on **stderr** (`opened window
 win-... (terminal at /?session=terminal-3) on desktop home for client ...`, `placed window ...
-in the left zone ...`); `refresh` prints `(sent refresh to client <id>)`.
+as snapped-left ...`); `refresh` prints `(sent refresh to client <id>)`.
 
 **stdout** is reserved for machine-readable output: the id of the window
-`open` made, the structured output of the read commands, and the desktop's
+`open` or `show` put on screen, the structured output of the read commands, and the desktop's
 shortcuts as they stand after a `shortcut set`, `shortcut move`, or
 `shortcut remove`.
 
