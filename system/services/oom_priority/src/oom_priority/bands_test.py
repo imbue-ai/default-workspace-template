@@ -124,6 +124,23 @@ def test_a_spare_chat_agent_is_shed_before_every_agent_and_agent_subprocess() ->
     assert bands.SPARE_AGENT == 1000
 
 
+def test_a_chat_just_started_on_a_spare_sits_at_the_floor_until_its_grace_ends() -> None:
+    # However abandoned its other signals make it look, the user opened it this moment.
+    def started(seconds_since_started: float) -> int:
+        return bands.chat_agent_oom_score_adj(
+            is_open=False,
+            is_visible=False,
+            recency_rank=None,
+            idle_seconds=48 * _HOUR,
+            is_mid_turn=False,
+            seconds_since_started=seconds_since_started,
+        )
+
+    assert started(0.0) == bands.CHAT_AGENT_FLOOR
+    assert started(bands.CHAT_JUST_STARTED_GRACE_SECONDS - 1) == bands.CHAT_AGENT_FLOOR
+    assert started(bands.CHAT_JUST_STARTED_GRACE_SECONDS) == _aged(48 * _HOUR)
+
+
 def test_primary_agent_is_pinned_to_the_never_shed_band() -> None:
     # The primary (services) agent must be at least as protected as the never-kill
     # infrastructure, and strictly below every service and agent band, so it is

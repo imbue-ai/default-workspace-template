@@ -271,16 +271,14 @@ class ChatOomPrioritizer:
             is_visible = chat_id in visible_ids
             is_open = chat_id in open_ids
             chat_started_at = started_at.get(chat_id)
-            if chat_started_at is not None and now - chat_started_at < bands.CHAT_JUST_STARTED_GRACE_SECONDS:
-                adj = bands.CHAT_AGENT_FLOOR
-            else:
-                adj = bands.chat_agent_oom_score_adj(
-                    is_open=is_open,
-                    is_visible=is_visible,
-                    recency_rank=rank_by_id.get(chat_id),
-                    idle_seconds=self._idle_seconds(chat_id, last_engaged_at, now),
-                    is_mid_turn=chat_id in running_ids,
-                )
+            adj = bands.chat_agent_oom_score_adj(
+                is_open=is_open,
+                is_visible=is_visible,
+                recency_rank=rank_by_id.get(chat_id),
+                idle_seconds=self._idle_seconds(chat_id, last_engaged_at, now),
+                is_mid_turn=chat_id in running_ids,
+                seconds_since_started=None if chat_started_at is None else now - chat_started_at,
+            )
             set_adj(pid, adj)
 
     def _idle_seconds(self, chat_id: ChatId, last_engaged_at: dict[ChatId, float], now: float) -> float | None:

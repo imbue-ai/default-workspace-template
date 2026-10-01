@@ -148,8 +148,13 @@ def chat_agent_oom_score_adj(
     recency_rank: int | None,
     idle_seconds: float | None,
     is_mid_turn: bool,
+    seconds_since_started: float | None = None,
 ) -> int:
     """Map a chat agent's live activity to its ``oom_score_adj``.
+
+    A chat that began on an agent started ahead of it (``seconds_since_started``, None for
+    any other chat) sits at ``CHAT_AGENT_FLOOR`` for ``CHAT_JUST_STARTED_GRACE_SECONDS``,
+    whatever its other signals; after that it is scored like any chat.
 
     Lower is more protected. Two forces move a chat within its band, starting
     from ``CHAT_AGENT_BASE``. Engagement pulls it down:
@@ -173,6 +178,11 @@ def chat_agent_oom_score_adj(
 
     The result is clamped to ``[CHAT_AGENT_FLOOR, CHAT_AGENT_STALE_CEILING]``.
     """
+    if (
+        seconds_since_started is not None
+        and seconds_since_started < CHAT_JUST_STARTED_GRACE_SECONDS
+    ):
+        return CHAT_AGENT_FLOOR
     engagement_bonus = 0
     if is_open:
         engagement_bonus += _CHAT_OPEN_BONUS
