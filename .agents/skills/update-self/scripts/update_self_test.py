@@ -7163,7 +7163,7 @@ def test_the_apply_waits_for_a_backup_tick_only_when_asked(
     assert code == 0
     [check] = runner.argvs_starting(*_BACKUP_CHECK)
     assert check[check.index("--timeout") + 1] == "900"
-    assert "waited for an in-flight backup tick" in capsys.readouterr().err
+    assert "waited 1s for an in-flight backup tick" in capsys.readouterr().err
 
 
 def test_the_apply_says_nothing_of_backups_when_none_is_in_flight(

@@ -910,7 +910,7 @@ def parse_backup_wait_report(stdout: str) -> BackupWaitReport | None:
 
 
 def _note_inflight_backup_tick(
-    repo_root: Path, runner: Runner, wait_seconds: float
+    repo_root: Path, runner: Runner, wait_seconds: float, now: Callable[[], float]
 ) -> None:
     """Let a backup tick in flight finish for up to ``wait_seconds`` before the services
     restart interrupts it, and say on stderr when it waited or interrupted one.
@@ -927,6 +927,7 @@ def _note_inflight_backup_tick(
         "--timeout",
         f"{wait_seconds:g}",
     ]
+    started_at = now()
     try:
         result = runner.run(
             argv,
@@ -953,7 +954,8 @@ def _note_inflight_backup_tick(
         return
     if report.is_finished:
         sys.stderr.write(
-            "note: waited for an in-flight backup tick to finish before restarting.\n"
+            f"note: waited {now() - started_at:.0f}s for an in-flight backup tick to "
+            "finish before restarting.\n"
         )
         return
     sys.stderr.write(
@@ -1395,7 +1397,7 @@ def apply_update(
             )
             _advance(PHASE_BUILT)
 
-        _note_inflight_backup_tick(repo_root, runner, backup_wait_seconds)
+        _note_inflight_backup_tick(repo_root, runner, backup_wait_seconds, now)
 
         # Every apply restarts the services agent, whatever the diff: the
         # running chat app imports mngr in-process, the shell and
