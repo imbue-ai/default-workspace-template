@@ -69,14 +69,6 @@ belong in tested code rather than agent prose:
     counts the content they removed as merged. ``apply`` refuses a merge ref that
     still carries one, by the same rule.
 
-``surface-chat-tab``
-    Open this run's own chat window in the workspace UI, so a user sent into the
-    workspace by the Imbue Studio app lands on the conversation performing the update.
-    The interface can only place a window in front of a client that is connected,
-    and the user may still be on their way in, so the command detaches a helper
-    that retries ``layout.py open`` until one takes it (or a deadline passes)
-    and returns at once; the open focuses a window that is already there.
-
 ``bootstrap-skill``
     Stage the copy of the update-self skill (SKILL.md, references, scripts) that
     the rest of the pass runs, at a single fixed path, and report whether it
@@ -549,92 +541,11 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     return 0
 
 
-# How long the detached helper keeps trying to open the window. Generous enough
-# to cover a user arriving after a stopped machine's cold boot; past it the
-# app's own copy naming the window is the fallback.
-SURFACE_CHAT_TAB_DEADLINE_SECONDS = 600.0
-
-SURFACE_CHAT_TAB_RETRY_SECONDS = 5.0
-
-
-def wait_and_open_chat_tab(
-    try_open: Callable[[], bool],
-    deadline_seconds: float,
-    retry_seconds: float,
-    monotonic: Callable[[], float] = time.monotonic,
-    sleep: Callable[[float], None] = time.sleep,
-) -> bool:
-    """Call ``try_open`` until it succeeds or the deadline passes; whether it did.
-
-    Stops on the first success: a window is surfaced once, and re-opening it later
-    would yank a user who has since moved on back to it.
-    """
-    started_at = monotonic()
-    while True:
-        if try_open():
-            return True
-        if monotonic() - started_at >= deadline_seconds:
-            return False
-        sleep(retry_seconds)
-
-
-def _try_open_chat_tab(repo_root: Path, chat_id: str, runner: Runner) -> bool:
-    """One attempt at opening the chat's window through the desktop's ``open`` op; whether the shell took it."""
-    result = runner.run(
-        [
-            sys.executable,
-            "system/scripts/layout.py",
-            "open",
-            "chat",
-            "--path",
-            f"/?chat={chat_id}",
-        ],
-        cwd=repo_root,
-        capture_output=True,
-    )
-    return result.returncode == 0
-
-
 def _cmd_pending_rollbacks(args: argparse.Namespace) -> int:
     for rollback in pending_update_rollbacks(
         args.target, "HEAD", _repo_root(args), Runner()
     ):
         print(rollback)
-    return 0
-
-
-def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
-    repo_root = _repo_root(args).resolve()
-    if args.wait:
-        return (
-            0
-            if wait_and_open_chat_tab(
-                lambda: _try_open_chat_tab(repo_root, args.chat_id, Runner()),
-                deadline_seconds=SURFACE_CHAT_TAB_DEADLINE_SECONDS,
-                retry_seconds=SURFACE_CHAT_TAB_RETRY_SECONDS,
-            )
-            else 1
-        )
-    # Detached so the lead's tool call returns now rather than after the user
-    # arrives: its own session, and no inherited stdio for the caller's shell
-    # to wait on.
-    subprocess.Popen(
-        [
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "surface-chat-tab",
-            "--chat-id",
-            args.chat_id,
-            "--repo-root",
-            str(repo_root),
-            "--wait",
-        ],
-        cwd=repo_root,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
     return 0
 
 
@@ -1009,23 +920,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--target", required=True, help="The ref this pass merges."
     )
     pending_parser.set_defaults(func=_cmd_pending_rollbacks)
-
-    surface_parser = sub.add_parser(
-        "surface-chat-tab",
-        help="Open this run's own chat window once a workspace client can show it.",
-        parents=[common],
-    )
-    surface_parser.add_argument(
-        "--chat-id",
-        required=True,
-        help="This run's chat id ($MINDS_CHAT_ID, or $MNGR_AGENT_ID for an agent that is its own chat).",
-    )
-    surface_parser.add_argument(
-        "--wait",
-        action="store_true",
-        help="Run the retry loop in this process (what the detached helper does) instead of detaching one.",
-    )
-    surface_parser.set_defaults(func=_cmd_surface_chat_tab)
 
     bootstrap_parser = sub.add_parser(
         "bootstrap-skill",
