@@ -1159,7 +1159,9 @@ def _announce_window_op(
     extra_args: Mapping[str, Any] | None = None,
 ) -> None:
     """Tell the target client's windows which window an op put in front of it, so a page that shows one window at a
-    time (the phone layout) can switch to it; the op's own edit has already been written."""
+    time (the phone layout) can switch to it, and, on a ``show`` naming a pulled-out window, the desktop's page and
+    that window's solo page ask the embedder to raise its own desktop window; the op's own edit has already been
+    written."""
     shell.broadcaster.broadcast_layout_op(
         op,
         {"window": str(window_id), **(extra_args or {})},
