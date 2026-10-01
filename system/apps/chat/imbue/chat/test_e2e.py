@@ -1421,9 +1421,9 @@ def _selection_of(url: str) -> str | None:
 def test_the_phone_layout_keeps_the_chat_list_in_a_drawer_over_the_chat(
     e2e_server: RunningWorkspace, page: Page
 ) -> None:
-    """With nothing selected the drawer is open over an empty transcript that says to pick or start a chat; picking a
-    row shows that chat under a header naming it and closes the drawer, the list button opens it again, and a tap on
-    the scrim or a drag to the left dismisses it."""
+    """With nothing selected the drawer is open over an empty transcript that says to pick or start a chat; its rows
+    are a finger's height (44px), picking one shows that chat under a header naming it and closes the drawer, the list
+    button opens it again, and a tap on the scrim or a drag to the left dismisses it."""
     _open_phone_chat_root(page, e2e_server, "/")
     drawer = page.locator("[data-chat-drawer]")
     expect(drawer).to_be_visible()
