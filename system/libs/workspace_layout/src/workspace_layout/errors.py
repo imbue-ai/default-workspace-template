@@ -22,5 +22,10 @@ class ShellRefusedOpError(ShellOpError):
         super().__init__(message)
 
 
+class WindowPoppedOutError(ShellRefusedOpError):
+    """The shell refused an op that would change where a window sits because the target client has it popped out
+    into its own window; the op applies with ``force``."""
+
+
 class ShellAnswerMalformedError(ShellOpError):
     """The shell answered with a success status and a body that is not the answer the contract gives."""

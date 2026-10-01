@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 from app_manifest.primitives import AppName
+from imbue.imbue_common.model_update import to_update
 
 from workspace_layout.answers import ConnectedClient
 from workspace_layout.answers import DesktopOpAnswer
@@ -16,6 +17,7 @@ from workspace_layout.client import requester_from_environment
 from workspace_layout.errors import ShellAnswerMalformedError
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.errors import ShellUnreachableError
+from workspace_layout.errors import WindowPoppedOutError
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import NavigateRequest
 from workspace_layout.ops import OpenRequest
@@ -177,6 +179,25 @@ def test_a_shell_that_refuses_an_op_raises_quoting_the_status_and_the_refusal(lo
 
     assert raised.value.status_code == 404
     assert len(loopback_shell.posted) == 1
+
+
+def test_a_place_on_a_popped_out_window_is_refused_as_such_and_applies_when_forced(
+    loopback_shell: LoopbackShell,
+) -> None:
+    request = PlaceRequest(window=_WINDOW, frame="0,0,0.5,1", client_id=None, desktop=None)
+    loopback_shell.op_refusal = (423, {"detail": f"Window {_WINDOW} is popped out into its own window"})
+
+    with pytest.raises(WindowPoppedOutError, match="popped out") as raised:
+        _client(loopback_shell.url).place(request)
+    assert raised.value.status_code == 423
+
+    loopback_shell.op_refusal = None
+    loopback_shell.op_answer = {**desktop_answer("home", "client-1", [], _WINDOW, []), "is_brought_back": True}
+    forced = request.model_copy_update(to_update(request.field_ref().is_forced, True))
+    answer = _client(loopback_shell.url).place(forced)
+
+    assert answer.is_brought_back is True and answer.is_raised_in_own_window is False
+    assert loopback_shell.posted_ops()[-1] == ("place", {"window": _WINDOW, "frame": "0,0,0.5,1", "force": True})
 
 
 def test_a_redirect_is_answered_as_it_came_rather_than_followed(loopback_shell: LoopbackShell) -> None:

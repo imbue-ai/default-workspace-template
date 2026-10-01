@@ -83,7 +83,8 @@ class FirstWindowOpener(MutableModel):
 
     def deliver_once(self) -> FirstWindowDelivery:
         """One attempt: nothing when the ledger says delivered or nobody is connected; else open and place the window
-        for the first connected client on the first desktop, and record the delivery when both ops were accepted."""
+        for the first connected client on the first desktop, and record the delivery when both ops were accepted. A
+        window the open found popped out into its own window is on screen already and is left there, unplaced."""
         if self.ledger.is_delivered():
             return FirstWindowDelivery(is_delivered=True, client_id=None)
         target = self._find_target()
@@ -99,10 +100,18 @@ class FirstWindowOpener(MutableModel):
             desktop=str(desktop_id),
         )
         try:
-            window_id = self.shell.open(open_request).window_id
+            opened = self.shell.open(open_request)
         except ShellOpError as e:
             logger.info("The shell did not open the {} window, so it stays owed: {}", self.app, e)
             return FirstWindowDelivery(is_delivered=False, client_id=None)
+        window_id = opened.window_id
+        if opened.is_raised_in_own_window:
+            # The shell refuses to place a popped-out window, and every retry would raise it again.
+            self.ledger.mark_delivered()
+            logger.info(
+                "The first-visit {} window {} is popped out for client {}; left there", self.app, window_id, client_id
+            )
+            return FirstWindowDelivery(is_delivered=True, client_id=client_id)
         place_request = PlaceRequest(
             window=str(window_id), frame=FIRST_WINDOW_FRAME, client_id=client_id, desktop=str(desktop_id)
         )

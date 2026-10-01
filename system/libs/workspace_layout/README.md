@@ -32,8 +32,10 @@ answer shapes live in one place the shell and its callers share.
 - `workspace_layout.errors`: `WorkspaceLayoutError`; `InvalidLayoutValueError`;
   and `ShellOpError`, raised by every op that did not happen, as
   `ShellUnreachableError` (down, restarting, timed out), `ShellRefusedOpError`
-  (an error status, carrying it), or `ShellAnswerMalformedError` (a success
-  status with a body that is not the answer).
+  (an error status, carrying it; `WindowPoppedOutError` for the shell's refusal
+  to move a window the client popped out into its own window, which a
+  `PlaceRequest` with `is_forced` overrides), or `ShellAnswerMalformedError` (a
+  success status with a body that is not the answer).
 - `workspace_layout.interfaces.ShellLayoutInterface`: `show`, `open`, `focus`,
   `navigate`, `place`, `close`, `refresh`, `connected_clients`, `desktops`, and
   `record_client_activity` (best-effort: an unreachable or failing shell is a
@@ -66,7 +68,11 @@ to the shell's op route under the calling agent's own chat as the requester
 read `GET /api/inventory`. Descriptions go to stderr; stdout carries only a
 window id (`open`, `show`), the JSON of the read commands, and a desktop's
 shortcuts after a `shortcut` write. Exit codes are `0` (done), `1` (refused or
-unreachable), and `3` (the shell or an app cannot act right now: retry).
+unreachable), `3` (the shell or an app cannot act right now: retry), and `4`
+(the window is popped out into its own window: pass `--force`, which every
+mutating subcommand takes, or leave it to the user). A summary notes when an op
+raised a popped-out window in its own window, brought one back, left an `open
+--beside` unpaired, or landed for a client with no desktop window open.
 
 `show <app> --path P [--showing P ...] [--repoint PAGE ...]` runs the shell's
 `show` op: it raises a window already at the path (or at a `--showing` path),

@@ -16,6 +16,7 @@ from imbue.imbue_common.model_update import to_update
 from workspace_layout.cli import EXIT_CONFLICT
 from workspace_layout.cli import EXIT_ERROR
 from workspace_layout.cli import EXIT_OK
+from workspace_layout.cli import EXIT_POPPED_OUT
 from workspace_layout.cli import RETIRED_VERBS
 from workspace_layout.cli import LayoutCliContext
 from workspace_layout.cli import app_name_argument
@@ -314,6 +315,83 @@ def test_the_window_verbs_post_the_window_and_the_target(
     assert "pointed window" in err and "at /?chat=agent-2" in err
 
 
+def test_every_mutating_verb_forwards_force(loopback_shell: LoopbackShell, layout_context: LayoutCliContext) -> None:
+    loopback_shell.op_answer = _answer([_CHAT_WINDOW], _CHAT_WINDOW["id"])
+    for argv in (
+        ["minimize", "self", "--force"],
+        ["place", "chat", "--zone", "left", "--force"],
+        ["open", "files", "--beside", "--force"],
+        ["focus", "self", "--force"],
+        ["refresh", "--app", "files", "--force"],
+    ):
+        assert run_layout_cli(argv, layout_context) == EXIT_OK
+    assert loopback_shell.posted_ops() == [
+        ("minimize", {"window": "self", "force": True}),
+        ("place", {"window": "chat", "zone": "left", "force": True}),
+        ("open", {"app": "files", "beside": "self", "force": True}),
+        ("focus", {"window": "self", "force": True}),
+        ("refresh", {"app": "files", "force": True}),
+    ]
+
+
+def test_a_popped_out_window_refusal_exits_4_and_says_force_overrides_it(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    loopback_shell.op_refusal = (423, {"detail": "Window win-0000000000000001 is popped out into its own window"})
+
+    assert run_layout_cli(["restore", _CHAT_WINDOW["id"]], layout_context) == EXIT_POPPED_OUT
+
+    err = capsys.readouterr().err
+    assert "'restore' refused (HTTP 423): Window win-0000000000000001 is popped out" in err
+    assert "--force overrides it" in err
+
+
+@pytest.mark.parametrize(
+    ("argv", "notes", "expected"),
+    [
+        pytest.param(
+            ["focus", "self"],
+            {"is_raised_in_own_window": True},
+            f"focused window {_CHAT_WINDOW['id']} (chat at /?chat=agent-1) on desktop home for client c1 "
+            "(raised in its own window: the user popped it out, so it stays there)",
+            id="raised",
+        ),
+        pytest.param(
+            ["maximize", "self", "--force"],
+            {"is_brought_back": True},
+            "(brought back from its own window)",
+            id="brought-back",
+        ),
+        pytest.param(
+            ["open", "files", "--beside"],
+            {"unpaired_beside": _CHAT_WINDOW["id"]},
+            f"opened window {_CHAT_WINDOW['id']} (chat at /?chat=agent-1) on desktop home for client c1 "
+            f"(not paired beside {_CHAT_WINDOW['id']}: the user popped it out",
+            id="unpaired",
+        ),
+        pytest.param(
+            ["open", "files"],
+            {"has_no_desktop_window": True},
+            "(client c1 has no desktop window open, only popped-out ones; the window is there when one opens)",
+            id="no-desktop-window",
+        ),
+    ],
+)
+def test_the_summary_notes_what_the_shell_did_about_a_popped_out_window(
+    loopback_shell: LoopbackShell,
+    layout_context: LayoutCliContext,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    notes: dict[str, Any],
+    expected: str,
+) -> None:
+    loopback_shell.op_answer = {**_answer([_CHAT_WINDOW], _CHAT_WINDOW["id"]), **notes}
+
+    assert run_layout_cli(argv, layout_context) == EXIT_OK
+
+    assert expected in capsys.readouterr().err
+
+
 def test_close_names_a_window_the_answer_no_longer_lists_by_its_id_alone(
     loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -403,12 +481,14 @@ def test_desktops_and_list_read_the_inventory_document(
             "color": "#000000",
         }
     ]
+    popped_out = {"window_id": _FILES_WINDOW["id"], "desktop_id": "home", "is_ghost_hidden": False}
     inventory_clients = [
         {
             "id": "c1",
             "active_desktop": "home",
             "is_connected": True,
             "shown": [_FILES_WINDOW["id"]],
+            "popped_out": [popped_out],
             "shown_history": ["home", _FILES_WINDOW["id"]],
             "last_seen": "t",
         },
@@ -440,11 +520,11 @@ def test_desktops_and_list_read_the_inventory_document(
         }
     ]
     assert [
-        (client["id"], client["active_desktop"], client["shown"], client["shown_history"])
+        (client["id"], client["active_desktop"], client["shown"], client["popped_out"], client["shown_history"])
         for client in desktops["clients"]
     ] == [
-        ("c1", "home", [_FILES_WINDOW["id"]], ["home", _FILES_WINDOW["id"]]),
-        ("c2", None, [], []),
+        ("c1", "home", [_FILES_WINDOW["id"]], [popped_out], ["home", _FILES_WINDOW["id"]]),
+        ("c2", None, [], [], []),
     ]
     assert run_layout_cli(["list", "--json"], layout_context) == 0
     listing = json.loads(capsys.readouterr().out)

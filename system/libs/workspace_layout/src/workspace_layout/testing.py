@@ -81,6 +81,9 @@ class FakeShell(ShellLayoutInterface):
         default=None, description="What the client and desktop lists raise while set"
     )
     shown: str = Field(default="opened", description="How a show says it put its path on screen")
+    is_open_raised_in_own_window: bool = Field(
+        default=False, description="Whether an open says it found the window popped out and raised it there"
+    )
     window_id: WindowId = Field(default=FAKE_WINDOW_ID, description="The window every op answers")
     desktop_id: DesktopId = Field(default=FAKE_DESKTOP_ID, description="The desktop every op answers")
     shows: list[ShowRequest] = Field(default_factory=list, description="Every show asked for")
@@ -116,7 +119,12 @@ class FakeShell(ShellLayoutInterface):
     def open(self, request: OpenRequest) -> OpenAnswer:
         self.opens.append(request)
         self._check(OPEN_OP, request.client_id)
-        return OpenAnswer(desktop_id=self.desktop_id, client_id=request.client_id, window_id=self.window_id)
+        return OpenAnswer(
+            desktop_id=self.desktop_id,
+            client_id=request.client_id,
+            window_id=self.window_id,
+            is_raised_in_own_window=self.is_open_raised_in_own_window,
+        )
 
     def focus(self, request: WindowRequest) -> DesktopOpAnswer:
         self.focuses.append(request)

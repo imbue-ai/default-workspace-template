@@ -944,6 +944,20 @@ def with_window_minimized(layout: DesktopLayout, window_id: WindowId) -> Desktop
 
 
 @pure
+def with_window_minimized_on_desktop(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
+    """Minimize onto the desktop: out of sight where it stands in the stack, and no longer pulled out, so a pulled-out
+    window goes out of sight with its own desktop window rather than keeping it and hiding only the ghost."""
+    current = placement_of(layout, window_id)
+    return _with_placement_in_place(
+        layout,
+        current.model_copy_update(
+            to_update(current.field_ref().is_minimized, True),
+            to_update(current.field_ref().is_detached, False),
+        ),
+    )
+
+
+@pure
 def with_window_restored(layout: DesktopLayout, window_id: WindowId) -> DesktopLayout:
     """Restore: the window shown at its own frame, normal, on top of the stack."""
     current = placement_of(layout, window_id)

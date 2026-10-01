@@ -93,6 +93,21 @@ def test_a_refused_open_or_place_leaves_the_delivery_owed(tmp_path: Path) -> Non
     assert opener.ledger.is_delivered() is True
 
 
+def test_a_window_the_open_found_popped_out_is_delivered_where_it_is(tmp_path: Path) -> None:
+    """The open raised the window in its own window: placing it would be refused, and retrying would raise it again
+    every poll, so the delivery is done without a place."""
+    shell = FakeShell(clients=[connected_client("client-a")], is_open_raised_in_own_window=True)
+    opener = _opener(tmp_path, shell)
+
+    delivery = opener.deliver_once()
+
+    assert delivery.is_delivered is True and delivery.client_id == "client-a"
+    assert shell.placements == []
+    assert opener.ledger.is_delivered() is True
+    assert opener.deliver_once().is_delivered is True
+    assert len(shell.opens) == 1
+
+
 def test_the_ledger_reads_an_absent_or_malformed_file_as_undelivered(tmp_path: Path) -> None:
     ledger = FirstWindowLedger(path=tmp_path / "first_window.json")
     assert ledger.is_delivered() is False
