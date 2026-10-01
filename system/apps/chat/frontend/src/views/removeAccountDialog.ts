@@ -22,8 +22,8 @@ export function removeAccountDialog(
     title: "Remove account",
     question: ["Remove ", m("strong", account.label), "?"],
     details:
-      "New chats can't be started on it. A chat already running may keep going until it " +
-      "next restarts, since its harness is already holding the credential.",
+      "New chats can't be started on it, and chats running on it stop taking messages until " +
+      "you move them to another provider.",
     confirmLabel: "Remove",
     onConfirm,
     onCancel,
