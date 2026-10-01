@@ -158,7 +158,7 @@ and the profile cache.
 
 The backend is the `imbue/system_interface/shell/` subpackage (inventory and
 liveness, desktops, placements, wallpapers, clients, users and the request
-identity, client activity, layout ops, the pure desktop document editor, the
+identity, client activity, the pure desktop document editor, the
 routes with their shared helpers, state); the package root holds the process
 (`main.py`, `server.py`), the not-built placeholder, and the update-staleness
 check. The frontend
