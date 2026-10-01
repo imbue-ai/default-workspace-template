@@ -1046,6 +1046,21 @@ describe("the phone layout's card", () => {
     expect(document.querySelector(".model-provider-menu")).toBeNull();
   });
 
+  it("keeps the settings button for a chat with no account and no model, with Source view and Stop agent", () => {
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "" } });
+    settingsState.choice = null;
+    // Whether or not some other provider is signed in.
+    for (const accounts of [[], [ACCOUNT]]) {
+      providerState.accounts = accounts;
+      renderPhone();
+      tap("[data-composer-settings]");
+      expect(screenText()).toContain("No account");
+      expect(document.querySelector('[data-menu-row="source-view"]')).not.toBeNull();
+      expect(screenText()).toContain("Stop agent");
+      tap("[data-composer-settings]");
+    }
+  });
+
   it("leaves the desktop card as it was: the chip, the slider, and no Source view row", () => {
     render();
     click(".model-selector-trigger");

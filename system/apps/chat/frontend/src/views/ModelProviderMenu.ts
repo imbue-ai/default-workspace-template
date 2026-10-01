@@ -846,8 +846,9 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       // before its first model read, and opencode never leaves it); or the live model may
       // match no catalog option. Only the Model/Effort/Fast rows are suppressed.
       if (chat === undefined) return provisionalChip(chatId);
-      // No account to name and no model to show: say so only when no provider is signed in.
-      if (account === null && matched === null) {
+      // No account to name and no model to show: say so only when no provider is signed in. A phone keeps its
+      // settings button, which is also its way to Source view and Stop agent.
+      if (account === null && matched === null && !isCompact) {
         if (!areAccountsLoaded() || getAccounts().length > 0) return null;
         return notConnectedChip((accountId) => {
           beginSwitchToAccountId(chatId, accountId);
