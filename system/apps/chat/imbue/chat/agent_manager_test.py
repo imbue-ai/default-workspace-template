@@ -5736,7 +5736,7 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
         manager.stop()
 
 
-def test_a_spare_claimed_while_it_starts_takes_the_chat_band_once_its_chat_settles(
+def test_a_spare_claimed_while_it_starts_leaves_the_spare_band_at_once_and_is_engaged_once_up(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, _argv_log = _write_booting_mngr_binary(tmp_path)
