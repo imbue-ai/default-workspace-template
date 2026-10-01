@@ -24,8 +24,8 @@
  * In the phone layout (`isCompact`) the same menu opens from a settings button at the left of
  * the composer instead of the chip under it, and draws the same rows on a sliding track
  * (`slidingMenuTrack.ts`): submenus slide in over the card instead of flying out beside it,
- * effort is a row of segments instead of a slider, and the Source view switch, which has no
- * under-bar to sit in there, is a row of its own.
+ * effort is a row of segments instead of a slider, and the Source view switch is a row of its
+ * own: the phone's under-bar carries the switch only while the terminal face is up, to turn back.
  */
 
 import m from "mithril";
