@@ -40,8 +40,6 @@ from imbue.chat.server import create_application
 from imbue.chat.shell_client import DisconnectedShell
 from imbue.chat.shell_client import ShellLayoutClient
 from imbue.chat.shell_client import shell_base_url
-from imbue.chat.spare_chat import SPARE_CHAT_FILENAME
-from imbue.chat.spare_chat import SpareChatStore
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -97,9 +95,9 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
             "Boot as a second chat beside the live one (a preview): follows the same agent "
             "observer and reads the live accounts, but reconciles no accounts, writes no memory "
             "scores, runs no automatic compaction, starts or resumes no switch, opens no windows, "
-            "reports no client activity to the shell, keeps no spare agents, and registers nothing; "
-            "point CHAT_DATA_DIR at a scratch copy so its writes never land in the live data, and "
-            "CHAT_STATE_DIR at the live chat's state dir by absolute path so it hides the live spares"
+            "reports no client activity to the shell, keeps no spare agents (it hides the live "
+            "chat's, by their label), and registers nothing; point CHAT_DATA_DIR at a scratch copy "
+            "so its writes never land in the live data"
         ),
     )
     return parser.parse_args(argv)
@@ -120,11 +118,10 @@ def build_production_state(
     ``ChatAppState`` with fakes via ``testing.build_test_state`` instead, except where
     what is under test is this wiring itself (where the chat's data directory lands).
 
-    Everything the chat keeps about the user's things lands under ``config.chat_data_dir``, so a
-    secondary chat pointed at a scratch copy never writes the live chat's data; the spare agents'
-    record is machine state, under ``config.chat_state_dir``, which a secondary only reads. A
-    secondary also opens no windows: the auto-open ledger and the shell it would drive belong to
-    the live chat.
+    Everything the chat keeps on disk lands under ``config.chat_data_dir``, so a secondary
+    chat pointed at a scratch copy never writes the live chat's data. A secondary also opens
+    no windows (the auto-open ledger and the shell it would drive belong to the live chat) and
+    keeps no spare agents, which are the live chat's to start, hand over, and destroy.
     """
     broadcaster = WebSocketBroadcaster()
     data_dir = config.chat_data_dir
@@ -145,7 +142,7 @@ def build_production_state(
         chat_files_root=chat_records_root,
         chat_settings=chat_settings,
         is_secondary=is_secondary,
-        spare_chat_store=SpareChatStore(path=config.chat_state_dir / SPARE_CHAT_FILENAME),
+        is_keeping_spares=not is_secondary,
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)

@@ -8,36 +8,29 @@ next new chat would get (``SpareChatTerms``), hidden from every listing, and han
 is still ahead of a create of its own. The pool is topped up as spares are taken. A spare's id
 is minted as the id of the chat it will become (a chat's id is its first agent's), so
 ``MINDS_CHAT_ID`` and every label baked in at its create are already right when it is handed
-over, and the hand-over itself runs no mngr command.
+over, and the hand-over waits on no mngr command.
 
-The spares are recorded in ``data/.state/chat/spare_chat.json`` before their create starts, so
-the observe stream, which lists an agent as soon as mngr provisions it, never shows one as a
-chat, and a restart of this app still knows them: a ready spare stays the spare, and a create
-the restart cut short is destroyed.
+A spare is created with the label ``chat_spare=true``, which is what every reader goes by: the
+chat listings (a secondary chat's included) hide an agent so labelled, the launch wrapper starts
+it in the most expendable memory band, and the memory report leaves it out. A hand-over lists the
+chat at once and sets the label to false in the background. Nothing else is kept on disk: a
+restart of the chat app destroys every agent still labelled a spare, except one whose chat
+folder shows a chat already took it, which is relabelled instead.
 """
 
-import json
-import os
-import threading
 from collections.abc import Sequence
 from enum import auto
-from pathlib import Path
 from typing import Final
 
-from loguru import logger
 from pydantic import Field
-from pydantic import PrivateAttr
-from pydantic import ValidationError
 
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
-from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 
-SPARE_CHAT_FILENAME: Final[str] = "spare_chat.json"
-_SPARES_KEY: Final[str] = "spares"
+CHAT_SPARE_LABEL: Final[str] = "chat_spare"
 
 
 class SpareChatPhase(UpperCaseStrEnum):
@@ -49,8 +42,8 @@ class SpareChatPhase(UpperCaseStrEnum):
     READY = auto()
     # Taken by a new chat while still being created: it becomes that chat once its harness is up.
     CLAIMED = auto()
-    # No longer wanted (its terms went stale, its process died, or its create failed); its
-    # ``mngr destroy`` is due or running.
+    # No longer wanted (its terms went stale, its process died, its create failed, or an earlier
+    # run of the app left it); its ``mngr destroy`` is due or running.
     DISCARDING = auto()
 
 
@@ -72,53 +65,6 @@ class SpareChatAgent(FrozenModel):
 
     def with_phase(self, phase: SpareChatPhase) -> "SpareChatAgent":
         return self.model_copy_update(to_update(self.field_ref().phase, phase))
-
-
-class SpareChatStore(MutableModel):
-    """The spares file, written whole on every change."""
-
-    path: Path = Field(frozen=True, description="The spares file")
-    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-
-    def read(self) -> tuple[SpareChatAgent, ...]:
-        """The spares as recorded; an absent file reads as none, an unreadable one as none with a warning."""
-        if not self.path.exists():
-            return ()
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            logger.warning("Ignored an unreadable spare chat file at {}: {}", self.path, e)
-            return ()
-        entries = payload.get(_SPARES_KEY) if isinstance(payload, dict) else None
-        if not isinstance(entries, list):
-            logger.warning("Ignored a spare chat file of the wrong shape at {}", self.path)
-            return ()
-        try:
-            return tuple(SpareChatAgent.model_validate(entry) for entry in entries)
-        except ValidationError as e:
-            logger.warning("Ignored a spare chat file at {} that does not fit: {}", self.path, e)
-            return ()
-
-    def write(self, spares: Sequence[SpareChatAgent]) -> None:
-        with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = self.path.with_suffix(".json.tmp")
-            payload = {_SPARES_KEY: [spare.model_dump(mode="json") for spare in spares]}
-            temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            os.replace(temp_path, self.path)
-
-
-@pure
-def spares_after_restart(spares: Sequence[SpareChatAgent]) -> tuple[SpareChatAgent, ...]:
-    """The spares a build starts from: a create that was running when this app stopped did not finish
-    here, so its agent (made or half-made) is discarded rather than trusted, and so is one a chat had
-    claimed, whose chat went with the provisional record this app held in memory."""
-    return tuple(
-        spare.with_phase(SpareChatPhase.DISCARDING)
-        if spare.phase in (SpareChatPhase.CREATING, SpareChatPhase.CLAIMED)
-        else spare
-        for spare in spares
-    )
 
 
 @pure

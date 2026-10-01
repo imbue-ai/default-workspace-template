@@ -7,7 +7,6 @@ import pytest
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_settings import SETTINGS_FILENAME
-from imbue.chat.config import DEFAULT_CHAT_STATE_DIR
 from imbue.chat.config import Config
 from imbue.chat.main import MANIFEST_PATH
 from imbue.chat.main import _parse_args
@@ -16,7 +15,6 @@ from imbue.chat.main import build_production_state
 from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.primitives import ChatId
 from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
-from imbue.chat.spare_chat import SPARE_CHAT_FILENAME
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 
@@ -84,19 +82,10 @@ def test_chat_writes_land_in_the_configured_data_dir(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("is_secondary", [False, True], ids=["live", "secondary"])
-def test_the_spares_record_is_in_the_configured_state_dir_whatever_the_data_dir(
-    tmp_path: Path, is_secondary: bool
-) -> None:
-    """A secondary reads the live chat's spares, to hide them, rather than its scratch copy's: a
-    preview runs from a worktree, so its manifest names the live state dir outright."""
-    assert Config().chat_state_dir == DEFAULT_CHAT_STATE_DIR
-    live_state_dir = tmp_path / "live-state"
-    state = build_production_state(
-        Config(chat_data_dir=tmp_path / "scratch", chat_state_dir=live_state_dir), is_secondary=is_secondary
-    )
+def test_only_the_live_chat_keeps_spare_agents(tmp_path: Path, is_secondary: bool) -> None:
+    """A secondary hides the live chat's spares by their label and never starts, hands over, or destroys one."""
+    state = build_production_state(Config(chat_data_dir=tmp_path / "scratch"), is_secondary=is_secondary)
     try:
-        spare_store = state.agent_manager._spare_chat_store
-        assert spare_store is not None
-        assert spare_store.path == live_state_dir / SPARE_CHAT_FILENAME
+        assert state.agent_manager._is_keeping_spares is not is_secondary
     finally:
         state.shutdown()
