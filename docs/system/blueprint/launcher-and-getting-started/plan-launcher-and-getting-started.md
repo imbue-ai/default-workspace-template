@@ -203,6 +203,12 @@ A disabled free-text row is drawn faint with its reason as the tooltip.
 The highlighted row wears the active fill and `data-highlighted="true"`.
 The menu renders no loading state at any point; every row comes from state the browser already holds.
 
+An app's desktop icon is its default shortcut (desktop-interface plan section 3.6) and nothing else: one per app.
+A right-click on the launch-path row of that shortcut (a shortcut of a launch path that takes text has no such row; its app's taskbar entry offers it) opens the desktop's menu for the app, ending with the reference rows every right-click menu of the shell ends with; every other row keeps the plain reference menu.
+It offers `Add to desktop` when the active desktop does not hold the shortcut, added at the first free cell in reading order in the shortcut's mode, and `Remove from desktop` when it does.
+A taskbar entry's menu carries the same row for its window's app.
+Either way the desktop shows the change at once, and puts it back if the shell refuses it.
+
 ### 4.3 Running a row
 
 | Row | What happens |
@@ -388,5 +394,5 @@ Each step leaves the tree green; the whole is one pull request per repository.
 - Ordering apps by recent use; the shell has no activity data.
 - ~~The idempotency key for launch paths on linked windows (issue #646)~~: resolved by the post-launch-paths plan, which made every launch path that creates something a POST.
 - A first-visit window on later desktops, for later clients, or a per-user first visit; a manifest-declared first window the shell would seed itself.
-- Hover-revealed row actions (add to desktop, open in a new window); "Add to desktop" leaves with the tiles and returns when a row menu is designed.
+- Hover-revealed row actions (add to desktop, open in a new window); "Add to desktop" is offered from the right-click menu of the row of an app's desktop shortcut instead (section 4.2).
 - The chat shortcut opening a second chat list while a pinned one exists.

@@ -17,7 +17,7 @@ timeless; everything here is a snapshot.
 | P5 substantive work under a step | live | **partial** | live | **partial** |
 | P6 `tk start`/`close` stands alone | live | **partial** | live | live |
 | P7 open steps are reconciled | live | live | live | **live (turn-start only)** |
-| P8 a finished chat turn notifies | prose-only | prose-only | prose-only | prose-only |
+| P8 a chat turn with something for the user notifies | prose-only | prose-only | prose-only | prose-only |
 | P9 secret file read only by the wrapper | live | live | live | **partial** |
 | P10 secret request stands alone | live | **partial** | live | **partial** |
 

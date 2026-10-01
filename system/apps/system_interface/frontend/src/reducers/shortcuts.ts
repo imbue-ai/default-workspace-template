@@ -10,7 +10,7 @@ import { drawnCells, firstFreeCellInReadingOrder, placeShortcuts } from "../geom
 import type { GridDimensions } from "../geometry/grid";
 import { mostRecentlyFocusedWindowOfApp } from "../geometry/stack";
 import { launchPathOf } from "../model/launch";
-import type { Desktop, GridCell, ShortcutMode } from "../model/records";
+import type { Desktop, DesktopShortcut, GridCell, ShortcutMode } from "../model/records";
 import { activeDesktop, appByName } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 
@@ -70,4 +70,13 @@ export function nextGlyphIndex(usedGlyphs: readonly number[], glyphCount: number
  *  that no shortcut draws in. */
 export function cellForAddedShortcut(desktop: Desktop, dimensions: GridDimensions): GridCell {
   return firstFreeCellInReadingOrder(drawnCells(placeShortcuts(desktop.shortcuts, dimensions)), dimensions.columns);
+}
+
+export function isShortcutOf(shortcut: DesktopShortcut, app: string, launch: string): boolean {
+  return shortcut.target.app === app && shortcut.target.launch === launch;
+}
+
+/** The desktop's shortcut of ``(app, launch)``; a desktop holds at most one. */
+export function findShortcut(desktop: Desktop, app: string, launch: string): DesktopShortcut | undefined {
+  return desktop.shortcuts.find((shortcut) => isShortcutOf(shortcut, app, launch));
 }
