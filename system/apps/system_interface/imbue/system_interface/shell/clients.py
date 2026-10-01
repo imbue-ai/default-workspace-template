@@ -233,40 +233,44 @@ class ClientStore(MutableModel):
             record=_record_of(client_id, stored), is_active_desktop_changed=previous_desktop != stored.active_desktop
         )
 
+    def _update_recorded_client(
+        self, client_id: ClientId, update: Callable[[_StoredClient], _StoredClient]
+    ) -> ClientRecord:
+        """Replace a recorded client's entry with what ``update`` makes of it; raises ClientNotFoundError."""
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            previous = document.clients.get(str(client_id))
+            if previous is None:
+                raise ClientNotFoundError(f"No client record for {client_id!r}")
+            updated = update(previous)
+            clients = {**document.clients, str(client_id): updated}
+            self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
+        return _record_of(client_id, updated)
+
     def set_entry_presentation(
         self, client_id: ClientId, app: AppName, presentation: EntryPresentation, now: datetime
     ) -> ClientRecord:
         """Store how a recorded client shows one pinned entry; raises ClientNotFoundError."""
         stamped = now.astimezone(timezone.utc)
-        with STATE_FILES_LOCK:
-            document = self._read_unlocked()
-            previous = document.clients.get(str(client_id))
-            if previous is None:
-                raise ClientNotFoundError(f"No client record for {client_id!r}")
-            updated = previous.model_copy_update(
+        return self._update_recorded_client(
+            client_id,
+            lambda previous: previous.model_copy_update(
                 to_update(previous.field_ref().entries, {**previous.entries, str(app): presentation}),
                 to_update(previous.field_ref().last_seen, stamped),
-            )
-            clients = {**document.clients, str(client_id): updated}
-            self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
-        return _record_of(client_id, updated)
+            ),
+        )
 
     def record_shown(self, client_id: ClientId, entry: str, now: datetime) -> ClientRecord:
         """Record what a recorded client now shows (a window id, or ``SHOWN_HOME_ENTRY``) as the newest entry of its
         shown history; raises ClientNotFoundError."""
         stamped = now.astimezone(timezone.utc)
-        with STATE_FILES_LOCK:
-            document = self._read_unlocked()
-            previous = document.clients.get(str(client_id))
-            if previous is None:
-                raise ClientNotFoundError(f"No client record for {client_id!r}")
-            updated = previous.model_copy_update(
+        return self._update_recorded_client(
+            client_id,
+            lambda previous: previous.model_copy_update(
                 to_update(previous.field_ref().shown_history, with_shown_entry(previous.shown_history, entry)),
                 to_update(previous.field_ref().last_seen, stamped),
-            )
-            clients = {**document.clients, str(client_id): updated}
-            self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
-        return _record_of(client_id, updated)
+            ),
+        )
 
     def drop_windows(self, window_ids: Collection[WindowId]) -> None:
         """Drop closed windows from every client's shown history; writes only when a history named one."""
