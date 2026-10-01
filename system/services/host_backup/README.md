@@ -215,7 +215,17 @@ outcomes without parsing the event: `0` for `restic_backup_succeeded`, `3` for
 no restore point), `1` for any other tick outcome, and `2` when no outcome was
 observed at all -- either no terminal event arrived before the timeout, or the
 events log could not be located in the first place (see below), in which case
-nothing was triggered either.
+nothing was triggered either. Nothing is triggered when the in-flight backup is
+still running at the timeout, either.
+
+Only the newest tick to start counts as in flight: the service runs one tick at a
+time, so an earlier tick with no terminal event was killed mid-run (an OOM shed, a
+services restart) and will never finish.
+
+`uv run host-backup-now --wait-only` waits for the in-flight tick and triggers
+nothing. It prints `{"inflight_tick_id": <id or null>, "finished": <bool>}` and exits
+`0` once no tick is in flight, or `2` when the tick was still running at the timeout.
+The update apply runs it before restarting the services, which would kill the tick.
 
 The service writes its events under the *primary* agent's state dir (it
 inherits `MNGR_AGENT_STATE_DIR` from the bootstrap shell that started

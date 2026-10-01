@@ -21,6 +21,7 @@ from host_backup.cli import (
     _read_tail_lines,
     _scan_for_inflight_tick_id,
     _wait_for_next_completion,
+    _wait_for_tick_to_end,
 )
 from host_backup.config import BACKUP_TOML_PATH
 from host_backup.events import (
@@ -328,3 +329,48 @@ def test_the_tail_read_drops_the_line_its_window_cut_in_half(tmp_path: Path) -> 
         "second",
         "third",
     ]
+
+
+def test_the_inflight_wait_ends_on_its_own_tick_only(tmp_path: Path) -> None:
+    follower = _EventsLogFollower(tmp_path / "events.jsonl")
+    _write_tick(tmp_path, BackupEventType.RESTIC_BACKUP_SUCCEEDED, tick_id="tick-other")
+    assert not _wait_for_tick_to_end(follower, "tick-busy", time.monotonic() + 0.1)
+
+    _write_tick(tmp_path, BackupEventType.RESTIC_BACKUP_FAILED, tick_id="tick-busy")
+    assert _wait_for_tick_to_end(
+        follower, "tick-busy", time.monotonic() + _GENEROUS_TIMEOUT_SECONDS
+    )
+
+
+@pytest.mark.parametrize(
+    ("ticks", "expected_exit_code", "expected_report"),
+    [
+        pytest.param(
+            (),
+            0,
+            {"inflight_tick_id": None, "finished": True},
+            id="nothing-in-flight",
+        ),
+        pytest.param(
+            (("tick-busy", (BackupEventType.BACKUP_STARTED,)),),
+            EXIT_NO_COMPLETION_OBSERVED,
+            {"inflight_tick_id": "tick-busy", "finished": False},
+            id="still-running-at-the-timeout",
+        ),
+    ],
+)
+def test_wait_only_reports_the_inflight_tick_and_triggers_nothing(
+    tmp_path: Path,
+    backup_events_dir: Path,
+    ticks: tuple[tuple[str, tuple[BackupEventType, ...]], ...],
+    expected_exit_code: int,
+    expected_report: dict[str, object],
+) -> None:
+    for tick_id, types in ticks:
+        _write_tick(backup_events_dir, *types, tick_id=tick_id)
+
+    result = CliRunner().invoke(backup_now_main, ["--wait-only", "--timeout", "0.2"])
+
+    assert result.exit_code == expected_exit_code
+    assert json.loads(result.stdout) == expected_report
+    assert not (tmp_path / BACKUP_TOML_PATH).exists()

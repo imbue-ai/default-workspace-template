@@ -12,6 +12,11 @@ exiting 0 on success, 3 when backups are not configured, 1 on any other tick
 outcome, and 2 when no outcome was observed at all (no terminal event before the
 timeout, or no events log to read in the first place). When the in-flight tick is
 still running at the timeout, it exits 2 without triggering a tick.
+
+With `--wait-only` it only waits for the in-flight tick, triggers nothing, and prints
+`{"inflight_tick_id": <id or null>, "finished": <bool>}`, exiting 0 once no tick is in
+flight and 2 when the tick it waited for was still running at the timeout. The
+update-self apply runs it before restarting the services, which would kill the tick.
 """
 
 import json
@@ -61,7 +66,12 @@ EXIT_BACKUPS_NOT_CONFIGURED: Final[int] = 3
     show_default=True,
     help="How long (seconds) to wait for the triggered backup to finish",
 )
-def backup_now_main(timeout_seconds: float) -> None:
+@click.option(
+    "--wait-only",
+    is_flag=True,
+    help="Only wait for the backup tick in flight to finish, and trigger nothing",
+)
+def backup_now_main(timeout_seconds: float, wait_only: bool) -> None:
     """Trigger an immediate host_backup tick and wait for it to complete."""
     events_dir = resolve_service_events_dir()
     if events_dir is None:
@@ -73,8 +83,16 @@ def backup_now_main(timeout_seconds: float) -> None:
     events_path = events_dir / EVENTS_FILENAME
 
     deadline = time.monotonic() + timeout_seconds
+    # Opened before the scan, so a tick that ends between the scan and the first poll
+    # is still seen ending.
     with closing(_EventsLogFollower(events_path)) as follower:
-        is_idle = _wait_for_no_inflight_backup(events_path, follower, deadline)
+        inflight_tick_id = _scan_for_inflight_tick_id(events_path, max_lines=200)
+        is_idle = inflight_tick_id is None or _wait_for_tick_to_end(
+            follower, inflight_tick_id, deadline
+        )
+    if wait_only:
+        click.echo(json.dumps({"inflight_tick_id": inflight_tick_id, "finished": is_idle}))
+        sys.exit(0 if is_idle else EXIT_NO_COMPLETION_OBSERVED)
     if not is_idle:
         logger.error(
             "Timed out waiting for the in-flight backup tick to finish; triggered nothing"
@@ -176,20 +194,13 @@ def _is_path_rotated_away_from(events_path: Path, held: BinaryIO) -> bool:
     return (on_path.st_dev, on_path.st_ino) != (held_stat.st_dev, held_stat.st_ino)
 
 
-def _wait_for_no_inflight_backup(
-    events_path: Path,
+def _wait_for_tick_to_end(
     follower: _EventsLogFollower,
+    inflight_tick_id: str,
     deadline: float,
 ) -> bool:
-    """Block until the tick in flight when this began emits a terminal event, or the
-    deadline passes. Returns False when the deadline passed first.
-
-    `follower` has to be opened before this scans the log, so a tick that ends
-    between the scan and the first poll is still seen ending.
-    """
-    inflight_tick_id = _scan_for_inflight_tick_id(events_path, max_lines=200)
-    if inflight_tick_id is None:
-        return True
+    """Block until `inflight_tick_id` emits a terminal event, or the deadline passes.
+    Returns False when the deadline passed first."""
     logger.info("Waiting for the in-flight backup tick to complete...")
     while time.monotonic() < deadline:
         for event in follower.read_new_events():

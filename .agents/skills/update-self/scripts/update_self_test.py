@@ -23,6 +23,8 @@ from typing import Callable, Sequence
 
 import pytest
 import tool_env
+from click.testing import CliRunner
+from host_backup.cli import backup_now_main
 import update_apply
 import update_apply_contract
 import update_banding
@@ -2010,7 +2012,19 @@ def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     runner.respond(("git", "log", "--topo-order"), _Result(stdout=""))
     runner.respond(("git", "rev-list"), _Result(stdout=_ROLLBACK))
     runner.respond(("git", "describe"), _Result(returncode=128))
+    runner.respond(("uv", "run", "host-backup-now"), _backup_wait_result(None, True))
     return runner
+
+
+def _backup_wait_result(
+    inflight_tick_id: str | None, is_finished: bool, returncode: int = 0
+) -> _Result:
+    """What ``host-backup-now --wait-only`` prints, as the apply reads it."""
+    return _Result(
+        returncode=returncode,
+        stdout=json.dumps({"inflight_tick_id": inflight_tick_id, "finished": is_finished})
+        + "\n",
+    )
 
 
 def _apply(
@@ -7073,6 +7087,81 @@ def test_an_env_converge_that_cannot_be_spawned_is_a_warning_not_a_traceback(
     err = capsys.readouterr().err
     assert "env-converge upgrade` failed" in err
     assert "uv: not found" in err
+
+
+_BACKUP_WAIT = ("uv", "run", "host-backup-now", "--wait-only")
+
+
+def test_the_apply_waits_for_an_inflight_backup_tick_before_restarting(
+    apply_repo: Path, capsys
+) -> None:
+    """The restart kills a backup tick mid-restic, which loses that backup and leaves a
+    tick with no ending in the events log."""
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    runner.respond(("uv", "run", "host-backup-now"), _backup_wait_result("tick-1", True))
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    [wait] = runner.argvs_starting(*_BACKUP_WAIT)
+    assert wait[wait.index("--timeout") + 1] == "900"
+    assert runner.calls.index(wait) < runner.calls.index(list(_RESTART))
+    assert "waited" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("response", "expected_line"),
+    [
+        pytest.param(
+            _backup_wait_result("tick-1", False, returncode=2),
+            "interrupted an in-flight backup tick",
+            id="still-running-at-the-budget",
+        ),
+        pytest.param(
+            _Result(returncode=2, stderr="Error: No such option: --wait-only"),
+            "could not check for an in-flight backup tick",
+            id="host-backup-now-predates-wait-only",
+        ),
+        pytest.param(
+            FileNotFoundError("uv: not found"),
+            "could not check for an in-flight backup tick",
+            id="cannot-be-spawned",
+        ),
+    ],
+)
+def test_a_backup_tick_the_apply_cannot_wait_out_is_reported_not_a_rollback(
+    apply_repo: Path, capsys, response: object, expected_line: str
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    runner.respond(("uv", "run", "host-backup-now"), response)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert runner.ran(*_RESTART)
+    assert expected_line in capsys.readouterr().err
+
+
+def test_the_apply_reads_what_host_backup_now_wait_only_prints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The apply runs the merged tree's ``host-backup-now``: hold its printed report to
+    the apply's reading of it."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
+    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path / "state"))
+    events = tmp_path / "state" / "events" / "backup" / "events.jsonl"
+    events.parent.mkdir(parents=True)
+    events.write_text(
+        json.dumps({"source": "backup", "type": "BACKUP_STARTED", "tick_id": "tick-busy"})
+        + "\n"
+    )
+
+    result = CliRunner().invoke(backup_now_main, ["--wait-only", "--timeout", "0.1"])
+
+    assert update_apply.parse_backup_wait_report(
+        result.stdout
+    ) == update_apply.BackupWaitReport(inflight_tick_id="tick-busy", is_finished=False)
 
 
 # recover

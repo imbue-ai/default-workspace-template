@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime
 import fcntl
+import json
 import os
 import re
 import shutil
@@ -144,6 +145,11 @@ _FRONTEND_BUILD_TIMEOUT_SECONDS = 1200.0
 
 
 _RESTART_TIMEOUT_SECONDS = 600.0
+
+# How long the restart waits for a backup tick already in flight, which it would kill:
+# restic runs measured 8 to 13 minutes on a two-core workspace, so this covers one that
+# has only just started.
+_BACKUP_WAIT_TIMEOUT_SECONDS = 900.0
 
 _ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
 
@@ -875,6 +881,92 @@ def _recover_running_state(
     )
 
 
+class BackupWaitReport(NamedTuple):
+    """What ``host-backup-now --wait-only`` printed: the tick it found in flight, if any,
+    and whether that tick had finished by the time it returned."""
+
+    inflight_tick_id: str | None
+    is_finished: bool
+
+
+def parse_backup_wait_report(stdout: str) -> BackupWaitReport | None:
+    """The report on the last line of ``stdout``, or None when there is none (a tree
+    whose ``host-backup-now`` predates ``--wait-only``, or one that could not run)."""
+    lines = stdout.strip().splitlines()
+    if not lines:
+        return None
+    try:
+        report = json.loads(lines[-1])
+    except ValueError:
+        return None
+    if not isinstance(report, dict):
+        return None
+    tick_id = report.get("inflight_tick_id")
+    is_finished = report.get("finished")
+    if not (tick_id is None or isinstance(tick_id, str)) or not isinstance(
+        is_finished, bool
+    ):
+        return None
+    return BackupWaitReport(inflight_tick_id=tick_id, is_finished=is_finished)
+
+
+def _wait_for_inflight_backup_tick(
+    repo_root: Path, runner: Runner, now: Callable[[], float]
+) -> None:
+    """Let a backup tick in flight finish before the services restart kills it, within
+    :data:`_BACKUP_WAIT_TIMEOUT_SECONDS`.
+
+    Never fails the apply: a tick still running at the budget, or a check that could not
+    run, is said on stderr for the results message and the restart goes ahead.
+    """
+    argv = [
+        "uv",
+        "run",
+        "host-backup-now",
+        "--wait-only",
+        "--timeout",
+        f"{_BACKUP_WAIT_TIMEOUT_SECONDS:g}",
+    ]
+    started = now()
+    try:
+        result = runner.run(
+            argv,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_BACKUP_WAIT_TIMEOUT_SECONDS + 60,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        sys.stderr.write(
+            f"warning: could not check for an in-flight backup tick ({exc}); restarting "
+            "the services anyway, which interrupts one if it is running.\n"
+        )
+        return
+    report = parse_backup_wait_report(getattr(result, "stdout", "") or "")
+    if report is None:
+        stderr = (getattr(result, "stderr", "") or "").strip()
+        sys.stderr.write(
+            "warning: could not check for an in-flight backup tick (`host-backup-now "
+            f"--wait-only` exited {getattr(result, 'returncode', '?')}: {stderr}); "
+            "restarting the services anyway, which interrupts one if it is running.\n"
+        )
+        return
+    if report.inflight_tick_id is None:
+        return
+    if report.is_finished:
+        sys.stderr.write(
+            f"backup: waited {now() - started:.0f}s for an in-flight backup tick to "
+            "finish before restarting the services.\n"
+        )
+        return
+    sys.stderr.write(
+        "warning: interrupted an in-flight backup tick: it was still running after "
+        f"{_BACKUP_WAIT_TIMEOUT_SECONDS:g}s, and the services restart stops it. The next "
+        "backup tick runs as usual.\n"
+    )
+
+
 def _phase_timing_line(marker: ApplyMarker) -> str:
     """One stderr line of per-phase durations, from the marker's timings.
 
@@ -1303,6 +1395,8 @@ def apply_update(
                 repo_root, expected_bundle_hashes, live_service_restarted=False
             )
             _advance(PHASE_BUILT)
+
+        _wait_for_inflight_backup_tick(repo_root, runner, now)
 
         # Every apply restarts the services agent, whatever the diff: the
         # running chat app imports mngr in-process, the shell and
