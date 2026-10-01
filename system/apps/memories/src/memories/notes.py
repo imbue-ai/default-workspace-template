@@ -16,6 +16,7 @@ it at any time, and goes through a temporary file and a rename so a chat never r
 import os
 import re
 import uuid
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 from datetime import timezone
 from enum import auto
@@ -37,6 +38,10 @@ NON_NOTE_FILENAMES: Final[frozenset[str]] = frozenset({INDEX_FILENAME, "README.m
 NOTE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
 _FRONTMATTER_FENCE: Final[str] = "---"
 _INDEX_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(\s*[-*]\s+\[[^\]]*\]\((?P<file>[^)]+)\))(?P<hook>.*)$")
+_INDEX_TITLE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\s*[-*]\s+\[(?P<title>[^\]]*)\]")
+# How much of MEMORY.md a chat loads: Claude Code's limit, which agent_memory_context.py applies for pi too.
+INDEX_LOADED_MAX_LINES: Final[int] = 200
+INDEX_LOADED_MAX_BYTES: Final[int] = 25 * 1024
 _HOOK_SEPARATOR: Final[str] = " — "
 # The harness a note came from. pi writes ``metadata.source`` itself (the protocol it is given asks it to); Claude
 # Code writes none, but stamps ``originSessionId`` on every note it saves.
@@ -77,6 +82,25 @@ class Note(FrozenModel):
     raw_text: str = Field(description="The file exactly as it is on disk")
     modified_at: datetime = Field(description="When the file last changed")
     version: str = Field(description="The file's mtime and size, which a write must match")
+
+
+class IndexEntry(FrozenModel):
+    """A note's line in ``MEMORY.md``: what every chat starts with, before it opens the note itself."""
+
+    line_number: int = Field(description="Its line in MEMORY.md, counting from 1")
+    title: str = Field(description="The link text")
+    hook: str = Field(description="The summary after the link, as chats see it")
+    is_loaded: bool = Field(description="Whether it falls within what a chat loads (200 lines or 25KB)")
+
+
+class IndexSummary(FrozenModel):
+    """How much of ``MEMORY.md`` chats load, and what it points at that is not there."""
+
+    line_count: int = Field(description="Its lines")
+    loaded_line_count: int = Field(description="How many of them a chat loads")
+    max_lines: int = Field(description="The most lines a chat loads")
+    max_bytes: int = Field(description="The most bytes a chat loads")
+    missing_files: tuple[str, ...] = Field(description="Notes it lists whose files no longer exist")
 
 
 @pure
@@ -177,6 +201,49 @@ def split_index_lines(index_text: str, file_name: str) -> tuple[str, tuple[str, 
         else:
             kept.append(line)
     return "\n".join(kept), tuple(removed)
+
+
+@pure
+def loaded_line_count(index_text: str) -> int:
+    """How many lines of the index a chat loads: the first 200, cut sooner if they pass 25KB."""
+    loaded = 0
+    loaded_bytes = 0
+    for line in index_text.splitlines()[:INDEX_LOADED_MAX_LINES]:
+        loaded_bytes += len(line.encode("utf-8")) + 1
+        if loaded_bytes > INDEX_LOADED_MAX_BYTES:
+            break
+        loaded += 1
+    return loaded
+
+
+@pure
+def parse_index(index_text: str) -> dict[str, IndexEntry]:
+    """Each note's first line in the index, keyed by file name."""
+    loaded = loaded_line_count(index_text)
+    entries: dict[str, IndexEntry] = {}
+    for line_idx, line in enumerate(index_text.splitlines()):
+        match = _INDEX_LINE_PATTERN.match(line)
+        if match is None or match.group("file") in entries:
+            continue
+        title_match = _INDEX_TITLE_PATTERN.match(line)
+        entries[match.group("file")] = IndexEntry(
+            line_number=line_idx + 1,
+            title=title_match.group("title").strip() if title_match is not None else "",
+            hook=match.group("hook").strip().lstrip("—–-:").strip(),
+            is_loaded=line_idx < loaded,
+        )
+    return entries
+
+
+@pure
+def summarize_index(index_text: str, note_file_names: AbstractSet[str]) -> IndexSummary:
+    return IndexSummary(
+        line_count=len(index_text.splitlines()),
+        loaded_line_count=loaded_line_count(index_text),
+        max_lines=INDEX_LOADED_MAX_LINES,
+        max_bytes=INDEX_LOADED_MAX_BYTES,
+        missing_files=tuple(name for name in parse_index(index_text) if name not in note_file_names),
+    )
 
 
 def validate_note_name(file_name: str) -> None:

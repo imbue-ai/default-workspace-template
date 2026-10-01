@@ -4,7 +4,7 @@
  * each is tested on its own; the body is returned as plain text pieces, never HTML, since an agent wrote it.
  */
 
-import type { BackupRetention, Note, NoteAttribution } from "../models/notes";
+import type { BackupRetention, IndexSummary, Note, NoteAttribution } from "../models/notes";
 
 export interface BodyBlock {
   readonly label: string | null;
@@ -111,4 +111,31 @@ export function backupsDetail(backups: BackupRetention): string {
     `Backups are snapshots of the whole workspace, kept ${backups.schedule.join(", ")} (set in ${backups.settings_path}). ` +
     "Each snapshot holds the notes as they were when it was taken, including notes deleted since."
   );
+}
+
+/** What chats load of the index, in a sentence, or null when there are no notes to speak of. */
+export function indexSummaryLine(index: IndexSummary, noteCount: number): string | null {
+  if (noteCount === 0) return null;
+  const opening =
+    "Every chat starts with the one-line summaries below (the list in MEMORY.md), and opens a note's full text only when its summary looks relevant to what you're asking.";
+  const skipped = index.line_count - index.loaded_line_count;
+  return skipped > 0
+    ? `${opening} Chats load at most ${index.max_lines} lines of that list; yours is ${index.line_count} lines long, so the last ${countLabel(skipped, "line isn't", "lines aren't")} loaded.`
+    : `${opening} Chats load at most ${index.max_lines} lines of it; your list is ${countLabel(index.line_count, "line", "lines")} long.`;
+}
+
+export type IndexStatus =
+  | { readonly kind: "seen"; readonly text: string }
+  | { readonly kind: "not-listed"; readonly text: string }
+  | { readonly kind: "past-limit"; readonly text: string };
+
+/** Whether chats see a note at the start, and the exact line they see. */
+export function indexStatus(note: Note, maxLines: number): IndexStatus {
+  const entry = note.index_entry;
+  if (entry === null) return { kind: "not-listed", text: "Not in the list chats start with, so they won't find it" };
+  if (!entry.is_loaded) {
+    return { kind: "past-limit", text: `Past the ${maxLines}-line limit of that list, so chats don't load it` };
+  }
+  const seen = entry.hook === "" ? entry.title : entry.title === "" ? entry.hook : `${entry.title} — ${entry.hook}`;
+  return { kind: "seen", text: `Chats start with: “${seen}”` };
 }

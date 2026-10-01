@@ -1,8 +1,10 @@
 /**
- * The page, top to bottom: how many things the chats remember; who can see the notes (every Claude and pi chat
- * here, no other chat type, no other workspace, and the workspace's backups, which keep deleted notes until they
- * expire); then the notes grouped by what they are about, each with who wrote it, how many chats read it, the file
- * as it is on disk, and Edit and Delete. Delete asks first, saying what still holds a copy afterwards.
+ * The page, top to bottom: how many things the chats remember, when a chat saves a note and what it never saves,
+ * and how much of the list every chat starts with it loads; where the notes go (stored here, read by every Claude
+ * and pi chat, sent to a chat's AI provider when used, kept in backups, not shared with other workspaces); then the
+ * notes grouped by what they are about, each group saying what belongs in it (and what to try when it is empty),
+ * each note with the line chats start with, who wrote it, how many chats read it, the file as it is on disk, and
+ * Edit and Delete. Delete asks first, saying what still holds a copy afterwards.
  */
 
 import m from "mithril";
@@ -19,6 +21,8 @@ import {
   deleteBackupsWarning,
   deletedStatus,
   formatDate,
+  indexStatus,
+  indexSummaryLine,
   writerLine,
 } from "./format";
 
@@ -28,13 +32,48 @@ const DETAILS_CLASS =
 const DISCLOSE_CLASS = "memories-disclose self-start cursor-pointer type-helper text-accent hover:underline";
 const NoticeDialog = makeNoticeDialog();
 
-const GROUPS: readonly { readonly type: NoteType; readonly label: string }[] = [
-  { type: "USER", label: "About you" },
-  { type: "FEEDBACK", label: "How you like things done" },
-  { type: "PROJECT", label: "What you're working on" },
-  { type: "REFERENCE", label: "Where things are" },
-  { type: "OTHER", label: "Other notes" },
+interface Group {
+  readonly type: NoteType;
+  readonly label: string;
+  readonly description: string;
+  /** Something to tell a chat that would land a note here; null for the group that only shows when it has notes. */
+  readonly example: string | null;
+}
+
+// The four kinds Claude Code's memory (and the protocol pi follows) sorts a note into, in the user's words.
+const GROUPS: readonly Group[] = [
+  {
+    type: "USER",
+    label: "About you",
+    description: "Who you are: your role, what you know well, where you are.",
+    example: "Remember that I'm a teacher and new to coding.",
+  },
+  {
+    type: "FEEDBACK",
+    label: "How you like things done",
+    description: "Corrections and preferences for how chats work with you. Chats save these most often.",
+    example: "From now on, keep your answers short.",
+  },
+  {
+    type: "PROJECT",
+    label: "What you're working on",
+    description: "Goals, deadlines and decisions that aren't written down in your files.",
+    example: "Remember that the launch moved to March 3.",
+  },
+  {
+    type: "REFERENCE",
+    label: "Where things are",
+    description: "Where to look for things: links, dashboards, documents.",
+    example: "Remember that our team's notes are in the Design wiki.",
+  },
+  { type: "OTHER", label: "Other notes", description: "Notes that don't say what kind they are.", example: null },
 ];
+
+const STATUS_CLASS: Readonly<Record<"seen" | "not-listed" | "past-limit", string>> = {
+  seen: "type-helper text-secondary",
+  "not-listed": "type-helper text-warning",
+  "past-limit": "type-helper text-warning",
+};
 
 export interface MemoriesPageAttrs {
   readonly state: NotesState;
@@ -79,16 +118,26 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
     m.redraw();
   }
 
-  function whoCanSee(document: NotesDocument): m.Vnode {
+  function whereNotesGo(document: NotesDocument): m.Vnode {
     const row = (tone: "success" | "neutral" | "warning", label: string, text: string): m.Vnode =>
       m("div", { class: "grid grid-cols-[96px_minmax(0,1fr)] items-baseline gap-3" }, [
         m("span", { class: `justify-self-start ${badgeClass(tone)}` }, label),
         m("span", { class: "type-body text-primary" }, text),
       ]);
     return m("section", { class: "flex flex-col gap-2 rounded-lg border border-default bg-surface-secondary p-4" }, [
-      m("span", { class: "type-label text-primary" }, "Who can see these notes"),
-      row("success", "Shared", "Every Claude and pi chat in this workspace, including new ones"),
+      m("span", { class: "type-label text-primary" }, "Where your notes go"),
+      row("neutral", "Stored", "In this workspace only. They aren't synced to GitHub."),
+      row(
+        "success",
+        "Read by",
+        "Every Claude and pi chat in this workspace, including new ones and the background tasks they start.",
+      ),
       row("neutral", "Not yet", "Codex, OpenCode and Antigravity chats. They don't use these notes."),
+      row(
+        "neutral",
+        "Sent to",
+        "The AI provider of a chat that uses a note (Anthropic, for Claude chats), as part of that chat.",
+      ),
       row("neutral", "Not shared", "Your other workspaces. Each has its own notes."),
       row(document.backups.is_backed_up ? "warning" : "neutral", "Backups", backupsLine(document.backups)),
       m(
@@ -107,7 +156,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
             m(
               "p",
               { class: "m-0 mt-2" },
-              `${document.index_path} lists them all. Every Claude chat reads that list when it starts and opens a note when it looks relevant, so a change reaches a chat when it next starts.`,
+              `${document.index_path} lists them all, one line each. Every Claude chat loads that list when it starts (the first ${document.index.max_lines} lines, or ${Math.round(document.index.max_bytes / 1024)}KB, whichever is less) and opens a note when its line looks relevant; a note saved later reaches an open Claude chat on its next message.`,
             ),
             m(
               "p",
@@ -197,7 +246,16 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
     );
   }
 
-  function noteCard(note: Note, attrs: MemoriesPageAttrs): m.Vnode {
+  function indexStatusLine(note: Note, maxIndexLines: number): m.Vnode {
+    const status = indexStatus(note, maxIndexLines);
+    return m(
+      "p",
+      { class: `memories-index-status m-0 ${STATUS_CLASS[status.kind]}`, "data-status": status.kind },
+      status.text,
+    );
+  }
+
+  function noteCard(note: Note, attrs: MemoriesPageAttrs, maxIndexLines: number): m.Vnode {
     if (draft !== null && draft.fileName === note.file_name) return editor(note, attrs, draft);
     const fileKey = `file:${note.file_name}`;
     return m(
@@ -216,6 +274,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
                 block.text,
               ]),
         ),
+        indexStatusLine(note, maxIndexLines),
         m("div", { class: "flex flex-wrap items-center justify-between gap-2 pt-1" }, [
           m("span", { class: "flex flex-wrap items-center gap-x-1.5 type-helper text-secondary" }, [
             `${writerLine(note)} · updated ${formatDate(note.modified_at)} ·`,
@@ -307,23 +366,29 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
           m(
             "p",
             { class: "m-0 type-body text-secondary" },
-            count === 0
-              ? "When a chat learns something worth keeping, like how you like things done or what you're working on, it writes a note here. You'll be able to read, correct or remove each one."
-              : "They read these notes when they start work. Fix anything that's wrong, or delete it.",
+            "A chat saves a note when you ask it to remember something, when you correct how it works, or when you mention something that will still matter later. It never saves passwords or keys, sensitive personal details unless you ask, or what's already in your files. Fix anything that's wrong here, or delete it.",
           ),
+          indexSummaryLine(document.index, count) === null
+            ? null
+            : m("p", { class: "m-0 type-body text-secondary" }, indexSummaryLine(document.index, count)),
         ]),
-        whoCanSee(document),
+        whereNotesGo(document),
         statusMessage === null ? null : m("p", { class: "m-0 type-body text-primary", role: "status" }, statusMessage),
         GROUPS.map((group) => ({ group, notes: document.notes.filter((note) => note.note_type === group.type) }))
-          .filter(({ notes }) => notes.length > 0)
+          .filter(({ group, notes }) => notes.length > 0 || group.example !== null)
           .map(({ group, notes }) =>
-            m("section", { key: group.type, class: "flex flex-col gap-2" }, [
-              m(
-                "h3",
-                { class: `m-0 border-b border-default pb-1.5 ${SECTION_HEADING_CLASS}` },
-                `${group.label} · ${notes.length}`,
-              ),
-              notes.map((note) => noteCard(note, attrs)),
+            m("section", { key: group.type, class: "memories-group flex flex-col gap-2", "data-group": group.type }, [
+              m("div", { class: "flex flex-col gap-0.5 border-b border-default pb-1.5" }, [
+                m("h3", { class: `m-0 ${SECTION_HEADING_CLASS}` }, `${group.label} · ${notes.length}`),
+                m("p", { class: "m-0 type-helper text-secondary" }, group.description),
+              ]),
+              notes.length === 0 && group.example !== null
+                ? m(
+                    "p",
+                    { class: "m-0 type-helper text-faint" },
+                    `Nothing yet. Try telling a chat: “${group.example}”`,
+                  )
+                : notes.map((note) => noteCard(note, attrs, document.index.max_lines)),
             ]),
           ),
         pendingDelete === null ? null : deleteDialog(pendingDelete, document.backups, attrs),

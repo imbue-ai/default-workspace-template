@@ -12,15 +12,21 @@ from memories.errors import NoteNameError
 from memories.errors import NoteNotFoundError
 from memories.errors import NoteWriteError
 from memories.notes import INDEX_FILENAME
+from memories.notes import INDEX_LOADED_MAX_BYTES
+from memories.notes import INDEX_LOADED_MAX_LINES
+from memories.notes import IndexEntry
 from memories.notes import NoteType
 from memories.notes import delete_note
 from memories.notes import file_version
 from memories.notes import list_notes
+from memories.notes import loaded_line_count
+from memories.notes import parse_index
 from memories.notes import parse_note
 from memories.notes import read_index
 from memories.notes import render_note
 from memories.notes import rewrite_index_hook
 from memories.notes import split_index_lines
+from memories.notes import summarize_index
 from memories.notes import update_note
 from memories.notes import write_atomically
 
@@ -250,3 +256,36 @@ def test_a_note_says_which_harness_saved_it() -> None:
     assert top_level.source == "codex"
     assert unknown.source is None
     assert parse_note("no frontmatter").source is None
+
+
+def test_parse_index_reads_each_notes_line_title_and_summary() -> None:
+    index = "# Memory\n- [Units](units.md) — Prefers metric\n* [Role](role.md) - Is a designer\n- [Again](units.md) — dup\n"
+
+    assert parse_index(index) == {
+        "units.md": IndexEntry(line_number=2, title="Units", hook="Prefers metric", is_loaded=True),
+        "role.md": IndexEntry(line_number=3, title="Role", hook="Is a designer", is_loaded=True),
+    }
+
+
+def test_lines_past_200_or_25kb_are_not_loaded() -> None:
+    many = "".join(f"- [N{idx}](n{idx}.md) — hook\n" for idx in range(INDEX_LOADED_MAX_LINES + 2))
+    entries = parse_index(many)
+
+    assert entries[f"n{INDEX_LOADED_MAX_LINES - 1}.md"].is_loaded is True
+    assert entries[f"n{INDEX_LOADED_MAX_LINES}.md"].is_loaded is False
+    assert loaded_line_count(many) == INDEX_LOADED_MAX_LINES
+
+    long_line = "- [Long](long.md) — " + "x" * 5000
+    heavy = "\n".join(long_line.replace("long.md", f"l{idx}.md") for idx in range(10))
+    assert loaded_line_count(heavy) == INDEX_LOADED_MAX_BYTES // (len(long_line) + 3)
+    assert parse_index(heavy)["l9.md"].is_loaded is False
+
+
+def test_summarize_index_counts_lines_and_names_listed_notes_that_are_gone() -> None:
+    index = "- [Units](units.md) — x\n- [Gone](gone.md) — y\n"
+
+    summary = summarize_index(index, {"units.md", "unlisted.md"})
+
+    assert (summary.line_count, summary.loaded_line_count) == (2, 2)
+    assert (summary.max_lines, summary.max_bytes) == (INDEX_LOADED_MAX_LINES, INDEX_LOADED_MAX_BYTES)
+    assert summary.missing_files == ("gone.md",)

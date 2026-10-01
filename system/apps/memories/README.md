@@ -9,7 +9,7 @@ notes: `.pi/extensions/memory.ts` gives every pi turn the protocol in `.agents/s
 (adapted from Claude Code's own memory prompt, so both write one format) and the index, through
 `system/scripts/agent_memory_context.py`. Codex, OpenCode and Antigravity do not use the folder yet, and other
 workspaces have their own. A note pi saves says so in `metadata.source: pi-coding`; Claude Code marks its own with
-`originSessionId`. The page says so before anything else, then shows each note grouped by its `type` (about you, how you
+`originSessionId`. The page says when a chat saves a note and what it never saves, how much of the index chats load, and where the notes go (stored here, read by Claude and pi chats, sent to a chat's AI provider when used, backed up, not synced to GitHub), then shows each note grouped by its `type` (about you, how you
 like things done, what you're working on, where things are), with:
 
 - who wrote it and how many chats have read it, from the chats' own transcripts: Claude's (mapped to an agent through

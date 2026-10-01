@@ -18,6 +18,23 @@ export interface NoteAttribution {
   readonly reader_count: number;
 }
 
+/** A note's line in MEMORY.md: what every chat starts with, before it opens the note itself. */
+export interface IndexEntry {
+  readonly line_number: number;
+  readonly title: string;
+  readonly hook: string;
+  readonly is_loaded: boolean;
+}
+
+/** How much of MEMORY.md chats load, and what it lists that no longer exists. */
+export interface IndexSummary {
+  readonly line_count: number;
+  readonly loaded_line_count: number;
+  readonly max_lines: number;
+  readonly max_bytes: number;
+  readonly missing_files: readonly string[];
+}
+
 export interface Note {
   readonly file_name: string;
   readonly name: string | null;
@@ -30,6 +47,7 @@ export interface Note {
   readonly modified_at: string;
   readonly version: string;
   readonly attribution: NoteAttribution | null;
+  readonly index_entry: IndexEntry | null;
 }
 
 /** What the workspace's backups keep: a deleted note stays in the snapshots taken before the delete. */
@@ -43,6 +61,7 @@ export interface BackupRetention {
 export interface NotesDocument {
   readonly notes_dir: string;
   readonly index_path: string;
+  readonly index: IndexSummary;
   readonly backups: BackupRetention;
   readonly notes: readonly Note[];
   readonly messages: readonly string[];

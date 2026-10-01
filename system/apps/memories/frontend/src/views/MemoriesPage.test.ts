@@ -34,6 +34,7 @@ function note(
     modified_at: "2026-10-01T10:00:00Z",
     version: `1-${fileName.length}`,
     attribution: null,
+    index_entry: { line_number: 1, title: description, hook: description.toLowerCase(), is_loaded: true },
   };
 }
 
@@ -41,6 +42,7 @@ function documentWith(backups: BackupRetention): NotesDocument {
   return {
     notes_dir: "/home/user/workspace/data/memories",
     index_path: "/home/user/workspace/data/memories/MEMORY.md",
+    index: { line_count: 2, loaded_line_count: 2, max_lines: 200, max_bytes: 25600, missing_files: [] },
     backups,
     notes: [
       note("role.md", "Is a product designer", "USER"),
@@ -175,5 +177,49 @@ describe("who keeps and saved the notes", () => {
 
     expect(cards[0].textContent).toContain("Who wrote this isn't recorded");
     expect(cards[1].textContent).toContain("Saved by a pi chat");
+  });
+});
+
+describe("explaining what is remembered, used and shared", () => {
+  it("says when a chat saves a note and what it never saves", () => {
+    const { root } = render();
+
+    expect(root.textContent).toContain(
+      "A chat saves a note when you ask it to remember something, when you correct how it works, or when you mention something that will still matter later.",
+    );
+    expect(root.textContent).toContain("It never saves passwords or keys, sensitive personal details unless you ask");
+  });
+
+  it("describes every kind of note, and suggests what to say for the empty ones", () => {
+    const { root } = render();
+    const group = (type: string): HTMLElement => root.querySelector<HTMLElement>(`[data-group="${type}"]`)!;
+
+    expect(group("USER").textContent).toContain("Who you are: your role, what you know well, where you are.");
+    expect(group("PROJECT").textContent).toContain(
+      "Nothing yet. Try telling a chat: “Remember that the launch moved to March 3.”",
+    );
+    expect(group("REFERENCE").querySelectorAll(".memories-note")).toHaveLength(0);
+    expect(root.querySelector('[data-group="OTHER"]')).toBeNull();
+  });
+
+  it("shows the line each note puts in front of every chat", () => {
+    const { root } = render();
+    const statuses = Array.from(root.querySelectorAll<HTMLElement>(".memories-index-status"));
+
+    expect(statuses.map((status) => status.textContent)).toEqual([
+      "Chats start with: “Is a product designer — is a product designer”",
+      "Chats start with: “Prefers metric units — prefers metric units”",
+    ]);
+    expect(root.textContent).toContain("Chats load at most 200 lines of it; your list is 2 lines long.");
+  });
+
+  it("says where the notes go, including the AI provider and GitHub", () => {
+    const { root } = render();
+
+    expect(root.textContent).toContain("Where your notes go");
+    expect(root.textContent).toContain("In this workspace only. They aren't synced to GitHub.");
+    expect(root.textContent).toContain(
+      "The AI provider of a chat that uses a note (Anthropic, for Claude chats), as part of that chat.",
+    );
   });
 });

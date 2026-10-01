@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { BackupRetention, Note } from "../models/notes";
-import { backupsDetail, backupsLine, deleteBackupsWarning, deletedStatus, writerLine } from "./format";
+import type { BackupRetention, IndexSummary, Note } from "../models/notes";
+import {
+  backupsDetail,
+  backupsLine,
+  deleteBackupsWarning,
+  deletedStatus,
+  indexStatus,
+  indexSummaryLine,
+  writerLine,
+} from "./format";
 
 const BACKED_UP: BackupRetention = {
   is_backed_up: true,
@@ -48,6 +56,7 @@ function savedBy(source: string | null, chatTitle: string | null = null): Note {
     modified_at: "2026-10-01T10:00:00Z",
     version: "1-1",
     attribution: chatTitle === null ? null : { authors: [{ chat_title: chatTitle, at: null }], reader_count: 0 },
+    index_entry: null,
   };
 }
 
@@ -59,5 +68,50 @@ describe("who saved a note", () => {
     expect(writerLine(savedBy("codex"))).toBe("Saved by a Codex chat");
     expect(writerLine(savedBy("something-new"))).toBe("Saved by a something-new chat");
     expect(writerLine(savedBy("pi-coding", "pi-test"))).toBe('Written by "pi-test" · not read since');
+  });
+});
+
+const INDEX: IndexSummary = {
+  line_count: 3,
+  loaded_line_count: 3,
+  max_lines: 200,
+  max_bytes: 25600,
+  missing_files: [],
+};
+
+describe("what chats load of the notes", () => {
+  it("says every chat starts with the summaries, how many lines load, and how many don't", () => {
+    expect(indexSummaryLine(INDEX, 3)).toBe(
+      "Every chat starts with the one-line summaries below (the list in MEMORY.md), and opens a note's full text only when its summary looks relevant to what you're asking. Chats load at most 200 lines of it; your list is 3 lines long.",
+    );
+    expect(indexSummaryLine({ ...INDEX, line_count: 203, loaded_line_count: 200 }, 203)).toContain(
+      "Chats load at most 200 lines of that list; yours is 203 lines long, so the last 3 lines aren't loaded.",
+    );
+    expect(indexSummaryLine({ ...INDEX, line_count: 201, loaded_line_count: 200 }, 201)).toContain(
+      "so the last 1 line isn't loaded.",
+    );
+    expect(indexSummaryLine(INDEX, 0)).toBeNull();
+  });
+
+  it("shows the exact line a chat starts with, or why it has none", () => {
+    const listed = (title: string, hook: string, isLoaded: boolean): Note => ({
+      ...savedBy("claude"),
+      index_entry: { line_number: 4, title, hook, is_loaded: isLoaded },
+    });
+
+    expect(indexStatus(listed("Units", "Prefers metric", true), 200)).toEqual({
+      kind: "seen",
+      text: "Chats start with: “Units — Prefers metric”",
+    });
+    expect(indexStatus(listed("Units", "", true), 200).text).toBe("Chats start with: “Units”");
+    expect(indexStatus(listed("", "Prefers metric", true), 200).text).toBe("Chats start with: “Prefers metric”");
+    expect(indexStatus(listed("Units", "Prefers metric", false), 200)).toEqual({
+      kind: "past-limit",
+      text: "Past the 200-line limit of that list, so chats don't load it",
+    });
+    expect(indexStatus(savedBy("claude"), 200)).toEqual({
+      kind: "not-listed",
+      text: "Not in the list chats start with, so they won't find it",
+    });
   });
 });

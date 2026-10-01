@@ -39,6 +39,9 @@ from memories.errors import NoteWriteError
 from memories.notes import INDEX_FILENAME
 from memories.notes import delete_note
 from memories.notes import list_notes
+from memories.notes import parse_index
+from memories.notes import read_index
+from memories.notes import summarize_index
 from memories.notes import update_note
 from memories.request_guard import is_write_allowed
 
@@ -149,9 +152,13 @@ def build_pages_blueprint(
     @blueprint.get(NOTES_PATH)
     def notes() -> ResponseReturnValue:
         attributions, messages = read_attributions(transcript_sources, client, _chat_app_url(registry_path))
+        notes_on_disk = list_notes(notes_dir)
+        index_text = read_index(notes_dir)
+        index_entries = parse_index(index_text)
         payload = {
             "notes_dir": str(notes_dir),
             "index_path": str(notes_dir / INDEX_FILENAME),
+            "index": summarize_index(index_text, {note.file_name for note in notes_on_disk}).model_dump(mode="json"),
             "backups": read_backup_retention(backup_config_path, restic_env_path).model_dump(mode="json"),
             "notes": [
                 {
@@ -159,8 +166,11 @@ def build_pages_blueprint(
                     "attribution": attributions[note.file_name].model_dump(mode="json")
                     if note.file_name in attributions
                     else None,
+                    "index_entry": index_entries[note.file_name].model_dump(mode="json")
+                    if note.file_name in index_entries
+                    else None,
                 }
-                for note in list_notes(notes_dir)
+                for note in notes_on_disk
             ],
             "messages": list(messages),
         }
