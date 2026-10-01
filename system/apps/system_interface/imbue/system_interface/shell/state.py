@@ -40,7 +40,6 @@ from imbue.system_interface.shell.app_lifecycle import build_app_lifecycle_manag
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
-from imbue.system_interface.shell.clients import SHOWN_HOME_ENTRY
 from imbue.system_interface.shell.clients import entries_wire_json
 from imbue.system_interface.shell.close_hints import WindowClosedHint
 from imbue.system_interface.shell.close_hints import post_window_closed_hint
@@ -736,7 +735,6 @@ class ShellState(MutableModel):
     def record_client_shown(self, client_id: ClientId, window_id: WindowId | None) -> ClientRecord:
         """Record what a client's phone layout now shows: a window some desktop holds, or its home grid for None.
         Raises WindowNotFoundError for a window no desktop holds, and ClientNotFoundError."""
-        entry = str(window_id) if window_id is not None else SHOWN_HOME_ENTRY
         # Checked and recorded under one hold of the lock, so a close either lands first (and this is a 404) or
         # drops the entry after it is recorded.
         with STATE_FILES_LOCK:
@@ -744,7 +742,7 @@ class ShellState(MutableModel):
                 find_window(desktop, window_id) is not None for desktop in self.list_desktops()
             ):
                 raise WindowNotFoundError(str(window_id))
-            return self.clients.record_shown(client_id, entry, datetime.now(timezone.utc))
+            return self.clients.record_shown(client_id, window_id, datetime.now(timezone.utc))
 
     def active_desktop_of_client(self, client_id: str) -> DesktopId | None:
         """The desktop a client is on by the rule of desktop contracts.md section 4.3; None with no desktops."""

@@ -11,7 +11,6 @@ from imbue.system_interface.shell.clients import CLIENTS_FILENAME
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
 from imbue.system_interface.shell.clients import SHOWN_HISTORY_LIMIT
-from imbue.system_interface.shell.clients import SHOWN_HOME_ENTRY
 from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import EntryPresentation
@@ -162,10 +161,10 @@ def test_the_shown_history_holds_the_newest_distinct_entries_most_recent_last(tm
     store = ClientStore(state_directory=tmp_path)
     store.record_report(_report("c1", "home"), TEST_NOW)
     for index in range(SHOWN_HISTORY_LIMIT + 5):
-        store.record_shown(ClientId("c1"), _window_id(index), TEST_NOW)
-    store.record_shown(ClientId("c1"), SHOWN_HOME_ENTRY, TEST_NOW)
+        store.record_shown(ClientId("c1"), WindowId(_window_id(index)), TEST_NOW)
+    store.record_shown(ClientId("c1"), None, TEST_NOW)
     # Showing a window again moves it to the end rather than listing it twice.
-    again = store.record_shown(ClientId("c1"), _window_id(10), TEST_NOW + timedelta(minutes=1))
+    again = store.record_shown(ClientId("c1"), WindowId(_window_id(10)), TEST_NOW + timedelta(minutes=1))
 
     expected = (
         *(_window_id(index) for index in range(6, SHOWN_HISTORY_LIMIT + 5) if index != 10),
@@ -182,16 +181,16 @@ def test_the_shown_history_holds_the_newest_distinct_entries_most_recent_last(tm
     assert reread is not None and reread.shown_history == expected
     assert client_wire_json(reread, False)["shown_history"] == list(expected)
     with pytest.raises(ClientNotFoundError):
-        store.record_shown(ClientId("nobody"), SHOWN_HOME_ENTRY, TEST_NOW)
+        store.record_shown(ClientId("nobody"), None, TEST_NOW)
 
 
 def test_dropping_closed_windows_prunes_every_clients_history_and_writes_nothing_otherwise(tmp_path: Path) -> None:
     store = ClientStore(state_directory=tmp_path)
     for client_id in ("c1", "c2"):
         store.record_report(_report(client_id, "home"), TEST_NOW)
-    for entry in (_window_id(1), SHOWN_HOME_ENTRY, _window_id(2)):
-        store.record_shown(ClientId("c1"), entry, TEST_NOW)
-    store.record_shown(ClientId("c2"), _window_id(2), TEST_NOW)
+    for shown in (WindowId(_window_id(1)), None, WindowId(_window_id(2))):
+        store.record_shown(ClientId("c1"), shown, TEST_NOW)
+    store.record_shown(ClientId("c2"), WindowId(_window_id(2)), TEST_NOW)
 
     store.drop_windows([WindowId(_window_id(2))])
 
@@ -214,5 +213,5 @@ def test_a_version_two_file_written_before_the_shown_history_reads_it_as_empty(t
 
     (client,) = store.list_clients()
     assert client.shown_history == ()
-    assert store.record_shown(ClientId("c1"), _window_id(1), TEST_NOW).shown_history == (_window_id(1),)
+    assert store.record_shown(ClientId("c1"), WindowId(_window_id(1)), TEST_NOW).shown_history == (_window_id(1),)
     assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 2

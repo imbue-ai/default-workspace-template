@@ -260,9 +260,10 @@ class ClientStore(MutableModel):
             ),
         )
 
-    def record_shown(self, client_id: ClientId, entry: str, now: datetime) -> ClientRecord:
-        """Record what a recorded client now shows (a window id, or ``SHOWN_HOME_ENTRY``) as the newest entry of its
+    def record_shown(self, client_id: ClientId, window_id: WindowId | None, now: datetime) -> ClientRecord:
+        """Record what a recorded client now shows (a window, or its home grid for None) as the newest entry of its
         shown history; raises ClientNotFoundError."""
+        entry = SHOWN_HOME_ENTRY if window_id is None else str(window_id)
         stamped = now.astimezone(timezone.utc)
         return self._update_recorded_client(
             client_id,
