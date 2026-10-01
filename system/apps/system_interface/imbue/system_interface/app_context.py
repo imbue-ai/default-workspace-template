@@ -16,6 +16,9 @@ from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.chat_registry import ChatRegistry
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.handoff_archive import TranscriptArchive
+from imbue.system_interface.handoff_archive import build_chat_watcher
+from imbue.system_interface.harness_handoff import HandoffCoordinator
 from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.registry import build_watcher
@@ -63,6 +66,11 @@ class SystemInterfaceState(MutableModel):
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
     watchers: dict[str, AgentSessionWatcher] = {}
+    # The retired segments of switched chats, read back into every watcher a
+    # switched chat serves (see :mod:`handoff_archive`). A factory rather than a
+    # shared default, and in-memory unless the composition root points it at the
+    # workspace -- the same degradation as the chat registry's ``chats_dir=None``.
+    transcript_archive: TranscriptArchive = Field(default_factory=lambda: TranscriptArchive(archives_dir=None))
     latchkey_catalog_cache: dict[str, Any] = {}
     # Captures the tree HEAD this process started from, so the app shell can
     # say when the served tree has moved under it (see update_staleness.py).
@@ -76,6 +84,8 @@ class SystemInterfaceState(MutableModel):
     )
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _handoff_coordinator: HandoffCoordinator | None = PrivateAttr(default=None)
+    _handoff_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _latchkey_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _is_shut_down: bool = PrivateAttr(default=False)
 
@@ -97,6 +107,31 @@ class SystemInterfaceState(MutableModel):
         via ``state.agent_manager = ...`` must repoint the registry with it.
         """
         return self.agent_manager.chat_registry
+
+    @property
+    def handoff_coordinator(self) -> HandoffCoordinator:
+        """The harness-switch coordinator, built on first use and kept for the app's life.
+
+        Lazily rather than as a field because it needs this state's own watcher
+        registry: constructing it in ``__init__`` would mean handing an object a
+        reference to the thing being constructed. Kept (not rebuilt per request)
+        because it holds the in-flight switches, which is what stops two windows
+        from switching one chat at once. Rebuilt if ``agent_manager`` is reseeded,
+        since a coordinator paired with the wrong manager would freeze one
+        workspace's agent and re-point another's chat.
+        """
+        with self._handoff_lock:
+            existing = self._handoff_coordinator
+            if existing is not None and existing.agent_manager is self.agent_manager:
+                return existing
+            coordinator = HandoffCoordinator(
+                agent_manager=self.agent_manager,
+                transcript_archive=self.transcript_archive,
+                get_watcher=self.get_or_create_watcher,
+                evict_watcher=self.stop_and_remove_watcher,
+            )
+            self._handoff_coordinator = coordinator
+            return coordinator
 
     @property
     def latchkey_lock(self) -> threading.Lock:
@@ -149,6 +184,18 @@ class SystemInterfaceState(MutableModel):
                 lambda text: self.agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
                 lambda: self.agent_manager.is_agent_alive(agent_info.id),
             )
+            # Stitch the chat's archived history in front of the live agent, if it has
+            # any. Done AFTER the hooks above because they are the LIVE agent's (a
+            # retired segment has no queue to flush and no events to broadcast), and
+            # the composite delegates every one of them to the live watcher anyway.
+            # Keyed by the live agent's id like everything else in this registry: the
+            # key changes at each switch, which is exactly what makes the old
+            # composite fall out of use rather than have to be invalidated.
+            chat_id = self.chat_registry.chat_id_for_active_agent(agent_info.id)
+            if chat_id is not None:
+                watcher = build_chat_watcher(
+                    chat_id, self.chat_registry.retired_agent_ids(chat_id), watcher, self.transcript_archive
+                )
             self.watchers[agent_info.id] = watcher
 
         # Seed transcript-derived activity signals BEFORE starting the watcher
@@ -198,6 +245,12 @@ class SystemInterfaceState(MutableModel):
         self.event_queues.shutdown()
         self.broadcaster.shutdown()
         self.agent_manager.stop()
+        # Read the private attribute rather than the property: shutting down must not
+        # BUILD a coordinator that was never used, and one that was built owns threads
+        # running a switch that has to be joined.
+        coordinator = self._handoff_coordinator
+        if coordinator is not None:
+            coordinator.close()
         self.stop_all_watchers()
         try:
             self.http_client.close()

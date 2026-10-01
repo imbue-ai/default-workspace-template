@@ -129,4 +129,9 @@ def test_every_agent_route_has_a_chat_twin(app: Flask) -> None:
         if text.startswith("/api/chats/<chat_id>"):
             chat_rules.add((text.removeprefix("/api/chats/<chat_id>"), methods))
     assert agent_rules, "expected /api/agents/<agent_id> rules to exist"
-    assert agent_rules == chat_rules
+    assert agent_rules <= chat_rules
+    # The chat family may hold routes the agent family cannot: a CHAT-NATIVE route is
+    # one whose subject is the conversation rather than the process behind it, so it has
+    # no physical twin by definition. Pinned exactly, so a route that merely FORGOT its
+    # twin cannot hide here.
+    assert chat_rules - agent_rules == {("/switch-harness", frozenset({"POST"}))}
