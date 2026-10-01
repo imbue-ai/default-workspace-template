@@ -203,6 +203,32 @@ describe("opens and closes this client made", () => {
     expect(activeFocusedWindowId(state)).toBe("win-2");
   });
 
+  it("places a window opened minimized out of sight, and raises nothing for one that was already there", () => {
+    const opened = windowRecord("win-3", "docs", "/new");
+    const state = reduceDesktopState(loaded(), {
+      type: "window_opened_here",
+      desktopId: "home",
+      window: opened,
+      isNew: true,
+      isMinimized: true,
+    });
+    expect(activePlacements(state).find((placement) => placement.window_id === "win-3")).toEqual(
+      expect.objectContaining({ is_minimized: true }),
+    );
+    expect(activeFocusedWindowId(state)).toBe("win-1");
+    expect(isLayoutDirty(state)).toBe(false);
+
+    const before = loaded();
+    const existing = reduceDesktopState(before, {
+      type: "window_opened_here",
+      desktopId: "home",
+      window: home.windows[1],
+      isNew: false,
+      isMinimized: true,
+    });
+    expect(existing.layout).toBe(before.layout);
+  });
+
   it("takes a location route's answer in place, and nothing for a window since gone", () => {
     const reported = { ...home.windows[0], path: "/?doc=2", title: "Second" };
     const before = loaded();
