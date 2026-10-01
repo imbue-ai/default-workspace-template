@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from playwright.sync_api import Browser, Page, Route, WebSocketRoute
+from playwright.sync_api import BrowserContext, Page, Route, WebSocketRoute
 
 pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
 
@@ -37,11 +37,8 @@ def _wait_until(page: Page, is_done: Callable[[], bool]) -> None:
 
 
 def test_the_pane_fills_a_phone_and_a_rotation_reports_its_size_again(
-    module_browser: Browser,
+    phone_context: BrowserContext,
 ) -> None:
-    context = module_browser.new_context(
-        viewport={"width": 393, "height": 852}, has_touch=True
-    )
     stream_urls: list[str] = []
     resizes: list[str] = []
 
@@ -61,38 +58,35 @@ def test_the_pane_fills_a_phone_and_a_rotation_reports_its_size_again(
         stream_urls.append(socket.url)
         socket.on_message(record_resize)
 
-    try:
-        context.route("**/*", answer)
-        page = context.new_page()
-        page.route_web_socket(_STREAM_URL, stream)
-        page.goto(_VIEWER_URL)
-        _wait_until(page, lambda: len(stream_urls) == 1)
+    phone_context.route("**/*", answer)
+    page = phone_context.new_page()
+    page.route_web_socket(_STREAM_URL, stream)
+    page.goto(_VIEWER_URL)
+    _wait_until(page, lambda: len(stream_urls) == 1)
 
-        # The pane is the whole phone window, and the stream is opened at its size (widths are sent even).
-        assert page.locator("#stage").bounding_box() == {
-            "x": 0,
-            "y": 0,
-            "width": 393,
-            "height": 852,
-        }
-        assert stream_urls == ["ws://localhost/browsers/browser-1/stream?w=392&h=852"]
+    # The pane is the whole phone window, and the stream is opened at its size (widths are sent even).
+    assert page.locator("#stage").bounding_box() == {
+        "x": 0,
+        "y": 0,
+        "width": 393,
+        "height": 852,
+    }
+    assert stream_urls == ["ws://localhost/browsers/browser-1/stream?w=392&h=852"]
 
-        # The viewer may re-report its size once after it first becomes visible; let that pass.
-        page.wait_for_timeout(_BELT_SETTLE_MS)
-        settled = len(resizes)
+    # The viewer may re-report its size once after it first becomes visible; let that pass.
+    page.wait_for_timeout(_BELT_SETTLE_MS)
+    settled = len(resizes)
 
-        # A rotation that settles on the size already reported reports it again.
-        page.evaluate('window.dispatchEvent(new Event("orientationchange"))')
-        _wait_until(page, lambda: len(resizes) > settled)
+    # A rotation that settles on the size already reported reports it again.
+    page.evaluate('window.dispatchEvent(new Event("orientationchange"))')
+    _wait_until(page, lambda: len(resizes) > settled)
 
-        assert resizes[settled:] == ["r,392,852"]
+    assert resizes[settled:] == ["r,392,852"]
 
-        # A real rotation reports the new size and nothing else. The resize can be reported before the rotation
-        # event too, which then reports it again.
-        page.set_viewport_size({"width": 852, "height": 393})
-        page.evaluate('window.dispatchEvent(new Event("orientationchange"))')
-        _wait_until(page, lambda: len(resizes) > settled + 1)
-        page.wait_for_timeout(_SETTLE_MS)
-        assert set(resizes[settled + 1 :]) == {"r,852,392"}
-    finally:
-        context.close()
+    # A real rotation reports the new size and nothing else. The resize can be reported before the rotation
+    # event too, which then reports it again.
+    page.set_viewport_size({"width": 852, "height": 393})
+    page.evaluate('window.dispatchEvent(new Event("orientationchange"))')
+    _wait_until(page, lambda: len(resizes) > settled + 1)
+    page.wait_for_timeout(_SETTLE_MS)
+    assert set(resizes[settled + 1 :]) == {"r,852,392"}

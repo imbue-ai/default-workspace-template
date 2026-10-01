@@ -1,9 +1,9 @@
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
-from playwright.sync_api import Browser, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, ViewportSize, sync_playwright
 
 # The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
 # provisioned by env-converge before any agent starts. Playwright's browser-cache
@@ -13,6 +13,9 @@ from playwright.sync_api import Browser, sync_playwright
 # setup. The `chat` and `system_interface` apps are NOT under it: the root pytest
 # config ignores them and each runs from its own directory.
 FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
+
+# The phone the plan's e2e sizes name (an iPhone 15 in portrait), with touch.
+_PHONE_VIEWPORT: Final[ViewportSize] = {"width": 393, "height": 852}
 
 
 @pytest.fixture(scope="session")
@@ -41,3 +44,13 @@ def module_browser(browser_type_launch_args: dict[str, Any]) -> Iterator[Browser
             yield browser
         finally:
             browser.close()
+
+
+@pytest.fixture
+def phone_context(module_browser: Browser) -> Iterator[BrowserContext]:
+    """A touch-enabled browser context the size of a phone."""
+    context = module_browser.new_context(viewport=_PHONE_VIEWPORT, has_touch=True)
+    try:
+        yield context
+    finally:
+        context.close()
