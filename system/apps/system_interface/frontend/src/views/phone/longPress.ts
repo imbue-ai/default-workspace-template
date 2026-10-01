@@ -23,6 +23,7 @@ interface Press {
   readonly x: number;
   readonly y: number;
   isHeld: boolean;
+  isMoved: boolean;
 }
 
 const presses = new WeakMap<Element, Press>();
@@ -39,7 +40,7 @@ export function longPressAttrs(handlers: LongPressHandlers): m.Attributes {
       if (event.button !== 0) return;
       const target = event.currentTarget as HTMLElement;
       cancelTimer(target);
-      const press: Press = { timer: null, x: event.clientX, y: event.clientY, isHeld: false };
+      const press: Press = { timer: null, x: event.clientX, y: event.clientY, isHeld: false, isMoved: false };
       press.timer = setTimeout(() => {
         press.timer = null;
         press.isHeld = true;
@@ -51,6 +52,7 @@ export function longPressAttrs(handlers: LongPressHandlers): m.Attributes {
       const press = presses.get(event.currentTarget as Element);
       if (press === undefined || press.timer === null) return;
       if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > handlers.thresholdPx) {
+        press.isMoved = true;
         cancelTimer(event.currentTarget as Element);
       }
     },
@@ -59,9 +61,11 @@ export function longPressAttrs(handlers: LongPressHandlers): m.Attributes {
     onpointerleave: (event: PointerEvent) => cancelTimer(event.currentTarget as Element),
     oncontextmenu: (event: Event) => event.preventDefault(),
     onclick: (event: MouseEvent) => {
-      const press = presses.get(event.currentTarget as Element);
-      if (press?.isHeld === true) {
-        press.isHeld = false;
+      // The click a press released into is that press's alone; a click with none before it (a keyboard's) taps.
+      const element = event.currentTarget as Element;
+      const press = presses.get(element);
+      presses.delete(element);
+      if (press?.isHeld === true || press?.isMoved === true) {
         event.preventDefault();
         return;
       }
