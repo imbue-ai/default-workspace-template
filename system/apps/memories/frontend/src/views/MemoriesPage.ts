@@ -124,6 +124,11 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
               { class: "m-0 mt-2" },
               `Deleting a note erases its file and removes its line from ${document.index_path}. Nothing in the workspace keeps a copy.`,
             ),
+            m(
+              "p",
+              { class: "m-0 mt-2" },
+              "Each delete or edit made here is recorded (the note's file name and when, never what it said) in data/.state/memories/user-changes.jsonl for 30 days. Every chat reads that record before each message, so one that still remembers the note in its conversation doesn't save it again.",
+            ),
             m("p", { class: "m-0 mt-2" }, backupsDetail(document.backups)),
             m(
               "p",
@@ -167,7 +172,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
           m(
             "span",
             { class: "type-helper text-secondary" },
-            "New chats use the new version. Open pi chats see it on their next message, open Claude chats when they restart.",
+            "New chats use the new version. Open chats are told you changed it on their next message.",
           ),
           m("div", { class: "flex gap-2" }, [
             m(Button, { variant: "secondary", sm: true, disabled: isBusy, onclick: () => (draft = null) }, "Cancel"),
@@ -259,7 +264,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
         `"${note.description}"`,
         "It's erased from this workspace, and new chats won't see it. This can't be undone.",
         deleteBackupsWarning(backups),
-        "Chats that are open now may still remember it until they restart, and the chat that wrote it still shows it in its history.",
+        "Chats that are open now still have it in their conversation. They're told you deleted it and asked not to save it again, and the chat that wrote it still shows it in its history.",
       ],
       dismissLabel: "Cancel",
       isDismissable: !isBusy,

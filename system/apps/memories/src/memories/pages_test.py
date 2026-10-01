@@ -1,6 +1,8 @@
 """Tests for the routes: the page and its assets, the contract module, the notes document (with the backups'
 retention and where chat names come from), correcting a note, and deleting one for good."""
 
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import httpx
@@ -10,10 +12,14 @@ from flask.testing import FlaskClient
 
 from memories.attribution import DEFAULT_CHAT_APP_URL
 from memories.attribution import TranscriptSources
+from memories.changes import NoteChange
+from memories.changes import NoteChangeKind
+from memories.changes import read_changes
 from memories.notes import INDEX_FILENAME
 from memories.pages import build_pages_blueprint
 
 _REGISTERED_CHAT_URL = "http://127.0.0.1:9010"
+_NOW = datetime(2026, 10, 1, 22, 4, 32, tzinfo=timezone.utc)
 
 
 def _chat_app(request: httpx.Request) -> httpx.Response:
@@ -43,6 +49,8 @@ def _client(tmp_path: Path, http_client: httpx.Client) -> FlaskClient:
             ),
             registry_path=tmp_path / "apps.toml",
             client=http_client,
+            changes_path=tmp_path / "state" / "user-changes.jsonl",
+            now=lambda: _NOW,
         )
     )
     return app.test_client()
@@ -224,3 +232,48 @@ def test_deleting_a_missing_note_or_the_index_is_refused(tmp_path: Path) -> None
     assert missing.status_code == 404
     assert index.status_code == 400
     assert (tmp_path / "memories" / INDEX_FILENAME).is_file()
+
+
+def _changes(tmp_path: Path) -> list[NoteChange]:
+    return read_changes(tmp_path / "state" / "user-changes.jsonl")
+
+
+def test_a_delete_and_an_edit_are_recorded_for_open_chats_without_the_notes_content(tmp_path: Path) -> None:
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        (note,) = client.get("/api/notes").get_json()["notes"]
+        edited = client.put(
+            "/api/notes/units.md", json={"description": "Prefers SI units", "body": "Km.", "version": note["version"]}
+        )
+        deleted = client.delete("/api/notes/units.md", json={"version": edited.get_json()["version"]})
+
+    assert (edited.status_code, deleted.status_code) == (200, 200)
+    assert _changes(tmp_path) == [
+        NoteChange(file_name="units.md", change=NoteChangeKind.EDITED, at=_NOW),
+        NoteChange(file_name="units.md", change=NoteChangeKind.DELETED, at=_NOW),
+    ]
+    record = (tmp_path / "state" / "user-changes.jsonl").read_text()
+    assert "metric" not in record
+    assert "SI" not in record
+
+
+def test_a_refused_delete_or_edit_records_nothing(tmp_path: Path) -> None:
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        stale_edit = client.put("/api/notes/units.md", json={"description": "x", "body": "x", "version": "0-0"})
+        stale_delete = client.delete("/api/notes/units.md", json={"version": "0-0"})
+
+    assert (stale_edit.status_code, stale_delete.status_code) == (409, 409)
+    assert _changes(tmp_path) == []
+
+
+def test_a_delete_that_cannot_be_recorded_says_so_instead_of_claiming_success(tmp_path: Path) -> None:
+    (tmp_path / "state").write_text("a file where the record's folder should be")
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        version = client.get("/api/notes").get_json()["notes"][0]["version"]
+        response = client.delete("/api/notes/units.md", json={"version": version})
+
+    assert response.status_code == 500
+    assert "units.md was deleted, but open chats could not be told" in response.get_json()["detail"]
+    assert not (tmp_path / "memories" / "units.md").exists()

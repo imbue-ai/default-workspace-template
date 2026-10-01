@@ -107,7 +107,7 @@ describe("deleting a note", () => {
     expect(text).toContain('"Is a product designer"');
     expect(text).toContain("This can't be undone.");
     expect(text).toContain("A copy stays in your workspace's backups until they expire, up to 24 months from now.");
-    expect(text).toContain("Chats that are open now may still remember it until they restart");
+    expect(text).toContain("They're told you deleted it and asked not to save it again");
     expect(deleted).toEqual([]);
   });
 

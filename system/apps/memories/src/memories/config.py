@@ -18,6 +18,8 @@ class Config(BaseSettings):
     # The backups' retention settings and credentials, read to tell the user how long a deleted note survives in them.
     memories_backup_config_path: Path = BACKUP_TOML_PATH
     memories_restic_env_path: Path = RESTIC_ENV_PATH
+    # The record of notes the user deleted or edited, which agent_memory_context.py turns into a notice for chats.
+    memories_changes_path: Path = Path("data/.state/memories/user-changes.jsonl")
 
 
 def load_config() -> Config:

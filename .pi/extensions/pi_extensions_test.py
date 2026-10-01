@@ -30,6 +30,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -553,13 +554,23 @@ _MEMORY_INDEX_LINE = "- [Units](units.md) — Prefers metric units"
 
 
 def _memory_output(
-    tmp_path: Path, payload: dict[str, Any], *, work_dir: Path = _REPO_ROOT
+    tmp_path: Path,
+    payload: dict[str, Any],
+    *,
+    work_dir: Path = _REPO_ROOT,
+    changes: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     """Fire ``before_agent_start`` through memory.ts, with one note in the shared index under a temp HOME."""
     home = tmp_path / "home"
     notes_dir = home / "workspace" / "data" / "memories"
     notes_dir.mkdir(parents=True)
     (notes_dir / "MEMORY.md").write_text(_MEMORY_INDEX_LINE + "\n")
+    if changes is not None:
+        record = (
+            home / "workspace" / "data" / ".state" / "memories" / "user-changes.jsonl"
+        )
+        record.parent.mkdir(parents=True)
+        record.write_text(changes)
     proc = _run_event(
         tmp_path,
         _MEMORY,
@@ -628,3 +639,18 @@ def test_memory_fails_open_when_its_script_is_missing(tmp_path: Path) -> None:
     assert out["result"] is None
     assert out["payload"]["systemPromptOptions"]["sections"] == {}
     assert "running this turn without memory" in proc.stderr
+
+
+def test_memory_tells_pi_which_notes_the_user_deleted(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = {"systemPrompt": "BASE", "systemPromptOptions": {"sections": {}}}
+
+    _, out = _memory_output(
+        tmp_path,
+        payload,
+        changes=f'{{"file_name":"user-profile.md","change":"DELETED","at":"{now}"}}\n',
+    )
+
+    memory = out["payload"]["systemPromptOptions"]["sections"]["workspace_memory"]
+    assert "## Changes the user made to saved memories" in memory
+    assert "`user-profile.md` was deleted" in memory

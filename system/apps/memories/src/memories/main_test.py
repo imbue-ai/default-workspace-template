@@ -37,6 +37,7 @@ def _arguments(tmp_path: Path, *, port: int, is_registered: bool) -> MemoriesArg
         memories_notes_dir=tmp_path / "memories",
         memories_backup_config_path=tmp_path / "backup.toml",
         memories_restic_env_path=tmp_path / "restic.env",
+        memories_changes_path=tmp_path / "user-changes.jsonl",
     )
     return arguments_from_config(config, MANIFEST_PATH, tmp_path / "static", is_registered=is_registered)
 
@@ -49,6 +50,7 @@ def test_the_config_defaults_to_the_workspace_paths_and_reads_overrides_from_the
     assert defaults.memories_notes_dir == Path("data/memories")
     assert defaults.memories_backup_config_path == BACKUP_TOML_PATH
     assert defaults.memories_restic_env_path == RESTIC_ENV_PATH
+    assert defaults.memories_changes_path == Path("data/.state/memories/user-changes.jsonl")
 
     monkeypatch.setenv("MEMORIES_PORT", "8123")
     monkeypatch.setenv("MEMORIES_NOTES_DIR", "/elsewhere/memories")
@@ -65,6 +67,7 @@ def test_arguments_come_from_the_config_and_the_flags(tmp_path: Path) -> None:
     assert arguments.notes_dir == tmp_path / "memories"
     assert arguments.backup_config_path == tmp_path / "backup.toml"
     assert arguments.restic_env_path == tmp_path / "restic.env"
+    assert arguments.changes_path == tmp_path / "user-changes.jsonl"
     assert arguments.is_registered is True
     assert _arguments(tmp_path, port=8123, is_registered=False).is_registered is False
 

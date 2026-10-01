@@ -22,6 +22,9 @@ PROTOCOL_PATH = memory_context.PROTOCOL_PATH
 main = memory_context.main
 render_memory_context = memory_context.render_memory_context
 truncate_index = memory_context.truncate_index
+latest_changes = memory_context.latest_changes
+render_changes_notice = memory_context.render_changes_notice
+CHANGE_MAX_AGE = memory_context.CHANGE_MAX_AGE
 
 _NOW = datetime(2026, 10, 1, 18, 7, 56, tzinfo=timezone.utc)
 
@@ -210,3 +213,96 @@ def test_main_stamps_the_current_time(
         capsys.readouterr().out.splitlines()[0], "%Y-%m-%dT%H:%M:%SZ"
     ).replace(tzinfo=timezone.utc)
     assert before <= stamped <= datetime.now(timezone.utc)
+
+
+def _change(file_name: str, change: str, at: datetime) -> str:
+    return (
+        f'{{"file_name":"{file_name}","change":"{change}",'
+        f'"at":"{at.strftime("%Y-%m-%dT%H:%M:%SZ")}"}}\n'
+    )
+
+
+def test_each_notes_latest_change_is_kept_oldest_first_and_stale_or_broken_lines_skipped() -> (
+    None
+):
+    text = (
+        _change("units.md", "EDITED", _NOW - timedelta(hours=2))
+        + _change("profile.md", "DELETED", _NOW - timedelta(hours=1))
+        + _change("units.md", "DELETED", _NOW)
+        + _change("ancient.md", "DELETED", _NOW - CHANGE_MAX_AGE - timedelta(minutes=1))
+        + _change("renamed.md", "RENAMED", _NOW)
+        + "not json\n"
+        + '{"file_name": "no-time.md", "change": "DELETED"}\n'
+        + '{"file_name": "naive.md", "change": "DELETED", "at": "2026-10-01T22:00:00"}\n'
+    )
+
+    assert latest_changes(text, _NOW) == [
+        ("profile.md", "deleted", _NOW - timedelta(hours=1)),
+        ("units.md", "deleted", _NOW),
+    ]
+
+
+def test_the_notice_tells_chats_not_to_restore_a_deleted_note_or_revert_an_edit() -> (
+    None
+):
+    notice = render_changes_notice(
+        [
+            ("profile.md", "deleted", _NOW),
+            ("units.md", "edited", _NOW + timedelta(minutes=5)),
+        ]
+    )
+
+    assert notice.startswith("## Changes the user made to saved memories\n")
+    assert (
+        "- `profile.md` was deleted 2026-10-01 18:07 UTC. Don't save what it said again, in that note or any other, "
+        "unless the user tells you it again.\n"
+    ) in notice
+    assert (
+        "- `units.md` was edited 2026-10-01 18:12 UTC. Read it again before you change it, "
+        "and don't put back anything the user removed.\n"
+    ) in notice
+    assert render_changes_notice([]) == ""
+
+
+def test_changes_only_prints_just_the_notice_and_nothing_without_changes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    changes = tmp_path / "user-changes.jsonl"
+
+    assert main(["--changes-only", "--changes", str(changes)]) == 0
+    assert capsys.readouterr().out == ""
+
+    changes.write_text(_change("profile.md", "DELETED", datetime.now(timezone.utc)))
+    assert main(["--changes-only", "--changes", str(changes)]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("## Changes the user made to saved memories")
+    assert "Workspace memory" not in out
+
+
+def test_the_full_context_ends_with_the_notice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    notes_dir = _notes_dir(tmp_path, "- [Units](units.md) — Prefers metric\n")
+    protocol = tmp_path / "protocol.md"
+    protocol.write_text("Protocol.")
+    changes = tmp_path / "user-changes.jsonl"
+    changes.write_text(_change("profile.md", "DELETED", datetime.now(timezone.utc)))
+
+    main(
+        [
+            "--harness",
+            "pi-coding",
+            "--notes-dir",
+            str(notes_dir),
+            "--protocol",
+            str(protocol),
+            "--changes",
+            str(changes),
+        ]
+    )
+
+    out = capsys.readouterr().out
+    assert out.index("- [Units](units.md) — Prefers metric") < out.index(
+        "## Changes the user made to saved memories"
+    )
+    assert "`profile.md` was deleted" in out

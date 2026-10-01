@@ -66,6 +66,10 @@
           {
             "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_open_tickets_reminder.sh"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_memory_context.py --changes-only 2>/dev/null || true"
           }
         ]
       }

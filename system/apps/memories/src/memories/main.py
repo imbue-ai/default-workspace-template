@@ -19,6 +19,7 @@ from memories.attribution import default_transcript_sources
 from memories.config import Config
 from memories.config import load_config
 from memories.pages import build_pages_blueprint
+from memories.pages import utc_now
 from memories.serving import app_url_port
 from memories.serving import serve_in_background
 from memories.serving import wait_for_shutdown_signal
@@ -39,6 +40,7 @@ class MemoriesArguments(FrozenModel):
     notes_dir: Path = Field(description="The Claude memory notes folder")
     backup_config_path: Path = Field(description="The backups' retention settings")
     restic_env_path: Path = Field(description="The backups' credentials, whose presence says backups are set up")
+    changes_path: Path = Field(description="The record of notes the user deleted or edited, which chats read")
     host: str = Field(description="The address the page server binds")
     is_registered: bool = Field(
         description="Whether this boot is the workspace's memories app and registers the manifest; a preview boots "
@@ -55,6 +57,8 @@ def build_pages_app(arguments: MemoriesArguments, client: httpx.Client) -> Flask
             notes_dir=arguments.notes_dir,
             backup_config_path=arguments.backup_config_path,
             restic_env_path=arguments.restic_env_path,
+            changes_path=arguments.changes_path,
+            now=utc_now,
             transcript_sources=default_transcript_sources(notes_dir=arguments.notes_dir, work_dir=Path.cwd()),
             registry_path=registry_path(),
             client=client,
@@ -83,6 +87,7 @@ def arguments_from_config(
         notes_dir=config.memories_notes_dir,
         backup_config_path=config.memories_backup_config_path,
         restic_env_path=config.memories_restic_env_path,
+        changes_path=config.memories_changes_path,
         host=config.memories_host,
         is_registered=is_registered,
     )
