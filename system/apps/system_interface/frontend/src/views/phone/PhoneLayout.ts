@@ -12,7 +12,7 @@ import m from "mithril";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { appLaunchesOf, launchRowKindOf } from "../../model/launch";
-import { appByName, isAppShownStopped } from "../../reducers/desktopState";
+import { appByName, findWindow, isAppShownStopped } from "../../reducers/desktopState";
 import { defaultHighlightIndex, isRowEnabled } from "../../reducers/launcherRows";
 import type { LauncherRow } from "../../reducers/launcherRows";
 import {
@@ -91,9 +91,9 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
 
   function rowsOfWindowMenu(store: DesktopStore, windowId: string): MenuRow[] | null {
     const state = store.getState();
-    const found = state.desktops.flatMap((desktop) => desktop.windows).find((window) => window.id === windowId);
-    if (found === undefined) return null;
-    const app = appByName(state, found.app);
+    const found = findWindow(state, windowId);
+    if (found === null) return null;
+    const app = appByName(state, found.window.app);
     return phoneWindowMenuRows(app, {
       refresh: () => store.refreshWindow(windowId),
       share: app === undefined || app.critical || !isEmbedded() ? null : () => openShareSettings(app),
