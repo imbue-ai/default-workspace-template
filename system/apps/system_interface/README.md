@@ -63,8 +63,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
   placements (`/api/placements/<desktop>`), wallpapers (`/api/wallpapers`,
-  `/wallpapers/<kind>/<name>`), the per-app Stop and Start
-  (`/api/apps/<name>/stop|start`), clients (`/api/clients`, and the arrival
+  `/wallpapers/<kind>/<name>`), the per-app Stop, Start, and Quit
+  (`/api/apps/<name>/stop|start|quit`), clients (`/api/clients`, and the arrival
   `/api/clients/<client>/arrive` a page posts first), client activity
   (`/api/client-activity`), the inventory (`/api/inventory`), each client's
   pinned-entry presentation
@@ -82,9 +82,11 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   report.
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`,
-`placements/<desktop>/<client>.json`, `window_paths/<client>.json` (a client's
-own paths for independent windows), `clients.json`, `users.json` (the desktop
-made for each visiting user), `avatar_selection.json`, and the client-activity
+`default_shortcuts_offered.json` (the apps whose default shortcut the shell
+has offered), `placements/<desktop>/<client>.json`,
+`window_paths/<client>.json` (a client's own paths for independent windows),
+`clients.json`, `users.json` (the desktop made for each visiting user),
+`avatar_selection.json`, and the client-activity
 event log (`events/client_activity/events.jsonl`, what `layout.py context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
 `data/.apps/system_interface/wallpapers/` (files the user adds); avatar designs
@@ -102,21 +104,26 @@ and the profile cache.
   backdrop, state, minimized, detached; the order is the stack).
 - **Pinned windows** (`docs/system/blueprint/pinned-taskbar-entries/`): an
   app whose manifest declares a `[pin]` has exactly one pinned window on
-  every desktop, reconciled on every read after the registry is read and
-  never closed. With the `independent` scope the window's shared path stays
-  its home path and each client's own path and title live in
-  `shell/window_paths.py`'s per-client file. How a client shows the entry
-  (in the bar or floating, plain or as the avatar) is on its client record.
+  every desktop, reconciled on every read after the registry is read and on
+  every change of the registry's rows, and never closed. With the
+  `independent` scope the window's shared path stays its home path and each
+  client's own path and title live in `shell/window_paths.py`'s per-client
+  file. How a client shows the entry (in the bar or floating, plain or as the
+  avatar) is on its client record.
 - **The avatar** (`avatar/`): the bundled and registered designs, the
   workspace's selection, the rendered image routes, and the status reader,
   which folds mngr's agents event file into a mood (working when any agent
   but the services agent is running) and pushes `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's `default_shortcut` on the first read after the
-  registry has been read. A client record holds the client's active desktop,
-  when it was last seen, and the user it last arrived as; clients unseen for
-  a while are pruned with their placement files. `users.json` holds the
-  desktop made for each visiting user (see "Who is here").
+  registry has been read. An app that registers later has its default
+  shortcut added to every desktop once, on the registry change and on every
+  read; `default_shortcuts_offered.json` lists the apps offered so far, so a
+  shortcut the user removed stays removed. A client record holds the client's
+  active desktop, when it was last seen, and the user it last arrived as;
+  clients unseen for a while are pruned with their placement files.
+  `users.json` holds the desktop made for each visiting user (see "Who is
+  here").
 - **The pure editor** (`shell/desktop_document.py`): every verb (open, close,
   focus, minimize, restore, maximize, snap, place, detach, reattach, the
   shortcut edits) and
@@ -185,11 +192,31 @@ every connect, and on every change) keeps the list current from then on.
 Until that first read answers, a shortcut whose app the page cannot look up
 draws faint as "Connecting to the workspace..." and running it says the page is
 still connecting; only once the apps are known is a missing app reported as
-not registered.
+not registered. The sweep also compares the registry's mtime with the last
+read's and re-reads on a change, the backstop for a write no watch event
+reported (under gVisor and on lima, a change made outside the sandbox raises no
+inotify event in it).
 
-Stop and Start of the whole app act on its supervisord program and are refused
-for critical apps; the desktop offers them on the window menu
-(`frontend/src/views/WindowMenu.ts`). A framed page reaches the shell only
+Every registry read is also announced to the minds desktop (`app_announcements.py`):
+one `service_registered` event per app whose URL, label, or icon differs from
+the last announced, and one `service_deregistered` per app that left, appended
+to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
+event envelope; the first read after the shell starts announces every app. The
+stream is what `mngr forward` and the desktop resolve app origins from. A
+preview shell announces nothing, since its registry is a copy.
+
+The shell also owns each stoppable app's process (`shell/app_lifecycle.py`,
+the stop-when-no-windows spec): an app whose manifest declares
+`stop_when_no_windows` is stopped once no window on any desktop has shown it
+for a minute (only once someone has visited the workspace, and never while a
+per-app share grant names it, since such a visitor reaches the app without the
+shell: `shell/share_grants.py` reads `data/.secrets/share_grants.toml`), and while any
+stoppable app is stopped the shell holds its port (`shell/port_parking.py`), so
+the first request for the app starts it again and is answered with a loading
+page that reloads into the app. "Quit <app>" on the window menu
+(`frontend/src/views/WindowMenu.ts`) closes every window of the app and stops
+it at once; critical apps offer nothing there and are never stopped or parked.
+The stop and start routes remain for agents. A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 `shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
 stored on its window and reopens there, one that declared `navigation`

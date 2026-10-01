@@ -190,8 +190,8 @@ def chat_agent_oom_score_adj(
 # hurts: the two authority paths into the workspace (owner-exec, then the
 # terminal) come first, then the UI and the chat app, then the sharing stack,
 # then the runtime-state sync (github-sync, opt-in) and the host backup, then
-# the job scheduler and the app-watcher, then the browser stack (its X display,
-# then the coordinator), and last the file viewer.
+# the job scheduler, then the browser stack (its X display, then the
+# coordinator), and last the file viewer.
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
@@ -254,7 +254,6 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # command is the stock ``/usr/sbin/cron`` binary, not a workspace entry
     # point), so this band reaches it via the backstop listener instead.
     "cron": 55,
-    "app-watcher": 60,
     # The shared X display Chromium renders into. Losing it breaks the browser
     # subsystem, so it is *less* expendable than the coordinator below -- whose
     # death Chromium survives -- but more so than the workspace's own services:

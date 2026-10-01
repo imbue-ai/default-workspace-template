@@ -49,6 +49,7 @@ An app that declares no launch path has one synthesized by the shell, `open`, la
 Section 8 has the manifest; contracts.md section 2 has the exact fields.
 
 The inventory is the registry plus liveness, refreshed when the registry file changes and on the liveness sweep, and pushed as `apps_updated`.
+A read of the registry that changes its rows also reconciles the desktops with it (3.2).
 It carries no lists of anything inside an app.
 
 ### 3.2 Desktops
@@ -58,6 +59,15 @@ The id is the slugified name and never changes; two names that shorten to one id
 Every desktop is shared: a window holds a resource (a terminal, a browser) for everyone, so a desktop that only one person could see would still be everyone's, and there is no private mode. What keeps users out of each other's way is that each arriving user gets a desktop of their own (3.10).
 A fresh workspace, and a workspace whose state directory holds no `desktops.json`, gets one desktop named `Home` with the theme's default wallpaper and the seeded shortcuts of 3.6.
 It is created on the first read of the desktops after the inventory has read the registry once, so its shortcuts are seeded from the apps that are actually registered rather than from an empty registry at boot.
+Apps register one at a time as their programs finish starting, so an app may register after `Home` was seeded; its default shortcut is added then rather than waited for.
+The shell records every app whose default shortcut it has offered in `default_shortcuts_offered.json`: the apps each new desktop was seeded with, and every app added as follows.
+On every read of the desktops and after every change of the registry's rows, each registered, non-internal app whose `default_shortcut` names a launch path it offers, and which is not recorded, is added to every desktop and then recorded.
+A desktop that already holds a shortcut of that `(app, launch)` gets nothing.
+A desktop whose shortcuts are exactly the seed of the recorded apps that are registered is seeded again from every registered app, so it reads in launcher order however late each app registered.
+Any other desktop gets the shortcut at the first free cell in reading order, and nothing on it moves.
+A recorded app is never added again: a shortcut the user removed stays removed when its app registers again, on every boot and across restarts, and an app that deregisters changes nothing.
+A state directory holding `desktops.json` but no record counts every app with a shortcut on any desktop as recorded.
+A desktop created when no other desktop stands, such as `Home` seeded over a missing or unusable `desktops.json`, starts the record over from the apps it is seeded with.
 Deleting the last desktop is refused with `409`.
 Deleting a desktop closes its windows (their pages are destroyed in every client) and removes every client's layout of it; clients on it switch to the first remaining desktop.
 
@@ -102,7 +112,8 @@ A shortcut is `{target, mode, cell}` where `target` is `{kind: "launch", app, la
 `focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs the launch path only when there is none; `new` always runs it.
 A desktop holds at most one shortcut per `(app, launch)`.
 
-A new desktop is seeded from every registered, non-internal app's `default_shortcut`, in registry order, laid out in reading order from the grid origin.
+A new desktop is seeded from every registered, non-internal app's `default_shortcut`, in launcher order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
+An app that registers after a desktop was made is added to it as 3.2 says.
 The grid is `columns = max(1, floor((width - inset) / cell_width))` by `rows = max(1, floor((height - inset) / cell_height))` over the backdrop, with the cell size and inset from the theme (contracts.md section 10).
 Rendering places every shortcut that has a free cell inside the grid at its cell, then every other shortcut at the nearest free cell to its clamped cell (Euclidean distance in cell units, ties by column then row); no two shortcuts ever draw in one cell, and nothing is written.
 Dragging a shortcut writes its cell; dropping it on an occupied cell moves the occupant to the nearest free cell (that occupant's cell is written too).
@@ -119,10 +130,11 @@ The backdrop draws the wallpaper with `cover` fit, centred, over the theme's bac
 | Fact or verb | Owner |
 |---|---|
 | Which apps exist, their display name, icon, launch paths, criticality, priority | Manifest, mirrored into the registry |
-| Whether an app is running; Stop and Start | Shell, via supervisord |
+| Whether an app is running; Stop, Start, and Quit | Shell, via supervisord |
 | What is inside an app, and its own verbs on those things | The app, in its pages |
 | Desktops: name, colour, glyph, wallpaper, shortcuts and cells | Shell, shared |
 | Which desktop was made for which user | Shell, in `users.json` |
+| Which apps' default shortcuts have been offered | Shell, in `default_shortcuts_offered.json` |
 | Which windows a desktop holds; each window's path and title | Shell, shared; the page reports path and title |
 | Each client's placements and stacking order; the active desktop | Shell, per client |
 | Taskbar entries, tray widgets, the launcher's contents | Derived in the browser |
@@ -201,6 +213,7 @@ A viewport resize re-renders every window from the same fractions, so windows sc
 Close removes the window from the desktop for every client: the shell drops it from `desktops.json`, drops it from every layout of that desktop, destroys every client's page for it, and broadcasts.
 The close button, the window menu, a taskbar entry's context menu, an agent's `close`, and the minds chrome's close chord (`minds:close-active-tab`, which closes the focused window after sending it `shell:close-request`) all do this.
 The shell itself has no notion of stopping or deleting what the window showed; what the window showed is the app's to keep or collect, and the terminal and the browser collect it once no window shows it, told of the close through the manifest's `window_closed_path` and sweeping the shell's windows regardless (`docs/system/specs/window-bound-resources.md`).
+The app's *process* is another matter: an app whose manifest declares `stop_when_no_windows` is stopped by the shell a minute after its last window closes, and comes back on the next request for it, the shell holding its port meanwhile (`docs/system/specs/stop-when-no-windows.md`).
 A pinned window is never closed: the route answers `409`, the op is refused with "minimize it instead", and its close control, its menus' Close, and the close chord all minimize it instead (pinned-taskbar-entries plan section 3.2).
 
 ### 4.6 Following the URL
@@ -270,7 +283,7 @@ Window cycling and keyboard move and resize are deferred.
 
 ### 5.1 State files
 
-Under `data/.state/system_interface/`: `desktops.json`, `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
+Under `data/.state/system_interface/`: `desktops.json`, `default_shortcuts_offered.json` (the apps whose default shortcut the shell has offered, 3.2), `placements/<desktop_id>/<client_id>.json`, `clients.json`, `users.json` (the desktop made for each visiting user, 3.10), and the client-activity event log as today.
 Under `data/.apps/system_interface/`: `wallpapers/`.
 The old `projects.json`, `layouts/`, and `migrated.json` are ignored and left in place; a `CLEANUP:` note names them for deletion once migration lands.
 The boot-time `migrate_workspace_layouts.py` is removed from bootstrap and the apply, and deleted.
@@ -279,7 +292,7 @@ Exact shapes: contracts.md section 4.
 ### 5.2 Routes and the WebSocket
 
 The full tables are contracts.md sections 5 and 6.
-In brief: desktops (list, create, settings, delete, shortcuts, wallpaper), windows (open, close, location), placements (read, save), clients, inventory, wallpapers, the app-level Stop and Start, the templates catalog, client activity, health, the contract module, the op route, and the socket carrying `apps_updated`, `desktops_updated`, `placements_updated`, `active_desktop_changed`, and `layout_op`.
+In brief: desktops (list, create, settings, delete, shortcuts, wallpaper), windows (open, close, location), placements (read, save), clients, inventory, wallpapers, the app-level Stop, Start, and Quit, the templates catalog, client activity, health, the contract module, the op route, and the socket carrying `apps_updated`, `desktops_updated`, `placements_updated`, `active_desktop_changed`, and `layout_op`.
 Gone: every `/_instances` relay route, `/api/tabs/<id>/instance`, `/api/apps/<name>/changed`, `/api/projects/*`, `/api/layouts/*`.
 
 ### 5.3 The pure document editor
@@ -376,7 +389,7 @@ It drops `instances` and `instances_url`.
 `actions` becomes `launch_paths`: `[[launch_paths]] id, label, path, params`, where `path` is a path under the app origin and `params` is the documented list of query parameter names the shell may append.
 `default_shortcut.action` becomes `default_shortcut.launch`, naming a declared launch path id or `open`.
 A `[pin]` table (`path`, and optionally `style`, `scope`, `default_mode`) declares the app's pinned window (pinned-taskbar-entries plan section 7.1).
-`forward_port.py` copies the new fields onto the registry row and drops the old ones; the app watcher and minds read `name`, `url`, `label`, `icon` as before.
+`forward_port.py` copies the new fields onto the registry row and drops the old ones; the shell's services event writer and minds read `name`, `url`, `label`, `icon` as before.
 
 ## 9. The built-in apps
 
@@ -387,7 +400,7 @@ Each keeps its pages, its own state, and its own verbs, and adopts the contract:
 
 The chat app serves three kinds of page on its origin:
 
-- `/` is the **chat root**: the chat list on the left (Gleb's rail, moved into the chat frontend: grouping of helper agents under their lead chat, status dots, rename, stop and start, delete, the account chooser, new-chat rows for chats still waiting for an account), and an inner iframe on the right showing the selected chat's page. The selection is the query parameter `chat`, so the root's path is `/?chat=<chat-id>`, which is what it reports as its location, with the selected chat's display name as the title. With no selection the root shows its list and an empty slot.
+- `/` is the **chat root**: the chat list on the left (Gleb's rail, moved into the chat frontend: grouping of helper agents under their lead chat, status dots, rename, stop and start, delete, the account chooser, new-chat rows for chats still waiting for an account), and an inner iframe on the right showing the selected chat's page. The selection is the query parameter `chat`, so the root's path is `/?chat=<chat-id>`, which is what it reports as its location, with the selected chat's display name as the title. With no selection the root shows the most recent chat, or with no chats one awaiting its first send; on a phone it shows its list alone.
 - `POST /api/chats/intake` is where a text enters a chat from outside a chat page (the `new`, `send`, and `draft` launch paths, all POST): it creates or picks the chat and answers the root's path with it selected, `/?chat=<id>`, or with a pending intake for the root to finish (`/?intake=<token>`; the post-launch-paths plan section 3).
 - `/<chat-id>` is one chat and nothing else, exactly today's chat page, for direct launches (an agent's `open chat /<id>`, minds deep links, the inner frame); `/<chat-id>.<agent-id>.<session-id>` is a sub-agent view, also as today.
 

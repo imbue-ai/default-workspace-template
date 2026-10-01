@@ -31,6 +31,9 @@ export interface ShortcutIconAttrs {
   readonly app: AppRecord | undefined;
   /** Whether an app list has landed: an unknown app before that is the page still connecting, not a missing app. */
   readonly isAppsLoaded: boolean;
+  /** Whether the app is stopped and nothing brings it back on a request (the shell's parker answers for a
+   *  stoppable one, which draws as ready): drawn faint, with a tooltip saying so. */
+  readonly isStopped: boolean;
   readonly isSelected: boolean;
   /** How far a drag has carried this icon out of its cell, or null when it is resting: the icon in the hand
    *  is drawn in the cell it was lifted from and translated by this, at full strength and above everything. */
@@ -68,11 +71,16 @@ function shortcutContent(app: AppRecord | undefined, label: string, isLifted: bo
     m(
       "span",
       {
+        // The icon brings its own tile (`docs/system/app-icons.md`): a flat background over the
+        // whole 48, with the same 32 per cent corner `--desk-icon-radius` computes. So this box
+        // paints nothing and pads nothing -- it is the shadow's shape and the hover's handle, and
+        // the drawing fills it edge to edge.
+        //
         // The hover is the tile growing: a tint behind it is what says selected, and one look
         // cannot say both. A transform moves nothing around it.
         class:
           "shortcut-icon relative flex h-(--desk-icon-size) w-(--desk-icon-size) items-center justify-center " +
-          "rounded-(--desk-icon-radius) bg-surface p-2 [&>svg]:size-full " +
+          "rounded-(--desk-icon-radius) [&>svg]:size-full " +
           (isLifted
             ? "shadow-(--desk-icon-shadow-lifted)"
             : "shadow-(--desk-icon-shadow) transition-transform group-hover:scale-110"),
@@ -139,6 +147,7 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
         lift,
         isSliding,
         isRunOnClick,
+        isStopped,
         onSelect,
         onRun,
         onContextMenu,
@@ -146,7 +155,6 @@ export function ShortcutIcon(): m.Component<ShortcutIconAttrs> {
       const key = shortcutKey(shortcut.target.app, shortcut.target.launch);
       const label = shortcutLabel(shortcut, app);
       const isConnecting = app === undefined && !isAppsLoaded;
-      const isStopped = app !== undefined && !app.is_running;
       return m(
         "button",
         {

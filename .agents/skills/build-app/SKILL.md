@@ -132,8 +132,10 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   already used by an existing program (`system_interface`, `browser`, etc.
   are reserved by the scaffolder, which also refuses a name any
   `system/supervisord.conf.d/*.conf` already declares).
-- **Draw the app's icon** -- an `.svg` glyph specific to what *this*
-  app does, in the house style (see the CLI reference below);
+- **Draw the app's icon** -- a 216 by 216 two-layer tile specific to what
+  *this* app does, built to the rules in `docs/system/app-icons.md` (a
+  flat background under one fill-only glyph inside a centred 144 box, in
+  a colour pair from the palette that doc carries);
   `forward_port.py` refuses a brand-new registration without one. The
   scaffold copies it beside the app's manifest (`app.toml`), which names
   it.
@@ -199,7 +201,19 @@ What gets generated:
 - `system/apps/<package>/app.toml` -- the app's manifest: its registered
   `name`, `display_name`, `icon`,
   `priority = "user"` (shed before any built-in under memory pressure),
-  and `program` (its supervisord program). `forward_port.py --manifest`
+  `program` (its supervisord program), and `stop_when_no_windows = true` (the
+  shell stops the app a minute after its last window closes and starts it
+  again on the next request; `false` keeps it running for the life of the
+  workspace). Leave it `true` for an app that only answers requests: the stop
+  frees the whole process while nobody looks at it, its data on disk is
+  untouched, and the next request wakes it. Set it to `false` when the app
+  does work between requests that a stop would lose or interrupt: a
+  background thread or scheduler that refreshes data, a poller or file
+  watcher, a websocket or subscription to an outside service, a job that
+  must finish after the user closes the window, or an API another agent
+  drives with no window open. A stopped app runs nothing until its next
+  request, and the wake serves that request, not the work that was in
+  flight. `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
   editing it). Anything you build for this app outside `system/apps/<package>/`
@@ -255,7 +269,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec <name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -269,8 +283,9 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   FATAL rather than restarting a broken app several times a second for the life
   of the workspace. Built-in services deliberately retry forever instead.
 
-  The command ends in the app's own name, not `uv run <name>`; supervisord
-  resolves that name on PATH. The copy it finds is the console script
+  The command ends in `exec` of the app's own name, not `uv run <name>`, so
+  the app is the process supervisord tagged rather than a child of a wrapper;
+  supervisord resolves that name on PATH. The copy it finds is the console script
   `uv sync --all-packages` writes into the workspace venv -- `uv tool install
   -e` puts the tool's own entry point under your HOME, which supervisord's
   children do not have on PATH. So always sync with `--all-packages`: a
@@ -296,7 +311,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   ```
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && python3 system/scripts/with_secrets.py data/.secrets/example.env -- <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec python3 system/scripts/with_secrets.py data/.secrets/example.env -- <name>"
   ```
 
   A preview (`update-app`'s `preview_app.py`) runs the app under the same
@@ -585,7 +600,7 @@ shed before any built-in service under memory pressure (see
 
 ```ini
 [program:<name>]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port> && <existing_start_command>"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port> && exec <existing_start_command>"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -599,7 +614,7 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8090 && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8090 && exec jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -632,7 +647,7 @@ reread && supervisorctl update` to start the new program.
 
 The `forward_port.py` call MUST come first in the command -- the port
 must be registered before the app starts listening, otherwise the
-app-watcher races with the backend coming up.
+shell's announcement of the registration races with the backend coming up.
 
 For the full program schema and logging knobs, see the shared
 [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
@@ -689,29 +704,43 @@ Flags:
   warns on re-registration (the stored icon is kept), so a corrupted
   icon cannot crash-loop a running app.
 
-  **Draw the icon in the workspace's house style**: monochrome line
-  art on a transparent background, exactly like the built-in glyphs.
-  The frame to author in is
+  **Draw the icon to the rules in `docs/system/app-icons.md`**: a 216 by
+  216 tile of exactly two layers -- a flat background, and one glyph in a
+  second colour that fits a 144 by 144 box centred in it. The tile is
+  drawn small but authored large, so the hand-drawn detail the look asks
+  for has a grid to sit on. The frame to author in is
 
   ```svg
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="..."/>
+  <svg xmlns="http://www.w3.org/2000/svg" width="216" height="216" viewBox="0 0 216 216" fill="none">
+  <rect width="216" height="216" rx="69.12" fill="BACKGROUND"/>
+  <path d="..." fill="FOREGROUND"/>
   </svg>
   ```
 
-  -- strokes only, no `fill` on the shapes, no hardcoded colors.
-  `currentColor` is what lets the workspace ink the glyph to match the
-  text beside it, and a transparent background is what keeps it from
-  reading as a sticker in a row of line icons. Only use color if the
-  user explicitly asks for a colored icon.
+  -- fills only, never strokes; no shadow (every surface that draws an
+  icon casts its own); the 32 percent corner radius the shell's
+  `--desk-icon-radius` also uses; and a root `fill="none"`, so the shell
+  does not ink the tile with `currentColor` the way it inks a line
+  glyph. The colours are a pair from the palette in that doc, and the
+  glyph is one iconic *object* for what the app is *for* -- an
+  envelope, a clipboard, a bell -- drawn true to that object's own
+  proportions and then inked: the whole mark about a degree off level,
+  the width of every run breathing a fifth either side of its nominal,
+  the line itself drifting only a unit or two, ends round and lifting,
+  with its interior detail cut through to the background colour at one
+  nominal weight the whole set shares. Drawn in one pass and never revised. That doc carries the
+  full look, and says how an icon that already exists is changed
+  without losing its hand-placed points.
 - `--no-icon`: skip the icon requirement for a brand-new entry. Uses
   the generic letter monogram. Use this only when the user explicitly
   declines an icon, or for short-lived preview windows.
 - `--program`: name of the supervisord program that runs the app --
   the program-name-equals-service-name convention both paths follow, so
   pass the app's own name. Its presence on the registry entry is what
-  lets the workspace offer Stop/Start for the app (supervisord RPC);
+  lets the shell act on the app's process over supervisord's RPC: Quit it
+  from its window menu, stop it once no window shows it, hold its port
+  while it is stopped, and start it again on the next request (the
+  `/api/apps/<name>/stop` and `/start` routes remain for agents);
   omitting it clears any previously-stored value, so every registration
   call is authoritative. Never pass it for unsupervised instances
   (previews, `serve_isolated_instance.py` test servers) -- those own

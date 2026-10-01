@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Any
 from typing import Final
 
@@ -91,6 +92,19 @@ class AppInventoryEntry(FrozenModel):
 
 
 @pure
+def stoppable_program_of(entry: AppInventoryEntry, entries: Sequence[AppInventoryEntry]) -> str | None:
+    """The supervised program the workspace may stop, start, park, and wake for this app, or None: an app with no
+    program, a critical app, and any row inside a critical app's program are never acted on (desktop contracts.md
+    section 5.1)."""
+    program = entry.row.program or ""
+    if not program or entry.row.critical:
+        return None
+    if any(other.row.critical and other.row.program == program for other in entries):
+        return None
+    return program
+
+
+@pure
 def default_shortcut_wire_json(shortcut: DefaultShortcut | None) -> dict[str, str] | None:
     if shortcut is None:
         return None
@@ -122,6 +136,7 @@ def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
         "internal": row.internal,
         "program": row.program or "",
         "critical": row.critical,
+        "stop_when_no_windows": row.stop_when_no_windows,
         "launch_paths": [launch_path_wire_json(launch_path) for launch_path in effective_launch_paths(row)],
         "default_shortcut": default_shortcut_wire_json(row.default_shortcut),
         "launcher_rank": row.launcher_rank,
@@ -174,7 +189,9 @@ class ClientReportOutcome(FrozenModel):
 
 
 # The launch path every app that declares none has, at its root, synthesized by the shell (desktop
-# contracts.md section 2). ``label`` is ``Open <display name>`` per app, filled in by ``effective_launch_paths``.
+# contracts.md section 2). Its ``label`` is the app's display name, filled in by
+# ``effective_launch_paths``: the row stands in a list beside rows an app labelled for itself, where
+# a verb reads as a different KIND of row rather than as the same row with a word in front of it.
 OPEN_LAUNCH_PATH_VALUE: Final[LaunchPathValue] = LaunchPathValue("/")
 
 
@@ -185,9 +202,7 @@ def effective_launch_paths(row: RegistryRow) -> tuple[RegistryLaunchPath, ...]:
         return row.launch_paths
     display = str(row.display_name) if row.display_name is not None else str(row.name)
     return (
-        RegistryLaunchPath(
-            id=OPEN_LAUNCH_PATH_ID, label=NonEmptyStr(f"Open {display}"), path=OPEN_LAUNCH_PATH_VALUE, params=()
-        ),
+        RegistryLaunchPath(id=OPEN_LAUNCH_PATH_ID, label=NonEmptyStr(display), path=OPEN_LAUNCH_PATH_VALUE, params=()),
     )
 
 
@@ -293,6 +308,15 @@ class DesktopsDocument(FrozenModel):
 
     version: int = Field(description="The file format version")
     desktops: tuple[Desktop, ...] = Field(description="Every desktop, in creation order; the first is the fallback")
+
+
+class DefaultShortcutsOfferedDocument(FrozenModel):
+    """The whole of ``default_shortcuts_offered.json``: the apps whose default shortcut the shell has offered."""
+
+    version: int = Field(description="The file format version")
+    apps: tuple[AppName, ...] = Field(
+        description="Every app whose default shortcut the shell has put on a desktop or found there, sorted"
+    )
 
 
 class WindowPlacement(FrozenModel):

@@ -67,7 +67,7 @@ def _frontend_built() -> bool:
 
 
 pytestmark = [
-    pytest.mark.release,
+    pytest.mark.browser,
     pytest.mark.skipif(not is_e2e_browser_installed(), reason="Playwright browsers not installed"),
     pytest.mark.skipif(
         not _frontend_built(),
@@ -114,6 +114,8 @@ _CELL_WIDTH = 96
 _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
+# --desk-touch-target under [data-touch], which a taskbar entry takes there.
+_TOUCH_TARGET = 44
 _GEOMETRY_TOLERANCE_PX = 4
 
 
@@ -572,6 +574,25 @@ def _move_window_off_the_shortcuts(page: Page, window_id: str) -> None:
     _drag_title_bar(page, window_id, 500, 350)
 
 
+def _open_a_second_window_over_the_first(page: Page, server: E2EServer) -> tuple[str, str]:
+    """Open a window clear of the shortcuts, then a second from the shortcut's menu; answers (first, second) once
+    the second is focused."""
+    first = _open_via_shortcut(page, server)
+    _move_window_off_the_shortcuts(page, first)
+    page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').click(button="right")
+    page.locator('[data-menu-row="open-new"]').click()
+    windows = _wait_for_window_count(server.base_url, 2)
+    (second,) = [window["id"] for window in windows if window["id"] != first]
+    expect(_window(page, second)).to_have_attribute("data-focused", "true", timeout=15000)
+    return first, second
+
+
+def _press_shield(page: Page, window_id: str) -> None:
+    """A press on a lower window's content, which its shield takes, near the shield's bottom-left corner."""
+    shield_box = _box(_window(page, window_id).locator("[data-window-shield]"))
+    page.mouse.click(shield_box["x"] + 20, shield_box["y"] + shield_box["height"] - 20)
+
+
 def _assert_close(actual: float, expected: float, what: str) -> None:
     assert abs(actual - expected) <= _GEOMETRY_TOLERANCE_PX, f"{what}: {actual} is not within tolerance of {expected}"
 
@@ -668,7 +689,7 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     assert (
         page.locator(".app-layout")
         .evaluate("(el) => getComputedStyle(el).backgroundImage")
-        .endswith('/wallpapers/bundled/dawn")')
+        .endswith('/wallpapers/bundled/arcs")')
     )
     client_id = _client_id(page)
     wait_for(
@@ -1201,19 +1222,12 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
     raises it (the shield takes the press), after which a real click into its content reaches its page through the
     transparent chrome, and the stack order is what the placement file says."""
     _land(page, e2e_server)
-    first = _open_via_shortcut(page, e2e_server)
-    _move_window_off_the_shortcuts(page, first)
-    page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').click(button="right")
-    page.locator('[data-menu-row="open-new"]').click()
-    windows = _wait_for_window_count(e2e_server.base_url, 2)
-    (second,) = [window["id"] for window in windows if window["id"] != first]
-    expect(_window(page, second)).to_have_attribute("data-focused", "true", timeout=15000)
+    first, second = _open_a_second_window_over_the_first(page, e2e_server)
     expect(_window(page, first)).to_have_attribute("data-focused", "false")
     expect(_window(page, first).locator("[data-window-shield]")).to_have_count(1)
     expect(_window(page, second).locator("[data-window-shield]")).to_have_count(0)
 
-    shield_box = _box(_window(page, first).locator("[data-window-shield]"))
-    page.mouse.click(shield_box["x"] + 20, shield_box["y"] + shield_box["height"] - 20)
+    _press_shield(page, first)
     expect(_window(page, first)).to_have_attribute("data-focused", "true")
     expect(_window(page, second)).to_have_attribute("data-focused", "false")
     expect(_window(page, first).locator("[data-window-shield]")).to_have_count(0)
@@ -1229,6 +1243,28 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
         return list(_stored_placements(e2e_server.state_dir, client_id))[-1:] == [first]
 
     wait_for(_first_on_top, timeout=15.0, poll_interval=0.1, error_message="the raise never reached the file")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_raising_a_window_by_its_content_takes_the_focus_off_the_window_now_under_it(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """A press on a lower window's content raises it without the press reaching any page; the page that held the
+    keyboard (the one typed in last) must lose it, or keys go to a window the user can no longer see, and the
+    browser hands that page the focus back when the user returns from another application, which raises it again."""
+    _land(page, e2e_server)
+    first, second = _open_a_second_window_over_the_first(page, e2e_server)
+    second_frame = _page_frame(page, second)
+    second_frame.click("#held")
+    page.keyboard.type("typed")
+    assert second_frame.input_value("#held") == "typed"
+
+    _press_shield(page, first)
+    expect(_window(page, first)).to_have_attribute("data-focused", "true")
+    page.keyboard.type(" stray")
+
+    assert second_frame.input_value("#held") == "typed"
+    assert page.evaluate(f"() => document.activeElement?.getAttribute('data-live-page') !== {json.dumps(second)}")
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -1315,7 +1351,7 @@ def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tm
     occupied cell the occupant steps aside under the hand, before the drop, and the drop keeps it there."""
     with _running_e2e_server(tmp_path, is_second_app_offered=True) as server:
         _land(page, server)
-        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0), _SECOND_SHORTCUT_KEY: (0, 1)}
+        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (0, 0), _SECOND_SHORTCUT_KEY: (1, 0)}
         backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
 
         docs = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
@@ -1329,7 +1365,7 @@ def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tm
         )
         expect(docs).to_have_attribute("data-cell", "2,2")
         # An empty cell needs nothing stepping aside: the other shortcut stayed where it was.
-        assert _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (0, 1)
+        assert _shortcut_cells(server.base_url)[_SECOND_SHORTCUT_KEY] == (1, 0)
 
         # Held over the cell docs is in, without releasing: docs has already stepped aside to (1, 2), the
         # nearest free cell to the one it is being displaced from, and notes is the icon in the hand.
@@ -1338,12 +1374,11 @@ def test_shortcut_drag_lifts_the_icon_and_sends_the_shortcut_in_its_way_aside(tm
         expect(notes).to_have_attribute("data-cell", "2,2")
         expect(docs).to_have_attribute("data-cell", "1,2")
         # Nothing is written until the drop: the step aside is the desktop showing where the icon would land.
-        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (2, 2), _SECOND_SHORTCUT_KEY: (0, 1)}
+        assert _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (2, 2), _SECOND_SHORTCUT_KEY: (1, 0)}
 
         page.mouse.up()
         wait_for(
-            lambda: _shortcut_cells(server.base_url)
-            == {_STUB_SHORTCUT_KEY: (1, 2), _SECOND_SHORTCUT_KEY: (2, 2)},
+            lambda: _shortcut_cells(server.base_url) == {_STUB_SHORTCUT_KEY: (1, 2), _SECOND_SHORTCUT_KEY: (2, 2)},
             timeout=15.0,
             poll_interval=0.1,
             error_message="the drop did not keep the room that was made for it",
@@ -1447,6 +1482,15 @@ def _pinned_window(base_url: str, desktop_id: str = _HOME_DESKTOP_ID) -> dict[st
 
 def _pinned_entry(page: Page) -> Locator:
     return page.locator(f'[data-pinned-entry="{_PINNED_APP_NAME}"]')
+
+
+def _resting_box(page: Page, entry: Locator) -> FloatRect:
+    """A floating entry's box with the pointer off it and its tile at rest. Under the pointer the tile grows by a
+    tenth about its centre, through a transition reduced motion leaves on, so a box read there is anywhere between
+    its place and its place grown."""
+    page.mouse.move(0, 0)
+    page.wait_for_function("(element) => element.getAnimations().length === 0", arg=entry.element_handle())
+    return _box(entry)
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -1650,12 +1694,12 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         expect(entry).to_have_attribute("data-minimized", "true")
 
         backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
-        before = _box(entry)
+        before = _resting_box(page, entry)
         # The default corner: bottom right of the backdrop, inset by the theme's tokens.
         _assert_close(before["x"] + before["width"], backdrop["x"] + backdrop["width"] - 16, "default x")
         _assert_close(before["y"] + before["height"], backdrop["y"] + backdrop["height"] - 12, "default y")
         _drag(page, _center(before), (_center(before)[0] - 300, _center(before)[1] - 200))
-        moved = _box(entry)
+        moved = _resting_box(page, entry)
         _assert_close(moved["x"], before["x"] - 300, "dragged x")
         _assert_close(moved["y"], before["y"] - 200, "dragged y")
         stored = _wait_for_client_entry(
@@ -1673,7 +1717,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
 
         page.reload()
         expect(_pinned_entry(page)).to_be_visible(timeout=15000)
-        _assert_same_box(_box(_pinned_entry(page)), moved, "after reload")
+        _assert_same_box(_resting_box(page, _pinned_entry(page)), moved, "after reload")
 
         menu = _open_entry_menu(page, _pinned_entry(page))
         expect(menu.locator('[data-menu-row="close"]')).to_have_count(1)
@@ -1690,7 +1734,7 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         _open_entry_menu(page, _taskbar_entry(page, pinned["id"])).locator('[data-menu-row="float"]').click()
         expect(page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(1, timeout=10000)
         # The position it was dragged to is kept across the trip through the bar.
-        _assert_same_box(_box(_pinned_entry(page)), moved, "back afloat")
+        _assert_same_box(_resting_box(page, _pinned_entry(page)), moved, "back afloat")
 
 
 def _avatar_image_source(entry: Locator) -> str:
@@ -1884,11 +1928,14 @@ _MOBILE_CONTEXT_ARGS: dict[str, Any] = {
 
 
 @pytest.mark.timeout(90, func_only=False)
-def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server: E2EServer, page: Page) -> None:
+def test_phone_shows_every_window_maximized_with_finger_sized_taskbar_entries(
+    e2e_server: E2EServer, page: Page
+) -> None:
     """On a phone the shell is compact and touch: a tap on the shortcut opens the window, every window fills the
-    backdrop with no resize edges or maximize controls, the taskbar shows icons only, the launcher field is a
-    button that opens the overlay, and the stored placement is the client's own (still a normal frame, since
-    compactness is how this client renders, not what it saves)."""
+    backdrop with no resize edges or maximize controls, the taskbar's entries grow to the finger's touch target
+    (this is the client where an entry has to be reachable by thumb), the launcher field is a button that opens
+    the overlay, and the stored placement is the client's own (still a normal frame, since compactness is how
+    this client renders, not what it saves)."""
     with _second_client(page, e2e_server, **_MOBILE_CONTEXT_ARGS) as phone_page:
         expect(phone_page.locator("html")).to_have_attribute("data-compact", "")
         expect(phone_page.locator("html")).to_have_attribute("data-touch", "")
@@ -1902,7 +1949,13 @@ def test_phone_shows_every_window_maximized_with_an_icon_only_taskbar(e2e_server
         backdrop = _box(phone_page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
         _assert_same_box(_box(window), backdrop, "phone window")
         expect(_taskbar_entry(phone_page, window_id)).to_be_visible()
-        expect(phone_page.locator(".taskbar-entry-title")).to_have_count(0)
+        # As tall as the finger's target, with the window's name on it: --desk-taskbar-entry-size takes
+        # --desk-touch-target here, and the chip is the whole of the target rather than a tile inside one.
+        entry_box = _box(_taskbar_entry(phone_page, window_id))
+        assert entry_box["height"] >= _TOUCH_TARGET - 1, entry_box
+        expect(_taskbar_entry(phone_page, window_id).locator(".taskbar-entry-title")).to_have_text(
+            f"Stub {_STUB_LAUNCH_PATH}"
+        )
         assert _placements(e2e_server.base_url, _client_id(phone_page))[window_id]["state"] == "NORMAL"
         frame = _page_frame(phone_page, window_id)
         assert frame.url == f"{e2e_server.stub_url}{_STUB_LAUNCH_PATH}"

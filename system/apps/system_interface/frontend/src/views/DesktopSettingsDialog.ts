@@ -58,7 +58,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     error = null;
     m.redraw();
     try {
-      await attrs.onSave(chosen, color, glyphIndex, wallpaper);
+      await attrs.onSave(chosen, color, glyphIndex, resolvedWallpaper(attrs.wallpapers));
     } catch (e) {
       error = (e as Error).message;
       isSaving = false;
@@ -117,8 +117,30 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     );
   }
 
-  function wallpaperChoice(label: string, value: Wallpaper | null, url: string | null): m.Vnode {
-    const isSelected = isSameWallpaper(value, wallpaper);
+  /**
+   * The held reference, or null when the wallpapers on offer do not have it.
+   *
+   * A reference outlives the file it names -- a bundled wallpaper the shell stopped shipping, a
+   * file taken back out of the wallpapers directory -- and the backdrop already draws the default
+   * in its place. The picker says the same thing rather than leaving every swatch unlit, and a
+   * save writes what the picker showed, so agreeing with the backdrop also clears the dead
+   * reference. While the listings are still loading there is nothing to check it against, so the
+   * reference stands.
+   */
+  function resolvedWallpaper(listings: readonly WallpaperListing[] | null): Wallpaper | null {
+    if (wallpaper === null || listings === null) return wallpaper;
+    return listings.some((listing) => isSameWallpaper({ kind: listing.kind, name: listing.name }, wallpaper))
+      ? wallpaper
+      : null;
+  }
+
+  function wallpaperChoice(
+    label: string,
+    value: Wallpaper | null,
+    url: string | null,
+    selected: Wallpaper | null,
+  ): m.Vnode {
+    const isSelected = isSameWallpaper(value, selected);
     return m(
       "button",
       {
@@ -139,10 +161,11 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
 
   function wallpaperPicker(attrs: DesktopSettingsDialogAttrs): m.Children {
     if (attrs.wallpapers === null) return m("p", { class: "type-helper text-faint" }, "Loading wallpapers…");
+    const selected = resolvedWallpaper(attrs.wallpapers);
     return m("div", { class: "flex flex-wrap gap-2" }, [
-      wallpaperChoice("Default", null, null),
+      wallpaperChoice("Default", null, null, selected),
       attrs.wallpapers.map((listing) =>
-        wallpaperChoice(listing.name, { kind: listing.kind, name: listing.name }, listing.url),
+        wallpaperChoice(listing.name, { kind: listing.kind, name: listing.name }, listing.url, selected),
       ),
     ]);
   }

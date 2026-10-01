@@ -1,0 +1,5 @@
+The build-app scaffold writes `stop_when_no_windows = true` into every new manifest (the shell stops the app a minute after its last window closes and starts it again on the next request; `false` keeps it running for the life of the workspace), and the program lines it writes and shows `exec` the app's entry point so the app is the process supervisord tagged. The skill names the field beside `priority` and `program` and says when to set it `false`: an app that does work between requests (a background thread or scheduled refresh, a poller, a subscription to an outside service, a job that outlives the window, an API another agent drives with no window) would lose that work at the stop.
+
+The update-app skill checks the field against what a change makes the app do, in both directions.
+
+The update-self skill's post-apply remainder reviews the user's apps whose manifests predate the field: one without it keeps running for the life of the workspace, and the agent opts each in only after reading it, never mechanically.

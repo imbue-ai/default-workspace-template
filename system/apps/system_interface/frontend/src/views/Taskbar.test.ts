@@ -49,7 +49,6 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         look: { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null },
       },
     ],
-    isCompact: false,
     openEntryMenuWindowId: null,
     launcher: {
       query: "",
@@ -91,7 +90,7 @@ describe("Taskbar", () => {
     expect(entries.map((entry) => entry.getAttribute("data-pinned-entry"))).toEqual([null, null, "docs"]);
     expect(entries[2].getAttribute("data-entry-mode")).toBe("bar");
     expect(entries[2].getAttribute("data-entry-style")).toBe("avatar");
-    expect(entries[0].querySelector(".taskbar-entry-title")?.textContent).toBe("Plan");
+    expect(entries[0].getAttribute("aria-label")).toBe("Plan");
     (entries[1] as HTMLElement).click();
     expect(onEntryClick).toHaveBeenCalledWith("win-2");
   });
@@ -129,19 +128,28 @@ describe("Taskbar", () => {
       true,
       false,
     ]);
-    expect(entries.map((entry) => entry.querySelector(".opacity-60") !== null)).toEqual([true, false]);
+    expect(entries.map((entry) => entry.querySelector(".opacity-70") !== null)).toEqual([true, false]);
   });
 
-  it("shows icons only in compact mode, the title as each entry's accessible name", () => {
-    const taskbar = render({ isCompact: true });
-    expect(taskbar.querySelectorAll(".taskbar-entry-title")).toHaveLength(0);
-    const entries = taskbar.querySelectorAll("[data-taskbar-entry]");
+  it("writes each window's title on its entry, with the whole of it in a bubble above", () => {
+    const taskbar = render();
+    const entries = [...taskbar.querySelectorAll("[data-taskbar-entry]")];
     expect(entries).toHaveLength(3);
-    expect([...entries].map((entry) => entry.getAttribute("aria-label"))).toEqual(["Plan", "Docs", "Docs"]);
-    expect(render().querySelector("[data-taskbar-entry]")?.getAttribute("aria-label")).toBeNull();
+    expect(entries.map((entry) => entry.querySelector(".taskbar-entry-title")?.textContent)).toEqual([
+      "Plan",
+      "Docs",
+      "Docs",
+    ]);
+    expect(entries.map((entry) => entry.getAttribute("aria-label"))).toEqual(["Plan", "Docs", "Docs"]);
+    expect(entries.map((entry) => entry.getAttribute("data-hover-tooltip"))).toEqual(["Plan", "Docs", "Docs"]);
+    expect(entries.map((entry) => entry.getAttribute("data-hover-tooltip-placement"))).toEqual([
+      "above",
+      "above",
+      "above",
+    ]);
   });
 
-  it("draws the avatar in place of the icon for an avatar-style entry, wearing the mood, image only when compact", () => {
+  it("draws the avatar in place of the icon for an avatar-style entry, wearing the mood", () => {
     const stale = avatarStateRecord({ design: "jelly-cat", status: { mood: "working", is_stale: true } });
     const taskbar = render({ avatar: stale });
     const entry = taskbar.querySelector('[data-taskbar-entry="win-3"]') as HTMLElement;
@@ -150,15 +158,9 @@ describe("Taskbar", () => {
     expect(entry.getAttribute("data-hover-tooltip")).toBe("Docs (status may be out of date)");
     expect(entry.querySelector("svg")).toBeNull();
     expect(entry.querySelector("img")?.getAttribute("src")).toBe("/api/avatars/jelly-cat/image.svg?mood=working");
-    expect(entry.querySelector(".taskbar-entry-title")?.textContent).toBe("Docs");
     const ordinary = taskbar.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
     expect(ordinary.getAttribute("data-mood")).toBeNull();
     expect(ordinary.querySelector("svg")).not.toBeNull();
-    const compact = render({ avatar: stale, isCompact: true }).querySelector(
-      '[data-taskbar-entry="win-3"]',
-    ) as HTMLElement;
-    expect(compact.querySelector("img")).not.toBeNull();
-    expect(compact.querySelector(".taskbar-entry-title")).toBeNull();
   });
 
   it("asks for an entry's menu on a right click", () => {

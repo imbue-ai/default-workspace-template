@@ -18,7 +18,6 @@ import asyncio
 import contextlib
 import http.server
 import json
-import os
 import socket
 import threading
 import time
@@ -40,17 +39,6 @@ from browser.xinput import InputRouter
 from playwright.async_api import Error as PlaywrightError
 from Xlib import X
 from Xlib.display import Display
-
-# Real Chromium launches but its CDP connection never completes on the GitHub Actions
-# runner -- the launch hangs (manifesting as a pytest-timeout + a NoneType CDP-session
-# error), even though `playwright install` put the binary there and even with the sandbox
-# off. It is not a product issue: the fleet runs fine on real workspaces (docker / Lima /
-# cloud, all verified). So skip the real-Chromium tests in GH CI; they still run locally
-# and on offload, where a real browser actually comes up.
-_SKIP_REAL_CHROMIUM_IN_GH_CI = pytest.mark.skipif(
-    os.environ.get("GITHUB_ACTIONS") == "true",
-    reason="real Chromium can't start under the GitHub Actions runner; runs locally / on offload",
-)
 
 
 def _require_running(browser: "bsession.LiveBrowser") -> None:
@@ -102,7 +90,6 @@ async def _running_browser(
             bsession.set_proxy_server(None)
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 async def _noop_wake_method(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
     """Stand-in for ``_wake_agent``: skip the real ``message_chat.py`` subprocess in tests."""
 
@@ -251,7 +238,7 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
     # A viewer joining an already-running browser must NOT receive the fleet-level
     # `initializing` banner, even while the whole fleet is still restoring (finding
     # [3-runner]) -- its seed already says lifecycle=running and the live page is there.
-    fake = _install_fake_browser(monkeypatch)  # lifecycle=running
+    _install_fake_browser(monkeypatch)  # lifecycle=running
     runner._init_done.clear()  # the fleet is still restoring
     try:
         with _BootedServer() as server:
@@ -272,8 +259,6 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
         runner._init_done.set()
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
 def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pytest.MonkeyPatch) -> None:
     # While the fleet is still restoring, taking ownership returns 503 "initializing", but
     # read-only routes (ls/health) AND create stay open -- the locked "init must not block
@@ -316,9 +301,22 @@ def test_startup_opens_gate_even_if_restore_fails(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(bsession.BrowserSessionManager, "restore", boom)
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    # The real starters would leave the shared manager's checkpoint and window-sweep loops
+    # running on the session-wide bridge loop through every later test, sweeping against
+    # the live shell's windows.
+    started: list[str] = []
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager, "start_checkpointing", lambda _self: started.append("checkpointing")
+    )
+    monkeypatch.setattr(
+        bsession.BrowserSessionManager,
+        "start_window_sweeping",
+        lambda _self, *_args: started.append("window sweeping"),
+    )
     runner._init_done.clear()
     runner.bridge.run(runner._startup())  # the loop runs the same startup coroutine
     assert runner._init_done.is_set()
+    assert started == ["checkpointing", "window sweeping"]
 
 
 def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -326,7 +324,7 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
     # forgets its persistent profile and drops it from the manifest.
     profile = bsession._profile_dir("riley-jones")
     profile.mkdir(parents=True)
-    fake = _install_fake_browser(monkeypatch, browser_id="riley-jones")
+    _install_fake_browser(monkeypatch, browser_id="riley-jones")
 
     async def fake_close(self: bsession.LiveBrowser) -> None:  # avoid real Chromium teardown
         return None
@@ -343,7 +341,7 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
 # Persistence, the core promise, against real Chromium.
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(120)
 def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
     # The whole handover in one pass against a real browser: Chromium launches without
@@ -376,7 +374,7 @@ def test_launch_cdp_and_proxy_come_up_together_real_chromium(monkeypatch: pytest
     asyncio.run(go())
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(120)
 def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
     # The lifecycle hole this design had to close: crash detection must NOT depend on an
@@ -397,7 +395,7 @@ def test_crash_is_detected_with_nobody_attached_real_chromium() -> None:
     asyncio.run(go())
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(120)
 def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch) -> None:
     # The whole point of persistence: a cookie set in one daemon "session" is still
@@ -612,27 +610,36 @@ class _AutoResumingAgent:
                 await self._send("Runtime.runIfWaitingForDebugger", {}, message["params"]["sessionId"])
 
 
-def _browser_window_count(display: str) -> int:
-    """Mapped top-level browser windows on ``display``, by the window guardian's own rule."""
+def _browser_window_geometries(display: str) -> list[tuple[int, int, int, int]]:
+    """``(x, y, width, height)`` on the root of each mapped top-level browser window on
+    ``display``, by the window guardian's own rule."""
     disp = Display(display)
     try:
         atoms = {
             "window_type": disp.intern_atom("_NET_WM_WINDOW_TYPE"),
             "type_normal": disp.intern_atom("_NET_WM_WINDOW_TYPE_NORMAL"),
         }
-        count = 0
-        for window in disp.screen().root.query_tree().children:
+        root = disp.screen().root
+        geometries: list[tuple[int, int, int, int]] = []
+        for window in root.query_tree().children:
             try:
                 attrs = window.get_attributes()
                 if attrs.map_state != X.IsViewable or attrs.override_redirect:
                     continue
                 if WindowGuardian._is_browser_window(window, atoms):
-                    count += 1
+                    geometry = window.get_geometry()
+                    origin = root.translate_coords(window, 0, 0)
+                    geometries.append((origin.x, origin.y, geometry.width, geometry.height))
             except Xlib.error.BadWindow:
                 continue  # gone between query_tree and the read
-        return count
+        return geometries
     finally:
         disp.close()
+
+
+def _browser_window_count(display: str) -> int:
+    """Mapped top-level browser windows on ``display``, by the window guardian's own rule."""
+    return len(_browser_window_geometries(display))
 
 
 def _held_keycodes(display: str) -> list[int]:
@@ -644,7 +651,7 @@ def _held_keycodes(display: str) -> list[int]:
         disp.close()
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(120)
 def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> None:
     # A window.open with a features string asks for a popup, which would be a second
@@ -684,7 +691,7 @@ def test_a_popup_opens_as_a_tab_in_the_one_browser_window_real_chromium() -> Non
             asyncio.run(go())
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(120)
 def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
     # Playwright auto-attaches with waitForDebuggerOnStart, so Chromium holds every new tab
@@ -717,7 +724,7 @@ def test_a_new_tab_after_a_handoff_does_not_freeze_the_page_real_chromium(monkey
         asyncio.run(go())
 
 
-@_SKIP_REAL_CHROMIUM_IN_GH_CI
+@pytest.mark.browser
 @pytest.mark.timeout(180)
 def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
     # Paste-in presses Ctrl+V in the shown tab over CDP after setting the X clipboard. The
@@ -734,11 +741,16 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
                 assert display is not None
                 loop = asyncio.get_running_loop()
                 session_id = await _only_page_session(browser, f"{pages.origin}/")
-                x, y = await _evaluate(browser, session_id, (
+                client_x, client_y, inner_height = await _evaluate(browser, session_id, (
                     "(() => { const r = document.getElementById('i').getBoundingClientRect();"
-                    " const top = window.screenY + window.outerHeight - window.innerHeight;"
-                    " return [Math.round(window.screenX + r.left + 20), Math.round(top + r.top + r.height / 2)]; })()"
+                    " return [Math.round(r.left + 20), Math.round(r.top + r.height / 2), window.innerHeight]; })()"
                 ))
+                # The page sits at the bottom of the window, below the toolbar. The window's
+                # place and size come from X: the stealth-patched Chromium reports made-up
+                # screenX/outerHeight values, which put a click computed from them anywhere.
+                [(window_x, window_y, _width, window_height)] = _browser_window_geometries(display)
+                x = window_x + client_x
+                y = window_y + window_height - inner_height + client_y
 
                 def run_on_loop(coro: Any) -> Any:
                     return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)

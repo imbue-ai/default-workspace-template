@@ -679,3 +679,29 @@ describe("a solo shell", () => {
     expect(document.querySelector('iframe[data-live-page="win-1"]')).toBeNull();
   });
 });
+
+describe("the desktop's wallpaper", () => {
+  function layoutStyle(): string {
+    return (document.querySelector(".app-layout") as HTMLElement).getAttribute("style") ?? "";
+  }
+
+  function chooseWallpaper(name: string): void {
+    socket.deliver().onDesktopsUpdated([
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a")],
+        wallpaper: { kind: "bundled", name },
+      }),
+    ]);
+    m.redraw.sync();
+  }
+
+  it("paints nothing of its own when the desktop has chosen none, leaving the default the class carries", () => {
+    expect(layoutStyle()).not.toContain("background-image");
+  });
+
+  it("paints a chosen wallpaper over the default, so a reference whose file is gone shows the default", () => {
+    chooseWallpaper("arcs");
+    expect(layoutStyle()).toContain('url("/wallpapers/bundled/arcs")');
+    expect(layoutStyle()).toContain("var(--desk-default-wallpaper)");
+  });
+});

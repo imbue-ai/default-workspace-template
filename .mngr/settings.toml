@@ -118,8 +118,15 @@ create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_ac
 # git-ignored), so a create run from inside one -- a worker launching a worker --
 # would name no type and no account. Sharing the workspace's copy by symlink keeps
 # every checkout of the workspace on the same default account.
+#
+# The mngr assets (docs/system/style_guide.md links into them, and the frontends bundle
+# them) are fetched, not tracked, so a worktree has none until something fetches them.
+# Copying the workspace's assets into a worker's worktree gives it them at the
+# workspace's pin. Copied, not shared: vite resolves a symlink to its target, and
+# vitest then refuses to load an asset from outside the worktree it runs in.
 [work_dir_extra_paths]
 ".mngr/settings.local.toml" = "SHARE"
+"system/vendor/mngr-assets" = "COPY"
 
 # Agent types
 
@@ -625,14 +632,10 @@ host_log_dir = "/var/log/mngr"
 # the template that is shared across all agent types
 [create_templates.main]
 type = "main"
-# bootstrap is the only extra_window now. It runs first-boot setup (git config)
-# and then launches
-# supervisord, which runs every background service (system_interface, web,
-# share-gateway, app-watcher, host-backup, terminal, and the one-shot
-# deferred-install -- see system/supervisord.conf; the opt-in github-sync service is
-# added by its skill). The old git_auth_setup window is gone (the git config
-# it performed now runs inside bootstrap), and terminal is a supervisord
-# service rather than its own window.
+# bootstrap is the only extra_window. It runs first-boot setup (git config) and
+# then launches supervisord, which runs every background service (see
+# system/supervisord.conf; the opt-in github-sync service is added by its skill).
+# terminal is a supervisord service rather than its own window.
 extra_window = ["bootstrap='uv run bootstrap'"]
 # Write a sane default tmux config on every Imbue Studio host. tuple-typed
 # `extra_provision_command` stacks across templates (see

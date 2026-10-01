@@ -40,7 +40,8 @@ Built-in apps:
 
 Every app describes itself in an `app.toml` manifest beside its code: its
 registered name, the display name users see, its icon, the launch paths the
-desktop opens windows at, its memory-shedding `priority`, whether it is `critical`, and the
+desktop opens windows at, its memory-shedding `priority`, whether it is `critical`, whether it
+stops once no window shows it (`stop_when_no_windows`), and the
 supervisord `program` that runs it (the schema is the `app_manifest` library
 in `system/libs/`). An app runs as a supervised program (a `[program:*]` entry
 in its own `system/supervisord.conf.d/<name>.conf`) that registers the manifest
@@ -60,7 +61,7 @@ the supervisord programs the app owns beyond its own block and its
 inside the app's own directory (already implicit) or into another app's (that is
 a `pyproject.toml` dependency), and every one must exist, which
 `system/test_app_manifests.py` checks for every manifest in the tree. Together
-with the app's directory and its `system/supervisord.conf` blocks, these make up
+with the app's directory and the supervisord blocks that run it, these make up
 the app's footprint, which `app-manifest footprint <manifest>` writes out as a
 scope file; `app-manifest references --for-path <path>` runs the lookup the
 other way, from an owned path back to the app that claims it. Registration

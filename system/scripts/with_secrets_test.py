@@ -10,10 +10,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from script_modules_testing import load_script_module
 
-from conftest import _load_script_module
-
-with_secrets = _load_script_module("with_secrets_for_tests", "with_secrets.py")
+with_secrets = load_script_module("with_secrets_for_tests", "with_secrets.py")
 
 _SCRIPT = Path(__file__).parent / "with_secrets.py"
 

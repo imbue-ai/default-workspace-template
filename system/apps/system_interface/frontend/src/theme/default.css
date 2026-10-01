@@ -10,6 +10,16 @@
 :root {
   --desk-title-bar-height: 36px;
   --desk-taskbar-height: 48px;
+  /* A taskbar entry's height. The launcher field's, so the field and the entries beside it read as
+     one row of controls rather than two sizes of thing. */
+  --desk-taskbar-entry-size: 36px;
+  /* The app's icon inside an entry: the entry's own height less the 4px the chip pads itself by on
+     each side, so the icon fills the chip top to bottom rather than floating in it. One value drives
+     both, here and in touch mode, where the entry grows to the finger's target. */
+  --desk-taskbar-entry-icon: calc(var(--desk-taskbar-entry-size) - 8px);
+  /* The cast an entry's icon makes, quieter than the one a shortcut makes on the wallpaper: a row of
+     these sits an inch apart on a plain surface, where the desktop's is one tile on a photograph. */
+  --desk-taskbar-entry-shadow: 0 1px 4px 0 #00000026, 0 1px 1px 0 #00000014;
   --desk-cell-width: 96px;
   --desk-cell-height: 112px;
   --desk-grid-inset: 16px;
@@ -27,23 +37,24 @@
   --desk-window-control-inset: 4px;
   --desk-window-control-size: calc(var(--desk-title-bar-height) - 2 * var(--desk-window-control-inset));
   --desk-window-shadow: var(--shadow-overlay);
-  --desk-taskbar-surface: color-mix(in srgb, var(--c-surface) 70%, transparent);
-  --desk-taskbar-blur: 20px;
+  /* Solid, not a pane you can see the desktop through: the bar is a surface the entries sit on. */
+  --desk-taskbar-surface: var(--c-surface);
   --desk-backdrop: var(--c-bg);
-  --desk-default-wallpaper: url(/wallpapers/bundled/dawn);
+  --desk-default-wallpaper: url(/wallpapers/bundled/arcs);
   --desk-icon-size: 48px;
   /* The icon tile's corner, as a fraction of the tile: an icon shown larger or smaller keeps
      the same silhouette rather than growing a corner that is suddenly too tight or too round. */
   --desk-icon-radius: calc(var(--desk-icon-size) * 0.32);
-  /* The icon tile's own elevation: a wide soft cast under a tight one, the pair the shortcuts
-     want over a photograph -- lighter and further spread than the --shadow-raised the chrome uses. */
-  --desk-icon-shadow: 0 3px 8px 0 rgb(0 0 0 / 0.15), 0 1px 1px 0 rgb(0 0 0 / 0.08);
+  /* The icon tile's own elevation: a soft cast under a tight one. Tighter and darker than a shadow
+     for a photograph needs to be -- a tile sits on the bar's own white as often as on the wallpaper,
+     and a wide pale cast disappears there. */
+  --desk-icon-shadow: 0 2px 6px 0 rgb(0 0 0 / 0.2), 0 1px 2px 0 rgb(0 0 0 / 0.16);
   /* Drop shadows rather than a text-shadow: the name is clamped to two lines, so its own box
      clips anything painted inside it, and a filter draws the same silhouette from outside. */
   --desk-shortcut-label-shadow: drop-shadow(0 2px 4px rgb(0 0 0 / 0.45)) drop-shadow(0 1px 0.5px rgb(0 0 0 / 0.4));
   /* The tile's elevation while a drag holds it: the same pair, deeper and further spread, so the icon in
      the hand reads as lifted off the desktop rather than as a bigger icon. */
-  --desk-icon-shadow-lifted: 0 8px 20px 0 rgb(0 0 0 / 0.22), 0 3px 4px 0 rgb(0 0 0 / 0.12);
+  --desk-icon-shadow-lifted: 0 8px 20px 0 rgb(0 0 0 / 0.28), 0 3px 4px 0 rgb(0 0 0 / 0.18);
   /* How much a shortcut grows while it is in the hand: enough to read as picked up, not so much that it
      covers the cells it is being carried over. */
   --desk-shortcut-lift-scale: 1.12;
@@ -62,7 +73,10 @@
      user and the window. */
   --desk-window-move: 180ms;
   --desk-window-move-ease: cubic-bezier(0.2, 0, 0, 1);
-  --desk-launcher-menu-width: 22rem;
+  --desk-launcher-field-width: 18rem;
+  /* The menu hangs off the field and lines up with its left edge, so it takes the field's width too:
+     a card wider than the thing it belongs to reads as a second thing. */
+  --desk-launcher-menu-width: var(--desk-launcher-field-width);
 }
 
 [data-compact] {
@@ -83,4 +97,7 @@
   --desk-taskbar-height: 56px;
   --desk-drag-threshold: 8px;
   --desk-touch-target: 44px;
+  /* A finger needs the whole touch target, and the entry is the drawing as well as the target, so
+     the tile grows to it rather than sitting in a box larger than itself. */
+  --desk-taskbar-entry-size: var(--desk-touch-target);
 }

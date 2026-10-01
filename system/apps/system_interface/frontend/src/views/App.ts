@@ -17,7 +17,7 @@ import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu"
 import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows";
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
-import { fetchWallpapers, wallpaperImageUrl } from "../model/api";
+import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
 import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
@@ -400,6 +400,7 @@ export function App(): m.Component<AppAttrs> {
       onPressStart: (binding) => {
         const pressedWindowId =
           binding.kind === "window-move" || binding.kind === "window-resize" ? binding.windowId : null;
+        // What the browser would have done with a press whose default the gesture source did not prevent.
         pages?.takeFocusFromOtherPages(pressedWindowId);
         pages?.setGestureActive(true);
         root.setAttribute(WINDOW_MOTION_ATTRIBUTE, "off");
@@ -560,10 +561,7 @@ export function App(): m.Component<AppAttrs> {
         app === undefined || app.critical
           ? null
           : () => sendToEmbedder(OPEN_SHARE_SETTINGS, { serviceName: app.name }),
-      setAppLifecycle:
-        app !== undefined && current.canStopApp(app)
-          ? (action) => void current.setAppLifecycle(app.name, action)
-          : null,
+      quit: app !== undefined && current.canStopApp(app) ? () => void current.quitApp(app.name) : null,
       popOut: current.getCanPopOut() && !state.modes.isCompact ? () => void current.detachWindow(windowId) : null,
       close: () => void current.closeOrMinimizeWindow(windowId),
     });
@@ -971,7 +969,7 @@ export function App(): m.Component<AppAttrs> {
       // the taskbar's translucent surface then has the desktop behind it to blur, and the backdrop
       // stays the viewport less the taskbar height that the geometry rules measure.
       const wallpaperStyle =
-        desktop?.wallpaper == null ? {} : { backgroundImage: `url("${wallpaperImageUrl(desktop.wallpaper)}")` };
+        desktop?.wallpaper == null ? {} : { backgroundImage: wallpaperBackgroundImage(desktop.wallpaper) };
       return m(
         "div",
         {
@@ -1054,7 +1052,6 @@ export function App(): m.Component<AppAttrs> {
           m(Taskbar, {
             entries: barEntries(state),
             avatar: state.avatar,
-            isCompact: state.modes.isCompact,
             openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
             launcher: {
               query: launcherQuery,
@@ -1074,7 +1071,10 @@ export function App(): m.Component<AppAttrs> {
               onRunSecondary: () => runSecondaryRow(current),
               onRise: (rise) => {
                 launcherFieldRise = rise;
-                m.redraw();
+                // Told from the field's render hooks, where no redraw can run; m.redraw() would wait for the next
+                // frame and paint one with the menu where the field was. A microtask runs once the render is over,
+                // still before the browser paints, so the menu moves in the frame the field did.
+                queueMicrotask(() => m.redraw.sync());
               },
             },
             tray: {
