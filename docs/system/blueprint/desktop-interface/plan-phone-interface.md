@@ -50,7 +50,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 ### The window menu
 
 - From the pill's long-press or a row's kebab: Refresh, Share <app> (only when embedded, so never on a phone), Quit <app> (stoppable apps). No Minimize, no Move or Resize, no pop-out, no Close (the X is Close).
-- After Quit the phone stays on the app's stopped placeholder, as desktop windows do. After the shown window is closed, by this phone or any other client, the phone goes to the home grid.
+- Quit closes the app's windows as it does on the desktop, so a phone showing one goes to the home grid; a pinned window, which is never closed, stays on the app's stopped placeholder. After the shown window is closed, by this phone or any other client, the phone goes to the home grid.
 
 ### Showing windows, landing, and switching
 
@@ -106,10 +106,10 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 
 ### Shell backend (`system/apps/system_interface/imbue/system_interface/`)
 
-- `shell/data_types.py`: `ClientRecord` gains `shown_history: tuple[str, ...]` (window ids or the literal `"home"`, most recent last, at most 20). `WindowOpenRequest` gains `is_minimized: bool = False`.
+- `shell/data_types.py`: `ClientRecord` gains `shown_history: tuple[str, ...]` (window ids or the literal `"home"`, most recent last, at most 20). `WindowOpenRequest` gains `minimized: bool = False`, as `LaunchRequest` has.
 - `shell/clients.py`: `_StoredClient.shown_history` (default empty; a version-2 file without it reads as empty, no version bump). `ClientStore.record_shown(client_id, entry, now)` appends and trims; `client_wire_json` adds `shown_history`. `ClientStore.drop_windows(window_ids)` prunes closed windows from every history, called from the close paths in `shell/state.py` alongside the layout-file drop.
 - `shell/routes.py`: `POST /api/clients/<client_id>/shown` with `{"window_id": "<id>" | null}` (null records `"home"`); `200` the client record; `404` for a window no desktop holds. Loopback is not required: the phone calls it.
-- `shell/desktop_routes.py`: the windows route reads `minimized` from the body and passes it to `DesktopStoreState.open_window(..., is_minimized)`, which already takes it; the launch route already does. The inventory adds `"workspace_name"` and each client's `shown_history`.
+- `shell/desktop_routes.py`: the windows route reads `minimized` from the body into the `WindowOpenRequest` that `DesktopStoreState.open_window` places from; the launch route already does. The inventory adds `"workspace_name"` and each client's `shown_history`.
 - `config.py`: `SYSTEM_INTERFACE_WORKSPACE_NAME` (see Decisions for its source); `server.py` `_index` writes it into `<title>` and `apple-mobile-web-app-title`, adds `theme-color`, `viewport-fit=cover`, a `<link rel="apple-touch-icon">` and `<link rel="manifest">`.
 - `avatar/routes.py`: `GET /api/avatars/<id>/icon.png?size=180` rendering the design's SVG to PNG (library per Decisions); `GET /apple-touch-icon.png` and `GET /manifest.webmanifest` on `server.py` resolving the selected design.
 - Tests beside each module (`clients_test.py`, `routes_test.py`, which holds the desktop routes' tests too): history bounded and pruned on close; `404` for an unknown window; `minimized` on the windows route leaves other clients' layouts without a placement; inventory fields present.
