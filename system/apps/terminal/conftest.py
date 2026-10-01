@@ -21,9 +21,9 @@ def terminal_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Ter
 
 
 @pytest.fixture
-def phone_context(browser: Browser) -> Iterator[BrowserContext]:
+def phone_context(module_browser: Browser) -> Iterator[BrowserContext]:
     """A touch-enabled browser context the size of a phone."""
-    context = browser.new_context(viewport=_PHONE_VIEWPORT, has_touch=True)
+    context = module_browser.new_context(viewport=_PHONE_VIEWPORT, has_touch=True)
     try:
         yield context
     finally:

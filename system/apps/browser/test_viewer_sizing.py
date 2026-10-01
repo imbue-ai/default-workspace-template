@@ -34,9 +34,9 @@ def _wait_until(page: Page, is_done: Callable[[], bool]) -> None:
 
 
 def test_the_pane_fills_a_phone_and_a_rotation_reports_its_size_again(
-    browser: Browser,
+    module_browser: Browser,
 ) -> None:
-    context = browser.new_context(
+    context = module_browser.new_context(
         viewport={"width": 393, "height": 852}, has_touch=True
     )
     stream_urls: list[str] = []

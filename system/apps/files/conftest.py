@@ -170,7 +170,7 @@ def fetch_calls() -> list[dict[str, Any]]:
 
 @pytest.fixture
 def open_files_page(
-    browser: Browser, dufs_origin: str, fetch_calls: list[dict[str, Any]]
+    module_browser: Browser, dufs_origin: str, fetch_calls: list[dict[str, Any]]
 ) -> Iterator[Callable[[str, int, int], Page]]:
     """Open a path of the dufs stand-in in a fresh page of the given viewport size.
 
@@ -182,7 +182,7 @@ def open_files_page(
         fetch_calls.append(call)
 
     def open_page(path: str, width: int, height: int) -> Page:
-        context = browser.new_context(
+        context = module_browser.new_context(
             viewport={"width": width, "height": height}, timezone_id="UTC"
         )
         contexts.append(context)
