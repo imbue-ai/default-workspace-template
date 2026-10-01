@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
-import type m from "mithril";
+import m from "mithril";
 import { installLocalStoragePolyfill } from "@imbue/workspace-ui/src/testing/localStorage";
 
 // The composer persists its draft in localStorage, which the node test env lacks.
@@ -436,6 +436,35 @@ describe("MessageInput placeholder", () => {
     mocks.agent.activity_state = "THINKING";
     const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+});
+
+/** The element tags and child positions from ``node`` down to the first ``tag``: what mithril matches an
+ *  unkeyed element by from one render to the next. */
+function elementPathTo(node: unknown, tag: string): string[] | null {
+  if (node === null || node === undefined || typeof node !== "object" || Array.isArray(node)) return null;
+  const vnode = node as AnyVnode;
+  if (vnode.tag === tag) return [tag];
+  if (!Array.isArray(vnode.children)) return null;
+  for (const [index, child] of (vnode.children as unknown[]).entries()) {
+    const below = elementPathTo(child, tag);
+    if (below !== null) return [`${String(vnode.tag)}[${index}]`, ...below];
+  }
+  return null;
+}
+
+describe("MessageInput leading control", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("keeps the textarea where it was when a leading control comes or goes", () => {
+    const component = MessageInput();
+    const render = (leading: m.Children | undefined) =>
+      component.view!({ attrs: { chatId: "agent-1", leading } } as never);
+    const bare = elementPathTo(render(undefined), "textarea");
+    expect(bare).not.toBeNull();
+    expect(elementPathTo(render(m("button")), "textarea")).toEqual(bare);
   });
 });
 

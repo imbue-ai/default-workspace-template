@@ -212,11 +212,11 @@ export interface MessageInputAttrs {
   leading?: m.Children;
 }
 
-/** The composer's box, beside ``leading`` when there is one. */
+/** The composer's box, beside ``leading`` when there is one. The row is there either way, so the box (and the
+ *  textarea in it, with its focus and the soft keyboard) is kept when ``leading`` comes or goes. */
 function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]): m.Vnode {
-  if (leading === undefined) return m("div", { class: INPUT_BOX_CLASS }, boxChildren);
   return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
-    leading,
+    leading ?? null,
     m("div", { class: `${INPUT_BOX_CLASS} min-w-0 flex-1` }, boxChildren),
   ]);
 }
