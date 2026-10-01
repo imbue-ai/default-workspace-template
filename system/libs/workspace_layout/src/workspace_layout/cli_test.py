@@ -481,12 +481,14 @@ def test_desktops_and_list_read_the_inventory_document(
             "color": "#000000",
         }
     ]
+    popped_out = {"window_id": _FILES_WINDOW["id"], "desktop_id": "home", "is_ghost_hidden": False}
     inventory_clients = [
         {
             "id": "c1",
             "active_desktop": "home",
             "is_connected": True,
             "shown": [_FILES_WINDOW["id"]],
+            "popped_out": [popped_out],
             "shown_history": ["home", _FILES_WINDOW["id"]],
             "last_seen": "t",
         },
@@ -518,11 +520,11 @@ def test_desktops_and_list_read_the_inventory_document(
         }
     ]
     assert [
-        (client["id"], client["active_desktop"], client["shown"], client["shown_history"])
+        (client["id"], client["active_desktop"], client["shown"], client["popped_out"], client["shown_history"])
         for client in desktops["clients"]
     ] == [
-        ("c1", "home", [_FILES_WINDOW["id"]], ["home", _FILES_WINDOW["id"]]),
-        ("c2", None, [], []),
+        ("c1", "home", [_FILES_WINDOW["id"]], [popped_out], ["home", _FILES_WINDOW["id"]]),
+        ("c2", None, [], [], []),
     ]
     assert run_layout_cli(["list", "--json"], layout_context) == 0
     listing = json.loads(capsys.readouterr().out)
