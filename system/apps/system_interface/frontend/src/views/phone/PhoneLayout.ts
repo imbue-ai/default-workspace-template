@@ -30,14 +30,11 @@ import { Toasts } from "../Toast";
 import { UpdateNoticeBanner } from "../UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "../UpdateStalenessBanner";
 import { stoppedPlaceholder } from "../Window";
-import { openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
+import { MENU_MIN_WIDTH, openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
 import { HomeGrid } from "./HomeGrid";
 import { PhoneBar } from "./PhoneBar";
 import { StartSheet } from "./StartSheet";
 import { WindowsSheet } from "./WindowsSheet";
-
-/** The width the phone's menus never go under, as the desktop's. */
-const MENU_MIN_WIDTH = 176;
 
 type PhoneMenu =
   { readonly kind: "window"; readonly windowId: string } | { readonly kind: "app"; readonly app: string };

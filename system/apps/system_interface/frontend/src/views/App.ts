@@ -65,7 +65,7 @@ import { Toasts } from "./Toast";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
-import { openShareSettings, taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
+import { MENU_MIN_WIDTH, openShareSettings, taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
 import { windowSizeRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
@@ -107,9 +107,6 @@ function withReferenceRows(rows: MenuRow[] | null, referenceRows: readonly MenuR
   if (rows === null || referenceRows.length === 0) return rows;
   return [...rows, { kind: "divider" }, ...referenceRows];
 }
-
-/** The width the desktop's menus never go under, so a menu of two-word verbs is still a card. */
-const MENU_MIN_WIDTH = 176;
 
 /** Set on the desktop's root while a window is being dragged by its title bar, for as long as the
  *  pointer should hold the closed hand (style.css). Written straight onto the element: the drag

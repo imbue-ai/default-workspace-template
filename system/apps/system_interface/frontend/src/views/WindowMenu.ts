@@ -16,6 +16,10 @@ import type { WindowSizeActions } from "./WindowSizeRow";
 import type { AppRecord, EntryMode, PinStyle } from "../model/records";
 import type { EntryLook } from "../reducers/desktopState";
 
+/** The width the shell's menus, the desktop's and the phone's, never go under, so a menu of two-word verbs is still
+ *  a card. */
+export const MENU_MIN_WIDTH = 176;
+
 export interface WindowMenuActions {
   /** The zone grid's actions, or null where there is nothing to place (a window since closed). */
   readonly size: WindowSizeActions | null;
