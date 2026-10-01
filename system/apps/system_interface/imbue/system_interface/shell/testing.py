@@ -58,6 +58,7 @@ def registry_row_toml(
     program: str | None = None,
     is_critical: bool = False,
     is_internal: bool = False,
+    is_shareable: bool = True,
     default_shortcut: tuple[str, str] | None = None,
     display_name: str | None = None,
     label: str = "",
@@ -89,6 +90,7 @@ def registry_row_toml(
         f'display_name = "{display_name if display_name is not None else name.capitalize()}"',
         f"critical = {'true' if is_critical else 'false'}",
         f"internal = {'true' if is_internal else 'false'}",
+        f"shareable = {'true' if is_shareable else 'false'}",
         f"stop_when_no_windows = {'true' if stop_when_no_windows else 'false'}",
     ]
     if program is not None:

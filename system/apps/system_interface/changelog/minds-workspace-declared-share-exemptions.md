@@ -1,0 +1,1 @@
+The shell's `service_registered` events now carry `shareable`: `true` only when the app's row is shareable and not internal. The minds Share tab reads it to decide which apps to offer, so it no longer has to hardcode app names. A change to an app's shareability is re-announced like a change to its URL or label.

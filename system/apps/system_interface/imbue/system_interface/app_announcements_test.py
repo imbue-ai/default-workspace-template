@@ -30,8 +30,8 @@ def _events(events_path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in events_path.read_text().splitlines() if line]
 
 
-def _registered(name: str, url: str, label: str = "") -> str:
-    return registry_row_toml(name, url, label=label)
+def _registered(name: str, url: str, label: str = "", is_internal: bool = False, is_shareable: bool = True) -> str:
+    return registry_row_toml(name, url, label=label, is_internal=is_internal, is_shareable=is_shareable)
 
 
 def test_the_first_announcement_registers_every_app(
@@ -108,6 +108,38 @@ def test_a_relabelled_app_is_re_announced(announcement_writer: AppAnnouncementWr
     events = _events(announcement_writer.events_path)
     assert [(event["type"], event["service"]) for event in events[1:]] == [("service_registered", "chat")]
     assert events[1]["label"] == "chat-bbbb2222"
+
+
+def test_an_app_is_announced_shareable_unless_it_opts_out_or_is_internal(
+    announcement_writer: AppAnnouncementWriter, tmp_path: Path
+) -> None:
+    """The minds Share tab offers exactly the apps announced shareable, so an internal app (the terminal's pty) must
+    be announced unshareable even though its row never says so."""
+    announcement_writer.announce(
+        _rows(
+            tmp_path,
+            _registered("files", "http://localhost:8300"),
+            _registered("terminal", "http://localhost:7681", is_shareable=False),
+            _registered("terminal-pty", "http://localhost:7683", is_internal=True),
+        )
+    )
+
+    assert {event["service"]: event["shareable"] for event in _events(announcement_writer.events_path)} == {
+        "files": True,
+        "terminal": False,
+        "terminal-pty": False,
+    }
+
+
+def test_an_app_whose_shareability_changed_is_re_announced(
+    announcement_writer: AppAnnouncementWriter, tmp_path: Path
+) -> None:
+    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300")))
+
+    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300", is_shareable=False)))
+
+    events = _events(announcement_writer.events_path)
+    assert [(event["service"], event["shareable"]) for event in events] == [("files", True), ("files", False)]
 
 
 def test_an_unwritable_stream_is_announced_again_on_the_next_read(tmp_path: Path) -> None:

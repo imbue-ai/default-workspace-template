@@ -36,6 +36,7 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `priority` | string | no | `"user"` | A key of `SERVICE_BANDS` in `oom_priority.bands`, or `user`. |
 | `program` | string | no | `name` | The supervisord program that runs the app. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
+| `shareable` | bool | no | `true` | Whether the minds Share tab offers the app as a share target of its own; an `internal` app never is, whatever it declares. |
 | `default_shortcut` | table | no | absent | `{action = "<id>", launch = "<id>"?, mode = "focus" \| "new"}`. `action` must be a declared action id, or `open` for a single-instance app. `launch`, optional, is the desktop interface's spelling: a declared launch path id, or `open` when the app declares none. |
 | `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation, `layout.py --param` validation, and the New Tab page (an action with a `message` param is one the page can seed a first message into). Forbidden when `instances = false`. |
 | `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?}`: the paths the desktop interface opens windows at (`docs/system/blueprint/desktop-interface/contracts.md` section 2). `id` follows the action id rule, is unique, and is never `open` (reserved for the synthesized root launch path); `path` is rooted with one slash, carries no query string or fragment, and nothing a URL would escape; `params` is the optional `{name, label, required}` array naming the query parameters the shell may append. Declared beside `actions` until the desktop interface replaces the tabbed shell. |
@@ -63,6 +64,8 @@ Built-in manifests:
 | `files` | false | `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer" at `/home/user/workspace/`, param `path` optional) | the convention |
 | `browser` | false | `browser` | `{launch = "new", mode = "focus"}`; also `window_closed_path = "/api/window-closed"` | `new` ("New Browser" at `/new`, param `url` optional) | the convention |
 
+The chat, terminal, and browser declare `shareable = false`: they are shared only as part of the whole machine.
+
 Every built-in except the shell and the terminal's pty points `icon` at an `icon.svg` beside its manifest; those two are `internal` and have none.
 
 ## 3. The registry (`data/.state/apps.toml`)
@@ -79,6 +82,7 @@ Each `[[apps]]` row:
 | `instances` | manifest | Absent reads as `false`. |
 | `instances_url` | manifest | Absent reads as `url`. |
 | `critical` | manifest | Absent reads as `false`. |
+| `shareable` | manifest | Absent reads as `true`. |
 | `priority` | manifest | Absent reads as `user`. |
 | `default_shortcut` | manifest | Inline table `{action, launch?, mode}`. |
 | `actions` | manifest | Array of inline tables `{id, label, params?}`; `params` is the array of the manifest's param names, present only when there are any. |
@@ -90,7 +94,7 @@ Each `[[apps]]` row:
 `--remove` deletes the row.
 The script validates only what it copies from files; the shell validates every row against the `RegistryRow` model on read and logs and skips a row that fails, so a hand-edited registry degrades to a missing app rather than a crashed shell.
 
-The shell's services event writer and the minds side read `name`, `url`, `label`, and `icon` and ignore the manifest keys.
+The shell's services event writer announces each row's `name` (as `service`), `url`, `label`, and `icon`, and `shareable` as `true` only when the row is shareable and not `internal`; the minds side reads only the event, and offers an app on its Share tab only when it was announced `shareable`.
 
 ## 4. The instances API
 

@@ -385,6 +385,19 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "browser": False,
         "getting-started": True,
     }
+    # The minds Share tab offers an app as a target of its own only when it is shareable and not internal; the
+    # interfaces the workspace is built out of are shared only as part of the whole machine.
+    assert {
+        name: manifest.shareable and not manifest.internal for name, manifest in by_name.items()
+    } == {
+        "system_interface": False,
+        "chat": False,
+        "terminal": False,
+        "terminal-pty": False,
+        "files": True,
+        "browser": False,
+        "getting-started": True,
+    }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
     # focuses it like the browser's; it declares no launch path, so the desktop synthesizes ``open`` at its root.
     assert by_name["getting-started"].critical is False
