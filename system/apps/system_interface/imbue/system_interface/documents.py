@@ -117,6 +117,9 @@ def with_viewport_fit_cover(html_content: str) -> str:
 
 
 APPLE_WEB_APP_TITLE_META_NAME: Final[str] = "apple-mobile-web-app-title"
+# Lets the home-screen app draw under the status bar (the phone home grid's wallpaper reaches the top edge).
+APPLE_WEB_APP_STATUS_BAR_STYLE_META_NAME: Final[str] = "apple-mobile-web-app-status-bar-style"
+APPLE_WEB_APP_STATUS_BAR_STYLE: Final[str] = "black-translucent"
 THEME_COLOR_META_NAME: Final[str] = "theme-color"
 TOUCH_ICON_PATH: Final[str] = "/apple-touch-icon.png"
 MANIFEST_PATH: Final[str] = "/manifest.webmanifest"
@@ -128,6 +131,7 @@ def inject_install_tags(html_content: str, workspace_name: str, root_path: str) 
     a viewport that reaches under the notch. Each tag the build already carries is replaced rather than repeated."""
     html_content = set_document_title(html_content, workspace_name)
     html_content = set_meta_tag(html_content, APPLE_WEB_APP_TITLE_META_NAME, workspace_name)
+    html_content = set_meta_tag(html_content, APPLE_WEB_APP_STATUS_BAR_STYLE_META_NAME, APPLE_WEB_APP_STATUS_BAR_STYLE)
     html_content = set_meta_tag(html_content, THEME_COLOR_META_NAME, SHELL_BACKGROUND_COLOR)
     html_content = with_viewport_fit_cover(html_content)
     html_content = set_link_tag(
