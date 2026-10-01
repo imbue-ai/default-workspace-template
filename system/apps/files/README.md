@@ -54,7 +54,10 @@ resize: the table and toolbox give way to a header (up, the folder's name, searc
 and a kebab holding the toolbox verbs), a scrollable breadcrumb strip that dufs's
 search bar replaces while searching, sort keys, and one row per entry (octicon,
 name, and "<mtime> · <size>" beneath) whose kebab opens a sheet of the table's
-actions; the editor page gets a Save button and the file's kebab. It is all in
+actions. A tapped file opens in place, on its edit page (its view page where the
+table offers no Edit), rather than in a window of its own as a click in the table
+does (below); the editor page gets a Save button and the file's kebab, and a
+view page the kebab with its Edit control. It is all in
 its own `assets/phone.js` and `assets/phone.css`, included by the two
 `minds patch` lines in `assets/index.html`. It drives dufs's own state and
 functions (`DATA`, `PARAMS`, `movePath`, `deletePath`, `saveChange`, the toolbox
@@ -63,7 +66,7 @@ rather than editing it, so re-applying it after a dufs bump is those two lines;
 its test then checks that the names it leans on still behave.
 
 A folder in a listing opens in place, as dufs ships it. A file does not: framed by
-the shell, a click on a file's name opens the file's `?view` page (dufs's
+the shell, a click on a file's name in the table opens the file's `?view` page (dufs's
 read-only view: text as source, PDFs, images, audio and video embedded, anything
 else offered as a download) in a file-viewer window of its own, and the Edit
 button opens its `?edit` page, each through the app contract's `shell:open`
