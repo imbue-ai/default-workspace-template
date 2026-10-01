@@ -1,6 +1,7 @@
 name = "terminal"
 display_name = "Terminal"
 icon = "icon.svg"
+url = "http://localhost:7681"
 instances = true
 # The instances API port; ttyd serves the terminal pages on 7681.
 instances_url = "http://127.0.0.1:7682"

@@ -3,6 +3,7 @@
 name = "chat"
 display_name = "Chat"
 icon = "icon.svg"
+url = "http://localhost:8010"
 instances = true
 critical = true
 priority = "chat"

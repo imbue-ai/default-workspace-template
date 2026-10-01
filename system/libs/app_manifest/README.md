@@ -28,9 +28,12 @@ The models behind a workspace app's two descriptions:
   default `data/.state/apps.toml` relative to the cwd, exactly like
   `forward_port.py` and `layout.py`).
 - `app_manifest.primitives`: the validated string types (`AppName`,
-  `DisplayName`, `ActionId`, `InstancesUrl`, `PriorityName`, `ProgramName`) and
-  the name rule shared with `forward_port.py` (a drift test in
-  `system/scripts/forward_port_test.py` keeps them identical).
+  `DisplayName`, `ActionId`, `AppOriginUrl`, `InstancesUrl`, `PriorityName`,
+  `ProgramName`), the name rule shared with `forward_port.py` (a drift test in
+  `system/scripts/forward_port_test.py` keeps them identical), and the loopback
+  origin rule `AppOriginUrl` and `InstancesUrl` share
+  (`describe_loopback_url_problem`, with `loopback_url_port` to read the port
+  out of either).
 - The `app-manifest validate-manifest <path>` command, for the build-app
   scaffold and tests.
 

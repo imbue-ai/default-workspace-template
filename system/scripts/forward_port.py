@@ -5,7 +5,8 @@ Uses file locking to safely upsert or remove entries. Called by services
 on startup to declare the ports they expose.
 
 Usage:
-    python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml --url http://localhost:8300
+    python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml
+    python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml --url http://localhost:8399
     python3 system/scripts/forward_port.py --name terminal --url http://localhost:7681
     python3 system/scripts/forward_port.py --icon-file system/apps/foo/icon.svg --name foo --url http://localhost:8090
     python3 system/scripts/forward_port.py --remove --name terminal
@@ -31,6 +32,15 @@ the value types); the manifest's other rules are the ``app_manifest`` library's
 job, applied by ``validate-manifest`` and by every reader of the registry.
 ``--name --url`` without a manifest registers rows for things with no app
 directory (owner-exec, the VM exec service, previews, isolated test servers).
+
+A manifest may also declare ``url``, the loopback origin the app serves its own
+pages at, which makes ``--url`` optional. Declaring it is what lets tooling that
+never starts the app find the port it holds -- the build-app scaffolder's port
+pre-flight and migrate-workspace's port scan both read the manifests, and for an
+app whose supervisord command names no port because it registers itself at
+runtime, the manifest is the only static record. ``--url`` still wins when
+passed, so a run serving somewhere else (a test on an ephemeral port) registers
+where it actually is.
 
 Icons
 -----
@@ -139,7 +149,7 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 # ``name`` (validated separately), ``icon`` (read from the named file), and the
 # two structured keys (``default_shortcut``, ``actions``) are handled on their
 # own. ``program`` defaults to the name when the manifest omits it.
-_MANIFEST_STRING_KEYS = ("display_name", "instances_url", "priority", "program")
+_MANIFEST_STRING_KEYS = ("display_name", "instances_url", "priority", "program", "url")
 _MANIFEST_BOOL_KEYS = ("instances", "critical", "internal")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
 
@@ -690,12 +700,12 @@ def main() -> None:
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
             "instances, instances_url, critical, priority, program, internal, default_shortcut, "
-            "actions) are copied onto the row on every call."
+            "actions) are copied onto the row on every call. Its url is used when --url is omitted."
         ),
     )
     parser.add_argument(
         "--url",
-        help="Full URL where the app is accessible (e.g. http://localhost:7681)",
+        help="Full URL where the app is accessible (e.g. http://localhost:7681). Optional when --manifest names a manifest declaring url, which it overrides.",
     )
     parser.add_argument(
         "--icon-file",
@@ -737,9 +747,6 @@ def main() -> None:
 
     if args.manifest is None and args.name is None:
         parser.error("--name is required without --manifest")
-
-    if not args.remove and not args.url:
-        parser.error("--url is required when not using --remove")
 
     if args.no_icon and args.icon_file is not None:
         parser.error("--no-icon is mutually exclusive with --icon-file")
@@ -790,6 +797,18 @@ def main() -> None:
         manifest_fields is not None and manifest_fields.get("internal", False)
     )
 
+    # Where the app serves. The manifest declares it, which is what lets a reader
+    # that never starts the app -- the build-app scaffolder's port pre-flight,
+    # migrate-workspace's port scan -- find the port it holds. ``--url`` overrides
+    # that declaration for a run serving somewhere else (a test on an ephemeral
+    # port), so the row always records where the app actually is.
+    declared_url = manifest_fields.get("url") if manifest_fields is not None else None
+    resolved_url = args.url or (str(declared_url) if declared_url is not None else "")
+    if not args.remove and not resolved_url:
+        parser.error(
+            "--url is required when not using --remove, unless the manifest declares url"
+        )
+
     apps_file = _apps_file()
     lock_path = apps_file.parent / ".apps.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -820,7 +839,7 @@ def main() -> None:
                 _upsert(
                     apps_file,
                     name,
-                    args.url,
+                    resolved_url,
                     icon,
                     internal=args.internal,
                     program=args.program.strip() if args.program is not None else None,

@@ -129,12 +129,16 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   `forward_port.py` refuses a brand-new registration without one. The
   scaffold copies it beside the app's manifest (`app.toml`), which names
   it.
-- **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
-  picks the lowest free port at or above 8080 by parsing
-  `system/supervisord.conf`, every `system/supervisord.conf.d/*.conf`, and
-  `data/.state/apps.toml`; if you're choosing
-  manually, avoid `8000` (system_interface), `8010` (the chat app) and
-  `8081` (the browser service).
+- **Pick a free port.** The scaffolder picks the lowest free port at or
+  above 8080, and it can see every port the workspace holds: it reads
+  `system/supervisord.conf`, every `system/supervisord.conf.d/*.conf`,
+  every `system/apps/*/app.toml` (an app declares the port it serves as
+  its manifest's `url`, and its instances port as `instances_url`), and
+  `data/.state/apps.toml`. There is no list of ports to avoid by hand --
+  the manifests are the list, and unlike the runtime registry they are
+  committed, so a fresh clone or a worker worktree sees them too. Do not
+  reach for `ss -tln`: `iproute2` is not installed in every workspace, so
+  it exits 127 rather than reporting nothing is bound.
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
   app from inside the same container; binding to all interfaces is
   noise. The scaffolder does this. For the wrap-existing path, many
@@ -181,10 +185,11 @@ is taken, or the manifest check, the tool install or `uv sync` fails.
 What gets generated:
 
 - `system/apps/<package>/app.toml` -- the app's manifest: its registered
-  `name`, `display_name`, `icon`, `instances = false` (one tab),
-  `priority = "user"` (shed before any built-in under memory pressure),
-  and `program` (its supervisord program). `forward_port.py --manifest`
-  reads it on every start; the scaffold checks it with `uv run app-manifest
+  `name`, `display_name`, `icon`, `url` (the loopback origin the app
+  serves at -- the one place its port is written), `instances = false`
+  (one tab), `priority = "user"` (shed before any built-in under memory
+  pressure), and `program` (its supervisord program).
+  `forward_port.py --manifest` reads it on every start; the scaffold checks it with `uv run app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
   editing it).
 - `system/apps/<package>/pyproject.toml` -- declares
@@ -226,7 +231,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml && <name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -504,10 +509,15 @@ it as `system/apps/<name>/app.toml` (like the `files` app):
 name = "<name>"
 display_name = "<What users see>"
 icon = "icon.svg"
+url = "http://localhost:<port>"
 instances = false
 priority = "user"
 program = "<name>"
 ```
+
+`url` is the port the wrapped server listens on. Declare it here rather than on
+the registration call: it is what the port pre-flight reads, so an app whose port
+lives only in a third-party tool's own flags is still accounted for.
 
 Then add a `[program:<name>]` block as its own
 `system/supervisord.conf.d/<name>.conf` that runs `forward_port.py --manifest`
@@ -520,7 +530,7 @@ shed before any built-in service under memory pressure (see
 
 ```ini
 [program:<name>]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port> && <existing_start_command>"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml && <existing_start_command>"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -532,7 +542,7 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8090 && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -544,7 +554,7 @@ Two valid shapes:
   # system/scripts/run_<name>.sh
   #!/usr/bin/env bash
   set -euo pipefail
-  python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port>
+  python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml
   exec <existing_start_command>
   ```
 
@@ -574,6 +584,7 @@ Used by both paths (the scaffolder generates the call; the escape
 hatch has you write it directly).
 
 ```
+python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml
 python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url URL
 python3 system/scripts/forward_port.py --name NAME --url URL --icon-file PATH
 python3 system/scripts/forward_port.py --name NAME --remove
@@ -601,7 +612,10 @@ Flags:
   (reserved for workspace hostname coordinates). Registration fails
   loudly on an invalid name.
 - `--url`: full URL where the app is reachable from inside the
-  container (e.g. `http://localhost:8090`).
+  container (e.g. `http://localhost:8090`). Optional with `--manifest`
+  when the manifest declares `url`; passing it overrides the
+  declaration, which is what lets a throwaway instance on a spare port
+  register where it actually is.
 - `--icon-file`: path to the app's `.svg` icon (SVG only -- no
   rasters), drawn instead of the generic letter monogram. **Required
   when creating a new entry** (unless `--internal` or `--no-icon`);

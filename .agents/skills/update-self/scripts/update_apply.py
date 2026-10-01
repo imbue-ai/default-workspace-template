@@ -65,6 +65,7 @@ from update_environment import (
     discard_snapshots,
     refresh_app_tools,
     refresh_backend_dependencies,
+    remove_shadowing_mngr_installs,
     restore_snapshots,
     run_provisioner,
     take_snapshots,
@@ -1019,6 +1020,10 @@ def apply_update(
                 runner,
                 expend,
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
+            )
+        for stale in remove_shadowing_mngr_installs(runner):
+            sys.stderr.write(
+                f"refresh: removed {stale}, a stale mngr install that shadowed the refreshed one\n"
             )
         _advance(PHASE_REFRESHED)
 

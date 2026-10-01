@@ -18,6 +18,7 @@ from imbue.chat.harnesses.lanes import LANE_GOOGLE
 from imbue.chat.harnesses.lanes import LANE_OPENAI
 from imbue.chat.harnesses.lanes import LaneNotFoundError
 from imbue.chat.harnesses.lanes import PasteMethod
+from imbue.chat.harnesses.lanes import PasteSink
 from imbue.chat.harnesses.lanes import PtyMethod
 from imbue.chat.harnesses.lanes import Submit
 from imbue.chat.harnesses.lanes import account_label
@@ -85,6 +86,16 @@ def test_codex_scrapes_a_code_against_a_fixed_url_and_submits_nothing() -> None:
     assert method.submit is Submit.NONE
     # Its success signal is the process exiting, not a line on screen.
     assert method.success is None
+
+
+def test_the_openai_lane_can_also_be_signed_in_by_pasting_a_key() -> None:
+    """The device flow needs a person at a browser, so it is the only method on this lane
+    that cannot be driven programmatically. The key paste is a plain file write."""
+    method = get_method("openai", "api_key")
+    assert isinstance(method, PasteMethod)
+    assert method.sink is PasteSink.CODEX_AUTH_JSON
+    # The device flow stays primary: it is the subscription most people already have.
+    assert LANE_OPENAI.methods[0].id == "device"
 
 
 def test_agy_methods_assert_the_menu_before_typing() -> None:

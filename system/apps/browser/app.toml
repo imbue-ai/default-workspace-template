@@ -1,6 +1,7 @@
 name = "browser"
 display_name = "Browser"
 icon = "icon.svg"
+url = "http://localhost:8081"
 instances = true
 critical = false
 priority = "browser"

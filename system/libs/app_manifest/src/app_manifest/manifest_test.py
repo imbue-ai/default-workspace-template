@@ -11,6 +11,7 @@ from app_manifest.manifest import (
     load_manifest,
     manifest_icon_path,
 )
+from app_manifest.primitives import loopback_url_port
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
@@ -156,32 +157,81 @@ def test_icon_must_be_a_relative_svg_path(icon: str) -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "instances_url",
-    [
-        "https://127.0.0.1:8301",
-        "http://0.0.0.0:8301",
-        "http://127.0.0.1",
-        "http://127.0.0.1:8301/",
-        "127.0.0.1:8301",
-        "http://127.0.0.1:0",
-        "http://127.0.0.1:70000",
-        "http://127.0.0.1:8301\n",
-    ],
+# Every way a value can fail the loopback origin rule: wrong scheme, a host that is not
+# loopback, no port, a path, no scheme, a port outside the usable range, trailing space.
+_BAD_LOOPBACK_ORIGINS = (
+    "https://127.0.0.1:8300",
+    "http://0.0.0.0:8300",
+    "http://localhost",
+    "http://localhost:8300/",
+    "localhost:8300",
+    "http://localhost:0",
+    "http://localhost:70000",
+    "http://localhost:8300\n",
 )
-def test_instances_url_must_be_a_bare_loopback_origin_with_a_usable_port(
-    instances_url: str,
+
+
+@pytest.mark.parametrize("field", ["url", "instances_url"])
+@pytest.mark.parametrize("value", _BAD_LOOPBACK_ORIGINS)
+def test_an_origin_a_manifest_declares_must_be_bare_loopback_with_a_usable_port(
+    field: str, value: str
 ) -> None:
-    with pytest.raises(ValidationError, match="invalid instances_url"):
+    """``url`` and ``instances_url`` are one rule, so one table covers both."""
+    with pytest.raises(ValidationError, match=f"invalid {field}"):
         AppManifest.model_validate(
             {
                 "name": "news",
                 "display_name": "News",
                 "icon": "icon.svg",
                 "instances": True,
-                "instances_url": instances_url,
+                field: value,
             }
         )
+
+
+def test_url_is_optional() -> None:
+    """An app registered with an explicit --url need not declare one."""
+    manifest = AppManifest.model_validate(
+        {"name": "news", "display_name": "News", "icon": "icon.svg"}
+    )
+
+    assert manifest.url is None
+
+
+def test_instances_url_may_not_name_the_same_port_as_url() -> None:
+    """Compared by port, not by string: the house spelling writes the two hosts differently.
+
+    `files` and `terminal` both declare `url` as ``localhost`` and `instances_url` as
+    ``127.0.0.1``, so a rule that compared the strings would never fire on a manifest
+    written the way the built-ins are.
+    """
+    with pytest.raises(ValidationError, match="names the same port as url"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "instances": True,
+                "url": "http://localhost:9000",
+                "instances_url": "http://127.0.0.1:9000",
+            }
+        )
+
+
+def test_a_second_port_for_the_instances_api_is_allowed() -> None:
+    manifest = AppManifest.model_validate(
+        {
+            "name": "news",
+            "display_name": "News",
+            "icon": "icon.svg",
+            "instances": True,
+            "url": "http://localhost:8300",
+            "instances_url": "http://127.0.0.1:8301",
+        }
+    )
+
+    assert loopback_url_port(manifest.url) == 8300
+    assert loopback_url_port(manifest.instances_url) == 8301
 
 
 def test_instances_url_requires_instances() -> None:

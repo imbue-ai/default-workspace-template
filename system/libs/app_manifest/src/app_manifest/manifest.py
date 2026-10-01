@@ -16,9 +16,11 @@ from app_manifest.errors import InvalidManifestValueError
 from app_manifest.errors import ManifestLoadError
 from app_manifest.primitives import ActionId
 from app_manifest.primitives import AppName
+from app_manifest.primitives import AppOriginUrl
 from app_manifest.primitives import DisplayName
 from app_manifest.primitives import IconPath
 from app_manifest.primitives import InstancesUrl
+from app_manifest.primitives import loopback_url_port
 from app_manifest.primitives import PriorityName
 from app_manifest.primitives import ProgramName
 
@@ -67,6 +69,7 @@ class AppManifest(FrozenModel):
     name: AppName = Field(description="The registered app name")
     display_name: DisplayName = Field(description="What users see")
     icon: IconPath | None = Field(default=None, description="The icon file, relative to the manifest; required unless internal")
+    url: AppOriginUrl | None = Field(default=None, description="Where the app serves its own pages; the port every static reader finds it by")
     instances: bool = Field(default=False, description="Whether the app serves the instances API")
     instances_url: InstancesUrl | None = Field(default=None, description="Where the instances API is served when not at the app URL")
     critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
@@ -94,6 +97,17 @@ class AppManifest(FrozenModel):
     def _check_cross_field_rules(self) -> Self:
         if self.icon is None and not self.internal:
             raise InvalidManifestValueError("icon is required unless internal = true")
+        if (
+            self.instances_url is not None
+            and self.url is not None
+            and loopback_url_port(self.instances_url) == loopback_url_port(self.url)
+        ):
+            # Compared by port, not by string: the house spelling writes the app's own
+            # url as ``localhost`` and its instances_url as ``127.0.0.1``, so the same
+            # socket is routinely named two different ways.
+            raise InvalidManifestValueError(
+                f"instances_url {self.instances_url!r} names the same port as url {self.url!r}; one socket cannot serve both"
+            )
         if self.instances_url is not None and not self.instances:
             raise InvalidManifestValueError("instances_url is only allowed with instances = true")
         if self.actions and not self.instances:

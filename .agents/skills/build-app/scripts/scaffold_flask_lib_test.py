@@ -5,9 +5,12 @@ build two creations in one workspace at the same time. That is a property of the
 files the script touches, not of the lib it generates, so these run the real script
 over a real (temporary) workspace and assert on the tree it leaves behind.
 
-The port pre-flight is checked the same way: every program declares its port in
-its own drop-in now, so a pre-flight that read only the main config would hand a
-new app a port another program already holds.
+The port pre-flight is checked the same way. A port can be declared in three
+places -- the main config, a program's own drop-in, or an app's `app.toml` -- and
+a pre-flight blind to any of them hands a new app a port something already holds.
+The manifests matter most: an app that registers itself at runtime names no port
+in its supervisord command at all, and the runtime registry is gitignored, so on
+a tree that has not booted the manifest is the only record.
 """
 
 from __future__ import annotations
@@ -66,6 +69,20 @@ def _dropin(name: str, port: int | None) -> str:
         else f"command={name}"
     )
     return f"[program:{name}]\n{command}\ndirectory=/home/user/workspace\n"
+
+
+def _app_manifest(
+    root: Path, name: str, url: str, instances_url: str | None = None
+) -> Path:
+    """Write ``system/apps/<package>/app.toml`` declaring where the app serves."""
+    directory = root / "system/apps" / name.replace("-", "_")
+    directory.mkdir(parents=True)
+    lines = [f'name = "{name}"', f'display_name = "{name}"', f'url = "{url}"']
+    if instances_url is not None:
+        lines += ["instances = true", f'instances_url = "{instances_url}"']
+    manifest = directory / "app.toml"
+    manifest.write_text("\n".join(lines) + "\n")
+    return manifest
 
 
 def _make_workspace(
@@ -149,7 +166,7 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
     # lands on 8082 -- it would answer 8080 if the main config went unread.
     ok = _scaffold(root, "news")
     assert ok.returncode == 0, ok.stderr
-    assert "http://localhost:8082" in (root / "system/supervisord.conf.d/news.conf").read_text()
+    assert load_manifest(root / "system/apps/news/app.toml").url == "http://localhost:8082"
 
 
 def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None:
@@ -159,7 +176,7 @@ def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None
     result = _scaffold(root, "news")
     assert result.returncode == 0, result.stderr
 
-    assert "http://localhost:8082" in (root / "system/supervisord.conf.d/news.conf").read_text()
+    assert load_manifest(root / "system/apps/news/app.toml").url == "http://localhost:8082"
 
 
 def test_a_dropin_the_include_glob_would_not_read_is_refused(tmp_path: Path) -> None:
@@ -199,7 +216,7 @@ def test_a_port_held_by_a_non_default_include_directory_is_still_seen(tmp_path: 
     result = _scaffold(root, "news")
     assert result.returncode == 0, result.stderr
 
-    assert "http://localhost:8081" in (root / "system/supervisord.conf.d/news.conf").read_text()
+    assert load_manifest(root / "system/apps/news/app.toml").url == "http://localhost:8081"
 
 
 def test_requested_port_held_by_a_dropin_is_refused(tmp_path: Path) -> None:
@@ -210,6 +227,49 @@ def test_requested_port_held_by_a_dropin_is_refused(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "8081 is already in use" in result.stderr
     assert not (root / "system/supervisord.conf.d/news.conf").exists()
+
+
+def test_auto_picked_port_avoids_a_port_only_an_app_manifest_declares(tmp_path: Path) -> None:
+    """An app that registers itself declares its port in its manifest and nowhere else.
+
+    chat, files and terminal are supervised by a command that names no port -- they
+    register at runtime from their own code -- so the config scan cannot see what they
+    hold. Their manifest is the declaration, and it is the only static record: the
+    runtime registry (``data/.state/apps.toml``) is gitignored, so a fresh clone, a
+    published template and a worker worktree all have the manifests and none of them
+    have the registry.
+    """
+    root = _make_workspace(tmp_path / "workspace", {"chat": None})
+    _app_manifest(root, "chat", "http://localhost:8080")
+
+    result = _scaffold(root, "news")
+    assert result.returncode == 0, result.stderr
+
+    assert load_manifest(root / "system/apps/news/app.toml").url == "http://localhost:8081"
+
+
+def test_requested_port_held_by_an_app_manifest_is_refused(tmp_path: Path) -> None:
+    root = _make_workspace(tmp_path / "workspace", {"chat": None})
+    _app_manifest(root, "chat", "http://localhost:8080")
+
+    result = _scaffold(root, "news", "--port", "8080")
+
+    assert result.returncode != 0
+    assert "8080 is already in use" in result.stderr
+    assert not (root / "system/supervisord.conf.d/news.conf").exists()
+
+
+def test_an_instances_port_an_app_manifest_declares_is_seen(tmp_path: Path) -> None:
+    """A multi-port app holds its instances port too, declared as ``instances_url``."""
+    root = _make_workspace(tmp_path / "workspace", {"files": None})
+    _app_manifest(
+        root, "files", "http://localhost:8080", instances_url="http://127.0.0.1:8081"
+    )
+
+    result = _scaffold(root, "news")
+    assert result.returncode == 0, result.stderr
+
+    assert load_manifest(root / "system/apps/news/app.toml").url == "http://localhost:8082"
 
 
 def test_name_already_declared_by_a_dropin_is_refused(tmp_path: Path) -> None:
@@ -280,6 +340,6 @@ def test_the_display_name_limit_matches_the_library() -> None:
 
 
 def test_the_runner_page_posts_shell_location_to_the_shell() -> None:
-    source = scaffold_flask_lib._lib_runner("inbox-status", "inbox_status", "inbox status dashboard", 8081)
+    source = scaffold_flask_lib._lib_runner("inbox-status", "inbox_status", "inbox status dashboard")
     assert '"shell:location"' in source
     assert "minds-location" not in source

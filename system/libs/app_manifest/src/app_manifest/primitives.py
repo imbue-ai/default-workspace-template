@@ -21,8 +21,9 @@ MAX_DISPLAY_NAME_LENGTH: Final[int] = 64
 
 ACTION_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
-# Where the shell reaches an app's instances API: loopback only, one port a socket can listen on.
-INSTANCES_URL_PATTERN: Final[re.Pattern[str]] = re.compile(
+# Where a manifest may point the shell: loopback only, one port a socket can listen on.
+# Both the app's own ``url`` and its ``instances_url`` take this shape.
+LOOPBACK_ORIGIN_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^http://(?:127\.0\.0\.1|localhost):(?P<port>[0-9]{1,5})$"
 )
 MIN_PORT: Final[int] = 1
@@ -51,6 +52,31 @@ def describe_app_name_problem(name: str) -> str | None:
     if name in RESERVED_APP_NAMES:
         return f"invalid app name {name!r}: this name is reserved"
     return None
+
+
+@pure
+def describe_loopback_url_problem(value: str, field: str) -> str | None:
+    """Return why ``value`` cannot be the manifest's ``field``, or None when it can."""
+    match = LOOPBACK_ORIGIN_PATTERN.fullmatch(value)
+    if match is None:
+        return (
+            f"invalid {field} {value!r}: expected http://127.0.0.1:<port> "
+            "or http://localhost:<port>"
+        )
+    if not MIN_PORT <= int(match.group("port")) <= MAX_PORT:
+        return f"invalid {field} {value!r}: the port must be between {MIN_PORT} and {MAX_PORT}"
+    return None
+
+
+@pure
+def loopback_url_port(value: str) -> int:
+    """The port a loopback origin names."""
+    match = LOOPBACK_ORIGIN_PATTERN.fullmatch(value)
+    if match is None:
+        raise InvalidManifestValueError(
+            f"{value!r} names no port: expected http://127.0.0.1:<port> or http://localhost:<port>"
+        )
+    return int(match.group("port"))
 
 
 class AppName(str):
@@ -111,19 +137,38 @@ class ActionId(str):
         )
 
 
+class AppOriginUrl(str):
+    """Where an app serves its own pages: a loopback origin with a port.
+
+    The manifest's ``url``. Declaring it here is what lets tooling that never
+    starts the app find the port it holds -- the build-app scaffolder's port
+    pre-flight and migrate-workspace's port scan both read it -- and it is the
+    only static record for an app whose supervisord command names no port
+    because it registers itself at runtime.
+    """
+
+    def __new__(cls, value: str) -> Self:
+        problem = describe_loopback_url_problem(value, "url")
+        if problem is not None:
+            raise InvalidManifestValueError(problem)
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
 class InstancesUrl(str):
     """Where the shell reaches an app's instances API: a loopback origin with a port."""
 
     def __new__(cls, value: str) -> Self:
-        match = INSTANCES_URL_PATTERN.fullmatch(value)
-        if match is None:
-            raise InvalidManifestValueError(
-                f"invalid instances_url {value!r}: expected http://127.0.0.1:<port> or http://localhost:<port>"
-            )
-        if not MIN_PORT <= int(match.group("port")) <= MAX_PORT:
-            raise InvalidManifestValueError(
-                f"invalid instances_url {value!r}: the port must be between {MIN_PORT} and {MAX_PORT}"
-            )
+        problem = describe_loopback_url_problem(value, "instances_url")
+        if problem is not None:
+            raise InvalidManifestValueError(problem)
         return super().__new__(cls, value)
 
     @classmethod
