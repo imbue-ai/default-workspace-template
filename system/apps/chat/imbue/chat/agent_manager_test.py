@@ -5345,6 +5345,28 @@ def test_a_new_chat_is_created_its_own_way_when_the_spares_file_cannot_record_th
         manager.stop()
 
 
+def test_a_new_chat_whose_fast_mode_cannot_be_written_leaves_the_ready_spare_in_the_pool(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, _ = write_recording_mngr_binary(tmp_path)
+    manager, spare_store = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        spares = _wait_for_ready_spares(manager, 1)
+        # A file where the chat's folder would go, so its fast mode cannot be written.
+        (tmp_path / "chats").mkdir(exist_ok=True)
+        (tmp_path / "chats" / spares[0].chat_id).write_text("")
+
+        with pytest.raises(OSError):
+            manager.create_chat("")
+
+        assert list(manager._spares) == spares
+        assert spare_store.read() == tuple(spares)
+        assert manager.get_chat_snapshots() == []
+    finally:
+        manager.stop()
+
+
 def test_spares_on_an_account_that_is_no_longer_the_default_are_replaced(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -3280,8 +3280,9 @@ class AgentManager:
         if spare is None:
             return None
         is_ready = spare.phase is SpareChatPhase.READY
-        # Recorded before anything else changes, so a spares file that cannot be written leaves
-        # the spare as it was.
+        # The chat's fast mode and then the take are written before anything else changes, so a
+        # write that fails leaves the spare as it was.
+        self._fast_mode_for_launch_locked(spare.chat_id)
         try:
             if is_ready:
                 self._drop_spare_locked(spare.chat_id)
@@ -3307,7 +3308,6 @@ class AgentManager:
             )
             self._provisional_chats[spare.chat_id] = provisional
         self._creation_settled_by_chat[spare.chat_id] = settled
-        self._fast_mode_for_launch_locked(spare.chat_id)
         if any(self._is_spare_usable_locked(ready, terms) for ready in self._spares):
             self._spare_replenish_not_before = time.monotonic() + SPARE_CHAT_REPLENISH_DELAY_SECONDS
         return spare, provisional
