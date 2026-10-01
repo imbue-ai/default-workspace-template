@@ -5396,11 +5396,10 @@ def test_a_relabel_that_fails_is_run_again_by_the_session_sweep(
     mngr_binary, argv_log, label_exit_code = _write_label_failing_mngr_binary(tmp_path)
     label_exit_code.write_text("1")
     manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
-    relabel = ["label", "", "--label", f"{CHAT_SPARE_LABEL}=false"]
     try:
         manager.ensure_spare_chat()
         (spare,) = _wait_for_ready_spares(manager, 1)
-        relabel[1] = spare.chat_id
+        relabel = ["label", spare.chat_id, "--label", f"{CHAT_SPARE_LABEL}=false"]
 
         assert manager.create_chat("").chat_id == spare.chat_id
 
