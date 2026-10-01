@@ -2040,6 +2040,24 @@ describe("the phone layout", () => {
     expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: opened?.id });
   });
 
+  it("launches a home tile's app by its desktop shortcut, passing over a first launch path that takes text", async () => {
+    const store = await phoneStore();
+    api.apps = [
+      ...api.apps,
+      appRecord("sheets", {
+        default_shortcut: null,
+        launch_paths: [
+          launchPathRecord({ id: "ask", label: "Ask sheets", params: ["message"], text_param: "message" }),
+          launchPathRecord({ id: "open", label: "Open sheets", path: "/" }),
+        ],
+      }),
+    ];
+    offerApps(api, socket, api.apps);
+    await store.runHomeTile("sheets");
+    await settle();
+    expect(api.calls).toContain("launch:home:sheets:open:{}:new:minimized");
+  });
+
   it("closes every window but the pinned one, and says why in a toast when the shell refuses an open", async () => {
     const store = await phoneStore();
     await store.closeAllWindows();

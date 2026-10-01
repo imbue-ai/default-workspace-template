@@ -21,6 +21,7 @@ import { StalePlacementsSaveError } from "../model/api";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
+  appShortcutOf,
   draftRowsOf,
   freeTextParams,
   freeTextRowsOf,
@@ -654,7 +655,8 @@ export class DesktopStore {
   }
 
   /** A home tile's tap: the app's window on this client's desktop nearest the top of its stack, else its newest
-   *  window anywhere, else the app's default shortcut launch (its first launch path when it declares none). */
+   *  window anywhere, else the launch of the app's desktop shortcut (``appShortcutOf``), or its first launch path
+   *  when it has none. */
   async runHomeTile(appName: string): Promise<void> {
     const target = focusTargetOf(this.state, appName);
     if (target !== null) {
@@ -662,7 +664,7 @@ export class DesktopStore {
       return;
     }
     const app = appByName(this.state, appName);
-    const launch = app?.default_shortcut?.launch ?? app?.launch_paths[0]?.id;
+    const launch = (app === undefined ? null : appShortcutOf(app))?.launch ?? app?.launch_paths[0]?.id;
     if (app === undefined || launch === undefined) {
       this.toast(`Cannot open: ${appName} has nothing to open`);
       return;

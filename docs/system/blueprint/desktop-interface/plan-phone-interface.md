@@ -31,7 +31,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 ### The home grid
 
 - Every registered non-internal app, read-only, in the order the launcher ranks apps, on the first desktop's wallpaper. No badges, no add, remove or reorder.
-- Tap: if the app has a window on the client's active desktop, show the one nearest the top of this client's stack there; else if it has a window on any desktop, show the newest; else run the app's default shortcut launch. A stopped app draws faint as on desktop.
+- Tap: if the app has a window on the client's active desktop, show the one nearest the top of this client's stack there; else if it has a window on any desktop, show the newest; else run the launch of the app's default shortcut (`plan-desktop-interface.md` section 3.6), or its first launch path when it has none. A stopped app draws faint as on desktop.
 - Long-press: a small menu of the app's launch rows, each opening a new window, so a second terminal is one gesture away.
 
 ### The windows sheet
