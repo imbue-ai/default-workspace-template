@@ -253,33 +253,27 @@ clones, fetched pages, thumbnails, model or package caches -- mark it:
 
 - **Give the rebuildable store its own directory** (e.g. `DATA_DIR / "repos"`),
   apart from records only the user could recreate.
-- **Write a `CACHEDIR.TAG` into that directory wherever the code creates it**,
-  so the tag comes back whenever the directory does. The backup then keeps only
-  the tag. The file must start with the standard signature line:
+- **Create an empty `.nobackup` file in that directory wherever the code
+  creates it**, so the marker comes back whenever the directory does. The
+  backup then keeps only the marker:
 
   ```python
-  CACHEDIR_TAG_CONTENT: Final[str] = (
-      "Signature: 8a477f597d28d172789f06886806bc55\n"
-      "# Rebuildable; kept out of the workspace backup.\n"
-  )
-
-
   def ensure_rebuildable_store_dir(path: Path) -> Path:
       path.mkdir(parents=True, exist_ok=True)
-      tag = path / "CACHEDIR.TAG"
-      if not tag.exists():
-          tag.write_text(CACHEDIR_TAG_CONTENT)
+      (path / ".nobackup").touch()
       return path
   ```
 
+  (A `CACHEDIR.TAG` does nothing here: the backup ignores it on purpose,
+  because uv writes one into every virtualenv and tool environment.)
 - **Rebuild on demand.** A missing or empty store is a cold cache to refill,
   never an error: a restore deletes whatever the backup did not hold, so after
-  one the directory is gone or holds only the tag.
-- **Tag only what really can be rebuilt from its source.** Anything the user
+  one the directory is gone or holds only the marker.
+- **Mark only what really can be rebuilt from its source.** Anything the user
   made, or that could not be fetched again (a source that may disappear, past
-  results of a paid call), stays untagged. When in doubt, leave it in the
+  results of a paid call), stays unmarked. When in doubt, leave it in the
   backup.
-- **Cover it with a test**: the directory holds the tag once the code has
+- **Cover it with a test**: the directory holds the marker once the code has
   created it, and the code refills the store after it is deleted.
 
 ## Review gates

@@ -1,4 +1,4 @@
-Backups now skip the contents of any directory holding a valid `CACHEDIR.TAG` file (restic's `--exclude-caches`), keeping only the tag. This is how an app marks a store it can rebuild, such as downloaded archives or clones, so it stops slowing every hourly backup: restic's time follows the number of files it walks, not their size.
+Backups now skip the contents of any directory holding a `.nobackup` file (restic's `--exclude-if-present`), keeping only that file. This is how an app marks a store it can rebuild, such as downloaded archives or clones, so it stops slowing every hourly backup: restic's time follows the number of files it walks, not their size. `CACHEDIR.TAG` is deliberately not honored, because uv writes one into every virtualenv and tool environment, which a restore could not refill.
 
 `backup.toml` accepts `extra_excludes`, patterns excluded on top of the defaults. Setting `excludes` still replaces the defaults, so a single pattern no longer means copying the whole default list.
 

@@ -27,9 +27,7 @@ from host_backup.heavy_dirs import (
     stream_snapshot_listing,
 )
 from host_backup.restic import (
-    backup as restic_backup,
-)
-from host_backup.restic import (
+    NO_BACKUP_MARKER_FILENAME,
     extract_snapshot_id_from_backup_output,
     find_backup_summary,
     init_repo,
@@ -37,6 +35,9 @@ from host_backup.restic import (
     is_repo_missing_error,
     probe_repo,
     run_restic,
+)
+from host_backup.restic import (
+    backup as restic_backup,
 )
 from host_backup.restic import (
     forget as restic_forget,
@@ -219,45 +220,47 @@ def test_default_excludes_drop_app_data_copies_but_keep_what_they_copy(
         assert f"/{path.relative_to(home)}" not in listed, path
 
 
-_CACHEDIR_TAG_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55\n"
-
-
-def test_a_cachedir_tag_keeps_its_directorys_contents_out_of_the_backup(
+def test_a_no_backup_marker_keeps_its_directorys_contents_out_of_the_backup(
     tmp_path: Path,
 ) -> None:
-    """An app marks a rebuildable directory with CACHEDIR.TAG; only the tag itself is backed up."""
+    """An app marks a rebuildable directory with the marker file; only the marker is backed up."""
     repo_dir = tmp_path / "repo"
     home = tmp_path / "home"
     apps = home / "workspace" / "data" / ".apps"
-    tagged = apps / "pr-review" / "repos"
-    wrongly_tagged = apps / "reading-room" / "articles"
-    untagged = apps / "finances" / "raw"
-    for directory in (tagged / "repo-a" / "sha-1", wrongly_tagged, untagged):
+    marked = apps / "pr-review" / "repos"
+    unmarked = apps / "finances" / "raw"
+    # uv writes a CACHEDIR.TAG into every tool environment and virtualenv, which
+    # a restore could not refill, so that tag must not keep them out of the backup.
+    uv_tool_env = home / ".local" / "share" / "uv" / "tools" / "chat-app"
+    for directory in (marked / "repo-a" / "sha-1", unmarked, uv_tool_env / "bin"):
         directory.mkdir(parents=True)
-    (tagged / "CACHEDIR.TAG").write_text(_CACHEDIR_TAG_SIGNATURE)
-    (tagged / "repo-a" / "sha-1" / "main.py").write_text("print('rebuildable')")
-    # restic honors only a tag that starts with the standard signature.
-    (wrongly_tagged / "CACHEDIR.TAG").write_text("not the signature\n")
-    (wrongly_tagged / "article.md").write_text("kept")
-    (untagged / "statement.csv").write_text("kept")
+    (marked / NO_BACKUP_MARKER_FILENAME).touch()
+    (marked / "repo-a" / "sha-1" / "main.py").write_text("print('rebuildable')")
+    (unmarked / "statement.csv").write_text("kept")
+    (uv_tool_env / "CACHEDIR.TAG").write_text(
+        "Signature: 8a477f597d28d172789f06886806bc55"
+    )
+    (uv_tool_env / "bin" / "chat-app").write_text("#!/bin/sh\n")
 
     env = _env_for_local_repo(repo_dir)
     assert init_repo(env).returncode == 0
     backup_result = restic_backup(
-        source_path=home, excludes=(), tag="cachedir-tag", env_overrides=env
+        source_path=home, excludes=(), tag="no-backup-marker", env_overrides=env
     )
     assert backup_result.returncode == 0, backup_result.stderr
 
     listing = run_restic(("ls", "latest"), env_overrides=env)
     assert listing.returncode == 0, listing.stderr
     listed = set(listing.stdout.splitlines())
-    assert "/workspace/data/.apps/pr-review/repos/CACHEDIR.TAG" in listed
+    assert (
+        f"/workspace/data/.apps/pr-review/repos/{NO_BACKUP_MARKER_FILENAME}" in listed
+    )
     assert not any(
         path.startswith("/workspace/data/.apps/pr-review/repos/repo-a")
         for path in listed
     )
-    assert "/workspace/data/.apps/reading-room/articles/article.md" in listed
     assert "/workspace/data/.apps/finances/raw/statement.csv" in listed
+    assert "/.local/share/uv/tools/chat-app/bin/chat-app" in listed
 
 
 def test_heavy_dirs_names_the_directory_holding_most_of_a_real_snapshot(

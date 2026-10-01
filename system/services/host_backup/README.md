@@ -32,11 +32,13 @@ downloads, extracted archives, clones.
    minute or two, so run it in the background and read its output afterwards.
    It counts what the backup actually held, with every exclude applied.
 3. Exclude what can be rebuilt:
-   - A directory an app owns and can rebuild on demand: the app writes a
-     `CACHEDIR.TAG` into it when it creates it (the file must start with
-     `Signature: 8a477f597d28d172789f06886806bc55`). The backup then keeps only
-     the tag. This is the fix to make in the app itself; see "Keep rebuildable
-     data out of the backup" in `.agents/shared/worker/references/harden-creation.md`.
+   - A directory an app owns and can rebuild on demand: the app creates an
+     empty `.nobackup` file in it when it creates the directory. The backup
+     then keeps only that file. This is the fix to make in the app itself; see
+     "Keep rebuildable data out of the backup" in
+     `.agents/shared/worker/references/harden-creation.md`. (`CACHEDIR.TAG` is
+     deliberately not honored: uv writes one into every virtualenv and tool
+     environment, which a restore could not refill.)
    - Anything else, or until the app is changed: add a pattern to
      `extra_excludes` in `data/system/backup.toml`, e.g.
      `extra_excludes = ["**/data/.apps/pr-review/repos"]`. Do not use
@@ -62,8 +64,8 @@ restic prune
 supervisorctl start host-backup
 ```
 
-`rewrite` has no counterpart to `CACHEDIR.TAG`, so a tagged directory is
-rewritten out of history by its path pattern.
+`rewrite` has no counterpart to the `.nobackup` marker, so a marked directory
+is rewritten out of history by its path pattern.
 
 ## Behavior
 
@@ -134,8 +136,8 @@ rewritten out of history by its path pattern.
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
   `excludes` list (default: `**/.venv`, `**/node_modules`, etc) followed by
   its `extra_excludes` list (default empty; for adding patterns without
-  restating the defaults), and with `--exclude-caches`, which keeps only the
-  tag file of any directory holding a valid `CACHEDIR.TAG`. Rust's
+  restating the defaults), and with `--exclude-if-present .nobackup`, which
+  keeps only the marker file of any directory holding one. Rust's
   regenerable caches (`~/.cargo/registry`, `~/.cargo/git`,
   `~/.rustup/toolchains`, `~/.rustup/downloads`) are excluded by default while
   the user-data parts of those trees (`~/.cargo/bin` binaries, config,

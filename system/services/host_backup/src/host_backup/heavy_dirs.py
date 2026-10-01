@@ -31,7 +31,7 @@ from host_backup.config import (
     load_restic_env,
     missing_required_restic_keys,
 )
-from host_backup.restic import build_restic_environment
+from host_backup.restic import NO_BACKUP_MARKER_FILENAME, build_restic_environment
 
 _ROOT: Final[str] = "/"
 
@@ -165,7 +165,7 @@ def format_heavy_directories_report(
     lines += [
         "",
         "Paths are relative to the backed-up home directory (/home/user in a workspace).",
-        "Keep a directory that can be rebuilt out of the backup with a CACHEDIR.TAG file",
+        f"Keep a directory that can be rebuilt out of the backup with a `{NO_BACKUP_MARKER_FILENAME}` file",
         "in it, or a pattern in `extra_excludes` in data/system/backup.toml.",
         f"See 'Slow backups' in {HOST_BACKUP_README_PATH}.",
     ]

@@ -459,8 +459,8 @@ Two cases, two patterns:
   -- a hardcoded `data/.apps/<name>/` silently bypasses the override and
   re-exposes the live data. Do NOT use `Path(__file__)`-based paths for
   state. A store the app can rebuild (downloads, extracted archives,
-  clones, caches) gets its own directory under `DATA_DIR` with a
-  `CACHEDIR.TAG` in it, so the hourly backup skips it; see "Keep
+  clones, caches) gets its own directory under `DATA_DIR` with an
+  empty `.nobackup` file in it, so the hourly backup skips it; see "Keep
   rebuildable data out of the backup" in
   `.agents/shared/worker/references/harden-creation.md`.
 - **Static assets shipped alongside the .py file** (templates,
