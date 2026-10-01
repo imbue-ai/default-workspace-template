@@ -149,7 +149,7 @@ def format_heavy_directories_report(
     lines = [
         f"Snapshot {counts.snapshot_short_id} ({counts.snapshot_time}) holds "
         f"{total:,} entries (files, directories and links).",
-        f"Directories holding at least {min_share:.0%} of them, heaviest first under each parent:",
+        f"Directories holding at least {min_share * 100:g}% of them, heaviest first under each parent:",
         "",
     ]
     for directory in heavy:
