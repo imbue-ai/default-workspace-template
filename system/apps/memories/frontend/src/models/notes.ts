@@ -30,19 +30,19 @@ export interface Note {
   readonly attribution: NoteAttribution | null;
 }
 
-export interface ForgottenNote {
-  readonly forgotten_id: string;
-  readonly file_name: string;
-  readonly description: string;
-  readonly forgotten_at: string;
+/** What the workspace's backups keep: a deleted note stays in the snapshots taken before the delete. */
+export interface BackupRetention {
+  readonly is_backed_up: boolean;
+  readonly longest_kept: string | null;
+  readonly schedule: readonly string[];
+  readonly settings_path: string;
 }
 
 export interface NotesDocument {
   readonly notes_dir: string;
   readonly index_path: string;
-  readonly forgotten_dir: string;
+  readonly backups: BackupRetention;
   readonly notes: readonly Note[];
-  readonly forgotten: readonly ForgottenNote[];
   readonly messages: readonly string[];
 }
 
@@ -75,7 +75,7 @@ export async function refreshNotes(): Promise<void> {
   }
 }
 
-async function send(method: "PUT" | "POST", path: string, body: object): Promise<string | null> {
+async function send(method: "PUT" | "DELETE", path: string, body: object): Promise<string | null> {
   try {
     const response = await fetch(path, {
       method,
@@ -83,7 +83,8 @@ async function send(method: "PUT" | "POST", path: string, body: object): Promise
       body: JSON.stringify(body),
     });
     if (response.ok) return null;
-    if (response.status === 409) return "A chat changed this note while you had it open. Its latest version is shown now.";
+    if (response.status === 409)
+      return "A chat changed this note while you had it open. Its latest version is shown now.";
     const detail = ((await response.json().catch(() => ({}))) as { detail?: string }).detail;
     return detail ?? `The page answered ${response.status}.`;
   } catch (error) {
@@ -94,13 +95,13 @@ async function send(method: "PUT" | "POST", path: string, body: object): Promise
 }
 
 export function saveNote(note: Note, description: string, body: string): Promise<string | null> {
-  return send("PUT", `${NOTES_PATH}/${encodeURIComponent(note.file_name)}`, { description, body, version: note.version });
+  return send("PUT", `${NOTES_PATH}/${encodeURIComponent(note.file_name)}`, {
+    description,
+    body,
+    version: note.version,
+  });
 }
 
-export function forgetNote(note: Note): Promise<string | null> {
-  return send("POST", `${NOTES_PATH}/${encodeURIComponent(note.file_name)}/forget`, { version: note.version });
-}
-
-export function restoreNote(forgottenId: string): Promise<string | null> {
-  return send("POST", `/api/forgotten/${encodeURIComponent(forgottenId)}/restore`, {});
+export function deleteNote(note: Note): Promise<string | null> {
+  return send("DELETE", `${NOTES_PATH}/${encodeURIComponent(note.file_name)}`, { version: note.version });
 }

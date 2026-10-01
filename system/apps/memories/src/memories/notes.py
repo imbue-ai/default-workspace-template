@@ -1,23 +1,20 @@
-"""The Claude memory notes: reading them, correcting one, and forgetting or restoring one.
+"""The Claude memory notes: reading them, correcting one, and deleting one.
 
 Claude's built-in memory keeps one Markdown file per note in the notes folder (``autoMemoryDirectory``,
 ``data/memories/``), each with a small frontmatter block (``name``, ``description``, ``metadata.type``), plus
 ``MEMORY.md``, an index of one ``- [Title](file.md) — summary`` line per note that every chat loads when it starts.
 So every change here keeps the index in step: a corrected summary is written into the note's index line, and a
-forgotten note's line leaves with it (and comes back on a restore).
+deleted note's line leaves with it.
 
-A forgotten note moves out of the notes folder into its own directory under the forgotten folder, beside a record
-of the index lines it had, so no chat can find it and a restore puts back exactly what was there.
+A delete erases the note: nothing in the workspace keeps a copy to restore. Snapshots the backups took before the
+delete still hold it until they expire (see ``backups``), which the page tells the user before they delete.
 
 Every write checks the note is still the version the page read (its mtime and size), since a chat may write to
 it at any time, and goes through a temporary file and a rename so a chat never reads a half-written note.
 """
 
-import json
 import os
 import re
-import shutil
-from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from enum import auto
@@ -37,7 +34,6 @@ from memories.errors import NoteWriteError
 INDEX_FILENAME: Final[str] = "MEMORY.md"
 NON_NOTE_FILENAMES: Final[frozenset[str]] = frozenset({INDEX_FILENAME, "README.md"})
 NOTE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
-FORGOTTEN_RECORD_FILENAME: Final[str] = "forgotten.json"
 _FRONTMATTER_FENCE: Final[str] = "---"
 _INDEX_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(\s*[-*]\s+\[[^\]]*\]\((?P<file>[^)]+)\))(?P<hook>.*)$")
 _HOOK_SEPARATOR: Final[str] = " — "
@@ -74,16 +70,6 @@ class Note(FrozenModel):
     raw_text: str = Field(description="The file exactly as it is on disk")
     modified_at: datetime = Field(description="When the file last changed")
     version: str = Field(description="The file's mtime and size, which a write must match")
-
-
-class ForgottenNote(FrozenModel):
-    """A note moved out of the notes folder."""
-
-    forgotten_id: str = Field(description="The directory it was moved into, under the forgotten folder")
-    file_name: str = Field(description="Its file name in the notes folder")
-    description: str = Field(description="Its one-line summary when it was forgotten")
-    forgotten_at: datetime = Field(description="When it was forgotten")
-    index_lines: tuple[str, ...] = Field(description="The index lines it had, put back on a restore")
 
 
 @pure
@@ -178,16 +164,6 @@ def split_index_lines(index_text: str, file_name: str) -> tuple[str, tuple[str, 
     return "\n".join(kept), tuple(removed)
 
 
-@pure
-def append_index_lines(index_text: str, lines: Sequence[str]) -> str:
-    present = set(index_text.split("\n"))
-    missing = [line for line in lines if line not in present]
-    if not missing:
-        return index_text
-    base = index_text if index_text.endswith("\n") or not index_text else f"{index_text}\n"
-    return base + "\n".join(missing) + "\n"
-
-
 def validate_note_name(file_name: str) -> None:
     if not NOTE_NAME_PATTERN.match(file_name) or file_name in NON_NOTE_FILENAMES:
         raise NoteNameError(f"{file_name!r} is not a note file name")
@@ -268,62 +244,13 @@ def update_note(notes_dir: Path, file_name: str, description: str, body: str, ve
     return read_note(path)
 
 
-def forget_note(notes_dir: Path, forgotten_dir: Path, file_name: str, version: str, now: datetime) -> ForgottenNote:
-    """Move a note out of the notes folder and drop its index lines, keeping both to put back."""
+def delete_note(notes_dir: Path, file_name: str, version: str) -> None:
+    """Erase a note's file and drop its lines from the index, so no chat loads or finds it again."""
     path = _note_path_checked(notes_dir, file_name, version)
-    description = read_note(path).description
-    index_text = read_index(notes_dir)
-    kept_index, removed_lines = split_index_lines(index_text, file_name)
-    forgotten = ForgottenNote(
-        forgotten_id=f"{now.strftime('%Y%m%dT%H%M%S%f')}-{file_name.removesuffix('.md')}",
-        file_name=file_name,
-        description=description,
-        forgotten_at=now,
-        index_lines=removed_lines,
-    )
-    destination = forgotten_dir / forgotten.forgotten_id
     try:
-        destination.mkdir(parents=True, exist_ok=False)
-        (destination / FORGOTTEN_RECORD_FILENAME).write_text(forgotten.model_dump_json(indent=2), encoding="utf-8")
-        shutil.move(str(path), str(destination / file_name))
+        path.unlink()
     except OSError as e:
-        raise NoteWriteError(f"could not move {file_name} to {destination}: {e}") from e
+        raise NoteWriteError(f"could not delete {path}: {e}") from e
+    kept_index, removed_lines = split_index_lines(read_index(notes_dir), file_name)
     if removed_lines:
         write_atomically(notes_dir / INDEX_FILENAME, kept_index)
-    return forgotten
-
-
-def list_forgotten(forgotten_dir: Path) -> list[ForgottenNote]:
-    """Every forgotten note that can still be restored, most recently forgotten first."""
-    if not forgotten_dir.is_dir():
-        return []
-    forgotten: list[ForgottenNote] = []
-    for entry in forgotten_dir.iterdir():
-        record_path = entry / FORGOTTEN_RECORD_FILENAME
-        try:
-            record = ForgottenNote.model_validate(json.loads(record_path.read_text(encoding="utf-8")))
-        except (OSError, ValueError):
-            continue
-        if (entry / record.file_name).is_file():
-            forgotten.append(record)
-    return sorted(forgotten, key=lambda record: record.forgotten_at, reverse=True)
-
-
-def restore_note(notes_dir: Path, forgotten_dir: Path, forgotten_id: str) -> str:
-    """Move a forgotten note back and put its index lines back; returns its file name."""
-    record = next((item for item in list_forgotten(forgotten_dir) if item.forgotten_id == forgotten_id), None)
-    if record is None:
-        raise NoteNotFoundError(f"no forgotten note {forgotten_id}")
-    destination = notes_dir / record.file_name
-    if destination.exists():
-        raise NoteChangedError(f"a note named {record.file_name} exists again; rename or forget it first")
-    source_dir = forgotten_dir / forgotten_id
-    try:
-        notes_dir.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source_dir / record.file_name), str(destination))
-        shutil.rmtree(source_dir)
-    except OSError as e:
-        raise NoteWriteError(f"could not restore {record.file_name}: {e}") from e
-    if record.index_lines:
-        write_atomically(notes_dir / INDEX_FILENAME, append_index_lines(read_index(notes_dir), record.index_lines))
-    return record.file_name

@@ -1,10 +1,10 @@
 /**
- * The words the page shows for a note: who wrote it and who read it, dates, counts, and the note's body split
- * into paragraphs and labeled lines (``**Why:** ...``). Pure, so each is tested on its own; the body is returned as
- * plain text pieces, never HTML, since an agent wrote it.
+ * The words the page shows for a note: who wrote it and who read it, dates, counts, the note's body split
+ * into paragraphs and labeled lines (``**Why:** ...``), and what the backups still hold after a delete. Pure, so
+ * each is tested on its own; the body is returned as plain text pieces, never HTML, since an agent wrote it.
  */
 
-import type { NoteAttribution } from "../models/notes";
+import type { BackupRetention, NoteAttribution } from "../models/notes";
 
 export interface BodyBlock {
   readonly label: string | null;
@@ -26,7 +26,9 @@ export function bodyBlocks(body: string): BodyBlock[] {
     .filter((line) => line !== "")
     .map((line) => {
       const labeled = LABELED_LINE.exec(line);
-      return labeled === null ? { label: null, text: plainText(line) } : { label: labeled[1], text: plainText(labeled[2]) };
+      return labeled === null
+        ? { label: null, text: plainText(line) }
+        : { label: labeled[1], text: plainText(labeled[2]) };
     });
 }
 
@@ -48,8 +50,50 @@ export function attributionLine(attribution: NoteAttribution | null): string {
       : latest.chat_title === null
         ? "Written by a chat that has since been deleted"
         : `Written by "${latest.chat_title}"`;
-  const others = attribution.authors.length > 1 ? ` and ${countLabel(attribution.authors.length - 1, "other chat", "other chats")}` : "";
+  const others =
+    attribution.authors.length > 1
+      ? ` and ${countLabel(attribution.authors.length - 1, "other chat", "other chats")}`
+      : "";
   const readers =
-    attribution.reader_count === 0 ? "not read since" : `read by ${countLabel(attribution.reader_count, "chat", "chats")}`;
+    attribution.reader_count === 0
+      ? "not read since"
+      : `read by ${countLabel(attribution.reader_count, "chat", "chats")}`;
   return `${writer}${others} · ${readers}`;
+}
+
+/** How long the backups keep a copy, or null when nothing outside the workspace keeps one. */
+function keptFor(backups: BackupRetention): string | null {
+  return backups.is_backed_up ? backups.longest_kept : null;
+}
+
+/** The standing line in "Who can see these notes": deleted notes stay in the backups. */
+export function backupsLine(backups: BackupRetention): string {
+  const kept = keptFor(backups);
+  return kept === null
+    ? "This workspace isn't backed up, so a note you delete is gone for good."
+    : `Your workspace's backups also hold these notes, including ones you delete, for up to ${kept}.`;
+}
+
+/** The delete confirmation's backup paragraph. */
+export function deleteBackupsWarning(backups: BackupRetention): string {
+  const kept = keptFor(backups);
+  return kept === null
+    ? "This workspace isn't backed up, so no other copy is kept."
+    : `A copy stays in your workspace's backups until they expire, up to ${kept} from now.`;
+}
+
+/** What the page says once a note is deleted. */
+export function deletedStatus(backups: BackupRetention): string {
+  const kept = keptFor(backups);
+  return kept === null ? "Deleted." : `Deleted. A copy stays in your backups for up to ${kept}.`;
+}
+
+/** The technical detail behind the backups line: the schedule, and the file it comes from. */
+export function backupsDetail(backups: BackupRetention): string {
+  if (!backups.is_backed_up) return "No backups are set up for this workspace.";
+  if (backups.schedule.length === 0) return `Backups are set up, but ${backups.settings_path} keeps no snapshots.`;
+  return (
+    `Backups are snapshots of the whole workspace, kept ${backups.schedule.join(", ")} (set in ${backups.settings_path}). ` +
+    "Each snapshot holds the notes as they were when it was taken, including notes deleted since."
+  );
 }

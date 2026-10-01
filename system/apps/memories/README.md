@@ -14,8 +14,11 @@ like things done, what you're working on, where things are), with:
   `GET /api/chats`);
 - the file exactly as it is on disk;
 - Edit, which rewrites the note's summary and body and its `MEMORY.md` line's summary to match;
-- Forget, which moves the note to `data/.state/memories/forgotten/<id>/` beside a record of the index lines it had,
-  so no chat finds it, and drops those lines from `MEMORY.md`; Bring back puts both back.
+- Delete, which erases the note's file and drops its lines from `MEMORY.md`. Nothing in the workspace keeps a copy,
+  so it cannot be undone; it asks first, and says what still holds the note afterwards: the workspace's backups
+  (restic snapshots of the whole home tree, kept for as long as `data/system/backup.toml`'s retention says, read
+  through `host_backup.config`), open chats until they restart, and the transcript of the chat that wrote it. The
+  "Who can see these notes" panel states the backups' retention up front too.
 
 Every write checks that the note is still the version the page read and refuses (409) if a chat changed it
 meanwhile, and goes through a temporary file and a rename. A chat that is already open has loaded the index, so it
@@ -26,10 +29,9 @@ environment, serving on `http://127.0.0.1:8050`:
 
 - `GET /`, `GET /assets/...`: the page.
 - `GET /api/health`: `{"status", "is_frontend_built"}`.
-- `GET /api/notes`: the notes, their attribution, and the forgotten notes.
+- `GET /api/notes`: the notes, their attribution, and the backups' retention (`backups`).
 - `PUT /api/notes/<file>`: `{"description", "body", "version"}`.
-- `POST /api/notes/<file>/forget`: `{"version"}`.
-- `POST /api/forgotten/<id>/restore`.
+- `DELETE /api/notes/<file>`: `{"version"}`.
 - `GET /_static/app_contract.js`: the shell's browser-side contract module.
 
 The manifest declares `stop_when_no_windows`: the app holds nothing between requests, so the shell stops it a minute

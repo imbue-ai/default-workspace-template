@@ -1,10 +1,7 @@
-"""The app's routes on its own origin: the page, the health probe, the notes, correcting, forgetting and restoring
-a note, and the contract module. Everything is read when asked; the app keeps nothing between requests."""
+"""The app's routes on its own origin: the page, the health probe, the notes, correcting and deleting a note, and
+the contract module. Everything is read when asked; the app keeps nothing between requests."""
 
-from collections.abc import Callable
 from collections.abc import Mapping
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -25,15 +22,14 @@ from app_manifest.registry import read_registry
 from memories.attribution import DEFAULT_CHAT_APP_URL
 from memories.attribution import TranscriptSources
 from memories.attribution import read_attributions
+from memories.backups import read_backup_retention
 from memories.errors import MemoriesError
 from memories.errors import NoteChangedError
 from memories.errors import NoteNameError
 from memories.errors import NoteNotFoundError
 from memories.notes import INDEX_FILENAME
-from memories.notes import forget_note
-from memories.notes import list_forgotten
+from memories.notes import delete_note
 from memories.notes import list_notes
-from memories.notes import restore_note
 from memories.notes import update_note
 from memories.request_guard import is_write_allowed
 
@@ -54,10 +50,6 @@ _NOT_BUILT_PAGE: Final[str] = (
     "<body><p>This page has not been built yet (run <code>npm run build</code> in <code>system/</code>).</p>"
     "</body></html>"
 )
-
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _chat_app_url(registry_path: Path) -> str:
@@ -90,11 +82,11 @@ def build_pages_blueprint(
     static_directory: Path,
     contract_path: Path,
     notes_dir: Path,
-    forgotten_dir: Path,
+    backup_config_path: Path,
+    restic_env_path: Path,
     transcript_sources: TranscriptSources,
     registry_path: Path,
     client: httpx.Client,
-    now: Callable[[], datetime],
 ) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
 
@@ -130,7 +122,7 @@ def build_pages_blueprint(
         payload = {
             "notes_dir": str(notes_dir),
             "index_path": str(notes_dir / INDEX_FILENAME),
-            "forgotten_dir": str(forgotten_dir),
+            "backups": read_backup_retention(backup_config_path, restic_env_path).model_dump(mode="json"),
             "notes": [
                 {
                     **note.model_dump(mode="json"),
@@ -140,7 +132,6 @@ def build_pages_blueprint(
                 }
                 for note in list_notes(notes_dir)
             ],
-            "forgotten": [record.model_dump(mode="json") for record in list_forgotten(forgotten_dir)],
             "messages": list(messages),
         }
         response = jsonify(payload)
@@ -154,23 +145,17 @@ def build_pages_blueprint(
         if not description:
             return jsonify({"detail": "a note needs a summary"}), HTTP_BAD_REQUEST
         try:
-            note = update_note(notes_dir, file_name, description, str(body.get("body", "")), str(body.get("version", "")))
+            note = update_note(
+                notes_dir, file_name, description, str(body.get("body", "")), str(body.get("version", ""))
+            )
         except MemoriesError as e:
             return _error_response(e)
         return jsonify(note.model_dump(mode="json"))
 
-    @blueprint.post(f"{NOTES_PATH}/<file_name>/forget")
-    def forget(file_name: str) -> ResponseReturnValue:
+    @blueprint.delete(f"{NOTES_PATH}/<file_name>")
+    def delete(file_name: str) -> ResponseReturnValue:
         try:
-            record = forget_note(notes_dir, forgotten_dir, file_name, str(_json_body().get("version", "")), now())
-        except MemoriesError as e:
-            return _error_response(e)
-        return jsonify(record.model_dump(mode="json"))
-
-    @blueprint.post("/api/forgotten/<forgotten_id>/restore")
-    def restore(forgotten_id: str) -> ResponseReturnValue:
-        try:
-            file_name = restore_note(notes_dir, forgotten_dir, forgotten_id)
+            delete_note(notes_dir, file_name, str(_json_body().get("version", "")))
         except MemoriesError as e:
             return _error_response(e)
         return jsonify({"file_name": file_name})

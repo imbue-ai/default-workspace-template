@@ -7,7 +7,7 @@ class ServeError(MemoriesError):
 
 
 class NoteNotFoundError(MemoriesError, LookupError):
-    """No note, or no forgotten note, by the name asked for."""
+    """No note by the name asked for."""
 
 
 class NoteNameError(MemoriesError, ValueError):
@@ -19,4 +19,4 @@ class NoteChangedError(MemoriesError):
 
 
 class NoteWriteError(MemoriesError, OSError):
-    """A note, the index, or the forgotten folder could not be written."""
+    """A note or the index could not be written or deleted."""

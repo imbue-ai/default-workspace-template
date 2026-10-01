@@ -19,7 +19,6 @@ from memories.attribution import default_transcript_sources
 from memories.config import Config
 from memories.config import load_config
 from memories.pages import build_pages_blueprint
-from memories.pages import utc_now
 from memories.serving import app_url_port
 from memories.serving import serve_in_background
 from memories.serving import wait_for_shutdown_signal
@@ -38,7 +37,8 @@ class MemoriesArguments(FrozenModel):
     app_url: AppUrl = Field(description="Where the page is served")
     static_directory: Path = Field(description="The frontend's built bundle")
     notes_dir: Path = Field(description="The Claude memory notes folder")
-    forgotten_dir: Path = Field(description="Where forgotten notes are kept, outside the notes folder")
+    backup_config_path: Path = Field(description="The backups' retention settings")
+    restic_env_path: Path = Field(description="The backups' credentials, whose presence says backups are set up")
     host: str = Field(description="The address the page server binds")
     is_registered: bool = Field(
         description="Whether this boot is the workspace's memories app and registers the manifest; a preview boots "
@@ -53,11 +53,11 @@ def build_pages_app(arguments: MemoriesArguments, client: httpx.Client) -> Flask
             static_directory=arguments.static_directory,
             contract_path=SHELL_APP_CONTRACT_PATH,
             notes_dir=arguments.notes_dir,
-            forgotten_dir=arguments.forgotten_dir,
+            backup_config_path=arguments.backup_config_path,
+            restic_env_path=arguments.restic_env_path,
             transcript_sources=default_transcript_sources(notes_dir=arguments.notes_dir, work_dir=Path.cwd()),
             registry_path=registry_path(),
             client=client,
-            now=utc_now,
         )
     )
     return app
@@ -81,7 +81,8 @@ def arguments_from_config(
         app_url=AppUrl(f"http://localhost:{config.memories_port}"),
         static_directory=static_directory,
         notes_dir=config.memories_notes_dir,
-        forgotten_dir=config.memories_forgotten_dir,
+        backup_config_path=config.memories_backup_config_path,
+        restic_env_path=config.memories_restic_env_path,
         host=config.memories_host,
         is_registered=is_registered,
     )
@@ -112,7 +113,7 @@ def arguments_from_config(
     help="Skip the registration: a throwaway boot, such as a preview, that must not re-point the live row",
 )
 def main(manifest_path: Path, static_directory: Path, is_unregistered: bool) -> None:
-    """Run the memories app: what the workspace's Claude chats have written down, and a way to correct it."""
+    """Run the memories app: what the workspace's Claude chats have written down, and a way to correct or delete it."""
     arguments = arguments_from_config(
         config=load_config(),
         manifest_path=manifest_path,
