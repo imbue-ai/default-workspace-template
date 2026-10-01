@@ -80,7 +80,8 @@ export type PhoneShown = { readonly kind: "home" } | { readonly kind: "window"; 
 export type PhoneSheet = "windows" | "start";
 
 export interface PhoneState {
-  /** Null until the phone has landed (the inventory has not answered, or the desktop layout is on screen). */
+  /** Null until the phone layout first lands (the desktops have not arrived, or only the desktop layout has been
+   *  drawn); kept across a switch to the desktop layout and back, so the phone resumes where it was. */
   readonly shown: PhoneShown | null;
   /** What this client recorded showing, most recent last: window ids and ``SHOWN_HOME``, each at most once. */
   readonly history: readonly string[];
