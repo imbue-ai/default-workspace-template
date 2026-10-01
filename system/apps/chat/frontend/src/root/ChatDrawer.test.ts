@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
  * The phone layout's drawer and the list it hosts: every row keeps its right-click verbs behind a
- * kebab, which opens them without picking the row; the drawer goes on a scrim tap, Escape, or a
- * drag far enough to the left, and a shorter drag springs back without the release picking a row.
+ * kebab, which opens them without picking the row; the drawer goes on a scrim tap, Escape (unless a
+ * modal over it takes the key), or a drag far enough to the left, and a shorter drag springs back
+ * without the release picking a row.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -44,10 +45,10 @@ function rail(): ChatRailAttrs {
   };
 }
 
-function mount(): HTMLElement {
+function mount(isCovered = false): HTMLElement {
   root = document.createElement("div");
   document.body.appendChild(root);
-  m.mount(root, { view: () => m(ChatDrawer, { rail: rail(), onDismiss }) });
+  m.mount(root, { view: () => m(ChatDrawer, { rail: rail(), isCovered, onDismiss }) });
   // jsdom lays nothing out: the panel is given the width a phone gives it.
   const panel = root.querySelector<HTMLElement>(".chat-drawer-panel");
   if (panel === null) throw new Error("no drawer panel");
@@ -115,6 +116,12 @@ describe("ChatDrawer", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(onDismiss).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves Escape to a modal open over it", () => {
+    mount(true);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(onDismiss).not.toHaveBeenCalled();
   });
 
   it("goes on a drag far enough to the left, and the release picks nothing", () => {

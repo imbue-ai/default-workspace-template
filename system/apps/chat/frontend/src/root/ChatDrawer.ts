@@ -1,7 +1,8 @@
 /**
  * The chats' drawer in the chat root's phone layout: the list (``ChatRail``, rows unchanged)
  * on a panel that slides in from the left over the chat, with a scrim over the rest. A tap on
- * the scrim, Escape, or dragging the panel back to the left dismisses it.
+ * the scrim, Escape, or dragging the panel back to the left dismisses it; while a modal is open
+ * over the drawer, Escape is the modal's.
  */
 
 import m from "mithril";
@@ -10,6 +11,8 @@ import type { ChatRailAttrs } from "./ChatRail";
 
 export interface ChatDrawerAttrs {
   rail: ChatRailAttrs;
+  /** Whether a modal is open over the drawer. */
+  isCovered: boolean;
   onDismiss: () => void;
 }
 
@@ -20,6 +23,7 @@ const DISMISS_FRACTION = 0.3;
 
 export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
   let onDismiss: () => void = () => undefined;
+  let isCovered = false;
   let panel: HTMLElement | null = null;
   let scrim: HTMLElement | null = null;
   // The press being followed, from its pointerdown to its release; null between presses.
@@ -83,7 +87,7 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key !== "Escape") return;
+    if (event.key !== "Escape" || isCovered) return;
     onDismiss();
     m.redraw();
   }
@@ -108,6 +112,7 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
     },
     view({ attrs }) {
       onDismiss = attrs.onDismiss;
+      isCovered = attrs.isCovered;
       return m("div", { class: "chat-drawer absolute inset-0 z-(--z-sticky)", "data-chat-drawer": "" }, [
         m("div", {
           class: "chat-drawer-scrim absolute inset-0 bg-black/30 animate-[modal-overlay-in_160ms_ease-out]",

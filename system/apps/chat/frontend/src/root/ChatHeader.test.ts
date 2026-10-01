@@ -80,7 +80,7 @@ describe("the chat header", () => {
     m.mount(root, {
       view: () => [
         m(ChatHeader, { row: RENAMED_CHAT, context: rail, isListOpen: true, onOpenList: () => undefined }),
-        m(ChatDrawer, { rail, onDismiss: () => undefined }),
+        m(ChatDrawer, { rail, isCovered: false, onDismiss: () => undefined }),
       ],
     });
 

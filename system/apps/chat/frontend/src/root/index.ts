@@ -388,6 +388,7 @@ const ChatRoot: m.Component = {
         isCompact && isDrawerOpen
           ? m(ChatDrawer, {
               rail,
+              isCovered: isProviderChooserOpen() || pendingPick !== null,
               onDismiss: () => {
                 isDrawerOpen = false;
               },
