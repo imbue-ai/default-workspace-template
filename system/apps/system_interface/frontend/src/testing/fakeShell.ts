@@ -28,7 +28,9 @@ import type {
   Wallpaper,
   WindowRecord,
 } from "../model/records";
-import { withWindowPlacedOnOpen, withWindowRaised, withoutPlacement } from "../geometry/stack";
+import { withWindowMinimized, withWindowPlacedOnOpen, withWindowRaised, withoutPlacement } from "../geometry/stack";
+import { SHOWN_HOME } from "../model/records";
+import { withShownRecorded } from "../reducers/desktopState";
 import type { DesktopSocket, SocketHandlers } from "../store/socket";
 import { clientRecord } from "./records";
 import type { UiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
@@ -41,6 +43,7 @@ export class FakeDesktopApi implements DesktopApi {
   /** The apps the inventory answers; the socket's ``apps_updated`` is delivered by hand. */
   apps: AppRecord[] = [];
   clients: ClientRecord[] = [];
+  workspaceName = "Test workspace";
   /** What the next arrival answers beyond the client's recorded desktop: a desktop seeded for the user (added to
    *  the desktops as the shell would), and the name of the one it replaced. */
   arrival: Pick<ClientArrival, "created_desktop" | "replaced_desktop_name"> = {
@@ -146,7 +149,12 @@ export class FakeDesktopApi implements DesktopApi {
     this.calls.push("fetchInventory");
     this.refuse();
     if (this.readGate !== null) await this.readGate;
-    return { desktops: [...this.desktops], apps: [...this.apps], clients: [...this.clients] };
+    return {
+      desktops: [...this.desktops],
+      apps: [...this.apps],
+      clients: [...this.clients],
+      workspace_name: this.workspaceName,
+    };
   }
 
   async createDesktop(name: string, color: string, glyph: number): Promise<Desktop> {
@@ -232,7 +240,10 @@ export class FakeDesktopApi implements DesktopApi {
   }
 
   async openWindow(desktopId: string, request: WindowOpenRequest): Promise<WindowOpenOutcome> {
-    this.calls.push(`openWindow:${desktopId}:${request.app}:${request.path}:${request.ifPresent}`);
+    this.calls.push(
+      `openWindow:${desktopId}:${request.app}:${request.path}:${request.ifPresent}` +
+        (request.isMinimized ? ":minimized" : ""),
+    );
     this.refuse();
     const desktop = this.desktop(desktopId);
     const existing = desktop.windows.find(
@@ -257,10 +268,11 @@ export class FakeDesktopApi implements DesktopApi {
       scope: "linked",
     };
     this.replace({ ...desktop, windows: [...desktop.windows, window] });
+    const placed = withWindowPlacedOnOpen(this.layoutOf(desktopId, request.clientId), window.id);
     this.writeLayout(
       desktopId,
       request.clientId,
-      withWindowPlacedOnOpen(this.layoutOf(desktopId, request.clientId), window.id),
+      request.isMinimized ? withWindowMinimized(placed, window.id) : placed,
     );
     return { window, isNew: true };
   }
@@ -271,7 +283,8 @@ export class FakeDesktopApi implements DesktopApi {
     const targetSpelling =
       request.target.kind === "window" ? `window:${request.target.windowId}` : request.target.kind;
     this.calls.push(
-      `launch:${desktopId}:${request.app}:${request.launch}:${JSON.stringify(request.params)}:${targetSpelling}`,
+      `launch:${desktopId}:${request.app}:${request.launch}:${JSON.stringify(request.params)}:${targetSpelling}` +
+        (request.isMinimized ? ":minimized" : ""),
     );
     this.refuse();
     const app = this.apps.find((candidate) => candidate.name === request.app);
@@ -303,6 +316,7 @@ export class FakeDesktopApi implements DesktopApi {
       path,
       clientId: request.clientId,
       ifPresent: target.kind,
+      isMinimized: request.isMinimized,
     });
     return { window: opened.window, path, isNew: opened.isNew };
   }
@@ -388,6 +402,23 @@ export class FakeDesktopApi implements DesktopApi {
     };
   }
 
+  /** As the shell does: the entry goes to the end of the client's history, and a window no desktop holds is
+   *  refused. */
+  async recordShown(clientId: string, windowId: string | null): Promise<ClientRecord> {
+    this.calls.push(`recordShown:${clientId}:${windowId ?? SHOWN_HOME}`);
+    this.refuse();
+    if (
+      windowId !== null &&
+      !this.desktops.some((desktop) => desktop.windows.some((window) => window.id === windowId))
+    ) {
+      throw new Error(`No window ${windowId}`);
+    }
+    const existing = this.clients.find((client) => client.id === clientId) ?? clientRecord(clientId);
+    const recorded = { ...existing, shown_history: withShownRecorded(existing.shown_history, windowId ?? SHOWN_HOME) };
+    this.clients = [...this.clients.filter((client) => client.id !== clientId), recorded];
+    return recorded;
+  }
+
   async fetchClients(): Promise<ClientRecord[]> {
     this.calls.push("fetchClients");
     this.refuse();
@@ -438,6 +469,8 @@ export class FakeDesktopApi implements DesktopApi {
 export class FakeDesktopSocket implements DesktopSocket {
   handlers: SocketHandlers | null = null;
   readonly reports: { activeDesktop: string; previousDesktop: string }[] = [];
+  /** How many times the store registered the socket as a pop-out's. */
+  popOutReports = 0;
 
   connect(handlers: SocketHandlers): void {
     this.handlers = handlers;
@@ -445,6 +478,10 @@ export class FakeDesktopSocket implements DesktopSocket {
 
   reportClientState(activeDesktop: string, previousDesktop: string): void {
     this.reports.push({ activeDesktop, previousDesktop });
+  }
+
+  reportPopOut(): void {
+    this.popOutReports += 1;
   }
 
   /** The handlers the store registered; a test delivers events through them. */

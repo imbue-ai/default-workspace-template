@@ -90,3 +90,17 @@
     transition: none;
   }
 }
+
+/* The phone's sheets rise from the foot of the screen over a scrim that fades in (views/phone/Sheet.ts). */
+@keyframes phone-sheet-rise {
+  from {
+    transform: translateY(24px);
+    opacity: 0.6;
+  }
+}
+
+@keyframes phone-fade {
+  from {
+    opacity: 0;
+  }
+}

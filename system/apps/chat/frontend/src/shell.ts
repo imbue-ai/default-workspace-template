@@ -16,6 +16,7 @@ import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { currentPresenceState, reportPresence, startPresenceReporting } from "./presence";
 import type { ChatPageEmbedApi } from "./embedApi";
+import { setCompactFromRoot } from "./compactLayout";
 import { rootPathFor } from "./root/selection";
 import { prependToComposer } from "./views/MessageInput";
 import { applyUiTheme, mirrorParentUiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
@@ -104,6 +105,10 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
       shown: onShown,
       hidden: onHidden,
       prependDraft: (text) => prependToComposer(chatId, text),
+      setCompact: (isCompact) => {
+        setCompactFromRoot(isCompact);
+        m.redraw();
+      },
     };
     window.chatPageEmbed = embedApi;
   }

@@ -8,7 +8,7 @@ import { initialDesktopState, reduceDesktopState } from "../reducers/desktopStat
 import type { DesktopState } from "../reducers/desktopState";
 import { desktopRecord } from "./records";
 
-const MODES = { isCompact: false, isTouch: false };
+const MODES = { isPhone: false, isTouch: false };
 
 /** A client on a machine offering ``apps``, with one active desktop ``home`` holding no windows. */
 export function desktopStateWithApps(apps: readonly AppRecord[]): DesktopState {

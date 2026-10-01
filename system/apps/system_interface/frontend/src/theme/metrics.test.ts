@@ -3,11 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { themeMetricsRecord } from "../testing/records";
 import type { MediaQueryLike } from "./metrics";
 import {
-  COMPACT_ATTRIBUTE,
-  COMPACT_MAX_WIDTH_PX,
-  COMPACT_MEDIA_QUERY,
+  PHONE_ATTRIBUTE,
+  PHONE_MEDIA_QUERY,
   TOUCH_ATTRIBUTE,
-  TOUCH_MEDIA_QUERY,
   ThemeMetricsError,
   applyRenderModes,
   currentRenderModes,
@@ -20,7 +18,7 @@ const THEME_CSS = readFileSync(new URL("./default.css", import.meta.url).pathnam
 
 /** The value a token has in the `:root` block of the theme file. */
 function rootToken(token: string): string {
-  const root = THEME_CSS.slice(THEME_CSS.indexOf(":root {"), THEME_CSS.indexOf("[data-compact]"));
+  const root = THEME_CSS.slice(THEME_CSS.indexOf(":root {"), THEME_CSS.indexOf("[data-touch]"));
   const match = new RegExp(`${token}:\\s*([^;]+);`).exec(root);
   if (match === null) throw new Error(`no ${token} on :root`);
   return match[1].trim();
@@ -55,23 +53,12 @@ describe("the theme file", () => {
     expect(rootToken("--desk-default-wallpaper")).toMatch(/^url\(\/wallpapers\/bundled\/[a-z0-9-]+\)$/);
   });
 
-  it("redeclares the compact and touch values under their attributes", () => {
-    const compact = THEME_CSS.slice(THEME_CSS.indexOf("[data-compact]"), THEME_CSS.indexOf("[data-touch]"));
-    expect(compact).toContain("--desk-taskbar-height: 56px");
-    expect(compact).toContain("--desk-cell-width: 80px");
-    expect(compact).toContain("--desk-cell-height: 104px");
-    expect(compact).toContain("--desk-grid-inset: 8px");
-    expect(compact).toContain("--desk-window-radius: 0px");
+  it("redeclares the touch values under their attribute", () => {
     const touch = THEME_CSS.slice(THEME_CSS.indexOf("[data-touch]"));
     expect(touch).toContain("--desk-title-bar-height: 44px");
     expect(touch).toContain("--desk-taskbar-height: 56px");
     expect(touch).toContain("--desk-drag-threshold: 8px");
     expect(touch).toContain("--desk-touch-target: 44px");
-  });
-
-  it("applies the compact breakpoint as a media query", () => {
-    expect(COMPACT_MEDIA_QUERY).toBe(`(max-width: ${COMPACT_MAX_WIDTH_PX}px)`);
-    expect(TOUCH_MEDIA_QUERY).toBe("(pointer: coarse)");
   });
 });
 
@@ -117,7 +104,7 @@ function fakeRoot(): { element: HTMLElement; style: () => { getPropertyValue: (n
     style: () =>
       styleOf({
         ...CONTRACT_TOKENS,
-        "--desk-taskbar-height": attributes.has(COMPACT_ATTRIBUTE) ? "56px" : "48px",
+        "--desk-taskbar-height": attributes.has(TOUCH_ATTRIBUTE) ? "56px" : "48px",
         "--desk-touch-target": attributes.has(TOUCH_ATTRIBUTE) ? "44px" : "32px",
       }),
   };
@@ -125,48 +112,52 @@ function fakeRoot(): { element: HTMLElement; style: () => { getPropertyValue: (n
 
 describe("followRenderModes", () => {
   it("stamps the attributes and re-reads the metrics on every change", () => {
-    const compact = fakeQuery(false);
-    const touch = fakeQuery(true);
+    const phone = fakeQuery(false);
+    const touch = fakeQuery(false);
     const root = fakeRoot();
     const onChange = vi.fn();
     const stop = followRenderModes(
       root.element,
-      (query) => (query === COMPACT_MEDIA_QUERY ? compact : touch),
+      (query) => (query === PHONE_MEDIA_QUERY ? phone : touch),
       root.style,
       onChange,
     );
-    expect(root.element.hasAttribute(COMPACT_ATTRIBUTE)).toBe(false);
-    expect(root.element.hasAttribute(TOUCH_ATTRIBUTE)).toBe(true);
+    expect(root.element.hasAttribute(PHONE_ATTRIBUTE)).toBe(false);
+    expect(root.element.hasAttribute(TOUCH_ATTRIBUTE)).toBe(false);
     expect(onChange).toHaveBeenLastCalledWith(
-      { isCompact: false, isTouch: true },
-      expect.objectContaining({ taskbarHeight: 48, touchTarget: 44 }),
+      { isPhone: false, isTouch: false },
+      expect.objectContaining({ taskbarHeight: 48, touchTarget: 32 }),
     );
 
-    compact.flip(true);
-    expect(root.element.hasAttribute(COMPACT_ATTRIBUTE)).toBe(true);
+    phone.flip(true);
+    expect(root.element.hasAttribute(PHONE_ATTRIBUTE)).toBe(true);
+    expect(onChange).toHaveBeenLastCalledWith({ isPhone: true, isTouch: false }, expect.any(Object));
+
+    touch.flip(true);
+    expect(root.element.hasAttribute(TOUCH_ATTRIBUTE)).toBe(true);
     expect(onChange).toHaveBeenLastCalledWith(
-      { isCompact: true, isTouch: true },
-      expect.objectContaining({ taskbarHeight: 56 }),
+      { isPhone: true, isTouch: true },
+      expect.objectContaining({ taskbarHeight: 56, touchTarget: 44 }),
     );
 
     stop();
-    compact.flip(false);
-    expect(onChange).toHaveBeenCalledTimes(2);
+    phone.flip(false);
+    expect(onChange).toHaveBeenCalledTimes(3);
   });
 
   it("applyRenderModes removes what no longer matches", () => {
     const root = fakeRoot();
-    applyRenderModes(root.element, { isCompact: true, isTouch: true });
-    applyRenderModes(root.element, { isCompact: false, isTouch: false });
-    expect(root.element.hasAttribute(COMPACT_ATTRIBUTE)).toBe(false);
+    applyRenderModes(root.element, { isPhone: true, isTouch: true });
+    applyRenderModes(root.element, { isPhone: false, isTouch: false });
+    expect(root.element.hasAttribute(PHONE_ATTRIBUTE)).toBe(false);
     expect(root.element.hasAttribute(TOUCH_ATTRIBUTE)).toBe(false);
   });
 
   it("currentRenderModes reads back what applyRenderModes stamped", () => {
     const root = fakeRoot();
-    applyRenderModes(root.element, { isCompact: true, isTouch: false });
-    expect(currentRenderModes(root.element)).toEqual({ isCompact: true, isTouch: false });
-    applyRenderModes(root.element, { isCompact: false, isTouch: true });
-    expect(currentRenderModes(root.element)).toEqual({ isCompact: false, isTouch: true });
+    applyRenderModes(root.element, { isPhone: true, isTouch: false });
+    expect(currentRenderModes(root.element)).toEqual({ isPhone: true, isTouch: false });
+    applyRenderModes(root.element, { isPhone: false, isTouch: true });
+    expect(currentRenderModes(root.element)).toEqual({ isPhone: false, isTouch: true });
   });
 });

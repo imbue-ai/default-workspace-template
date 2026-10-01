@@ -46,5 +46,5 @@ tools = ["mngr"]
 [[plugins]]
 package = "imbue-mngr-autocompact"
 subdirectory = "libs/mngr_autocompact"
-tools = ["mngr"]
+tools = ["mngr", "chat"]
 

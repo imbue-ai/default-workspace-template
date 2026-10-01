@@ -7,7 +7,7 @@
  * every page a launch opens; nothing here builds a URL.
  */
 
-import type { AppRecord, LaunchPath } from "./records";
+import type { AppRecord, DefaultShortcut, LaunchPath } from "./records";
 
 /** One launch path of one app: what a launcher row runs. */
 export interface AppLaunch {
@@ -82,6 +82,20 @@ export function draftRowsOf(apps: readonly AppRecord[]): AppLaunch[] {
 /** The launch path of ``app`` with ``launchId``, or null when the app declares none by that id. */
 export function launchPathOf(app: AppRecord, launchId: string): LaunchPath | null {
   return app.launch_paths.find((candidate) => candidate.id === launchId) ?? null;
+}
+
+/** The app's one desktop shortcut, by the rule the shell seeds desktops with (desktop-interface plan section 3.6):
+ *  its ``default_shortcut`` when that names a launch path it offers, whether or not that path takes text; else, for
+ *  an app a program runs, its first launch path taking no text, or its first when every one takes text, focusing. An
+ *  internal app has none, and so does a row with no program (a preview frame, an isolated test server) that declares
+ *  none. */
+export function appShortcutOf(app: AppRecord): DefaultShortcut | null {
+  if (app.internal) return null;
+  const declared = app.default_shortcut;
+  if (declared !== null) return launchPathOf(app, declared.launch) === null ? null : declared;
+  if (app.program === "") return null;
+  const first = app.launch_paths.find((launchPath) => fillParamOf(launchPath) === null) ?? app.launch_paths[0];
+  return first === undefined ? null : { launch: first.id, mode: "focus" };
 }
 
 /** The params a free-text row launches with: the text as its fill param; none for empty text. */

@@ -101,6 +101,8 @@ export interface WindowOpenRequest {
   readonly path: string;
   readonly clientId: string;
   readonly ifPresent: IfPresent;
+  /** Placed out of sight for this client, so no other client finds it placed either. */
+  readonly isMinimized: boolean;
 }
 
 export interface WindowOpenOutcome {
@@ -115,6 +117,7 @@ export async function openWindow(desktopId: string, request: WindowOpenRequest):
     path: request.path,
     client_id: request.clientId,
     if_present: request.ifPresent,
+    minimized: request.isMinimized,
   };
   const data = await postJson<{ window: unknown; is_new: boolean }>(desktopUrl(desktopId, "/windows"), body);
   return { window: parseWindow(data.window), isNew: data.is_new === true };
@@ -131,6 +134,8 @@ export interface LaunchRequest {
   readonly params: Readonly<Record<string, string>>;
   readonly clientId: string;
   readonly target: LaunchTarget;
+  /** A window the launch opens is placed out of sight for this client. */
+  readonly isMinimized: boolean;
 }
 
 export interface LaunchOutcome {
@@ -153,6 +158,7 @@ export async function launch(desktopId: string, request: LaunchRequest): Promise
     params: request.params,
     client_id: request.clientId,
     target,
+    minimized: request.isMinimized,
   });
   return { window: parseWindow(data.window), path: data.path, isNew: data.is_new === true };
 }
@@ -219,6 +225,13 @@ export async function arriveClient(clientId: string): Promise<ClientArrival> {
 /** The desktops, the apps, and the clients in one read: what a page boots from once it has arrived. */
 export async function fetchInventory(): Promise<Inventory> {
   return parseInventory(await getJson(apiUrl("/api/inventory")));
+}
+
+/** Record what this client's phone layout shows: a window, or the home grid for null. Answers the client record. */
+export async function recordShown(clientId: string, windowId: string | null): Promise<ClientRecord> {
+  return parseClientRecord(
+    await postJson<unknown>(apiUrl(`/api/clients/${encodeURIComponent(clientId)}/shown`), { window_id: windowId }),
+  );
 }
 
 export async function fetchClients(): Promise<ClientRecord[]> {

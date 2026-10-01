@@ -192,7 +192,9 @@ The pinned entry's context menu is the taskbar entry menu with the presentation 
 5. Show as plain entry or Show as <style>, when the pin declares a style
 6. Change avatar..., when the current style is `avatar`
 7. divider
-8. Close, which minimizes the pinned window
+8. Add to desktop or Remove from desktop, when the app has a desktop shortcut (desktop-interface plan section 4.9)
+9. divider
+10. Close, which minimizes the pinned window
 
 The pinned window's own menu is the V1 window menu: Refresh, Share, Quit, Close; its Close minimizes.
 Its title bar has minimize, maximize, and close; the close control minimizes too.
@@ -261,6 +263,7 @@ A chat root that had drifted to a chat-specific path is not adopted; the desktop
 
 ### 4.9 Compact and touch
 
+Compact mode is gone: a phone-sized viewport (at most 500px one way and 1000px the other) gets the phone layout, which has no taskbar or floating entries, and `../desktop-interface/plan-phone-interface.md` supersedes the compact-mode rules throughout this plan.
 Compact mode renders every pinned entry in the bar in its style, image only for `avatar`, and hides the floating verb from the menu.
 Touch mode uses long press for the menus, as elsewhere; the floating entry has the theme's touch target size at minimum.
 

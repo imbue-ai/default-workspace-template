@@ -9,7 +9,6 @@ desktop) a request came from.
 
 import json
 import threading
-from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
@@ -30,6 +29,7 @@ from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.imbue_common.logging import generate_log_event_id
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 
 CLIENT_ACTIVITY_EVENT_SOURCE: Final[EventSource] = EventSource("client_activity")
 MESSAGE_EVENT_TYPE: Final[EventType] = EventType("message")
@@ -164,15 +164,14 @@ def _empty_client_summary(client_id: str) -> dict[str, Any]:
 @pure
 def summarize_client_activity(
     events: Sequence[dict[str, Any]],
-    # The broadcaster's registrations: each carries ``client_id`` and ``active_desktop`` ("" when the client
-    # has not reported one).
-    connected_clients: Sequence[Mapping[str, str]],
+    connected_clients: Sequence[ConnectionRegistration],
 ) -> list[dict[str, Any]]:
     """Fold the log into one summary per client, most recently seen first (the ``context`` op).
 
     Every connected client is listed with its live desktop, whether or not the log holds anything
     for it: a client that has neither messaged nor switched desktops yet has no event, and is
-    still the one an agent's op should land on.
+    still the one an agent's op should land on. A pop-out's registration makes its client connected
+    but names no desktop, so the client's desktop stays its main window's (or the log's).
     """
     summary_by_client_id: dict[str, dict[str, Any]] = {}
     for event in events:
@@ -197,10 +196,10 @@ def summarize_client_activity(
     # The live registrations are fresher than the log (and the only record of a client that
     # has logged nothing yet), so they settle the desktop.
     for connected in connected_clients:
-        client_id = connected["client_id"]
-        summary = summary_by_client_id.setdefault(client_id, _empty_client_summary(client_id))
+        summary = summary_by_client_id.setdefault(connected.client_id, _empty_client_summary(connected.client_id))
         summary["is_connected"] = True
-        summary["active_desktop"] = connected["active_desktop"] or None
+        if not connected.is_pop_out:
+            summary["active_desktop"] = connected.active_desktop or None
     return sorted(summary_by_client_id.values(), key=lambda summary: summary["last_seen"], reverse=True)
 
 

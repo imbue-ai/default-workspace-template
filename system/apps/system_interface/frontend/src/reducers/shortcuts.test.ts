@@ -4,7 +4,7 @@ import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopEvent, DesktopState } from "./desktopState";
 import { cellForAddedShortcut, nextDesktopName, nextGlyphIndex, resolveLaunchRun } from "./shortcuts";
 
-const MODES = { isCompact: false, isTouch: false };
+const MODES = { isPhone: false, isTouch: false };
 const home = desktopRecord("home", {
   windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-2", "docs", "/b")],
   shortcuts: [

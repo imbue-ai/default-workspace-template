@@ -275,7 +275,20 @@ describe("the small helpers", () => {
       last_seen: "now",
       is_connected: true,
       entries: {},
+      shown_history: [],
     });
+    expect(
+      parseClientRecord({
+        id: "c1",
+        active_desktop: null,
+        last_seen: "now",
+        is_connected: true,
+        shown_history: ["win-1", "home"],
+      }).shown_history,
+    ).toEqual(["win-1", "home"]);
+    expect(() =>
+      parseClientRecord({ id: "c1", active_desktop: null, last_seen: "now", is_connected: true, shown_history: [3] }),
+    ).toThrow(WireShapeError);
     expect(
       parseClientRecord({
         id: "c1",

@@ -163,6 +163,7 @@ export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}):
     last_seen: "2026-09-19T00:00:00Z",
     is_connected: true,
     entries: {},
+    shown_history: [],
     ...overrides,
   };
 }
@@ -223,7 +224,7 @@ export function noticeWire(apps: string[], overrides: Partial<UpdateNoticeWire> 
   };
 }
 
-/** The theme metrics at the contract's default (non-compact) values. */
+/** The theme metrics at the contract's default (non-touch) values. */
 export function themeMetricsRecord(overrides: Partial<ThemeMetrics> = {}): ThemeMetrics {
   return {
     titleBarHeight: 36,
