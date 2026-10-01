@@ -59,7 +59,17 @@ const THEMES = [
       Monaco: "Retro Monaco",
       Geneva_9: "Retro Geneva 9",
     },
-    droppedRules: [],
+    droppedRules: [
+      // The demo page's grid backdrop; the desktop paints its own, and every app page its own.
+      /^body$/,
+      // Sets every form in a monospace face.
+      /^form$/,
+      // Inverts a field to white on black while it has the focus, which leaves a chat composer black.
+      /^input\[type="?[a-z-]+"?\]:focus-visible$/,
+      /^textarea:focus$/,
+      // Hides every checkbox and radio for labels the desktop does not draw.
+      /^input\[type="?(radio|checkbox)"?\]/,
+    ],
     droppedDeclarations: [
       // 18px type and fixed widths sized for the library's demo page; the desktop sizes its own.
       {
@@ -69,7 +79,10 @@ const THEMES = [
       // A 20px side padding would push the icon out of the desktop's square icon buttons.
       { selector: /^(\.btn|\.btn-default)$/, property: /^padding$/ },
       // A window is positioned by the desktop: no margin, and no floor under its own minimum size.
-      { selector: /^\.window$/, property: /^(margin|min-width|font-family)$/ },
+      // A window's page is a frame laid under its chrome, so the window paints no background over it.
+      { selector: /^\.window$/, property: /^(margin|min-width|font-family|background-color)$/ },
+      // Demo-page heading sizes (h2 at twice the body); the desktop and its apps size their own.
+      { selector: /^(\.heading|h1|h2)$/, property: /^font-size$/ },
       // The title bar controls are the desktop's own size; the library's are 40px boxes drawn at half scale.
       { selector: /^\.title-bar button$/, property: /^(width|height|margin|transform|border)$/ },
       { selector: /^\.title-bar \.title$/, property: /^font-size$/ },
@@ -121,6 +134,10 @@ const THEMES = [
       /^\.navbar/,
       // Moves every checkbox and radio off screen, for Bootstrap's custom labels the desktop does not draw.
       /^input\[type="(radio|checkbox)"\]$/,
+      // Windows buttons keep their raised face under the pointer and after a click, and sink on their
+      // plain face while pressed; the library sinks and dithers them on hover, focus and press (with
+      // !important), so a button stays sunk after it is pressed. The theme draws the pressed state.
+      /^\.btn:(hover|focus|active)$/,
       // A one-colon typo of the `::-webkit-scrollbar-button` rule the library also spells correctly.
       /^:-webkit-scrollbar/,
     ],

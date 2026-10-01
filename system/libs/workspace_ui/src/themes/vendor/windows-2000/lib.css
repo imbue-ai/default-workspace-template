@@ -92,27 +92,6 @@
     color: black;
     border-radius: 1px;
 }
-:root[data-ui-theme="windows-2000"] .btn:hover {
-    border: 2px inset #fff;
-    background: #d4d0c8;
-    color: #424242;
-    box-shadow: -1px -1px #000;
-}
-:root[data-ui-theme="windows-2000"] .btn:focus {
-    border: 2px inset #fff !important;
-    background: #d4d0c8;
-    color: #424242;
-    box-shadow: -1px -1px #000 !important;
-    outline: 0 !important;
-    background: url("./assets/background.bmp");
-}
-:root[data-ui-theme="windows-2000"] .btn:active {
-    border: 2px inset #fff !important;
-    color: #424242;
-    box-shadow: -1px -1px #000 !important;
-    outline: 0 !important;
-    background: url("./assets/background.bmp");
-}
 
 :root[data-ui-theme="windows-2000"] .btn-primary{
     padding-left: 8px;
