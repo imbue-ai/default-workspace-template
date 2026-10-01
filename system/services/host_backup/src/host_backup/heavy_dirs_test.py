@@ -38,8 +38,15 @@ def test_count_snapshot_listing_credits_each_entry_to_every_ancestor() -> None:
     assert counts.snapshot_short_id == "1a2b3c4d"
     assert counts.entry_count_by_directory["/"] == 97
     assert counts.entry_count_by_directory["/workspace/data"] == 96
-    assert counts.entry_count_by_directory["/workspace/data/.apps/pr-review/repos"] == 90
-    assert counts.entry_count_by_directory["/workspace/data/.apps/pr-review/repos/repo-a/sha-1"] == 30
+    assert (
+        counts.entry_count_by_directory["/workspace/data/.apps/pr-review/repos"] == 90
+    )
+    assert (
+        counts.entry_count_by_directory[
+            "/workspace/data/.apps/pr-review/repos/repo-a/sha-1"
+        ]
+        == 30
+    )
     assert counts.entry_count_by_directory["/workspace/data/notes"] == 6
 
 
@@ -50,12 +57,16 @@ def test_count_snapshot_listing_stops_counting_below_the_depth_limit() -> None:
     assert "/workspace/data/.apps/pr-review" not in counts.entry_count_by_directory
 
 
-def test_select_heavy_directories_follows_the_chain_down_to_the_heavy_directory() -> None:
+def test_select_heavy_directories_follows_the_chain_down_to_the_heavy_directory() -> (
+    None
+):
     counts = count_snapshot_listing(_tarball_cache_listing(), max_depth=8)
 
     heavy = select_heavy_directories(counts, min_share=0.2)
 
-    assert [(directory.path, directory.entry_count, directory.depth) for directory in heavy] == [
+    assert [
+        (directory.path, directory.entry_count, directory.depth) for directory in heavy
+    ] == [
         ("/workspace", 96, 1),
         ("/workspace/data", 96, 2),
         ("/workspace/data/.apps", 90, 3),
@@ -70,7 +81,10 @@ def test_select_heavy_directories_follows_the_chain_down_to_the_heavy_directory(
 
 def test_select_heavy_directories_lists_the_heavier_sibling_first() -> None:
     counts = count_snapshot_listing(
-        _listing(*[f"/light/f-{index}" for index in range(3)], *[f"/heavy/f-{index}" for index in range(7)]),
+        _listing(
+            *[f"/light/f-{index}" for index in range(3)],
+            *[f"/heavy/f-{index}" for index in range(7)],
+        ),
         max_depth=8,
     )
 

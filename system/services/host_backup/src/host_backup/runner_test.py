@@ -604,7 +604,9 @@ def _run_backup_with_threshold(
     state = _state_recording_events(tmp_path)
     _run_restic_backup(
         state=state,
-        config=BackupConfig(slow_backup_threshold_seconds=slow_backup_threshold_seconds),
+        config=BackupConfig(
+            slow_backup_threshold_seconds=slow_backup_threshold_seconds
+        ),
         snapshot=_direct_snapshot(),
         env_overrides={},
         backup_fn=_ScriptedRestic([_completed(0, stdout=_SLOW_BACKUP_SUMMARY_STDOUT)]),
@@ -647,7 +649,11 @@ def test_a_backup_under_the_threshold_records_no_slow_notice(
     ("last_notice_age_seconds", "expected_notice_count"),
     [
         pytest.param(3600.0, 0, id="notified-an-hour-ago"),
-        pytest.param(SLOW_BACKUP_NOTICE_INTERVAL_SECONDS + 3600.0, 1, id="notified-over-a-day-ago"),
+        pytest.param(
+            SLOW_BACKUP_NOTICE_INTERVAL_SECONDS + 3600.0,
+            1,
+            id="notified-over-a-day-ago",
+        ),
     ],
 )
 def test_the_slow_notice_is_recorded_at_most_once_a_day(

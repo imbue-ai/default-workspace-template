@@ -46,7 +46,9 @@ class SnapshotEntryCounts(FrozenModel):
     """How many entries a snapshot holds under each of its directories."""
 
     snapshot_short_id: str = Field(description="Short id of the listed snapshot")
-    snapshot_time: str = Field(description="When the snapshot was taken, as restic reports it")
+    snapshot_time: str = Field(
+        description="When the snapshot was taken, as restic reports it"
+    )
     entry_count_by_directory: dict[str, int] = Field(
         description="Entries (files, directories, links) beneath each directory; '/' holds the total"
     )
@@ -79,7 +81,9 @@ def count_snapshot_listing(
         try:
             record = json.loads(line)
         except ValueError:
-            logger.warning("Skipping a restic ls line that is not JSON: {!r}", line[:200])
+            logger.warning(
+                "Skipping a restic ls line that is not JSON: {!r}", line[:200]
+            )
             continue
         if not isinstance(record, dict):
             continue

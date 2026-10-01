@@ -253,7 +253,8 @@ def test_a_cachedir_tag_keeps_its_directorys_contents_out_of_the_backup(
     listed = set(listing.stdout.splitlines())
     assert "/workspace/data/.apps/pr-review/repos/CACHEDIR.TAG" in listed
     assert not any(
-        path.startswith("/workspace/data/.apps/pr-review/repos/repo-a") for path in listed
+        path.startswith("/workspace/data/.apps/pr-review/repos/repo-a")
+        for path in listed
     )
     assert "/workspace/data/.apps/reading-room/articles/article.md" in listed
     assert "/workspace/data/.apps/finances/raw/statement.csv" in listed
@@ -283,9 +284,7 @@ def test_heavy_dirs_names_the_directory_holding_most_of_a_real_snapshot(
     )
     assert backup_result.returncode == 0, backup_result.stderr
 
-    counts = count_snapshot_listing(
-        stream_snapshot_listing("latest", env), max_depth=8
-    )
+    counts = count_snapshot_listing(stream_snapshot_listing("latest", env), max_depth=8)
     heavy_by_path = {
         directory.path: directory.entry_count
         for directory in select_heavy_directories(counts, min_share=0.5)
