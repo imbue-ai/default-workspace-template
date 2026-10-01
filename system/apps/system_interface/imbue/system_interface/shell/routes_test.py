@@ -2037,7 +2037,7 @@ def test_focus_raises_a_popped_out_window_in_its_own_window_and_leaves_it_out(cl
         answer = focused.get_json()
         assert (answer["is_raised_in_own_window"], answer["is_brought_back"]) == (True, False)
         assert _placements(client, "c1", "research") == placements_before
-        assert _show_messages(client_queue) == [({"window": window_id, "is_detached": True}, "c1", "")]
+        assert _layout_ops(client_queue) == [("show", {"window": window_id, "is_detached": True}, "c1", "")]
     recorded = _shell(app).clients.get_client("c1")
     assert recorded is not None and recorded.active_desktop == "home"
 
@@ -2056,7 +2056,7 @@ def test_an_open_that_finds_a_popped_out_window_at_the_path_raises_it_in_its_own
     assert found.status_code == 200
     assert (found.get_json()["window_id"], found.get_json()["is_raised_in_own_window"]) == (window_id, True)
     assert _placements(client, "c1") == placements_before
-    assert _show_messages(client_queue) == [({"window": window_id, "is_detached": True}, "c1", "")]
+    assert _layout_ops(client_queue) == [("show", {"window": window_id, "is_detached": True}, "c1", "")]
     # Asked for another window at the path, the open opens one: the pop-out is left alone.
     another = _op(
         client, "open", {"app": "terminal", "path": "/?session=t1", "client": "c1", "if_present": "new"}, None
