@@ -263,6 +263,45 @@ describe("opens and closes this client made", () => {
     ).toBe(state);
   });
 
+  it("keeps this client's own path of an independent window on a desktop it is not on", () => {
+    const independent = windowRecord("win-4", "docs", "/", { scope: "independent" });
+    const elsewhere = windowRecord("win-5", "docs", "/", { scope: "independent" });
+    let state = reduceDesktopState(loaded(), {
+      type: "desktops_updated",
+      desktops: [
+        { ...home, windows: [...home.windows, independent] },
+        { ...work, windows: [elsewhere] },
+      ],
+    });
+    state = reduceAll(
+      state,
+      {
+        type: "window_location_reported",
+        desktopId: "home",
+        window: { ...independent, path: "/?doc=4", title: "Four" },
+      },
+      {
+        type: "window_location_reported",
+        desktopId: "work",
+        window: { ...elsewhere, path: "/?doc=5", title: "Five" },
+      },
+    );
+    expect(effectiveWindow(state, elsewhere).path).toBe("/?doc=5");
+    expect(effectiveWindowTitle(state, elsewhere, appRecord("docs"))).toBe("Five");
+    expect(state.desktops[1].windows[0].path).toBe("/");
+
+    // Leaving a desktop keeps what this client knew of its own pages there.
+    state = reduceDesktopState(state, { type: "desktop_activated", desktopId: "work" });
+    expect(effectiveWindow(state, independent).path).toBe("/?doc=4");
+    // The window's own desktop's layout, once loaded, is the shell's word on it.
+    state = reduceDesktopState(state, {
+      type: "layout_loaded",
+      desktopId: "work",
+      layout: { ...layoutRecord([], "t2"), window_paths: { "win-5": { path: "/?doc=6", title: "Six" } } },
+    });
+    expect(effectiveWindow(state, elsewhere).path).toBe("/?doc=6");
+  });
+
   it("drops a closed window and its placement", () => {
     const state = reduceDesktopState(loaded(), { type: "window_closed_here", desktopId: "home", windowId: "win-1" });
     expect(state.desktops[0].windows.map((window) => window.id)).toEqual(["win-2"]);

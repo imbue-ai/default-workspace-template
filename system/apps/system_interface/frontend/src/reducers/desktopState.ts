@@ -53,6 +53,9 @@ export interface DesktopState {
   readonly layout: Layout;
   /** False between a desktop switch and the fetch of its layout answering. */
   readonly isLayoutLoaded: boolean;
+  /** This client's last known own path and title of each independent window on a desktop other than the active
+   *  one, which the layout does not hold: the phone shows every desktop's windows. */
+  readonly otherDesktopWindowPaths: Readonly<Record<string, StoredWindowPath>>;
   /** Bumped by every gesture that changed the layout; a save carries the version it wrote. */
   readonly layoutVersion: number;
   /** The version the last save wrote, so ``isLayoutDirty`` is a comparison rather than a flag. */
@@ -116,6 +119,7 @@ export function initialDesktopState(clientId: string, modes: RenderModes): Deskt
     activeDesktopId: null,
     layout: EMPTY_LAYOUT,
     isLayoutLoaded: false,
+    otherDesktopWindowPaths: {},
     layoutVersion: 0,
     savedLayoutVersion: 0,
     modes,
@@ -196,6 +200,7 @@ function withDesktopActivated(state: DesktopState, desktopId: string): DesktopSt
     activeDesktopId: desktopId,
     layout: EMPTY_LAYOUT,
     isLayoutLoaded: false,
+    otherDesktopWindowPaths: { ...state.otherDesktopWindowPaths, ...state.layout.window_paths },
     layoutVersion: state.layoutVersion + 1,
     savedLayoutVersion: state.layoutVersion + 1,
   };
@@ -263,15 +268,21 @@ function withWindowClosedHere(state: DesktopState, desktopId: string, windowId: 
 
 /** The window's record as the location route answered it, in place; nothing for a window since gone. An
  *  independent window's answer is this client's own path and title, which live beside the layout rather than on
- *  the shared record (not a gesture: the layout's version is untouched). */
+ *  the shared record (not a gesture: the layout's version is untouched), or beside the state for a window on
+ *  another desktop. */
 function withWindowLocationReported(state: DesktopState, desktopId: string, window: WindowRecord): DesktopState {
   const desktop = state.desktops.find((candidate) => candidate.id === desktopId);
   if (desktop === undefined || !desktop.windows.some((candidate) => candidate.id === window.id)) return state;
   if (window.scope === "independent") {
-    if (desktopId !== state.activeDesktopId) return state;
+    const reported = { path: window.path, title: window.title };
+    if (desktopId !== state.activeDesktopId) {
+      const known = state.otherDesktopWindowPaths[window.id];
+      if (known?.path === window.path && known.title === window.title) return state;
+      return { ...state, otherDesktopWindowPaths: { ...state.otherDesktopWindowPaths, [window.id]: reported } };
+    }
     const stored = state.layout.window_paths[window.id];
     if (stored?.path === window.path && stored.title === window.title) return state;
-    const window_paths = { ...state.layout.window_paths, [window.id]: { path: window.path, title: window.title } };
+    const window_paths = { ...state.layout.window_paths, [window.id]: reported };
     return { ...state, layout: { ...state.layout, window_paths } };
   }
   const desktops = state.desktops.map((candidate) =>
@@ -430,11 +441,12 @@ export function windowTitle(window: WindowRecord, app: AppRecord | undefined): s
   return app?.display_name ?? window.app;
 }
 
-/** The window as this client sees it: an independent window on the active desktop wears the client's stored path
- *  and title (the home path with no title when it has none); a linked window is the shared record. */
+/** The window as this client sees it: an independent window wears the client's stored path and title (the home
+ *  path with no title when it has none), from the active desktop's layout or, for another desktop's window, what
+ *  this client last knew of it; a linked window is the shared record. */
 export function effectiveWindow(state: DesktopState, window: WindowRecord): WindowRecord {
   if (window.scope === "linked") return window;
-  const stored = state.layout.window_paths[window.id];
+  const stored = state.layout.window_paths[window.id] ?? state.otherDesktopWindowPaths[window.id];
   return stored === undefined ? window : { ...window, path: stored.path, title: stored.title };
 }
 
