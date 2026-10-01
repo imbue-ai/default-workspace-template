@@ -29,10 +29,15 @@ input=$(cat)
 # Skip if subagent proxy child -- subagents manage their own steps.
 [[ -z "${MNGR_CLAUDE_SUBAGENT_PROXY_CHILD:-}" ]] || exit 0
 
-# Skip a build's plan-node worker. It keeps no progress records at all: the only timeline the
-# user sees belongs to the orchestrator that launched it, and it shows them stages of the build
-# rather than nodes. Nudging one to declare steps would contradict its own task file.
-[[ "${MNGR_AGENT_ROLE:-}" != "worktree_worker" ]] || exit 0
+# Skip a build's plan-node worker, in either template it runs under: a worktree of its own, or
+# the build folder shared with its siblings. It keeps no progress records at all -- the only
+# timeline the user sees belongs to the orchestrator that launched it, and it shows them stages
+# of the build rather than nodes. `worker-workspace-rules.md` tells the worker outright that it
+# does not use `tk`, so nudging one here contradicts its own instructions, which is exactly what
+# happened when the shared-folder template arrived and this test still named only the worktree one.
+case "${MNGR_AGENT_ROLE:-}" in
+    worktree_worker | shared_worker) exit 0 ;;
+esac
 
 tool_name=$(echo "$input" | jq -r '.tool_name // empty')
 
