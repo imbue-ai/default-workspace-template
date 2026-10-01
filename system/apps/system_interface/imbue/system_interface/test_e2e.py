@@ -14,6 +14,8 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.parse
@@ -2151,3 +2153,177 @@ def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_typ
                 chrome_server.server_close()
     assert isinstance(client_id, str) and client_id
     assert received == [{"type": _FOCUS_CHAT_TYPE, "client_id": client_id, "chatId": _FOCUSED_CHAT_ID}]
+
+
+# The File Viewer (``system/apps/files``): dufs over a folder of the test's own, with the workspace's vendored and
+# patched frontend, registered as the ``files`` app. The workspace image installs dufs; elsewhere these tests skip.
+_FILES_APP_NAME = "files"
+_FILES_ASSETS_DIRECTORY = Path(__file__).resolve().parents[3] / "files" / "assets"
+_DUFS_BINARY = shutil.which("dufs")
+# dufs answers a client it takes for a script (curl and the like) with a bare "Not Found" instead of the assets'
+# ``404.html``, so a direct request says it is a browser.
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+)
+
+
+@contextlib.contextmanager
+def _running_file_viewer(root: Path) -> Generator[str, None, None]:
+    """Run dufs over ``root`` as the File Viewer's program line runs it over ``/``; yields its URL."""
+    assert _DUFS_BINARY is not None
+    port = find_free_port()
+    url = f"http://127.0.0.1:{port}"
+    command = [_DUFS_BINARY, "--allow-all", "--bind", "127.0.0.1", "--port", str(port)]
+    command += ["--assets", str(_FILES_ASSETS_DIRECTORY), str(root)]
+    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for(
+            lambda: is_server_answering(url),
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message=f"dufs did not come up at {url}",
+        )
+        yield url
+    finally:
+        process.terminate()
+        process.wait(timeout=5.0)
+
+
+@contextlib.contextmanager
+def _running_e2e_server_with_file_viewer(tmp_path: Path, root: Path) -> Generator[tuple[E2EServer, str], None, None]:
+    """The shell over the stub app and a File Viewer serving ``root``; yields the shell and the viewer's URL."""
+    with _running_file_viewer(root) as viewer_url:
+        row = registry_row_toml(
+            _FILES_APP_NAME,
+            viewer_url,
+            display_name="File Viewer",
+            launch_paths=(("new", "File Viewer", "/"),),
+        )
+        with _running_e2e_server(tmp_path, extra_rows=(row,)) as server:
+            yield server, viewer_url
+
+
+def _file_viewer_frame(page: Page, window_id: str) -> Frame:
+    """The frame of a File Viewer window; it speaks only its location beacon, so there is no handshake to await."""
+    handle = page.locator(f'iframe[data-live-page="{window_id}"]').element_handle(timeout=15000)
+    frame = handle.content_frame()
+    assert frame is not None
+    return frame
+
+
+def _raise_window(page: Page, server: E2EServer, client_id: str, window_id: str) -> None:
+    """Bring a window covered by a newer one back on top, as an agent's ``focus`` op does."""
+    _broadcast_op(server.base_url, "focus", {"window": window_id, "client": client_id})
+    expect(_window(page, window_id)).to_have_attribute("data-focused", "true", timeout=15000)
+
+
+def _window_record(base_url: str, window_id: str) -> dict[str, Any]:
+    return next(window for window in _windows(base_url) if window["id"] == window_id)
+
+
+def _wait_for_window_at(base_url: str, window_id: str, path: str) -> dict[str, Any]:
+    wait_for(
+        lambda: _window_record(base_url, window_id)["path"] == path,
+        timeout=15.0,
+        poll_interval=0.1,
+        error_message=f"window {window_id} never reached {path!r}",
+    )
+    return _window_record(base_url, window_id)
+
+
+@pytest.mark.skipif(_DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
+@pytest.mark.timeout(120, func_only=False)
+def test_the_file_viewer_opens_files_in_workspace_windows_and_raises_one_already_on_the_page(
+    tmp_path: Path, page: Page
+) -> None:
+    """In a File Viewer window, a folder opens in place; a file's name opens its view page in a new window of the
+    File Viewer, titled after the file, and a second click raises that window; the view page's Edit takes the same
+    window to the edit page; the listing's Edit then raises that window, and a modified click on the name opens a
+    view page again, as no window is on it any more. No click opens a browser window of its own."""
+    root = tmp_path / "viewer-root"
+    (root / "notes").mkdir(parents=True)
+    (root / "notes" / "plan 1.txt").write_text("the plan\n")
+    view_path = "/notes/plan%201.txt?view"
+    edit_path = "/notes/plan%201.txt?edit"
+    with _running_e2e_server_with_file_viewer(tmp_path, root) as (server, _):
+        _land(page, server)
+        client_id = _client_id(page)
+        listing_id = _broadcast_op(
+            server.base_url, "open", {"app": _FILES_APP_NAME, "path": "/", "client": client_id}
+        )["window_id"]
+        listing = _file_viewer_frame(page, listing_id)
+
+        listing.get_by_role("link", name="notes", exact=True).click()
+        _wait_for_window_at(server.base_url, listing_id, "/notes/")
+        assert [window["id"] for window in _windows(server.base_url)] == [listing_id]
+
+        listing.get_by_role("link", name="plan 1.txt", exact=True).click()
+        (viewer,) = [window for window in _wait_for_window_count(server.base_url, 2) if window["id"] != listing_id]
+        assert viewer["app"] == _FILES_APP_NAME and viewer["path"] == view_path
+        wait_for(
+            lambda: _window_record(server.base_url, viewer["id"])["title"] == "plan 1.txt",
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the view page's window was never titled after the file",
+        )
+        expect(_window(page, viewer["id"])).to_have_attribute("data-focused", "true", timeout=15000)
+
+        _raise_window(page, server, client_id, listing_id)
+        listing.get_by_role("link", name="plan 1.txt", exact=True).click()
+        expect(_window(page, viewer["id"])).to_have_attribute("data-focused", "true", timeout=15000)
+        _assert_no_further_window(page, server, [listing_id, viewer["id"]])
+
+        viewer_frame = _file_viewer_frame(page, viewer["id"])
+        viewer_frame.locator(".edit-file").click()
+        _wait_for_window_at(server.base_url, viewer["id"], edit_path)
+        assert [window["id"] for window in _windows(server.base_url)] == [listing_id, viewer["id"]]
+
+        _raise_window(page, server, client_id, listing_id)
+        listing.locator('a[title="Edit file"]').click()
+        expect(_window(page, viewer["id"])).to_have_attribute("data-focused", "true", timeout=15000)
+        _assert_no_further_window(page, server, [listing_id, viewer["id"]])
+
+        _raise_window(page, server, client_id, listing_id)
+        listing.get_by_role("link", name="plan 1.txt", exact=True).click(modifiers=["ControlOrMeta"])
+        (second_viewer,) = [
+            window
+            for window in _wait_for_window_count(server.base_url, 3)
+            if window["id"] not in (listing_id, viewer["id"])
+        ]
+        assert second_viewer["path"] == view_path
+        assert page.context.pages == [page], "a File Viewer click opened a browser window of its own"
+
+
+@pytest.mark.skipif(_DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
+@pytest.mark.timeout(90, func_only=False)
+def test_the_file_viewer_answers_a_missing_path_with_its_own_page_naming_it_and_the_nearest_folder(
+    tmp_path: Path, page: Page
+) -> None:
+    """A path that does not exist answers 404 with the File Viewer's own page, which, in a window, names the path
+    asked for, links the nearest folder above it that exists, and titles the window after the missing name."""
+    root = tmp_path / "viewer-root"
+    (root / "notes").mkdir(parents=True)
+    missing = "/notes/gone/missing.txt"
+    with _running_e2e_server_with_file_viewer(tmp_path, root) as (server, viewer_url):
+        request = urllib.request.Request(f"{viewer_url}{missing}?view", headers={"User-Agent": _BROWSER_USER_AGENT})
+        with pytest.raises(urllib.error.HTTPError) as answered:
+            urllib.request.urlopen(request, timeout=5)
+        assert answered.value.code == 404
+        assert "<h1>Not found</h1>" in answered.value.read().decode()
+
+        _land(page, server)
+        client_id = _client_id(page)
+        window_id = _broadcast_op(
+            server.base_url, "open", {"app": _FILES_APP_NAME, "path": f"{missing}?view", "client": client_id}
+        )["window_id"]
+        frame = _file_viewer_frame(page, window_id)
+        expect(frame.locator(".asked-path")).to_have_text(missing, timeout=15000)
+        nearest = frame.locator(".nearest-folder")
+        expect(nearest).to_have_text("/notes/", timeout=15000)
+        assert nearest.get_attribute("href") == "/notes/"
+        wait_for(
+            lambda: _window_record(server.base_url, window_id)["title"] == "missing.txt",
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the not-found page's window was never titled after the missing name",
+        )
