@@ -1,0 +1,1 @@
+- Tool-call policy P8 (and its state-of-things row) now states the new notify rule: a chat notifies when a turn ends with something the user will want to know about or act on, including a question only they can answer, rather than after every turn that did work. Still prose-only, with no hook.

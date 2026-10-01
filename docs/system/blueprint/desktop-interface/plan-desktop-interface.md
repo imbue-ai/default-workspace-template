@@ -61,7 +61,7 @@ A fresh workspace, and a workspace whose state directory holds no `desktops.json
 It is created on the first read of the desktops after the inventory has read the registry once, so its shortcuts are seeded from the apps that are actually registered rather than from an empty registry at boot.
 Apps register one at a time as their programs finish starting, so an app may register after `Home` was seeded; its default shortcut is added then rather than waited for.
 The shell records every app whose default shortcut it has offered in `default_shortcuts_offered.json`: the apps each new desktop was seeded with, and every app added as follows.
-On every read of the desktops and after every change of the registry's rows, each registered, non-internal app whose `default_shortcut` names a launch path it offers, and which is not recorded, is added to every desktop and then recorded.
+On every read of the desktops and after every change of the registry's rows, each app with a default shortcut (3.6) that is not recorded has it added to every desktop, and is then recorded.
 A desktop that already holds a shortcut of that `(app, launch)` gets nothing.
 A desktop whose shortcuts are exactly the seed of the recorded apps that are registered is seeded again from every registered app, so it reads in launcher order however late each app registered.
 Any other desktop gets the shortcut at the first free cell in reading order, and nothing on it moves.
@@ -112,7 +112,9 @@ A shortcut is `{target, mode, cell}` where `target` is `{kind: "launch", app, la
 `focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs the launch path only when there is none; `new` always runs it.
 A desktop holds at most one shortcut per `(app, launch)`.
 
-A new desktop is seeded from every registered, non-internal app's `default_shortcut`, in launcher order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
+Every registered, non-internal app has at most one default shortcut: its manifest's `default_shortcut` when it declares one, whether or not that launch path takes typed or drafted text (none when it names a launch path the app does not offer); otherwise, when its row names a `program`, its first launch path that takes no text (one declaring neither a `text_param` nor a `draft_param`), or its first launch path when every one takes text, in `focus` mode. A shortcut of a launch path that takes text runs it with no text.
+A row naming no program and declaring no `default_shortcut` has none: such a row is a preview frame, an isolated test server, or an app registered before manifests without `forward_port.py --program`, while an app built from a manifest names one, and so does an app registered before manifests with `--program`.
+A new desktop is seeded from every app's default shortcut, in launcher order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
 An app that registers after a desktop was made is added to it as 3.2 says.
 The grid is `columns = max(1, floor((width - inset) / cell_width))` by `rows = max(1, floor((height - inset) / cell_height))` over the backdrop, with the cell size and inset from the theme (contracts.md section 10).
 Rendering places every shortcut that has a free cell inside the grid at its cell, then every other shortcut at the nearest free cell to its clamped cell (Euclidean distance in cell units, ties by column then row); no two shortcuts ever draw in one cell, and nothing is written.
@@ -241,8 +243,8 @@ Creating switches the creating client to the new desktop.
 
 ### 4.9 Shortcut gestures
 
-Single click selects; double click, Enter, or Space runs; on touch a tap runs, since a finger has no double tap worth asking for and nothing to select for; a drag beyond the threshold lifts the icon, shows the target cell, and drops it there; right-click or long-press opens the shortcut menu (Open, the complementary mode, Remove).
-Adding a shortcut: the launcher's tiles offer "Add to desktop" for each launch path, placed at the first free cell in reading order.
+Single click selects; double click, Enter, or Space runs; on touch a tap runs, since a finger has no double tap worth asking for and nothing to select for; a drag beyond the threshold lifts the icon, shows the target cell, and drops it there; right-click or long-press opens the shortcut menu (Open, the complementary mode, Remove from desktop).
+Adding a shortcut: the right-click menu of the launcher row of an app's default shortcut (3.6), and of a taskbar entry of the app, offers "Add to desktop", placed at the first free cell in reading order in the shortcut's mode, or "Remove from desktop" when the active desktop holds it (launcher plan section 4.2); no other launch path is offered.
 
 ### 4.10 The taskbar
 

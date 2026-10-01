@@ -166,10 +166,14 @@ python3 system/scripts/layout.py place "$(python3 system/scripts/layout.py open 
 ## Shortcuts and the wallpaper
 
 Each desktop's backdrop carries **shortcuts**: one per (app, launch path), in
-grid cells. A new desktop is seeded with every app's `default_shortcut` from
-its manifest, and an app that registers after a desktop was made (one you
-just built included) has its `default_shortcut` added to every desktop once:
-there is no need to add it by hand, and one taken off after that stays off.
+grid cells. A new desktop is seeded with a shortcut of every app: its
+manifest's `default_shortcut` (which may be a launch path that takes typed
+text), or, when it declares none and a program runs it, its first launch path
+taking no text (its first of all when every one takes text), focusing.
+An app that registers after a desktop was made (one you just built included)
+has its shortcut added to every desktop once: there is no need to add it by
+hand, and one taken off after that stays off. The user can also add or remove
+an app's own shortcut by right-clicking it in the launcher or the taskbar.
 
 ```bash
 # The target client's active desktop's shortcuts: app, launch path, mode, cell.

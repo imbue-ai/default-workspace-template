@@ -6,7 +6,7 @@ The workspace has a phone layout. On a screen whose shorter side is under 700px 
 
 - Tapping the pill lists every window of every desktop, the ones you looked at most recently first. Each can be shown, closed with its X, or given a Refresh (and Quit, for an app that can be stopped) from its menu; Close all closes everything but the chat after asking. Holding the pill opens the menu of the window on screen.
 
-- The plus opens the launcher as a list you tap: apps to open, and with text typed, the windows that match and "Send to chat..." / "Draft into chat". Sending a message shows the chat it went to.
+- The plus opens the launcher as a list you tap: apps to open, and with text typed, the windows that match and "Send to chat..." / "Draft into chat". Sending a message shows the chat it went to. It offers no Add to desktop, since the phone draws no desktop icons.
 
 - A phone moves nothing on a laptop: showing a window there changes nobody's arrangement, and a window opened from the phone waits minimized at the bottom of the laptop's taskbar. When an agent shows or opens a window for the phone, the phone switches to it; when a window it shows is closed anywhere, it goes back home.
 

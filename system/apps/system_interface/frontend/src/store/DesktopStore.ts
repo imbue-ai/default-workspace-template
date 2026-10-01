@@ -87,6 +87,7 @@ import {
   activeDesktop,
   activeFocusedWindowId,
   appByName,
+  desktopById,
   detachedWindowsOf,
   draftTargetOf,
   effectiveWindow,
@@ -111,7 +112,13 @@ import type {
   PhoneShown,
 } from "../reducers/desktopState";
 import { focusTargetOf, isShownWindowGone, phoneLanding, shownWindowOf } from "../reducers/phone";
-import { STILL_CONNECTING_NOTICE, cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
+import {
+  STILL_CONNECTING_NOTICE,
+  cellForAddedShortcut,
+  findShortcut,
+  isShortcutOf,
+  resolveLaunchRun,
+} from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
 import type {
   ActiveDesktopChangedEvent,
@@ -207,7 +214,7 @@ export type TearOutPhase = "out" | "in" | "released";
 export interface PopOutBridge {
   requestPopOut(request: PopOutRequest): void;
   beginWindowDrag(request: WindowDragRequest): void;
-  endWindowDrag(windowId: string, isDetached: boolean): void;
+  endWindowDrag(windowId: string, isDetached: boolean, isCancelled: boolean): void;
   reportDetachedWindows(windows: readonly DetachedWindowReport[]): void;
 }
 
@@ -313,6 +320,14 @@ interface ShortcutCellUpdate {
 
 export type ActiveGesture = MoveGesture | ResizeGesture | ShortcutGesture | FloatingEntryGesture;
 
+/** A watched drag this shell ended on its own release, whose last word from the chrome may still be on its way. */
+interface ReleasedWatchedDrag {
+  readonly windowId: string;
+  readonly isDetached: boolean;
+  /** The window's placement as the drag began, which a late pull-out puts back before detaching it. */
+  readonly placementAtStart: Placement;
+}
+
 type Listener = () => void;
 
 export class DesktopStore {
@@ -320,6 +335,7 @@ export class DesktopStore {
   private metrics: ThemeMetrics;
   private backdrop: PixelSize = { width: 0, height: 0 };
   private gesture: ActiveGesture | null = null;
+  private releasedWatchedDrag: ReleasedWatchedDrag | null = null;
   private isLauncherOpenNow = false;
   // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
   private replacedDesktop: ReplacedDesktop | null = null;
@@ -419,10 +435,15 @@ export class DesktopStore {
    *  stands where the drag began. "in": the chrome dropped that window, and this one is brought back and shown
    *  again where the drag has it, saved at once too. "released": the button came up while out, and the gesture
    *  is over; the placement is already what it is to be, so nothing is written. This shell is the one writer
-   *  during a drag; the chrome's window only reads. */
+   *  during a drag; the chrome's window only reads. A word on a watched drag this shell already ended on its own
+   *  release still stands (``takeLateTearOut``). */
   setTearOut(windowId: string, phase: TearOutPhase): void {
     const gesture = this.moveGestureOf(windowId);
-    if (gesture === null || !gesture.isWatched) return;
+    if (gesture === null) {
+      this.takeLateTearOut(windowId, phase);
+      return;
+    }
+    if (!gesture.isWatched) return;
     if (phase === "released") {
       if (!gesture.isTearingOut) return;
       this.gesture = null;
@@ -442,6 +463,28 @@ export class DesktopStore {
   private detachDraggedWindow(windowId: string): void {
     this.dispatch({ type: "window_detached", windowId });
     void this.flushPendingSave();
+  }
+
+  /** The chrome's word on a watched drag this shell already ended on its own release, which reached it first. The
+   *  chrome's word stands: "released" after a release inside means the chrome kept the window it pulled out, so
+   *  this one goes out too, from the placement the drag began at, as if "out" had come in time; "in" after a
+   *  release outside means the chrome dropped its window, so this one comes back. A late "out" alone changes
+   *  nothing: the chrome follows it with "released" when it keeps its window. */
+  private takeLateTearOut(windowId: string, phase: TearOutPhase): void {
+    const released = this.releasedWatchedDrag;
+    if (released === null || released.windowId !== windowId) return;
+    if (phase === "released" && !released.isDetached) {
+      const start = released.placementAtStart;
+      this.dispatch({ type: "window_frame_set", windowId, frame: start.frame });
+      if (start.state !== "NORMAL") this.dispatch({ type: "window_state_set", windowId, state: start.state });
+      this.detachDraggedWindow(windowId);
+    } else if (phase === "in" && released.isDetached) {
+      this.bringBackDraggedWindow(windowId);
+    } else {
+      return;
+    }
+    this.releasedWatchedDrag = null;
+    this.notifyListeners();
   }
 
   /** Back inside, or cancelled while out: the window is on the desktop again, raised (its state kept, so a
@@ -1138,21 +1181,34 @@ export class DesktopStore {
     this.dispatch({ type: "desktops_updated", desktops });
   }
 
-  /** Add a launch path to the active desktop at the first free cell in reading order over the current grid;
-   *  nothing when it is already there (the shell would move the shortcut and reset its mode). */
+  /** Add a launch path to the active desktop at the first free cell in reading order over the current grid, drawn
+   *  at once and taken off again if the shell refuses; nothing when it is already there (the shell would move the
+   *  shortcut and reset its mode). A refusal takes off only the shortcut drawn here: one a broadcast put there in
+   *  the meantime is the shell's and stays. */
   async addShortcut(app: string, launch: string, mode: ShortcutMode): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
-    if (desktop.shortcuts.some((shortcut) => shortcut.target.app === app && shortcut.target.launch === launch)) return;
+    if (findShortcut(desktop, app, launch) !== undefined) return;
     const cell = cellForAddedShortcut(desktop, this.gridDimensions());
-    await this.setShortcut(desktop.id, { target: { kind: "launch", app, launch }, mode, cell });
+    const shortcut: DesktopShortcut = { target: { kind: "launch", app, launch }, mode, cell };
+    this.takeDesktop({ ...desktop, shortcuts: [...desktop.shortcuts, shortcut] });
+    try {
+      this.takeDesktop(await this.deps.api.setDesktopShortcut(desktop.id, shortcut));
+    } catch (error) {
+      const now = desktopById(this.state, desktop.id);
+      if (now !== null && findShortcut(now, app, launch) === shortcut) {
+        this.takeDesktop({ ...now, shortcuts: now.shortcuts.filter((candidate) => candidate !== shortcut) });
+      }
+      this.toast(`Could not add the shortcut: ${(error as Error).message}`);
+    }
   }
 
+  /** Replace a shortcut the desktop holds, as the shortcut menu's mode flip does. */
   async setShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<void> {
     try {
       this.takeDesktop(await this.deps.api.setDesktopShortcut(desktopId, shortcut));
     } catch (error) {
-      this.toast(`Could not add the shortcut: ${(error as Error).message}`);
+      this.toast(`Could not change the shortcut: ${(error as Error).message}`);
     }
   }
 
@@ -1203,20 +1259,29 @@ export class DesktopStore {
     this.takeDesktop({
       ...desktop,
       shortcuts: desktop.shortcuts.map((shortcut) => {
-        const wanted = cells.find(
-          (entry) => entry.app === shortcut.target.app && entry.launch === shortcut.target.launch,
-        );
+        const wanted = cells.find((entry) => isShortcutOf(shortcut, entry.app, entry.launch));
         return wanted === undefined ? shortcut : { ...shortcut, cell: wanted.cell };
       }),
     });
   }
 
+  /** Take a shortcut off the active desktop at once, putting it back if the shell refuses. A refusal puts it back
+   *  only while the shell has said nothing of the desktops since: a broadcast in the meantime is the shell's word on
+   *  whether it is still there, and stands. */
   async removeShortcut(app: string, launch: string): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
+    const removed = findShortcut(desktop, app, launch);
+    if (removed === undefined) return;
+    this.takeDesktop({ ...desktop, shortcuts: desktop.shortcuts.filter((candidate) => candidate !== removed) });
+    const revision = this.desktopsRevision;
     try {
       this.takeDesktop(await this.deps.api.removeDesktopShortcut(desktop.id, app, launch));
     } catch (error) {
+      const now = desktopById(this.state, desktop.id);
+      if (this.desktopsRevision === revision && now !== null && findShortcut(now, app, launch) === undefined) {
+        this.takeDesktop({ ...now, shortcuts: [...now.shortcuts, removed] });
+      }
       this.toast(`Could not remove the shortcut: ${(error as Error).message}`);
     }
   }
@@ -1633,6 +1698,7 @@ export class DesktopStore {
     const startRect = this.renderedRect(placement);
     // A solo shell shows one window edge to edge; there is no desktop to pull a window out of.
     const isWatched = this.canPopOut && this.soloWindowId === null;
+    this.releasedWatchedDrag = null;
     this.gesture = {
       kind: "move",
       windowId,
@@ -1691,7 +1757,14 @@ export class DesktopStore {
     this.gesture = null;
     if (settled === null || settled.kind !== "move") return;
     const placement = placementOf(this.state.layout, settled.windowId);
-    if (settled.isWatched) this.popOut.endWindowDrag(settled.windowId, settled.isTearingOut);
+    if (settled.isWatched) {
+      this.popOut.endWindowDrag(settled.windowId, settled.isTearingOut, false);
+      this.releasedWatchedDrag = {
+        windowId: settled.windowId,
+        isDetached: settled.isTearingOut,
+        placementAtStart: placement,
+      };
+    }
     if (settled.isTearingOut) {
       // Released outside, and this shell saw the release itself (a pointer that does leave the chrome's window):
       // the window was detached and saved as it went out, so the gesture only ends.
@@ -1868,7 +1941,7 @@ export class DesktopStore {
     // A watched drag cancelled mid-way (Escape, the browser): the chrome drops any window it was dragging, and
     // one that was out comes back to the desktop.
     if (cancelled.kind === "move" && cancelled.isWatched) {
-      this.popOut.endWindowDrag(cancelled.windowId, false);
+      this.popOut.endWindowDrag(cancelled.windowId, false, true);
       if (cancelled.isTearingOut) this.bringBackDraggedWindow(cancelled.windowId);
     }
     this.notifyListeners();

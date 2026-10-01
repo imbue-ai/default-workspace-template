@@ -84,7 +84,7 @@ function mountPhoneLayout() {
     if (!$searchbar.classList.contains("hidden")) {
       const $searchStrip = $top.querySelector(".phone-search");
       borrowNode($searchbar, $searchStrip, $searchStrip.firstElementChild);
-      document.getElementById("search").placeholder = `Search in ${folderTitle(DATA.href)}`;
+      document.getElementById("search").placeholder = `Search in ${pageTitle(DATA.href)}`;
     }
     renderSortKeys($top.querySelector(".phone-sort"));
 
@@ -149,7 +149,7 @@ function renderPhoneHeader() {
     <span class="phone-title"></span>
     ${buttons.join("")}`;
   updateSaveButton();
-  $hdr.querySelector(".phone-title").textContent = folderTitle(DATA.href);
+  $hdr.querySelector(".phone-title").textContent = pageTitle(DATA.href);
 }
 
 function updateSaveButton() {
@@ -260,7 +260,7 @@ function onPhoneClick(event) {
       openPhoneMenu($target, "top", null, folderActions());
       break;
     case "file-menu":
-      openPhoneMenu($target, "sheet", menuTitle(folderTitle(DATA.href), "File"), fileActions());
+      openPhoneMenu($target, "sheet", menuTitle(pageTitle(DATA.href), "File"), fileActions());
       break;
     case "row-menu": {
       const index = Number($target.closest(".phone-row").dataset.phoneIndex);

@@ -5,7 +5,8 @@
  * section with no rows draws nothing. The rows themselves come from ``reducers/launcherRows``;
  * this draws them and reports a hover (which moves the highlight) and a click (which runs a row).
  * The highlighted row, whatever its kind, carries the ``Enter`` caption; the secondary text row
- * carries its chord's.
+ * carries its chord's. A right-click on the row of an app's own desktop shortcut reports it, for the
+ * menu that adds it to the desktop or takes it off.
  * Markers the tests use are data attributes (plan section 6.2): ``data-launcher-overlay`` on
  * the card, and on each row ``data-launcher-row``, ``data-launch``, ``data-launcher-window``,
  * ``data-text-action``, ``data-highlighted``, and ``data-disabled``.
@@ -14,6 +15,7 @@
  */
 
 import m from "mithril";
+import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import {
   MENU_ROW_FOCUS,
@@ -21,6 +23,7 @@ import {
   menuCardClass,
   menuDividerClass,
 } from "@imbue/workspace-ui/src/components/menu";
+import { appShortcutOf } from "../model/launch";
 import { shortcutKey } from "../model/records";
 import type { LauncherMenuRows, LauncherRow, TextRow } from "../reducers/launcherRows";
 import { isRowEnabled } from "../reducers/launcherRows";
@@ -49,6 +52,8 @@ export interface LauncherSectionsAttrs {
   readonly isSheet: boolean;
   readonly onRun: (row: LauncherRow) => void;
   readonly onHighlight: (index: number) => void;
+  /** Null in the phone's start sheet, which draws no desktop shortcuts to add or remove. */
+  readonly onAppShortcutContextMenu: ((app: string, x: number, y: number, target: Element) => void) | null;
 }
 
 export interface LauncherMenuAttrs extends Omit<LauncherSectionsAttrs, "isSheet"> {
@@ -129,13 +134,24 @@ function textRowCaption(row: TextRow): m.Children {
 
 function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs): m.Vnode {
   const keys = keyCaptions(row, index === attrs.highlightIndex, attrs);
+  const onAppShortcutContextMenu = attrs.onAppShortcutContextMenu;
   const appSize = attrs.isSheet ? SHEET_APP_GLYPH_SIZE : APP_GLYPH_SIZE;
   const markSize = attrs.isSheet ? SHEET_MARK_GLYPH_SIZE : MARK_GLYPH_SIZE;
   switch (row.kind) {
     case "launch":
       return m(
         "button",
-        { ...rowAttrs(row, index, attrs), "data-launch": shortcutKey(row.app.name, row.launchPath.id) },
+        {
+          ...rowAttrs(row, index, attrs),
+          "data-launch": shortcutKey(row.app.name, row.launchPath.id),
+          oncontextmenu:
+            onAppShortcutContextMenu !== null && appShortcutOf(row.app)?.launch === row.launchPath.id
+              ? (event: MouseEvent) => {
+                  event.preventDefault();
+                  onAppShortcutContextMenu(row.app.name, event.clientX, event.clientY, targetElementOf(event));
+                }
+              : undefined,
+        },
         [
           glyphCell(appGlyph(row.app, appSize), attrs.isSheet),
           m("span", { class: "min-w-0 flex-1 truncate" }, row.label),

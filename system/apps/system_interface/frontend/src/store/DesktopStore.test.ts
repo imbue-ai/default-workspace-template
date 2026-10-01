@@ -1352,7 +1352,7 @@ describe("pulled-out windows", () => {
     const popOut: PopOutBridge = {
       requestPopOut: (request) => calls.push(["request", request]),
       beginWindowDrag: (request) => calls.push(["drag", request]),
-      endWindowDrag: (windowId, isDetached) => calls.push(["ended", windowId, isDetached]),
+      endWindowDrag: (windowId, isDetached, isCancelled) => calls.push(["ended", windowId, isDetached, isCancelled]),
       reportDetachedWindows: (windows) => reports.push(windows),
     };
     return { store: makeStore(() => undefined, { popOut, soloWindowId }), calls, reports };
@@ -1438,7 +1438,7 @@ describe("pulled-out windows", () => {
     store.endWindowMove({ x: 300, y: 200 });
     expect(calls.map((call) => (call as unknown[]).slice(0, 1).concat((call as unknown[]).slice(2)))).toEqual([
       ["drag"],
-      ["ended", false],
+      ["ended", false, false],
     ]);
     // Released while out, by a pointer this shell does see: the chrome hears that the window was detached, and
     // the release itself writes nothing more.
@@ -1447,7 +1447,7 @@ describe("pulled-out windows", () => {
     await settle();
     const savesBeforeRelease = savedCalls().length;
     store.endWindowMove({ x: 1060, y: 300 });
-    expect(calls[3]).toEqual(["ended", "win-1", true]);
+    expect(calls[3]).toEqual(["ended", "win-1", true, false]);
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
     expect(store.getGesture()).toBeNull();
     await settle();
@@ -1457,11 +1457,75 @@ describe("pulled-out windows", () => {
     store.beginWindowMove("win-1", { x: 100, y: 60 });
     store.setTearOut("win-1", "out");
     store.cancelGesture();
-    expect(calls[5]).toEqual(["ended", "win-1", false]);
+    expect(calls[5]).toEqual(["ended", "win-1", false, true]);
     expect(store.getGesture()).toBeNull();
     expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(false);
     await settle();
     expect(storedPlacement("win-1")?.is_detached).toBe(false);
+  });
+
+  it("takes the chrome's word on a drag whose release reached this shell before the word did", async () => {
+    const { store, calls } = makePopOutStore();
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+    // A fast drag out: this shell sees the release at the edge, in a zone, before the chrome's "out" arrives, and
+    // ends the drag as released inside.
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    store.endWindowMove({ x: 1010, y: 300 });
+    expect(calls[1]).toEqual(["ended", "win-1", false, false]);
+    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({
+      state: "SNAPPED_RIGHT",
+      is_detached: false,
+    });
+    // The chrome's "out" lands after the end and changes nothing on its own ...
+    store.setTearOut("win-1", "out");
+    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({
+      state: "SNAPPED_RIGHT",
+      is_detached: false,
+    });
+    // ... and its "released" says it kept its own window: this one goes out as if the "out" had come in time,
+    // from the placement the drag began at, and the detach is saved.
+    store.setTearOut("win-1", "released");
+    expect(placementOf(store.getState().layout, "win-1")).toMatchObject({
+      state: "NORMAL",
+      frame: cascadeFrame(0),
+      is_detached: true,
+    });
+    await settle();
+    expect(storedPlacement("win-1")).toMatchObject({ state: "NORMAL", frame: cascadeFrame(0), is_detached: true });
+    // Taken once: a repeat changes nothing.
+    const savesAfterDetach = savedCalls().length;
+    store.setTearOut("win-1", "released");
+    await settle();
+    expect(savedCalls()).toHaveLength(savesAfterDetach);
+
+    // The reverse: released outside after "out", but the chrome had already seen the cursor back inside and dropped
+    // its window; its late "in" brings this one back.
+    await store.reattachWindow("win-1", null);
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    store.setTearOut("win-1", "out");
+    store.endWindowMove({ x: 1060, y: 300 });
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(true);
+    store.setTearOut("win-1", "in");
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(false);
+    await settle();
+    expect(storedPlacement("win-1")?.is_detached).toBe(false);
+  });
+
+  it("ignores the chrome's late word on a cancelled drag, and on a drag another one has replaced", async () => {
+    const { store } = makePopOutStore();
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    store.cancelGesture();
+    store.setTearOut("win-1", "out");
+    store.setTearOut("win-1", "released");
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(false);
+    store.beginWindowMove("win-1", { x: 100, y: 60 });
+    store.endWindowMove({ x: 150, y: 90 });
+    store.beginWindowMove("win-2", { x: 100, y: 60 });
+    store.setTearOut("win-1", "released");
+    expect(placementOf(store.getState().layout, "win-1").is_detached).toBe(false);
   });
 
   it("announces the dragged window again at its new size when a snapped window un-snaps", async () => {

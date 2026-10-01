@@ -72,7 +72,8 @@ def _probe_lock(account_dir: Path) -> threading.Lock:
         return _PROBE_LOCKS_BY_ACCOUNT_DIR.setdefault(account_dir.resolve(), threading.Lock())
 
 
-def _probe_environment(account_dir: Path) -> dict[str, str]:
+def codex_account_environment(account_dir: Path) -> dict[str, str]:
+    """The server's environment with codex bound to ``account_dir`` and no ambient key to answer for instead."""
     environment = {key: value for key, value in os.environ.items() if key not in _AMBIENT_AUTH_KEYS}
     environment.update(CodexAccountBinding().account_env(account_dir))
     return environment
@@ -141,7 +142,7 @@ def _probe_bound_codex(account_dir: Path) -> tuple[CodexModel, ...]:
             # otherwise run forever, and SIGTERM is not a failure to report.
             process = group.run_process_in_background(
                 command=command,
-                env=_probe_environment(account_dir),
+                env=codex_account_environment(account_dir),
                 is_checked_by_group=False,
                 timeout=_PROBE_TIMEOUT_SECONDS,
                 name="codex account model-options probe",

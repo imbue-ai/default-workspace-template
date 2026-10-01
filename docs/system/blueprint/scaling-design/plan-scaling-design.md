@@ -28,7 +28,9 @@ Memory lifetime is owned by watcher eviction: when an agent is destroyed or its 
 transitions into a positively-dead state (a UI stop, `mngr stop`, an OOM shed, idle
 shutdown), the agent manager's composition-wired callback pops and stops its watcher --
 the resident transcript, watch thread, and inotify watches go with it. Viewing a stopped
-chat rebuilds the watcher from disk on demand.
+chat rebuilds the watcher from disk on demand, and after every observe event the app state
+drops each stopped chat's rebuilt transcript again unless a stream of the chat is open (a
+send reviving the chat counts as not stopped).
 
 Live delivery is a hint layer, never the source of truth: per-connection SSE queues are
 bounded, an overflowing consumer is disconnected on the first full `put`, and the

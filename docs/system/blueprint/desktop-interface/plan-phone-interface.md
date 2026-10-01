@@ -136,7 +136,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 
 ### File viewer (`system/apps/files/assets/`)
 
-- New `phone.css` and `phone.js`, referenced from `index.html` with `?v=minds-7` (all three existing URLs bumped too). `phone.js` runs after `ready()`: under `(max-width: 700px)` it hides `.paths-table` and `.head`, renders the header, breadcrumb strip, sort keys, rows and sheets from `DATA.paths` and `PARAMS`, honoring `isShowingHiddenFiles()`, and calls `movePath`, `deletePath`, `createFolder`, `createFile` and the download URLs the table uses. The editor page gets the Save button (`saveChange`) and kebab. Marked `minds patch` as the others are; `README.md` lists it as the fourth patch.
+- New `phone.css` and `phone.js`, referenced from `index.html` with `?v=minds-8` (all three existing URLs bumped too). `phone.js` runs after `ready()`: under `(max-width: 700px)` it hides `.paths-table` and `.head`, renders the header, breadcrumb strip, sort keys, rows and sheets from `DATA.paths` and `PARAMS`, honoring `isShowingHiddenFiles()`, and calls `movePath`, `deletePath`, `createFolder`, `createFile` and the download URLs the table uses. The editor page gets the Save button (`saveChange`) and kebab. Marked `minds patch` as the others are; `README.md` lists it as the sixth patch.
 - `system/apps/files/test_phone_layout.py` (marked `browser`): serves the assets over a static server with a fixture `__INDEX_DATA__`, asserts rows under 700px, the kebab sheet's actions reach the dufs handlers (stubbed `fetch`), sort and search.
 
 ### Terminal (`system/apps/terminal/src/terminal_app/pages.py`, `pty_page.py`, `dispatch.py`)

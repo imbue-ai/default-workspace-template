@@ -192,7 +192,9 @@ The pinned entry's context menu is the taskbar entry menu with the presentation 
 5. Show as plain entry or Show as <style>, when the pin declares a style
 6. Change avatar..., when the current style is `avatar`
 7. divider
-8. Close, which minimizes the pinned window
+8. Add to desktop or Remove from desktop, when the app has a desktop shortcut (desktop-interface plan section 4.9)
+9. divider
+10. Close, which minimizes the pinned window
 
 The pinned window's own menu is the V1 window menu: Refresh, Share, Quit, Close; its Close minimizes.
 Its title bar has minimize, maximize, and close; the close control minimizes too.
