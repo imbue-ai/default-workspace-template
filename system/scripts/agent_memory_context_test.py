@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -24,6 +26,7 @@ render_memory_context = memory_context.render_memory_context
 truncate_index = memory_context.truncate_index
 latest_changes = memory_context.latest_changes
 render_changes_notice = memory_context.render_changes_notice
+claude_hook_output = memory_context.claude_hook_output
 CHANGE_MAX_AGE = memory_context.CHANGE_MAX_AGE
 
 _NOW = datetime(2026, 10, 1, 18, 7, 56, tzinfo=timezone.utc)
@@ -264,19 +267,135 @@ def test_the_notice_tells_chats_not_to_restore_a_deleted_note_or_revert_an_edit(
     assert render_changes_notice([]) == ""
 
 
-def test_changes_only_prints_just_the_notice_and_nothing_without_changes(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def _hook_input(tmp_path: Path, session_id: str, started: datetime) -> str:
+    transcript = tmp_path / f"{session_id}.jsonl"
+    transcript.write_text(
+        '{"type":"permission-mode"}\n'
+        + json.dumps(
+            {"type": "user", "timestamp": started.strftime("%Y-%m-%dT%H:%M:%S.000Z")}
+        )
+        + "\n"
+    )
+    return json.dumps({"session_id": session_id, "transcript_path": str(transcript)})
+
+
+def _note(
+    notes_dir: Path, name: str, description: str, at: datetime, extra: str = ""
 ) -> None:
+    path = notes_dir / name
+    path.write_text(
+        f"---\nname: {name[:-3]}\ndescription: {description}\nmetadata:\n  type: user\n{extra}---\n\nx\n"
+    )
+    os.utime(path, (at.timestamp(), at.timestamp()))
+
+
+def test_the_claude_hook_lists_notes_saved_since_the_chat_started_but_not_its_own(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _notes_dir(
+        tmp_path,
+        "- [Location](user-location.md) — lives in California\n- [Job](user-profession.md) — software engineer\n",
+    )
+    started = _NOW - timedelta(minutes=10)
+    _note(
+        notes_dir,
+        "user-location.md",
+        "lives in California",
+        started - timedelta(minutes=1),
+    )
+    _note(
+        notes_dir,
+        "user-profession.md",
+        "software engineer",
+        started + timedelta(minutes=1),
+    )
+    _note(
+        notes_dir,
+        "own.md",
+        "saved by this chat",
+        started + timedelta(minutes=2),
+        "  originSessionId: sess-1\n",
+    )
+    _note(notes_dir, "unindexed.md", "Plays the cello", started + timedelta(minutes=3))
+    (notes_dir / "README.md").write_text("readme")
+
+    out = claude_hook_output(
+        _hook_input(tmp_path, "sess-1", started),
+        notes_dir,
+        tmp_path / "none.jsonl",
+        _NOW,
+    )
+
+    assert out == (
+        "## Notes saved since this chat started\n\n"
+        "This chat loaded the memory index when it started. Other chats (or the user) saved or changed these notes "
+        "since then, so they are not in that index; open a note's file when it looks relevant:\n"
+        "- [Job](user-profession.md) — software engineer\n"
+        "- `unindexed.md` — Plays the cello\n"
+    )
+
+
+def test_the_claude_hook_puts_the_change_notice_first_and_says_nothing_when_nothing_is_new(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _notes_dir(tmp_path, None)
+    started = _NOW - timedelta(minutes=10)
     changes = tmp_path / "user-changes.jsonl"
 
-    assert main(["--changes-only", "--changes", str(changes)]) == 0
-    assert capsys.readouterr().out == ""
+    assert (
+        claude_hook_output(
+            _hook_input(tmp_path, "s", started), notes_dir, changes, _NOW
+        )
+        == ""
+    )
 
-    changes.write_text(_change("profile.md", "DELETED", datetime.now(timezone.utc)))
-    assert main(["--changes-only", "--changes", str(changes)]) == 0
-    out = capsys.readouterr().out
+    changes.write_text(
+        _change("user-profile.md", "DELETED", _NOW - timedelta(minutes=5))
+    )
+    _note(notes_dir, "job.md", "software engineer", started + timedelta(minutes=1))
+    out = claude_hook_output(
+        _hook_input(tmp_path, "s", started), notes_dir, changes, _NOW
+    )
+    assert out.index("## Changes the user made") < out.index(
+        "## Notes saved since this chat started"
+    )
+
+
+@pytest.mark.parametrize(
+    "hook_input",
+    ["", "not json", '{"session_id": "s"}', '{"transcript_path": "/missing.jsonl"}'],
+)
+def test_the_claude_hook_without_a_readable_transcript_gives_only_the_change_notice(
+    tmp_path: Path, hook_input: str
+) -> None:
+    notes_dir = _notes_dir(tmp_path, None)
+    _note(notes_dir, "job.md", "software engineer", _NOW)
+    changes = tmp_path / "user-changes.jsonl"
+    changes.write_text(_change("user-profile.md", "DELETED", _NOW))
+
+    out = claude_hook_output(hook_input, notes_dir, changes, _NOW)
+
     assert out.startswith("## Changes the user made to saved memories")
-    assert "Workspace memory" not in out
+    assert "Notes saved since" not in out
+
+
+def test_the_claude_hook_runs_from_stdin_under_a_plain_python3(tmp_path: Path) -> None:
+    notes_dir = tmp_path / "workspace" / "data" / "memories"
+    notes_dir.mkdir(parents=True)
+    started = datetime.now(timezone.utc) - timedelta(minutes=10)
+    _note(notes_dir, "job.md", "software engineer", datetime.now(timezone.utc))
+
+    result = subprocess.run(
+        [sys.executable, "-I", str(_SCRIPT), "--claude-hook"],
+        input=_hook_input(tmp_path, "s", started),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={"HOME": str(tmp_path)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.endswith("- `job.md` — software engineer\n")
 
 
 def test_the_full_context_ends_with_the_notice(

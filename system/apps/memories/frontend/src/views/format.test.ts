@@ -58,5 +58,6 @@ describe("who saved a note", () => {
     expect(writerLine(savedBy("pi-coding"))).toBe("Saved by a pi chat");
     expect(writerLine(savedBy("codex"))).toBe("Saved by a Codex chat");
     expect(writerLine(savedBy("something-new"))).toBe("Saved by a something-new chat");
+    expect(writerLine(savedBy("pi-coding", "pi-test"))).toBe('Written by "pi-test" · not read since');
   });
 });

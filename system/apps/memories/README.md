@@ -12,7 +12,9 @@ workspaces have their own. A note pi saves says so in `metadata.source: pi-codin
 `originSessionId`. The page says so before anything else, then shows each note grouped by its `type` (about you, how you
 like things done, what you're working on, where things are), with:
 
-- for a note pi saved, "Saved by a pi chat"; for Claude's, who wrote it and how many chats have read it, from the chats' own transcripts (a `Write`/`Edit`/`Read` tool call
+- who wrote it and how many chats have read it, from the chats' own transcripts: Claude's (mapped to an agent through
+  `claude_session_id_history`) and pi's (`agents/<id>/plugin/pi_coding/sessions/`, so the agent is the folder); a
+  note no transcript explains falls back to the harness its `source` field names ("Saved by a pi chat") (a `Write`/`Edit`/`Read` tool call
   on the note's file, mapped to its agent through `claude_session_id_history` and to its chat through the chat app's
   `GET /api/chats`);
 - the file exactly as it is on disk;

@@ -68,10 +68,11 @@ const HARNESS_NAMES: Readonly<Record<string, string>> = {
   antigravity: "Antigravity",
 };
 
-/** Who saved a note. Claude's notes are attributed to their chat from its transcript; a note another harness saved
- *  says which harness in its frontmatter, and that is all the page can know about it. */
+/** Who saved a note: the chat named by its transcript (Claude's or pi's) when one records the save; otherwise the
+ *  harness the note itself names; otherwise that it isn't recorded. */
 export function writerLine(note: Note): string {
-  if (note.source === null || note.source === "claude") return attributionLine(note.attribution);
+  const hasWriter = note.attribution !== null && note.attribution.authors.length > 0;
+  if (hasWriter || note.source === null || note.source === "claude") return attributionLine(note.attribution);
   return `Saved by a ${HARNESS_NAMES[note.source] ?? note.source} chat`;
 }
 

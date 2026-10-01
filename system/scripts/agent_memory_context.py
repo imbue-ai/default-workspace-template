@@ -14,8 +14,13 @@ filled in too, since Claude Code stamps a note's ``modified`` itself and a model
 It also prints the notes the user deleted or edited in the "What agents know" app, from the record that app keeps
 (``data/.state/memories/user-changes.jsonl``: a file name, what was done and when, never the content). An open chat
 still has a note it saw in its conversation, and without this it writes a deleted note back, or reverts an edit,
-the next time it saves. Every harness needs that notice, Claude included, so ``--changes-only`` prints just it, and
-nothing when there is nothing to say: Claude's UserPromptSubmit hook in ``.claude/settings.json`` runs it that way.
+the next time it saves. Every harness needs that notice, Claude included.
+
+Claude has one more gap: Claude Code loads ``MEMORY.md`` once, when a chat starts, so a note another chat saves later
+never reaches it. pi reads the index on every message and has no such gap. So ``--claude-hook``, which Claude's
+UserPromptSubmit hook in ``.claude/settings.json`` runs before every message, reads the hook's input (the chat's
+session id and transcript path) and prints the change notice plus the index lines of notes saved or changed since the
+chat started, leaving out the ones the chat saved itself -- and nothing at all when there is nothing new.
 
 Fails open: if the protocol cannot be read, it prints nothing and exits 0, so a broken checkout costs a chat its
 memory, never its turn. An unreadable or malformed change record reads as no changes. Stdlib only, since harness
@@ -41,6 +46,10 @@ DEFAULT_CHANGES_PATH: Final[Path] = (
 # The memories app drops older entries itself; this keeps a stale record from being read as news.
 CHANGE_MAX_AGE: Final[timedelta] = timedelta(days=30)
 INDEX_FILENAME: Final[str] = "MEMORY.md"
+NON_NOTE_FILENAMES: Final[frozenset[str]] = frozenset({"MEMORY.md", "README.md"})
+# Claude Code stamps this on every note a Claude session saves.
+CLAUDE_SESSION_KEY: Final[str] = "originSessionId"
+SAVED_SINCE_MAX_NOTES: Final[int] = 20
 INDEX_MAX_LINES: Final[int] = 200
 INDEX_MAX_BYTES: Final[int] = 25 * 1024
 
@@ -146,6 +155,99 @@ def read_changes_text(changes_path: Path) -> str:
         return ""
 
 
+def session_start(transcript_path: Path) -> datetime | None:
+    """When a Claude chat started: the first timestamp its transcript records, or None when it cannot be read."""
+    try:
+        with transcript_path.open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    timestamp = json.loads(line).get("timestamp")
+                    if isinstance(timestamp, str):
+                        return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    continue
+    except OSError:
+        return None
+    return None
+
+
+def _note_description(note_text: str) -> str:
+    for line in note_text.splitlines()[1:]:
+        if line.strip() == "---":
+            break
+        key, _, value = line.partition(":")
+        if key == "description":
+            return value.strip().strip("\"'")
+    return ""
+
+
+def notes_saved_since(
+    notes_dir: Path, since: datetime, session_id: str, index_text: str | None
+) -> list[str]:
+    """The index line (or a stand-in) of each note saved or changed after ``since`` by anyone but this session."""
+    index_lines = (index_text or "").splitlines()
+    found: list[tuple[float, str]] = []
+    try:
+        paths = sorted(notes_dir.glob("*.md"))
+    except OSError:
+        return []
+    for path in paths:
+        if path.name in NON_NOTE_FILENAMES:
+            continue
+        try:
+            modified = path.stat().st_mtime
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if modified <= since.timestamp():
+            continue
+        if session_id and f"{CLAUDE_SESSION_KEY}: {session_id}" in text:
+            continue
+        line = next(
+            (candidate for candidate in index_lines if f"]({path.name})" in candidate),
+            f"- `{path.name}` — {_note_description(text)}",
+        )
+        found.append((modified, line))
+    found.sort()
+    return [line for _, line in found[-SAVED_SINCE_MAX_NOTES:]]
+
+
+def render_saved_since_notice(lines: list[str]) -> str:
+    if not lines:
+        return ""
+    return (
+        "## Notes saved since this chat started\n\n"
+        "This chat loaded the memory index when it started. Other chats (or the user) saved or changed these notes "
+        "since then, so they are not in that index; open a note's file when it looks relevant:\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+
+
+def claude_hook_output(
+    hook_input: str, notes_dir: Path, changes_path: Path, now: datetime
+) -> str:
+    """What Claude's UserPromptSubmit hook adds to the next message: the change notice, then new notes."""
+    notice = render_changes_notice(latest_changes(read_changes_text(changes_path), now))
+    try:
+        payload = json.loads(hook_input)
+    except ValueError:
+        payload = None
+    saved_since = ""
+    if isinstance(payload, dict) and isinstance(payload.get("transcript_path"), str):
+        started = session_start(Path(payload["transcript_path"]))
+        if started is not None and started.tzinfo is not None:
+            saved_since = render_saved_since_notice(
+                notes_saved_since(
+                    notes_dir,
+                    started,
+                    str(payload.get("session_id") or ""),
+                    read_index(notes_dir),
+                )
+            )
+    return "\n".join(part for part in (notice, saved_since) if part)
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -172,18 +274,22 @@ def main(argv: list[str]) -> int:
         help="The record of notes the user deleted or edited",
     )
     parser.add_argument(
-        "--changes-only",
+        "--claude-hook",
         action="store_true",
-        help="Print only the notice of the user's deletes and edits (for a harness with its own memory)",
+        help="Run as Claude's UserPromptSubmit hook: read its input on stdin, print only what is new",
     )
     arguments = parser.parse_args(argv)
     now = datetime.now(timezone.utc)
+    if arguments.claude_hook:
+        sys.stdout.write(
+            claude_hook_output(
+                sys.stdin.read(), arguments.notes_dir, arguments.changes, now
+            )
+        )
+        return 0
     notice = render_changes_notice(
         latest_changes(read_changes_text(arguments.changes), now)
     )
-    if arguments.changes_only:
-        sys.stdout.write(notice)
-        return 0
     try:
         protocol_text = arguments.protocol.read_text(encoding="utf-8")
     except OSError as e:

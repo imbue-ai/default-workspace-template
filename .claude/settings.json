@@ -69,7 +69,7 @@
           },
           {
             "type": "command",
-            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_memory_context.py --changes-only 2>/dev/null || true"
+            "command": "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_memory_context.py --claude-hook 2>/dev/null || true"
           }
         ]
       }

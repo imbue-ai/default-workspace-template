@@ -18,9 +18,11 @@ from memories.attribution import encode_project_dir_name
 from memories.attribution import fetch_chat_title_by_agent_id
 from memories.attribution import note_tool_uses
 from memories.attribution import parse_session_history
+from memories.attribution import pi_note_tool_uses
 from memories.attribution import read_agent_id_by_session
 from memories.attribution import read_attributions
 from memories.attribution import read_note_tool_uses
+from memories.attribution import read_pi_note_tool_uses
 
 _CHAT_APP_URL = "http://chat.test"
 _PROJECT_DIR_NAME = "-home-user-workspace"
@@ -237,3 +239,72 @@ def test_default_sources_read_every_account_then_the_plain_claude_dir(
     assert sources.mngr_agents_dir == tmp_path / "host" / "agents"
     assert sources.notes_dir.is_absolute()
     assert encode_project_dir_name(Path("/home/user/my.workspace")) == "-home-user-my-workspace"
+
+
+def _pi_tool_line(tool: str, path: str, role: str = "assistant") -> str:
+    return json.dumps(
+        {
+            "type": "message",
+            "timestamp": "2026-10-01T22:44:43.581Z",
+            "message": {
+                "role": role,
+                "content": [{"type": "toolCall", "name": tool, "arguments": {"path": path, "content": "x"}}],
+            },
+        }
+    )
+
+
+def _write_pi_session(agents_dir: Path, agent_id: str, lines: list[str], cwd: str = "/home/user/workspace") -> None:
+    sessions_dir = agents_dir / agent_id / "plugin" / "pi_coding" / "sessions" / "--home-user-workspace--"
+    sessions_dir.mkdir(parents=True)
+    header = json.dumps({"type": "session", "version": 3, "id": "s", "cwd": cwd})
+    (sessions_dir / "2026-10-01T18-58-16-632Z_s.jsonl").write_text("\n".join([header, *lines]) + "\n")
+
+
+def test_pi_note_tool_uses_counts_writes_edits_and_reads_including_relative_paths() -> None:
+    notes_dir = Path("/home/user/workspace/data/memories")
+    cwd = Path("/home/user/workspace")
+
+    (write,) = pi_note_tool_uses(_pi_tool_line("write", f"{notes_dir}/job.md"), "pi:a1", notes_dir, cwd)
+    (edit,) = pi_note_tool_uses(_pi_tool_line("edit", "data/memories/job.md"), "pi:a1", notes_dir, cwd)
+    (read,) = pi_note_tool_uses(_pi_tool_line("read", "data/memories/job.md"), "pi:a1", notes_dir, cwd)
+
+    assert (write.file_name, write.is_write, write.session_id) == ("job.md", True, "pi:a1")
+    assert write.at == datetime(2026, 10, 1, 22, 44, 43, 581000, tzinfo=timezone.utc)
+    assert (edit.is_write, read.is_write) == (True, False)
+    assert pi_note_tool_uses(_pi_tool_line("bash", f"{notes_dir}/job.md"), "pi:a1", notes_dir, cwd) == []
+    assert pi_note_tool_uses(_pi_tool_line("write", "/elsewhere/job.md"), "pi:a1", notes_dir, cwd) == []
+    assert pi_note_tool_uses(_pi_tool_line("write", f"{notes_dir}/job.md", role="user"), "pi:a1", notes_dir, cwd) == []
+    assert pi_note_tool_uses("not json", "pi:a1", notes_dir, cwd) == []
+
+
+def test_a_pi_chats_note_is_attributed_to_its_chat_through_the_agent_folder(tmp_path: Path) -> None:
+    sources = _sources(tmp_path)
+    notes = sources.notes_dir
+    _write_pi_session(
+        sources.mngr_agents_dir,
+        "agent-pi",
+        [_pi_tool_line("write", f"{notes}/user-profession.md"), _pi_tool_line("read", f"{notes}/user-location.md")],
+        cwd=str(notes.parent.parent),
+    )
+    _write_transcript(tmp_path / "account-a", "s1", [_tool_line("Read", f"{notes}/user-profession.md")])
+    _write_agent(sources.mngr_agents_dir, "agent-claude", ["s1"])
+
+    uses, agent_id_by_session = read_pi_note_tool_uses(sources.mngr_agents_dir, notes)
+    chats = {
+        "chats": [
+            {"title": "pi-test", "agent_ids": ["agent-pi"]},
+            {"title": "claude-test", "agent_ids": ["agent-claude"]},
+        ]
+    }
+    with _chat_app(chats) as client:
+        attributions, _ = read_attributions(sources, client, _CHAT_APP_URL)
+
+    assert agent_id_by_session == {"pi:agent-pi": "agent-pi"}
+    assert [(use.file_name, use.is_write) for use in uses] == [
+        ("user-profession.md", True),
+        ("user-location.md", False),
+    ]
+    assert attributions["user-profession.md"].authors[0].chat_title == "pi-test"
+    assert attributions["user-profession.md"].reader_count == 1
+    assert attributions["user-location.md"].reader_count == 1

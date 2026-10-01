@@ -1,10 +1,12 @@
 """Which chat wrote each note, and how many chats have read it, from the chats' own transcripts.
 
-A note file records nothing about who wrote it, but every Claude session's transcript records each tool call it
-made. So: every ``Write``/``Edit`` of a file in the notes folder is a write by that session and every ``Read`` a
-read; a session belongs to the agent whose ``claude_session_id_history`` lists it (under the mngr host dir); and an
-agent belongs to the chat whose ``agent_ids`` hold it (the chat app's ``GET /api/chats``). A session no agent
-claims, or an agent no live chat holds (a deleted chat), is still counted, just without a chat's name.
+A note file records nothing reliable about who wrote it, but every chat's transcript records each tool call it made.
+Claude: every ``Write``/``Edit`` of a file in the notes folder is a write by that session and every ``Read`` a read,
+and a session belongs to the agent whose ``claude_session_id_history`` lists it (under the mngr host dir). pi: its
+sessions live under each agent's own folder (``agents/<id>/plugin/pi_coding/sessions/``), so the agent is known
+directly, and its ``write``/``edit``/``read`` tool calls count the same way. An agent belongs to the chat whose
+``agent_ids`` hold it (the chat app's ``GET /api/chats``). A session no agent claims, or an agent no live chat holds
+(a deleted chat), is still counted, just without a chat's name.
 
 Transcripts are read when the page asks, line by line, parsing only the lines that name the notes folder.
 """
@@ -28,6 +30,11 @@ from imbue.imbue_common.pure import pure
 
 WRITE_TOOL_NAMES: Final[frozenset[str]] = frozenset({"Write", "Edit", "MultiEdit"})
 READ_TOOL_NAMES: Final[frozenset[str]] = frozenset({"Read"})
+PI_WRITE_TOOL_NAMES: Final[frozenset[str]] = frozenset({"write", "edit"})
+PI_READ_TOOL_NAMES: Final[frozenset[str]] = frozenset({"read"})
+PI_SESSIONS_SUBPATH: Final[str] = "plugin/pi_coding/sessions"
+# A pi session's key in the session-to-agent mapping: its agent is known from the folder it sits in.
+PI_SESSION_PREFIX: Final[str] = "pi:"
 SESSION_HISTORY_FILENAME: Final[str] = "claude_session_id_history"
 TRANSCRIPT_SUFFIX: Final[str] = ".jsonl"
 DEFAULT_CHAT_APP_URL: Final[str] = "http://127.0.0.1:8010"
@@ -96,13 +103,7 @@ def note_tool_uses(line: str, session_id: str, notes_dir: Path) -> list[NoteTool
     content = message.get("content") if isinstance(message, Mapping) else None
     if not isinstance(content, list):
         return []
-    at: datetime | None = None
-    timestamp = record.get("timestamp")
-    if isinstance(timestamp, str):
-        try:
-            at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        except ValueError:
-            at = None
+    at = _parse_timestamp(record.get("timestamp"))
     uses: list[NoteToolUse] = []
     for item in content:
         if not isinstance(item, Mapping) or item.get("type") != "tool_use":
@@ -135,6 +136,86 @@ def read_note_tool_uses(sources: TranscriptSources) -> list[NoteToolUse]:
             except OSError as e:
                 logger.debug("Skipped transcript {}: {}", transcript, e)
     return uses
+
+
+@pure
+def pi_note_tool_uses(line: str, session_key: str, notes_dir: Path, cwd: Path) -> list[NoteToolUse]:
+    """The note tool calls in one pi session line: an assistant message's ``toolCall`` items."""
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return []
+    message = record.get("message") if isinstance(record, Mapping) else None
+    if not isinstance(message, Mapping) or message.get("role") != "assistant":
+        return []
+    content = message.get("content")
+    if not isinstance(content, list):
+        return []
+    at = _parse_timestamp(record.get("timestamp"))
+    uses: list[NoteToolUse] = []
+    for item in content:
+        if not isinstance(item, Mapping) or item.get("type") != "toolCall":
+            continue
+        name = item.get("name")
+        arguments: Any = item.get("arguments")
+        raw_path = arguments.get("path") if isinstance(arguments, Mapping) else None
+        if name not in PI_WRITE_TOOL_NAMES | PI_READ_TOOL_NAMES or not isinstance(raw_path, str):
+            continue
+        path = Path(os.path.expanduser(raw_path))
+        if not path.is_absolute():
+            path = cwd / path
+        if path.parent != notes_dir:
+            continue
+        uses.append(
+            NoteToolUse(session_id=session_key, file_name=path.name, is_write=name in PI_WRITE_TOOL_NAMES, at=at)
+        )
+    return uses
+
+
+def read_pi_note_tool_uses(mngr_agents_dir: Path, notes_dir: Path) -> tuple[list[NoteToolUse], dict[str, str]]:
+    """Every pi session's note tool calls, and each pi session key's agent id."""
+    uses: list[NoteToolUse] = []
+    agent_id_by_session: dict[str, str] = {}
+    if not mngr_agents_dir.is_dir():
+        return uses, agent_id_by_session
+    for agent_dir in sorted(mngr_agents_dir.iterdir()):
+        sessions_dir = agent_dir / PI_SESSIONS_SUBPATH
+        if not sessions_dir.is_dir():
+            continue
+        session_key = f"{PI_SESSION_PREFIX}{agent_dir.name}"
+        agent_id_by_session[session_key] = agent_dir.name
+        for transcript in sorted(sessions_dir.glob(f"*/*{TRANSCRIPT_SUFFIX}")):
+            cwd = notes_dir
+            try:
+                with transcript.open(encoding="utf-8", errors="replace") as handle:
+                    for line in handle:
+                        if '"type":"session"' in line.replace(" ", ""):
+                            cwd = _session_cwd(line, cwd)
+                        elif '"toolCall"' in line and notes_dir.name in line:
+                            uses.extend(pi_note_tool_uses(line, session_key, notes_dir, cwd))
+            except OSError as e:
+                logger.debug("Skipped pi transcript {}: {}", transcript, e)
+    return uses, agent_id_by_session
+
+
+@pure
+def _session_cwd(line: str, fallback: Path) -> Path:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return fallback
+    cwd = record.get("cwd") if isinstance(record, Mapping) else None
+    return Path(cwd) if isinstance(cwd, str) else fallback
+
+
+@pure
+def _parse_timestamp(timestamp: object) -> datetime | None:
+    if not isinstance(timestamp, str):
+        return None
+    try:
+        return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 @pure
@@ -226,9 +307,10 @@ def read_attributions(
     chat_title_by_agent_id = fetch_chat_title_by_agent_id(client, chat_app_url)
     if chat_title_by_agent_id is None:
         notes.append("Chat names could not be read from the chat app, so writers are shown without them.")
+    pi_uses, pi_agent_id_by_session = read_pi_note_tool_uses(sources.mngr_agents_dir, sources.notes_dir)
     attributions = attribute_notes(
-        read_note_tool_uses(sources),
-        read_agent_id_by_session(sources.mngr_agents_dir),
+        [*read_note_tool_uses(sources), *pi_uses],
+        {**read_agent_id_by_session(sources.mngr_agents_dir), **pi_agent_id_by_session},
         chat_title_by_agent_id or {},
     )
     return attributions, notes
