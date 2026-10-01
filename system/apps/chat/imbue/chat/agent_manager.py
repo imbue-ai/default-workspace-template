@@ -3241,42 +3241,11 @@ class AgentManager:
         """
         if self._spare_chat_store is None or self._is_secondary:
             return None
-        provisional: ProvisionalChat | None = None
         with self._lock:
-            terms = self._new_chat_terms_locked(account_id, project_id)
-            spare = self._spare_for_new_chat_locked(terms)
-            if spare is None:
-                return None
-            is_ready = spare.phase is SpareChatPhase.READY
-            # Recorded before anything else changes, so a spares file that cannot be written leaves
-            # the spare as it was and the chat to a create of its own.
-            try:
-                if is_ready:
-                    self._drop_spare_locked(spare.chat_id)
-                else:
-                    self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.CLAIMED)
-            except OSError as e:
-                _loguru_logger.warning("Could not record spare agent {} as taken by a new chat: {}", spare.chat_id, e)
-                return None
-            settled = threading.Event()
-            if is_ready:
-                # ``should_wait`` waits on this: the chat's agent is already up.
-                settled.set()
-            else:
-                self._spare_claim_by_chat[spare.chat_id] = _SpareClaim(message=message, model_pick=model_pick)
-                provisional = ProvisionalChat(
-                    chat_id=spare.chat_id,
-                    name=spare.display_name,
-                    project_id=project_id,
-                    account_id=account_id,
-                    message=message,
-                    phase=ProvisionalChatPhase.CREATING,
-                )
-                self._provisional_chats[spare.chat_id] = provisional
-            self._creation_settled_by_chat[spare.chat_id] = settled
-            self._fast_mode_for_launch_locked(spare.chat_id)
-            if any(self._is_spare_usable_locked(ready, terms) for ready in self._spares):
-                self._spare_replenish_not_before = time.monotonic() + SPARE_CHAT_REPLENISH_DELAY_SECONDS
+            taken = self._take_spare_for_new_chat_locked(account_id, project_id, message, model_pick)
+        if taken is None:
+            return None
+        spare, provisional = taken
         _record_mru(account_id)
         if provisional is None:
             _loguru_logger.info("Handed spare agent {} to a new chat", spare.chat_id)
@@ -3296,6 +3265,52 @@ class AgentManager:
         return CreatedChat(
             chat_id=spare.chat_id, name=canonical_agent_name(spare.display_name), display_name=spare.display_name
         )
+
+    def _take_spare_for_new_chat_locked(
+        self, account_id: str, project_id: str, message: str, model_pick: ModelPick | None
+    ) -> tuple[SpareChatAgent, ProvisionalChat | None] | None:
+        """Take the spare a new chat on these terms gets out of the pool. Lock held.
+
+        A ready one leaves the spares and is returned with no provisional record; one still being
+        created is claimed and returned with the chat's provisional record. None when no spare fits,
+        or when the spares file cannot record the take, which leaves the chat to a create of its own.
+        """
+        terms = self._new_chat_terms_locked(account_id, project_id)
+        spare = self._spare_for_new_chat_locked(terms)
+        if spare is None:
+            return None
+        is_ready = spare.phase is SpareChatPhase.READY
+        # Recorded before anything else changes, so a spares file that cannot be written leaves
+        # the spare as it was.
+        try:
+            if is_ready:
+                self._drop_spare_locked(spare.chat_id)
+            else:
+                self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.CLAIMED)
+        except OSError as e:
+            _loguru_logger.warning("Could not record spare agent {} as taken by a new chat: {}", spare.chat_id, e)
+            return None
+        provisional: ProvisionalChat | None = None
+        settled = threading.Event()
+        if is_ready:
+            # ``should_wait`` waits on this: the chat's agent is already up.
+            settled.set()
+        else:
+            self._spare_claim_by_chat[spare.chat_id] = _SpareClaim(message=message, model_pick=model_pick)
+            provisional = ProvisionalChat(
+                chat_id=spare.chat_id,
+                name=spare.display_name,
+                project_id=project_id,
+                account_id=account_id,
+                message=message,
+                phase=ProvisionalChatPhase.CREATING,
+            )
+            self._provisional_chats[spare.chat_id] = provisional
+        self._creation_settled_by_chat[spare.chat_id] = settled
+        self._fast_mode_for_launch_locked(spare.chat_id)
+        if any(self._is_spare_usable_locked(ready, terms) for ready in self._spares):
+            self._spare_replenish_not_before = time.monotonic() + SPARE_CHAT_REPLENISH_DELAY_SECONDS
+        return spare, provisional
 
     def ensure_spare_chat(self) -> None:
         """Keep the pool of spare agents full on the terms the next new chat would get.
