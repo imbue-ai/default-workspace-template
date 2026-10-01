@@ -517,13 +517,13 @@ def test_shortcut_verbs_post_to_the_desktop_and_print_its_shortcuts(
 @pytest.mark.parametrize(
     ("response", "exit_code", "fragment"),
     [
-        ((409, {"detail": "a save is in flight"}), EXIT_CONFLICT, "409"),
-        ((503, {"detail": "the app is still starting"}), EXIT_CONFLICT, "503"),
-        ((404, {"detail": "No window win-x"}), EXIT_ERROR, "not found"),
-        ((400, {"detail": "bad"}), EXIT_ERROR, "400"),
-        ((412, {"detail": "no client"}), EXIT_ERROR, "412"),
+        ((409, {"detail": "a save is in flight"}), EXIT_CONFLICT, "'focus' rejected (HTTP 409)"),
+        ((503, {"detail": "the app is still starting"}), EXIT_CONFLICT, "'focus' rejected (HTTP 503)"),
+        ((404, {"detail": "No window win-x"}), EXIT_ERROR, "'focus' target not found"),
+        ((400, {"detail": "bad"}), EXIT_ERROR, "'focus' rejected (HTTP 400)"),
+        ((412, {"detail": "no client"}), EXIT_ERROR, "'focus' has no client"),
         # A proxy's error page rather than the shell's JSON: reported as it came.
-        ((500, "<html>boom</html>"), EXIT_ERROR, "failed (HTTP 500): <html>boom</html>"),
+        ((500, "<html>boom</html>"), EXIT_ERROR, "'focus' failed (HTTP 500): <html>boom</html>"),
     ],
 )
 def test_refusals_map_to_exit_codes(
