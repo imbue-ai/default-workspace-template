@@ -18,4 +18,4 @@ On every layout, an operation that fails now says so in a short note at the bott
 
 Agents reading the workspace's clients see each one's `shown_history`, and `layout.py` `open`, `focus`, and `show` now tell the client they target which window they brought forward.
 
-An agent's window now appears where the user is looking when they have moved to another browser since messaging the agent (a phone's browser tab and the same workspace saved to its home screen are two browsers): an op with no `--client` passes over a messaging client that is no longer connected in favour of the one connected client, and still goes to it when no other client, or several, are connected.
+An agent's window now appears where the user is looking when they have moved to another browser since messaging the agent (a phone's browser tab and the same workspace saved to its home screen are two browsers): an op with no `--client` passes over a messaging client that is no longer connected in favour of the one connected client when that is the same user's, and still goes to it when no other client, several, or only another user's (a visitor's) are connected.

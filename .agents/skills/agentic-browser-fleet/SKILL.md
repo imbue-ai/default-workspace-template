@@ -200,9 +200,10 @@ carry on.
 The browser streams to a window on the desktop of whoever is watching your chat, and it follows
 whatever tab you are acting on. `new` and your first command open that window automatically, but
 minimized, and only when the shell can tell which screen asked (the client that last messaged your
-chat while it is connected, else the one connected client, else that messaging client though it has
-gone); `handoff` opens it in front. To put it in front of the user at any other time -- they asked
-to see the browser, or should watch what you do -- show it yourself:
+chat while it is connected, else the one connected client if it is the same user's, else that
+messaging client though it has gone); `handoff` opens it in front. To put it in front of the user
+at any other time -- they asked to see the browser, or should watch what you do -- show it
+yourself:
 
 ```bash
 python3 system/scripts/layout.py open browser --path "/?session=browser-1"

@@ -530,6 +530,22 @@ def test_an_op_goes_to_the_one_connected_client_once_the_messaging_client_has_go
     assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] == "c7"
 
 
+def test_a_gone_messaging_client_keeps_its_op_from_another_users_connected_client(
+    client: FlaskClient, app: Flask
+) -> None:
+    """The owner messages a chat and leaves while a visitor is the only one connected: the visitor's screen is not
+    where the owner is looking, so the op stays with the owner's client."""
+    shell = _shell(app)
+    requester = {"app": "chat", "marker": "agent-1"}
+    owner_window = _register_client(app, "c7", "home")
+    shell.activity.append_message("c7", "home", "chat", "agent-1", "build me a calculator")
+    shell.broadcaster.unregister(owner_window)
+    _arrive(client, "c-alice", _ALICE)
+    _register_client(app, "c-alice", "alice")
+
+    assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] == "c7"
+
+
 def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
     """A requester that names an app and no marker has no client that last messaged it: the log is not
     searched under a made-up key."""
