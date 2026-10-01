@@ -1,0 +1,1 @@
+New `agent_memory_context.py` prints the workspace memory a harness without Claude's built-in memory needs: the memory protocol, filled in with the notes folder, the harness and the current time, and the `MEMORY.md` index cut at 200 lines or 25KB as Claude Code cuts it. It uses only the standard library and fails open.

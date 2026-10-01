@@ -1,0 +1,1 @@
+pi chats now share the workspace's memory with Claude chats. A new reference, `memory-protocol.md`, is the note format and the rules for keeping notes, adapted from Claude Code's own memory prompt so both harnesses write notes the other reads.

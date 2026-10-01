@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { BackupRetention } from "../models/notes";
-import { backupsDetail, backupsLine, deleteBackupsWarning, deletedStatus } from "./format";
+import type { BackupRetention, Note } from "../models/notes";
+import { backupsDetail, backupsLine, deleteBackupsWarning, deletedStatus, writerLine } from "./format";
 
 const BACKED_UP: BackupRetention = {
   is_backed_up: true,
@@ -33,5 +33,30 @@ describe("what the page says the backups keep after a delete", () => {
     }
     expect(backupsDetail(NOT_BACKED_UP)).toBe("No backups are set up for this workspace.");
     expect(backupsDetail(KEEPS_NOTHING)).toBe("Backups are set up, but data/system/backup.toml keeps no snapshots.");
+  });
+});
+
+function savedBy(source: string | null, chatTitle: string | null = null): Note {
+  return {
+    file_name: "a.md",
+    name: "a",
+    description: "A",
+    note_type: "USER",
+    source,
+    body: "",
+    raw_text: "",
+    modified_at: "2026-10-01T10:00:00Z",
+    version: "1-1",
+    attribution: chatTitle === null ? null : { authors: [{ chat_title: chatTitle, at: null }], reader_count: 0 },
+  };
+}
+
+describe("who saved a note", () => {
+  it("names the Claude chat from its transcript, and other harnesses by name", () => {
+    expect(writerLine(savedBy("claude", "Plan the launch"))).toBe('Written by "Plan the launch" · not read since');
+    expect(writerLine(savedBy(null))).toBe("Who wrote this isn't recorded");
+    expect(writerLine(savedBy("pi-coding"))).toBe("Saved by a pi chat");
+    expect(writerLine(savedBy("codex"))).toBe("Saved by a Codex chat");
+    expect(writerLine(savedBy("something-new"))).toBe("Saved by a something-new chat");
   });
 });

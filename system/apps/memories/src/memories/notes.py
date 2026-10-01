@@ -38,6 +38,10 @@ NOTE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.
 _FRONTMATTER_FENCE: Final[str] = "---"
 _INDEX_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(\s*[-*]\s+\[[^\]]*\]\((?P<file>[^)]+)\))(?P<hook>.*)$")
 _HOOK_SEPARATOR: Final[str] = " — "
+# The harness a note came from. pi writes ``metadata.source`` itself (the protocol it is given asks it to); Claude
+# Code writes none, but stamps ``originSessionId`` on every note it saves.
+CLAUDE_SOURCE: Final[str] = "claude"
+_CLAUDE_SESSION_KEY: Final[str] = "originSessionId"
 
 
 class NoteType(UpperCaseStrEnum):
@@ -56,6 +60,7 @@ class ParsedNote(FrozenModel):
     name: str | None = Field(description="The ``name`` field, or None")
     description: str | None = Field(description="The ``description`` field: the note's one-line summary, or None")
     note_type: NoteType = Field(description="The ``metadata.type`` (or top-level ``type``) field")
+    source: str | None = Field(description="The harness that saved it, or None when the note does not say")
     frontmatter_lines: tuple[str, ...] = Field(description="The frontmatter's lines verbatim, fences excluded")
     body: str = Field(description="Everything after the frontmatter")
 
@@ -67,6 +72,7 @@ class Note(FrozenModel):
     name: str | None = Field(description="The note's ``name`` field")
     description: str = Field(description="Its one-line summary (the file name when it has none)")
     note_type: NoteType = Field(description="What it is about")
+    source: str | None = Field(description="The harness that saved it (``claude``, ``pi-coding``), when known")
     body: str = Field(description="Its text after the frontmatter")
     raw_text: str = Field(description="The file exactly as it is on disk")
     modified_at: datetime = Field(description="When the file last changed")
@@ -86,10 +92,14 @@ def parse_note(text: str) -> ParsedNote:
     """Split a note into frontmatter fields and body; a file with no frontmatter is all body."""
     lines = text.split("\n")
     if not lines or lines[0].strip() != _FRONTMATTER_FENCE:
-        return ParsedNote(name=None, description=None, note_type=NoteType.OTHER, frontmatter_lines=(), body=text)
+        return ParsedNote(
+            name=None, description=None, note_type=NoteType.OTHER, source=None, frontmatter_lines=(), body=text
+        )
     closing_idx = next((idx for idx in range(1, len(lines)) if lines[idx].strip() == _FRONTMATTER_FENCE), None)
     if closing_idx is None:
-        return ParsedNote(name=None, description=None, note_type=NoteType.OTHER, frontmatter_lines=(), body=text)
+        return ParsedNote(
+            name=None, description=None, note_type=NoteType.OTHER, source=None, frontmatter_lines=(), body=text
+        )
     frontmatter_lines = tuple(lines[1:closing_idx])
     top_level: dict[str, str] = {}
     nested: dict[str, dict[str, str]] = {}
@@ -105,7 +115,8 @@ def parse_note(text: str) -> ParsedNote:
             continue
         current_block = key.strip() if not value.strip() else None
         top_level[key.strip()] = _unquote(value)
-    type_text = nested.get("metadata", {}).get("type") or top_level.get("type") or ""
+    metadata = nested.get("metadata", {})
+    type_text = metadata.get("type") or top_level.get("type") or ""
     try:
         note_type = NoteType(type_text.strip().upper())
     except ValueError:
@@ -114,6 +125,9 @@ def parse_note(text: str) -> ParsedNote:
         name=top_level.get("name") or None,
         description=top_level.get("description") or None,
         note_type=note_type,
+        source=metadata.get("source")
+        or top_level.get("source")
+        or (CLAUDE_SOURCE if _CLAUDE_SESSION_KEY in metadata else None),
         frontmatter_lines=frontmatter_lines,
         body="\n".join(lines[closing_idx + 1 :]).lstrip("\n"),
     )
@@ -199,6 +213,7 @@ def read_note(path: Path) -> Note:
         name=parsed.name,
         description=parsed.description or path.stem.replace("_", " ").replace("-", " "),
         note_type=parsed.note_type,
+        source=parsed.source,
         body=parsed.body,
         raw_text=raw_text,
         modified_at=datetime.fromtimestamp(stat.st_mtime, timezone.utc),

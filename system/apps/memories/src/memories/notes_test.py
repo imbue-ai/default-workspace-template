@@ -237,3 +237,16 @@ def test_write_atomically_replaces_the_file_and_leaves_no_temporary_file_behind(
     with pytest.raises(NoteWriteError):
         write_atomically(tmp_path / "missing-folder" / "note.md", "x")
     assert [path.name for path in tmp_path.iterdir()] == ["note.md"]
+
+
+def test_a_note_says_which_harness_saved_it() -> None:
+    pi_note = parse_note("---\nname: units\nmetadata:\n  type: feedback\n  source: pi-coding\n---\nx\n")
+    claude_note = parse_note("---\nname: role\nmetadata:\n  type: user\n  originSessionId: abc-123\n---\nx\n")
+    top_level = parse_note("---\nname: role\nsource: codex\n---\nx\n")
+    unknown = parse_note("---\nname: role\nmetadata:\n  type: user\n---\nx\n")
+
+    assert pi_note.source == "pi-coding"
+    assert claude_note.source == "claude"
+    assert top_level.source == "codex"
+    assert unknown.source is None
+    assert parse_note("no frontmatter").source is None

@@ -4,12 +4,15 @@ The memories app ("What agents know" on the desktop): what the workspace's Claud
 user and their work, on one page a window of the desktop frames at the app's own origin.
 
 Claude's built-in memory keeps one Markdown note per thing it learned in `data/memories/` (`autoMemoryDirectory` in
-`.claude/settings.json`), plus `MEMORY.md`, an index every Claude chat loads when it starts. Every Claude chat in the
-workspace shares the folder; other harnesses (Codex, Pi, OpenCode, Antigravity) do not use it, and other workspaces
-have their own. The page says so before anything else, then shows each note grouped by its `type` (about you, how you
+`.claude/settings.json`), plus `MEMORY.md`, an index every Claude chat loads when it starts. pi chats keep the same
+notes: `.pi/extensions/memory.ts` gives every pi turn the protocol in `.agents/shared/references/memory-protocol.md`
+(adapted from Claude Code's own memory prompt, so both write one format) and the index, through
+`system/scripts/agent_memory_context.py`. Codex, OpenCode and Antigravity do not use the folder yet, and other
+workspaces have their own. A note pi saves says so in `metadata.source: pi-coding`; Claude Code marks its own with
+`originSessionId`. The page says so before anything else, then shows each note grouped by its `type` (about you, how you
 like things done, what you're working on, where things are), with:
 
-- who wrote it and how many chats have read it, from the chats' own transcripts (a `Write`/`Edit`/`Read` tool call
+- for a note pi saved, "Saved by a pi chat"; for Claude's, who wrote it and how many chats have read it, from the chats' own transcripts (a `Write`/`Edit`/`Read` tool call
   on the note's file, mapped to its agent through `claude_session_id_history` and to its chat through the chat app's
   `GET /api/chats`);
 - the file exactly as it is on disk;

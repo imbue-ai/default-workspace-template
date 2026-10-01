@@ -1,5 +1,5 @@
 /**
- * The page, top to bottom: how many things the Claude chats remember; who can see the notes (every Claude chat
+ * The page, top to bottom: how many things the chats remember; who can see the notes (every Claude and pi chat
  * here, no other chat type, no other workspace, and the workspace's backups, which keep deleted notes until they
  * expire); then the notes grouped by what they are about, each with who wrote it, how many chats read it, the file
  * as it is on disk, and Edit and Delete. Delete asks first, saying what still holds a copy afterwards.
@@ -12,7 +12,6 @@ import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import type { BackupRetention, Note, NotesDocument, NotesState, NoteType } from "../models/notes";
 import {
-  attributionLine,
   backupsDetail,
   backupsLine,
   bodyBlocks,
@@ -20,6 +19,7 @@ import {
   deleteBackupsWarning,
   deletedStatus,
   formatDate,
+  writerLine,
 } from "./format";
 
 const SECTION_HEADING_CLASS = "type-section text-faint";
@@ -87,8 +87,8 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
       ]);
     return m("section", { class: "flex flex-col gap-2 rounded-lg border border-default bg-surface-secondary p-4" }, [
       m("span", { class: "type-label text-primary" }, "Who can see these notes"),
-      row("success", "Shared", "Every Claude chat in this workspace, including new ones"),
-      row("neutral", "Not yet", "Codex, Pi, OpenCode and Antigravity chats. They don't use these notes."),
+      row("success", "Shared", "Every Claude and pi chat in this workspace, including new ones"),
+      row("neutral", "Not yet", "Codex, OpenCode and Antigravity chats. They don't use these notes."),
       row("neutral", "Not shared", "Your other workspaces. Each has its own notes."),
       row(document.backups.is_backed_up ? "warning" : "neutral", "Backups", backupsLine(document.backups)),
       m(
@@ -112,7 +112,12 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
             m(
               "p",
               { class: "m-0 mt-2" },
-              "Who wrote a note and who read it come from the chats' own transcripts: each Write, Edit or Read of a note's file.",
+              "pi chats get the same list, and how to keep it, with every message they answer (.pi/extensions/memory.ts runs system/scripts/agent_memory_context.py), so a change reaches them on their next message. Each note a pi chat saves says so in its source field.",
+            ),
+            m(
+              "p",
+              { class: "m-0 mt-2" },
+              "Which Claude chat wrote a note and who read it come from the chats' own transcripts: each Write, Edit or Read of a note's file.",
             ),
             m(
               "p",
@@ -162,7 +167,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
           m(
             "span",
             { class: "type-helper text-secondary" },
-            "New chats use the new version. Open chats pick it up when they restart.",
+            "New chats use the new version. Open pi chats see it on their next message, open Claude chats when they restart.",
           ),
           m("div", { class: "flex gap-2" }, [
             m(Button, { variant: "secondary", sm: true, disabled: isBusy, onclick: () => (draft = null) }, "Cancel"),
@@ -208,7 +213,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
         ),
         m("div", { class: "flex flex-wrap items-center justify-between gap-2 pt-1" }, [
           m("span", { class: "flex flex-wrap items-center gap-x-1.5 type-helper text-secondary" }, [
-            `${attributionLine(note.attribution)} · updated ${formatDate(note.modified_at)} ·`,
+            `${writerLine(note)} · updated ${formatDate(note.modified_at)} ·`,
             disclose(fileKey, "Show file", "Hide file"),
           ]),
           m("div", { class: "flex gap-2" }, [
@@ -286,20 +291,20 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
       const count = document.notes.length;
       return m("div", { class: "flex flex-col gap-6" }, [
         m("div", { class: "flex flex-col gap-2" }, [
-          m("span", { class: `self-start ${badgeClass("accent")}` }, "Claude chats"),
+          m("span", { class: `self-start ${badgeClass("accent")}` }, "Claude and pi chats"),
           m(
             "h2",
             { class: "m-0 type-heading-lg text-primary text-balance" },
             count === 0
-              ? "Your Claude chats haven't written anything down yet."
-              : `Your Claude chats remember ${countLabel(count, "thing", "things")} about you and your work.`,
+              ? "Your chats haven't written anything down yet."
+              : `Your chats remember ${countLabel(count, "thing", "things")} about you and your work.`,
           ),
           m(
             "p",
             { class: "m-0 type-body text-secondary" },
             count === 0
               ? "When a chat learns something worth keeping, like how you like things done or what you're working on, it writes a note here. You'll be able to read, correct or remove each one."
-              : "They read these notes at the start of every chat. Fix anything that's wrong, or delete it.",
+              : "They read these notes when they start work. Fix anything that's wrong, or delete it.",
           ),
         ]),
         whoCanSee(document),

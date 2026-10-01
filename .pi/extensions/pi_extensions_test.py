@@ -15,7 +15,8 @@ scripts live in this repo, so those tests point it at the repo root and run the
 real PreToolUse hook scripts and ``agent_rewrite_bash_command.py`` -- covering
 the extension and its wiring together. ``tk_workflow.ts`` reads step state
 from the vendored ``ticket`` script, so those tests point it at a temp tree with
-a stub ``ticket`` whose output a test can drive.
+a stub ``ticket`` whose output a test can drive. ``memory.ts`` runs the real
+``agent_memory_context.py`` with ``HOME`` pointed at a temp tree holding the notes.
 
 See ``system/apps/chat/imbue/chat/harnesses/core-contracts/tool-call-policies.md`` for what each rule enforces on each
 harness.
@@ -48,6 +49,7 @@ _EXTENSIONS_DIR = Path(__file__).parent
 _REPO_ROOT = _EXTENSIONS_DIR.parents[1]
 _POLICY_GUARDS = _EXTENSIONS_DIR / "policy_guards.ts"
 _TK_WORKFLOW = _EXTENSIONS_DIR / "tk_workflow.ts"
+_MEMORY = _EXTENSIONS_DIR / "memory.ts"
 
 # Node driver: load one extension by absolute path, register its handlers against a
 # fake `pi`, fire a single event, and report the handler's return value and the event
@@ -545,3 +547,84 @@ def test_stop_nudge_reports_open_steps_on_stderr(
         assert expected in proc.stderr
     else:
         assert "Stopping with" not in proc.stderr
+
+
+_MEMORY_INDEX_LINE = "- [Units](units.md) — Prefers metric units"
+
+
+def _memory_output(
+    tmp_path: Path, payload: dict[str, Any], *, work_dir: Path = _REPO_ROOT
+) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
+    """Fire ``before_agent_start`` through memory.ts, with one note in the shared index under a temp HOME."""
+    home = tmp_path / "home"
+    notes_dir = home / "workspace" / "data" / "memories"
+    notes_dir.mkdir(parents=True)
+    (notes_dir / "MEMORY.md").write_text(_MEMORY_INDEX_LINE + "\n")
+    proc = _run_event(
+        tmp_path,
+        _MEMORY,
+        "before_agent_start",
+        payload,
+        work_dir=work_dir,
+        env={"HOME": str(home)},
+    )
+    return proc, _event_output(proc)
+
+
+def test_memory_adds_the_protocol_and_index_as_their_own_system_prompt_section(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "systemPrompt": "BASE",
+        "systemPromptOptions": {"sections": {"tool_guidance": "unchanged"}},
+    }
+
+    _, out = _memory_output(tmp_path, payload)
+
+    assert out["result"] is None
+    sections = out["payload"]["systemPromptOptions"]["sections"]
+    assert sections["tool_guidance"] == "unchanged"
+    memory = sections["workspace_memory"]
+    assert memory.startswith("# Workspace memory")
+    assert "  source: pi-coding" in memory
+    assert memory.endswith(_MEMORY_INDEX_LINE)
+
+
+def test_memory_appends_to_a_prompt_another_extension_already_replaced(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "systemPrompt": "FORCED_BY_TK_WORKFLOW",
+        "systemPromptOptions": {
+            "forceSystemPrompt": "FORCED_BY_TK_WORKFLOW",
+            "sections": {},
+        },
+    }
+
+    _, out = _memory_output(tmp_path, payload)
+
+    assert out["result"]["systemPrompt"].startswith(
+        "FORCED_BY_TK_WORKFLOW\n\n# Workspace memory"
+    )
+    assert out["result"]["systemPrompt"].endswith(_MEMORY_INDEX_LINE)
+    assert out["payload"]["systemPromptOptions"]["sections"] == {}
+
+
+def test_memory_appends_to_the_prompt_when_pi_offers_no_sections(
+    tmp_path: Path,
+) -> None:
+    _, out = _memory_output(tmp_path, {"systemPrompt": "BASE"})
+
+    assert out["result"]["systemPrompt"].startswith("BASE\n\n# Workspace memory")
+
+
+def test_memory_fails_open_when_its_script_is_missing(tmp_path: Path) -> None:
+    empty_work_dir = tmp_path / "work"
+    empty_work_dir.mkdir()
+    payload = {"systemPrompt": "BASE", "systemPromptOptions": {"sections": {}}}
+
+    proc, out = _memory_output(tmp_path, payload, work_dir=empty_work_dir)
+
+    assert out["result"] is None
+    assert out["payload"]["systemPromptOptions"]["sections"] == {}
+    assert "running this turn without memory" in proc.stderr

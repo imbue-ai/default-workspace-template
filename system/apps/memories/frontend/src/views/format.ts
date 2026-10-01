@@ -4,7 +4,7 @@
  * each is tested on its own; the body is returned as plain text pieces, never HTML, since an agent wrote it.
  */
 
-import type { BackupRetention, NoteAttribution } from "../models/notes";
+import type { BackupRetention, Note, NoteAttribution } from "../models/notes";
 
 export interface BodyBlock {
   readonly label: string | null;
@@ -59,6 +59,20 @@ export function attributionLine(attribution: NoteAttribution | null): string {
       ? "not read since"
       : `read by ${countLabel(attribution.reader_count, "chat", "chats")}`;
   return `${writer}${others} · ${readers}`;
+}
+
+const HARNESS_NAMES: Readonly<Record<string, string>> = {
+  "pi-coding": "pi",
+  codex: "Codex",
+  opencode: "OpenCode",
+  antigravity: "Antigravity",
+};
+
+/** Who saved a note. Claude's notes are attributed to their chat from its transcript; a note another harness saved
+ *  says which harness in its frontmatter, and that is all the page can know about it. */
+export function writerLine(note: Note): string {
+  if (note.source === null || note.source === "claude") return attributionLine(note.attribution);
+  return `Saved by a ${HARNESS_NAMES[note.source] ?? note.source} chat`;
 }
 
 /** How long the backups keep a copy, or null when nothing outside the workspace keeps one. */

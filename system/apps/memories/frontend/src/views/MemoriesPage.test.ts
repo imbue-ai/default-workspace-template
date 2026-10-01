@@ -17,12 +17,18 @@ const BACKED_UP: BackupRetention = {
   settings_path: "data/system/backup.toml",
 };
 
-function note(fileName: string, description: string, noteType: Note["note_type"]): Note {
+function note(
+  fileName: string,
+  description: string,
+  noteType: Note["note_type"],
+  source: string | null = "claude",
+): Note {
   return {
     file_name: fileName,
     name: fileName.replace(".md", ""),
     description,
     note_type: noteType,
+    source,
     body: "Some detail.",
     raw_text: `---\ndescription: ${description}\n---\n\nSome detail.\n`,
     modified_at: "2026-10-01T10:00:00Z",
@@ -36,7 +42,10 @@ function documentWith(backups: BackupRetention): NotesDocument {
     notes_dir: "/home/user/workspace/data/memories",
     index_path: "/home/user/workspace/data/memories/MEMORY.md",
     backups,
-    notes: [note("role.md", "Is a product designer", "USER"), note("units.md", "Prefers metric units", "FEEDBACK")],
+    notes: [
+      note("role.md", "Is a product designer", "USER"),
+      note("units.md", "Prefers metric units", "FEEDBACK", "pi-coding"),
+    ],
     messages: [],
   };
 }
@@ -149,5 +158,22 @@ describe("deleting a note", () => {
     click(root, "Delete for good");
     await settle();
     expect(root.querySelector('[role="status"]')?.textContent).toBe("Deleted.");
+  });
+});
+
+describe("who keeps and saved the notes", () => {
+  it("says Claude and pi chats share the notes and the other harnesses don't yet", () => {
+    const { root } = render();
+
+    expect(root.textContent).toContain("Every Claude and pi chat in this workspace, including new ones");
+    expect(root.textContent).toContain("Codex, OpenCode and Antigravity chats. They don't use these notes.");
+  });
+
+  it("says which harness saved a note", () => {
+    const { root } = render();
+    const cards = Array.from(root.querySelectorAll<HTMLElement>(".memories-note"));
+
+    expect(cards[0].textContent).toContain("Who wrote this isn't recorded");
+    expect(cards[1].textContent).toContain("Saved by a pi chat");
   });
 });

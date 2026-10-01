@@ -23,6 +23,8 @@ export interface Note {
   readonly name: string | null;
   readonly description: string;
   readonly note_type: NoteType;
+  /** The harness that saved it (``claude``, ``pi-coding``), when the note says. */
+  readonly source: string | null;
   readonly body: string;
   readonly raw_text: string;
   readonly modified_at: string;
