@@ -1597,7 +1597,11 @@ def test_show_switches_the_client_to_another_desktop_already_showing_the_path(
     assert (answer["shown"], answer["window_id"], answer["desktop_id"]) == ("raised", elsewhere, "research")
     recorded = _shell(app).clients.get_client("c1")
     assert recorded is not None and recorded.active_desktop == "research"
-    assert "active_desktop_changed" in [message["type"] for message in drain_messages(client_queue)]
+    messages = drain_messages(client_queue)
+    assert "active_desktop_changed" in [message["type"] for message in messages]
+    assert [message["args"] for message in messages if message["type"] == "layout_op"] == [
+        {"window": elsewhere, "is_detached": False}
+    ]
     assert _placement_of(client, elsewhere, desktop_id="research")["is_minimized"] is False
     assert client.get("/api/placements/home?client=c1").get_json()["window_paths"] == {}
 
@@ -1720,7 +1724,7 @@ def test_show_opens_a_window_at_the_path_when_the_app_has_no_pinned_window(
         broadcaster,
     )
     client = app.test_client()
-    _register_client(app, "c1", "home")
+    client_queue = _register_client(app, "c1", "home")
     minimized = _window_id_at(client, "buddy", "/?doc=agent-2")
     assert _op(client, "minimize", {"window": minimized, "client": "c1"}, None).status_code == 200
 
@@ -1733,6 +1737,7 @@ def test_show_opens_a_window_at_the_path_when_the_app_has_no_pinned_window(
     assert _paths_by_window(client) == {minimized: "/?doc=agent-2", answer["window_id"]: _SHOW_PATH}
     on_top = answer["layout"]["placements"][-1]
     assert (on_top["window_id"], on_top["is_minimized"]) == (answer["window_id"], False)
+    assert _show_messages(client_queue) == [({"window": answer["window_id"], "is_detached": False}, "c1", "buddy")]
 
 
 def _pull_out(
