@@ -68,6 +68,17 @@ class ClientRecord(FrozenModel):
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"
     )
+    shown_history: tuple[str, ...] = Field(
+        default=(),
+        description="What the client has shown on the phone layout, most recent last: window ids and 'home', "
+        "each at most once",
+    )
+
+
+class ClientShownRequest(FrozenModel):
+    """The body of ``POST /api/clients/<client_id>/shown``: the window the client now shows, or None for home."""
+
+    window_id: WindowId | None = Field(description="The window shown, or None for the home grid")
 
 
 class UserRecord(FrozenModel):
@@ -350,6 +361,9 @@ class WindowOpenRequest(FrozenModel):
     client_id: ClientId = Field(description="The requesting client, whose placement is written at once")
     if_present: IfPresent = Field(
         default=IfPresent.FOCUS, description="Focus a window already at the path, or open another"
+    )
+    minimized: bool = Field(
+        default=False, description="Whether a window this open creates is placed minimized for the client"
     )
 
 

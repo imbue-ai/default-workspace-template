@@ -4,7 +4,9 @@
  * size the geometry needs, the gesture in progress, and whether the launcher is open; applies
  * the reducers; schedules redraws; saves the layout with a debounce, a save id, and the stamp it
  * was based on (a stale save is refused with 409 and the layout refetched); and subscribes to
- * the socket. Everything that reads or writes the shell goes through here.
+ * the socket. Everything that reads or writes the shell goes through here, the phone layout's showing of one
+ * window at a time included (plan-phone-interface.md): a phone never writes a placement, lands where it
+ * left off, and opens every window on the first desktop, out of every other client's sight.
  */
 
 import type {
@@ -19,6 +21,7 @@ import { StalePlacementsSaveError } from "../model/api";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
+  appShortcutOf,
   draftRowsOf,
   freeTextParams,
   freeTextRowsOf,
@@ -53,6 +56,7 @@ import type {
   WindowState,
 } from "../model/records";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
+import { ToastQueue } from "../model/Toasts";
 import { SaveIdMinter } from "../model/saveIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
@@ -84,6 +88,7 @@ import {
   activeDesktop,
   activeFocusedWindowId,
   appByName,
+  desktopById,
   detachedWindowsOf,
   draftTargetOf,
   effectiveWindow,
@@ -97,10 +102,24 @@ import {
   openableApps,
   pinnedWindowOf,
   reduceDesktopState,
-  renderedState,
+  shownHistoryEntry,
+  withShownRecorded,
 } from "../reducers/desktopState";
-import type { DesktopEvent, DesktopState, DetachedWindowReport } from "../reducers/desktopState";
-import { STILL_CONNECTING_NOTICE, cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
+import type {
+  DesktopEvent,
+  DesktopState,
+  DetachedWindowReport,
+  PhoneSheet,
+  PhoneShown,
+} from "../reducers/desktopState";
+import { focusTargetOf, isShownWindowGone, phoneLanding, shownWindowOf } from "../reducers/phone";
+import {
+  STILL_CONNECTING_NOTICE,
+  cellForAddedShortcut,
+  findShortcut,
+  isShortcutOf,
+  resolveLaunchRun,
+} from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
 import type {
   ActiveDesktopChangedEvent,
@@ -145,6 +164,8 @@ export interface DesktopApi {
   savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null>;
   arriveClient(clientId: string): Promise<ClientArrival>;
   fetchClients(): Promise<ClientRecord[]>;
+  /** Record what this client's phone layout shows: a window, or the home grid for null. */
+  recordShown(clientId: string, windowId: string | null): Promise<ClientRecord>;
   quitApp(appName: string): Promise<void>;
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
   fetchAvatars(): Promise<AvatarCatalog>;
@@ -194,7 +215,7 @@ export type TearOutPhase = "out" | "in" | "released";
 export interface PopOutBridge {
   requestPopOut(request: PopOutRequest): void;
   beginWindowDrag(request: WindowDragRequest): void;
-  endWindowDrag(windowId: string, isDetached: boolean): void;
+  endWindowDrag(windowId: string, isDetached: boolean, isCancelled: boolean): void;
   reportDetachedWindows(windows: readonly DetachedWindowReport[]): void;
 }
 
@@ -205,11 +226,11 @@ const NULL_POP_OUT_BRIDGE: PopOutBridge = {
   reportDetachedWindows: () => undefined,
 };
 
-// The layout verbs a solo shell (the pull-out-window spec, section 7.5) never applies: it is a view of one
-// window, and the desktop's arrangement belongs to the client's main window. The two exceptions are its own
-// window's detach (the first load's fallback, when no desktop shell wrote it) and reattach (the way back
-// when no desktop shell can take it).
-const SOLO_IGNORED_LAYOUT_EVENTS: ReadonlySet<DesktopEvent["type"]> = new Set([
+// The layout verbs that edit a placement, which two shells never apply. A solo shell (the pull-out-window spec,
+// section 7.5) is a view of one window, and the desktop's arrangement belongs to the client's main window; its
+// two exceptions are its own window's detach (the first load's fallback, when no desktop shell wrote it) and
+// reattach (the way back when no desktop shell can take it). The phone layout shows windows without placing them.
+const PLACEMENT_EDIT_EVENTS: ReadonlySet<DesktopEvent["type"]> = new Set([
   "window_raised",
   "window_minimized",
   "window_restored",
@@ -227,8 +248,6 @@ export interface StoreDependencies {
   readonly modes: RenderModes;
   /** Schedule a redraw of the views after a state change. */
   readonly redraw: () => void;
-  /** Tell the user about a refusal. */
-  readonly notify: (message: string) => void;
   /** Reload the whole interface (the ``reload_system_interface`` op). */
   readonly reloadInterface: () => void;
   /** The pull-out conversation with the embedder; absent means no embedder. */
@@ -306,6 +325,14 @@ interface ShortcutCellUpdate {
 
 export type ActiveGesture = MoveGesture | ResizeGesture | ShortcutGesture | FloatingEntryGesture;
 
+/** A watched drag this shell ended on its own release, whose last word from the chrome may still be on its way. */
+interface ReleasedWatchedDrag {
+  readonly windowId: string;
+  readonly isDetached: boolean;
+  /** The window's placement as the drag began, which a late pull-out puts back before detaching it. */
+  readonly placementAtStart: Placement;
+}
+
 type Listener = () => void;
 
 export class DesktopStore {
@@ -313,6 +340,7 @@ export class DesktopStore {
   private metrics: ThemeMetrics;
   private backdrop: PixelSize = { width: 0, height: 0 };
   private gesture: ActiveGesture | null = null;
+  private releasedWatchedDrag: ReleasedWatchedDrag | null = null;
   private isLauncherOpenNow = false;
   // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
   private replacedDesktop: ReplacedDesktop | null = null;
@@ -354,6 +382,13 @@ export class DesktopStore {
   /** A solo shell's reattach is on its way to the shell: the detached-set report waits for it to land, since
    *  the chrome closes this window on a report without its window, which would abort the save. */
   private isReportHeldForSave = false;
+  /** A window an agent op showed this phone before the desktops update that brings it landed. */
+  private pendingPhoneShowId: string | null = null;
+  /** Whether the page was out of sight since the socket last connected: a reconnect then reloads the phone's page,
+   *  whose own connection most likely went down with the shell's. */
+  private isHiddenSinceConnect = false;
+  /** The notes a refusal leaves on screen (plan-phone-interface.md's toasts). */
+  readonly toasts: ToastQueue;
 
   constructor(private readonly deps: StoreDependencies) {
     this.state = initialDesktopState(deps.clientId, deps.modes);
@@ -364,6 +399,12 @@ export class DesktopStore {
     this.appsLoaded = new Promise((resolve) => {
       this.markAppsLoaded = resolve;
     });
+    this.toasts = new ToastQueue(() => this.notifyListeners());
+  }
+
+  /** Tell the user about a refusal. */
+  private toast(message: string): void {
+    this.toasts.show(message);
   }
 
   /** The one window this shell shows alone, or null for the whole desktop. */
@@ -399,10 +440,15 @@ export class DesktopStore {
    *  stands where the drag began. "in": the chrome dropped that window, and this one is brought back and shown
    *  again where the drag has it, saved at once too. "released": the button came up while out, and the gesture
    *  is over; the placement is already what it is to be, so nothing is written. This shell is the one writer
-   *  during a drag; the chrome's window only reads. */
+   *  during a drag; the chrome's window only reads. A word on a watched drag this shell already ended on its own
+   *  release still stands (``takeLateTearOut``). */
   setTearOut(windowId: string, phase: TearOutPhase): void {
     const gesture = this.moveGestureOf(windowId);
-    if (gesture === null || !gesture.isWatched) return;
+    if (gesture === null) {
+      this.takeLateTearOut(windowId, phase);
+      return;
+    }
+    if (!gesture.isWatched) return;
     if (phase === "released") {
       if (!gesture.isTearingOut) return;
       this.gesture = null;
@@ -422,6 +468,28 @@ export class DesktopStore {
   private detachDraggedWindow(windowId: string): void {
     this.dispatch({ type: "window_detached", windowId });
     void this.flushPendingSave();
+  }
+
+  /** The chrome's word on a watched drag this shell already ended on its own release, which reached it first. The
+   *  chrome's word stands: "released" after a release inside means the chrome kept the window it pulled out, so
+   *  this one goes out too, from the placement the drag began at, as if "out" had come in time; "in" after a
+   *  release outside means the chrome dropped its window, so this one comes back. A late "out" alone changes
+   *  nothing: the chrome follows it with "released" when it keeps its window. */
+  private takeLateTearOut(windowId: string, phase: TearOutPhase): void {
+    const released = this.releasedWatchedDrag;
+    if (released === null || released.windowId !== windowId) return;
+    if (phase === "released" && !released.isDetached) {
+      const start = released.placementAtStart;
+      this.dispatch({ type: "window_frame_set", windowId, frame: start.frame });
+      if (start.state !== "NORMAL") this.dispatch({ type: "window_state_set", windowId, state: start.state });
+      this.detachDraggedWindow(windowId);
+    } else if (phase === "in" && released.isDetached) {
+      this.bringBackDraggedWindow(windowId);
+    } else {
+      return;
+    }
+    this.releasedWatchedDrag = null;
+    this.notifyListeners();
   }
 
   /** Back inside, or cancelled while out: the window is on the desktop again, raised (its state kept, so a
@@ -473,13 +541,9 @@ export class DesktopStore {
     return !isPreviewShell() && isAppStoppable(this.state, app);
   }
 
-  /** The rectangle a placement renders at, in backdrop pixels (the compact override and the fit applied). */
+  /** The rectangle a placement renders at, in backdrop pixels (the fit applied). */
   renderedRect(placement: Placement): PixelRect {
-    return fitFrameToBackdrop(
-      frameForState(placement.frame, renderedState(placement, this.state.modes)),
-      this.backdrop,
-      this.metrics,
-    );
+    return fitFrameToBackdrop(frameForState(placement.frame, placement.state), this.backdrop, this.metrics);
   }
 
   subscribe(listener: Listener): () => void {
@@ -494,11 +558,13 @@ export class DesktopStore {
   dispatch(event: DesktopEvent): void {
     // A solo shell leaves the desktop's arrangement to the client's main window; only its own window's detach
     // and reattach are its to write.
-    if (this.soloWindowId !== null && SOLO_IGNORED_LAYOUT_EVENTS.has(event.type)) {
+    if (this.soloWindowId !== null && PLACEMENT_EDIT_EVENTS.has(event.type)) {
       const isOwnWindow = "windowId" in event && event.windowId === this.soloWindowId;
       const isOwnVerb = event.type === "window_detached" || event.type === "window_reattached";
       if (!isOwnWindow || !isOwnVerb) return;
     }
+    // A phone shows windows without placing them, so a laptop client never sees anything move.
+    if (this.isPhoneLayout() && PLACEMENT_EDIT_EVENTS.has(event.type)) return;
     const next = reduceDesktopState(this.state, event);
     if (next === this.state) return;
     // Only an event that changed the layout re-arms the debounce: a broadcast landing while a save
@@ -507,6 +573,139 @@ export class DesktopStore {
     this.state = next;
     if (isLayoutChanged && isLayoutDirty(next)) this.scheduleSave();
     this.notifyListeners();
+    this.followShownWindow();
+  }
+
+  /** Whether this shell draws the phone layout: the phone mode, and not a solo shell (which shows its one window
+   *  whatever the viewport). */
+  isPhoneLayout(): boolean {
+    return this.state.modes.isPhone && this.soloWindowId === null;
+  }
+
+  /** Keep what the phone shows honest after any change: a shown window that no desktop holds any longer sends the
+   *  phone home, a pinned window that is not the active desktop's gives way to its app's pinned window there (the
+   *  phone lists only those), and a window an agent op showed before the desktops that hold it arrived is shown once
+   *  they do. */
+  private followShownWindow(): void {
+    if (!this.isPhoneLayout() || !this.state.isDesktopsLoaded) return;
+    const pending = this.pendingPhoneShowId;
+    if (pending !== null && findWindow(this.state, pending) !== null) {
+      this.showOnPhone({ kind: "window", windowId: pending });
+      return;
+    }
+    if (isShownWindowGone(this.state)) {
+      // A sheet open when the window went (its own X, Close all, another client's close) stays open over home.
+      const sheet = this.state.phone.sheet;
+      this.showOnPhone({ kind: "home" });
+      if (sheet !== null) this.openPhoneSheet(sheet);
+      return;
+    }
+    const shown = shownWindowOf(this.state);
+    if (shown?.is_pinned !== true) return;
+    const pinned = pinnedWindowOf(this.state, shown.app);
+    if (pinned !== null && pinned.id !== shown.id) this.showOnPhone({ kind: "window", windowId: pinned.id });
+  }
+
+  /** Put ``shown`` on the phone's screen and record it with the shell, which keeps it as this client's history: a
+   *  reload lands there, and an agent reading the client sees it. Closes any open sheet. */
+  showOnPhone(shown: PhoneShown): void {
+    this.pendingPhoneShowId = null;
+    this.dispatch({ type: "phone_shown", shown });
+    this.recordShownWithShell(shown);
+  }
+
+  private recordShownWithShell(shown: PhoneShown): void {
+    const windowId = shown.kind === "window" ? shown.windowId : null;
+    void this.deps.api.recordShown(this.deps.clientId, windowId).catch((error: unknown) => {
+      console.warn("[si] could not record what the phone shows", error);
+    });
+  }
+
+  /** Take the shell's record of what this client showed. A phone showing something the record does not end on (a
+   *  show whose recording failed, or one this read overtook) keeps it as the newest entry and records it again, so
+   *  the shell, the windows sheet's order and the screen agree. */
+  private takeShownHistory(history: readonly string[]): void {
+    const shown = this.state.phone.shown;
+    if (!this.isPhoneLayout() || shown === null || history[history.length - 1] === shownHistoryEntry(shown)) {
+      this.dispatch({ type: "phone_history_loaded", history });
+      return;
+    }
+    this.dispatch({ type: "phone_history_loaded", history: withShownRecorded(history, shownHistoryEntry(shown)) });
+    this.recordShownWithShell(shown);
+  }
+
+  goHome(): void {
+    this.showOnPhone({ kind: "home" });
+  }
+
+  /** Show a window an agent op named, now if this client knows it, else once the desktops that hold it arrive. */
+  private showOnPhoneWhenKnown(windowId: string): void {
+    if (findWindow(this.state, windowId) !== null) {
+      this.showOnPhone({ kind: "window", windowId });
+      return;
+    }
+    this.pendingPhoneShowId = windowId;
+  }
+
+  /** Where the phone lands: what this client recorded last, else the pinned chat window, else home. Taken without
+   *  recording, since the history already says it. */
+  private landPhone(): void {
+    if (!this.isPhoneLayout() || this.state.phone.shown !== null || !this.state.isDesktopsLoaded) return;
+    this.dispatch({ type: "phone_shown", shown: phoneLanding(this.state) });
+  }
+
+  openPhoneSheet(sheet: PhoneSheet | null): void {
+    this.dispatch({ type: "phone_sheet_set", sheet });
+  }
+
+  /** A home tile's tap: the app's window on this client's desktop nearest the top of its stack, else its newest
+   *  window anywhere, else the launch of the app's desktop shortcut (``appShortcutOf``), or its first launch path
+   *  when it has none. */
+  async runHomeTile(appName: string): Promise<void> {
+    const target = focusTargetOf(this.state, appName);
+    if (target !== null) {
+      this.showOnPhone({ kind: "window", windowId: target.id });
+      return;
+    }
+    const app = appByName(this.state, appName);
+    const launch = (app === undefined ? null : appShortcutOf(app))?.launch ?? app?.launch_paths[0]?.id;
+    if (app === undefined || launch === undefined) {
+      this.toast(`Cannot open: ${appName} has nothing to open`);
+      return;
+    }
+    await this.runLaunch(app.name, launch, "new");
+  }
+
+  /** Close every window but the pinned one, one after another. */
+  async closeAllWindows(): Promise<void> {
+    const windows = this.state.desktops.flatMap((desktop) => desktop.windows.filter((window) => !window.is_pinned));
+    for (const window of windows) await this.closeWindow(window.id);
+  }
+
+  /** The page came back into sight or went out of it. Back in sight, the shell's word is read again, since a
+   *  phone's page sleeps while hidden and the pushes of the time away may never have arrived. */
+  onVisibilityChange(isVisible: boolean): void {
+    if (!isVisible) {
+      this.isHiddenSinceConnect = true;
+      return;
+    }
+    void this.refreshInventory();
+  }
+
+  private async refreshInventory(): Promise<void> {
+    let inventory: Inventory;
+    try {
+      inventory = await this.deps.api.fetchInventory();
+    } catch (error) {
+      console.warn("[si] could not read the inventory again", error);
+      return;
+    }
+    this.takeApps(inventory.apps);
+    // As a push: a desktop deleted while the page was away moves this client to the fallback, told to the shell.
+    this.takeDesktops(inventory.desktops);
+    this.dispatch({ type: "workspace_name_updated", workspaceName: inventory.workspace_name });
+    const own = inventory.clients.find((client) => client.id === this.deps.clientId);
+    if (own !== undefined) this.takeShownHistory(own.shown_history);
   }
 
   private notifyListeners(): void {
@@ -537,8 +736,11 @@ export class DesktopStore {
 
   setThemeMetrics(metrics: ThemeMetrics, modes: RenderModes): void {
     this.metrics = metrics;
+    // A gesture of the desktop does not carry over into the phone layout, which has none to finish it.
+    if (modes.isPhone) this.cancelGesture();
     // The modes event always yields a new state, so the dispatch notifies and redraws.
     this.dispatch({ type: "render_modes_changed", modes });
+    this.landPhone();
   }
 
   /** Resolves once the app list has landed, with the bootstrap's inventory read or the socket's first
@@ -585,16 +787,18 @@ export class DesktopStore {
       inventory = await this.deps.api.fetchInventory();
     } catch (error) {
       console.warn("[si] could not read the inventory", error);
-      this.deps.notify(`Could not read the desktops and apps: ${(error as Error).message}`);
+      this.toast(`Could not read the desktops and apps: ${(error as Error).message}`);
       return;
     }
     // The apps before the desktops, so the first draw of a desktop's shortcuts already knows every app.
     this.takeApps(inventory.apps);
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops: inventory.desktops });
+    this.dispatch({ type: "workspace_name_updated", workspaceName: inventory.workspace_name });
     this.replacedDesktop = replacedDesktopOf(arrival);
     const own = inventory.clients.find((client) => client.id === this.deps.clientId);
     this.takeFetchedEntries(own, entryPushesBefore);
+    if (own !== undefined) this.takeShownHistory(own.shown_history);
     // The shell's answer says where this client lands; without one (the arrival failed), the recorded desktop.
     // A solo shell lands on the desktop that holds its window, wherever the client is.
     const landing = arrival?.desktop_id ?? own?.active_desktop ?? null;
@@ -603,9 +807,12 @@ export class DesktopStore {
         ? null
         : (inventory.desktops.find((desktop) => desktop.windows.some((window) => window.id === this.soloWindowId))
             ?.id ?? null);
-    const chosen = chooseInitialDesktopId(inventory.desktops, soloDesktopId ?? deepLink.desktopId, landing);
+    // A phone never picks a desktop: its active one is only ever the one the shell assigns on arrival.
+    const deepLinkDesktopId = this.isPhoneLayout() ? null : deepLink.desktopId;
+    const chosen = chooseInitialDesktopId(inventory.desktops, soloDesktopId ?? deepLinkDesktopId, landing);
     if (chosen === null) return;
     await this.switchDesktop(chosen, { isFollowingPush: true });
+    this.landPhone();
     if (deepLink.open === null && deepLink.launch === null) return;
     await this.appsLoaded;
     await this.applyDeepLink(deepLink);
@@ -617,8 +824,12 @@ export class DesktopStore {
   private takeConnected(): void {
     // A solo shell's socket is still its client's: registered as a pop-out's, the ops aimed at the client reach it.
     if (this.soloWindowId !== null) this.deps.socket.reportPopOut();
+    const wasHidden = this.isHiddenSinceConnect;
+    this.isHiddenSinceConnect = false;
     if (this.hasSocketConnected) {
       void this.resyncAfterReconnect();
+      const shown = shownWindowOf(this.state);
+      if (wasHidden && this.isPhoneLayout() && shown !== null) this.pageDriver?.reload(shown.id);
       return;
     }
     this.hasSocketConnected = true;
@@ -638,6 +849,7 @@ export class DesktopStore {
       const clients = await this.deps.api.fetchClients();
       const own = clients.find((client) => client.id === this.deps.clientId);
       this.takeFetchedEntries(own, entryPushesBefore);
+      if (own !== undefined) this.takeShownHistory(own.shown_history);
       recorded = own?.active_desktop ?? null;
     } catch (error) {
       console.warn("[si] could not read the client records after reconnecting", error);
@@ -691,7 +903,7 @@ export class DesktopStore {
     this.deps.socket.reportClientState(active, previousDesktop);
   }
 
-  private takeDesktops(desktops: Desktop[]): void {
+  private takeDesktops(desktops: readonly Desktop[]): void {
     const previous = this.state.activeDesktopId;
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
@@ -796,7 +1008,7 @@ export class DesktopStore {
     try {
       reported = await this.deps.api.reportWindowLocation(found.desktop.id, windowId, this.deps.clientId, path, title);
     } catch (error) {
-      this.deps.notify(`Could not move the window: ${(error as Error).message}`);
+      this.toast(`Could not move the window: ${(error as Error).message}`);
       return false;
     }
     this.applyOwnNavigation(found, reported);
@@ -838,7 +1050,7 @@ export class DesktopStore {
     try {
       await this.deps.api.selectAvatar(design);
     } catch (error) {
-      this.deps.notify(`Could not change the avatar: ${(error as Error).message}`);
+      this.toast(`Could not change the avatar: ${(error as Error).message}`);
     }
   }
 
@@ -856,7 +1068,7 @@ export class DesktopStore {
       if (this.entryPushes !== entryPushesBefore) return;
       this.dispatch({ type: "entries_updated", entries: record.entries });
     } catch (error) {
-      this.deps.notify(`Could not change the entry: ${(error as Error).message}`);
+      this.toast(`Could not change the entry: ${(error as Error).message}`);
       if (this.entryPushes !== entryPushesBefore) return;
       const others = Object.fromEntries(Object.entries(this.state.entries).filter(([name]) => name !== app));
       this.dispatch({
@@ -908,13 +1120,20 @@ export class DesktopStore {
       case "reload_system_interface":
         this.deps.reloadInterface();
         return;
-      case "show": {
-        // A pulled-out window the shell left out: its desktop window is raised as the taskbar's "Show" raises it. The
-        // main window's page asks for any window; a solo page asks for its own, so the raise works with the main
-        // window closed (the chrome raises an existing desktop window on the ask, whoever sends it).
+      case "show":
+      case "open":
+      case "focus": {
+        // An op that put a window on this client's screen. A phone shows it; a desktop has it placed already, and
+        // acts only on a pulled-out window the shell left out, whose desktop window it raises as the taskbar's
+        // "Show" does. The main window's page asks for any window; a solo page asks for its own, so the raise works
+        // with the main window closed (the chrome raises an existing desktop window on the ask, whoever sends it).
         const windowId = event.args.window;
         if (typeof windowId !== "string" || windowId === "") return;
-        if (this.soloWindowId === null || windowId === this.soloWindowId) this.showDetachedWindow(windowId);
+        const isDetachedShow = event.op === "show" && event.args.is_detached === true;
+        if (this.soloWindowId !== null) {
+          if (isDetachedShow && windowId === this.soloWindowId) this.showDetachedWindow(windowId);
+        } else if (this.isPhoneLayout()) this.showOnPhoneWhenKnown(windowId);
+        else if (isDetachedShow) this.showDetachedWindow(windowId);
         return;
       }
     }
@@ -940,7 +1159,7 @@ export class DesktopStore {
       this.takeDesktop(created);
       await this.switchDesktop(created.id);
     } catch (error) {
-      this.deps.notify(`Could not create the desktop: ${(error as Error).message}`);
+      this.toast(`Could not create the desktop: ${(error as Error).message}`);
     }
   }
 
@@ -974,21 +1193,34 @@ export class DesktopStore {
     this.dispatch({ type: "desktops_updated", desktops });
   }
 
-  /** Add a launch path to the active desktop at the first free cell in reading order over the current grid;
-   *  nothing when it is already there (the shell would move the shortcut and reset its mode). */
+  /** Add a launch path to the active desktop at the first free cell in reading order over the current grid, drawn
+   *  at once and taken off again if the shell refuses; nothing when it is already there (the shell would move the
+   *  shortcut and reset its mode). A refusal takes off only the shortcut drawn here: one a broadcast put there in
+   *  the meantime is the shell's and stays. */
   async addShortcut(app: string, launch: string, mode: ShortcutMode): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
-    if (desktop.shortcuts.some((shortcut) => shortcut.target.app === app && shortcut.target.launch === launch)) return;
+    if (findShortcut(desktop, app, launch) !== undefined) return;
     const cell = cellForAddedShortcut(desktop, this.gridDimensions());
-    await this.setShortcut(desktop.id, { target: { kind: "launch", app, launch }, mode, cell });
+    const shortcut: DesktopShortcut = { target: { kind: "launch", app, launch }, mode, cell };
+    this.takeDesktop({ ...desktop, shortcuts: [...desktop.shortcuts, shortcut] });
+    try {
+      this.takeDesktop(await this.deps.api.setDesktopShortcut(desktop.id, shortcut));
+    } catch (error) {
+      const now = desktopById(this.state, desktop.id);
+      if (now !== null && findShortcut(now, app, launch) === shortcut) {
+        this.takeDesktop({ ...now, shortcuts: now.shortcuts.filter((candidate) => candidate !== shortcut) });
+      }
+      this.toast(`Could not add the shortcut: ${(error as Error).message}`);
+    }
   }
 
+  /** Replace a shortcut the desktop holds, as the shortcut menu's mode flip does. */
   async setShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<void> {
     try {
       this.takeDesktop(await this.deps.api.setDesktopShortcut(desktopId, shortcut));
     } catch (error) {
-      this.deps.notify(`Could not add the shortcut: ${(error as Error).message}`);
+      this.toast(`Could not change the shortcut: ${(error as Error).message}`);
     }
   }
 
@@ -1028,7 +1260,7 @@ export class DesktopStore {
       this.takeDesktop(await this.deps.api.moveDesktopShortcut(desktop.id, app, launch, cell));
     } catch (error) {
       this.withShortcutCells(changes.map((entry) => ({ ...entry, cell: entry.storedCell })));
-      this.deps.notify(`Could not move the shortcut: ${(error as Error).message}`);
+      this.toast(`Could not move the shortcut: ${(error as Error).message}`);
     }
   }
 
@@ -1039,21 +1271,30 @@ export class DesktopStore {
     this.takeDesktop({
       ...desktop,
       shortcuts: desktop.shortcuts.map((shortcut) => {
-        const wanted = cells.find(
-          (entry) => entry.app === shortcut.target.app && entry.launch === shortcut.target.launch,
-        );
+        const wanted = cells.find((entry) => isShortcutOf(shortcut, entry.app, entry.launch));
         return wanted === undefined ? shortcut : { ...shortcut, cell: wanted.cell };
       }),
     });
   }
 
+  /** Take a shortcut off the active desktop at once, putting it back if the shell refuses. A refusal puts it back
+   *  only while the shell has said nothing of the desktops since: a broadcast in the meantime is the shell's word on
+   *  whether it is still there, and stands. */
   async removeShortcut(app: string, launch: string): Promise<void> {
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
+    const removed = findShortcut(desktop, app, launch);
+    if (removed === undefined) return;
+    this.takeDesktop({ ...desktop, shortcuts: desktop.shortcuts.filter((candidate) => candidate !== removed) });
+    const revision = this.desktopsRevision;
     try {
       this.takeDesktop(await this.deps.api.removeDesktopShortcut(desktop.id, app, launch));
     } catch (error) {
-      this.deps.notify(`Could not remove the shortcut: ${(error as Error).message}`);
+      const now = desktopById(this.state, desktop.id);
+      if (this.desktopsRevision === revision && now !== null && findShortcut(now, app, launch) === undefined) {
+        this.takeDesktop({ ...now, shortcuts: [...now.shortcuts, removed] });
+      }
+      this.toast(`Could not remove the shortcut: ${(error as Error).message}`);
     }
   }
 
@@ -1064,16 +1305,16 @@ export class DesktopStore {
     const run = resolveLaunchRun(this.state, app, launch, mode);
     switch (run.kind) {
       case "raise":
-        this.raiseWindow(run.windowId);
+        this.restoreWindow(run.windowId);
         return;
       case "open":
         await this.launchAt(run.app, run.launch, {}, { kind: "new" });
         return;
       case "connecting":
-        this.deps.notify(STILL_CONNECTING_NOTICE);
+        this.toast(STILL_CONNECTING_NOTICE);
         return;
       case "unavailable":
-        this.deps.notify(`Cannot open: ${run.reason}`);
+        this.toast(`Cannot open: ${run.reason}`);
         return;
     }
   }
@@ -1087,7 +1328,7 @@ export class DesktopStore {
     const app = appByName(this.state, appName);
     const launchPath = app === undefined ? null : launchPathOf(app, launchId);
     if (app === undefined || launchPath === null) {
-      this.deps.notify(`Cannot open: ${appName} has no launch path ${launchId}`);
+      this.toast(`Cannot open: ${appName} has no launch path ${launchId}`);
       return null;
     }
     return { app, launchPath };
@@ -1118,7 +1359,7 @@ export class DesktopStore {
     if (found === null) return false;
     const disabledReason = textRowDisabledReason(found.launchPath, text);
     if (disabledReason !== null) {
-      this.deps.notify(disabledReason);
+      this.toast(disabledReason);
       return false;
     }
     const params = freeTextParams(found.launchPath, text);
@@ -1140,7 +1381,7 @@ export class DesktopStore {
     if (draftTargetOf(this.state) !== null) return this.draftIntoPinnedWindow(text);
     const [draftRow] = draftRowsOf(openableApps(this.state));
     if (draftRow === undefined) {
-      this.deps.notify(NO_DRAFT_APP_REASON);
+      this.toast(NO_DRAFT_APP_REASON);
       return false;
     }
     return this.runFreeText(draftRow.app.name, draftRow.launchPath.id, text);
@@ -1151,30 +1392,51 @@ export class DesktopStore {
   async startWithText(text: string): Promise<boolean> {
     const [primary] = freeTextRowsOf(openableApps(this.state));
     if (primary === undefined) {
-      this.deps.notify(NO_TEXT_APP_REASON);
+      this.toast(NO_TEXT_APP_REASON);
       return false;
     }
     return this.runFreeText(primary.app.name, primary.launchPath.id, text);
   }
 
+  /** The desktop an open goes to: the active one, or on a phone the first, where a window opened out of sight
+   *  is minimized at the bottom of every other client's stack and nobody's own desktop moves. */
+  private openingDesktopId(): string | null {
+    if (this.isPhoneLayout()) return this.state.desktops[0]?.id ?? null;
+    return this.state.activeDesktopId;
+  }
+
   /** Every open goes through the shell's one route; the answer is applied at once and the layout
-   *  refetched for the stamp the shell wrote. Answers the window id, or null when the shell refused. */
+   *  refetched for the stamp the shell wrote. A phone opens out of sight and shows the window itself. Answers the
+   *  window id, or null when the shell refused. */
   async openWindowAt(app: string, path: string, ifPresent: IfPresent): Promise<string | null> {
-    const desktopId = this.state.activeDesktopId;
+    const desktopId = this.openingDesktopId();
     if (desktopId === null) return null;
+    const isMinimized = this.isPhoneLayout();
     // The shell writes the new placement over the stored layout, and the refetch takes that: a gesture
     // still waiting in the debounce goes into the file first or it is lost.
     await this.flushPendingSave();
     let outcome: WindowOpenOutcome;
     try {
-      outcome = await this.deps.api.openWindow(desktopId, { app, path, clientId: this.deps.clientId, ifPresent });
+      outcome = await this.deps.api.openWindow(desktopId, {
+        app,
+        path,
+        clientId: this.deps.clientId,
+        ifPresent,
+        isMinimized,
+      });
     } catch (error) {
-      this.deps.notify(`Could not open ${app}: ${(error as Error).message}`);
+      this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return null;
     }
-    this.dispatch({ type: "window_opened_here", desktopId, window: outcome.window, isNew: outcome.isNew });
-    void this.refetchLayout();
+    this.takeOpened(desktopId, outcome.window, outcome.isNew, isMinimized);
     return outcome.window.id;
+  }
+
+  /** A window the shell opened or answered for this client, applied at once; the phone shows it. */
+  private takeOpened(desktopId: string, window: WindowRecord, isNew: boolean, isMinimized: boolean): void {
+    this.dispatch({ type: "window_opened_here", desktopId, window, isNew, isMinimized });
+    void this.refetchLayout();
+    if (this.isPhoneLayout()) this.showOnPhone({ kind: "window", windowId: window.id });
   }
 
   /** Run a launch path through the shell's launch route (post-launch-paths plan section 5.3): the shell resolves the
@@ -1187,8 +1449,11 @@ export class DesktopStore {
     params: Readonly<Record<string, string>>,
     target: LaunchTarget,
   ): Promise<string | null> {
-    const desktopId = this.state.activeDesktopId;
+    // A launch into a named window runs on that window's desktop; any other on the desktop an open goes to.
+    const named = target.kind === "window" ? findWindow(this.state, target.windowId) : null;
+    const desktopId = named?.desktop.id ?? this.openingDesktopId();
     if (desktopId === null) return null;
+    const isMinimized = this.isPhoneLayout();
     await this.flushPendingSave();
     let outcome: LaunchOutcome;
     try {
@@ -1198,18 +1463,17 @@ export class DesktopStore {
         params,
         clientId: this.deps.clientId,
         target,
+        isMinimized,
       });
     } catch (error) {
-      this.deps.notify(`Could not open ${app}: ${(error as Error).message}`);
+      this.toast(`Could not open ${app}: ${(error as Error).message}`);
       return null;
     }
     if (target.kind === "window") {
-      const found = findWindow(this.state, target.windowId);
-      if (found !== null) this.applyOwnNavigation(found, outcome.window);
+      if (named !== null) this.applyOwnNavigation(named, outcome.window);
       return outcome.window.id;
     }
-    this.dispatch({ type: "window_opened_here", desktopId, window: outcome.window, isNew: outcome.isNew });
-    void this.refetchLayout();
+    this.takeOpened(desktopId, outcome.window, outcome.isNew, isMinimized);
     return outcome.window.id;
   }
 
@@ -1217,7 +1481,9 @@ export class DesktopStore {
   async openPathFromWindow(windowId: string, path: string, ifPresent: IfPresent): Promise<void> {
     const found = findWindow(this.state, windowId);
     if (found === null) return;
-    if (found.desktop.id !== this.state.activeDesktopId) await this.switchDesktop(found.desktop.id);
+    if (!this.isPhoneLayout() && found.desktop.id !== this.state.activeDesktopId) {
+      await this.switchDesktop(found.desktop.id);
+    }
     await this.openWindowAt(found.window.app, path, ifPresent);
   }
 
@@ -1231,7 +1497,7 @@ export class DesktopStore {
     try {
       await this.deps.api.closeWindow(found.desktop.id, windowId);
     } catch (error) {
-      this.deps.notify(`Could not close the window: ${(error as Error).message}`);
+      this.toast(`Could not close the window: ${(error as Error).message}`);
       return;
     }
     this.dispatch({ type: "window_closed_here", desktopId: found.desktop.id, windowId });
@@ -1243,7 +1509,8 @@ export class DesktopStore {
     // In a solo shell the chord belongs to the chrome, which closes the desktop window instead; the focused
     // window here would be some other window of the desktop.
     if (this.soloWindowId !== null) return;
-    const focused = activeFocusedWindowId(this.state);
+    // A phone's focused window is the one it shows.
+    const focused = this.isPhoneLayout() ? (shownWindowOf(this.state)?.id ?? null) : activeFocusedWindowId(this.state);
     if (focused === null) return;
     if (findWindow(this.state, focused)?.window.is_pinned === true) {
       this.minimizeWindow(focused);
@@ -1284,8 +1551,12 @@ export class DesktopStore {
     this.dispatch({ type: "window_minimized", windowId });
   }
 
-  /** Restore a minimized window (the taskbar's verb): raised. */
+  /** Restore a minimized window (the taskbar's verb): raised; on a phone, shown. */
   restoreWindow(windowId: string): void {
+    if (this.isPhoneLayout()) {
+      this.showOnPhone({ kind: "window", windowId });
+      return;
+    }
     this.raiseWindow(windowId);
   }
 
@@ -1296,12 +1567,10 @@ export class DesktopStore {
   /** Place a window at a fraction of the backdrop -- the size menu's halves and quarters, which no
    *  window state stands for. Normal, shown and raised, as a drag that ends away from an edge leaves it. */
   setWindowFrame(windowId: string, frame: Frame): void {
-    if (this.state.modes.isCompact) return;
     this.dispatch({ type: "window_frame_set", windowId, frame });
   }
 
   toggleMaximized(windowId: string): void {
-    if (this.state.modes.isCompact) return;
     const placement = placementOf(this.state.layout, windowId);
     if (placement.state === "MAXIMIZED") this.dispatch({ type: "window_restored", windowId });
     else this.dispatch({ type: "window_state_set", windowId, state: "MAXIMIZED" });
@@ -1419,7 +1688,7 @@ export class DesktopStore {
     try {
       await this.deps.api.quitApp(appName);
     } catch (error) {
-      this.deps.notify(`Failed to quit ${appName}: ${(error as Error).message}`);
+      this.toast(`Failed to quit ${appName}: ${(error as Error).message}`);
     }
   }
 
@@ -1437,11 +1706,11 @@ export class DesktopStore {
 
   /** A drag of a window's title bar began (past the threshold) at ``pointer``, in backdrop pixels. */
   beginWindowMove(windowId: string, pointer: PixelPoint): void {
-    if (this.state.modes.isCompact) return;
     const placement = placementOf(this.state.layout, windowId);
     const startRect = this.renderedRect(placement);
     // A solo shell shows one window edge to edge; there is no desktop to pull a window out of.
     const isWatched = this.canPopOut && this.soloWindowId === null;
+    this.releasedWatchedDrag = null;
     this.gesture = {
       kind: "move",
       windowId,
@@ -1500,7 +1769,14 @@ export class DesktopStore {
     this.gesture = null;
     if (settled === null || settled.kind !== "move") return;
     const placement = placementOf(this.state.layout, settled.windowId);
-    if (settled.isWatched) this.popOut.endWindowDrag(settled.windowId, settled.isTearingOut);
+    if (settled.isWatched) {
+      this.popOut.endWindowDrag(settled.windowId, settled.isTearingOut, false);
+      this.releasedWatchedDrag = {
+        windowId: settled.windowId,
+        isDetached: settled.isTearingOut,
+        placementAtStart: placement,
+      };
+    }
     if (settled.isTearingOut) {
       // Released outside, and this shell saw the release itself (a pointer that does leave the chrome's window):
       // the window was detached and saved as it went out, so the gesture only ends.
@@ -1518,7 +1794,6 @@ export class DesktopStore {
   }
 
   beginWindowResize(windowId: string, edge: ResizeEdge): void {
-    if (this.state.modes.isCompact) return;
     const placement = placementOf(this.state.layout, windowId);
     // Resizing a snapped or maximized window first un-snaps it, at the rectangle it rendered at.
     const startRect = this.renderedRect(placement);
@@ -1629,10 +1904,9 @@ export class DesktopStore {
     );
   }
 
-  /** A floating entry was lifted; ``grabOffset`` is where inside its box the pointer pressed. Nothing moves
-   *  in compact mode, or for an app with no pinned window on the active desktop. */
+  /** A floating entry was lifted; ``grabOffset`` is where inside its box the pointer pressed. Nothing moves for
+   *  an app with no pinned window on the active desktop. */
   beginFloatingEntryDrag(app: string, pointer: PixelPoint, grabOffset: PixelPoint): void {
-    if (this.state.modes.isCompact) return;
     const current = this.presentationOf(app);
     if (current === null) return;
     const start = this.renderedFloatingEntryRect(app, current.position);
@@ -1679,7 +1953,7 @@ export class DesktopStore {
     // A watched drag cancelled mid-way (Escape, the browser): the chrome drops any window it was dragging, and
     // one that was out comes back to the desktop.
     if (cancelled.kind === "move" && cancelled.isWatched) {
-      this.popOut.endWindowDrag(cancelled.windowId, false);
+      this.popOut.endWindowDrag(cancelled.windowId, false, true);
       if (cancelled.isTearingOut) this.bringBackDraggedWindow(cancelled.windowId);
     }
     this.notifyListeners();
@@ -1753,8 +2027,13 @@ export class DesktopStore {
     // carried nothing new for it): only the client's window paths, which change without moving the stamp, are
     // taken, and a gesture still waiting to be saved is kept rather than thrown away with a reload.
     if (this.state.isLayoutLoaded && layout.updated_at === this.state.layout.updated_at) {
-      if (isSameWindowPaths(layout.window_paths, this.state.layout.window_paths)) return;
       this.layoutLoadsRevision += 1;
+      if (isSameWindowPaths(layout.window_paths, this.state.layout.window_paths)) {
+        // Nothing to take, but the pages still follow: the shell handing back the paths this window already
+        // holds is what confirms a page's own location report, so the page stops guarding the path it left.
+        this.notifyListeners();
+        return;
+      }
       this.dispatch({ type: "window_paths_loaded", desktopId, windowPaths: layout.window_paths });
       return;
     }

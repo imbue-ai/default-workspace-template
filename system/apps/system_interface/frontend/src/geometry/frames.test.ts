@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { frameForState, frameFromPixels, frameToPixels, isResizeEdge, movedRect, resizedRect } from "./frames";
+import {
+  frameForState,
+  frameFromPixels,
+  frameFromViewportFractions,
+  frameToPixels,
+  isResizeEdge,
+  movedRect,
+  resizedRect,
+} from "./frames";
 
 const BACKDROP = { width: 1000, height: 800 };
 const MINIMUM = { windowMinWidth: 320, windowMinHeight: 240 };
@@ -30,6 +38,40 @@ describe("pixels and fractions", () => {
       width: 0.4,
       height: 0.5,
     });
+  });
+
+  it("map a drop the chrome measured against the whole viewport onto the backdrop, keeping its pixel size", () => {
+    // The chrome's surface is this page's viewport; the taskbar takes the bottom 48px of it.
+    const viewport = { width: 1512, height: 852 };
+    const backdrop = { x: 0, y: 0, width: 1512, height: 804 };
+    const dropped = { x: 100, y: 120, width: 984, height: 356 };
+    const frame = frameFromViewportFractions(
+      {
+        x: dropped.x / viewport.width,
+        y: dropped.y / viewport.height,
+        width: dropped.width / viewport.width,
+        height: dropped.height / viewport.height,
+      },
+      viewport,
+      backdrop,
+    );
+    const landed = frameToPixels(frame, backdrop);
+    expect(landed.x).toBeCloseTo(dropped.x);
+    expect(landed.y).toBeCloseTo(dropped.y);
+    expect(landed.width).toBeCloseTo(dropped.width);
+    expect(landed.height).toBeCloseTo(dropped.height);
+  });
+
+  it("offset a drop by where the backdrop sits in the viewport, and clamp one that overhangs it", () => {
+    const viewport = { width: 1000, height: 900 };
+    const backdrop = { x: 0, y: 100, width: 1000, height: 800 };
+    expect(frameFromViewportFractions({ x: 0.1, y: 0.5, width: 0.5, height: 0.4 }, viewport, backdrop)).toEqual({
+      x: 0.1,
+      y: 0.4375,
+      width: 0.5,
+      height: 0.45,
+    });
+    expect(frameFromViewportFractions({ x: 0, y: 0, width: 0.5, height: 0.5 }, viewport, backdrop).y).toBe(0);
   });
 
   it("fills the square when the backdrop has no size yet", () => {

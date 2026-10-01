@@ -153,9 +153,8 @@ beforeEach(async () => {
     api,
     socket,
     metrics: METRICS,
-    modes: { isCompact: false, isTouch: false },
+    modes: { isPhone: false, isTouch: false },
     redraw: () => undefined,
-    notify: () => undefined,
     reloadInterface: () => undefined,
   });
   store.setBackdropSize({ width: 1000, height: 800 });
@@ -547,6 +546,27 @@ describe("the contract", () => {
     expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?doc=9" }]);
   });
 
+  it("follows an independent window's stored path back to the one its page reported leaving", async () => {
+    await showIndependentWindow([placementRecord("win-4")]);
+    const spy = spyOnFrame("win-4");
+    load("win-4");
+    messageFromPage("win-4", { type: SHELL_CAPABILITIES, navigation: true });
+    spy.mockClear();
+    // From here the layer reconciles only when the store says something changed, as the app's redraw does.
+    store.subscribe(() => layer.reconcile());
+    // The page moves on by itself, and the shell's broadcast confirms the path it reported.
+    messageFromPage("win-4", { type: SHELL_LOCATION, path: "/?doc=8", title: "Eight" });
+    await settle();
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell-2" });
+    await settle();
+    expect(spy).not.toHaveBeenCalled();
+    // An agent's show then points this client's page back where it was (opening a notification's chat).
+    api.windowPaths.set(`${CLIENT}/win-4`, { path: "/?doc=7", title: "Seven" });
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-shell-3" });
+    await settle();
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([{ type: SHELL_NAVIGATE, path: "/?doc=7" }]);
+  });
+
   it("leaves an independent window's hidden page alone while another desktop is active", async () => {
     const frame = await showIndependentWindow([placementRecord("win-4")]);
     expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=7");
@@ -801,5 +821,44 @@ describe("the contract", () => {
     load("win-1");
     await store.closeFocusedWindow();
     expect(api.calls).toContain("closeWindow:home:win-1");
+  });
+});
+
+describe("the phone's mount policy", () => {
+  it("lays the shown page over the whole host, keeps the kept one hidden, and destroys every other", () => {
+    expect(layer.hasPage("win-1")).toBe(true);
+    // win-2 is minimized for this client, which a phone does not read: shown is shown.
+    layer.setMountPolicy({ kind: "shown", windowId: "win-2", alsoKeep: ["win-3"] });
+    layer.reconcile();
+    expect(layer.hasPage("win-1")).toBe(false);
+    const shown = wrapperOf("win-2");
+    expect(shown.style.display).toBe("");
+    expect([shown.style.left, shown.style.top, shown.style.width, shown.style.height]).toEqual([
+      "0px",
+      "0px",
+      "1000px",
+      "800px",
+    ]);
+    expect(shown.style.pointerEvents).toBe("auto");
+    // The kept page is created even though it has never been shown, and stays out of sight.
+    expect(wrapperOf("win-3").style.display).toBe("none");
+  });
+
+  it("gives a window shown again a fresh page, while the kept page lives on across the switch", () => {
+    layer.setMountPolicy({ kind: "shown", windowId: "win-1", alsoKeep: ["win-3"] });
+    layer.reconcile();
+    const firstFrame = frameOf("win-1");
+    const keptFrame = frameOf("win-3");
+    layer.setMountPolicy({ kind: "shown", windowId: "win-2", alsoKeep: ["win-3"] });
+    layer.reconcile();
+    layer.setMountPolicy({ kind: "shown", windowId: "win-1", alsoKeep: ["win-3"] });
+    layer.reconcile();
+    expect(frameOf("win-1")).not.toBe(firstFrame);
+    expect(frameOf("win-3")).toBe(keptFrame);
+    // Home: no page shown, the kept one still mounted.
+    layer.setMountPolicy({ kind: "shown", windowId: null, alsoKeep: ["win-3"] });
+    layer.reconcile();
+    expect(layer.hasPage("win-1")).toBe(false);
+    expect(frameOf("win-3")).toBe(keptFrame);
   });
 });

@@ -1,0 +1,1 @@
+The desktop-interface contracts describe how the desktop takes the Imbue Studio app's late word on a window drag it already ended: a late `released` pulls the window out from where the drag began, a late `in` brings it back, and a cancelled drag takes no late word.

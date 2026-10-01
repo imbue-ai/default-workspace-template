@@ -17,6 +17,9 @@ from imbue.system_interface.avatar.designs import AvatarMood
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
 from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
 from imbue.system_interface.avatar.designs import render_design_svg
+from imbue.system_interface.avatar.icons import DEFAULT_ICON_SIZE
+from imbue.system_interface.avatar.icons import render_design_icon_png
+from imbue.system_interface.avatar.primitives import DesignId
 from imbue.system_interface.avatar.selection import AvatarSelection
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
@@ -30,6 +33,7 @@ from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 # A registration is one design plus its JSON framing; anything larger is not a design.
 _MAX_REGISTRATION_BYTES: Final[int] = MAX_SVG_BYTES * 6 + 16384
 _SVG_MIMETYPE: Final[str] = "image/svg+xml"
+_PNG_MIMETYPE: Final[str] = "image/png"
 # The image is isolated by the browser's image mode; the policy also covers a direct visit to the route.
 _IMAGE_CSP: Final[str] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 _SOURCE_CSP: Final[str] = "default-src 'none'; sandbox"
@@ -83,6 +87,38 @@ def avatar_image(design_id: str) -> ResponseReturnValue:
     return response
 
 
+def selected_design_id(shell: ShellState) -> DesignId:
+    """The design the workspace shows: the selection, or the default when the selected design is no longer in the
+    catalog."""
+    selected = shell.avatar_selection.read()
+    return selected if shell.avatar_catalog.source(selected) is not None else DEFAULT_DESIGN_ID
+
+
+def icon_png_response(design_id: str, size: int) -> ResponseReturnValue:
+    """The design's home-screen icon, ``size`` pixels square; 404 for a design the catalog does not hold."""
+    source = _shell().avatar_catalog.source(design_id)
+    if source is None:
+        return detail_response(f"No avatar design {design_id!r}", HTTP_NOT_FOUND)
+    response = Response(render_design_icon_png(source, design_id, size), mimetype=_PNG_MIMETYPE)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # The selection, and a registered design's drawing, can change under one URL.
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+def _size_argument() -> int:
+    raw = request.args.get("size", str(DEFAULT_ICON_SIZE))
+    try:
+        return int(raw)
+    except ValueError:
+        raise InvalidShellValueError(f"an icon size is a whole number of pixels, not {raw!r}") from None
+
+
+def avatar_icon(design_id: str) -> ResponseReturnValue:
+    """The design's still pose on an opaque square tile, as the PNG a phone's home screen takes."""
+    return icon_png_response(design_id, _size_argument())
+
+
 def avatar_source(design_id: str) -> ResponseReturnValue:
     source = _shell().avatar_catalog.source(design_id)
     if source is None:
@@ -112,6 +148,9 @@ def register_avatar_routes(application: Flask) -> None:
     application.add_url_rule("/api/avatars", view_func=register_avatar, methods=["POST"], endpoint="register_avatar")
     application.add_url_rule(
         "/api/avatars/<design_id>/image.svg", view_func=avatar_image, methods=["GET"], endpoint="avatar_image"
+    )
+    application.add_url_rule(
+        "/api/avatars/<design_id>/icon.png", view_func=avatar_icon, methods=["GET"], endpoint="avatar_icon"
     )
     application.add_url_rule(
         "/api/avatars/<design_id>/source.svg", view_func=avatar_source, methods=["GET"], endpoint="avatar_source"

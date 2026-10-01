@@ -28,11 +28,14 @@ from playwright.sync_api import Frame
 from playwright.sync_api import FrameLocator
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
+from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
 
 from imbue.chat.accounts import account_dir
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.auto_open import chat_root_path
+from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
@@ -1383,3 +1386,166 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         provider_row = chat.locator('[data-menu-row="providers"]')
         expect(provider_row).to_contain_text("Google")
         expect(provider_row).not_to_contain_text("next:")
+
+
+# the phone layout (plan-phone-interface.md, "The chat app")
+
+
+_PHONE_VIEWPORT: ViewportSize = {"width": 393, "height": 852}
+
+
+def _open_phone_chat_root(page: Page, server: RunningWorkspace, path: str = _FIXTURE_ROOT_PATH) -> None:
+    """Open the chat root at a phone's width, at the chat app's own URL: its layout follows its own width whatever
+    frames it, so the shell's phone layout is not what is under test here."""
+    page.set_viewport_size(_PHONE_VIEWPORT)
+    page.goto(f"{server.chat_url}{path}")
+    expect(page.locator('.chat-root[data-compact="true"]')).to_be_visible(timeout=15000)
+
+
+def _dismiss_drawer_by_its_scrim(page: Page) -> None:
+    """Tap the scrim where the drawer's panel does not cover it: the strip at the right edge."""
+    page.mouse.click(_PHONE_VIEWPORT["width"] - 10, _PHONE_VIEWPORT["height"] // 2)
+
+
+def _shown_chat_of_root(page: Page) -> FrameLocator:
+    """The chat page the root opened at the chat app's own URL shows."""
+    return page.frame_locator("iframe.chat-root-frame:not([hidden])")
+
+
+def _selection_of(url: str) -> str | None:
+    """The chat the root's URL selects."""
+    return urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("chat", [None])[0]
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_phone_layout_keeps_the_chat_list_in_a_drawer_over_the_chat(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """With nothing selected the drawer is open over an empty transcript that says to pick or start a chat; its rows
+    are a finger's height (44px), picking one shows that chat under a header naming it and closes the drawer, the list
+    button opens it again, and a tap on the scrim or a drag to the left dismisses it."""
+    _open_phone_chat_root(page, e2e_server, "/")
+    drawer = page.locator("[data-chat-drawer]")
+    expect(drawer).to_be_visible()
+    expect(page.locator(".chat-root-empty")).to_have_text("Pick a chat, or start a new one.")
+    expect(drawer.locator(".chat-rail-new")).to_have_attribute("aria-label", "New chat")
+
+    _dismiss_drawer_by_its_scrim(page)
+    expect(drawer).to_have_count(0)
+    expect(page.locator(".chat-header-title")).to_have_text("Chats")
+
+    page.locator("[data-chat-header-list]").click()
+    row = drawer.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]')
+    row_box = row.bounding_box()
+    assert row_box is not None and row_box["height"] >= 44, row_box
+    row.click()
+    expect(drawer).to_have_count(0)
+    expect(page.locator(".chat-header-title")).to_have_text("test-agent")
+    expect(_shown_chat_of_root(page).locator(".message-user").first).to_contain_text("Hello agent!", timeout=15000)
+
+    page.locator("[data-chat-header-list]").click()
+    expect(drawer).to_be_visible()
+    panel = page.locator(".chat-drawer-panel").bounding_box()
+    assert panel is not None
+    y = panel["y"] + panel["height"] / 2
+    page.mouse.move(panel["x"] + panel["width"] - 40, y)
+    page.mouse.down()
+    page.mouse.move(panel["x"] + 40, y, steps=10)
+    page.mouse.up()
+    expect(drawer).to_have_count(0)
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_phone_header_kebab_renames_the_chat_on_screen(e2e_server: RunningWorkspace, page: Page) -> None:
+    """The header's kebab offers the row menu's verbs for the chat on screen, and its Rename is typed in place of the
+    title and lands on the chat."""
+    _open_phone_chat_root(page, e2e_server)
+    expect(page.locator(".chat-header-title")).to_have_text("test-agent")
+
+    page.locator("[data-chat-header-menu]").click()
+    menu = page.locator(".chat-header-menu")
+    expect(menu.locator("[data-menu-row]")).to_have_text(["Rename", "Stop chat", "Delete chat"])
+    menu.locator('[data-menu-row="rename"]').click()
+    field = page.locator(".chat-header .chat-rail-rename-input")
+    expect(field).to_be_focused()
+    field.fill("Phone rename")
+    field.press("Enter")
+
+    expect(page.locator(".chat-header-title")).to_have_text("Phone rename", timeout=15000)
+    snapshot = e2e_server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+    assert snapshot is not None and snapshot.title == "Phone rename"
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_drawer_row_kebab_stops_that_chat(tmp_path: Path, page: Page) -> None:
+    """Each row in the drawer carries a kebab with the right-click menu's verbs; its Stop chat stops that row's chat,
+    not the one on screen, and picks nothing."""
+    with _running_e2e_server(tmp_path, additional_agents=((_SECOND_AGENT_ID, "Second-chat"),)) as server:
+        _open_phone_chat_root(page, server)
+        page.locator("[data-chat-header-list]").click()
+        page.locator(f'[data-chat-row-menu="{_SECOND_AGENT_ID}"]').click()
+        menu = page.locator(".chat-rail-menu")
+        expect(menu.locator("[data-menu-row]")).to_have_text(["Rename", "Stop chat", "Delete chat"])
+
+        with page.expect_response(
+            lambda response: response.request.method == "POST" and "/stop" in response.url
+        ) as stopped:
+            menu.locator('[data-menu-row="stop"]').click()
+        assert stopped.value.url.endswith(f"/api/chats/{_SECOND_AGENT_ID}/stop")
+        assert stopped.value.status == 200
+        expect(page.locator("[data-chat-drawer]")).to_be_visible()
+        assert _selection_of(page.url) == FIXTURE_AGENT_ID
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_phone_composer_settings_button_opens_the_model_menu_with_effort_segments_and_source_view(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """On a phone the model chip leaves the under-bar for a settings button at the composer's left; its menu carries
+    the effort as segments, whose press sets the chat's effort, the Source view switch as a row, and submenus that
+    slide in over the card and back."""
+    model_state = get_model_state_path(HarnessType.CLAUDE, e2e_server.agent_info.agent_state_dir)
+    model_state.write_text(json.dumps({"model": "claude-opus-5-5", "effort": "high", "fast": False}))
+    e2e_server.chat_state.agent_manager.refresh_model_choice(FIXTURE_AGENT_ID)
+    _open_phone_chat_root(page, e2e_server)
+    chat = _shown_chat_of_root(page)
+    expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+    expect(chat.locator(".composer-under-bar .model-selector-trigger")).to_have_count(0)
+    expect(chat.locator(".composer-under-bar .terminal-view-toggle")).to_have_count(0)
+
+    chat.locator("[data-composer-settings]").click()
+    menu = chat.locator(".model-provider-menu--compact")
+    expect(menu).to_be_visible()
+    segments = menu.locator('[role="radiogroup"][aria-label="Reasoning effort"] [data-effort-level]')
+    expect(segments).to_have_text(["Low", "Medium", "High", "Xhigh", "Max"])
+    expect(menu.locator('[data-effort-level="high"]')).to_have_attribute("aria-checked", "true")
+    expect(menu.locator('[data-menu-row="source-view"] [role="switch"]')).to_have_attribute("aria-checked", "false")
+    expect(menu.locator('input[type="range"]')).to_have_count(0)
+
+    with page.expect_request(lambda request: request.method == "POST" and request.url.endswith("/model")) as picked:
+        menu.locator('[data-effort-level="max"]').click()
+    assert json.loads(picked.value.post_data or "{}")["effort"] == "max"
+
+    menu.locator('[data-menu-row="providers"]').click()
+    expect(menu.locator("[data-menu-track]")).to_have_attribute("data-menu-track", "submenu")
+    expect(menu.locator("text=+ Add a provider")).to_be_visible()
+    menu.locator("[data-menu-track-back]").click()
+    expect(menu.locator("[data-menu-track]")).to_have_attribute("data-menu-track", "menu")
+
+    menu.locator('[data-menu-row="source-view"] [role="switch"]').click()
+    expect(menu).to_have_count(0)
+    expect(chat.locator(".composer-under-bar .terminal-view-toggle")).to_have_attribute("aria-checked", "true")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_draft_typed_on_the_phone_is_back_after_a_reload(e2e_server: RunningWorkspace, page: Page) -> None:
+    """An unsent message survives the page going away, which is what lets the phone mount only the window it shows."""
+    _open_phone_chat_root(page, e2e_server)
+    textbox = _shown_chat_of_root(page).locator(".message-input-textbox")
+    expect(textbox).to_be_visible(timeout=15000)
+    textbox.fill("Half a thought, typed on a phone")
+
+    page.reload()
+    expect(_shown_chat_of_root(page).locator(".message-input-textbox")).to_have_value(
+        "Half a thought, typed on a phone", timeout=15000
+    )

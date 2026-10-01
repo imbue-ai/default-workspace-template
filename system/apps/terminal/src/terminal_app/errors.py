@@ -36,3 +36,7 @@ class TerminalServeError(TerminalAppError):
 
 class UnknownSessionPageError(TerminalAppError):
     """The wrapper was asked for the page of a session name that cannot be one."""
+
+
+class ClientHasNoBodyCloseError(TerminalAppError):
+    """The ttyd web client has no closing body tag to add the pty page's script before."""

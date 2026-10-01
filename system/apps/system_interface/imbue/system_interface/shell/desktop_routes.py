@@ -257,7 +257,7 @@ def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
 
 def open_window(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowOpenRequest)
-    outcome = _shell().open_window(desktop_id, body, is_minimized=False)
+    outcome = _shell().open_window(desktop_id, body)
     return (
         jsonify({"window": _shell().window_wire_json(outcome.window), "is_new": outcome.is_new}),
         HTTP_CREATED if outcome.is_new else HTTP_OK,
@@ -387,9 +387,10 @@ def _popped_out_wire_json(desktop: Desktop, layout: DesktopLayout) -> list[dict[
 
 
 def inventory_document_json(shell: ShellState) -> dict[str, Any]:
-    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, every desktop, every
-    app, and every known client with ``shown``, the windows of its active desktop that its layout does not minimize,
-    and ``popped_out``, the windows its layouts of every desktop say it popped out into their own windows."""
+    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, the workspace's name,
+    every desktop, every app, and every known client with ``shown``, the windows of its active desktop that its layout
+    does not minimize, and ``popped_out``, the windows its layouts of every desktop say it popped out into their own
+    windows."""
     desktops = shell.list_desktops()
     connected = shell.broadcaster.connected_client_ids()
     clients: list[dict[str, Any]] = []
@@ -413,6 +414,7 @@ def inventory_document_json(shell: ShellState) -> dict[str, Any]:
         )
     return {
         "is_preview": get_state().is_preview,
+        "workspace_name": get_state().workspace_name.resolve(),
         "desktops": shell.desktops_wire_json(desktops),
         "apps": shell.inventory.serialized(),
         "clients": clients,
@@ -589,9 +591,7 @@ def _raise_in_own_window(
     """Ask the client's windows to raise a popped-out window's own desktop window, leaving its placement as it stands:
     only the client's pages can bring that window forward, and raising the placement would pull the window back onto
     the desktop instead."""
-    shell.broadcaster.broadcast_layout_op(
-        SHOW_OP, {"window": str(window_id)}, requester=_requester_wire(requester), target_client_id=str(client_id)
-    )
+    _announce_window_op(shell, SHOW_OP, window_id, client_id, requester, {"is_detached": True})
 
 
 @pure
@@ -715,7 +715,13 @@ def _open_request(
     shell: ShellState, arguments: DesktopOpArguments, client_id: ClientId, desktop_id: DesktopId
 ) -> WindowOpenRequest:
     target = _open_target(shell, arguments, client_id, desktop_id)
-    return WindowOpenRequest(app=target.app, path=target.path, client_id=client_id, if_present=arguments.if_present)
+    return WindowOpenRequest(
+        app=target.app,
+        path=target.path,
+        client_id=client_id,
+        if_present=arguments.if_present,
+        minimized=arguments.minimized,
+    )
 
 
 def _open_unplaced(
@@ -864,6 +870,7 @@ def _op_window(
             shell.edit_desktop_layout(
                 desktop, target.client_id, lambda current: with_window_raised(current, window.id)
             )
+            _announce_window_op(shell, "focus", window.id, target.client_id, requester)
             return window.id, _PopOutNotes(is_brought_back=is_detached)
         case _ if op in _POP_OUT_REFUSING_OPS:
             edit = _placement_edit(op, arguments, window.id, is_detached)
@@ -921,16 +928,14 @@ def _show(
     is_raised_in_own_window = False
     if choice.window is None:
         request = WindowOpenRequest(app=app, path=path, client_id=client_id, if_present=IfPresent.NEW)
-        window_id = shell.open_window(desktop.id, request, is_minimized=False).window.id
+        window_id = shell.open_window(desktop.id, request).window.id
     else:
         window_id = choice.window.id
         if choice.outcome is not ShowOutcome.RAISED:
             # As a ``navigate`` does: an independent window moves for this client alone, a linked one for everyone.
             shell.report_window_location(desktop.id, window_id, client_id, path, choice.window.title)
         is_raised_in_own_window = placement_of(shell.read_desktop_layout(desktop, client_id), window_id).is_detached
-        if is_raised_in_own_window:
-            _raise_in_own_window(shell, window_id, client_id, requester)
-        else:
+        if not is_raised_in_own_window:
             shell.edit_desktop_layout(desktop, client_id, lambda current: with_window_raised(current, window_id))
     # Switched after the raise, so the layout the client fetches on arriving already has the window on top; a window
     # raised in its own window leaves the client where ``args.desktop`` put it.
@@ -938,6 +943,7 @@ def _show(
         shell.set_client_active_desktop(client_id, desktop.id)
     else:
         _switch_as_asked(shell, target)
+    _announce_window_op(shell, SHOW_OP, window_id, client_id, requester, {"is_detached": is_raised_in_own_window})
     logger.info(
         "layout op={} requester={} desktop={} client={} app={} path={} shown={}",
         SHOW_OP,
@@ -1060,9 +1066,11 @@ def _open(
     if found is not None and _is_detached_while_connected(shell, target.client_id, is_found_detached):
         _raise_in_own_window(shell, found.id, target.client_id, requester)
         return found.id, _PopOutNotes(is_raised_in_own_window=True, unpaired_beside=unpaired_beside)
-    window_id = shell.open_window(target.desktop.id, request, arguments.minimized).window.id
+    window_id = shell.open_window(target.desktop.id, request).window.id
     _pair_beside(shell, target, anchor, window_id)
     _switch_as_asked(shell, target)
+    if not arguments.minimized:
+        _announce_window_op(shell, "open", window_id, target.client_id, requester)
     return window_id, _PopOutNotes(
         is_brought_back=is_found_detached or (anchor is not None and anchor.id != window_id and is_anchor_detached),
         unpaired_beside=unpaired_beside,
@@ -1138,6 +1146,24 @@ def _requester_wire(requester: OpRequester | None) -> str:
     if requester is None:
         return ""
     return str(requester.app) + (f":{requester.marker}" if requester.marker else "")
+
+
+def _announce_window_op(
+    shell: ShellState,
+    op: str,
+    window_id: WindowId,
+    client_id: ClientId,
+    requester: OpRequester | None,
+    extra_args: Mapping[str, Any] | None = None,
+) -> None:
+    """Tell the target client's windows which window an op put in front of it, so a page that shows one window at a
+    time (the phone layout) can switch to it; the op's own edit has already been written."""
+    shell.broadcaster.broadcast_layout_op(
+        op,
+        {"window": str(window_id), **(extra_args or {})},
+        requester=_requester_wire(requester),
+        target_client_id=str(client_id),
+    )
 
 
 def _reload_system_interface(shell: ShellState, requester: OpRequester | None) -> ResponseReturnValue:

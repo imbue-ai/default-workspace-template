@@ -482,7 +482,14 @@ def test_desktops_and_list_read_the_inventory_document(
         }
     ]
     inventory_clients = [
-        {"id": "c1", "active_desktop": "home", "is_connected": True, "shown": [_FILES_WINDOW["id"]], "last_seen": "t"},
+        {
+            "id": "c1",
+            "active_desktop": "home",
+            "is_connected": True,
+            "shown": [_FILES_WINDOW["id"]],
+            "shown_history": ["home", _FILES_WINDOW["id"]],
+            "last_seen": "t",
+        },
         {"id": "c2", "active_desktop": None, "is_connected": False, "shown": [], "last_seen": "t"},
     ]
     loopback_shell.get_answers[INVENTORY_ROUTE] = (
@@ -510,9 +517,12 @@ def test_desktops_and_list_read_the_inventory_document(
             ],
         }
     ]
-    assert [(client["id"], client["active_desktop"], client["shown"]) for client in desktops["clients"]] == [
-        ("c1", "home", [_FILES_WINDOW["id"]]),
-        ("c2", None, []),
+    assert [
+        (client["id"], client["active_desktop"], client["shown"], client["shown_history"])
+        for client in desktops["clients"]
+    ] == [
+        ("c1", "home", [_FILES_WINDOW["id"]], ["home", _FILES_WINDOW["id"]]),
+        ("c2", None, [], []),
     ]
     assert run_layout_cli(["list", "--json"], layout_context) == 0
     listing = json.loads(capsys.readouterr().out)

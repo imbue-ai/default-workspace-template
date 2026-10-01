@@ -17,6 +17,7 @@ dependencies = [
     "imbue-mngr-pi-coding",
     "imbue-mngr-opencode",
     "imbue-mngr-antigravity",
+    "imbue-mngr-autocompact",
     "oom-priority",
     "pexpect>=4.9",
     "pydantic-settings>=2.13.1",
@@ -111,6 +112,12 @@ default-flags=["report"]
 default-flags-tui=["report"]
 default-flags-ide=["report"]
 format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
+
+# Makes this directory ty's project (test_no_type_errors runs ty from here). ty
+# skips a pyproject.toml with no [tool.ty] table and keeps searching upward, so
+# without one, a checkout nested in another project (e.g. a clone under mngr's
+# .external_worktrees/) would be checked as part of that project instead.
+[tool.ty]
 
 [tool.pyright]
 venvPath = "."

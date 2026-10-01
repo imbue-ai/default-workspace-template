@@ -74,9 +74,23 @@ def is_known_client(shell: ShellState, client_id: str) -> bool:
     return shell.clients.get_client(client_id) is not None or client_id in shell.broadcaster.connected_client_ids()
 
 
+def _is_same_user(shell: ShellState, client_id: str, other_client_id: str) -> bool:
+    """Whether two recorded clients last arrived as the same user (the owner arrives as none)."""
+    record = shell.clients.get_client(client_id)
+    other_record = shell.clients.get_client(other_client_id)
+    return record is not None and other_record is not None and record.user_id == other_record.user_id
+
+
 def resolve_client(shell: ShellState, args_raw: Mapping[str, Any], requester: OpRequester | None) -> ClientId | None:
-    """The client an op addresses: ``args.client``, else the client that last messaged the requester's chat, else
-    the one connected client; None when nothing settles it."""
+    """The client an op addresses: ``args.client``, else the client that last messaged the requester's chat while
+    it is connected, else the one connected client (when a client messaged, only if it is the same user's), else
+    that messaging client though it is not connected; None when nothing settles it.
+
+    A messaging client that has gone yields to the one connected client because the user carried on there: a
+    phone's browser tab and its home-screen app are two clients, and the window belongs where the user is looking.
+    Another user's client (a visitor's, while the owner messaged) is not where they are looking, so it never takes
+    over from theirs.
+    """
     explicit = args_raw.get("client")
     if isinstance(explicit, str) and explicit:
         # Held to the client id rule before it names a layout file.
@@ -84,14 +98,21 @@ def resolve_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
         if not is_known_client(shell, client_id):
             raise ClientNotFoundError(f"No client {client_id!r}: see `workspace-layout context` for the known clients")
         return client_id
+    attributed: str | None = None
     # Only a requester with a marker has a client that last messaged it; a bare app names none.
     if requester is not None and requester.marker:
         attributed = find_client_id_for_page(shell.activity.read_events(), str(requester.app), requester.marker)
-        if attributed is not None and is_known_client(shell, attributed):
-            return ClientId(attributed)
+        if attributed is not None and not is_known_client(shell, attributed):
+            attributed = None
     connected = shell.broadcaster.connected_client_ids()
+    if attributed is not None and attributed in connected:
+        return ClientId(attributed)
     if len(connected) == 1:
-        return ClientId(next(iter(connected)))
+        only_connected = next(iter(connected))
+        if attributed is None or _is_same_user(shell, attributed, only_connected):
+            return ClientId(only_connected)
+    if attributed is not None:
+        return ClientId(attributed)
     return None
 
 
@@ -108,8 +129,9 @@ def require_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
         )
         or "none"
     )
+    connected_client_count = len({info.client_id for info in connected_clients})
     raise NoTargetClientError(
         "Could not tell which client this op is for: no client has messaged the requesting agent and "
-        f"{len(connected_clients)} client(s) are connected. Pass --client <id> (see `workspace-layout context`). "
+        f"{connected_client_count} client(s) are connected. Pass --client <id> (see `workspace-layout context`). "
         f"Connected clients: {client_summary}."
     )

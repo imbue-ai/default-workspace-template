@@ -54,6 +54,8 @@ describe("FloatingEntries", () => {
     expect(entry.getAttribute("data-detached")).toBe("false");
     expect(entry.getAttribute("aria-pressed")).toBe("false");
     expect(entry.getAttribute("aria-label")).toBe("Buddy");
+    // A plain entry keeps the shared below placement; only the avatar's bubble goes above.
+    expect(entry.getAttribute("data-hover-tooltip-placement")).toBeNull();
     expect(entry.style.left).toBe("500px");
     expect(entry.style.top).toBe("400px");
     expect(entry.style.width).toBe("56px");
@@ -72,6 +74,27 @@ describe("FloatingEntries", () => {
     expect(entry.classList.contains("opacity-70")).toBe(true);
   });
 
+  it("does not dim the avatar when its window is away, the way it dims a plain entry", () => {
+    const away = { isMinimized: false, isDetached: true } as const;
+    const plain = render({ entries: [pinnedEntry(away)] });
+    expect((plain.querySelector('[data-pinned-entry="buddy"]') as HTMLElement).classList.contains("opacity-70")).toBe(
+      true,
+    );
+    unmountViews();
+
+    const avatar = render({
+      entries: [
+        pinnedEntry({
+          ...away,
+          look: { mode: "floating", style: "avatar", declaredStyle: "avatar", position: { x: 0.5, y: 0.5 } },
+        }),
+      ],
+    });
+    const entry = avatar.querySelector('[data-pinned-entry="buddy"]') as HTMLElement;
+    expect(entry.getAttribute("data-detached")).toBe("true");
+    expect(entry.classList.contains("opacity-70")).toBe(false);
+  });
+
   it("draws the avatar wearing the mood in the avatar style, marked stale when the status may be old", () => {
     const layer = render({
       entries: [
@@ -88,6 +111,9 @@ describe("FloatingEntries", () => {
     expect(entry.getAttribute("data-mood")).toBe("working");
     expect(entry.getAttribute("data-stale")).toBe("true");
     expect(entry.getAttribute("aria-label")).toBe("Buddy (status may be out of date)");
+    // Above, so the bubble lands on the backdrop rather than on the taskbar the entry floats over.
+    expect(entry.getAttribute("data-hover-tooltip")).toBe("Buddy (status may be out of date)");
+    expect(entry.getAttribute("data-hover-tooltip-placement")).toBe("above");
     expect(entry.querySelector("svg")).toBeNull();
     const image = entry.querySelector("img") as HTMLImageElement;
     expect(image.getAttribute("src")).toBe("/api/avatars/jelly-cat/image.svg?mood=working");

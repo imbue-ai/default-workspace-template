@@ -239,8 +239,11 @@ class WebSocketBroadcaster(MutableModel):
         requester: str = "",
         target_client_id: str | None = None,
     ) -> None:
-        """Send a transient ``layout_op`` (refresh, the interface reload, a pulled-out window's show) to the browser
-        (desktop contracts.md section 8).
+        """Send a transient ``layout_op`` to the browser (desktop contracts.md section 8): ``refresh`` and the
+        interface reload, which are the whole effect of their ops, and the ``show``, ``open`` (unless minimized),
+        and ``focus`` of a targeted op, which name the window the op put in front of the client after its edit was
+        written, for the phone layout to switch to; a ``show`` also says whether the window is pulled out, since only
+        the client's page can bring a pulled-out window's own desktop window forward.
 
         ``requester`` is the app and marker of the chat that invoked ``workspace-layout``, spelled
         ``<app>:<marker>``. ``target_client_id`` names the client whose windows apply the op; None reaches
