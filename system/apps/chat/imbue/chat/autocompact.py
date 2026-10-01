@@ -31,7 +31,8 @@ class ChatAutoCompactor:
     Once every interval, runs one `mngr autocompact run <agent names...>` covering
     every chat agent that is currently running, and nothing at all while the
     workspace's mngr config leaves proactive compaction off: each run is a full
-    mngr launch, and with the mode off it could only do nothing. All
+    mngr launch, and with the mode off it could only do nothing. When mngr
+    rejects the batch with its exit 1, each chat is run on its own instead. All
     collaborators are injectable for unit testing without subprocesses or real
     agents.
     """
@@ -87,7 +88,12 @@ class ChatAutoCompactor:
             self._thread = None
 
     def sweep(self) -> list[FinishedProcess | None]:
-        """Perform one pass of autocompact checks across all running chat agents."""
+        """Perform one pass of autocompact checks across all running chat agents.
+
+        Returns nothing when no launch was made, the batch's outcome alone when it was
+        not retried, and one outcome per chat run before a stop when it was; each
+        outcome is the finished process when it exited 0, else None.
+        """
         if self._stop_event.is_set():
             return []
         names = self._list_running_chat_agent_names()
