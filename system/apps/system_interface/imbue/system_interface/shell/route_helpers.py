@@ -138,8 +138,9 @@ def require_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
         )
         or "none"
     )
+    connected_client_count = len({info.client_id for info in connected_clients})
     raise NoTargetClientError(
         "Could not tell which client this op is for: no client has messaged the requesting agent and "
-        f"{len(connected_clients)} client(s) are connected. Pass --client <id> (see `layout.py context`). "
+        f"{connected_client_count} client(s) are connected. Pass --client <id> (see `layout.py context`). "
         f"Connected clients: {client_summary}."
     )
