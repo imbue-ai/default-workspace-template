@@ -1,5 +1,6 @@
 import json
 import threading
+from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
@@ -9,7 +10,11 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from app_manifest.manifest import DefaultShortcut
+from app_manifest.manifest import LocationScope
 from app_manifest.primitives import AppName
+from app_manifest.primitives import AppUrl
+from app_manifest.registry import RegistryLaunchPath
 from imbue.imbue_common.mutable_model import MutableModel
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -18,6 +23,7 @@ from workspace_layout.answers import ClientActivitySummary
 from workspace_layout.answers import ClientView
 from workspace_layout.answers import ContextAnswer
 from workspace_layout.answers import DesktopOpAnswer
+from workspace_layout.answers import InventoryApp
 from workspace_layout.answers import OpenAnswer
 from workspace_layout.answers import ShowAnswer
 from workspace_layout.answers import TransientOpAnswer
@@ -67,15 +73,19 @@ def connected_client(client_id: str) -> ClientView:
     return ClientView(id=ClientId(client_id), last_seen=FAKE_TIME, is_connected=True)
 
 
-def fake_window(window_id: str, app: str, path: str, title: str = "") -> WindowView:
-    """One window of a desktop, linked, as the shell's answers carry it."""
+def fake_window(
+    window_id: str, app: str, path: str, title: str = "", client_paths: Mapping[str, str] | None = None
+) -> WindowView:
+    """One window of a desktop as the shell's answers carry it: linked, or independent when it names each client's
+    own path."""
     return WindowView(
         id=WindowId(window_id),
         app=AppName(app),
         path=WindowPath(path),
         title=WindowTitle(title),
         opened_at=FAKE_TIME,
-        client_paths={},
+        scope=LocationScope.LINKED if client_paths is None else LocationScope.INDEPENDENT,
+        client_paths={ClientId(client): WindowPath(path) for client, path in (client_paths or {}).items()},
     )
 
 
@@ -93,6 +103,32 @@ def fake_desktop(
         wallpaper=None,
         shortcuts=tuple(shortcuts),
         windows=tuple(windows),
+    )
+
+
+def fake_app(
+    name: str,
+    launch_paths: Sequence[RegistryLaunchPath] = (),
+    default_shortcut: DefaultShortcut | None = None,
+    is_internal: bool = False,
+) -> InventoryApp:
+    """A running app of the inventory, named for itself, served on a loopback port nothing listens on."""
+    return InventoryApp(
+        name=AppName(name),
+        display_name=name.capitalize(),
+        icon="",
+        label="",
+        url=AppUrl(f"http://127.0.0.1:9/{name}"),
+        internal=is_internal,
+        program="",
+        critical=False,
+        stop_when_no_windows=False,
+        launch_paths=tuple(launch_paths),
+        default_shortcut=default_shortcut,
+        launcher_rank=None,
+        pin=None,
+        message_handlers=(),
+        is_running=True,
     )
 
 

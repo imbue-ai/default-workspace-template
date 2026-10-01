@@ -5,6 +5,7 @@ from imbue.system_interface.shell.client_activity import MESSAGE_TEXT_TRUNCATION
 from imbue.system_interface.shell.client_activity import RECENT_MESSAGES_PER_CLIENT
 from imbue.system_interface.shell.client_activity import find_client_id_for_page
 from imbue.system_interface.shell.client_activity import summarize_client_activity
+from imbue.system_interface.shell.testing import message_report
 from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 
 
@@ -24,7 +25,7 @@ def _pop_out(client_id: str) -> ConnectionRegistration:
 def test_messages_are_appended_truncated_and_read_back_in_order(tmp_path: Path) -> None:
     log = _log(tmp_path)
     assert log.read_events() == []
-    log.append_message("c1", "home", "chat", "agent-1", "x" * (MESSAGE_TEXT_TRUNCATION_LIMIT + 5))
+    log.append_message(message_report("c1", "home", "chat", "agent-1", "x" * (MESSAGE_TEXT_TRUNCATION_LIMIT + 5)))
     log.append_desktop_switch("c1", "home", "research")
     events = log.read_events()
     assert [event["type"] for event in events] == ["message", "desktop_switch"]
@@ -37,42 +38,42 @@ def test_messages_are_appended_truncated_and_read_back_in_order(tmp_path: Path) 
 def test_the_summary_folds_the_log_per_client(tmp_path: Path) -> None:
     log = _log(tmp_path)
     for index in range(RECENT_MESSAGES_PER_CLIENT + 2):
-        log.append_message("c1", "home", "chat", "agent-1", f"m{index}")
+        log.append_message(message_report("c1", "home", "chat", "agent-1", f"m{index}"))
     log.append_desktop_switch("c1", "home", "research")
-    log.append_message("c2", "home", "chat", "agent-2", "hello")
+    log.append_message(message_report("c2", "home", "chat", "agent-2", "hello"))
     summaries = summarize_client_activity(log.read_events(), [_connected("c2", "notes")])
-    assert [summary["client_id"] for summary in summaries] == ["c2", "c1"]
+    assert [summary.client_id for summary in summaries] == ["c2", "c1"]
     first, second = summaries[1], summaries[0]
-    assert first["active_desktop"] == "research"
-    assert first["is_connected"] is False
-    assert [message["text"] for message in first["recent_messages"]] == [
+    assert first.active_desktop == "research"
+    assert first.is_connected is False
+    assert [message.text for message in first.recent_messages] == [
         f"m{index}" for index in range(2, RECENT_MESSAGES_PER_CLIENT + 2)
     ]
-    assert (first["recent_messages"][0]["app"], first["recent_messages"][0]["key"]) == ("chat", "agent-1")
+    assert (first.recent_messages[0].app, first.recent_messages[0].key) == ("chat", "agent-1")
     # The live registration outranks the log for the desktop a connected client is on.
-    assert second["is_connected"] is True and second["active_desktop"] == "notes"
+    assert second.is_connected is True and second.active_desktop == "notes"
 
 
 def test_a_message_settles_the_desktop_and_an_empty_live_desktop_reads_as_none(tmp_path: Path) -> None:
     log = _log(tmp_path)
     log.append_desktop_switch("c1", "home", "research")
-    log.append_message("c1", "notes", "chat", "agent-1", "hello")
+    log.append_message(message_report("c1", "notes", "chat", "agent-1", "hello"))
     log.append_desktop_switch("c2", "", "home")
     summaries = summarize_client_activity(log.read_events(), [_connected("c2", "")])
-    by_id = {summary["client_id"]: summary for summary in summaries}
-    assert by_id["c1"]["active_desktop"] == "notes"
-    assert by_id["c2"]["active_desktop"] is None and by_id["c2"]["is_connected"] is True
+    by_id = {str(summary.client_id): summary for summary in summaries}
+    assert by_id["c1"].active_desktop == "notes"
+    assert by_id["c2"].active_desktop is None and by_id["c2"].is_connected is True
 
 
 def test_a_connected_client_with_no_activity_is_still_listed(tmp_path: Path) -> None:
     log = _log(tmp_path)
-    log.append_message("c1", "home", "chat", "agent-1", "hello")
+    log.append_message(message_report("c1", "home", "chat", "agent-1", "hello"))
     summaries = summarize_client_activity(log.read_events(), [_connected("c9", "research")])
-    assert [summary["client_id"] for summary in summaries] == ["c1", "c9"]
+    assert [summary.client_id for summary in summaries] == ["c1", "c9"]
     silent = summaries[1]
-    assert silent["is_connected"] is True
-    assert silent["active_desktop"] == "research"
-    assert silent["recent_messages"] == [] and silent["last_seen"] == ""
+    assert silent.is_connected is True
+    assert silent.active_desktop == "research"
+    assert silent.recent_messages == () and silent.last_seen == ""
 
 
 def test_a_pop_out_connects_its_client_without_supplying_a_desktop(tmp_path: Path) -> None:
@@ -81,25 +82,25 @@ def test_a_pop_out_connects_its_client_without_supplying_a_desktop(tmp_path: Pat
     summaries = summarize_client_activity(
         log.read_events(), [_connected("c1", "notes"), _pop_out("c1"), _pop_out("c2")]
     )
-    by_id = {summary["client_id"]: summary for summary in summaries}
+    by_id = {str(summary.client_id): summary for summary in summaries}
     # Its main window's registration settles c1's desktop, whichever order the registrations come in.
-    assert by_id["c1"]["active_desktop"] == "notes"
+    assert by_id["c1"].active_desktop == "notes"
     # A client with only a pop-out open is connected, on no desktop the pop-out could name.
-    assert by_id["c2"]["is_connected"] is True and by_id["c2"]["active_desktop"] is None
+    assert by_id["c2"].is_connected is True and by_id["c2"].active_desktop is None
 
 
 def test_a_message_to_a_page_without_a_marker_is_summarized_with_an_empty_key(tmp_path: Path) -> None:
     log = _log(tmp_path)
-    log.append_message("c1", "home", "files", "", "open the notes")
+    log.append_message(message_report("c1", "home", "files", "", "open the notes"))
     (summary,) = summarize_client_activity(log.read_events(), [])
-    assert (summary["recent_messages"][0]["app"], summary["recent_messages"][0]["key"]) == ("files", "")
+    assert (summary.recent_messages[0].app, summary.recent_messages[0].key) == ("files", "")
 
 
 def test_the_last_client_to_message_a_page_is_found(tmp_path: Path) -> None:
     log = _log(tmp_path)
-    log.append_message("c1", "home", "chat", "agent-1", "one")
-    log.append_message("c2", "home", "chat", "agent-1", "two")
-    log.append_message("c3", "home", "chat", "agent-2", "three")
+    log.append_message(message_report("c1", "home", "chat", "agent-1", "one"))
+    log.append_message(message_report("c2", "home", "chat", "agent-1", "two"))
+    log.append_message(message_report("c3", "home", "chat", "agent-2", "three"))
     events = log.read_events()
     assert find_client_id_for_page(events, "chat", "agent-1") == "c2"
     assert find_client_id_for_page(events, "chat", "agent-9") is None
@@ -108,7 +109,7 @@ def test_the_last_client_to_message_a_page_is_found(tmp_path: Path) -> None:
 
 def test_unparsable_lines_are_skipped(tmp_path: Path) -> None:
     log = _log(tmp_path)
-    log.append_message("c1", "home", "chat", "agent-1", "one")
+    log.append_message(message_report("c1", "home", "chat", "agent-1", "one"))
     with log.events_path.open("a") as event_file:
         event_file.write("not json\n")
     assert len(log.read_events()) == 1

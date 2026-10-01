@@ -9,6 +9,9 @@ from workspace_layout.errors import ShellOpError
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowPage
+from workspace_layout.primitives import ShowOutcome
 from workspace_layout.testing import FakeShell
 
 from imbue.chat.server import create_application
@@ -29,7 +32,7 @@ def _forwarded(chat_id: str = _CHAT_ID) -> dict[str, str]:
 
 
 def test_a_focus_chat_shows_the_chat_root_on_the_chat_counting_its_own_page_and_moving_a_chat_root_window() -> None:
-    shell = FakeShell(shown="navigated")
+    shell = FakeShell(shown=ShowOutcome.NAVIGATED)
 
     answered = _focus_chat(shell, _forwarded())
 
@@ -37,7 +40,10 @@ def test_a_focus_chat_shows_the_chat_root_on_the_chat_counting_its_own_page_and_
     assert answered.get_json() == {"shown": "navigated", "window_id": "win-0123456789abcdef"}
     assert shell.shows == [
         chat_show_request(
-            f"/?chat={_CHAT_ID}", showing=(f"/{_CHAT_ID}",), repoint=("/",), client_id=ClientId("client-1")
+            WindowPath(f"/?chat={_CHAT_ID}"),
+            showing=(WindowPath(f"/{_CHAT_ID}"),),
+            repoint=(WindowPage("/"),),
+            client_id=ClientId("client-1"),
         )
     ]
 

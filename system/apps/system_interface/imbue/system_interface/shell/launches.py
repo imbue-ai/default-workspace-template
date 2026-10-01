@@ -19,6 +19,7 @@ from app_manifest.manifest import LaunchPathMethod
 from app_manifest.registry import RegistryLaunchPath
 from loguru import logger
 from pydantic import Field
+from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WindowPath
@@ -26,7 +27,6 @@ from workspace_layout.primitives import WindowPath
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppInventoryEntry
-from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import LaunchRefusedError
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 
@@ -104,7 +104,7 @@ def get_launch_destination(launch_path: RegistryLaunchPath, params: Mapping[str,
     encoded = urlencode(query)
     try:
         return WindowPath(f"{launch_path.path}?{encoded}" if encoded else str(launch_path.path))
-    except InvalidShellValueError as e:
+    except InvalidLayoutValueError as e:
         raise LaunchRefusedError(f"the launch path with its params is not a window path: {e}") from e
 
 
@@ -158,7 +158,7 @@ def launched_path(app: str, outcome: LaunchPostOutcome) -> WindowPath:
         raise LaunchUnavailableError(f"{app} answered the launch with no page path")
     try:
         return WindowPath(answered)
-    except InvalidShellValueError as e:
+    except InvalidLayoutValueError as e:
         raise LaunchUnavailableError(f"{app} answered the launch with a path that is not a window path: {e}") from e
 
 

@@ -1,38 +1,40 @@
 from app_manifest.primitives import AppName
 
+from workspace_layout.answers import DesktopsListing
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 from workspace_layout.testing import LoopbackShell
+from workspace_layout.testing import fake_desktop
+from workspace_layout.testing import fake_window
 from workspace_layout.windows import read_app_window_paths
 from workspace_layout.windows import window_paths_of_app
 from workspace_layout.windows import window_query_value
 
 _TERMINAL = AppName("terminal")
 
-_DESKTOPS = {
-    "desktops": [
-        {
-            "id": "home",
-            "windows": [
-                {"id": "win-1", "app": "terminal", "path": "/?session=terminal-1"},
-                {"id": "win-2", "app": "browser", "path": "/?session=browser-1"},
+_DESKTOPS = DesktopsListing(
+    desktops=(
+        fake_desktop(
+            "home",
+            [
+                fake_window("win-0000000000000001", "terminal", "/?session=terminal-1"),
+                fake_window("win-0000000000000002", "browser", "/?session=browser-1"),
             ],
-        },
-        {"id": "work", "windows": [{"id": "win-3", "app": "terminal", "path": "/new?workdir=%2Fdata"}]},
-        {
-            "id": "pinned",
-            "windows": [
-                {
-                    "id": "win-4",
-                    "app": "terminal",
-                    "path": "/",
-                    "scope": "independent",
-                    "client_paths": {"c1": "/?session=terminal-7", "c2": "/?session=terminal-8"},
-                },
-                {"id": "win-5", "app": "browser", "path": "/", "client_paths": {"c1": "/?session=browser-2"}},
+        ),
+        fake_desktop("work", [fake_window("win-0000000000000003", "terminal", "/new?workdir=%2Fdata")]),
+        fake_desktop(
+            "pinned",
+            [
+                fake_window(
+                    "win-0000000000000004",
+                    "terminal",
+                    "/",
+                    client_paths={"c1": "/?session=terminal-7", "c2": "/?session=terminal-8"},
+                ),
+                fake_window("win-0000000000000005", "browser", "/", client_paths={"c1": "/?session=browser-2"}),
             ],
-        },
-    ]
-}
+        ),
+    )
+).model_dump(mode="json")
 
 
 def test_the_reader_answers_the_apps_window_paths_across_every_desktop(loopback_shell: LoopbackShell) -> None:
@@ -49,7 +51,7 @@ def test_the_reader_answers_the_apps_window_paths_across_every_desktop(loopback_
 
 
 def test_the_reader_answers_an_empty_list_for_an_app_with_no_windows(loopback_shell: LoopbackShell) -> None:
-    loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, {"desktops": [{"id": "home", "windows": []}]})
+    loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, {"desktops": [fake_desktop("home").model_dump(mode="json")]})
 
     assert read_app_window_paths(loopback_shell.url, _TERMINAL) == []
 

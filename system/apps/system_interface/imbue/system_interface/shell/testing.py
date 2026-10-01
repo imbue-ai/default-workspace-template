@@ -17,6 +17,9 @@ from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
 from flask import Flask
 from flask import request
+from workspace_layout.ops import ClientActivityReport
+from workspace_layout.primitives import ClientActivityKind
+from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPath
@@ -481,3 +484,15 @@ def read_stub_update_self_calls(repo_root: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
+def message_report(client_id: str, desktop_id: str, app: str, key: str, text: str) -> ClientActivityReport:
+    """A client-activity report of a message a client sent to an app's page."""
+    return ClientActivityReport(
+        client_id=ClientId(client_id),
+        desktop_id=DesktopId(desktop_id),
+        kind=ClientActivityKind.MESSAGE,
+        app=app,
+        key=key,
+        text=text,
+    )

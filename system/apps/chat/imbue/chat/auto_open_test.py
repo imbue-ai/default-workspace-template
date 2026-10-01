@@ -11,6 +11,7 @@ from workspace_layout.ops import ShowRequest
 from workspace_layout.primitives import ClientId
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import connected_client
+from workspace_layout.primitives import WindowPath
 
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
@@ -29,7 +30,7 @@ def _shown(chat_id: str, client_id: str) -> ShowRequest:
     """The show the reactor owes a chat for one client: the chat root on the chat, with no other path counting as
     showing it and no window to repoint, so the shell raises a window already there, else takes the pinned window,
     else opens one."""
-    return chat_show_request(f"/?chat={chat_id}", showing=(), repoint=(), client_id=ClientId(client_id))
+    return chat_show_request(WindowPath(f"/?chat={chat_id}"), showing=(), repoint=(), client_id=ClientId(client_id))
 
 
 def test_only_the_two_auto_open_labels_ask_for_a_window() -> None:

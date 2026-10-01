@@ -21,6 +21,9 @@ from workspace_layout.ops import window_op_arguments
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import IfPresent
 from workspace_layout.primitives import LayoutOp
+from workspace_layout.primitives import WindowPage
+from workspace_layout.primitives import WindowPath
+from workspace_layout.records import Frame
 from workspace_layout.testing import describe_op_body_problem
 
 _CLIENT = ClientId("client-1")
@@ -57,9 +60,9 @@ def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> 
             show_op_arguments(
                 ShowRequest(
                     app=AppName("chat"),
-                    path="/?chat=agent-1",
-                    showing=("/agent-1",),
-                    repoint=("/",),
+                    path=WindowPath("/?chat=agent-1"),
+                    showing=(WindowPath("/agent-1"),),
+                    repoint=(WindowPage("/"),),
                     client_id=_CLIENT,
                 )
             ),
@@ -67,7 +70,9 @@ def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> 
         ),
         (
             LayoutOp.SHOW,
-            show_op_arguments(ShowRequest(app=AppName("files"), path="/a", showing=(), repoint=(), client_id=None)),
+            show_op_arguments(
+                ShowRequest(app=AppName("files"), path=WindowPath("/a"), showing=(), repoint=(), client_id=None)
+            ),
             {"app": "files", "path": "/a", "showing": [], "repoint": []},
         ),
         (
@@ -75,7 +80,7 @@ def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> 
             open_op_arguments(
                 OpenRequest(
                     app=AppName("getting-started"),
-                    path="/",
+                    path=WindowPath("/"),
                     if_present=IfPresent.FOCUS,
                     is_minimized=False,
                     client_id=_CLIENT,
@@ -98,15 +103,27 @@ def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> 
         ),
         (
             LayoutOp.NAVIGATE,
-            navigate_op_arguments(NavigateRequest(window="files", path="/b/", client_id=_CLIENT, desktop=None)),
+            navigate_op_arguments(
+                NavigateRequest(window="files", path=WindowPath("/b/"), client_id=_CLIENT, desktop=None)
+            ),
             {"window": "files", "path": "/b/", "client": "client-1"},
         ),
         (
             LayoutOp.PLACE,
             place_op_arguments(
-                PlaceRequest(window="win-0123456789abcdef", frame="0,0,0.5,1", client_id=_CLIENT, desktop="home")
+                PlaceRequest(
+                    window="win-0123456789abcdef",
+                    frame=Frame(x=0.0, y=0.0, width=0.5, height=1.0),
+                    client_id=_CLIENT,
+                    desktop="home",
+                )
             ),
-            {"window": "win-0123456789abcdef", "frame": "0,0,0.5,1", "client": "client-1", "desktop": "home"},
+            {
+                "window": "win-0123456789abcdef",
+                "frame": {"x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0},
+                "client": "client-1",
+                "desktop": "home",
+            },
         ),
     ],
     ids=["show", "show-for-the-shells-choice-of-client", "open", "focus", "navigate", "place"],
@@ -125,11 +142,18 @@ def test_each_request_is_spelled_as_the_op_route_reads_it(
 @pytest.mark.parametrize(
     ("body", "fragment"),
     [
-        ({"op": "split", "args": {}}, "unknown op"),
+        ({"op": "split", "args": {}}, "Unknown layout op"),
         ({"op": "focus", "args": {"window": "self", "relative_to": "x"}}, "relative_to"),
         ({"op": "focus", "args": {"window": "self"}, "requester": "chat:agent-1"}, "requester"),
         ({"op": "focus", "args": {"window": "self", "client": 3}}, "client"),
         ({"op": "open", "args": {"app": "files", "if_present": "sometimes"}}, "if_present"),
+        ({"op": "place", "args": {"window": "self", "zone": "left"}}, "zone"),
+        ({"op": "place", "args": {"window": "self", "state": "NORMAL"}}, "a frame or a restore"),
+        ({"op": "place", "args": {"window": "self", "frame": "0,0,0.5,1"}}, "frame"),
+        ({"op": "place", "args": {"window": "self", "frame": {"x": 0.6, "y": 0, "width": 0.5, "height": 1}}}, "unit"),
+        ({"op": "show", "args": {"app": "files", "path": "//elsewhere"}}, "single '/'"),
+        ({"op": "show", "args": {"app": "files", "path": "/a", "repoint": ["/?x"]}}, "no query string"),
+        ({"op": "shortcut_move", "args": {"app": "files", "cell": "0,1"}}, "cell"),
     ],
 )
 def test_a_body_the_shell_would_refuse_is_named_with_the_reason(body: dict[str, Any], fragment: str) -> None:

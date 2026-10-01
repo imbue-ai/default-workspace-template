@@ -25,6 +25,7 @@ from workspace_layout.primitives import WindowTitle
 from workspace_layout.records import Desktop
 from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import StoredWindowPath
+from workspace_layout.windows import WindowClosedHint
 
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
@@ -32,7 +33,7 @@ from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import WAKE_WAIT_SECONDS
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
-from imbue.system_interface.shell.close_hints import WindowClosedHint
+from imbue.system_interface.shell.close_hints import WindowClosedHintPost
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
@@ -112,7 +113,7 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
 
 
 def _shell_recording_hints(
-    tmp_path: Path, broadcaster: WebSocketBroadcaster, hints: list[WindowClosedHint]
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, hints: list[WindowClosedHintPost]
 ) -> ShellState:
     registry_path = write_two_app_registry(tmp_path)
     built = build_shell_state(
@@ -129,7 +130,7 @@ def _open(shell: ShellState, desktop_id: str, app: str, path: str) -> WindowId:
 def test_closing_a_window_tells_its_app_when_the_row_names_a_window_closed_path(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
-    hints: list[WindowClosedHint] = []
+    hints: list[WindowClosedHintPost] = []
     shell = _shell_recording_hints(tmp_path, broadcaster, hints)
     (home,) = shell.list_desktops()
     terminal_window = _open(shell, home.id, "terminal", "/?session=terminal-1")
@@ -137,10 +138,12 @@ def test_closing_a_window_tells_its_app_when_the_row_names_a_window_closed_path(
 
     assert shell.close_window(home.id, terminal_window) is True
     assert hints == [
-        WindowClosedHint(
+        WindowClosedHintPost(
             app="terminal",
             url=f"{TEST_TERMINAL_URL}{TEST_TERMINAL_WINDOW_CLOSED_PATH}",
-            body={"path": "/?session=terminal-1", "window_id": str(terminal_window), "desktop_id": "home"},
+            hint=WindowClosedHint(
+                path=WindowPath("/?session=terminal-1"), window_id=terminal_window, desktop_id=DesktopId("home")
+            ),
         )
     ]
     # A second close of the same window is idempotent and tells nobody; the files row names no path.
@@ -151,7 +154,7 @@ def test_closing_a_window_tells_its_app_when_the_row_names_a_window_closed_path(
 
 def test_a_stopped_app_is_not_told_of_its_closed_window(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     """The post would reach the shell's own parker and wake the app to tell it a window closed."""
-    hints: list[WindowClosedHint] = []
+    hints: list[WindowClosedHintPost] = []
     prober = FakeLivenessProber()
     prober.is_running_by_name["terminal"] = False
     registry_path = write_two_app_registry(tmp_path)
@@ -306,7 +309,7 @@ def test_an_arrival_marks_the_workspace_visited(tmp_path: Path, broadcaster: Web
 def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
-    hints: list[WindowClosedHint] = []
+    hints: list[WindowClosedHintPost] = []
     shell = _shell_recording_hints(tmp_path, broadcaster, hints)
     shell.list_desktops()
     work = shell.desktops.create_desktop("Work", "#123456", 1, (), ())
@@ -316,10 +319,7 @@ def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
 
     shell.delete_desktop(work.id)
 
-    assert [(hint.body["window_id"], hint.body["desktop_id"]) for hint in hints] == [
-        (str(first), "work"),
-        (str(second), "work"),
-    ]
+    assert [(post.hint.window_id, post.hint.desktop_id) for post in hints] == [(first, "work"), (second, "work")]
 
 
 def test_concurrent_first_arrivals_of_one_user_seed_a_single_desktop(

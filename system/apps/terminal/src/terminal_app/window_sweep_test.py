@@ -1,9 +1,11 @@
-import json
 
 from app_manifest.primitives import AppName
 from imbue.mngr.utils.polling import wait_for
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 from workspace_layout.testing import LoopbackShell
+from workspace_layout.testing import fake_window
+from workspace_layout.testing import fake_desktop
+from workspace_layout.answers import DesktopsListing
 
 from terminal_app.primitives import TmuxSessionName
 from terminal_app.sessions import TmuxSessionSource
@@ -13,8 +15,8 @@ from terminal_app.window_sweep import WindowSweeper
 
 
 def _desktops_showing(*names: str) -> str:
-    windows = [{"id": f"win-{index}", "app": "terminal", "path": f"/?session={name}"} for index, name in enumerate(names)]
-    return json.dumps({"desktops": [{"id": "home", "windows": windows}]})
+    windows = [fake_window(f"win-{index:016x}", "terminal", f"/?session={name}") for index, name in enumerate(names)]
+    return DesktopsListing(desktops=(fake_desktop("home", windows),)).model_dump_json()
 
 
 def _sweeper(session_source: TmuxSessionSource, loopback_shell: LoopbackShell, interval_seconds: float) -> WindowSweeper:

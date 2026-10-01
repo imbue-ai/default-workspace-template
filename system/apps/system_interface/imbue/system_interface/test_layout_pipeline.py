@@ -178,7 +178,7 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
 
     for verb, extra, expected in (
         ("focus", [], (window_id, "NORMAL", False)),
-        ("place", ["--zone", "left"], (window_id, "SNAPPED_LEFT", False)),
+        ("place", ["--state", "snapped-left"], (window_id, "SNAPPED_LEFT", False)),
         ("minimize", [], (window_id, "SNAPPED_LEFT", True)),
         ("restore", [], (window_id, "NORMAL", False)),
         ("maximize", [], (window_id, "MAXIMIZED", False)),

@@ -35,6 +35,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
+from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import UserId
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -185,7 +186,7 @@ class PresenceStore(MutableModel):
             for path in sorted(self.users_directory.glob("*.json")):
                 try:
                     UserId(path.stem)
-                except InvalidShellValueError:
+                except InvalidLayoutValueError:
                     logger.warning("Skipped a presence file whose name is not a user id: {}", path.name)
                     continue
                 user = self._read_user(path)
