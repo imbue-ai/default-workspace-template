@@ -16,7 +16,7 @@ import json
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import Final
 
 import click
@@ -149,7 +149,7 @@ def select_heavy_directories(
 
 @pure
 def format_heavy_directories_report(
-    counts: SnapshotEntryCounts, heavy: list[HeavyDirectory], min_share: float
+    counts: SnapshotEntryCounts, heavy: Sequence[HeavyDirectory], min_share: float
 ) -> str:
     total = counts.entry_count_by_directory[_ROOT]
     lines = [
