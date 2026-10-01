@@ -25,6 +25,7 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 
+from host_backup.cli import EXIT_BACKUPS_NOT_CONFIGURED
 from host_backup.config import (
     HOST_BACKUP_README_PATH,
     load_restic_env,
@@ -35,7 +36,6 @@ from host_backup.restic import build_restic_environment
 _ROOT: Final[str] = "/"
 
 EXIT_LISTING_FAILED: Final[int] = 1
-EXIT_BACKUPS_NOT_CONFIGURED: Final[int] = 3
 
 
 class SnapshotListingError(Exception):
