@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 import xmlrpc.client
 from collections.abc import Iterator
+from collections.abc import Mapping
 from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
@@ -44,6 +45,7 @@ from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.state import build_shell_state
+from imbue.system_interface.workspace_name import workspace_name_source
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -188,6 +190,7 @@ def build_test_state(
     is_lifecycle_enabled: bool = False,
     no_windows_grace_seconds: float = NO_WINDOWS_GRACE_SECONDS,
     idle_sweep_interval_seconds: float = IDLE_SWEEP_INTERVAL_SECONDS,
+    workspace_environ: Mapping[str, str] | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
@@ -208,7 +211,8 @@ def build_test_state(
     fetches anything unless it says so). ``launch_poster`` answers the POST launches the shell would otherwise make
     over loopback. ``is_lifecycle_enabled`` makes the lifecycle manager own the apps: its sweep runs once the shell
     is started, and a POST launch wakes a stopped app (off by default, so no test parks a port or starts a
-    program by accident), with the grace period and idle sweep interval given.
+    program by accident), with the grace period and idle sweep interval given. ``workspace_environ`` is the
+    environment the workspace's name is read from (none by default, so no test reads the machine's mngr records).
     """
     state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
     resolved_presence_directory = (
@@ -253,14 +257,15 @@ def build_test_state(
         presence=presence,
         presence_sweep=build_presence_sweep(presence, resolved_profiles, resolved_broadcaster),
         profiles=resolved_profiles,
+        workspace_name=workspace_name_source(
+            resolved_config.system_interface_workspace_name,
+            workspace_environ if workspace_environ is not None else {},
+        ),
     )
 
 
-# The agent-driven desktop pipeline (``test_layout_pipeline.py``): the shell's fixed loopback port, the two
-# stand-in apps its registry holds (one declaring launch paths), and the one connected client most of its
-# tests target, on the default desktop.
-PIPELINE_PORT: Final[int] = 18766
-PIPELINE_BASE_URL: Final[str] = f"http://127.0.0.1:{PIPELINE_PORT}"
+# The agent-driven desktop pipeline (``test_layout_pipeline.py``): the two stand-in apps its registry holds
+# (one declaring launch paths), and the one connected client most of its tests target, on the default desktop.
 PIPELINE_SEEDED_APP_NAME: Final[str] = "chat"
 PIPELINE_STUB_APP_NAME: Final[str] = "docs"
 PIPELINE_CLIENT_ID: Final[str] = "client-1"

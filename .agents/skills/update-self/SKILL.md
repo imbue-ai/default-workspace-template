@@ -230,15 +230,9 @@ reason drops the bridge first (Step 6's opening command); a retry rebuilds it.
 
 ### 3b. Launch
 
-Surface your own chat window first (the Imbue Studio app sends the user into this
-workspace when it starts an update, and this conversation is where they should
-land). The command detaches a helper that retries until a client is there; it
-is best-effort, and a failure is not a reason to stop:
-
-```bash
-python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    surface-chat-tab --chat-id "${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"
-```
+Do not open a window for your own chat: when the Imbue Studio app starts an
+update, the chat app already shows this conversation in the user's pinned chat
+window.
 
 Open a tracking ticket (note the id it prints), then `tk start <ticket-id>` as
 its own tool call:
@@ -439,10 +433,11 @@ carry on into §5 and get their verdict there.
 The worker contract (the staged copy's `references/update-self-worker.md`,
 §4a, §4b, §4c and §6) makes the impact analysis, the validation scope and the
 review gates rule-driven and the report evidence-bearing. It must show which
-branch of the 4a and 4b rules applied (the footprint evidence, and each
-validation item's condition and whether it held), and either show the
-clean-pull skip's three conditions held (`has_merge_work: false`, no impacted
-user-created code, no worker-authored in-branch edits beyond Step 1's
+branch of the 4a and 4b rules applied (the footprint evidence --
+`has_local_footprint`, and per creation the scope files' verdicts when it is
+true -- and each validation item's condition and whether it held), and either
+show the clean-pull skip's three conditions held (`has_merge_work: false`, no
+impacted user-created code, no worker-authored in-branch edits beyond Step 1's
 rollback reverts as git made them or with a `both added` file taken at the
 target's version, shown by an empty diff against the landed merge) or carry
 the gate run's own evidence (fix commits kept or reverted, or a clean run,
@@ -452,8 +447,8 @@ openly discloses skipping a gate outside the rule -- goes back to the worker
 via the Step 4 cycle (say what is missing, consume the report into
 `data/.tasks/update-self/reports/consumed/`, re-arm). Do not run the apply
 over the gap. A deviation stands only when the worker is gone and the gap
-cannot be closed from here, and then the results message states it plainly
-as a caveat.
+cannot be closed from here, and then the results message states it plainly as
+a caveat.
 
 There is no approval gate: the audit, not the user, authorizes the apply. The
 `done` report is your raw material, not the user's message; the results
@@ -574,12 +569,14 @@ resumes), and how to honor a rollback request are in
 
 Before composing the results message, collect every finding the worker labelled
 a `submit-upstream-changes` candidate, plus any other defect in built-in code
-you hit this pass (a failing built-in test, a step of this flow that broke and
-had to be worked around). Escalate them together as AGENTS.md's "Updates"
+you hit this pass (a failing built-in test, a built-in test the worker's
+Validation names as flaky, a step of this flow that broke and had to be worked
+around). Escalate them together as AGENTS.md's "Updates"
 section describes -- one report via
 `.agents/shared/references/report-built-in-issues.md`, or
 `submit-upstream-changes` for a template fix -- or name each in the results
-message with the submission offered.
+message with the submission offered. A flaky test of a creation the workspace
+built is not built-in: file a regular ticket for it (`tk create`).
 
 Then compose the results message per `references/results-message.md`.
 

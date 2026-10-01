@@ -3,6 +3,7 @@
 import json
 import queue
 
+from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.ws_broadcaster import _CLIENT_QUEUE_MAX_SIZE
 from imbue.system_interface.ws_broadcaster import _MAX_CONSECUTIVE_QUEUE_FULL
@@ -289,7 +290,26 @@ def test_set_client_info_and_desktop_lookup() -> None:
     broadcaster.set_client_info(first_queue, "client-1", "home")
 
     assert broadcaster.connected_client_ids() == {"client-1"}
-    assert broadcaster.get_connected_client_infos() == [{"client_id": "client-1", "active_desktop": "home"}]
+    assert broadcaster.get_connected_client_infos() == [
+        ConnectionRegistration(client_id="client-1", active_desktop="home", is_pop_out=False)
+    ]
+
+
+def test_a_pop_out_registration_is_targeted_and_connected_but_names_no_desktop() -> None:
+    broadcaster = WebSocketBroadcaster()
+    pop_out_queue = broadcaster.register()
+    other_queue = broadcaster.register()
+    broadcaster.set_pop_out_info(pop_out_queue, "client-1")
+    broadcaster.set_client_info(other_queue, "client-2", "home")
+
+    broadcaster.broadcast_layout_op("refresh", {"window": "win-0000000000000001"}, target_client_id="client-1")
+
+    assert json.loads(_get_message(pop_out_queue))["target_client_id"] == "client-1"
+    assert other_queue.empty()
+    assert broadcaster.connected_client_ids() == {"client-1", "client-2"}
+    assert broadcaster.get_client_info(pop_out_queue) == ConnectionRegistration(
+        client_id="client-1", active_desktop="", is_pop_out=True
+    )
 
 
 def test_set_client_info_ignores_unregistered_queue() -> None:

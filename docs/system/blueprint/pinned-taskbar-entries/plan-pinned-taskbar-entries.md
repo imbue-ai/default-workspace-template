@@ -72,10 +72,10 @@ The human-facing controls keep their shape so habit is not punished: the title b
 Deleting a desktop still deletes its pinned windows with it.
 
 The shell reconciles pinned windows on read, extending the rule that creates the `Home` desktop.
-Every read of the desktops after the inventory has read the registry ensures that each desktop holds one pinned window per pinned app: it adopts the earliest-opened window of that app whose path equals the home path, marking it pinned, setting its scope, and clearing its shared title when the scope is independent, and creates one when there is none.
+Every read of the desktops after the inventory has read the registry, and every read of the registry that changes its rows, ensures that each desktop holds one pinned window per pinned app: it adopts the earliest-opened window of that app whose path equals the home path, marking it pinned, setting its scope, and clearing its shared title when the scope is independent, and creates one when there is none.
 A write happens only when something was missing, and it broadcasts `desktops_updated` once, after the read that made it, never from inside it.
 Desktop creation runs the same ensure before answering, so a new desktop is born with its pinned windows.
-An app registered later is reconciled on the next read after the registry change.
+An app registered later is reconciled as soon as the registry change is read.
 When a pin is withdrawn, its windows stay as ordinary windows, `is_pinned` false, and can be closed like any other.
 
 A pinned window has no placement in a client's layout until the client touches it; the shell's layout answer places it for the client at the pinned frame (the right half of the backdrop, a margin in: `x 0.46, y 0.05, width 0.5, height 0.9`), normal and minimized, below every stored placement.
@@ -192,7 +192,9 @@ The pinned entry's context menu is the taskbar entry menu with the presentation 
 5. Show as plain entry or Show as <style>, when the pin declares a style
 6. Change avatar..., when the current style is `avatar`
 7. divider
-8. Close, which minimizes the pinned window
+8. Add to desktop or Remove from desktop, when the app has a desktop shortcut (desktop-interface plan section 4.9)
+9. divider
+10. Close, which minimizes the pinned window
 
 The pinned window's own menu is the V1 window menu: Refresh, Share, Quit, Close; its Close minimizes.
 Its title bar has minimize, maximize, and close; the close control minimizes too.
@@ -261,6 +263,7 @@ A chat root that had drifted to a chat-specific path is not adopted; the desktop
 
 ### 4.9 Compact and touch
 
+Compact mode is gone: a phone-sized viewport (at most 500px one way and 1000px the other) gets the phone layout, which has no taskbar or floating entries, and `../desktop-interface/plan-phone-interface.md` supersedes the compact-mode rules throughout this plan.
 Compact mode renders every pinned entry in the bar in its style, image only for `avatar`, and hides the floating verb from the menu.
 Touch mode uses long press for the menus, as elsewhere; the floating entry has the theme's touch target size at minimum.
 

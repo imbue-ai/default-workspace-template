@@ -250,7 +250,8 @@ function tooltipTextOf(element: Element): string | null {
 }
 
 function placementOf(element: Element): TooltipPlacement {
-  return element.getAttribute(PLACEMENT_ATTR) === "right" ? "right" : "below";
+  const named = element.getAttribute(PLACEMENT_ATTR);
+  return named === "right" || named === "above" ? named : "below";
 }
 
 /** Keep a shown bubble honest: its trigger can lose its text or be torn out of

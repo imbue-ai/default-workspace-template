@@ -70,3 +70,17 @@ def test_record_prunes_dead_entries_but_preserves_the_new_one(runtime: Path) -> 
     registry.record_agent_pid(123, "beta", is_worker=False)
 
     assert registry.lookup_agent(123) is not None
+
+
+def test_live_pids_by_agent_id_groups_every_live_pid_of_an_agent(runtime: Path) -> None:
+    directory = registry.agent_pids_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    # codex registers its TUI and its app-server daemon under one id.
+    (directory / "4242.json").write_text(json.dumps({"agent_name": "alpha", "agent_id": "agent-abc"}))
+    (directory / "4243.json").write_text(json.dumps({"agent_name": "alpha", "agent_id": "agent-abc"}))
+    (directory / "5000.json").write_text(json.dumps({"agent_name": "beta", "agent_id": "agent-def"}))
+    (directory / "6000.json").write_text(json.dumps({"agent_name": "gamma"}))
+
+    found = registry.live_pids_by_agent_id(is_alive=lambda pid: pid != 5000)
+
+    assert {agent_id: sorted(pids) for agent_id, pids in found.items()} == {"agent-abc": [4242, 4243]}

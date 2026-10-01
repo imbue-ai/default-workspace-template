@@ -17,6 +17,11 @@
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, and
  * ``shell:start-with-text``. Messages cross through ``relay.ts``.
+ *
+ * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
+ * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
+ * whether shown or not, since it is where a phone lands); every other page is destroyed rather than hidden, and a
+ * window shown again gets a fresh page.
  */
 
 import {
@@ -97,6 +102,16 @@ export interface LivePagesOptions {
   readonly protocol: string;
 }
 
+/** The phone's pages: the shown window's, and the ones it keeps beside it. */
+export type ShownMountPolicy = {
+  readonly kind: "shown";
+  readonly windowId: string | null;
+  readonly alsoKeep: readonly string[];
+};
+
+/** Which pages live: every page of the desktop's windows, or the phone's shown page and the ones it keeps. */
+export type MountPolicy = { readonly kind: "all" } | ShownMountPolicy;
+
 /** A pixel box relative to the pages' host. */
 interface HostRect {
   left: number;
@@ -116,6 +131,7 @@ export class LivePagesLayer implements PageDriver {
   private followedDesktopsRevision = 0;
   /** The shell's layout revision the pages last followed: an independent window's stored path arrives with it. */
   private followedLayoutLoadsRevision = 0;
+  private mountPolicy: MountPolicy = { kind: "all" };
 
   constructor(
     private readonly host: HTMLElement,
@@ -136,16 +152,20 @@ export class LivePagesLayer implements PageDriver {
     this.store.setPageDriver(this);
   }
 
+  /** Set which pages live; applied by the next reconcile. */
+  setMountPolicy(policy: MountPolicy): void {
+    this.mountPolicy = policy;
+  }
+
   /** Whether a window's page has been created in this client. */
   hasPage(windowId: string): boolean {
     return this.pages.has(windowId);
   }
 
-  /** A press on a handle of ``windowId`` (null for a handle of no window: a shortcut, an entry) takes the
-   *  document's focus back from any other window's page that holds it, as the browser would have on a press
-   *  whose default the gesture source did not prevent. Left in that page, the focus would come back to it with
-   *  the chrome window's (a tear-out drag returning, a switch to another application and back), and the page
-   *  would report it and be raised over the window the user chose. The pressed window's own page keeps it. */
+  /** Take the document's focus back from any page other than ``windowId``'s (null: from every page) that holds
+   *  it. Left in that page, the focus would come back to it with the chrome window's (a tear-out drag returning,
+   *  a switch to another application and back), and the page would report it and be raised over the window the
+   *  user chose. */
   takeFocusFromOtherPages(windowId: string | null): void {
     const active = document.activeElement;
     if (!(active instanceof HTMLIFrameElement)) return;
@@ -248,6 +268,11 @@ export class LivePagesLayer implements PageDriver {
       this.reconcileSolo(soloWindowId, windowsById);
       return;
     }
+    const policy = this.mountPolicy;
+    if (policy.kind === "shown") {
+      this.reconcileShown(policy.windowId, policy.alsoKeep, windowsById);
+      return;
+    }
 
     const desktop = activeDesktop(state);
     const placements = desktop === null ? [] : activePlacements(state);
@@ -255,7 +280,9 @@ export class LivePagesLayer implements PageDriver {
     const shownIds = new Set<string>();
     placements.forEach((placement, index) => {
       const found = windowsById.get(placement.window_id);
-      if (found === undefined || desktop === null || placement.is_minimized) return;
+      if (found === undefined || desktop === null) return;
+      // A minimized window has no chrome to lie under: its page is hidden until it is restored.
+      if (placement.is_minimized) return;
       // A pulled-out window's page is shown in the chrome's own desktop window; one being pulled out right now
       // is already drawn there under the cursor.
       if (placement.is_detached || placement.window_id === this.tornOutWindowId) return;
@@ -302,6 +329,35 @@ export class LivePagesLayer implements PageDriver {
     this.focusIfChanged(soloWindowId);
   }
 
+  /** The phone's policy: the shown window's page over the whole host, live and focused; the kept ones mounted and
+   *  hidden; every other page destroyed. */
+  private reconcileShown(
+    shownId: string | null,
+    alsoKeep: readonly string[],
+    windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>,
+  ): void {
+    const state = this.store.getState();
+    const mounted = new Set([...alsoKeep, ...(shownId === null ? [] : [shownId])]);
+    for (const page of [...this.pages.values()]) {
+      if (!mounted.has(page.windowId)) this.destroy(page);
+    }
+    for (const windowId of mounted) {
+      const found = windowsById.get(windowId);
+      const app = found === undefined ? undefined : appByName(state, found.window.app);
+      if (found === undefined || app === undefined) continue;
+      const page = this.pages.get(windowId) ?? this.create(found.window, app);
+      if (windowId !== shownId || !this.prepareShownPage(page, app)) {
+        this.hide(page);
+        continue;
+      }
+      const hostBox = this.host.getBoundingClientRect();
+      this.show(page, { left: 0, top: 0, width: hostBox.width, height: hostBox.height }, 0, true);
+      if (page.greetedDesktopId !== null && page.greetedDesktopId !== found.desktop.id) this.greet(page);
+    }
+    this.followIfRevised(windowsById);
+    this.focusIfChanged(shownId !== null && this.pages.has(shownId) ? shownId : null);
+  }
+
   /** Whether a page about to be shown can be: the page of an app that is stopped and that nothing brings back on
    *  a request is hidden and held (false), and a held page is reloaded once its app runs again. A stoppable app's
    *  page stays: the shell's parker answers it with a loading page until the app is up. */
@@ -335,10 +391,12 @@ export class LivePagesLayer implements PageDriver {
     this.follow(windowsById);
   }
 
-  /** Give the focused window's page the frame focus once, when the focused window changes. */
+  /** When the focused window changes, however it was raised, take the document's focus off every other window's
+   *  page and give the focused window's page the frame focus once. */
   private focusIfChanged(focused: string | null): void {
     if (focused === this.lastFocusedWindowId) return;
     this.lastFocusedWindowId = focused;
+    this.takeFocusFromOtherPages(focused);
     const page = focused === null ? undefined : this.pages.get(focused);
     if (page !== undefined) requestFrameFocus(page.wrapper);
   }

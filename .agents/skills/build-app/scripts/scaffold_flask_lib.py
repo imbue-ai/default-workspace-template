@@ -544,10 +544,9 @@ def _write_lib(
 # ``oom_tag_service.py user`` prefix below also names. ``stop_when_no_windows``
 # is stated outright so the rule an app runs under is in its own manifest. No
 # launch paths: the shell offers ``open`` at the app's root. No
-# ``default_shortcut``: an app pins itself to a desktop's backdrop only when the
-# user asks. The ``[preview]`` table is the library's default for the name
-# spelled out, so an edit to the runner's env names has the table to keep in
-# step beside it.
+# ``default_shortcut``: the shell gives every desktop a shortcut of ``open``.
+# The ``[preview]`` table is the library's default for the name spelled out,
+# so an edit to the runner's env names has the table to keep in step beside it.
 _MANIFEST_TEMPLATE = """\
 name = "{name}"
 display_name = "{display_name}"

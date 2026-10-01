@@ -17,9 +17,12 @@ from typing import assert_never
 from urllib.parse import parse_qsl
 from urllib.parse import urlsplit
 
+from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import LocationScope
+from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
+from app_manifest.registry import RegistryLaunchPath
 from app_manifest.registry import RegistryRow
 from pydantic import Field
 
@@ -648,24 +651,94 @@ def launcher_order(rows: Sequence[RegistryRow]) -> tuple[RegistryRow, ...]:
 
 
 @pure
+def _takes_text(launch_path: RegistryLaunchPath) -> bool:
+    return launch_path.text_param is not None or launch_path.draft_param is not None
+
+
+@pure
+def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
+    """The shortcut an app is given on a desktop: its ``default_shortcut`` when it declares one naming a launch path it
+    offers, whether or not that path takes text; else, for a supervised app (one whose row names a ``program``), its
+    first launch path that takes no typed or drafted text, or its first launch path when every one takes text,
+    focusing. A manifest-less row with no program (a preview, an isolated test server) gets none, and neither does an
+    internal app."""
+    if row.internal:
+        return None
+    offered = effective_launch_paths(row)
+    if row.default_shortcut is not None:
+        is_offered = any(path.id == row.default_shortcut.launch for path in offered)
+        return row.default_shortcut if is_offered else None
+    if row.program is None:
+        return None
+    first = next((path for path in offered if not _takes_text(path)), offered[0])
+    return DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS)
+
+
+@pure
 def seed_desktop_shortcuts(rows: Sequence[RegistryRow]) -> tuple[DesktopShortcut, ...]:
-    """A new desktop's shortcuts: every registered, non-internal app's ``default_shortcut`` (``default_launch_path_id``),
-    in launcher order, laid out in reading order from the grid origin."""
+    """A new desktop's shortcuts: every app's default shortcut (``_default_shortcut_choice``), in launcher order, laid
+    out in reading order from the grid origin."""
     shortcuts: list[DesktopShortcut] = []
     for row in launcher_order(rows):
-        if row.internal or row.default_shortcut is None:
-            continue
-        launch = default_launch_path_id(row)
-        if launch is None:
+        choice = _default_shortcut_choice(row)
+        if choice is None:
             continue
         shortcuts.append(
             DesktopShortcut(
-                target=ShortcutTarget(app=row.name, launch=launch),
-                mode=row.default_shortcut.mode,
+                target=ShortcutTarget(app=row.name, launch=choice.launch),
+                mode=choice.mode,
                 cell=reading_order_cell(len(shortcuts), SEED_GRID_COLUMNS),
             )
         )
     return tuple(shortcuts)
+
+
+@pure
+def apps_with_a_default_shortcut(rows: Sequence[RegistryRow]) -> frozenset[AppName]:
+    """The apps a desktop is seeded with a shortcut of (``_default_shortcut_choice``)."""
+    return frozenset(shortcut.target.app for shortcut in seed_desktop_shortcuts(rows))
+
+
+@pure
+def apps_with_a_shortcut_on(desktops: Sequence[Desktop]) -> frozenset[AppName]:
+    return frozenset(shortcut.target.app for desktop in desktops for shortcut in desktop.shortcuts)
+
+
+@pure
+def apps_with_their_default_shortcut_on(desktop: Desktop, rows: Sequence[RegistryRow]) -> frozenset[AppName]:
+    """The apps whose default shortcut the desktop holds: a shortcut of the app's default ``(app, launch)`` target."""
+    return frozenset(
+        shortcut.target.app
+        for shortcut in seed_desktop_shortcuts(rows)
+        if _find_shortcut(desktop, shortcut.target.app, shortcut.target.launch) is not None
+    )
+
+
+@pure
+def with_default_shortcuts_offered(
+    desktop: Desktop, rows: Sequence[RegistryRow], offered_apps: AbstractSet[AppName]
+) -> Desktop:
+    """The desktop holding the default shortcut of every registered app not in ``offered_apps`` (desktop plan section
+    3.2): none is added for a target the desktop already holds; a desktop whose shortcuts are exactly the seed of the
+    offered apps is seeded again from every registered app, so it stands in launcher order however late each app
+    registered; any other desktop gets each missing shortcut, in launcher order, at the next free cell in reading
+    order, with nothing it holds moved. The same object when nothing is missing."""
+    offering = seed_desktop_shortcuts([row for row in rows if row.name not in offered_apps])
+    missing = [
+        shortcut
+        for shortcut in offering
+        if _find_shortcut(desktop, shortcut.target.app, shortcut.target.launch) is None
+    ]
+    if not missing:
+        return desktop
+    if desktop.shortcuts == seed_desktop_shortcuts([row for row in rows if row.name in offered_apps]):
+        return desktop.model_copy_update(to_update(desktop.field_ref().shortcuts, seed_desktop_shortcuts(rows)))
+    extended = desktop
+    for shortcut in missing:
+        extended = with_shortcut(
+            extended, shortcut.model_copy_update(to_update(shortcut.field_ref().cell, next_shortcut_cell(extended)))
+        )
+    return extended
 
 
 # Layouts: placements

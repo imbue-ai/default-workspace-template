@@ -51,6 +51,14 @@ belong in tested code rather than agent prose:
     update could break", which scopes the worker's impact analysis and its
     validation.
 
+``footprint-ranges``
+    Name the two commit ranges the worker reads each app's footprint over:
+    what the workspace itself changed, and what the update changes in the tree
+    the live workspace runs. Anchored on this pass's merge commit, so a fix
+    committed on top of it leaves them unchanged, and shifted past the
+    rollback reverts of a pass after rolled-back updates (whether the target
+    moved or not).
+
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
     the worker's "what's new" report.
@@ -60,14 +68,6 @@ belong in tested code rather than agent prose:
     first -- the commits the worker reverts before it merges, since until then git
     counts the content they removed as merged. ``apply`` refuses a merge ref that
     still carries one, by the same rule.
-
-``surface-chat-tab``
-    Open this run's own chat window in the workspace UI, so a user sent into the
-    workspace by the Imbue Studio app lands on the conversation performing the update.
-    The interface can only place a window in front of a client that is connected,
-    and the user may still be on their way in, so the command detaches a helper
-    that retries ``layout.py open`` until one takes it (or a deadline passes)
-    and returns at once; the open focuses a window that is already there.
 
 ``bootstrap-skill``
     Stage the copy of the update-self skill (SKILL.md, references, scripts) that
@@ -152,11 +152,13 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from update_apply import (
+    UpdateRollbackHistory,
     apply_update,
     confirm_last,
     pending_update_rollbacks,
     recover,
     rollback_last,
+    update_rollback_history,
 )
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
@@ -357,6 +359,156 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
     return 0
 
 
+UPDATE_SELF_MERGE_SUBJECT = "update-self: merge upstream template"
+
+
+class NoUpdateMergeError(Exception):
+    """The branch carries no ``update-self`` merge of the requested target."""
+
+
+def _commit_sha(ref: str, repo_root: Path) -> str:
+    return _git(["rev-parse", f"{ref}^{{commit}}"], repo_root)
+
+
+def _latest_commit_with_subject(
+    subject_prefix: str, revision_range: str, repo_root: Path
+) -> str | None:
+    found = _git(
+        [
+            "log",
+            "--format=%H %s",
+            "--fixed-strings",
+            f"--grep={subject_prefix}",
+            revision_range,
+        ],
+        repo_root,
+    )
+    for line in _list_names(found):
+        sha, _, subject = line.partition(" ")
+        if subject.startswith(subject_prefix):
+            return sha
+    return None
+
+
+def _before_rollback_reverts(
+    commit: str, history: UpdateRollbackHistory, repo_root: Path
+) -> str:
+    """The commit under the run of update-rollback reverts ending at ``commit``
+    (``commit`` itself when it is not one): the tree before the worker's first step."""
+    while commit in history.reverts:
+        commit = _commit_sha(f"{commit}^", repo_root)
+    return commit
+
+
+def _has_update_rolled_back_since(earlier: str, commit: str, repo_root: Path) -> bool:
+    """Whether ``commit``'s history since ``earlier`` holds an update rollback that
+    nothing there has undone."""
+    return bool(pending_update_rollbacks(earlier, commit, repo_root, Runner()))
+
+
+def _first_attempt_first_parent(
+    merge: str, history: UpdateRollbackHistory, repo_root: Path
+) -> str:
+    """The first parent of the first merge in ``merge``'s chain of retries.
+
+    A merge made while an earlier landed merge's rollback was still in force
+    under it -- directly, under the reverts of it that the pass's first step
+    committed, or under the workspace's own later commits -- was made on top
+    of that rolled-back attempt; the chain ends at a merge made on the
+    workspace's own line, whose first parent carries none of those releases.
+    """
+    first_parent = _commit_sha(f"{merge}^1", repo_root)
+    while True:
+        before_reverts = _before_rollback_reverts(first_parent, history, repo_root)
+        earlier = _latest_commit_with_subject(
+            UPDATE_SELF_MERGE_SUBJECT, before_reverts, repo_root
+        )
+        if earlier is None:
+            if first_parent in history.reverts or first_parent in history.rollbacks:
+                raise NoUpdateMergeError(
+                    f"{first_parent} rolls back an update or reverts its rollback, "
+                    f"but no earlier '{UPDATE_SELF_MERGE_SUBJECT}' commit precedes it"
+                )
+            return first_parent
+        if not _has_update_rolled_back_since(earlier, before_reverts, repo_root):
+            return first_parent
+        first_parent = _commit_sha(f"{earlier}^1", repo_root)
+
+
+def footprint_ranges(target: str, repo_root: Path) -> dict[str, str]:
+    """The two commit ranges the worker reads each app's footprint over.
+
+    The local range is what the workspace itself changed since it forked from
+    the target's line; the update range is what the update changes in the tree
+    the live workspace runs. Both are anchored on this pass's
+    ``update-self: merge upstream template`` commit rather than on ``HEAD``, so
+    a fix committed on top of the merge leaves them unchanged.
+
+    A pass after rolled-back updates shifts the anchors. The worker first reverts
+    every update rollback nothing has undone, so when the target moved, the
+    merge's first parent is the last of those reverts, which already carries the
+    landed releases: the update range starts under the whole run of reverts
+    instead, at the tree the live workspace runs. On a retry of the same target
+    the reverts leave ``git merge`` nothing to do, so the merge found is the
+    landed attempt's own; the reverts are then the whole update, and the local
+    range runs to the commit under them, which carries every local commit since
+    that attempt branched. That commit runs the tree from before every
+    rolled-back attempt, so its fork point is taken from the first attempt in
+    the chain rather than from the landed one, which may itself have been made
+    on top of an earlier release. A user's rollback of an app change, and its
+    revert, carry the same subjects but are the workspace's own history, and
+    shift nothing.
+    """
+    target_sha = _commit_sha(target, repo_root)
+    merge = _latest_commit_with_subject(UPDATE_SELF_MERGE_SUBJECT, "HEAD", repo_root)
+    if merge is None:
+        raise NoUpdateMergeError(
+            f"no '{UPDATE_SELF_MERGE_SUBJECT}' commit on this branch"
+        )
+    parents = _git(["log", "-1", "--format=%P", merge], repo_root).split()
+    if len(parents) != 2 or parents[1] != target_sha:
+        raise NoUpdateMergeError(
+            f"the latest '{UPDATE_SELF_MERGE_SUBJECT}' commit ({merge}) does not "
+            f"merge {target}; an earlier update's merge carries the same subject"
+        )
+    first_parent = parents[0]
+    history = update_rollback_history(target, "HEAD", repo_root, Runner())
+    since_merge = _list_names(
+        _git(["rev-list", "--first-parent", f"{merge}..HEAD"], repo_root)
+    )
+    same_target_revert = next(
+        (commit for commit in since_merge if commit in history.reverts), None
+    )
+    if same_target_revert is not None:
+        local_fork = _first_attempt_first_parent(merge, history, repo_root)
+        local_ref = update_base = _before_rollback_reverts(
+            same_target_revert, history, repo_root
+        )
+        update_ref = same_target_revert
+    else:
+        local_fork = local_ref = first_parent
+        update_base = _before_rollback_reverts(first_parent, history, repo_root)
+        update_ref = merge
+    local_base = _git(["merge-base", local_fork, target_sha], repo_root)
+    return {
+        "merge": merge,
+        "local_base": local_base,
+        "local_ref": local_ref,
+        "update_base": update_base,
+        "update_ref": update_ref,
+    }
+
+
+def _cmd_footprint_ranges(args: argparse.Namespace) -> int:
+    try:
+        ranges = footprint_ranges(args.target, _repo_root(args))
+    except NoUpdateMergeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(json.dumps(ranges, indent=2))
+    return 0
+
+
 def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args)
     # Per-PR changelog entries live in a ``changelog/`` dir under each project
@@ -389,92 +541,11 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     return 0
 
 
-# How long the detached helper keeps trying to open the window. Generous enough
-# to cover a user arriving after a stopped machine's cold boot; past it the
-# app's own copy naming the window is the fallback.
-SURFACE_CHAT_TAB_DEADLINE_SECONDS = 600.0
-
-SURFACE_CHAT_TAB_RETRY_SECONDS = 5.0
-
-
-def wait_and_open_chat_tab(
-    try_open: Callable[[], bool],
-    deadline_seconds: float,
-    retry_seconds: float,
-    monotonic: Callable[[], float] = time.monotonic,
-    sleep: Callable[[float], None] = time.sleep,
-) -> bool:
-    """Call ``try_open`` until it succeeds or the deadline passes; whether it did.
-
-    Stops on the first success: a window is surfaced once, and re-opening it later
-    would yank a user who has since moved on back to it.
-    """
-    started_at = monotonic()
-    while True:
-        if try_open():
-            return True
-        if monotonic() - started_at >= deadline_seconds:
-            return False
-        sleep(retry_seconds)
-
-
-def _try_open_chat_tab(repo_root: Path, chat_id: str, runner: Runner) -> bool:
-    """One attempt at opening the chat's window through the desktop's ``open`` op; whether the shell took it."""
-    result = runner.run(
-        [
-            sys.executable,
-            "system/scripts/layout.py",
-            "open",
-            "chat",
-            "--path",
-            f"/?chat={chat_id}",
-        ],
-        cwd=repo_root,
-        capture_output=True,
-    )
-    return result.returncode == 0
-
-
 def _cmd_pending_rollbacks(args: argparse.Namespace) -> int:
     for rollback in pending_update_rollbacks(
         args.target, "HEAD", _repo_root(args), Runner()
     ):
         print(rollback)
-    return 0
-
-
-def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
-    repo_root = _repo_root(args).resolve()
-    if args.wait:
-        return (
-            0
-            if wait_and_open_chat_tab(
-                lambda: _try_open_chat_tab(repo_root, args.chat_id, Runner()),
-                deadline_seconds=SURFACE_CHAT_TAB_DEADLINE_SECONDS,
-                retry_seconds=SURFACE_CHAT_TAB_RETRY_SECONDS,
-            )
-            else 1
-        )
-    # Detached so the lead's tool call returns now rather than after the user
-    # arrives: its own session, and no inherited stdio for the caller's shell
-    # to wait on.
-    subprocess.Popen(
-        [
-            sys.executable,
-            str(Path(__file__).resolve()),
-            "surface-chat-tab",
-            "--chat-id",
-            args.chat_id,
-            "--repo-root",
-            str(repo_root),
-            "--wait",
-        ],
-        cwd=repo_root,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
     return 0
 
 
@@ -818,6 +889,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     classify_parser.set_defaults(func=_cmd_classify_merge)
 
+    ranges_parser = sub.add_parser(
+        "footprint-ranges",
+        help="Print the local and update commit ranges the worker reads each "
+        "app's footprint over, anchored on this pass's update-self merge.",
+        parents=[common],
+    )
+    ranges_parser.add_argument(
+        "--target", required=True, help="The upstream ref this pass merged."
+    )
+    ranges_parser.set_defaults(func=_cmd_footprint_ranges)
+
     changelog_parser = sub.add_parser(
         "changelog-entries",
         help="List per-PR changelog entries newly added between two refs "
@@ -838,23 +920,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--target", required=True, help="The ref this pass merges."
     )
     pending_parser.set_defaults(func=_cmd_pending_rollbacks)
-
-    surface_parser = sub.add_parser(
-        "surface-chat-tab",
-        help="Open this run's own chat window once a workspace client can show it.",
-        parents=[common],
-    )
-    surface_parser.add_argument(
-        "--chat-id",
-        required=True,
-        help="This run's chat id ($MINDS_CHAT_ID, or $MNGR_AGENT_ID for an agent that is its own chat).",
-    )
-    surface_parser.add_argument(
-        "--wait",
-        action="store_true",
-        help="Run the retry loop in this process (what the detached helper does) instead of detaching one.",
-    )
-    surface_parser.set_defaults(func=_cmd_surface_chat_tab)
 
     bootstrap_parser = sub.add_parser(
         "bootstrap-skill",

@@ -40,7 +40,7 @@ function visibleChatIds(): string[] {
 
 /** Stand in for the page loading: install its embed API on the frame's window, then fire ``load``. */
 function loadPage(chatId: string): { [K in keyof ChatPageEmbedApi]: ReturnType<typeof vi.fn> } {
-  const api = { handshake: vi.fn(), shown: vi.fn(), hidden: vi.fn(), prependDraft: vi.fn() };
+  const api = { handshake: vi.fn(), shown: vi.fn(), hidden: vi.fn(), prependDraft: vi.fn(), setCompact: vi.fn() };
   const frame = frameOf(chatId);
   const contentWindow = frame.contentWindow;
   if (contentWindow === null) throw new Error(`frame ${chatId} has no window`);
@@ -139,5 +139,20 @@ describe("InnerFramePool", () => {
 
     expect(pageA.hidden).toHaveBeenCalledTimes(1);
     expect(pageA.shown).not.toHaveBeenCalled();
+  });
+
+  it("tells every page the root's layout, before it is shown on load and again whenever it changes", () => {
+    pool.setRootShown(true);
+    pool.setCompact(true);
+    pool.show("agent-a");
+    const pageA = loadPage("agent-a");
+    expect(pageA.setCompact).toHaveBeenCalledWith(true);
+    expect(pageA.setCompact.mock.invocationCallOrder[0]).toBeLessThan(pageA.shown.mock.invocationCallOrder[0]);
+
+    pool.show("agent-b");
+    const pageB = loadPage("agent-b");
+    pool.setCompact(false);
+    expect(pageA.setCompact).toHaveBeenLastCalledWith(false);
+    expect(pageB.setCompact).toHaveBeenLastCalledWith(false);
   });
 });

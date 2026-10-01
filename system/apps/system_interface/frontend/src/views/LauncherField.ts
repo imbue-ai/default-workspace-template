@@ -7,24 +7,27 @@
  * and tells its owner how far it rose so the menu can sit above it. Its keys are the menu's (plan
  * section 4.8): the arrows move the highlight (the caret, once the text has lines), Enter runs the
  * highlight, Ctrl+Enter (Cmd+Enter on a Mac) runs the secondary text action, and Escape clears the
- * text, then closes. In compact mode it collapses to an icon that expands over the taskbar's
- * entries while the menu is open.
+ * text, then closes.
  */
 
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { isMessageText } from "../reducers/launcherRows";
+import { glyph } from "./glyphs";
 
-export const LAUNCHER_PLACEHOLDER = "Start app or send message...";
+export const LAUNCHER_PLACEHOLDER = "Open an app or send a message";
 const FIELD_GLYPH_SIZE = 14;
+/** The field's own emblem: a plus rather than a magnifier, since the field starts things at least as
+ *  often as it finds them. The same size and the same weight as the plus a free-text row wears in the
+ *  menu above -- one mark in two places, not two marks. */
+const FIELD_MARK_SIZE = 20;
 /** Past this many lines the field scrolls rather than growing. */
 export const MAX_FIELD_LINES = 8;
 
 export interface LauncherFieldAttrs {
   readonly query: string;
   readonly isOpen: boolean;
-  readonly isCompact: boolean;
   readonly onOpen: () => void;
   readonly onClose: () => void;
   readonly onQuery: (query: string) => void;
@@ -77,60 +80,39 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
 
   return {
     view(vnode) {
-      const { query, isOpen, isCompact, onOpen, onClose, onQuery } = vnode.attrs;
-      if (isCompact && !isOpen) {
-        return m(
-          Button,
-          {
-            variant: "ghost",
-            icon: true,
-            "aria-label": LAUNCHER_PLACEHOLDER,
-            extra: "launcher-field-toggle shrink-0",
-            "data-launcher-field": "",
-            onclick: onOpen,
-          },
-          m.trust(icon("search", { size: FIELD_GLYPH_SIZE })),
-        );
-      }
+      const { query, isOpen, onOpen, onClose, onQuery } = vnode.attrs;
       const field = m(
         "div",
         {
           "data-launcher-field": "",
           class:
-            "launcher-field absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-lg border bg-surface " +
-            "px-2.5 " +
-            (isOpen ? "border-accent" : "border-default"),
+            // Fully round, and padded so its mark lands under the mark of the menu row above it: a
+            // card row's glyph sits 14px inside the card's border, so the field's mark wants 14 too.
+            "launcher-field absolute inset-x-0 bottom-0 flex min-h-9 items-end gap-2 rounded-full " +
+            // A heavier edge than a panel seam: this is a control you type into, and it has to read
+            // as one against a bar of the same colour. Open is a ring OUTSIDE that edge rather than
+            // a recolouring of it, so the box does not change weight as it opens.
+            "border border-strong bg-surface pr-2.5 pl-3.5 " +
+            (isOpen ? "ring-2 ring-accent" : ""),
         },
         [
-          m(
-            "span",
-            { class: "flex h-8.5 shrink-0 items-center text-faint" },
-            m.trust(icon("search", { size: FIELD_GLYPH_SIZE })),
-          ),
+          m("span", { class: "flex h-8.5 shrink-0 items-center text-faint" }, m.trust(glyph("plus", FIELD_MARK_SIZE))),
           m("textarea", {
             rows: 1,
             "aria-label": LAUNCHER_PLACEHOLDER,
             placeholder: LAUNCHER_PLACEHOLDER,
             value: query,
             class:
+              // Body text rather than a row's: this is a line being written, not an entry in a list.
               "launcher-input min-w-0 flex-1 resize-none overflow-y-auto bg-transparent py-1.75 leading-5 " +
-              "text-(length:--font-size-row) text-primary outline-none placeholder:text-faint",
-            oncreate: (created: m.VnodeDOM) => {
-              fit(created.dom as HTMLTextAreaElement, vnode.attrs);
-              if (isCompact) (created.dom as HTMLTextAreaElement).focus();
-            },
+              "text-(length:--font-size-body) text-primary outline-none placeholder:text-secondary",
+            oncreate: (created: m.VnodeDOM) => fit(created.dom as HTMLTextAreaElement, vnode.attrs),
             // A row that ran closed the menu under a focused field: the focus goes with it, so the next keys do not
             // land in the field, and a click on the field (already focused, so no focus event) opens the menu again.
             onupdate: (updated: m.VnodeDOM) => {
               fit(updated.dom as HTMLTextAreaElement, vnode.attrs);
               if (!vnode.attrs.isOpen && document.activeElement === updated.dom)
                 (updated.dom as HTMLTextAreaElement).blur();
-            },
-            // The compact field collapses with the menu, and nothing stands above one row then.
-            onremove: () => {
-              if (reportedRise === 0) return;
-              reportedRise = 0;
-              vnode.attrs.onRise(0);
             },
             onfocus: onOpen,
             onclick: onOpen,
@@ -191,15 +173,10 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
         ],
       );
       // The field keeps a one-row footprint and grows upward out of it, so the taskbar's height and its entries'
-      // places hold whatever the text's length. The slot is a flex item in the taskbar's flow; in compact mode it
-      // lies over the entries, centred in the taskbar by their alignment, as the collapsed button is.
+      // places hold whatever the text's length. The slot is a flex item in the taskbar's flow.
       return m(
         "div",
-        {
-          class:
-            "launcher-field-slot h-9 " +
-            (isCompact ? "absolute inset-x-2 z-(--z-content)" : "relative w-72 max-w-[40vw] shrink-0"),
-        },
+        { class: "launcher-field-slot relative h-9 w-(--desk-launcher-field-width) max-w-[40vw] shrink-0" },
         field,
       );
     },

@@ -39,6 +39,7 @@ from imbue.chat import focus_chat
 from imbue.chat import latchkey_endpoints
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.accounts import AccountError
+from imbue.chat.accounts import account_exists
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
@@ -141,6 +142,7 @@ from imbue.chat.models import StopAgentResponse
 from imbue.chat.models import SwitchChatRequest
 from imbue.chat.models import SwitchChatResponse
 from imbue.chat.models import parse_subagent_key
+from imbue.chat.naming import canonical_agent_name
 from imbue.chat.presence import PresenceReport
 from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import CHAT_APP_NAME
@@ -499,13 +501,15 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
             outcome = _revive_and_retry_send(
                 agent_info, agent_manager, session, SendMessageRequest(message=text, message_id=message_id), message_id
             )
-    # A delivered send means the agent is up: mngr's own send auto-starts a stopped
-    # file-harness agent (``is_start_desired``), and the observe stream would not see that
-    # revival for minutes. Reflect it now, as the codex revive above does, so the UI's
-    # liveness unblocks with the send and a handoff's summary wait and stop step read a
-    # lifecycle that is true rather than one that says the agent they just messaged is dead.
-    if outcome is SendOutcome.OK:
-        agent_manager.note_agent_alive(agent_info.id)
+        # A delivered send means the agent is up: mngr's own send auto-starts a stopped
+        # file-harness agent (``is_start_desired``), and the observe stream would not see that
+        # revival for minutes. Reflect it now, as the codex revive above does, so the UI's
+        # liveness unblocks with the send and a handoff's summary wait and stop step read a
+        # lifecycle that is true rather than one that says the agent they just messaged is dead.
+        # Inside the connecting scope, so the chat never reads as stopped and not connecting,
+        # which would let the stopped-chat release drop the watcher of the chat it revived.
+        if outcome is SendOutcome.OK:
+            agent_manager.note_agent_alive(agent_info.id)
     return outcome
 
 
@@ -522,7 +526,13 @@ class _ServerSecretRequestBridge(SecretRequestChatBridge):
     def deliver_notice(self, chat_id: str, text: str) -> None:
         message_id = uuid4().hex
         accepted = _send_to_chat(
-            get_state(), ChatId(chat_id), SendMessageRequest(message=text, message_id=message_id), message_id
+            get_state(),
+            ChatId(chat_id),
+            SendMessageRequest(message=text, message_id=message_id),
+            message_id,
+            # The notice answers a request the agent itself filed, so it reaches the agent whatever
+            # account it runs on.
+            is_refused_on_signed_out_account=False,
         )
         if isinstance(accepted, Response):
             raise NoticeDeliveryError(accepted.get_json()["detail"])
@@ -545,8 +555,41 @@ class _SendAccepted(FrozenModel):
     held_phase: HandoffPhase | None = Field(description="The phase the send was held in; None when it was delivered")
 
 
+def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) -> None:
+    """Hand a message the user sent to a chat to the namer, which names a chat still called "Chat N" from it."""
+    if state.chat_namer is not None:
+        state.chat_namer.consider_message(chat_id, message)
+
+
+# The send-failure kind a chat whose account was signed out answers with. The composer already
+# offers "Choose a provider" in place of the input from the account list, so only a page whose
+# list has not caught up with the sign-out sends and meets this.
+ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND: Final[str] = "account_signed_out"
+
+
+def _is_account_signed_out(agent_info: AgentInfo) -> bool:
+    """Whether the agent's ``account`` label names an account no longer signed in (a chat from before accounts has none).
+
+    An index that cannot be read says nothing about this account, so the send goes through.
+    """
+    account_id = agent_info.labels.get("account", "")
+    if account_id == "":
+        return False
+    try:
+        return not account_exists(account_id)
+    except AccountError as e:
+        logger.warning("Could not check whether account {} is still signed in: {}", account_id, e)
+        return False
+
+
 def _send_to_chat(
-    state: ChatAppState, chat_id: ChatId, send_message_request: SendMessageRequest, message_id: str
+    state: ChatAppState,
+    chat_id: ChatId,
+    send_message_request: SendMessageRequest,
+    message_id: str,
+    # A chat whose account was signed out takes no more of the user's messages until it moves to
+    # another provider: its agent still holds the credential it loaded, and would keep using it.
+    is_refused_on_signed_out_account: bool,
 ) -> _SendAccepted | Response:
     """The ordinary send path, shared by the message route, the intake, and the secret-request notice: hold the send
     while the chat converges, else deliver it to the active agent; either way record the client's activity and the
@@ -564,6 +607,9 @@ def _send_to_chat(
         agent_info = _find_active_agent(str(chat_id))
         if agent_info is None:
             return _chat_not_found_response(str(chat_id))
+        if is_refused_on_signed_out_account and _is_account_signed_out(agent_info):
+            detail = "You signed out of the account this chat runs on. Choose a provider to continue it on."
+            return json_response({"detail": detail, "kind": ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND}, status_code=409)
         try:
             outcome = _deliver_message(state, agent_info, send_message_request.message, message_id)
         except AgentNotFoundError as e:
@@ -609,7 +655,12 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
     message_id = send_message_request.message_id or uuid4().hex
-    accepted = _send_to_chat(state, ChatId(chat_id), send_message_request, message_id)
+    # Alongside the delivery rather than after it, which can take seconds: the name should land
+    # while the agent is still answering.
+    _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
+    accepted = _send_to_chat(
+        state, ChatId(chat_id), send_message_request, message_id, is_refused_on_signed_out_account=True
+    )
     if isinstance(accepted, Response):
         return accepted
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
@@ -1399,6 +1450,7 @@ def _run_create_chat() -> CreatedChat | Response:
     )
     if isinstance(created, Response):
         return created
+    _consider_naming_chat(get_state(), created.chat_id, create_request.message)
     if not create_request.should_wait:
         return created
     outcome = agent_manager.wait_for_chat_creation(created.chat_id, CHAT_CREATION_WAIT_TIMEOUT_SECONDS)
@@ -1418,6 +1470,24 @@ def _create_chat() -> Response:
         return created
     response = CreateChatResponse(chat_id=created.chat_id, name=created.name, display_name=created.display_name)
     return json_response(response.model_dump(), status_code=201)
+
+
+def _awaiting_chat_for_empty_list() -> Response:
+    """``POST /api/chats/awaiting``: the chat a chat list with none to show opens on, waiting for its first send.
+
+    Nothing is written until that send launches it, so a list that shows it and is closed leaves no chat behind
+    after a restart of this app. Answers the chat's id and name pair; 503 until the agent list has been read.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    if not agent_manager.is_agent_list_known():
+        return _agent_list_not_known_response()
+    provisional = agent_manager.awaiting_chat_for_empty_list()
+    response = CreateChatResponse(
+        chat_id=provisional.chat_id,
+        name=canonical_agent_name(provisional.name),
+        display_name=provisional.name,
+    )
+    return json_response(response.model_dump())
 
 
 def _seed_chat() -> Response:
@@ -1511,7 +1581,8 @@ def _deliver_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeReq
     send_message_request = SendMessageRequest(
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
     )
-    accepted = _send_to_chat(state, chat_id, send_message_request, message_id)
+    _consider_naming_chat(state, chat_id, intake.message)
+    accepted = _send_to_chat(state, chat_id, send_message_request, message_id, is_refused_on_signed_out_account=True)
     return accepted if isinstance(accepted, Response) else None
 
 
@@ -1587,6 +1658,7 @@ def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Respons
         )
         if isinstance(created, Response):
             return created
+        _consider_naming_chat(state, created.chat_id, intake.message)
         return json_response(IntakeResponse(path=intake_path(created.chat_id, None)).model_dump())
     minted = agent_manager.mint_awaiting_chat(account or "")
     token = state.pending_intakes.mint(intake, minted.chat_id, needs_pick=False)
@@ -1981,7 +2053,7 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
         # list. The list comes last on purpose -- it is how a page knows the replay is over,
         # so a record it still holds that this process did not replay (a create the previous
         # process was running) can be dropped rather than waited on forever.
-        for provisional in agent_manager.get_provisional_chats():
+        for provisional in agent_manager.get_provisional_chats_as_shown():
             websocket.send(json.dumps(provisional_chat_created_message(provisional)))
         websocket.send(json.dumps(chats_updated_message(agent_manager.get_chat_snapshots())))
         shutdown = False
@@ -2061,6 +2133,7 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule("/api/chats", view_func=_list_chats_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats/create", view_func=_create_chat, methods=["POST"])
     application.add_url_rule("/api/chats/seed", view_func=_seed_chat, methods=["POST"])
+    application.add_url_rule("/api/chats/awaiting", view_func=_awaiting_chat_for_empty_list, methods=["POST"])
     application.add_url_rule("/api/chats/intake", view_func=_intake_chat, methods=["POST"])
     application.add_url_rule("/api/chats/intakes/<token>", view_func=_get_pending_intake, methods=["GET"])
     application.add_url_rule("/api/chats/intakes/<token>/apply", view_func=_apply_pending_intake, methods=["POST"])
