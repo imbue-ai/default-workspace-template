@@ -203,8 +203,11 @@ and never closed; `scope`: `linked`, or `independent` for a window whose path
 is each client's own, in which case the listed `path` is the shared home path
 and `client_paths` says where each client's page is, by client id) and shortcuts,
 and every client with its `active_desktop`,
-`is_connected`, and `shown` (the windows of its active desktop it has not
-minimized). `list` prints every app with its launch paths, whether it is
+`is_connected`, `shown` (the windows of its active desktop it has not
+minimized), and `shown_history` (what its phone layout showed, most recent
+last: window ids, and `home` for the home grid; a phone places the windows it
+shows minimized, so its `shown` is usually empty and the last entry here is
+what is on its screen). `list` prints every app with its launch paths, whether it is
 running, and where its windows are, plus the same desktops and clients. Both
 print JSON.
 
