@@ -1,6 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="216" height="216" viewBox="0 0 216 216" fill="none">
-<rect width="216" height="216" rx="69.12" fill="#E9ECD9"/>
-<g transform="scale(4.5) translate(-8 -5)">
-<path d="M21.3438 15.7499C24.523 15.6742 26.5667 15.7499 27.9292 15.9013C29.5188 16.0527 30.3514 16.8853 31.2597 18.2478C32.1681 19.6103 32.6979 20.2916 34.1361 20.3673C37.1639 20.5187 41.1546 20.2159 44.2581 20.3673C46.8317 20.5187 48.1396 22.4867 47.9882 24.9846C47.7611 29.0721 47.1556 34.2193 46.4743 38.2311C46.0201 40.8047 44.4306 42.0915 41.5542 42.1672C34.8931 42.3186 26.1883 42.3186 20.3599 42.0915C17.5592 41.9401 16.365 41.0257 16.1653 38.2311C15.6653 31.2347 16.4237 24.5305 16.8021 20.2916C17.0292 17.3395 18.4674 15.8256 21.3438 15.7499Z" fill="#492222"/>
-</g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="216" height="216" viewBox="0 0 216 216" fill="none"><defs><clipPath id="files-icon-c114"><rect width="216" height="216" rx="69.12"/></clipPath><radialGradient id="files-icon-g113" cx="134" cy="134" r="162" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFE2AE"/><stop offset="1" stop-color="#EF8C78"/></radialGradient></defs><g clip-path="url(#files-icon-c114)"><rect width="216" height="216" fill="url(#files-icon-g113)"/><path d="M40 70c0-10 8-18 18-18h34l16 16h50c10 0 18 8 18 18v68c0 10-8 18-18 18H58c-10 0-18-8-18-18z" fill="#FFFFFF"/><rect x="40" y="86" width="136" height="7" fill="url(#files-icon-g113)"/></g></svg>

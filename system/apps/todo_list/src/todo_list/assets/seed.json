@@ -1,0 +1,96 @@
+{
+ "items": [
+  {
+   "id": "p1",
+   "section": "promise",
+   "summary": "Send Priya the deck",
+   "src": "email",
+   "where": "Re: Q3 planning deck",
+   "raw": "You: Thanks Priya, I'll send the updated deck by Thursday with the new revenue numbers and the hiring plan",
+   "due_in_days": 1,
+   "sources": [
+    {
+     "src": "email",
+     "where": "Re: Q3 planning deck",
+     "when": "Mon",
+     "raw": "You: Thanks Priya, I'll send the updated deck by Thursday with the new revenue numbers and the hiring plan"
+    },
+    {
+     "src": "slack",
+     "where": "#q3-planning",
+     "when": "Tue",
+     "raw": "You: yep, will send Priya the deck tonight, just waiting on Jin's update to slide 4"
+    },
+    {
+     "src": "slack",
+     "where": "#q3-planning",
+     "when": "Tue",
+     "raw": "Jin: slide 4 updated with the new revenue numbers, all yours"
+    }
+   ]
+  },
+  {
+   "id": "p2",
+   "section": "promise",
+   "summary": "Review pricing doc",
+   "src": "slack",
+   "where": "#pricing",
+   "raw": "You: will take a look this afternoon, want to check the enterprise tier before we share it",
+   "due_in_days": 0
+  },
+  {
+   "id": "p3",
+   "section": "promise",
+   "summary": "Intro Dana to Acme",
+   "src": "email",
+   "where": "Coffee next week?",
+   "raw": "You: Happy to intro you to the Acme team, I'll do it this week once I hear back from Jordan",
+   "due_in_days": 2
+  },
+  {
+   "id": "r1",
+   "section": "request",
+   "summary": "Approve offsite budget",
+   "src": "email",
+   "where": "Offsite budget: need sign-off",
+   "raw": "Leo Park: Hi, bumping this again. Can you approve the $12k before Friday so we can lock the venue?",
+   "due_in_days": 2,
+   "asked_days_ago": 5
+  },
+  {
+   "id": "r2",
+   "section": "request",
+   "summary": "Join Acme call",
+   "src": "slack",
+   "where": "@Sam Ortiz",
+   "raw": "Sam: would be great to have you on the Acme call Wed 2pm, they asked about the roadmap",
+   "due_in_days": 0,
+   "due_time": "14:00",
+   "asked_days_ago": 1
+  },
+  {
+   "id": "k1",
+   "section": "know",
+   "summary": "Launch moved to Oct 14",
+   "src": "slack",
+   "where": "#product",
+   "raw": "Maya: heads up everyone, we're moving launch to Oct 14 to give QA another week"
+  },
+  {
+   "id": "k2",
+   "section": "know",
+   "summary": "Acme renewed for 2 years",
+   "src": "email",
+   "where": "Acme renewal: signed",
+   "raw": "Sales team: Great news, Acme signed the two-year renewal this morning"
+  },
+  {
+   "id": "k4",
+   "section": "know",
+   "summary": "Design review notes posted",
+   "src": "slack",
+   "where": "#design",
+   "raw": "Jin: notes from today's design review are in the doc, main decision was to keep the sidebar"
+  }
+ ]
+}

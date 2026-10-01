@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="216" height="216" viewBox="0 0 216 216" fill="none">
+<defs><radialGradient id="todo-list-glow" cx="134" cy="134" r="162" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFE2AE"/><stop offset="1" stop-color="#EF8C78"/></radialGradient></defs>
+<rect width="216" height="216" rx="69.12" fill="url(#todo-list-glow)"/>
+<path d="M66 110l28 27 58-60" stroke="#FFFFFF" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

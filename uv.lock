@@ -43,6 +43,7 @@ members = [
     "system-interface",
     "terminal-app",
     "tk-command-parsing",
+    "todo-list",
 ]
 
 [[package]]
@@ -3571,6 +3572,23 @@ wheels = [
 name = "tk-command-parsing"
 version = "0.1.0"
 source = { editable = "system/libs/tk_command_parsing" }
+
+[[package]]
+name = "todo-list"
+version = "0.1.0"
+source = { editable = "system/apps/todo_list" }
+dependencies = [
+    { name = "flask" },
+    { name = "flask-sock" },
+    { name = "werkzeug" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "flask", specifier = ">=3.0" },
+    { name = "flask-sock", specifier = ">=0.7" },
+    { name = "werkzeug", specifier = ">=3.0" },
+]
 
 [[package]]
 name = "tokenizers"

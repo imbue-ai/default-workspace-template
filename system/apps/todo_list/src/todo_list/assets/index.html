@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>To-do, to-do</title>
+<style>
+  /* To-do, to-do: a scrapbook page. Paper notes taped to a dotted sheet, handwritten labels, marker ticks,
+     and a rubber stamp when something's done. Blues carry importance; red and purple mean late and today. */
+  @font-face { font-family: "Caveat"; src: url("/fonts/Caveat.woff2") format("woff2"); font-weight: 400 700; font-display: swap; }
+  @font-face { font-family: "Shrikhand"; src: url("/fonts/Shrikhand.woff2") format("woff2"); font-display: swap; }
+  :root {
+    --bg: #eef1f5; --dots: #c7d0dc; --paper: #ffffff; --ink: #0e2645; --muted: #34506e; --faint: #4f6680; --line: #dde3ea;
+    --msg: #1f3654; --link: #003f91; --done: #003f91; --sky: #5da9e9; --purple: #6d326d; --late: #b3261e;
+    --hand: "Caveat", "Comic Sans MS", cursive; --display: "Shrikhand", Georgia, serif;
+    --confetti: #5da9e9,#003f91,#6d326d,#f28db2,#ffffff; --flash: #dde9f8;
+  }
+  * { box-sizing: border-box; }
+  /* Every size below is in rem, so this one value scales all text, spacing and art together. */
+  html { font-size: 52%; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; color: var(--ink); overflow-x: hidden;
+    background: var(--bg) radial-gradient(var(--dots) 0.144231rem, transparent 0.15625rem) 0 0 / 2.644231rem 2.644231rem fixed;
+    font: 1.682692rem/1.35 "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; cursor: pointer; color: inherit; }
+
+  /* ---- Top: the name as a sticker, what's urgent in handwriting, and the progress badge ---- */
+  .bar { position: relative; z-index: 10; }
+  .bar-inner { max-width: 76.923077rem; margin: 0 auto; padding: 2.403846rem 2.403846rem 1.201923rem; display: flex; align-items: center; gap: 1.682692rem; position: relative; }
+  .titles h1 {
+    display: inline-block; margin: 0; font: 5.048077rem/1 var(--display); color: var(--done); letter-spacing: .01em;
+    text-shadow: 0.360577rem 0.360577rem 0 #e4a8f5; transform: rotate(-2.5deg); transform-origin: left bottom;
+  }
+  .titles .date { font: 600 2.764423rem/1 var(--hand); color: var(--muted); margin: -0.360577rem 0 0 0.721154rem; min-height: 0.480769rem; }
+  .titles .date .sep { margin: 0 0.961538rem; }
+  .titles .date .late { color: var(--late); }
+  .titles .date .duetoday { color: var(--purple); }
+
+  .goal {
+    margin-left: auto; position: relative; width: 8.894231rem; height: 8.894231rem; padding: 0; border-radius: 50%;
+    background: var(--paper); border: 0.240385rem solid var(--ink); box-shadow: 0.360577rem 0.360577rem 0 var(--ink); transform: rotate(6deg);
+    transition: transform .15s;
+  }
+  .goal:hover { transform: rotate(0deg) scale(1.04); }
+  .goal svg { position: absolute; inset: 0.600962rem; width: calc(100% - 1.201923rem); height: calc(100% - 1.201923rem); transform: rotate(-90deg); }
+  .goal circle { fill: none; stroke-width: 6; }
+  .goal .track { stroke: var(--sky); opacity: .3; }
+  .goal .fill { stroke: var(--done); stroke-linecap: round; stroke-dasharray: 163.36; stroke-dashoffset: 163.36; transition: stroke-dashoffset .7s cubic-bezier(.3,1.3,.5,1); }
+  .goal .num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 700 3.125rem/1 var(--hand); color: var(--done); }
+  .goal .num .of { color: var(--muted); }
+  .goal.hit { animation: hit .5s cubic-bezier(.3,1.8,.5,1); }
+
+  /* What you've finished, a paper note dropped from the badge */
+  .donepanel {
+    position: absolute; right: 2.403846rem; top: calc(100% + 0.480769rem); width: 39.663462rem; max-width: calc(100vw - 2.884615rem); max-height: 60vh; overflow: auto;
+    background: var(--paper); border: 0.240385rem solid var(--ink); border-radius: 0.721154rem; box-shadow: 0.480769rem 0.480769rem 0 var(--ink);
+    padding: 1.201923rem 1.682692rem 0.721154rem; display: none; transform: rotate(-1deg);
+  }
+  .donepanel.on { display: block; animation: drop .18s ease-out; }
+  .donepanel h3 { margin: 0 0 0.240385rem; font: 700 3.125rem/1.1 var(--hand); color: var(--done); display: flex; align-items: baseline; gap: 0.961538rem; }
+  .donepanel h3 .count { font-size: 2.644231rem; color: var(--muted); }
+  .donepanel .none { font: 500 2.524038rem/1.2 var(--hand); color: var(--muted); padding: 0.721154rem 0 1.442308rem; }
+
+  .page { max-width: 76.923077rem; margin: 0 auto; padding: 0 2.403846rem 12.019231rem; }
+
+  /* ---- Each group: a note taped to the page, its name written on the tape ---- */
+  section {
+    position: relative; margin-top: 4.807692rem; background: var(--paper); border: 0.240385rem solid var(--ink); border-radius: 0.721154rem;
+    box-shadow: 0.600962rem 0.600962rem 0 var(--ink); padding: 3.125rem 1.923077rem 0.961538rem; transform: rotate(var(--tilt, 0deg));
+  }
+  section + section { margin-top: 7.211538rem; }
+  section:nth-of-type(odd) { --tilt: -0.25deg; }
+  section:nth-of-type(even) { --tilt: 0.3deg; }
+  /* Tape colours, strongest on the group that most needs you; the theme's heading colour replaces all three */
+  section[data-section="promise"] { --tape: var(--tape-promise, #003f91); --tape-ink: #fff; }
+  section[data-section="request"] { --tape: var(--tape-request, #2f74c8); --tape-ink: #fff; }
+  section[data-section="know"] { --tape: var(--tape-know, #cfe3f8); --tape-ink: var(--tape-know-ink, #0b4a9a); }
+  .ghead { position: absolute; top: -2.403846rem; left: 2.163462rem; }
+  .ghead h2 {
+    margin: 0; font: 700 3.125rem/1 var(--hand); color: var(--tape-ink); padding: 0.721154rem 2.644231rem 0.841346rem;
+    background: var(--tape);
+    transform: rotate(-2.5deg); opacity: .96; box-shadow: 0 0.120192rem 0.240385rem rgba(0,0,0,.15);
+    /* torn tape ends */
+    clip-path: polygon(0 0, 100% 0, 97% 18%, 100% 36%, 97% 54%, 100% 72%, 97% 88%, 100% 100%, 0 100%, 3% 84%, 0 66%, 3% 48%, 0 30%, 3% 14%);
+  }
+  section[data-section="request"] .ghead h2 { transform: rotate(1.5deg); }
+
+  /* ---- One to-do ---- */
+  .row { position: relative; display: flex; align-items: flex-start; gap: 1.442308rem; padding: 1.201923rem 0.240385rem; }
+  .check { flex-shrink: 0; position: relative; width: 2.884615rem; height: 2.884615rem; margin-top: 0; padding: 0; border: none; background: none; }
+  .check:active { transform: scale(.86); }
+  .check svg { width: 2.884615rem; height: 2.884615rem; overflow: visible; }
+  .check .box { fill: var(--paper); stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; transition: fill .2s; }
+  .check .tick { fill: none; stroke: var(--done); stroke-width: 3.4; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 34; stroke-dashoffset: 34; }
+  .check:hover .tick { stroke: #a9c6ea; stroke-dashoffset: 0; transition: stroke-dashoffset .25s; }
+  .row.checked .check .box, .donepanel .check .box { fill: #e6eef9; }
+  .row.checked .check .tick, .donepanel .check .tick { stroke: var(--done); stroke-dashoffset: 0; transition: stroke-dashoffset .3s ease-out; }
+  .donepanel .check:hover .tick { stroke: #a9c6ea; }
+
+  .body { flex: 1; min-width: 0; cursor: pointer; }
+  .titleline { display: flex; align-items: center; flex-wrap: wrap; column-gap: 1.201923rem; row-gap: 0.240385rem; min-width: 0; }
+  .title { position: relative; display: inline-block; max-width: 100%; font-size: 2.043269rem; line-height: 2.644231rem; font-weight: 650; transition: color .3s; }
+  /* the marker scribble that crosses a title out */
+  .title::after {
+    content: ""; position: absolute; left: -0.480769rem; right: -0.480769rem; top: 50%; height: 1.201923rem; margin-top: -0.600962rem;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 10' preserveAspectRatio='none'%3E%3Cpath d='M1 6 C10 3 18 8 28 5 S46 3 59 6' fill='none' stroke='%23003f91' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E") 0 0 / 100% 100% no-repeat;
+    clip-path: inset(0 100% 0 0); transition: clip-path .35s cubic-bezier(.6,0,.2,1);
+  }
+  .row.checked .title { color: var(--faint); }
+  .row.checked .title::after, .donepanel .title::after { clip-path: inset(0 0 0 0); }
+  .meta { display: flex; align-items: center; gap: 0.721154rem; margin-top: 0.360577rem; color: var(--msg); font-size: 1.802885rem; min-width: 0; }
+  .place { display: inline-flex; align-items: center; gap: 0.721154rem; flex-shrink: 0; max-width: 50%; min-width: 0; }
+  .place .src { width: 1.923077rem; height: 1.923077rem; flex-shrink: 0; }
+  .meta .where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta .snip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .meta .snip::before { content: "\00b7"; margin-right: 0.721154rem; }
+  .row:hover .meta .where { color: var(--link); }
+
+  /* The original messages, opened by clicking the to-do */
+  .orig { display: none; margin-top: 1.081731rem; }
+  .row.expanded .orig { display: block; }
+  .row.expanded .meta .snip { display: none; }
+  .msg { padding: 0.240385rem 0 0.240385rem 1.442308rem; border-left: 0.360577rem solid #cfe3f8; color: var(--msg); font-size: 1.742788rem; line-height: 1.45; white-space: pre-wrap; }
+  .msg + .msg { margin-top: 0.961538rem; }
+  .msg .from { display: flex; align-items: center; gap: 0.600962rem; font-size: 1.5625rem; color: var(--muted); margin-bottom: 0.240385rem; white-space: normal; }
+  .msg .from .src { width: 1.682692rem; height: 1.682692rem; }
+
+  /* When it's due: a highlighter swipe in handwriting. Red once late, purple today, blue this week */
+  .when { flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.961538rem; white-space: nowrap; font: 500 2.524038rem/1 var(--hand); }
+  .due { padding: 0.120192rem 1.081731rem 0.360577rem; border-radius: 0.480769rem 1.201923rem 0.600962rem 1.322115rem / 1.081731rem 0.600962rem 1.201923rem 0.480769rem; transform: rotate(-1.5deg); }
+  .due.over { color: var(--late); background: #fde1df; }
+  .due.today { color: var(--purple); background: #f3e3f3; }
+  .due.soon { color: var(--done); background: #dde9f8; }
+  .due.later { color: var(--muted); background: #edf0f4; }
+  .waiting { color: var(--muted); }
+  .due + .waiting::before { content: "\00b7"; margin-right: 0.961538rem; }
+  .row.checked .when { opacity: .4; transition: opacity .3s; }
+
+  .skip {
+    flex-shrink: 0; border: none; background: none; width: 3.605769rem; height: 3.605769rem; margin: -0.360577rem -0.480769rem 0 0; padding: 0; border-radius: 0.961538rem;
+    display: inline-flex; align-items: center; justify-content: center; color: var(--faint); opacity: 0; transition: opacity .15s, color .15s, background .15s;
+  }
+  .skip svg { width: 2.163462rem; height: 2.163462rem; }
+  .row:hover .skip { opacity: 1; }
+  .skip:hover { color: var(--late); background: #fde1df; }
+
+  /* The rubber stamp that lands on a finished to-do */
+  .stamp {
+    position: absolute; right: 5.288462rem; top: 50%; z-index: 2; pointer-events: none;
+    font: 3.605769rem/1 var(--display); color: var(--done); letter-spacing: .04em; padding: 0.480769rem 1.442308rem 0.721154rem;
+    border: 0.360577rem solid var(--done); border-radius: 0.961538rem; box-shadow: inset 0 0 0 0.240385rem var(--paper), inset 0 0 0 0.480769rem var(--done);
+    transform: translateY(-50%) rotate(-12deg); opacity: .88; mix-blend-mode: multiply;
+  }
+
+  /* Finished rows inside the badge's note */
+  .donepanel .row { padding: 0.841346rem 0; }
+  .donepanel .title { color: var(--faint); font-size: 1.802885rem; line-height: 2.524038rem; }
+  .donepanel .meta, .donepanel .skip, .donepanel .orig, .donepanel .when { display: none; }
+  .bump { animation: bump .4s cubic-bezier(.3,1.8,.5,1); }
+
+  /* Everything done */
+  .allclear { display: none; }
+  .allclear.on { display: block; text-align: center; padding: 6.009615rem 2.403846rem 1.201923rem; }
+  .allclear h3 { margin: 0; font: 5.528846rem/1 var(--display); color: var(--done); text-shadow: 0.360577rem 0.360577rem 0 #e4a8f5; transform: rotate(-3deg); }
+  .allclear p { margin: 1.442308rem 0 0; font: 600 3.004808rem/1.2 var(--hand); color: var(--muted); }
+
+  /* Toast with undo: an inked strip, the reverse of the notes, so it stands out */
+  .toast {
+    position: fixed; left: 50%; bottom: 2.644231rem; z-index: 30; transform: translate(-50%, 3.605769rem); opacity: 0; pointer-events: none;
+    background: var(--ink); color: #fff; border: 0.240385rem solid var(--ink); border-radius: 0.721154rem; box-shadow: 0.480769rem 0.480769rem 0 var(--sky);
+    padding: 0.961538rem 0.961538rem 0.961538rem 1.923077rem; display: flex; align-items: center; gap: 1.682692rem; font-size: 1.802885rem;
+    transition: transform .3s cubic-bezier(.3,1.4,.5,1), opacity .2s; max-width: calc(100% - 3.846154rem);
+  }
+  .toast.on { transform: translate(-50%, 0) rotate(-1deg); opacity: 1; pointer-events: auto; }
+  .toast .msgtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toast button { border: 0.240385rem solid #fff; background: #fff; color: var(--ink); font: 700 2.524038rem/1 var(--hand); border-radius: 0.721154rem; padding: 0.480769rem 1.442308rem 0.721154rem; flex-shrink: 0; }
+  .toast button:hover { background: #cfe3f8; border-color: #cfe3f8; }
+
+  .fx { position: fixed; z-index: 40; pointer-events: none; }
+  .flyer { width: 2.884615rem; height: 2.884615rem; }
+  .flyer svg { width: 2.884615rem; height: 2.884615rem; overflow: visible; }
+  .flyer .box { fill: #e6eef9; stroke: var(--ink); stroke-width: 2; }
+  .flyer .tick { fill: none; stroke: var(--done); stroke-width: 3.4; stroke-linecap: round; stroke-linejoin: round; }
+
+  @keyframes bump { 0% { transform: scale(1); } 40% { transform: scale(1.3); } 100% { transform: scale(1); } }
+  @keyframes hit { 0% { transform: rotate(6deg) scale(1); } 35% { transform: rotate(-4deg) scale(1.16); } 100% { transform: rotate(6deg) scale(1); } }
+  @keyframes drop { from { opacity: 0; transform: translateY(-0.721154rem) rotate(-1deg); } to { opacity: 1; transform: rotate(-1deg); } }
+
+  /* ---- Bullet journal style: one pen on dotted paper. The notes lose their tape, borders and shadows and
+     become handwritten headings with a ruled line; the tick boxes become bullets (a dot, an x once done);
+     the due chips become plain handwriting; the logos go to ink. ---- */
+  html[data-style="bullet-journal"] {
+    --bg: #f7f2e8; --dots: #c9bfa9; --paper: #f7f2e8; --ink: #2a2622; --muted: #6b6257; --faint: #8e8475; --line: #d9d0c0;
+    --msg: #4a4238; --link: #2a2622; --done: #2a2622; --sky: #b9ad98; --purple: #2a2622; --late: #8c2f24;
+    --confetti: #2a2622,#6b6257,#b9ad98,#8c2f24,#f7f2e8; --flash: #ece4d4;
+  }
+  html[data-style="bullet-journal"] body { font-family: var(--hand); font-size: 2.1rem; }
+  html[data-style="bullet-journal"] .titles h1 { font: 700 5.8rem/1 var(--hand); color: var(--ink); text-shadow: none; transform: none; }
+  html[data-style="bullet-journal"] .goal { background: transparent; border-width: 0.18rem; box-shadow: none; transform: none; }
+  html[data-style="bullet-journal"] .goal:hover { transform: scale(1.04); }
+  html[data-style="bullet-journal"] section {
+    background: transparent; border: none; border-radius: 0; box-shadow: none; transform: none;
+    padding: 4.6rem 0.6rem 0.6rem; margin-top: 2.4rem;
+  }
+  html[data-style="bullet-journal"] section + section { margin-top: 4.2rem; }
+  html[data-style="bullet-journal"] .ghead { top: 0; left: 0.6rem; right: 0.6rem; }
+  html[data-style="bullet-journal"] .ghead h2 {
+    display: block; background: none; color: var(--ink); padding: 0 0.4rem 0.4rem; transform: none; opacity: 1;
+    box-shadow: none; clip-path: none; font-size: 3.4rem; border-bottom: 0.3rem double var(--ink);
+  }
+  html[data-style="bullet-journal"] .row { padding: 0.9rem 0.3rem; border-bottom: 0.1rem dashed var(--line); }
+  html[data-style="bullet-journal"] .row:last-child { border-bottom: none; }
+  html[data-style="bullet-journal"] .check svg { display: none; }
+  html[data-style="bullet-journal"] .check::before {
+    content: ""; position: absolute; left: 50%; top: 50%; width: 1.2rem; height: 1.2rem; margin: -0.6rem 0 0 -0.6rem;
+    border-radius: 50%; background: var(--ink);
+  }
+  html[data-style="bullet-journal"] .check:hover::before { background: var(--faint); }
+  html[data-style="bullet-journal"] .row.checked .check::before, html[data-style="bullet-journal"] .donepanel .check::before {
+    content: "\00d7"; width: auto; height: auto; margin: 0; background: none; transform: translate(-50%, -50%);
+    font: 700 3.6rem/1 var(--hand); color: var(--ink);
+  }
+  html[data-style="bullet-journal"] .title { font-weight: 700; font-size: 2.5rem; line-height: 2.9rem; }
+  html[data-style="bullet-journal"] .title::after { display: none; }
+  html[data-style="bullet-journal"] .row.checked .title { text-decoration: line-through; text-decoration-thickness: 0.2rem; }
+  html[data-style="bullet-journal"] .meta { font-size: 2rem; }
+  html[data-style="bullet-journal"] .place .src, html[data-style="bullet-journal"] .msg .from .src { filter: grayscale(1) brightness(0.4); opacity: 0.8; }
+  html[data-style="bullet-journal"] .msg { border-left-color: var(--line); font-family: var(--hand); font-size: 2rem; }
+  html[data-style="bullet-journal"] .due { background: none; border-radius: 0; transform: none; padding: 0 0.3rem; border-bottom: 0.18rem solid currentColor; }
+  html[data-style="bullet-journal"] .due.over { color: var(--late); }
+  html[data-style="bullet-journal"] .due.today { color: var(--ink); }
+  html[data-style="bullet-journal"] .due.soon, html[data-style="bullet-journal"] .due.later { color: var(--muted); }
+  html[data-style="bullet-journal"] .stamp { mix-blend-mode: normal; }
+  html[data-style="bullet-journal"] .donepanel { background: var(--paper); box-shadow: none; transform: none; border-width: 0.18rem; }
+  html[data-style="bullet-journal"] .toast { box-shadow: none; }
+  html[data-style="bullet-journal"] .allclear h3 { font: 700 5.8rem/1 var(--hand); color: var(--ink); text-shadow: none; transform: none; }
+
+  @media (max-width: 420px) {
+    .bar-inner, .page { padding-left: 1.442308rem; padding-right: 1.442308rem; }
+    .titles h1 { font-size: 4.086538rem; }
+    .skip { opacity: 1; }
+    .donepanel { right: 1.442308rem; }
+  }
+</style>
+</head>
+<body>
+<header class="bar" id="bar">
+  <div class="bar-inner">
+    <div class="titles">
+      <h1>To-do, to-do</h1>
+      <div class="date" id="date"></div>
+    </div>
+    <button class="goal" id="goal" title="See what you've finished" aria-label="See what you've finished">
+      <svg viewBox="0 0 62 62"><circle class="track" cx="31" cy="31" r="26"/><circle class="fill" id="ringfill" cx="31" cy="31" r="26"/></svg>
+      <span class="num" id="num">0</span>
+    </button>
+    <div class="donepanel" id="donepanel"></div>
+  </div>
+</header>
+<div class="page" id="page"></div>
+<div class="toast" id="toast"><span class="msgtext" id="toastmsg"></span><button id="undo">Undo</button></div>
+
+<script>
+const GROUPS = [
+  { key: "promise", title: "I said I'd do" },
+  { key: "request", title: "Asked of me" },
+  { key: "know", title: "Good to know" },
+];
+
+const TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7"/></svg>';
+// A hand-drawn box and a marker tick that overshoots it
+const TICK = '<svg viewBox="0 0 24 24"><path class="box" d="M3.4 4.3 C8 3.5 15 3.9 20.4 3.6 C20.9 9 20.5 15 20.7 20.5 C15 21 9 20.4 3.7 20.8 C3.2 15 3.8 9 3.4 4.3 Z"/><path class="tick" d="M6 12.6 C7.6 14 9 16 10.2 18.3 C13 12 16.8 6.4 22.5 1.8"/></svg>';
+const LOGO = {
+  email: '<svg class="src" viewBox="1.4 2.1 21.2 21.2" aria-label="Email"><rect x="2" y="5.5" width="4.2" height="14" rx="1.4" fill="#4285F4"/><rect x="17.8" y="5.5" width="4.2" height="14" rx="1.4" fill="#34A853"/><path d="M4.1 7.3L12 13.3l7.9-6" fill="none" stroke="#EA4335" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.1 7.3l2.6 2" fill="none" stroke="#C5221F" stroke-width="3.6" stroke-linecap="round"/><path d="M19.9 7.3l-2.6 2" fill="none" stroke="#FBBC04" stroke-width="3.6" stroke-linecap="round"/></svg>',
+  slack: '<svg class="src" viewBox="0 0 122.8 122.8" aria-label="Slack"><path d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9zm6.5 0c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z" fill="#E01E5A"/><path d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2zm0 6.5c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z" fill="#36C5F0"/><path d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2zm-6.5 0c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z" fill="#2EB67D"/><path d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9zm0-6.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z" fill="#ECB22E"/></svg>',
+  calendar: '<svg class="src" viewBox="0 0 24 24" aria-label="Calendar"><rect x="2.5" y="4" width="19" height="17.5" rx="2.5" fill="#fff" stroke="#1a73e8" stroke-width="2"/><rect x="2.5" y="4" width="19" height="5.5" rx="2.5" fill="#1a73e8"/><rect x="2.5" y="7" width="19" height="2.5" fill="#1a73e8"/></svg>',
+};
+const SRC_NAME = { email: "Email", slack: "Slack", calendar: "Calendar" };
+
+let items = [];
+
+const esc = (t) => String(t || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+// ---- Urgency: when each to-do is due, and how long someone has been waiting ----
+const DAY = 864e5;
+const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; };
+// "2026-10-01" or "2026-10-01T14:00", read as local time (not UTC)
+function parseLocal(iso) {
+  const [date, time] = iso.split("T");
+  const [y, m, d] = date.split("-").map(Number);
+  const [hh, mm] = (time || "0:0").split(":").map(Number);
+  return new Date(y, m - 1, d, hh, mm);
+}
+function dueInfo(it) {
+  if (!it.due) return null;
+  const when = parseLocal(it.due);
+  const day = new Date(when); day.setHours(0, 0, 0, 0);
+  const days = Math.round((day - startOfToday()) / DAY);
+  const time = it.due.includes("T") ? when.toLocaleTimeString([], { hour: "numeric", minute: when.getMinutes() ? "2-digit" : undefined }).replace(" ", "").toLowerCase() : "";
+  let label, level;
+  if (days < 0) { level = "over"; label = days === -1 ? "Due yesterday" : `${-days} days late`; }
+  else if (days === 0) { level = "today"; label = time ? `Today ${time}` : "Today"; }
+  else if (days === 1) { level = "soon"; label = "Tomorrow"; }
+  else if (days <= 6) { level = "soon"; label = when.toLocaleDateString(undefined, { weekday: "short" }); }
+  else { level = "later"; label = when.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
+  // A to-do with a day but no time is due by the end of that day, so one with an hour on it that day
+  // comes first: the two o'clock meeting is more pressing than the doc to read before tonight.
+  const endOfDay = new Date(when); endOfDay.setHours(23, 59, 59, 999);
+  return { days, label, level, at: (time ? when : endOfDay).getTime() };
+}
+function waitingDays(it) {
+  if (!it.asked) return 0;
+  return Math.round((startOfToday() - parseLocal(it.asked)) / DAY);
+}
+// Most urgent first: late, then soonest due, then the rest in the order they arrived.
+const urgency = (it) => { const d = dueInfo(it); return d ? d.at : Infinity; };
+const openIn = (key) => items.filter((it) => it.section === key && it.status === "open")
+  .map((it, i) => [it, i]).sort((a, b) => urgency(a[0]) - urgency(b[0]) || a[1] - b[1]).map(([it]) => it);
+const doneItems = () => items.filter((it) => it.status === "done");
+const openCount = () => items.filter((it) => it.status === "open").length;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const $ = (id) => document.getElementById(id);
+
+// Every to-do has one or more conversations behind it (an email thread, a Slack channel, ...).
+const sourcesOf = (it) => (it.sources && it.sources.length ? it.sources : [{ src: it.src, where: it.where, raw: it.raw }]);
+
+function metaHtml(it) {
+  // One line per conversation (a thread or channel): its logo, its name, and a peek at its latest message.
+  const latest = new Map();
+  for (const s of sourcesOf(it)) latest.set(s.src + "|" + (s.where || ""), s);
+  return [...latest.values()].map((s) => `<div class="meta"><span class="place">${LOGO[s.src] || ""}<span class="where">${esc(s.where || SRC_NAME[s.src] || "")}</span></span><span class="snip">${esc(s.raw)}</span></div>`).join("");
+}
+
+function origHtml(it) {
+  return `<div class="orig">${sourcesOf(it).map((s) => `<div class="msg"><span class="from">${LOGO[s.src] || ""}${esc(SRC_NAME[s.src] || s.src)}${s.where ? " · " + esc(s.where) : ""}${s.when ? " · " + esc(s.when) : ""}</span>${esc(s.raw)}</div>`).join("")}</div>`;
+}
+
+function whenHtml(it) {
+  const due = dueInfo(it), waited = waitingDays(it);
+  if (!due && waited < 2) return "";
+  return `<span class="when">${due ? `<span class="due ${due.level}">${esc(due.label)}</span>` : ""}${waited >= 2 ? `<span class="waiting">waiting ${waited} days</span>` : ""}</span>`;
+}
+
+function rowHtml(it) {
+  return `<div class="row" data-id="${esc(it.id)}">
+    <button class="check" aria-label="Mark done" title="Mark done">${TICK}</button>
+    <div class="body"><div class="titleline"><div class="title">${esc(it.summary)}</div>${whenHtml(it)}</div>${metaHtml(it)}${origHtml(it)}</div>
+    <button class="skip" title="Not doing: take it off the list" aria-label="Not doing">${TRASH}</button>
+  </div>`;
+}
+
+function render() {
+  const groups = GROUPS.map((g) => {
+    const list = openIn(g.key);
+    if (!list.length) return "";
+    return `<section data-section="${g.key}">
+      <div class="ghead"><h2>${g.title}</h2></div>
+      <div class="rows">${list.map(rowHtml).join("")}</div>
+    </section>`;
+  }).join("");
+  $("page").innerHTML = `<div class="allclear ${openCount() ? "" : "on"}"><h3>All done!</h3><p>Nothing left. Go outside.</p></div>${groups}`;
+  renderDone();
+  updateProgress(false);
+}
+
+function renderDone() {
+  const done = doneItems().slice().reverse();
+  $("donepanel").innerHTML = `<h3>Finished <span class="count">${done.length}</span></h3>` +
+    (done.length ? done.map(rowHtml).join("") : '<div class="none">Tick something off and it lands here.</div>');
+}
+
+function updateProgress(animate) {
+  const open = openCount(), done = doneItems().length, total = open + done;
+  const circ = 2 * Math.PI * 26;
+  const fill = $("ringfill");
+  fill.style.strokeDasharray = circ;
+  fill.style.strokeDashoffset = circ * (1 - (total ? done / total : 0));
+  $("num").innerHTML = `${done}<span class="of">/${total}</span>`;
+  updateSubtitle();
+  $("goal").title = `${done} of ${total} done. See what you've finished`;
+  if (animate) { const el = $("num"); el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump"); }
+}
+
+// ---- The satisfying part: tick, fly into the circle, circle fills ----
+let audio = null;
+function note(freq, vol = 0.1) {
+  audio = audio || new AudioContext();
+  const t = audio.currentTime, o = audio.createOscillator(), g = audio.createGain();
+  o.type = "sine"; o.frequency.value = freq;
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(vol, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+  o.connect(g).connect(audio.destination);
+  o.start(t); o.stop(t + 0.4);
+}
+
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const unit = document.createElement("div");
+unit.style.cssText = "position:absolute;visibility:hidden;width:1rem";
+document.body.appendChild(unit);
+// Design pixels in the effects below, stated at this page's own root size and scaled with it.
+const dp = (n) => (n * unit.getBoundingClientRect().width) / 8.32;
+const confetti = () => css("--confetti").split(",").map((c) => c.trim());
+
+function center(el) { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+
+function sparkle(at, n, spread, colors) {
+  for (let i = 0; i < n; i++) {
+    const p = document.createElement("div");
+    p.className = "fx";
+    const size = dp(4 + Math.random() * 4);
+    p.style.cssText = `left:${at.x}px;top:${at.y}px;width:${size}px;height:${size * (Math.random() < .5 ? 1 : 2)}px;border-radius:${dp(2)}px;background:${colors[i % colors.length]}`;
+    document.body.appendChild(p);
+    const ang = (Math.PI * 2 * i) / n + Math.random() * 0.5;
+    const dist = spread + Math.random() * spread;
+    p.animate([
+      { transform: "translate(-50%,-50%) scale(1)", opacity: 1 },
+      { transform: `translate(calc(-50% + ${Math.cos(ang) * dist}px), calc(-50% + ${Math.sin(ang) * dist}px)) rotate(${Math.random() * 540}deg) scale(.5)`, opacity: 0 },
+    ], { duration: 520 + Math.random() * 260, easing: "cubic-bezier(.15,.8,.35,1)" }).finished.then(() => p.remove());
+  }
+}
+
+async function flyToGoal(fromEl) {
+  const a = center(fromEl), b = center($("goal"));
+  const f = document.createElement("div");
+  f.className = "fx flyer";
+  f.innerHTML = TICK;
+  f.style.left = a.x + "px"; f.style.top = a.y + "px";
+  document.body.appendChild(f);
+  const dx = b.x - a.x, dy = b.y - a.y;
+  // An arc: out to the side and up, then down into the circle
+  const mx = dx * 0.55, my = dy * 0.45 - 70;
+  await f.animate([
+    { transform: "translate(-50%,-50%) scale(1)", offset: 0 },
+    { transform: `translate(calc(-50% + ${mx}px), calc(-50% + ${my}px)) scale(1.15)`, offset: 0.5, easing: "cubic-bezier(.3,0,.6,1)" },
+    { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scale(.5)`, offset: 1 },
+  ], { duration: 620, easing: "cubic-bezier(.2,.6,.4,1)", fill: "forwards" }).finished;
+  f.remove();
+  const g = $("goal");
+  g.classList.remove("hit"); void g.offsetWidth; g.classList.add("hit");
+  sparkle(b, 14, dp(34), confetti());
+  note(1318.5);
+}
+
+// ---- The rubber stamp: slams onto the finished to-do with a thunk and a jolt of the note ----
+const STAMP_WORDS = ["Done!", "Ta-da!", "Nailed it", "Boom", "Sorted"];
+function thunk() {
+  audio = audio || new AudioContext();
+  const t = audio.currentTime, o = audio.createOscillator(), g = audio.createGain();
+  o.type = "triangle"; o.frequency.setValueAtTime(190, t); o.frequency.exponentialRampToValueAtTime(70, t + 0.12);
+  g.gain.setValueAtTime(0.28, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+  o.connect(g).connect(audio.destination); o.start(t); o.stop(t + 0.2);
+}
+async function stampRow(row, local) {
+  const s = document.createElement("div");
+  s.className = "stamp";
+  s.textContent = STAMP_WORDS[Math.floor(Math.random() * STAMP_WORDS.length)];
+  row.appendChild(s);
+  await s.animate([
+    { transform: "translateY(-50%) rotate(-22deg) scale(2.6)", opacity: 0 },
+    { transform: "translateY(-50%) rotate(-12deg) scale(1)", opacity: .88 },
+  ], { duration: 170, easing: "cubic-bezier(.5,0,.9,.5)", fill: "forwards" }).finished;
+  if (local) thunk();
+  sparkle(center(s), 12, dp(30), confetti());
+  const note = row.closest("section");
+  if (note) {
+    const tilt = getComputedStyle(note).getPropertyValue("--tilt").trim() || "0deg";
+    note.animate([
+      { transform: `rotate(${tilt}) translate(0,0)` }, { transform: `rotate(${tilt}) translate(${dp(2)}px,${dp(3)}px)` },
+      { transform: `rotate(${tilt}) translate(${dp(-1)}px,${dp(-1)}px)` }, { transform: `rotate(${tilt}) translate(0,0)` },
+    ], { duration: 220, easing: "ease-out" });
+  }
+}
+
+async function collapse(row) {
+  const h = row.offsetHeight;
+  row.style.overflow = "hidden";
+  await row.animate([{ height: h + "px", opacity: 1 }, { height: "0px", paddingTop: "0px", paddingBottom: "0px", opacity: 0 }],
+    { duration: 300, easing: "cubic-bezier(.4,0,.2,1)", fill: "forwards" }).finished;
+  row.remove();
+}
+
+function refreshGroups() {
+  for (const g of GROUPS) {
+    const sec = document.querySelector(`section[data-section="${g.key}"]`);
+    if (!sec) continue;
+    const n = openIn(g.key).length;
+    if (!n) sec.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200 }).finished.then(() => sec.remove());
+  }
+  renderDone();
+}
+
+function celebrateAllClear() {
+  document.querySelector(".allclear").classList.add("on");
+  const b = center($("goal"));
+  sparkle(b, 50, dp(90), confetti());
+  [1046.5, 1318.5, 1568].forEach((f, i) => setTimeout(() => note(f, 0.08), 120 + i * 110));
+}
+
+// Used for this window's clicks and for changes made in other windows.
+async function setStatus(id, status, local) {
+  const it = items.find((x) => x.id === id);
+  if (!it || it.status === status) return;
+  const row = document.querySelector(`#page .row[data-id="${CSS.escape(id)}"]`);
+  it.status = status;
+  if (status === "done" && row) {
+    row.classList.add("checked");
+    const box = row.querySelector(".check");
+    if (local) note(880);
+    await wait(240);
+    await stampRow(row, local);
+    await wait(650);
+    const flight = flyToGoal(box).then(() => updateProgress(true));
+    await wait(200);
+    await collapse(row);
+    await flight;
+  } else if (status === "drop" && row) {
+    row.style.transition = "opacity .25s"; row.style.opacity = ".35";
+    await wait(180);
+    await collapse(row);
+    updateProgress(true);
+  } else if (status === "open") {
+    render();
+    const back = document.querySelector(`#page .row[data-id="${CSS.escape(id)}"]`);
+    if (back) back.animate([{ background: css("--flash") }, { background: "transparent" }], { duration: 1200 });
+    return;
+  } else {
+    updateProgress(true);
+  }
+  refreshGroups();
+  if (!openCount()) celebrateAllClear();
+}
+
+function post(id, action) {
+  return fetch(`/api/items/${encodeURIComponent(id)}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }),
+  });
+}
+
+let toastTimer = null, toastUndo = null;
+function toast(text, undo) {
+  $("toastmsg").textContent = text;
+  toastUndo = undo;
+  $("toast").classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $("toast").classList.remove("on"), 5000);
+}
+$("undo").addEventListener("click", () => {
+  $("toast").classList.remove("on");
+  if (toastUndo) toastUndo();
+  toastUndo = null;
+});
+
+function act(id, action) {
+  const it = items.find((x) => x.id === id);
+  setStatus(id, action, true);
+  post(id, action);
+  const reopen = () => { setStatus(id, "open", true); post(id, "open"); };
+  toast(action === "done" ? `Done: ${it.summary}` : `Taken off the list: ${it.summary}`, reopen);
+}
+
+document.addEventListener("click", (e) => {
+  const panel = $("donepanel");
+  if (e.target.closest("#goal")) { panel.classList.toggle("on"); return; }
+  if (!e.target.closest("#donepanel")) panel.classList.remove("on");
+  const row = e.target.closest(".row");
+  if (!row) return;
+  const id = row.dataset.id;
+  if (row.closest("#donepanel")) {
+    if (e.target.closest(".check")) { setStatus(id, "open", true); post(id, "open"); }
+    return;
+  }
+  if (e.target.closest(".check")) { if (!row.classList.contains("checked")) act(id, "done"); }
+  else if (e.target.closest(".skip")) act(id, "drop");
+  else if (e.target.closest(".body")) row.classList.toggle("expanded");
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("donepanel").classList.remove("on"); });
+
+// Under the title: what's late and what's due today (nothing when neither)
+function updateSubtitle() {
+  const open = items.filter((it) => it.status === "open").map(dueInfo).filter(Boolean);
+  const late = open.filter((d) => d.level === "over").length, today = open.filter((d) => d.level === "today").length;
+  const parts = [];
+  if (late) parts.push(`<span class="late">${late} late</span>`);
+  if (today) parts.push(`<span class="duetoday">${today} due today</span>`);
+  $("date").innerHTML = parts.join('<span class="sep">·</span>');
+}
+
+// The colours the theme route hands out: the main blue, the page behind the notes, and the group headings'
+// tape (one colour, stepped lighter down the page so the order of importance still shows).
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-style", theme.style || "");
+  const root = document.documentElement.style;
+  if (theme.accent) root.setProperty("--done", theme.accent);
+  if (theme.background) root.setProperty("--bg", theme.background);
+  const tapes = ["--tape-promise", "--tape-request", "--tape-know", "--tape-know-ink"];
+  if (theme.heading) {
+    root.setProperty("--tape-promise", theme.heading);
+    root.setProperty("--tape-request", `color-mix(in srgb, ${theme.heading} 72%, #fff)`);
+    root.setProperty("--tape-know", `color-mix(in srgb, ${theme.heading} 20%, #fff)`);
+    root.setProperty("--tape-know-ink", theme.heading);
+  } else {
+    for (const name of tapes) root.removeProperty(name);
+  }
+}
+
+async function load() {
+  const res = await fetch("/api/state");
+  const body = await res.json();
+  items = body.items;
+  applyTheme(body.theme);
+  render();
+}
+
+function connect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onopen = () => load();
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "removed" || msg.type === "status") setStatus(msg.id, msg.action || msg.status, false);
+    else if (msg.type === "added") { const known = new Set(items.map((it) => it.id)); for (const it of msg.items) if (!known.has(it.id)) items.push(it); render(); }
+    else if (msg.type === "theme") applyTheme(msg.theme);
+    else if (msg.type === "reset") load();
+  };
+  ws.onclose = () => setTimeout(connect, 1000);
+}
+load().then(connect);
+</script>
+</body>
+</html>

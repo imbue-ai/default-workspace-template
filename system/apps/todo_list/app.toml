@@ -1,0 +1,16 @@
+name = "todo-list"
+display_name = "To-do, to-do"
+icon = "icon.svg"
+priority = "user"
+program = "todo-list"
+
+# No launch path, so the desktop offers the synthesized ``open`` at its root; one window is what it is for.
+[default_shortcut]
+launch = "open"
+mode = "focus"
+
+# How update-app boots a throwaway preview of this app: on a free port, over a
+# scratch copy of its data (see .agents/skills/update-app/scripts/preview_app.py).
+[preview]
+env = {TODO_LIST_PORT = "{port:main}", TODO_LIST_HOST = "{host}", TODO_LIST_DATA_DIR = "{copy:data}"}
+copies = {data = "data/.apps/todo-list"}
