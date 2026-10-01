@@ -97,7 +97,17 @@ class ChatAutoCompactor:
         if self._stop_event.is_set():
             return []
         names = self._list_running_chat_agent_names()
-        if not names or not self._is_autocompact_enabled():
+        if not names:
+            return []
+        try:
+            is_enabled = self._is_enabled()
+        except (MngrError, OSError, ValidationError) as e:
+            # The command reads the same config and decides for itself, so an unreadable
+            # config costs a launch rather than silently turning compaction off. Its exit 1
+            # is not retried per chat: mngr's own load of that config fails every chat alike.
+            logger.warning("Could not read the autocompact mode from the mngr config, checking anyway: {}", e)
+            return [_succeeded_or_none(self._run_autocompact(names))]
+        if not is_enabled:
             return []
 
         batch_result = self._run_autocompact(names)
@@ -152,15 +162,6 @@ class ChatAutoCompactor:
                     result.stderr,
                 )
         return result
-
-    def _is_autocompact_enabled(self) -> bool:
-        try:
-            return self._is_enabled()
-        except (MngrError, OSError, ValidationError) as e:
-            # The command reads the same config and decides for itself, so an unreadable
-            # config costs a launch rather than silently turning compaction off.
-            logger.warning("Could not read the autocompact mode from the mngr config, checking anyway: {}", e)
-            return True
 
     def _run_sweep(self) -> None:
         """Background loop executing sweeps on interval until stopped."""

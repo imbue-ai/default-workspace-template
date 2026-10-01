@@ -158,9 +158,10 @@ def test_sweep_checks_every_running_chat_in_one_command() -> None:
     "read_error",
     [ConfigParseError("Invalid config for 'plugins.autocompact'"), PermissionError("settings.toml")],
 )
-def test_an_unreadable_mode_still_runs_the_sweep(read_error: Exception, loguru_records: list[str]) -> None:
-    """An unreadable config must cost a launch, not silently turn compaction off."""
-    recorded_commands, fake_runner = _recording_runner()
+def test_an_unreadable_mode_costs_one_launch(read_error: Exception, loguru_records: list[str]) -> None:
+    """An unreadable config must cost a launch, not silently turn compaction off, and mngr's own
+    load of it rejects every chat alike, so its exit 1 is not retried per chat."""
+    recorded_commands, fake_runner = _recording_runner(lambda command: 1)
 
     def unreadable_mode() -> bool:
         raise read_error
