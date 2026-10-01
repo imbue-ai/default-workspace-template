@@ -386,16 +386,14 @@ def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
     if status == _UNREACHABLE_STATUS:
         _write_stderr(f"error: could not reach the workspace shell: {body}\n")
         return EXIT_ERROR
+    detail = str(body.get("detail", body)) if isinstance(body, dict) else body
     if status == POPPED_OUT_REFUSAL_STATUS:
-        detail = str(body.get("detail", body)) if isinstance(body, dict) else body
         _write_stderr(
             f"error: {op!r} refused (HTTP {status}): {detail}. The user popped the window out into its own window; "
             "--force overrides it\n"
         )
         return EXIT_POPPED_OUT
-    detail: str = ""
     if isinstance(body, dict):
-        detail = str(body.get("detail", body))
         if status == 412:
             _write_stderr(f"error: {op!r} has no client to apply it to (HTTP 412): {detail}\n")
             return EXIT_ERROR
@@ -409,8 +407,6 @@ def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
         if status == 400:
             _write_stderr(f"error: {op!r} rejected (HTTP 400): {detail}\n")
             return EXIT_ERROR
-    else:
-        detail = body
     _write_stderr(f"error: {op!r} failed (HTTP {status}): {detail}\n")
     return EXIT_ERROR
 
