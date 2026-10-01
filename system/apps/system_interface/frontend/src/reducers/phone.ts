@@ -45,13 +45,14 @@ export function isShownWindowGone(state: DesktopState): boolean {
   return shown !== null && shown.kind === "window" && findWindow(state, shown.windowId) === null;
 }
 
-/** Where a load lands: the newest recorded entry that still means something (a window still open, or the home
- *  grid), else the pinned chat window, else the home grid. */
+/** Where a load lands: the newest recorded entry that still means something (a window the phone still lists, or
+ *  the home grid), else the pinned chat window, else the home grid. */
 export function phoneLanding(state: DesktopState): PhoneShown {
+  const listedIds = new Set(phoneWindows(state).map((window) => window.id));
   for (let index = state.phone.history.length - 1; index >= 0; index -= 1) {
     const entry = state.phone.history[index];
     if (entry === SHOWN_HOME) return { kind: "home" };
-    if (findWindow(state, entry) !== null) return { kind: "window", windowId: entry };
+    if (listedIds.has(entry)) return { kind: "window", windowId: entry };
   }
   const pinned = pinnedChatWindowOf(state);
   return pinned === null ? { kind: "home" } : { kind: "window", windowId: pinned.id };

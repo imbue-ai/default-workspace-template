@@ -70,6 +70,14 @@ describe("where a phone lands", () => {
     });
   });
 
+  it("passes over the pinned window of a desktop the client is no longer on, for the one it keeps", () => {
+    const history = ["chat-work"];
+    expect(phoneLanding(phoneState({ type: "phone_history_loaded", history }))).toEqual({
+      kind: "window",
+      windowId: "chat-home",
+    });
+  });
+
   it("on the active desktop's pinned window with nothing recorded, else home", () => {
     expect(phoneLanding(phoneState())).toEqual({ kind: "window", windowId: "chat-home" });
     const unpinned = phoneState({
