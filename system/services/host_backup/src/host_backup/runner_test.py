@@ -453,17 +453,19 @@ def _completed(
 
 
 class _ScriptedRestic:
-    """A restic call that returns scripted results in order and counts its calls."""
+    """A restic call that returns scripted results in order and records each call's keyword arguments."""
 
     def __init__(self, results: list[subprocess.CompletedProcess[str]]) -> None:
         self._results = results
         self.calls = 0
+        self.call_kwargs: list[dict[str, object]] = []
 
     def __call__(
-        self, *_args: object, **_kwargs: object
+        self, *_args: object, **kwargs: object
     ) -> subprocess.CompletedProcess[str]:
         result = self._results[self.calls]
         self.calls += 1
+        self.call_kwargs.append(kwargs)
         return result
 
 
@@ -500,6 +502,26 @@ def _run_backup_under_test(
         unlock_fn=unlock if unlock is not None else _ScriptedRestic([]),
     )
     return state, succeeded
+
+
+def test_run_restic_backup_passes_extra_excludes_after_the_excludes(
+    tmp_path: Path,
+) -> None:
+    backup = _ScriptedRestic(
+        [_completed(0, stdout='{"message_type":"summary","snapshot_id":"snap1"}')]
+    )
+    _run_restic_backup(
+        state=_state_recording_events(tmp_path),
+        config=BackupConfig(
+            excludes=("**/only-this",), extra_excludes=("**/and-this",)
+        ),
+        snapshot=_direct_snapshot(),
+        env_overrides={},
+        backup_fn=backup,
+        unlock_fn=_ScriptedRestic([]),
+    )
+
+    assert backup.call_kwargs[0]["excludes"] == ("**/only-this", "**/and-this")
 
 
 _LOCK_STDERR = (
