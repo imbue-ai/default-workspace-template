@@ -60,6 +60,7 @@ from typing import Any, Literal
 
 from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.nudge import SilentNudger
+from detached_subprocess.runner import run_detached_subprocess, spawn_detached_process
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import PrivateAttr
@@ -174,7 +175,8 @@ def _spawn_xvfb() -> "tuple[str, subprocess.Popen[bytes]]":
     if number is None:
         raise BrowserStartupError("no free X display number for the browser")
     display = f":{number}"
-    xvfb = subprocess.Popen(
+    # ``_stop_xvfb`` terminates it by handle, which is what makes detaching safe.
+    xvfb = spawn_detached_process(
         ["Xvfb", display, "-screen", "0", f"{_FB_W}x{_FB_H}x24", "-nolisten", "tcp"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
@@ -225,7 +227,7 @@ def _ensure_pulse_daemon() -> bool:
     Returns whether it's reachable; never raises."""
     env = _pulse_env()
     try:
-        if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
+        if run_detached_subprocess(["pactl", "info"], timeout=5, env=env).returncode == 0:
             return True
         os.makedirs("/var/run/pulse", exist_ok=True)
         # Foreground daemon as a detached background process. A clean service stop signals
@@ -242,7 +244,7 @@ def _ensure_pulse_daemon() -> bool:
         )
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
+            if run_detached_subprocess(["pactl", "info"], timeout=5, env=env).returncode == 0:
                 return True
             time.sleep(0.2)
         return False
@@ -259,18 +261,14 @@ def _ensure_pulse_sink(sink_name: str) -> bool:
         return False
     env = _pulse_env()
     try:
-        listed = subprocess.run(
-            ["pactl", "list", "short", "sinks"], env=env, capture_output=True, text=True, timeout=5
-        )
+        listed = run_detached_subprocess(["pactl", "list", "short", "sinks"], timeout=5, env=env)
         if sink_name in listed.stdout:
             return True
-        subprocess.run(
+        run_detached_subprocess(
             ["pactl", "load-module", "module-null-sink", f"sink_name={sink_name}", "rate=48000", "channels=2"],
-            env=env, capture_output=True, timeout=10,
+            timeout=10, env=env,
         )
-        check = subprocess.run(
-            ["pactl", "list", "short", "sinks"], env=env, capture_output=True, text=True, timeout=5
-        )
+        check = run_detached_subprocess(["pactl", "list", "short", "sinks"], timeout=5, env=env)
         return sink_name in check.stdout
     except (OSError, subprocess.SubprocessError) as error:
         logger.warning("pulse sink {} setup failed ({}); streaming video only", sink_name, error)
@@ -282,13 +280,11 @@ def _unload_pulse_sink(sink_name: str) -> None:
     its sink. Blocking -- call via a thread. Best-effort; never raises."""
     env = _pulse_env()
     try:
-        listing = subprocess.run(
-            ["pactl", "list", "short", "modules"], env=env, capture_output=True, text=True, timeout=5
-        )
+        listing = run_detached_subprocess(["pactl", "list", "short", "modules"], timeout=5, env=env)
         for line in listing.stdout.splitlines():
             if "module-null-sink" in line and f"sink_name={sink_name}" in line:
                 index = line.split("\t", 1)[0].strip()
-                subprocess.run(["pactl", "unload-module", index], env=env, capture_output=True, timeout=5)
+                run_detached_subprocess(["pactl", "unload-module", index], timeout=5, env=env)
     except (OSError, subprocess.SubprocessError) as error:
         logger.debug("pulse sink {} unload ignored ({})", sink_name, error)
 

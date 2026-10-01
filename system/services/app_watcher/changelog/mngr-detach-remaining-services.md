@@ -1,0 +1,1 @@
+No behaviour change. The app watcher starts no child processes today, but it is a supervisord service like the rest, so this adds the check that a child started here later must run in its own session -- otherwise killing it could stop the watcher along with it.

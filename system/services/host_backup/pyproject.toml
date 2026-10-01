@@ -8,6 +8,8 @@ dependencies = [
     "loguru>=0.7.0",
     "imbue-common",
     "click>=8.1",
+    # The one way this service shells out: children in their own session.
+    "detached-subprocess",
 ]
 
 [project.scripts]

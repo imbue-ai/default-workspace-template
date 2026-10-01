@@ -11,6 +11,7 @@ last confirmed answer (see runner._refresh_visibility for that policy).
 import json
 import subprocess
 
+from detached_subprocess.runner import run_detached_subprocess
 from loguru import logger
 
 from github_sync.config import parse_owner_and_name
@@ -56,12 +57,8 @@ def check_repo_visibility(repo_url: str) -> str:
     # latchkey curl injects the GitHub credential server-side; -s keeps
     # stdout parseable.
     try:
-        result = subprocess.run(
-            ["latchkey", "curl", "-s", api_url],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_LATCHKEY_CURL_TIMEOUT_SECONDS,
+        result = run_detached_subprocess(
+            ["latchkey", "curl", "-s", api_url], timeout=_LATCHKEY_CURL_TIMEOUT_SECONDS
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.debug("latchkey curl failed: {}", e)

@@ -1,9 +1,26 @@
 """The one way a workspace service shells out: detached from the workspace's terminal.
 
-A service that adopts this runs every run-to-completion subprocess written in its own source
-through :func:`run_detached_command`, and carries a ratchet (``test_subprocess_ratchets.py``)
-that keeps it that way. The chat app and the system interface do; the workspace's other
-supervisord programs spawn attached and have the same exposure.
+A service that adopts this spawns every subprocess written in its own source through one of
+three entry points -- :func:`run_detached_command` for a command that runs to completion in a
+service built on ``ConcurrencyGroup``, :func:`run_detached_subprocess` for the same in a service
+that is not, :func:`spawn_detached_process` for a child that outlives the call -- and a ratchet
+that keeps it that way (``subprocess_ratchets_test.py``, or ``test_subprocess_ratchets.py`` in
+the chat app and the system interface). Every supervisord program whose Python source is in this
+repo does.
+
+Two things sit outside that. ``bootstrap`` is the foreground process group that owns the
+terminal rather than a child of it, so its children are foreground and cannot be stopped this
+way; and the ``oom_priority`` launchers ``exec`` into the service rather than spawning it, so
+there is no child to detach. The rules also scan Python only, so a supervisord program with a
+shell body -- ``owner-exec``, ``vm-exec-register``, and anything ``cron`` drives -- is not
+covered by them, whatever its exposure.
+
+Detaching at the top instead, once, is the alternative worth having considered: it would need no
+call-site changes and would keep process groups intact so supervisord still reaped everything.
+It is not reachable. Leaving a session requires forking, and every candidate is already a
+leader -- bootstrap ``exec``s supervisord from the tmux pane, and supervisord ``setpgrp``s each
+program before exec, so ``setsid`` returns EPERM in both places. Getting there means forking
+supervisord away from the pane, which breaks the contract that keeps the bootstrap window alive.
 
 Workspace services are started by supervisord, which puts each one into its own process group
 with ``setpgrp`` -- a new *group*, but the same session, so the service and everything it
@@ -43,8 +60,10 @@ could reach the terminal.
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import IO
 
 from imbue.concurrency_group.event_utils import MutableEvent
 from imbue.concurrency_group.subprocess_utils import (
@@ -83,4 +102,68 @@ def run_detached_command(
         shutdown_timeout_sec=shutdown_timeout_sec,
         name=name,
         is_detached_from_terminal=True,
+    )
+
+
+def run_detached_subprocess(
+    command: Sequence[str],
+    timeout: float | None = None,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """:func:`subprocess.run` with the child in its own session, capturing text output.
+
+    The stdlib-shaped counterpart to :func:`run_detached_command`, for a service that does not
+    otherwise use ``ConcurrencyGroup``. It keeps :class:`subprocess.CompletedProcess` as the
+    caller's currency and the stdlib's exceptions -- :class:`subprocess.TimeoutExpired` on a
+    timeout, :class:`OSError` when the binary is missing -- so adopting it changes only where
+    the child's session comes from.
+
+    Prefer :func:`run_detached_command` in a service already built on ``ConcurrencyGroup``: it
+    reports a timeout on the result rather than raising, and carries the trace callbacks and
+    shutdown-event plumbing this one has no way to express.
+    """
+    return subprocess.run(
+        list(command),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout,
+        env=dict(env) if env is not None else None,
+        cwd=cwd,
+        start_new_session=True,
+    )
+
+
+def spawn_detached_process(
+    command: Sequence[str],
+    stdout: int | IO[bytes] | None = None,
+    stderr: int | IO[bytes] | None = None,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> subprocess.Popen[bytes]:
+    """Start a long-lived child in its own session, returning its handle.
+
+    The counterpart to :func:`run_detached_command` for a process that outlives the call -- a
+    wrapped server, a display, a browser -- which cannot go through a runner that waits for the
+    command to finish.
+
+    Raises :class:`OSError` when the child cannot be spawned, exactly as :func:`subprocess.Popen`
+    does, so an existing handler keeps working.
+
+    The caller owns the child's death, and owes two things for it. Terminate it explicitly
+    (``terminate``/``kill``/``send_signal``): detaching puts it out of reach of the service's
+    process group, so supervisord's ``stopasgroup``/``killasgroup`` no longer reaps it and the
+    handle returned here is the only thing that does. And if the child holds a fixed port, sweep
+    for an orphan at startup -- a parent SIGKILLed for overrunning ``stopwaitsecs`` never runs its
+    own teardown, and the orphan then holds the port against the restarted service
+    (``chrome_launcher.reap_orphan`` is the worked example).
+    """
+    return subprocess.Popen(
+        list(command),
+        stdout=stdout,
+        stderr=stderr,
+        env=dict(env) if env is not None else None,
+        cwd=cwd,
+        start_new_session=True,
     )

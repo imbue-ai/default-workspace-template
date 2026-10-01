@@ -1,0 +1,1 @@
+GitHub sync now runs git and the latchkey CLI in their own sessions. When sync is enabled its tick loop shells out every minute, and a child that touched the workspace's terminal could stop the service along with it.

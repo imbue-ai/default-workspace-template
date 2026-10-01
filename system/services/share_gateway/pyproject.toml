@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "cryptography>=42",
+    # The one way this service shells out: children in their own session.
+    "detached-subprocess",
     "flask>=3.0",
     "httpx>=0.27",
     "pyjwt>=2.8",
