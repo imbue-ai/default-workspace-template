@@ -7,7 +7,7 @@
 import m from "mithril";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import { kebabGlyph, listGlyph } from "../glyphs";
-import { isRenaming, renameField, rowMenuRows } from "./ChatRail";
+import { isDeleting, isRenaming, renameField, rowMenuRows } from "./ChatRail";
 import type { RowMenuContext } from "./ChatRail";
 import type { ChatRow } from "./rows";
 
@@ -37,7 +37,9 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
     },
     view({ attrs }) {
       const { row } = attrs;
-      const hasVerbs = row !== null && !row.isProvisional;
+      // A chat being deleted offers nothing more, as its row in the list does not.
+      const isRowDeleting = row !== null && isDeleting(row.chatId);
+      const hasVerbs = row !== null && !row.isProvisional && !isRowDeleting;
       return m(
         "header",
         { class: "chat-header flex h-11 flex-none items-center gap-1 border-b border-default bg-page pr-2 pl-1.5" },
@@ -59,7 +61,8 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
                 "span",
                 {
                   class:
-                    "chat-header-title ml-1 min-w-0 flex-1 truncate text-(length:--font-size-body) font-semibold text-primary",
+                    "chat-header-title ml-1 min-w-0 flex-1 truncate text-(length:--font-size-body) font-semibold " +
+                    (isRowDeleting ? "text-danger line-through opacity-50" : "text-primary"),
                 },
                 row?.title ?? "Chats",
               ),

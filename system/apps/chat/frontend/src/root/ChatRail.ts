@@ -90,6 +90,11 @@ function beginRename(row: ChatRow): void {
   rename = { chatId: row.chatId, draft: row.title, error: null };
 }
 
+/** Whether ``chatId`` is being deleted: its delete was asked for and has not failed. */
+export function isDeleting(chatId: string): boolean {
+  return deletingChatIds.has(chatId);
+}
+
 /** Whether ``chatId`` is being renamed. */
 export function isRenaming(chatId: string): boolean {
   return rename !== null && rename.chatId === chatId;
