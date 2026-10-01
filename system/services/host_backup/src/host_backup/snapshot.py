@@ -6,10 +6,13 @@ Each mechanism implements the same `SnapshotTakerInterface` contract:
   in-container path; returns a `SnapshotResult` describing where restic
   should read.
 - `cleanup_after_backup()` reclaims snapshots after restic has read them and
-  returns the snapshot paths it deleted (for event logging). For
-  `outer_trigger` this retains the newest `max_local_snapshots` and deletes
-  the rest; for `btrfs_local` it deletes the single `current` snapshot; for
-  `direct` it is a no-op.
+  returns the snapshot paths it deleted (for event logging). No snapshot is
+  kept between ticks: the local snapshot is only restic's consistent read
+  source (history lives in the repository), and a retained one pins the
+  copy-on-write delta of everything deleted since it was taken -- under the
+  slice data disk's quota, that is space the workspace cannot reclaim.
+  `outer_trigger` deletes every snapshot it can list; `btrfs_local` deletes
+  the single `current` snapshot; `direct` is a no-op.
 
 The three concrete implementations are selected from `BackupCapabilities.method`
 (detected in memory at service startup; see `host_backup.capabilities`).
@@ -37,7 +40,7 @@ class SnapshotError(RuntimeError):
 
 
 class SnapshotCleanupError(SnapshotError):
-    """Raised when keep-N cleanup fails partway, carrying what was already deleted.
+    """Raised when the snapshot cleanup fails partway, carrying what was already deleted.
 
     Lets the runner log the deletions that did succeed (and which target failed)
     instead of losing that detail when the exception propagates.
@@ -213,12 +216,22 @@ class OuterTriggerSnapshotTaker(SnapshotTakerInterface):
     """Writes request.json, waits for the outer helper to produce result.json."""
 
     def take_snapshot(self) -> SnapshotResult:
+        # A leftover from a tick that died between its snapshot and its
+        # cleanup would pin quota (and eat the data disk's reserve) until the
+        # next cleanup; sweep it first. Best-effort: a failed sweep is logged
+        # and the backup proceeds, since the post-backup cleanup retries it.
+        try:
+            self._delete_all_snapshots()
+        except SnapshotError as e:
+            logger.warning(
+                "Could not sweep leftover snapshots before the backup: {}", e
+            )
         # Create a fresh, uniquely-named snapshot. We never reuse a path: under
         # gVisor the gofer caches a handle to the first subvolume it opens at a
         # given path, so deleting and recreating one path makes every snapshot
         # after the first read empty. The request id (a timestamp) doubles as
-        # the snapshot's directory name, and cleanup_after_backup garbage-
-        # collects old snapshots by name.
+        # the snapshot's directory name, and cleanup_after_backup deletes it
+        # by name.
         assert self.capabilities.snapshot_read_path is not None
         assert self.capabilities.snapshot_current_path is not None
         start = time.monotonic()
@@ -247,19 +260,22 @@ class OuterTriggerSnapshotTaker(SnapshotTakerInterface):
         )
 
     def cleanup_after_backup(self) -> tuple[str, ...]:
-        # Retain the newest `max_local_snapshots`; delete the rest by name. The
-        # parent of the configured read/current path is the snapshots dir (the
-        # `current` basename in the config is vestigial under the per-name
-        # scheme). We enumerate over the read mount -- listing the parent dir is
-        # reliable; only same-path inode swaps were affected by the gofer bug.
+        return self._delete_all_snapshots()
+
+    def _delete_all_snapshots(self) -> tuple[str, ...]:
+        """Delete every timestamped snapshot by name, oldest first; return the deleted outer paths.
+
+        The parent of the configured read/current path is the snapshots dir
+        (the `current` basename in the config is vestigial under the per-name
+        scheme). We enumerate over the read mount -- listing the parent dir is
+        reliable; only same-path inode swaps were affected by the gofer bug.
+        """
         assert self.capabilities.snapshot_read_path is not None
         assert self.capabilities.snapshot_current_path is not None
         read_dir = self.capabilities.snapshot_read_path.parent
         outer_dir = self.capabilities.snapshot_current_path.parent
-        names = _list_snapshot_names(read_dir)
-        surplus_count = max(0, len(names) - self.capabilities.max_local_snapshots)
         deleted: list[str] = []
-        for name in names[:surplus_count]:
+        for name in _list_snapshot_names(read_dir):
             result = self._do_request("cleanup", request_id=uuid4().hex, target=name)
             if result.exit_code != 0:
                 raise SnapshotCleanupError(

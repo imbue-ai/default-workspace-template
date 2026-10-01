@@ -1,0 +1,3 @@
+host_backup no longer keeps a btrfs snapshot between backup ticks (mngr-internal `new-fleet-phase-2`, slice-fleet cutover phase 2). Under `outer_trigger` the snapshot is deleted by name as soon as restic has read it, and a leftover from a tick that died before its cleanup is swept before the next snapshot is taken (best-effort; a failed sweep is logged and the backup proceeds).
+
+- The `max_local_snapshots` setting is removed. The local snapshot is only restic's consistent read source (history lives in the repository), and a retained one pins the copy-on-write delta of everything deleted since it was taken -- under the slice data disk's single workspace quota, space the workspace could not reclaim until the next tick.
