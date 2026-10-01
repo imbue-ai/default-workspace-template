@@ -81,6 +81,7 @@ const OPUS = {
   supports_fast: false,
   in_picker: true,
   harness_reported_model_id: null,
+  default_effort: null,
 };
 const ACCOUNT = {
   id: "acct-1",
