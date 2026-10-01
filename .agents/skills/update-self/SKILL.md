@@ -534,7 +534,8 @@ affected environments, re-runs `system/scripts/setup_system.sh` when a file it
 reads changed, pre-flights the merged backend (the shell, and the chat app in its
 side-effect-free `--preflight` mode, since the chat is the process that imports
 mngr and the harness plugins), installs or builds the frontend
-bundle, restarts the services
+bundle, waits up to 15 minutes for a backup tick already in flight (the
+restart would kill it), restarts the services
 agent (every apply; the fresh supervisord it brings up reads the merged program
 table, so a program the update adds starts on its own), probes the shell's health
 route and the health route of every critical app the user can open (the chat, the

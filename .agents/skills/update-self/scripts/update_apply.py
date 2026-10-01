@@ -1,7 +1,8 @@
 """``apply`` lands a prepared merge and makes the live workspace consistent with
 it, as one deterministic, idempotent, rollback-on-failure motion: merge,
 state snapshots, dependency refresh, provisioner run, frontend build (or the
-worker's already-built bundle), pre-flight, restart, health probes, the
+worker's already-built bundle), pre-flight, the wait for an in-flight backup tick,
+restart, health probes, the
 version-history ledger entry, and the environment converge. On any failure it
 reverts the entire merge and restores the pre-apply snapshots -- a recovery
 path needing no network, no package manager, and no working ``mngr``.
