@@ -69,6 +69,9 @@ dev = [
     "mngr-cli-contract",
     # Keeps tmp_path somewhere a stub executable can run (a workspace container mounts /tmp noexec).
     "pytest-executable-tmp",
+    # Fails a test that skips where the environment is meant to be complete
+    # (the CI job that runs the suites inside the workspace image).
+    "pytest-workspace-env",
 ]
 
 [tool.uv]
@@ -100,22 +103,23 @@ host-backup = { workspace = true }
 share-gateway = { workspace = true }
 mngr-cli-contract = { workspace = true }
 pytest-executable-tmp = { workspace = true }
+pytest-workspace-env = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
 # Apps that other members depend on (their test suites boot each other).
 system-interface = { workspace = true }
 chat = { workspace = true }
-imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "1399dfde1e4984c916eacbfd099b0071a802c416", subdirectory = "libs/imbue_common" }
-imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "1399dfde1e4984c916eacbfd099b0071a802c416", subdirectory = "libs/mngr" }
-imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "1399dfde1e4984c916eacbfd099b0071a802c416", subdirectory = "libs/mngr_claude" }
-imbue-mngr-codex = { git = "https://github.com/imbue-ai/mngr", rev = "1399dfde1e4984c916eacbfd099b0071a802c416", subdirectory = "libs/mngr_codex" }
-imbue-mngr-pi-coding = { git = "https://github.com/imbue-ai/mngr", rev = "1399dfde1e4984c916eacbfd099b0071a802c416", subdirectory = "libs/mngr_pi_coding" }
-imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr", rev = "1399dfde1e4984c916eacbfd099b0071a802c416", subdirectory = "libs/mngr_opencode" }
-imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "1399dfde1e4984c916eacbfd099b0071a802c416", subdirectory = "libs/mngr_antigravity" }
-imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "1399dfde1e4984c916eacbfd099b0071a802c416", subdirectory = "libs/mngr_autocompact" }
-concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "1399dfde1e4984c916eacbfd099b0071a802c416", subdirectory = "libs/concurrency_group" }
-imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "1399dfde1e4984c916eacbfd099b0071a802c416", subdirectory = "libs/mngr_ttyd" }
+imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "b9adf75086bcf0e2aeda5d88fa669fe4fc4c4670", subdirectory = "libs/imbue_common" }
+imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "b9adf75086bcf0e2aeda5d88fa669fe4fc4c4670", subdirectory = "libs/mngr" }
+imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "b9adf75086bcf0e2aeda5d88fa669fe4fc4c4670", subdirectory = "libs/mngr_claude" }
+imbue-mngr-codex = { git = "https://github.com/imbue-ai/mngr", rev = "b9adf75086bcf0e2aeda5d88fa669fe4fc4c4670", subdirectory = "libs/mngr_codex" }
+imbue-mngr-pi-coding = { git = "https://github.com/imbue-ai/mngr", rev = "b9adf75086bcf0e2aeda5d88fa669fe4fc4c4670", subdirectory = "libs/mngr_pi_coding" }
+imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr", rev = "b9adf75086bcf0e2aeda5d88fa669fe4fc4c4670", subdirectory = "libs/mngr_opencode" }
+imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "b9adf75086bcf0e2aeda5d88fa669fe4fc4c4670", subdirectory = "libs/mngr_antigravity" }
+imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "b9adf75086bcf0e2aeda5d88fa669fe4fc4c4670", subdirectory = "libs/mngr_autocompact" }
+concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "b9adf75086bcf0e2aeda5d88fa669fe4fc4c4670", subdirectory = "libs/concurrency_group" }
+imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "b9adf75086bcf0e2aeda5d88fa669fe4fc4c4670", subdirectory = "libs/mngr_ttyd" }
 
 [tool.pytest.ini_options]
 testpaths = ["."]
@@ -131,9 +135,8 @@ norecursedirs = [
     # collecting one alongside the in-tree copy kills a bare `uv run pytest`
     # with an import-file basename collision.
     "data",
-    # Test scratch, never part of the suite, and the same collision as above: an
-    # interrupted test_nested_dispatch_live.py run leaves a full clone of the
-    # tree here.
+    # Test scratch, never part of the suite, and the same collision as above when
+    # an interrupted run leaves a clone of the tree here.
     ".test_output",
     ".git",
     ".claude",
@@ -155,7 +158,9 @@ timeout_func_only = true
 # Each app's pyproject declares the same markers for its own run.
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
-    "release: marks tests as being required for release (but not for merging PRs)",
+    "browser: marks tests that drive a browser",
+    "frontend: marks tests that read an app's frontend source",
+    "real_claude: marks tests that run the real claude binary",
     "flaky: marks tests as known-flaky (retried by offload with a separate retry count)",
 ]
 addopts = [
