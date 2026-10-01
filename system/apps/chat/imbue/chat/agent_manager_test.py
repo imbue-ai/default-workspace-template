@@ -5666,7 +5666,7 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
 
         spare_pid_writes = [adj for pid, adj in adj_writes if pid == spare_pid]
         assert spare_pid_writes != []
-        assert bands.CHAT_AGENT_FLOOR <= spare_pid_writes[-1] <= bands.CHAT_AGENT_STALE_CEILING
+        assert spare_pid_writes[-1] == bands.CHAT_AGENT_FLOOR
         assert [adj for pid, adj in adj_writes if pid == harness_child_pid][-1:] == [bands.CHAT_AGENT_BASE]
         adj_writes.clear()
         manager.ensure_spare_chat()
@@ -5700,7 +5700,7 @@ def test_a_spare_claimed_while_it_starts_takes_the_chat_band_once_its_chat_settl
         assert manager.wait_for_chat_creation(created.chat_id, timeout=15.0) == ChatCreationOutcome(is_created=True)
 
         spare_pid_writes = [adj for pid, adj in adj_writes if pid == spare_pid]
-        assert bands.CHAT_AGENT_FLOOR <= spare_pid_writes[-1] <= bands.CHAT_AGENT_STALE_CEILING
+        assert spare_pid_writes[-1] == bands.CHAT_AGENT_FLOOR
         assert [adj for pid, adj in adj_writes if pid == harness_child_pid] == [bands.CHAT_AGENT_BASE]
         adj_writes.clear()
         manager.ensure_spare_chat()
