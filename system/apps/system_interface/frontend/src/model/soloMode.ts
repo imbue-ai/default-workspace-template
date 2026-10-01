@@ -2,8 +2,9 @@
  * Solo mode (the pull-out-window spec, section 7.5): ``/?solo=<window-id>`` asks the shell to show that one
  * window edge to edge and nothing else, which is what a pulled-out window's desktop window loads. The chrome
  * adds ``reopened=1`` when it reopened that desktop window rather than tearing the window out just now (a
- * session restore at launch or when the app is reopened, a backend retry). Both stay in the URL, so any reload of the page (the
- * interface reload, the browser's own) comes back as the same pop-out; this module only reads them.
+ * session restore at launch or when the app is reopened, a backend retry). Both stay in the URL, so any reload
+ * of the page (the interface reload, the browser's own) comes back as the same pop-out; this module only reads
+ * them.
  */
 
 const SOLO_PARAM = "solo";
