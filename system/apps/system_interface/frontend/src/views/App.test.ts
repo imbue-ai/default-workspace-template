@@ -602,11 +602,17 @@ describe("the desktop shortcut rows", () => {
     expect(shownApps()).toEqual([]);
     await settle();
     expect(shownApps()).toEqual(["docs"]);
+    const toastMessages = (): string[] => store.toasts.current().map((toast) => toast.message);
+    expect(toastMessages()).toEqual(["Could not remove the shortcut: the shell said no"]);
 
     void store.addShortcut("docs", "other", "focus");
     expect(shownApps()).toEqual(["docs", "docs"]);
     await settle();
     expect(shownApps()).toEqual(["docs"]);
+    expect(toastMessages()).toEqual([
+      "Could not remove the shortcut: the shell said no",
+      "Could not add the shortcut: the shell said no",
+    ]);
   });
 
   it("keeps a shortcut a broadcast put on the desktop while a refused add was in flight", async () => {
