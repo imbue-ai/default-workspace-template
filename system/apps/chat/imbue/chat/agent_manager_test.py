@@ -5194,6 +5194,45 @@ def test_a_new_chat_that_brings_a_message_sends_it_to_the_handed_spare(
         manager.stop()
 
 
+def test_a_chat_handed_a_ready_spare_is_settled_only_once_its_first_message_is_delivered(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, _ = write_recording_mngr_binary(tmp_path)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    delivery_release = threading.Event()
+    delivered: list[str] = []
+
+    def held_deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        delivery_release.wait(timeout=15.0)
+        delivered.append(text)
+        return SendOutcome.OK
+
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=held_deliver,
+        )
+    )
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+
+        created = manager.create_chat("", message="Book the venue 8823")
+
+        assert created.chat_id == spare.chat_id
+        assert not manager._creation_settled_by_chat[created.chat_id].wait(timeout=0.5)
+        assert delivered == []
+
+        delivery_release.set()
+
+        assert manager.wait_for_chat_creation(created.chat_id, timeout=15.0) == ChatCreationOutcome(is_created=True)
+        assert delivered == ["Book the venue 8823"]
+    finally:
+        delivery_release.set()
+        manager.stop()
+
+
 def test_a_rename_addressed_to_a_spare_name_leaves_the_spare_alone(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

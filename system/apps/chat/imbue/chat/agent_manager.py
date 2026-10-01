@@ -3253,8 +3253,8 @@ class AgentManager:
             self._broadcast_chats_updated()
             if model_pick is not None or message:
                 self._creation_cg.start_new_thread(
-                    target=self._settle_new_chat,
-                    args=(spare.chat_id, str(spare.chat_id), model_pick, message),
+                    target=self._settle_handed_spare,
+                    args=(spare.chat_id, model_pick, message),
                     name=f"settle-{str(spare.chat_id)[:8]}",
                     is_checked=False,
                 )
@@ -3297,8 +3297,10 @@ class AgentManager:
         provisional: ProvisionalChat | None = None
         settled = threading.Event()
         if is_ready:
-            # ``should_wait`` waits on this: the chat's agent is already up.
-            settled.set()
+            # ``should_wait`` waits on this. The agent is already up, so it is settled now unless a
+            # pick or a first message is still to be handed to it (``_settle_handed_spare``).
+            if model_pick is None and not message:
+                settled.set()
         else:
             self._spare_claim_by_chat[spare.chat_id] = _SpareClaim(message=message, model_pick=model_pick)
             provisional = ProvisionalChat(
@@ -3314,6 +3316,17 @@ class AgentManager:
         if any(self._is_spare_usable_locked(ready, terms) for ready in self._spares):
             self._spare_replenish_not_before = time.monotonic() + SPARE_CHAT_REPLENISH_DELAY_SECONDS
         return spare, provisional
+
+    def _settle_handed_spare(self, chat_id: ChatId, model_pick: ModelPick | None, message: str) -> None:
+        """Hand a chat that took a ready spare its pick and first message, then mark its creation settled,
+        so a create that waits answers only once the first message is in, as a create of its own does."""
+        try:
+            self._settle_new_chat(chat_id, str(chat_id), model_pick, message)
+        finally:
+            with self._lock:
+                settled = self._creation_settled_by_chat.get(chat_id)
+            if settled is not None:
+                settled.set()
 
     def ensure_spare_chat(self) -> None:
         """Keep the pool of spare agents full on the terms the next new chat would get.
