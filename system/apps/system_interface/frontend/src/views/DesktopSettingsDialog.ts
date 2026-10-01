@@ -35,6 +35,9 @@ export interface DesktopSettingsDialogAttrs {
   ) => Promise<void>;
   readonly onDelete: () => Promise<void>;
   readonly onCancel: () => void;
+  /** Show a picked theme before it is saved; null when the dialog closes, which puts back whatever
+   *  the desktop has saved by then. */
+  readonly onPreviewTheme: (theme: UiTheme | null) => void;
 }
 
 function normalizedGlyphIndex(glyph: number): number {
@@ -179,7 +182,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
   }
 
   /** One look to pick, previewed by the file-folder icon it draws (the standard look's has none). */
-  function themeChoice(choice: (typeof UI_THEMES)[number]): m.Vnode {
+  function themeChoice(attrs: DesktopSettingsDialogAttrs, choice: (typeof UI_THEMES)[number]): m.Vnode {
     const isSelected = choice.name === theme;
     const previewUrl = retroIconUrlFor(choice.name, "files");
     return m(
@@ -193,6 +196,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
         "aria-pressed": isSelected ? "true" : "false",
         onclick() {
           theme = choice.name;
+          attrs.onPreviewTheme(theme);
         },
       },
       [
@@ -270,6 +274,9 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
       theme = desktop.theme;
       isConfirmingDelete = vnode.attrs.isDeleting;
     },
+    onremove(vnode) {
+      vnode.attrs.onPreviewTheme(null);
+    },
     view(vnode) {
       const attrs = vnode.attrs;
       const trimmedName = name.trim();
@@ -320,7 +327,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
           m("label", { class: MODAL_LABEL_CLASS }, "Wallpaper"),
           m("div", { class: "mb-3" }, wallpaperPicker(attrs)),
           m("label", { class: MODAL_LABEL_CLASS }, "Theme"),
-          m("div", { class: "mb-3 flex flex-wrap gap-2" }, UI_THEMES.map(themeChoice)),
+          m("div", { class: "mb-3 flex flex-wrap gap-2" }, UI_THEMES.map((choice) => themeChoice(attrs, choice))),
           error ? m("p", { class: "type-helper mt-1 text-danger" }, error) : null,
           isConfirmingDelete
             ? m("p", { class: MODAL_MESSAGE_CLASS }, [

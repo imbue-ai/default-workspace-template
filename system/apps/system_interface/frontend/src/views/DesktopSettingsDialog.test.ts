@@ -17,6 +17,7 @@ function render(overrides: Partial<DesktopSettingsDialogAttrs> = {}): DesktopSet
     onSave: vi.fn(async () => undefined),
     onDelete: vi.fn(async () => undefined),
     onCancel: vi.fn(),
+    onPreviewTheme: vi.fn(),
     ...overrides,
   };
   mountView(() => m(DesktopSettingsDialog, attrs));
@@ -72,6 +73,15 @@ describe("DesktopSettingsDialog", () => {
       { kind: "bundled", name: "dawn" },
       "windows-2000",
     );
+  });
+
+  it("previews a picked theme at once and drops the preview when the dialog closes", () => {
+    const attrs = render();
+    (card().querySelector('[data-theme="mac-classic"]') as HTMLButtonElement).click();
+    expect(attrs.onPreviewTheme).toHaveBeenLastCalledWith("mac-classic");
+    expect(attrs.onSave).not.toHaveBeenCalled();
+    unmountViews();
+    expect(attrs.onPreviewTheme).toHaveBeenLastCalledWith(null);
   });
 
   it("does not save a blank name: Save is disabled and Enter posts nothing", async () => {

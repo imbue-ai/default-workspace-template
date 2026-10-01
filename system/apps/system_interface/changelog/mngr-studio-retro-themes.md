@@ -1,4 +1,4 @@
-Desktop settings has a new **Theme** choice: Standard, **Classic Mac** (built on system.css), or **Windows 2000** (built on win95.css, in the Windows 2000 face gray). Each desktop keeps its own theme, and switching restyles the desktop at once for everyone looking at it.
+Desktop settings has a new **Theme** choice: Standard, **Classic Mac** (built on system.css), or **Windows 2000** (built on win95.css, in the Windows 2000 face gray). Picking a theme previews it on the desktop straight away; Save keeps it, and Cancel or closing the dialog puts the saved theme back. Each desktop keeps its own theme, and a saved switch restyles the desktop at once for everyone looking at it.
 
 - Classic Mac: black-and-white windows with pinstriped title bars on the focused window, rounded System 6 buttons, a one-pixel gray dither desktop, Chicago type, and Finder-style icon labels.
 

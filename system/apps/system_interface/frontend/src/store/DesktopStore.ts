@@ -314,6 +314,8 @@ export class DesktopStore {
   private isLauncherOpenNow = false;
   // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
   private replacedDesktop: ReplacedDesktop | null = null;
+  /** A theme picked in a desktop's settings and not yet saved: shown while that desktop is on screen. */
+  private themePreview: { readonly desktopId: string; readonly theme: UiTheme } | null = null;
   private readonly listeners = new Set<Listener>();
   private readonly saveIds = new SaveIdMinter();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -960,6 +962,19 @@ export class DesktopStore {
 
   async setDesktopTheme(desktopId: string, theme: UiTheme): Promise<void> {
     this.takeDesktop(await this.deps.api.setDesktopTheme(desktopId, theme));
+  }
+
+  /** Show `theme` on a desktop before it is saved, or (null) go back to its saved theme. */
+  previewDesktopTheme(desktopId: string, theme: UiTheme | null): void {
+    this.themePreview = theme === null ? null : { desktopId, theme };
+    this.deps.redraw();
+  }
+
+  /** The theme to draw this client in: the active desktop's, or the one previewed on it. */
+  shownTheme(): UiTheme | null {
+    const desktop = activeDesktop(this.state);
+    if (desktop === null) return null;
+    return this.themePreview?.desktopId === desktop.id ? this.themePreview.theme : desktop.theme;
   }
 
   /** Delete a desktop; the shell moves this client to the fallback and says so over the socket. */

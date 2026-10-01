@@ -26,7 +26,6 @@ import { PointerGestureSource } from "./gestures/pointerGestures";
 import { startPresenceHeartbeat } from "./model/Presence";
 import { initEmbedderRelay } from "./relay";
 import { reloadInterface } from "./reload";
-import { activeDesktop } from "./reducers/desktopState";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
 import { applyUiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
@@ -83,7 +82,7 @@ function bootstrap(): void {
   // metric tokens (the title bar height), so the metrics the geometry reads are taken again under it.
   const followDesktopTheme = (): void => {
     if (store === null) return;
-    if (!applyUiTheme(root, activeDesktop(store.getState())?.theme)) return;
+    if (!applyUiTheme(root, store.shownTheme())) return;
     store.setThemeMetrics(readThemeMetrics(readStyle(root)), currentRenderModes(root));
   };
   followRenderModes(

@@ -803,6 +803,7 @@ export function App(): m.Component<AppAttrs> {
       onCancel: () => {
         settingsDialog = null;
       },
+      onPreviewTheme: (theme) => current.previewDesktopTheme(desktop.id, theme),
     });
   }
 
