@@ -18,7 +18,6 @@ import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from oom_priority.proctree import list_descendant_pids
-from oom_priority.registry import lookup_pid_by_agent_id
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import account_dir
@@ -44,6 +43,7 @@ from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import chat_status_for_agent
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
+from imbue.chat.agent_manager import live_registered_pids_of_agent
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
@@ -5139,7 +5139,7 @@ def _spare_manager(
     pool_size: int,
     *,
     oom_score_adj_writer: Callable[[int, int], bool] = bands.set_oom_score_adj,
-    agent_pid_resolver: Callable[[str], int | None] = lookup_pid_by_agent_id,
+    agent_pids_resolver: Callable[[str], list[int]] = live_registered_pids_of_agent,
     descendant_pid_lister: Callable[[int], list[int]] = list_descendant_pids,
     is_secondary: bool = False,
 ) -> tuple[AgentManager, SpareChatStore]:
@@ -5158,7 +5158,7 @@ def _spare_manager(
         spare_chat_store=spare_store,
         spare_chat_pool_size=pool_size,
         oom_score_adj_writer=oom_score_adj_writer,
-        agent_pid_resolver=agent_pid_resolver,
+        agent_pids_resolver=agent_pids_resolver,
         descendant_pid_lister=descendant_pid_lister,
         is_secondary=is_secondary,
     )
@@ -5249,11 +5249,11 @@ def _record_cut_short_spare(tmp_path: Path) -> SpareChatAgent:
 
 def _band_recording_spare_manager(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mngr_binary: str
-) -> tuple[AgentManager, list[tuple[int, int]], dict[str, int], dict[int, list[int]]]:
-    """A one-spare manager whose ``oom_score_adj`` writes land in the returned list, with the agents' pids
-    and each pid's descendants read from the returned maps (empty until a test fills them)."""
+) -> tuple[AgentManager, list[tuple[int, int]], dict[str, list[int]], dict[int, list[int]]]:
+    """A one-spare manager whose ``oom_score_adj`` writes land in the returned list, with the agents' registered
+    pids and each pid's descendants read from the returned maps (empty until a test fills them)."""
     adj_writes: list[tuple[int, int]] = []
-    pid_by_agent_id: dict[str, int] = {}
+    pids_by_agent_id: dict[str, list[int]] = {}
     descendant_pids_by_pid: dict[int, list[int]] = {}
 
     def record_adj_write(pid: int, adj: int) -> bool:
@@ -5267,10 +5267,10 @@ def _band_recording_spare_manager(
         mngr_binary,
         1,
         oom_score_adj_writer=record_adj_write,
-        agent_pid_resolver=pid_by_agent_id.get,
+        agent_pids_resolver=lambda agent_id: pids_by_agent_id.get(agent_id, []),
         descendant_pid_lister=lambda pid: descendant_pids_by_pid.get(pid, []),
     )
-    return manager, adj_writes, pid_by_agent_id, descendant_pids_by_pid
+    return manager, adj_writes, pids_by_agent_id, descendant_pids_by_pid
 
 
 @pytest.mark.parametrize("pool_size", [1, 2])
@@ -5914,7 +5914,7 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
-    manager, adj_writes, pid_by_agent_id, descendant_pids_by_pid = _band_recording_spare_manager(
+    manager, adj_writes, pids_by_agent_id, descendant_pids_by_pid = _band_recording_spare_manager(
         broadcaster, monkeypatch, tmp_path, mngr_binary
     )
     try:
@@ -5923,13 +5923,18 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
         spare_pid = 48213
         # A subprocess its harness spawned while it waited.
         harness_child_pid = 48215
-        pid_by_agent_id[spare.chat_id] = spare_pid
+        # A second pid it registered (codex's app-server daemon), with a subprocess of its own.
+        daemon_pid = 48217
+        daemon_child_pid = 48219
+        pids_by_agent_id[spare.chat_id] = [spare_pid, daemon_pid]
         descendant_pids_by_pid[spare_pid] = [harness_child_pid]
+        descendant_pids_by_pid[daemon_pid] = [daemon_child_pid]
+        spare_tree = (spare_pid, harness_child_pid, daemon_pid, daemon_child_pid)
 
         manager.ensure_spare_chat()
 
         # The spare's creation thread sweeps once more after it is ready, and may tag it again.
-        assert set(adj_writes) == {(spare_pid, bands.SPARE_AGENT), (harness_child_pid, bands.SPARE_AGENT)}
+        assert set(adj_writes) == {(pid, bands.SPARE_AGENT) for pid in spare_tree}
         adj_writes.clear()
 
         assert manager.create_chat("").chat_id == spare.chat_id
@@ -5937,10 +5942,11 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
         spare_pid_writes = [adj for pid, adj in adj_writes if pid == spare_pid]
         assert spare_pid_writes != []
         assert spare_pid_writes[-1] == bands.CHAT_AGENT_FLOOR
-        assert [adj for pid, adj in adj_writes if pid == harness_child_pid][-1:] == [bands.CHAT_AGENT_BASE]
+        for moved_pid in (harness_child_pid, daemon_pid, daemon_child_pid):
+            assert [adj for pid, adj in adj_writes if pid == moved_pid][-1:] == [bands.CHAT_AGENT_BASE]
         adj_writes.clear()
         manager.ensure_spare_chat()
-        assert bands.SPARE_AGENT not in [adj for pid, adj in adj_writes if pid in (spare_pid, harness_child_pid)]
+        assert bands.SPARE_AGENT not in [adj for pid, adj in adj_writes if pid in spare_tree]
     finally:
         manager.stop()
 
@@ -5949,7 +5955,7 @@ def test_a_spare_claimed_while_it_starts_leaves_the_spare_band_at_once_and_is_en
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, _argv_log = _write_booting_mngr_binary(tmp_path)
-    manager, adj_writes, pid_by_agent_id, descendant_pids_by_pid = _band_recording_spare_manager(
+    manager, adj_writes, pids_by_agent_id, descendant_pids_by_pid = _band_recording_spare_manager(
         broadcaster, monkeypatch, tmp_path, mngr_binary
     )
     manager.set_handoff_capabilities(_handoff_capabilities([]))
@@ -5958,7 +5964,7 @@ def test_a_spare_claimed_while_it_starts_leaves_the_spare_band_at_once_and_is_en
         booting = _wait_for_created_spare(manager)
         spare_pid = 48214
         harness_child_pid = 48216
-        pid_by_agent_id[booting.chat_id] = spare_pid
+        pids_by_agent_id[booting.chat_id] = [spare_pid]
         descendant_pids_by_pid[spare_pid] = [harness_child_pid]
         manager.ensure_spare_chat()
         assert set(adj_writes) >= {(spare_pid, bands.SPARE_AGENT), (harness_child_pid, bands.SPARE_AGENT)}

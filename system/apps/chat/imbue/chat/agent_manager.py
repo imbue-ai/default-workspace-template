@@ -20,7 +20,7 @@ from oom_priority.bands import CHAT_AGENT_BASE
 from oom_priority.bands import SPARE_AGENT
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.proctree import list_descendant_pids
-from oom_priority.registry import lookup_pid_by_agent_id
+from oom_priority.registry import live_pids_by_agent_id
 from pydantic import Field
 
 from imbue.chat.accounts import Account
@@ -308,6 +308,12 @@ def _chat_project_label(primary_labels: dict[str, str], project_id: str) -> str:
     if project_id:
         return project_id
     return primary_labels.get("project", "")
+
+
+def live_registered_pids_of_agent(agent_id: str) -> list[int]:
+    """Every live pid mngr's launch wrapper registered for an agent id: one for most harnesses, two for codex
+    (its TUI and its app-server daemon). The first is the one the chat prioritizer re-tags."""
+    return live_pids_by_agent_id().get(agent_id, [])
 
 
 @pure
@@ -886,8 +892,8 @@ class AgentManager:
     # Writes a pid's ``oom_score_adj`` (the spares' shedding band, and the chat prioritizer's);
     # None in a secondary chat, whose writes would be the live chat's.
     _oom_score_adj_writer: Callable[[int, int], bool] | None
-    # The live main-process pid mngr's launch wrapper registered for an agent id, or None.
-    _resolve_agent_pid: Callable[[str], int | None]
+    # Every live pid mngr's launch wrapper registered for an agent id (``live_registered_pids_of_agent``).
+    _resolve_agent_pids: Callable[[str], list[int]]
     _list_descendant_pids: Callable[[int], list[int]]
     # The spares whose ``mngr destroy`` is running, so a sweep does not start a second one.
     _spare_ids_being_discarded: set[ChatId]
@@ -1016,7 +1022,7 @@ class AgentManager:
         spare_chat_store: SpareChatStore | None = None,
         spare_chat_pool_size: int = SPARE_CHAT_POOL_SIZE,
         oom_score_adj_writer: Callable[[int, int], bool] = set_oom_score_adj,
-        agent_pid_resolver: Callable[[str], int | None] = lookup_pid_by_agent_id,
+        agent_pids_resolver: Callable[[str], list[int]] = live_registered_pids_of_agent,
         descendant_pid_lister: Callable[[int], list[int]] = list_descendant_pids,
     ) -> Self:
         """Build an AgentManager with the given broadcaster.
@@ -1042,7 +1048,7 @@ class AgentManager:
         refuses every switch (a handoff or a rebind), since its chat records are a scratch copy.
         ``spare_chat_store`` records the spare agents a new chat is handed (``spare_chat.py``);
         None keeps none. ``spare_chat_pool_size`` is how many idle spares it keeps.
-        ``oom_score_adj_writer``, ``agent_pid_resolver``, and ``descendant_pid_lister`` are how
+        ``oom_score_adj_writer``, ``agent_pids_resolver``, and ``descendant_pid_lister`` are how
         the agents' memory-shedding bands are written: the real ``/proc`` writer, pid registry,
         and process-tree walk unless a test passes its own.
         """
@@ -1074,7 +1080,7 @@ class AgentManager:
         manager._spare_replenish_not_before = 0.0
         manager._spare_chat_pool_size = spare_chat_pool_size
         manager._oom_score_adj_writer = None if is_secondary else oom_score_adj_writer
-        manager._resolve_agent_pid = agent_pid_resolver
+        manager._resolve_agent_pids = agent_pids_resolver
         manager._list_descendant_pids = descendant_pid_lister
         manager._chat_files_root = chat_files_root
         manager._prompt_template_path = prompt_template_path
@@ -1143,7 +1149,8 @@ class AgentManager:
     def _resolve_active_pid(self, chat_id: ChatId) -> int | None:
         """The pid of the process a chat runs on, for the OOM prioritizer; None for a chat with no active agent."""
         active_agent_id = self._active_agent_id_of_chat(chat_id)
-        return None if active_agent_id is None else self._resolve_agent_pid(active_agent_id)
+        pids = [] if active_agent_id is None else self._resolve_agent_pids(active_agent_id)
+        return pids[0] if pids else None
 
     def _active_agent_id_of_chat(self, chat_id: ChatId) -> str | None:
         """The agent a chat runs on, from its record, else the chat's own id under the own-chat rule.
@@ -3569,8 +3576,9 @@ class AgentManager:
 
     def _tag_spares_for_shedding_first(self) -> None:
         """Put every spare's process tree in the ``SPARE_AGENT`` band, the first to be shed under memory
-        pressure. Rewritten on every sweep, since a restart of the agent relaunches it in the chat band,
-        and the subprocesses its harness spawned before a write keep the band they started in."""
+        pressure: every pid it registered (codex registers two) and their descendants. Rewritten on every
+        sweep, since a restart of the agent relaunches it in the chat band, and the subprocesses its harness
+        spawned before a write keep the band they started in."""
         writer = self._oom_score_adj_writer
         if writer is None:
             return
@@ -3578,9 +3586,11 @@ class AgentManager:
             spare_ids = [spare.chat_id for spare in pooled_spares(self._spares)]
         pids_by_spare_id: dict[ChatId, list[int]] = {}
         for spare_id in spare_ids:
-            pid = self._resolve_agent_pid(str(spare_id))
-            if pid is not None:
-                pids_by_spare_id[spare_id] = [pid, *self._list_descendant_pids(pid)]
+            pids_by_spare_id[spare_id] = [
+                pid
+                for root_pid in self._resolve_agent_pids(str(spare_id))
+                for pid in (root_pid, *self._list_descendant_pids(root_pid))
+            ]
         # Written under the lock, and only for a spare still pooled: a hand-over takes the spare under
         # it and moves it into the chat band after.
         with self._lock:
@@ -3593,26 +3603,28 @@ class AgentManager:
     def _move_handed_spare_into_chat_band(self, chat_id: ChatId) -> None:
         """Move a spare a chat just took out of the ``SPARE_AGENT`` band, as a chat just started.
 
-        The chat prioritizer moves its main process. The subprocesses its harness spawned while
+        The chat prioritizer moves its main process (the first pid it registered). Its other
+        registered pid (codex's app-server daemon) and the subprocesses its harness spawned while
         it waited are in ``SPARE_AGENT`` too and the prioritizer does not re-tag them, so they are
-        brought down to the chat launch band, where a chat's harness subprocesses start. The main
-        process moves first, so a subprocess spawned meanwhile inherits the chat band.
+        brought down to the chat launch band, where a chat's harness processes start. Each process
+        moves before its subprocesses, so one spawned meanwhile inherits the chat band.
         """
         self._oom_prioritizer.record_chat_started(chat_id)
         self._move_spare_tree_into_chat_launch_band(chat_id, is_main_process_moved=False)
 
     def _move_spare_tree_into_chat_launch_band(self, chat_id: ChatId, is_main_process_moved: bool) -> None:
-        """Write the chat launch band (``CHAT_AGENT_BASE``) to a taken spare's harness subprocesses, and to its
-        main process first when ``is_main_process_moved``. Nothing for an agent with no registered pid yet: the
-        launch wrapper starts it in the chat band, and a spare no longer pooled is never tagged again."""
+        """Write the chat launch band (``CHAT_AGENT_BASE``) to a taken spare's registered pids and their
+        subprocesses, leaving its main process (the first pid) to the prioritizer unless ``is_main_process_moved``.
+        Nothing for an agent with no registered pid yet: the launch wrapper starts it in the chat band, and a
+        spare no longer pooled is never tagged again."""
         writer = self._oom_score_adj_writer
-        pid = None if writer is None else self._resolve_agent_pid(str(chat_id))
-        if writer is None or pid is None:
+        if writer is None:
             return
-        if is_main_process_moved:
-            writer(pid, CHAT_AGENT_BASE)
-        for descendant_pid in self._list_descendant_pids(pid):
-            writer(descendant_pid, CHAT_AGENT_BASE)
+        for index, root_pid in enumerate(self._resolve_agent_pids(str(chat_id))):
+            if index > 0 or is_main_process_moved:
+                writer(root_pid, CHAT_AGENT_BASE)
+            for descendant_pid in self._list_descendant_pids(root_pid):
+                writer(descendant_pid, CHAT_AGENT_BASE)
 
     def _follow_live_spares(self, live_spare_store: SpareChatStore) -> None:
         """A secondary chat's view of the live chat's spares: re-read on every sweep, so a spare the
