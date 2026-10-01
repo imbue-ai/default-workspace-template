@@ -404,6 +404,32 @@ describe("the switch dialog", () => {
     ]);
   });
 
+  it("starts a rebind's new chat on the default effort this chat runs at when it never picked one", async () => {
+    // codex records no effort until one is picked, and a pick for a model with efforts must name one.
+    const otherCodex = { ...CODEX, id: "acct-openai-2", label: "OpenAI 2 (Codex)" };
+    state.accounts = [CODEX, otherCodex];
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: {
+        harness: "codex",
+        account_id: CODEX.id,
+        model_choice: {
+          identity: { model_id: "gpt-6-astra", effort: null, fast: false },
+          matched: { ...ASTRA, default_effort: "high" },
+        },
+      },
+    });
+    state.draft = "a fresh start";
+    openSwitchDialog("agent-1", otherCodex as ProviderAccount);
+    render();
+    await flush();
+    render();
+    pressButton("Start a new chat");
+    await flush();
+    expect(state.started).toEqual([
+      ["acct-openai-2", "a fresh start", { model_id: "gpt-6-astra", effort: "high", fast: false }],
+    ]);
+  });
+
   it("starts a rebind's new chat with no pick on a harness whose model the chat app cannot switch", async () => {
     // agy's model is changed from the agent's terminal: carrying the chat's model over would be a pick the
     // new chat could never apply.

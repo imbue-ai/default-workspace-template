@@ -32,6 +32,12 @@ export interface CatalogModelOption {
   harness_reported_model_id: string | null;
 }
 
+/** The effort an agent is running at: the one it recorded, else its model's default. A harness that
+ *  records no effort until one is picked (codex) runs at the default meanwhile. */
+export function effortInEffect(recordedEffort: string | null, option: CatalogModelOption | null): string | null {
+  return recordedEffort ?? option?.default_effort ?? null;
+}
+
 // A popup the harness declared for the chat UI (see HarnessSpec.popups on the
 // backend). `composer_command` popups match a typed message's first token against
 // `commands` at send time; the `turn_check` popup is the fast-mode turn-limit

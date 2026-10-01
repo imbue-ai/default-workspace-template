@@ -27,7 +27,8 @@ vi.mock("../models/Chats", () => ({
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
-vi.mock("../models/HarnessCatalog", () => ({
+vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/HarnessCatalog")>()),
   ensureHarnessCatalogs: () => undefined,
   getHarnessCatalog: (harness?: string) => (harness === undefined ? null : catalogState.catalog),
 }));

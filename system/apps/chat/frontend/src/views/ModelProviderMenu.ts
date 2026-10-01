@@ -27,7 +27,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getChatById, getProvisionalChat } from "../models/Chats";
 import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
-import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
+import { effortInEffect, ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import type { ChatFastModeState } from "../models/FastMode";
 import {
   FAST_MODES,
@@ -95,12 +95,6 @@ function clampEffort(option: CatalogModelOption, currentEffort: string | null): 
   }
   const shown = option.efforts.filter((effort) => effort.in_picker);
   return (shown[0] ?? option.efforts[0]).level;
-}
-
-/** The effort an agent is running at: the one it recorded, else its model's default. A harness that
- *  records no effort until one is picked (codex) runs at the default meanwhile. */
-function effortInEffect(recordedEffort: string | null, option: CatalogModelOption | null): string | null {
-  return recordedEffort ?? option?.default_effort ?? null;
 }
 
 /** The model a switch in progress is taking the chat to, as the chip reads it; null when the chat
