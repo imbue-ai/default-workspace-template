@@ -137,11 +137,16 @@ function notConnectedChip(onSignedIn?: (accountId: string) => void): m.Vnode {
   );
 }
 
+/** The chip while what the row would say has not arrived: it keeps the row from reading empty. */
+function loadingChip(): m.Vnode {
+  return m("span", { class: `model-selector-loading ${css.PROVISIONAL_CHIP}` }, "Loading…");
+}
+
 /** The chip for a chat with no agent yet: the account it starts on. With no agent there is no
- *  model to name or change. Null until there is something true to say. */
-function provisionalChip(chatId: string): m.Vnode | null {
+ *  model to name or change. */
+function provisionalChip(chatId: string): m.Vnode {
   const provisional = getProvisionalChat(chatId);
-  if (provisional === undefined || !areAccountsLoaded()) return null;
+  if (provisional === undefined || !areAccountsLoaded()) return loadingChip();
   const account = accountForFirstSend(provisional.account_id);
   if (account === null) return notConnectedChip();
   return m(
@@ -740,13 +745,17 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       // before its first model read, and opencode never leaves it); or the live model may
       // match no catalog option. Only the Model/Effort/Fast rows are suppressed.
       if (chat === undefined) return provisionalChip(chatId);
-      // No account to name and no model to show: say so only when no provider is signed in.
+      // No account to name and no model to show. With no provider signed in, say so; otherwise
+      // the chip below stands in (its Provider row reads "No account") until the model arrives,
+      // which for a chat whose agent is still connecting takes a while.
       if (account === null && matched === null) {
-        if (!areAccountsLoaded() || getAccounts().length > 0) return null;
-        return notConnectedChip((accountId) => {
-          beginSwitchToAccountId(chatId, accountId);
-          m.redraw();
-        });
+        if (!areAccountsLoaded()) return loadingChip();
+        if (getAccounts().length === 0) {
+          return notConnectedChip((accountId) => {
+            beginSwitchToAccountId(chatId, accountId);
+            m.redraw();
+          });
+        }
       }
 
       // opencode ships an empty catalog and a resolver that fails, so its every pick would
