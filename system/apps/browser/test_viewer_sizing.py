@@ -22,6 +22,9 @@ _POLL_MS: Final[int] = 50
 _POLL_ATTEMPTS: Final[int] = 100
 # Longer than the viewer's resize debounce, so a size it was going to send has been sent.
 _SETTLE_MS: Final[int] = 600
+# Longer than the viewer's 1.5s size belt. The pane's first visibility clears the last size sent, and when the socket
+# is not open yet the belt is what sends it again; once it has, it sends nothing more for an unchanged pane.
+_BELT_SETTLE_MS: Final[int] = 1600
 
 
 def _wait_until(page: Page, is_done: Callable[[], bool]) -> None:
@@ -74,8 +77,8 @@ def test_the_pane_fills_a_phone_and_a_rotation_reports_its_size_again(
         }
         assert stream_urls == ["ws://localhost/browsers/browser-1/stream?w=392&h=852"]
 
-        # The viewer may re-report its size once as it first becomes visible; let that pass.
-        page.wait_for_timeout(_SETTLE_MS)
+        # The viewer may re-report its size once after it first becomes visible; let that pass.
+        page.wait_for_timeout(_BELT_SETTLE_MS)
         settled = len(resizes)
 
         # A rotation that settles on the size already reported reports it again.
