@@ -42,8 +42,9 @@ Every op targets exactly one client: ``--client <id>`` (from ``context``), else 
 that most recently messaged you while it is connected, else the one connected client, else
 that messaging client though it is not connected; with several clients and no way to tell,
 the op is refused and lists them. The shell edits that client's placements itself, so an op
-lands whether or not a browser is connected, and a connected window shows it within a redraw. An op edits the client's active desktop; ``--desktop <name>`` edits that
-desktop and switches the client to it.
+lands whether or not a browser is connected, and a connected window shows it within a
+redraw. An op edits the client's active desktop; ``--desktop <name>`` edits that desktop
+and switches the client to it.
 
 ``open`` opens a window at ``--path``, or at one of the app's *launch paths* (``--launch <id>``
 with ``--param name=value`` for its parameters; with neither, the app's default launch path).
