@@ -15,13 +15,13 @@ from host_backup.cli import (
     EXIT_BACKUP_SUCCEEDED,
     EXIT_BACKUPS_NOT_CONFIGURED,
     EXIT_NO_COMPLETION_OBSERVED,
-    backup_now_main,
     _EventsLogFollower,
     _exit_code_for_completion,
     _read_tail_lines,
     _scan_for_inflight_tick_id,
     _wait_for_next_completion,
     _wait_for_tick_to_end,
+    backup_now_main,
 )
 from host_backup.config import BACKUP_TOML_PATH
 from host_backup.events import (
@@ -201,9 +201,7 @@ def test_a_tick_that_never_finished_is_not_in_flight_once_a_later_tick_started(
         BackupEventType.RESTIC_BACKUP_SUCCEEDED,
         tick_id="tick-after-restart",
     )
-    assert (
-        _scan_for_inflight_tick_id(tmp_path / "events.jsonl", max_lines=200) is None
-    )
+    assert _scan_for_inflight_tick_id(tmp_path / "events.jsonl", max_lines=200) is None
 
 
 @pytest.fixture
@@ -233,7 +231,9 @@ def test_backup_now_triggers_nothing_when_the_inflight_tick_outlasts_the_timeout
 def test_backup_now_triggers_past_a_tick_that_never_finished(
     tmp_path: Path, backup_events_dir: Path
 ) -> None:
-    _write_tick(backup_events_dir, BackupEventType.BACKUP_STARTED, tick_id="tick-killed")
+    _write_tick(
+        backup_events_dir, BackupEventType.BACKUP_STARTED, tick_id="tick-killed"
+    )
     _write_tick(
         backup_events_dir,
         BackupEventType.BACKUP_STARTED,

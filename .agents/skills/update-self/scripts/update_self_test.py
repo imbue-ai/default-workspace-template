@@ -23,8 +23,6 @@ from typing import Callable, Sequence
 
 import pytest
 import tool_env
-from click.testing import CliRunner
-from host_backup.cli import backup_now_main
 import update_apply
 import update_apply_contract
 import update_banding
@@ -36,6 +34,8 @@ import update_probes
 import update_runtime
 import update_self
 import update_target
+from click.testing import CliRunner
+from host_backup.cli import backup_now_main
 
 _SCRIPTS_DIR = Path(__file__).parent
 # ``.agents/skills/update-self/scripts/`` -> the workspace root.
@@ -2022,7 +2022,9 @@ def _backup_wait_result(
     """What ``host-backup-now --wait-only`` prints, as the apply reads it."""
     return _Result(
         returncode=returncode,
-        stdout=json.dumps({"inflight_tick_id": inflight_tick_id, "finished": is_finished})
+        stdout=json.dumps(
+            {"inflight_tick_id": inflight_tick_id, "finished": is_finished}
+        )
         + "\n",
     )
 
@@ -7098,7 +7100,9 @@ def test_the_apply_waits_for_an_inflight_backup_tick_before_restarting(
     """The restart kills a backup tick mid-restic, which loses that backup and leaves a
     tick with no ending in the events log."""
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    runner.respond(("uv", "run", "host-backup-now"), _backup_wait_result("tick-1", True))
+    runner.respond(
+        ("uv", "run", "host-backup-now"), _backup_wait_result("tick-1", True)
+    )
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
@@ -7153,7 +7157,9 @@ def test_the_apply_reads_what_host_backup_now_wait_only_prints(
     events = tmp_path / "state" / "events" / "backup" / "events.jsonl"
     events.parent.mkdir(parents=True)
     events.write_text(
-        json.dumps({"source": "backup", "type": "BACKUP_STARTED", "tick_id": "tick-busy"})
+        json.dumps(
+            {"source": "backup", "type": "BACKUP_STARTED", "tick_id": "tick-busy"}
+        )
         + "\n"
     )
 

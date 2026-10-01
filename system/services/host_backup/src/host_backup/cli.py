@@ -91,7 +91,9 @@ def backup_now_main(timeout_seconds: float, wait_only: bool) -> None:
             follower, inflight_tick_id, deadline
         )
     if wait_only:
-        click.echo(json.dumps({"inflight_tick_id": inflight_tick_id, "finished": is_idle}))
+        click.echo(
+            json.dumps({"inflight_tick_id": inflight_tick_id, "finished": is_idle})
+        )
         sys.exit(0 if is_idle else EXIT_NO_COMPLETION_OBSERVED)
     if not is_idle:
         logger.error(
