@@ -1155,7 +1155,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     expect(mocks.beginSwitchToAccountId).toHaveBeenCalledWith("agent-signed-out", "account-chosen-5522");
   });
 
-  it("keeps the phone's leading settings button beside the reason", () => {
+  it("keeps the phone's leading settings button under the signed-out notice", () => {
     const component = MessageInput();
     const leading = m("button", { "aria-label": "Chat settings" });
     const tree = component.view!({ attrs: { chatId: "agent-signed-out", leading } } as never);
