@@ -28,6 +28,9 @@ export const SHELL_SHOWN = "shell:shown";
 export const SHELL_HIDDEN = "shell:hidden";
 /** Shell to app: the close chord fired while this window was focused. */
 export const SHELL_CLOSE_REQUEST = "shell:close-request";
+/** Shell to app: the retro theme the window's desktop wears (Desktop settings > Theme), sent after the handshake
+ *  and on every switch; the page wears it too (`themes/uiTheme.ts`). */
+export const SHELL_THEME = "shell:theme";
 /** Shell to app: the window's path changed elsewhere; the page should show that path in place. */
 export const SHELL_NAVIGATE = "shell:navigate";
 /** App to shell: what this page can do, sent once on connect. */
@@ -79,6 +82,7 @@ export interface ShellConnectionHandlers {
   onHidden?: () => void;
   onCloseRequest?: () => void;
   onNavigate?: (path: string) => void;
+  onTheme?: (theme: string) => void;
   capabilities?: ShellCapabilities;
 }
 
@@ -163,6 +167,11 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       case SHELL_CLOSE_REQUEST:
         handlers.onCloseRequest?.();
         return;
+      case SHELL_THEME: {
+        const theme = message.theme;
+        if (typeof theme === "string") handlers.onTheme?.(theme);
+        return;
+      }
       case SHELL_NAVIGATE: {
         const path = message.path;
         if (typeof path === "string") handlers.onNavigate?.(path);

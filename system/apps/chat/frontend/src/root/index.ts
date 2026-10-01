@@ -63,6 +63,7 @@ import type { ChatRow } from "./rows";
 import { intakeTokenFromSearch, rootPathFor, selectionFromSearch, slotFill } from "./selection";
 import type { SlotFill } from "./selection";
 import { prependToComposer } from "../views/MessageInput";
+import { applyUiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
 
 // The desktop shell's compact breakpoint (desktop-interface contracts.md section 11): under
 // it the list starts collapsed beside the chat, and fills the root while nothing is selected.
@@ -416,6 +417,7 @@ function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => 
 function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
   const shell = connectToShell({
     capabilities: { navigation: true, closeChord: false },
+    onTheme: (theme) => void applyUiTheme(document.documentElement, theme),
     onHandshake: (received) => {
       handshake = received;
       adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });

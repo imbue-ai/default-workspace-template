@@ -22,6 +22,8 @@ const UI_THEME_ATTRIBUTE = "data-ui-theme";
 
 let current: UiTheme = DEFAULT_UI_THEME;
 
+const listeners = new Set<(theme: UiTheme) => void>();
+
 export function isUiTheme(value: unknown): value is UiTheme {
   return UI_THEMES.some((theme) => theme.name === value);
 }
@@ -38,12 +40,38 @@ export function applyUiTheme(root: Element, name: unknown): boolean {
   if (theme === current) return false;
   current = theme;
   root.setAttribute(UI_THEME_ATTRIBUTE, theme);
+  for (const listener of listeners) listener(theme);
+  return true;
+}
+
+/** Hear every change of the page's theme (the shell passes it on to the app pages it frames). */
+export function onUiThemeChanged(listener: (theme: UiTheme) => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/**
+ * Wear whatever theme the parent page wears, for a page framed by a page of its own app on its own origin (the
+ * chat root's chat pages), which the shell never messages directly. Answers whether there is such a parent.
+ */
+export function mirrorParentUiTheme(): boolean {
+  if (window.parent === window) return false;
+  let parentRoot: Element;
+  try {
+    parentRoot = window.parent.document.documentElement;
+  } catch {
+    return false;
+  }
+  const follow = (): void => void applyUiTheme(document.documentElement, parentRoot.getAttribute(UI_THEME_ATTRIBUTE));
+  follow();
+  new MutationObserver(follow).observe(parentRoot, { attributes: true, attributeFilter: [UI_THEME_ATTRIBUTE] });
   return true;
 }
 
 // Test-only: back to a freshly loaded page.
 export function resetUiThemeForTests(): void {
   current = DEFAULT_UI_THEME;
+  listeners.clear();
   document.documentElement.removeAttribute(UI_THEME_ATTRIBUTE);
 }
 
