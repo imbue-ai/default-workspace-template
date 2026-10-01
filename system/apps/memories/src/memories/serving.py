@@ -16,9 +16,9 @@ from werkzeug.serving import LISTEN_QUEUE
 from werkzeug.serving import make_server
 
 from app_manifest.primitives import AppUrl
-from memories.errors import ServeError
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.pure import pure
+from memories.errors import ServeError
 
 SERVER_SHUTDOWN_TIMEOUT_SECONDS: Final[float] = 5.0
 

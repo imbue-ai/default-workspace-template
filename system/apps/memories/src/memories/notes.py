@@ -15,6 +15,7 @@ it at any time, and goes through a temporary file and a rename so a chat never r
 
 import os
 import re
+import uuid
 from datetime import datetime
 from datetime import timezone
 from enum import auto
@@ -175,8 +176,12 @@ def file_version(path: Path) -> str:
 
 
 def write_atomically(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` through a sibling temporary file and a rename."""
-    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    """Write ``text`` to ``path`` through a sibling temporary file and a rename.
+
+    The temporary name is unique per write: the server answers requests on several threads, and two writes of the
+    index at once must not share one.
+    """
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         temporary_path.write_text(text, encoding="utf-8")
         os.replace(temporary_path, path)
