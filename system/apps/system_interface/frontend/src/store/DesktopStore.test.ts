@@ -1658,6 +1658,31 @@ describe("pulled-out windows", () => {
     expect(calls).toEqual([]);
   });
 
+  it("a solo shell the size of a phone stays solo when the agent ops aimed at its client reach it", async () => {
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1", { is_detached: true })],
+    });
+    const { store, calls } = makePopOutStore("win-1");
+    // A pulled-out window under the phone breakpoint on either side reads as a phone's viewport.
+    store.setThemeMetrics(METRICS, { isPhone: true, isTouch: false });
+    await store.start(NO_LINK);
+    socket.deliver().onConnected();
+    expect(socket.popOutReports).toBe(1);
+    expect(store.isPhoneLayout()).toBe(false);
+
+    // Registered under its client, it hears every show, open, and focus an agent aims at that client.
+    socket.deliver().onLayoutOp({ op: "open", args: { window: "win-2" }, requester: "chat" });
+    socket.deliver().onLayoutOp({ op: "focus", args: { window: "win-2" }, requester: "chat" });
+    socket.deliver().onLayoutOp({ op: "show", args: { window: "win-2", is_detached: true }, requester: "chat" });
+    await settle();
+
+    expect(store.getState().phone.shown).toBeNull();
+    expect(api.calls.filter((call) => call.startsWith("recordShown"))).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(socket.reports).toEqual([]);
+  });
+
   it("hides a pulled-out window's ghost and shows it again from its taskbar entry, the window staying out", async () => {
     const { store, calls, reports } = makePopOutStore();
     await store.start(NO_LINK);
