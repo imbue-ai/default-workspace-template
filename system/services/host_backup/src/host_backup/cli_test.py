@@ -191,9 +191,8 @@ def test_inflight_scan_treats_every_tick_ending_as_finished(tmp_path: Path) -> N
 def test_a_tick_that_never_finished_is_not_in_flight_once_a_later_tick_started(
     tmp_path: Path,
 ) -> None:
-    """A tick killed mid-restic (an OOM shed, the update's services restart) never emits
-    a terminal event. The runner runs one tick at a time, so a later tick starting
-    means it is dead, and waiting on it held `host-backup-now` for its whole timeout."""
+    """A tick killed mid-restic (an OOM shed, a services restart) never emits a terminal
+    event. The runner runs one tick at a time, so a later tick starting means it is dead."""
     _write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-killed")
     _write_tick(
         tmp_path,
@@ -217,9 +216,7 @@ def backup_events_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_backup_now_triggers_nothing_when_the_inflight_tick_outlasts_the_timeout(
     tmp_path: Path, backup_events_dir: Path
 ) -> None:
-    """A tick triggered after the deadline is one nobody waits for: the command used to
-    bump the config anyway and then exit 2 at once, leaving a backup running that its
-    caller had already reported as timed out."""
+    """A tick triggered after the deadline is one nobody waits for, so none is triggered."""
     _write_tick(backup_events_dir, BackupEventType.BACKUP_STARTED, tick_id="tick-busy")
 
     result = CliRunner().invoke(backup_now_main, ["--timeout", "0.2"])

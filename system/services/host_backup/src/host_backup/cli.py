@@ -15,8 +15,7 @@ still running at the timeout, it exits 2 without triggering a tick.
 
 With `--wait-only` it only waits for the in-flight tick, triggers nothing, and prints
 `{"inflight_tick_id": <id or null>, "finished": <bool>}`, exiting 0 once no tick is in
-flight and 2 when the tick it waited for was still running at the timeout. The
-update-self apply runs it before restarting the services, which would kill the tick.
+flight and 2 when the tick it waited for was still running at the timeout.
 """
 
 import json
