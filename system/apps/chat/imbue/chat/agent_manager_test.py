@@ -5761,12 +5761,12 @@ def test_a_spare_claimed_while_it_starts_takes_the_chat_band_once_its_chat_settl
         spare_pid_writes = [adj for pid, adj in adj_writes if pid == spare_pid]
         assert spare_pid_writes[-1:] == [bands.CHAT_AGENT_BASE]
         assert [adj for pid, adj in adj_writes if pid == harness_child_pid][-1:] == [bands.CHAT_AGENT_BASE]
+        adj_writes.clear()
         manager.ensure_spare_chat()
         assert bands.SPARE_AGENT not in [adj for pid, adj in adj_writes if pid in (spare_pid, harness_child_pid)]
         _mark_harness_ready(tmp_path, booting.chat_id)
         assert manager.wait_for_chat_creation(created.chat_id, timeout=15.0) == ChatCreationOutcome(is_created=True)
 
-        # The creation thread's own tag may land before the claim, so only the last write counts.
         spare_pid_writes = [adj for pid, adj in adj_writes if pid == spare_pid]
         assert spare_pid_writes[-1] == bands.CHAT_AGENT_FLOOR
         assert [adj for pid, adj in adj_writes if pid == harness_child_pid][-1:] == [bands.CHAT_AGENT_BASE]
