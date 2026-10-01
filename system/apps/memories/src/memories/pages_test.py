@@ -4,6 +4,7 @@ retention and where chat names come from), correcting a note, and deleting one f
 from pathlib import Path
 
 import httpx
+import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
@@ -82,17 +83,39 @@ def test_delete_answers_409_for_a_stale_version_and_keeps_the_note(tmp_path: Pat
     assert (tmp_path / "memories" / "units.md").is_file()
 
 
-def test_delete_from_another_origin_or_without_json_is_refused(tmp_path: Path) -> None:
+def test_a_write_from_the_apps_own_page_behind_the_forwarding_proxy_is_allowed(tmp_path: Path) -> None:
+    """The local forwarding proxy hands the app its backend address as Host, so the page's Origin never matches it;
+    the browser's own Sec-Fetch-Site is what says the request came from this page."""
     with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
         client = _client(tmp_path, http_client)
         version = client.get("/api/notes").get_json()["notes"][0]["version"]
 
-        foreign = client.delete(
-            "/api/notes/units.md", json={"version": version}, headers={"Origin": "http://evil.example"}
+        response = client.delete(
+            "/api/notes/units.md",
+            json={"version": version},
+            headers={
+                "Host": "127.0.0.1:8050",
+                "Origin": "http://memories-2vpr84gh.agent-0123456789abcdef0123456789abcdef.localhost:8421",
+                "Sec-Fetch-Site": "same-origin",
+            },
+        )
+
+    assert response.status_code == 200
+    assert not (tmp_path / "memories" / "units.md").exists()
+
+
+@pytest.mark.parametrize("fetch_site", ["same-site", "cross-site", "none"])
+def test_a_write_from_another_page_or_without_json_is_refused(tmp_path: Path, fetch_site: str) -> None:
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        version = client.get("/api/notes").get_json()["notes"][0]["version"]
+
+        other_page = client.delete(
+            "/api/notes/units.md", json={"version": version}, headers={"Sec-Fetch-Site": fetch_site}
         )
         not_json = client.delete("/api/notes/units.md", data=f'{{"version": "{version}"}}')
 
-    assert foreign.status_code == 403
+    assert other_page.status_code == 403
     assert not_json.status_code == 403
     assert (tmp_path / "memories" / "units.md").is_file()
 

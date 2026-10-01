@@ -92,7 +92,7 @@ def build_pages_blueprint(
 
     @blueprint.before_request
     def refuse_foreign_writes() -> ResponseReturnValue | None:
-        if is_write_allowed(request.method, request.headers.get("Origin"), request.host, request.content_type):
+        if is_write_allowed(request.method, request.headers.get("Sec-Fetch-Site"), request.content_type):
             return None
         return jsonify({"detail": "writes must be JSON and come from this app's own page"}), HTTP_FORBIDDEN
 
