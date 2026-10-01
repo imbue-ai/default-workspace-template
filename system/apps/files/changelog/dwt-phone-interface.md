@@ -4,6 +4,6 @@ The File Viewer has a phone layout. When its window is narrower than 700px (ever
 
 - The header has an up button, the folder's name, a search button, and a kebab with Show or Hide system files, Download folder as .zip, Upload files or folders, New folder, and New file. Beneath it the path scrolls sideways; while searching, the search field takes its place and each result shows the folder it was found in. Name, Last Modified, and Size sort the list as the table's column headings do.
 
-- The editor has a Save button, offered once the file has changed, and a kebab with the file's Download, Move & Rename, and Delete.
+- The editor has a Save button, offered once the file has changed, and a kebab with the file's Download, Move & Rename, and Delete. A file's read-only view page has a kebab with Download and, where the table would offer Edit, Edit file.
 
 - Widening the window past 700px brings the table back without a reload.

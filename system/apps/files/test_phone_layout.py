@@ -262,6 +262,21 @@ def test_a_file_opens_the_editor_page_with_save_and_the_files_kebab(
     ]
 
 
+def test_a_files_view_page_offers_edit_from_its_kebab(
+    open_files_page: OpenFilesPage, dufs_origin: str
+) -> None:
+    page = open_files_page(f"{WORKSPACE}/README.md?view", *PHONE)
+
+    expect(page.locator(".phone-title")).to_have_text("README.md")
+    expect(page.get_by_role("button", name="Save")).to_have_count(0)
+    page.get_by_role("button", name="More", exact=True).click()
+    expect(_menu_items(page)).to_have_text(["Download file", "Edit file"])
+
+    _menu_items(page).filter(has_text="Edit file").click()
+    page.wait_for_url(f"{dufs_origin}{WORKSPACE}/README.md?edit")
+    expect(page.get_by_role("button", name="Save")).to_be_disabled()
+
+
 def test_the_up_button_leaves_the_editor_for_its_folder(
     open_files_page: OpenFilesPage, dufs_origin: str
 ) -> None:

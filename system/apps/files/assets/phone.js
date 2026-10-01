@@ -365,11 +365,13 @@ function entryActions(file, index) {
   return actions;
 }
 
-// The editor page's toolbox verbs for the file it shows.
+// The editor or view page's toolbox verbs for the file it shows.
 function fileActions() {
   const actions = [];
   const $download = toolboxControl(".download");
   if ($download) actions.push({ label: "Download file", icon: ICONS.download, run: () => $download.click() });
+  const $edit = toolboxControl(".edit-file");
+  if ($edit) actions.push({ label: "Edit file", icon: ICONS.edit, run: () => $edit.click() });
   const $move = toolboxControl(".move-file");
   if ($move) actions.push({ label: "Move & Rename", icon: ICONS.move, run: () => $move.click() });
   const $delete = toolboxControl(".delete-file");
