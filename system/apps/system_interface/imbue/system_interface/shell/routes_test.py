@@ -513,7 +513,8 @@ def test_an_op_goes_to_the_one_connected_client_once_the_messaging_client_has_go
 ) -> None:
     """A user who messages a chat from one browser and then carries on in another (a phone's Safari tab and its
     home-screen app are two clients) sees the agent's window in the one they are using: the messaging client is
-    passed over while it is not connected and another is, and targeted again when nothing else is connected."""
+    passed over while it is not connected and one other client is, and targeted when no client, or several others,
+    are connected."""
     shell = _shell(app)
     requester = {"app": "chat", "marker": "agent-1"}
     messaging_window = _register_client(app, "c7", "home")
@@ -524,6 +525,9 @@ def test_an_op_goes_to_the_one_connected_client_once_the_messaging_client_has_go
 
     _register_client(app, "c1", "home")
     assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] == "c1"
+
+    _register_client(app, "c2", "home")
+    assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] == "c7"
 
 
 def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
