@@ -511,7 +511,6 @@ describe("the combo card", () => {
 
   it("shows the model's default effort for a chat that never picked one", () => {
     // codex records no effort until one is picked, while the thread runs at the model's default.
-    // Showing nothing (or the slider's far-left stop) misstates what the agent is running at.
     const efforts = [
       { level: "low", in_picker: true },
       { level: "medium", in_picker: true },

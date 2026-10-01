@@ -260,9 +260,7 @@ def test_list_offered_options_tolerates_a_daemon_failure(tmp_path: Path) -> None
     assert client.closed is True
 
 
-# =============================================================================
 # The raw model-options sidecar (offline-restart persistence)
-# =============================================================================
 
 
 def test_write_then_read_round_trips_the_raw_model_list(tmp_path: Path) -> None:
@@ -408,9 +406,7 @@ def test_switch_reports_failure_when_the_connection_cannot_be_opened(tmp_path: P
     assert result.detail is not None
 
 
-# =============================================================================
 # Root-thread binding for the short-lived switch connection
-# =============================================================================
 
 
 class _BindFakeClient:
@@ -464,9 +460,7 @@ def test_bind_raises_when_no_unambiguous_root(tmp_path: Path) -> None:
         _bind_root_thread(client, tmp_path)
 
 
-# =============================================================================
 # Root-thread SUBSCRIBING for the persistent live connection
-# =============================================================================
 #
 # The live-connection path must RESUME (thread/resume) rather than bind, because only a resume
 # subscribes the connection to the thread's turn/*/item/* event stream. Unlike the switch path
