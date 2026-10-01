@@ -252,7 +252,11 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
         attrs.isCompact ? drawerHead(attrs) : railHead(attrs),
         m(
           "div",
-          { class: "chat-rail-list min-h-0 flex-1 overflow-y-auto px-2 pb-2" },
+          {
+            // A touch's allowed gestures are read from the touched row up to the first scrolling ancestor, this
+            // list, so the drawer's own pan-y must be repeated here for a sideways drag over the rows to reach it.
+            class: `chat-rail-list min-h-0 flex-1 overflow-y-auto px-2 pb-2${attrs.isCompact ? " touch-pan-y" : ""}`,
+          },
           attrs.rows.map((row) => railRow(attrs, row)),
         ),
         menuRow === undefined ? null : railMenu.view(rowMenuRows(attrs, menuRow, menuReferenceRows)),
