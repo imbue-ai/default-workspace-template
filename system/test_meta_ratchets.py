@@ -302,6 +302,8 @@ _PLAYWRIGHT_SESSION_FIXTURES = frozenset(
         "browser_context",
         "new_context",
         "browser_type",
+        "browser_context_args",
+        "launch_browser",
         "playwright",
     }
 )
@@ -318,15 +320,24 @@ def _root_suite_ignored_paths() -> tuple[str, ...]:
     )
 
 
+def _fixture_decorators(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[ast.expr]:
+    return [
+        decorator
+        for decorator in node.decorator_list
+        if ast.unparse(
+            decorator.func if isinstance(decorator, ast.Call) else decorator
+        ).endswith("fixture")
+    ]
+
+
 def _fixture_names(tree: ast.Module) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        for decorator in node.decorator_list:
-            target = decorator.func if isinstance(decorator, ast.Call) else decorator
-            if not ast.unparse(target).endswith("fixture"):
-                continue
+        for decorator in _fixture_decorators(node):
             names.add(node.name)
             if isinstance(decorator, ast.Call):
                 for keyword in decorator.keywords:
@@ -370,7 +381,11 @@ def _find_playwright_session_fixture_uses() -> list[str]:
     violations: list[str] = []
     for rel in sorted(filter(None, candidates.stdout.split("\0"))):
         path = _REPO_ROOT / rel
-        if not (path.name.startswith("test_") or path.name.endswith("_test.py")):
+        if not (
+            path.name.startswith("test_")
+            or path.name.endswith("_test.py")
+            or path.name == "conftest.py"
+        ):
             continue
         if any(rel == prefix or rel.startswith(f"{prefix}/") for prefix in ignored):
             continue
@@ -381,7 +396,8 @@ def _find_playwright_session_fixture_uses() -> list[str]:
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            if not node.name.startswith("test"):
+            # A fixture taking one hands the session Playwright to every test using it.
+            if not node.name.startswith("test") and not _fixture_decorators(node):
                 continue
             arguments = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
             for name in sorted({argument.arg for argument in arguments}):
@@ -393,10 +409,10 @@ def _find_playwright_session_fixture_uses() -> list[str]:
 
 
 def test_prevent_playwright_session_fixtures_in_root_suite_tests() -> None:
-    """A root-suite test drives a browser through `module_browser`, never pytest-playwright's session-scoped fixtures."""
+    """A root-suite test or fixture drives a browser through `module_browser`, never pytest-playwright's session-scoped fixtures."""
     violations = _find_playwright_session_fixture_uses()
     assert len(violations) <= snapshot(0), (
-        "Tests taking a pytest-playwright fixture (use `module_browser` from the root conftest):\n"
+        "Tests or fixtures taking a pytest-playwright fixture (use `module_browser` from the root conftest):\n"
         + "\n".join(f"  - {v}" for v in violations)
     )
 
