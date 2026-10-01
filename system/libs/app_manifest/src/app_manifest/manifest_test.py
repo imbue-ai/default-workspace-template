@@ -136,19 +136,59 @@ def test_message_handlers_name_the_embedder_messages_an_app_takes_and_where_the_
     assert AppManifest.model_validate(_full_manifest_data()).message_handlers == ()
 
 
+def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pages_that_already_show_it() -> None:
+    manifest = AppManifest.model_validate(
+        {
+            **_full_manifest_data(),
+            "message_handlers": [
+                {"type": "open:file", "show": "{path}?view", "showing": ["{path}", "{path}/", "{path}/?view"]},
+                {"type": "open:url", "path": "/api/open-url"},
+            ],
+        }
+    )
+
+    shown, posted = manifest.message_handlers
+    assert (shown.type, shown.path, shown.show, shown.showing) == (
+        "open:file",
+        None,
+        "{path}?view",
+        ("{path}", "{path}/", "{path}/?view"),
+    )
+    assert (posted.type, posted.path, posted.show, posted.showing) == ("open:url", "/api/open-url", None, ())
+
+
 @pytest.mark.parametrize(
     ("handler", "match"),
     [
-        pytest.param({"type": "focus-chat", "path": "/api/focus-chat"}, "minds:", id="no-prefix"),
-        pytest.param({"type": "shell:open", "path": "/api/open"}, "minds:", id="another-prefix"),
-        pytest.param({"type": "minds:", "path": "/api/focus-chat"}, "minds:", id="prefix-alone"),
-        pytest.param({"type": "minds:Focus Chat", "path": "/api/focus-chat"}, "minds:", id="not-kebab-case"),
+        pytest.param({"type": "focus-chat", "path": "/api/focus-chat"}, "lowercase prefix", id="no-prefix"),
+        pytest.param({"type": "shell:open", "path": "/api/open"}, "app contract's own prefix", id="shell-prefix"),
+        pytest.param({"type": "Open:file", "path": "/api/open"}, "lowercase prefix", id="uppercase-prefix"),
+        pytest.param({"type": "minds:", "path": "/api/focus-chat"}, "lowercase prefix", id="prefix-alone"),
+        pytest.param({"type": "minds:Focus Chat", "path": "/api/focus-chat"}, "kebab-case", id="not-kebab-case"),
         pytest.param({"type": "minds:focus-chat", "path": "api/focus-chat"}, "single '/'", id="unrooted-path"),
         pytest.param({"type": "minds:focus-chat", "path": "/api/focus-chat?x=1"}, "no query string", id="query"),
-        pytest.param({"type": "minds:focus-chat"}, "path", id="no-path"),
+        pytest.param({"type": "minds:focus-chat"}, "exactly one of 'path'", id="neither-path-nor-show"),
+        pytest.param(
+            {"type": "open:file", "path": "/api/open", "show": "{path}"}, "exactly one of 'path'", id="path-and-show"
+        ),
+        pytest.param(
+            {"type": "open:file", "path": "/api/open", "showing": ["{path}/"]}, "only beside 'show'", id="showing-alone"
+        ),
+        pytest.param({"type": "open:file", "show": "{path?view"}, "a placeholder is", id="unclosed-placeholder"),
+        pytest.param({"type": "open:file", "show": "{}?view"}, "a placeholder is", id="empty-placeholder"),
+        pytest.param({"type": "open:file", "show": "{1path}"}, "a placeholder is", id="placeholder-not-a-name"),
+        pytest.param({"type": "open:file", "show": "/{path}}"}, "a placeholder is", id="stray-brace"),
+        pytest.param({"type": "open:file", "show": "{path}?view={path}"}, "query string is fixed", id="query-field"),
+        pytest.param({"type": "open:file", "show": "{path}#top"}, "no fragment", id="fragment"),
+        pytest.param({"type": "open:file", "show": "view/{path}"}, "single '/' or a placeholder", id="unrooted"),
+        pytest.param({"type": "open:file", "show": "//{path}"}, "single '/' or a placeholder", id="double-slash"),
+        pytest.param({"type": "open:file", "show": "/a b/{path}"}, "nothing a URL would escape", id="unescaped"),
+        pytest.param(
+            {"type": "open:file", "show": "{path}", "showing": ["{path"]}, "a placeholder is", id="bad-showing"
+        ),
     ],
 )
-def test_a_message_handler_names_a_minds_type_and_a_rooted_path(handler: dict[str, object], match: str) -> None:
+def test_a_malformed_message_handler_fails_to_load_with_its_reason(handler: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         AppManifest.model_validate({**_full_manifest_data(), "message_handlers": [handler]})
 
@@ -394,7 +434,6 @@ def test_minimal_manifest_takes_the_documented_defaults() -> None:
     assert manifest.launcher_rank is None
     assert manifest.pin is None
     assert manifest.window_closed_path is None
-    assert manifest.handles == {}
 
 
 def test_program_defaults_to_the_name_but_an_explicit_program_wins() -> None:
@@ -487,22 +526,9 @@ def test_default_shortcut_mode_must_be_focus_or_new() -> None:
         )
 
 
-def test_handles_must_be_absent_or_empty() -> None:
-    assert (
-        AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "handles": {}}
-        ).handles
-        == {}
-    )
+def test_a_manifest_that_still_carries_the_retired_handles_table_fails_to_load() -> None:
     with pytest.raises(ValidationError, match="handles"):
-        AppManifest.model_validate(
-            {
-                "name": "news",
-                "display_name": "News",
-                "icon": "icon.svg",
-                "handles": {"scheme": "x"},
-            }
-        )
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "handles": {}})
 
 
 def test_unknown_keys_are_rejected() -> None:

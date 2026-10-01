@@ -71,6 +71,10 @@ export const REATTACH_WINDOW: "minds:reattach-window" =
 // desktop window follows it, came back inside, or was released out there.
 // Payload: { windowId, phase: "out" | "in" | "released" }.
 export const TEAR_OUT: "minds:tear-out" = "TEAR_OUT" in embedContract ? embedContract.TEAR_OUT : "minds:tear-out";
+// Embedder -> workspace (contract v7, the workspace link routing plan): a popup a page of this workspace opened
+// to a local address, which Imbue Studio turned away from a window of its own; the workspace opens it inside.
+// Payload: { url }. Sent only to a workspace that announced ``opensLinks`` with WORKSPACE_READY.
+export const OPEN_LINK: "minds:open-link" = "OPEN_LINK" in embedContract ? embedContract.OPEN_LINK : "minds:open-link";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
@@ -85,6 +89,7 @@ const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   EMBEDDER_CAPABILITIES,
   REATTACH_WINDOW,
   TEAR_OUT,
+  OPEN_LINK,
 ];
 
 // One replaceable handler per embedder->workspace type, registered by the
@@ -139,10 +144,16 @@ export function setEmbedderMessageObserver(observer: EmbedderMessageHandler): vo
   messageObserver = observer;
 }
 
-/** Tell the embedder this page is listening, so it can send what it held.
+/** What a page says it handles when it announces itself ready. */
+export interface ReadyAnnouncement {
+  /** Whether it opens the links Imbue Studio hands it with OPEN_LINK. */
+  readonly opensLinks: boolean;
+}
+
+/** Tell the embedder this page is listening, so it can send what it held, and what it handles.
  * Called once per load, after the handlers that the held messages need. */
-export function announceReadyToEmbedder(): void {
-  sendToEmbedder(WORKSPACE_READY);
+export function announceReadyToEmbedder(announcement: ReadyAnnouncement): void {
+  sendToEmbedder(WORKSPACE_READY, { opensLinks: announcement.opensLinks });
 }
 
 /** Clear the handler for one embedder->workspace type. */

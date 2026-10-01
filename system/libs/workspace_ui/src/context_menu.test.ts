@@ -12,11 +12,26 @@ import {
   installElementContextMenu,
   type ContextMenuConnection,
 } from "./context_menu";
+import type { ContextMenuRow } from "./context_menu_rows";
+import { installLinkRouting, pageLinkRoutingContext } from "./links";
 import { REFERENCE_ID_PATTERN } from "./element_reference";
 
 const HANDSHAKE = { clientId: "client-1", windowId: "win-1", desktopId: "home", app: "docs", path: "/" };
 
-let connection: ContextMenuConnection & { draftText: ReturnType<typeof vi.fn<(text: string) => void>> };
+let connection: ContextMenuConnection & {
+  draftText: ReturnType<typeof vi.fn<(text: string) => void>>;
+  sendMessage: ReturnType<typeof vi.fn<(type: string, fields: Readonly<Record<string, unknown>>) => void>>;
+};
+
+function fakeConnection(isFramed: boolean): typeof connection {
+  return {
+    isFramed,
+    draftText: vi.fn<(text: string) => void>(),
+    openPath: vi.fn(),
+    sendMessage: vi.fn<(type: string, fields: Readonly<Record<string, unknown>>) => void>(),
+    openLink: vi.fn(),
+  };
+}
 let uninstall: (() => void) | null = null;
 
 function card(): HTMLElement | null {
@@ -41,7 +56,7 @@ beforeEach(() => {
     configurable: true,
   });
   document.body.innerHTML = '<p id="para">words</p><input id="field" value="v">';
-  connection = { isFramed: true, draftText: vi.fn<(text: string) => void>() };
+  connection = fakeConnection(true);
 });
 
 afterEach(() => {
@@ -51,6 +66,55 @@ afterEach(() => {
 });
 
 describe("installElementContextMenu", () => {
+  it("opens a link from the menu as a click on it would be routed: a routed file link through the connection", () => {
+    document.body.innerHTML = '<div class="message"><a id="file" href="/home/user/plan%201.md">plan</a></div>';
+    const stopRouting = installLinkRouting(
+      document.body,
+      ".message a[href]",
+      pageLinkRoutingContext(window, connection),
+    );
+    uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
+    rightClick(document.getElementById("file") as Element);
+    row("open-link").click();
+    stopRouting();
+    expect(connection.sendMessage.mock.calls).toEqual([["open:file", { path: "/home/user/plan 1.md" }]]);
+  });
+
+  it("says why Open link did nothing for a link the workspace cannot open", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    document.body.innerHTML = '<a id="script" href="javascript:void(0)">run</a>';
+    uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
+    rightClick(document.getElementById("script") as Element);
+    row("open-link").click();
+    expect(
+      [connection.sendMessage, connection.openPath, connection.openLink].map((fn) => vi.mocked(fn).mock.calls),
+    ).toEqual([[], [], []]);
+    expect(warn.mock.calls.map((call) => String(call[0]))).toEqual([
+      "[context-menu] Open link ignored: javascript:void(0) is not a link the workspace can open",
+    ]);
+    warn.mockRestore();
+  });
+
+  it("installs on a document with no window, where Open link warns rather than routing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const windowless = document.implementation.createHTMLDocument("");
+    windowless.body.innerHTML = '<a id="file" href="/home/user/plan.md">plan</a>';
+    const opened: ContextMenuRow[] = [];
+    uninstall = installElementContextMenu({
+      connection,
+      handshake: () => HANDSHAKE,
+      document: windowless,
+      open: (rows) => opened.push(...rows),
+    });
+    rightClick(windowless.getElementById("file") as Element);
+    const openLink = opened.find((candidate) => candidate.kind === "action" && candidate.key === "open-link");
+    expect(openLink?.kind).toBe("action");
+    if (openLink?.kind === "action") openLink.onSelect();
+    expect(connection.sendMessage).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Open link ignored"));
+    warn.mockRestore();
+  });
+
   it("opens the menu at the pointer on a right-click, with the reference rows last", () => {
     uninstall = installElementContextMenu({ connection, handshake: () => HANDSHAKE });
     const event = rightClick(document.getElementById("para") as Element);
@@ -89,18 +153,23 @@ describe("installElementContextMenu", () => {
     expect(text).toContain('"id":"para"');
   });
 
-  it("takes a draft route of the page's own in place of a connection", () => {
+  it("takes a draft route and a link route of the page's own in place of a connection", () => {
+    document.body.innerHTML += '<a id="docs" href="https://example.com/docs">docs</a>';
     const draft = vi.fn<(text: string) => void>();
-    uninstall = installElementContextMenu({ draft, isDraftAvailable: () => true, handshake: () => null });
+    const openLink = vi.fn<(anchor: HTMLAnchorElement) => void>();
+    uninstall = installElementContextMenu({ draft, isDraftAvailable: () => true, openLink, handshake: () => null });
     rightClick(document.getElementById("para") as Element);
     expect(row("explain-element").getAttribute("aria-disabled")).toBeNull();
     row("explain-element").click();
     expect(draft).toHaveBeenCalledTimes(1);
     expect(draft.mock.calls[0][0]).toContain('"app":null');
+    rightClick(document.getElementById("docs") as Element);
+    row("open-link").click();
+    expect(openLink.mock.calls).toEqual([[document.getElementById("docs")]]);
   });
 
   it("greys the draft rows on a page no shell frames", () => {
-    connection = { isFramed: false, draftText: vi.fn<(text: string) => void>() };
+    connection = fakeConnection(false);
     uninstall = installElementContextMenu({ connection, handshake: () => null });
     rightClick(document.getElementById("para") as Element);
     expect(row("explain-element").getAttribute("aria-disabled")).toBe("true");

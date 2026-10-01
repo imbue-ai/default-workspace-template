@@ -3,11 +3,13 @@
  * that touches the message primitives (``test_embed_ratchets.py``).
  *
  * A chat page inside the root posts to ``window.parent`` exactly as it would to the shell.
- * Three kinds of those messages are the shell's business and go up unchanged, as the shell's
- * own relay forwards the frames it created (desktop-interface contracts.md section 7): the
- * ``minds:`` messages for the minds chrome, ``shell:focused`` (which the root re-posts as its
- * own, since the shell raises the root's window for it), ``shell:open`` of a sub-agent view, and
- * ``shell:draft-text`` from a sub-agent view (which has no composer of its own to draft into).
+ * Some of those messages are the shell's business and go up unchanged, as the shell's own relay
+ * forwards the frames it created (desktop-interface contracts.md section 7): the ``minds:``
+ * messages for the minds chrome, ``shell:focused`` (which the root re-posts as its own, since the
+ * shell raises the root's window for it), ``shell:open`` of a sub-agent view, ``shell:draft-text``
+ * from a sub-agent view (which has no composer of its own to draft into), ``shell:message`` (a
+ * clicked link's ``open:file`` or ``open:url``, for whichever app opens it), and ``shell:open-link``
+ * (a clicked link to another app's address, which the shell opens as that app's window).
  * One ``shell:open`` is the root's own business: a page asking for a sibling chat names the
  * root's path for it (``/?chat=<id>``), and the root that already frames a chat list selects
  * that chat in place, exactly as its own New chat button does, rather than asking the shell for
@@ -18,11 +20,23 @@
  * forwarded one is forwarded only to ``window.parent``.
  */
 
-import { SHELL_DRAFT_TEXT, SHELL_FOCUSED, SHELL_OPEN } from "@imbue/workspace-ui/src/app_contract";
+import {
+  SHELL_DRAFT_TEXT,
+  SHELL_FOCUSED,
+  SHELL_MESSAGE,
+  SHELL_OPEN,
+  SHELL_OPEN_LINK,
+} from "@imbue/workspace-ui/src/app_contract";
 import { selectionFromSearch } from "./selection";
 
 const MINDS_PREFIX = "minds:";
-const FORWARDED_SHELL_TYPES: ReadonlySet<string> = new Set([SHELL_FOCUSED, SHELL_OPEN, SHELL_DRAFT_TEXT]);
+const FORWARDED_SHELL_TYPES: ReadonlySet<string> = new Set([
+  SHELL_FOCUSED,
+  SHELL_OPEN,
+  SHELL_DRAFT_TEXT,
+  SHELL_MESSAGE,
+  SHELL_OPEN_LINK,
+]);
 
 /** Whether a posted message is one the root passes up to the shell. */
 export function isForwardedToShell(data: unknown): boolean {

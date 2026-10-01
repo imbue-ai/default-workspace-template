@@ -1,0 +1,1 @@
+The File Viewer opens links to files and folders clicked elsewhere in the workspace: its manifest registers the `open:file` message, so a chat's link to an absolute path opens that file or folder on its view page in a File Viewer window, or raises a window already showing it (however that window reached it) instead of opening another.

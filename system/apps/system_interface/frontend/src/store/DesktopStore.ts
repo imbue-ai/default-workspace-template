@@ -17,6 +17,7 @@ import type {
   WindowOpenOutcome,
   WindowOpenRequest,
 } from "../model/api";
+import { OPEN_URL_MESSAGE, classifyLink } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
 import {
   NO_DRAFT_APP_REASON,
@@ -170,11 +171,22 @@ export interface DesktopApi {
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
   fetchAvatars(): Promise<AvatarCatalog>;
   selectAvatar(design: string): Promise<void>;
-  relayEmbedderMessage(type: string, clientId: string, payload: Readonly<Record<string, unknown>>): Promise<void>;
+  relayEmbedderMessage(
+    type: string,
+    clientId: string,
+    payload: Readonly<Record<string, unknown>>,
+    sender: string,
+  ): Promise<void>;
 }
 
-/** A message the Imbue Studio chrome sent this page: its type and its own fields. */
+/** A message this page received, from the Imbue Studio chrome or from an app's frame: its type and its own fields. */
 export type EmbedderMessage = { readonly type: string } & Readonly<Record<string, unknown>>;
+
+/** The sender the relay names for a message the Imbue Studio chrome sent (contracts.md section 5.6). */
+export const EMBEDDER_SENDER = "embedder";
+
+/** What a link to another workspace's app gets, since only that workspace can open it. */
+export const OTHER_WORKSPACE_LINK_NOTICE = "That link belongs to another workspace, so it cannot open here.";
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
 export interface PageDriver {
@@ -977,23 +989,69 @@ export class DesktopStore {
     return launched !== null;
   }
 
-  /** A message from the Imbue Studio chrome: when an app registered for its type, the shell is asked, once, to post it
-   *  there with this client's id (contracts.md section 5.6); the app decides what it means. False when no app
-   *  registered for the type, the shell could not pass it on, this is a preview shell (whose backend refuses
-   *  the relay: the apps it names are the live ones), or this is a solo shell (whose client is the main window's,
-   *  so what an app did with the message would land there). */
-  async relayEmbedderMessage(message: EmbedderMessage): Promise<boolean> {
-    if (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, message.type)) {
+  /** A message this page received, from the Imbue Studio chrome (``senderApp`` null) or from the frame of an app's
+   *  page (``senderApp`` that app): the shell is asked, once, to deliver it with this client's id to the apps
+   *  registered for its type (contracts.md section 5.6); the apps decide what it means. When it did not reach
+   *  every app, the user is told why in the relay's words. Answers whether it was relayed and reached every app.
+   *
+   *  A chrome message is relayed only when an app registered for its type, and never from a preview shell (whose
+   *  backend refuses the relay: the apps it names are the live ones) or a solo shell (whose client is the main
+   *  window's, which relays the chrome's messages itself). An app's message is always relayed, from a solo shell
+   *  too: what it shows lands on this client's desktop, in the main window. */
+  async relayEmbedderMessage(message: EmbedderMessage, senderApp: string | null): Promise<boolean> {
+    const isFromEmbedder = senderApp === null;
+    if (
+      isFromEmbedder &&
+      (isPreviewShell() || this.soloWindowId !== null || !isEmbedderMessageHandled(this.state, message.type))
+    ) {
       return false;
     }
+    return this.deliverMessage(message, senderApp ?? EMBEDDER_SENDER);
+  }
+
+  /** Ask the shell to deliver ``message`` to the apps registered for its type, telling the user why when it did not
+   *  reach every one; answers whether it did. */
+  private async deliverMessage(message: EmbedderMessage, sender: string): Promise<boolean> {
     const { type, ...payload } = message;
     try {
-      await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload);
+      await this.deps.api.relayEmbedderMessage(type, this.deps.clientId, payload, sender);
     } catch (error) {
-      console.warn(`[si] could not relay ${type} from the embedder`, error);
+      this.toast((error as Error).message);
       return false;
     }
     return true;
+  }
+
+  /** Open a link where it belongs in this workspace: a local URL in the workspace's browser (``open:url``), one of
+   *  this workspace's app addresses as that app's window at its path. Another workspace's address is refused with a
+   *  notice. ``workspaceHost`` is this page's own host, which says which workspace it is; ``senderApp`` is the app
+   *  whose page asked, or null for the Imbue Studio chrome, and names the ``open:url`` it sends. */
+  async openLink(url: string, workspaceHost: string, senderApp: string | null): Promise<void> {
+    const target = classifyLink(url, workspaceHost);
+    switch (target.kind) {
+      case "local-url":
+        await this.deliverMessage({ type: OPEN_URL_MESSAGE, url: target.url }, senderApp ?? EMBEDDER_SENDER);
+        return;
+      case "app-address": {
+        const app = this.state.apps.find((candidate) => candidate.label === target.label);
+        if (app === undefined) {
+          this.toast(`Nothing in this workspace is at ${target.url}`);
+          return;
+        }
+        await this.openWindowAt(app.name, target.path, "focus");
+        return;
+      }
+      case "other-workspace":
+        this.toast(OTHER_WORKSPACE_LINK_NOTICE);
+        return;
+      case "unroutable":
+        this.toast(`Nothing in this workspace is at ${url}`);
+        return;
+      case "external":
+      case "file":
+        console.warn(`[si] an opened link was ignored: ${url} is no address of this machine`);
+        return;
+    }
   }
 
   /** Point this client's view of a window at ``path``, the way an agent's ``navigate`` does: the location is

@@ -17,7 +17,7 @@ import {
   windowRecord,
 } from "../testing/records";
 import type { GridCell } from "../model/records";
-import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
+import { DesktopStore, OTHER_WORKSPACE_LINK_NOTICE, chooseInitialDesktopId } from "./DesktopStore";
 import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
 
 const METRICS = themeMetricsRecord();
@@ -1291,51 +1291,120 @@ describe("desktops and shortcuts", () => {
 describe("embedder messages", () => {
   /** An app registered for ``minds:focus-chat``, as its manifest's ``[[message_handlers]]`` declares. */
   const HANDLING_APP = appRecord("buddy", {
-    message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat" }],
+    message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat", show: null }],
   });
 
-  it("relays a message an app registered for once, with this client and the message's own fields", async () => {
+  it("relays a chrome message an app registered for once, with this client and the message's own fields", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), HANDLING_APP]);
 
-    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(true);
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(true);
 
     expect(api.relayedMessages).toEqual([
-      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-7" } },
+      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-7" }, sender: "embedder" },
     ]);
   });
 
-  it("relays nothing from a solo shell, whose client is the main window's", async () => {
+  it("relays no chrome message from a solo shell, whose client is the main window's", async () => {
     api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
     const store = makeStore(() => undefined, { soloWindowId: "win-1" });
     await store.start(NO_LINK);
 
-    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(false);
 
     expect(api.relayedMessages).toEqual([]);
   });
 
-  it("relays nothing for a type no app registered for", async () => {
+  it("relays an app's message from a solo shell too, with the app as its sender", async () => {
+    api.apps = [appRecord("docs"), appRecord("notes"), HANDLING_APP];
+    const store = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await store.start(NO_LINK);
+
+    expect(await store.relayEmbedderMessage({ type: "open:file", path: "/home/user/plan.md" }, "chat")).toBe(true);
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:file", clientId: CLIENT, payload: { path: "/home/user/plan.md" }, sender: "chat" },
+    ]);
+  });
+
+  it("relays no chrome message of a type no app registered for", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), HANDLING_APP]);
 
-    expect(await store.relayEmbedderMessage({ type: "minds:close-active-tab" })).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "minds:close-active-tab" }, null)).toBe(false);
 
     expect(api.relayedMessages).toEqual([]);
   });
 
-  it("answers false and says why when the shell could not pass the message on", async () => {
+  it("tells the user why, in the relay's words, when a message did not reach every app", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([HANDLING_APP]);
-    api.refusal = "buddy did not take it";
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.refusal = "Nothing in this workspace handles 'open:url'";
 
-    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" })).toBe(false);
+    expect(await store.relayEmbedderMessage({ type: "open:url", url: "http://localhost:3000/" }, "chat")).toBe(false);
+    api.refusal = "buddy did not take it: could not be reached";
+    expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(false);
 
-    expect(warn.mock.calls.map((call) => String(call[0]))).toEqual([
-      "[si] could not relay minds:focus-chat from the embedder",
+    expect(notices()).toEqual([
+      "Nothing in this workspace handles 'open:url'",
+      "buddy did not take it: could not be reached",
     ]);
-    warn.mockRestore();
+  });
+});
+
+describe("links Imbue Studio hands over", () => {
+  const COORDINATE = "host-0123456789abcdef0123456789abcdef.localhost:8421";
+  const SHELL_HOST = `system-interface-aa11bb22.${COORDINATE}`;
+  const FILES_APP = appRecord("files", { label: "files-ab12cd34" });
+
+  it("opens a local URL in the workspace's browser through open:url, sent as the embedder's", async () => {
+    const store = await startedStore();
+
+    await store.openLink("http://localhost:3000/app?x=1", SHELL_HOST, null);
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:url", clientId: CLIENT, payload: { url: "http://localhost:3000/app?x=1" }, sender: "embedder" },
+    ]);
+  });
+
+  it("opens one of this workspace's app addresses as that app's window at its path, raising one already there", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), FILES_APP]);
+
+    await store.openLink(`http://files-ab12cd34.${COORDINATE}/home/user/?view`, SHELL_HOST, null);
+
+    expect(api.calls).toContain("openWindow:home:files:/home/user/?view:focus");
+    expect(api.relayedMessages).toEqual([]);
+  });
+
+  it("refuses another workspace's address, and an address no app of this workspace is at, with a notice", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), FILES_APP]);
+
+    await store.openLink(
+      "http://files-ab12cd34.host-fedcba9876543210fedcba9876543210.localhost:8421/",
+      SHELL_HOST,
+      null,
+    );
+    await store.openLink(`http://gone-zz99yy88.${COORDINATE}/`, SHELL_HOST, null);
+    // The workspace's own bare address, which names no app; the desktop app forwards it like an app address.
+    await store.openLink(`http://${COORDINATE}/`, SHELL_HOST, null);
+
+    expect(notices()).toEqual([
+      OTHER_WORKSPACE_LINK_NOTICE,
+      `Nothing in this workspace is at http://gone-zz99yy88.${COORDINATE}/`,
+      `Nothing in this workspace is at http://${COORDINATE}/`,
+    ]);
+    expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
+  });
+
+  it("tells the user why a local URL could not open, in the relay's words", async () => {
+    const store = await startedStore();
+    api.refusal = "browser did not take it: Chromium is not installed";
+
+    await store.openLink("http://localhost:3000/", SHELL_HOST, null);
+
+    expect(notices()).toEqual(["browser did not take it: Chromium is not installed"]);
   });
 });
 

@@ -3,6 +3,7 @@ and the verbs of the op route."""
 
 from collections.abc import Mapping
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from typing import Any
 from typing import Final
 
@@ -784,18 +785,26 @@ def _client_desktop_view(shell: ShellState, desktop: Desktop, client_id: ClientI
     )
 
 
-def _show(
-    shell: ShellState, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
-) -> ResponseReturnValue:
-    """The ``show`` op: put the path of the app on the target client's screen, choosing the window by the rule
-    ``choose_show_target`` spells, and answer which way it went."""
-    app = _app_name_or_raise(arguments.app, "app")
+class ShowResult(FrozenModel):
+    """What a ``show`` did: the client and desktop the page is on, the window showing it, and which way it went."""
+
+    shown_on: _DesktopOpTarget = Field(description="The client, and the desktop the page is shown on")
+    window_id: WindowId = Field(description="The window that shows the page")
+    outcome: ShowOutcome = Field(description="Raised, navigated, pinned, or opened")
+
+
+def _show_page(
+    shell: ShellState,
+    app: AppName,
+    path: WindowPath,
+    showing: AbstractSet[WindowPath],
+    repoint: AbstractSet[WindowPage],
+    target: _DesktopOpTarget,
+    requester: OpRequester | None,
+) -> ShowResult:
+    """Put the path of the app on the target client's screen, choosing the window by the rule ``choose_show_target``
+    spells."""
     shell.require_app_entry(str(app))
-    if not arguments.path:
-        raise LayoutOpError("show needs a path")
-    path = WindowPath(arguments.path)
-    showing = {WindowPath(candidate) for candidate in arguments.showing}
-    repoint = {WindowPage(candidate) for candidate in arguments.repoint}
     client_id = target.client_id
     others = [
         _client_desktop_view(shell, desktop, client_id)
@@ -834,8 +843,45 @@ def _show(
         path,
         choice.outcome.value,
     )
-    shown_on = _DesktopOpTarget(client_id=client_id, desktop=desktop)
-    return jsonify({**_answer_document(shell, shown_on, window_id), "shown": choice.outcome.value})
+    return ShowResult(
+        shown_on=_DesktopOpTarget(client_id=client_id, desktop=desktop), window_id=window_id, outcome=choice.outcome
+    )
+
+
+def _show(
+    shell: ShellState, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
+) -> ResponseReturnValue:
+    """The ``show`` op: put the path of the app on the target client's screen and answer which way it went."""
+    app = _app_name_or_raise(arguments.app, "app")
+    if not arguments.path:
+        raise LayoutOpError("show needs a path")
+    result = _show_page(
+        shell,
+        app,
+        WindowPath(arguments.path),
+        {WindowPath(candidate) for candidate in arguments.showing},
+        {WindowPage(candidate) for candidate in arguments.repoint},
+        target,
+        requester,
+    )
+    return jsonify({**_answer_document(shell, result.shown_on, result.window_id), "shown": result.outcome.value})
+
+
+def show_page_for_client(
+    shell: ShellState,
+    app: AppName,
+    page: WindowPath,
+    showing: Sequence[WindowPath],
+    client_id: ClientId,
+    requester: OpRequester,
+) -> ShowResult:
+    """The ``show`` op as a message handler's delivery runs it (desktop contracts.md section 5.6): a page of the
+    declaring app, for the client whose page sent the message, on that client's active desktop, repointing nothing.
+
+    Raises the op's own errors (a ShellError) when the page cannot be shown.
+    """
+    target = _resolve_target(shell, {"client": str(client_id)}, requester)
+    return _show_page(shell, app, page, set(showing), set(), target, requester)
 
 
 def _beside_anchor(

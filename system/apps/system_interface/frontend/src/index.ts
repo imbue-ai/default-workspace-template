@@ -4,6 +4,7 @@ import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   DETACHED_WINDOWS,
   EMBEDDER_CAPABILITIES,
+  OPEN_LINK,
   POP_OUT_WINDOW,
   REATTACH_WINDOW,
   TEAR_OUT,
@@ -20,6 +21,7 @@ import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
 import { parseSoloMode } from "./model/soloMode";
+import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
 import { frameFromViewportFractions } from "./geometry/frames";
 import type { PopOutBridge } from "./store/DesktopStore";
@@ -121,8 +123,8 @@ function bootstrap(): void {
   document.addEventListener("visibilitychange", () =>
     desktopStore.onVisibilityChange(document.visibilityState === "visible"),
   );
-  // Every message the chrome sends also goes, its payload unread, to the apps registered for its type.
-  setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message));
+  // Every message the chrome sends also goes to the apps registered for its type.
+  setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message, null));
   // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     desktopStore.setCanPopOut(message.canPopOut === true);
@@ -131,6 +133,14 @@ function bootstrap(): void {
     const windowId = message.windowId;
     if (typeof windowId !== "string" || windowId === "") return;
     void desktopStore.reattachWindow(windowId, frameFromMessage(message.frame));
+  });
+  // A popup a page of this workspace opened, which Imbue Studio turned away from a window of its own: it opens here.
+  // A preview shell sees it only as the live shell's rebroadcast, and the live shell opens it.
+  setEmbedderMessageHandler(OPEN_LINK, (message) => {
+    if (isPreviewShell()) return;
+    const url = message.url;
+    if (typeof url !== "string" || url === "") return;
+    void desktopStore.openLink(url, window.location.host, null);
   });
   setEmbedderMessageHandler(TEAR_OUT, (message) => {
     const windowId = message.windowId;
@@ -155,7 +165,7 @@ function bootstrap(): void {
   // Announced once the page can act on what the embedder held, not merely once a handler is
   // registered: relaying a message needs the apps (which of them take it), and the embedder sends
   // what it held the moment this lands.
-  void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder());
+  void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder({ opensLinks: true }));
 }
 
 window.addEventListener("load", bootstrap);

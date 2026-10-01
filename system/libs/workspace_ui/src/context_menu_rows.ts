@@ -16,7 +16,6 @@ import {
   isEditableElement,
   imageSrcOf,
   isPasswordField,
-  linkHrefOf,
   referenceBlock,
   selectionOf,
   type ElementReference,
@@ -181,8 +180,11 @@ export function canReadClipboard(): boolean {
   return typeof navigator !== "undefined" && typeof navigator.clipboard?.readText === "function";
 }
 
+/** Open a link the menu was opened on, as a click on it would be (links.ts ``routeLinkElement``). */
+export type OpenLink = (anchor: HTMLAnchorElement) => void;
+
 /** The standard rows the target admits (section 3.3), in the order the native menu lists them. */
-export function standardContextMenuRows(target: ContextMenuTarget): ContextMenuRow[] {
+export function standardContextMenuRows(target: ContextMenuTarget, openLink: OpenLink): ContextMenuRow[] {
   const { element, selectionText } = target;
   const isEditable = isEditableElement(element);
   const fieldSelection = fieldSelectionOf(element);
@@ -209,16 +211,12 @@ export function standardContextMenuRows(target: ContextMenuTarget): ContextMenuR
     editRows.push({ kind: "action", key: "select-all", label: "Select All", onSelect: () => selectAllIn(element) });
   }
   const mediaRows: ContextMenuRow[] = [];
-  const href = linkHrefOf(element);
-  if (href !== null) {
+  const anchor = element.closest("a[href]");
+  if (anchor instanceof HTMLAnchorElement) {
+    const href = anchor.href;
     mediaRows.push(
       { kind: "action", key: "copy-link", label: "Copy link address", onSelect: () => void copyText(href) },
-      {
-        kind: "action",
-        key: "open-link",
-        label: "Open link in new window",
-        onSelect: () => void element.ownerDocument.defaultView?.open(href, "_blank", "noopener"),
-      },
+      { kind: "action", key: "open-link", label: "Open link", onSelect: () => openLink(anchor) },
     );
   }
   const src = imageSrcOf(element);
@@ -273,11 +271,12 @@ export function elementMenuRows(
   draft: (text: string) => void,
   isDraftAvailable: boolean,
   ownRows: readonly ContextMenuRow[],
+  openLink: OpenLink,
 ): ContextMenuRow[] {
   const reference = describeElement(target.element, target.click, scope);
   return joinRowGroups([
     ownRows,
-    standardContextMenuRows(target),
+    standardContextMenuRows(target, openLink),
     elementReferenceRows(reference, draft, isDraftAvailable),
   ]);
 }

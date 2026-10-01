@@ -33,10 +33,14 @@ from imbue.system_interface.shell.desktop_routes import dispatch_desktop_op
 from imbue.system_interface.shell.desktop_routes import inventory_document_json
 from imbue.system_interface.shell.desktop_routes import register_desktop_routes
 from imbue.system_interface.shell.desktop_routes import resolved_client_wire_json
+from imbue.system_interface.shell.desktop_routes import show_page_for_client
 from imbue.system_interface.shell.embedder_messages import EmbedderMessageRelayRequest
+from imbue.system_interface.shell.embedder_messages import MessageDelivery
+from imbue.system_interface.shell.embedder_messages import ShownPage
 from imbue.system_interface.shell.embedder_messages import deliver_forwarded_message
 from imbue.system_interface.shell.embedder_messages import forwarded_messages
 from imbue.system_interface.shell.embedder_messages import message_delivery_wire_json
+from imbue.system_interface.shell.embedder_messages import shown_pages
 from imbue.system_interface.shell.errors import AppLifecycleRefusedError
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import DesktopConflictError
@@ -288,21 +292,26 @@ def record_client_shown(client_id: str) -> ResponseReturnValue:
 
 
 def relay_embedder_message() -> ResponseReturnValue:
-    """Post a message the Imbue Studio chrome sent this client's page to every app registered for its type; 200 when
-    every app took it, 502 with each app's answer and a ``detail`` naming the ones that did not, 404 when no app
-    handles the type. Refused in a preview, whose copied registry names the live app of every sibling not
+    """Deliver a message this client's page received, from the Imbue Studio chrome or from an app's frame, to every
+    app registered for its type: posted to a ``path`` handler's route, or shown as the page a ``show`` handler builds.
+    200 when every app took it, 502 with each app's answer and a ``detail`` naming the ones that did not, 404 when no
+    app handles the type. Refused in a preview, whose copied registry names the live app of every sibling not
     previewed."""
     refusal = _refuse_if_preview()
     if refusal is not None:
         return refusal
     relayed = parse_request_body(EmbedderMessageRelayRequest)
-    forwarded = forwarded_messages([entry.row for entry in _shell().inventory.entries()], relayed)
-    if not forwarded:
-        raise NoMessageHandlerError(f"No registered app handles {str(relayed.type)!r}")
+    rows = [entry.row for entry in _shell().inventory.entries()]
+    forwarded = forwarded_messages(rows, relayed)
+    pages = shown_pages(rows, relayed)
+    if not forwarded and not pages:
+        raise NoMessageHandlerError(f"Nothing in this workspace handles {str(relayed.type)!r}")
     deliveries = [deliver_forwarded_message(message) for message in forwarded]
+    deliveries += [_show_relayed_page(page, relayed) for page in pages]
     logger.info(
-        "Relayed {} from client {} to {}",
+        "Relayed {} from {} for client {} to {}",
         relayed.type,
+        relayed.sender,
         relayed.client_id,
         ", ".join(f"{delivery.app} ({delivery.status})" for delivery in deliveries),
     )
@@ -315,6 +324,27 @@ def relay_embedder_message() -> ResponseReturnValue:
         return jsonify(answer), HTTP_OK
     detail = "; ".join(f"{delivery.app} did not take it: {delivery.detail}" for delivery in undelivered)
     return jsonify({**answer, "detail": detail}), HTTP_BAD_GATEWAY
+
+
+def _show_relayed_page(shown: ShownPage, relayed: EmbedderMessageRelayRequest) -> MessageDelivery:
+    """Run the ``show`` op for one ``show`` handler's page, as the declaring app, for the client whose page received
+    the message; a page that cannot be built or shown is that app's failed delivery, reported with the op's reason."""
+    if shown.page is None:
+        return MessageDelivery(app=shown.app, status=None, detail=shown.refusal, is_delivered=False)
+    requester = OpRequester(app=shown.app, marker="")
+    try:
+        result = show_page_for_client(_shell(), shown.app, shown.page, shown.showing, relayed.client_id, requester)
+    except ShellError as e:
+        logger.warning("Could not show {} of {} for {}: {}", shown.page, shown.app, relayed.type, e)
+        return MessageDelivery(app=shown.app, status=None, detail=str(e), is_delivered=False)
+    return MessageDelivery(
+        app=shown.app,
+        status=HTTP_OK,
+        detail="",
+        is_delivered=True,
+        shown=result.outcome,
+        window_id=result.window_id,
+    )
 
 
 # The update notice: the rollback point the update-app careful flow's apply kept

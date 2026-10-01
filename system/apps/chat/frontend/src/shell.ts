@@ -15,7 +15,7 @@ import type { ModelIdentity } from "./models/ModelSettings";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { currentPresenceState, reportPresence, startPresenceReporting } from "./presence";
-import type { ChatPageEmbedApi } from "./embedApi";
+import { CHAT_ROOT_FRAME_CLASS, type ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
 import { rootPathFor } from "./root/selection";
 import { prependToComposer } from "./views/MessageInput";
@@ -48,6 +48,18 @@ let isShown = true;
  */
 export function isFrameRendered(): boolean {
   return document.documentElement.getBoundingClientRect().height > 0;
+}
+
+/**
+ * Whether a shell stands above ``view``, the page's window: it frames the page, or it frames the chat root that
+ * frames the page. A root opened on its own frames its chats with nothing above it, and keeps what they send up
+ * (root/relay.ts), so a page there opens links as a page on its own does.
+ */
+export function isShellAbove(view: Window): boolean {
+  if (view.parent === view) return false;
+  // Null across origins: a frame the shell created.
+  const isInChatRoot = view.frameElement?.classList.contains(CHAT_ROOT_FRAME_CLASS) ?? false;
+  return !isInChatRoot || view.parent.parent !== view.parent;
 }
 
 export interface ChatShellOptions {

@@ -40,23 +40,33 @@ describe("renderMarkdown links", () => {
     return container;
   }
 
-  it("leaves web links as ordinary links", () => {
+  it("opens only external links in a new browsing context, with no opener or referrer", () => {
     const anchors = render(
-      "[Docs](https://example.com/docs), [mail](mailto:a@example.com), [call](tel:+15551234) and [cdn](//cdn.example.com/lib.js)",
+      "[Docs](https://example.com/docs), [mail](mailto:a@example.com), [call](tel:+15551234) and [x](HTTPS://EXAMPLE.COM)",
     ).querySelectorAll("a");
     expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
       "https://example.com/docs",
       "mailto:a@example.com",
       "tel:+15551234",
-      "//cdn.example.com/lib.js",
+      "HTTPS://EXAMPLE.COM",
     ]);
-    expect(Array.from(anchors, (a) => a.hasAttribute("download"))).toEqual([false, false, false, false]);
+    expect(Array.from(anchors, (a) => [a.getAttribute("target"), a.getAttribute("rel")])).toEqual(
+      Array(4).fill(["_blank", "noopener noreferrer"]),
+    );
   });
 
-  it("keeps an absolute path as a download link", () => {
-    const anchor = render("[Q4 report](/home/user/workspace/data/documents/q4.pdf)").querySelector("a")!;
-    expect(anchor.getAttribute("href")).toBe("/home/user/workspace/data/documents/q4.pdf");
-    expect(anchor.hasAttribute("download")).toBe(true);
+  it("keeps a file or local link's real target, with nothing that would open it in the browser", () => {
+    const anchors = render(
+      "[Q4 report](/home/user/workspace/data/documents/q4.pdf), [app](http://localhost:3000/) and [api](http://127.0.0.1:8080/x)",
+    ).querySelectorAll("a");
+    expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
+      "/home/user/workspace/data/documents/q4.pdf",
+      "http://localhost:3000/",
+      "http://127.0.0.1:8080/x",
+    ]);
+    expect(Array.from(anchors, (a) => [a.hasAttribute("target"), a.hasAttribute("download")])).toEqual(
+      Array(3).fill([false, false]),
+    );
   });
 
   it.each([
@@ -66,6 +76,7 @@ describe("renderMarkdown links", () => {
     "[section](#usage)",
     "[local](file:///home/user/workspace/notes.md)",
     "[text me](sms:+15551234)",
+    "[cdn](//cdn.example.com/lib.js)",
   ])("renders %s as its label text with no link", (source) => {
     const container = render(source);
     expect(container.querySelector("a")).toBeNull();

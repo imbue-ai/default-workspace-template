@@ -15,8 +15,8 @@
  * of plan section 4.6 after every desktops update and every layout load (``shell:navigate`` for a
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
- * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, and
- * ``shell:start-with-text``. Messages cross through ``relay.ts``.
+ * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
+ * ``shell:message``, and ``shell:open-link``. Messages cross through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
@@ -32,8 +32,10 @@ import {
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
   SHELL_LOCATION,
+  SHELL_MESSAGE,
   SHELL_NAVIGATE,
   SHELL_OPEN,
+  SHELL_OPEN_LINK,
   SHELL_SHOWN,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
@@ -55,7 +57,7 @@ import {
 } from "../reducers/desktopState";
 import type { DesktopState } from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
-import type { DesktopStore, PageDriver } from "../store/DesktopStore";
+import type { DesktopStore, EmbedderMessage, PageDriver } from "../store/DesktopStore";
 
 export const LIVE_PAGE_ATTRIBUTE = "data-live-page";
 /** The element of a window's chrome the page is laid over. */
@@ -147,6 +149,8 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
     setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
+    setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
+    setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
@@ -625,6 +629,33 @@ export class LivePagesLayer implements PageDriver {
       return null;
     }
     return text;
+  }
+
+  /** ``shell:message {message}`` from a page: a message of the page's own (a ``type`` and its fields, such as
+   *  ``open:file``), delivered to the apps registered for its type, with the page's app as its sender. The frame has
+   *  to be one the shell created. */
+  private takeMessage(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const page = this.pageOfFrame(frame);
+    if (page === undefined) return;
+    const message = payload.message;
+    if (message === null || typeof message !== "object" || typeof (message as { type?: unknown }).type !== "string") {
+      console.warn(`[si] shell:message ignored: it carried no message with a type (${JSON.stringify(payload)})`);
+      return;
+    }
+    void this.store.relayEmbedderMessage(message as EmbedderMessage, page.app);
+  }
+
+  /** ``shell:open-link {url}`` from a page: a link to another app's address (or another workspace's), which the
+   *  shell opens as that app's window, or refuses with a notice. The frame has to be one the shell created. */
+  private takeOpenLink(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const page = this.pageOfFrame(frame);
+    if (page === undefined) return;
+    const url = payload.url;
+    if (typeof url !== "string" || url === "") {
+      console.warn(`[si] shell:open-link ignored: it carried no url (${JSON.stringify(payload)})`);
+      return;
+    }
+    void this.store.openLink(url, window.location.host, page.app);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

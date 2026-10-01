@@ -54,8 +54,13 @@ export class FakeDesktopApi implements DesktopApi {
   /** ``<client>/<window>`` -> the client's own path and title for an independent window. */
   readonly windowPaths = new Map<string, StoredWindowPath>();
   readonly calls: string[] = [];
-  /** Every message relayed for the Imbue Studio chrome, in order. */
-  readonly relayedMessages: { type: string; clientId: string; payload: Readonly<Record<string, unknown>> }[] = [];
+  /** Every message relayed, from the Imbue Studio chrome or an app's page, with its sender, in order. */
+  readonly relayedMessages: {
+    type: string;
+    clientId: string;
+    payload: Readonly<Record<string, unknown>>;
+    sender: string;
+  }[] = [];
   /** A refusal every route raises while set. */
   refusal: string | null = null;
   /** The page a POST launch path answers (as the app would); a GET launch path's page is built from its path. */
@@ -451,10 +456,11 @@ export class FakeDesktopApi implements DesktopApi {
     type: string,
     clientId: string,
     payload: Readonly<Record<string, unknown>>,
+    sender: string,
   ): Promise<void> {
-    this.calls.push(`relayEmbedderMessage:${type}:${clientId}`);
+    this.calls.push(`relayEmbedderMessage:${type}:${clientId}:${sender}`);
     this.refuse();
-    this.relayedMessages.push({ type, clientId, payload });
+    this.relayedMessages.push({ type, clientId, payload, sender });
   }
 }
 

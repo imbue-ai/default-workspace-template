@@ -23,6 +23,7 @@ vi.mock("./presence", () => ({
 import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_LOCATION, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
 import { chatSnapshotFixture } from "./models/chatSnapshotFixture";
+import { CHAT_ROOT_FRAME_CLASS } from "./embedApi";
 
 const HANDSHAKE = {
   type: SHELL_HANDSHAKE,
@@ -269,5 +270,33 @@ describe("openSubagentView", () => {
       { type: "shell:open", path: "/agent-1.agent-1.sess-3", ifPresent: "focus" },
       "*",
     );
+  });
+});
+
+describe("isShellAbove", () => {
+  /** A frame in ``host``'s document, one the chat root holds a chat page in when ``isRootFrame``. */
+  function frameIn(host: Window, isRootFrame: boolean): Window {
+    const frame = host.document.createElement("iframe");
+    if (isRootFrame) frame.className = CHAT_ROOT_FRAME_CLASS;
+    host.document.body.append(frame);
+    return frame.contentWindow as Window;
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("sees the shell that frames the page or the root around it, and nothing over a root opened on its own", async () => {
+    const { isShellAbove } = await import("./shell");
+    const inShell = frameIn(window, false);
+    const inRootOnItsOwn = frameIn(window, true);
+    const inRootInShell = frameIn(frameIn(window, false), true);
+
+    expect([
+      isShellAbove(window),
+      isShellAbove(inShell),
+      isShellAbove(inRootOnItsOwn),
+      isShellAbove(inRootInShell),
+    ]).toEqual([false, true, false, true]);
   });
 });

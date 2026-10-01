@@ -147,11 +147,12 @@ export interface AppPin {
   readonly default_mode: EntryMode;
 }
 
-/** A message an app takes from the Imbue Studio chrome, and the route under its origin the shell posts it to
- *  (contracts.md section 2). */
+/** One message an app registered for (contracts.md section 2): its type, and either the route the shell posts it to
+ *  or the page template the shell shows for it (``null`` for the form it does not use). */
 export interface MessageHandler {
   readonly type: string;
-  readonly path: string;
+  readonly path: string | null;
+  readonly show: string | null;
 }
 
 /** One registered app as the shell lists it (contracts.md section 5.5). */
@@ -173,7 +174,7 @@ export interface AppRecord {
   readonly default_shortcut: DefaultShortcut | null;
   readonly launcher_rank: number | null;
   readonly pin: AppPin | null;
-  /** The messages from the Imbue Studio chrome the app takes, which the shell relays to it. */
+  /** The messages the app takes, from the Imbue Studio chrome or from other apps' pages, which the shell relays. */
   readonly message_handlers: readonly MessageHandler[];
   readonly is_running: boolean;
 }
@@ -470,7 +471,8 @@ function parseMessageHandler(raw: unknown): MessageHandler {
   const record = asObject(raw, "message handler");
   return {
     type: asString(record.type, "message_handler.type"),
-    path: asString(record.path, "message_handler.path"),
+    path: record.path == null ? null : asString(record.path, "message_handler.path"),
+    show: record.show == null ? null : asString(record.show, "message_handler.show"),
   };
 }
 

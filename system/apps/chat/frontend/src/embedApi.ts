@@ -10,6 +10,9 @@
 
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 
+/** The class of every frame the root holds a chat page in, by which a page knows the root frames it. */
+export const CHAT_ROOT_FRAME_CLASS = "chat-root-frame";
+
 export interface ChatPageEmbedApi {
   /** The handshake the shell gave the root, passed down so the page adopts the same client. */
   handshake(handshake: ShellHandshake): void;

@@ -386,7 +386,7 @@ A page that nests a further frame of its own (the chat root, section 9.1) relays
 
 ## 8. The manifest
 
-`app.toml` keeps `name`, `display_name`, `icon`, `critical`, `priority`, `program`, `internal`, `default_shortcut`, `launcher_rank`, `references`, `scope`, `wiring`, and `handles`.
+`app.toml` keeps `name`, `display_name`, `icon`, `critical`, `priority`, `program`, `internal`, `default_shortcut`, `launcher_rank`, `references`, `scope`, `wiring`, and `handles` (the reserved `handles` table was later removed by the workspace link routing plan, which made `message_handlers` the intent handlers).
 It drops `instances` and `instances_url`.
 `actions` becomes `launch_paths`: `[[launch_paths]] id, label, path, params`, where `path` is a path under the app origin and `params` is the documented list of query parameter names the shell may append.
 `default_shortcut.action` becomes `default_shortcut.launch`, naming a declared launch path id or `open`.

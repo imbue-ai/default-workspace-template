@@ -69,6 +69,20 @@ background agent, which is its own chat -- or the human).
   fresh home page rather than closed, since Chromium would close its window with it
   and the window-bound sweep would then stop the browser (409 while the browser is
   not running).
+- **Opening a link for the human** (`POST /api/open-url`, the manifest's `open:url` message handler; the
+  workspace link routing plan): the shell posts `{"type", "client_id", "url"}` when a link to a local address is
+  clicked in the workspace (a chat's `http://localhost:3000/` link, or a page's popup Imbue Studio hands back).
+  The URL must be an absolute `http(s)` URL on this machine (`localhost`, `127.0.0.1`, `[::1]`, or a
+  `*.localhost` host); anything else is refused with a reason under `detail`, which the shell shows the user, as
+  is a Chromium still installing (503). The one browser then opens it the way the launch path opens a start page
+  -- created, relaunched, or given a new tab in front -- with two exceptions: while Chromium is still launching the
+  URL is held and opened in front once the launch finishes, and while an agent drives the browser the URL is held
+  rather than opened over the agent's work. Either way the route then shows the browser's page to the client that
+  clicked (the shell's `show` op, through `workspace_layout`), raising a browser window or opening one. A held URL
+  is named on the viewer's agent overlay with "Take control of this browser", which takes control as the plain
+  button does and opens the URL as a tab in front, and "Cancel" (`POST /browsers/<name>/pending-url/cancel`), which
+  drops it and leaves the agent's session as it was. It also opens once the agent lets go of the browser; a
+  second URL held before either replaces the first, and a browser that stops (a failed relaunch included) drops it.
 - **CLI** (`agentic-browser-fleet`): the thin client the agent uses to drive the
   fleet. The fleet starts empty, so the first step is always `new` (it prints the
   name of the browser it started); every other command takes that
