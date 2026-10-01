@@ -5272,6 +5272,30 @@ def test_a_spare_is_not_ready_until_its_harness_says_it_accepts_input(
         manager.stop()
 
 
+def test_a_spare_whose_process_dies_while_it_boots_is_given_up_at_once_and_its_claiming_chat_told(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = _write_booting_mngr_binary(tmp_path)
+    manager, _ = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        booting = _wait_for_created_spare(manager)
+        created = manager.create_chat("")
+        assert created.chat_id == booting.chat_id
+
+        # Shed while it boots: the observe stream reports its process gone, and no ready marker comes.
+        seed_agent_state(manager, booting.chat_id, name="Chat-1", state="STOPPED")
+
+        # Answered well inside the boot timeout, not after it.
+        outcome = manager.wait_for_chat_creation(created.chat_id, timeout=15.0)
+        assert outcome is not None and not outcome.is_created
+        assert "the agent's process exited before the harness came up" in outcome.error
+        assert _mngr_calls(argv_log, "destroy") == [["destroy", booting.chat_id, "--force"]]
+        assert manager._spare_retry_not_before > time.monotonic()
+    finally:
+        manager.stop()
+
+
 def test_a_spare_still_starting_when_the_app_stops_is_left_for_the_next_start(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

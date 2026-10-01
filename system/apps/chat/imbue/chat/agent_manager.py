@@ -3491,9 +3491,10 @@ class AgentManager:
             return
         self._creation_cg.start_new_thread(target=self.ensure_spare_chat, name="ensure-spare-chat", is_checked=False)
 
-    def _wait_for_spare_harness(self, spare: SpareChatAgent, harness: HarnessType) -> bool:
-        """Wait until a created spare's harness accepts input; False when it does not within
-        ``SPARE_CHAT_BOOT_TIMEOUT_SECONDS`` or the app is stopping.
+    def _wait_for_spare_harness(self, spare: SpareChatAgent, harness: HarnessType) -> str | None:
+        """Wait until a created spare's harness accepts input; None once it does, else why it did not:
+        its process died (most likely shed for memory while it booted), it did not come up within
+        ``SPARE_CHAT_BOOT_TIMEOUT_SECONDS``, or the app is stopping.
 
         ``mngr create`` with no message returns before the harness is up, and a spare handed over
         then takes its chat's first message into a harness still booting. A spare a chat claimed
@@ -3504,10 +3505,14 @@ class AgentManager:
         deadline = time.monotonic() + SPARE_CHAT_BOOT_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             if not is_harness_starting_up(state_dir, spec.startup_ready_marker, spec.process_started_marker_filename):
-                return True
+                return None
+            with self._lock:
+                is_dead = not self._is_spare_process_alive_locked(spare)
+            if is_dead:
+                return "the agent's process exited before the harness came up"
             if self._shutdown_event.wait(timeout=SPARE_CHAT_BOOT_POLL_SECONDS):
-                return False
-        return False
+                return "the chat app stopped before the harness came up"
+        return f"the harness did not come up within {SPARE_CHAT_BOOT_TIMEOUT_SECONDS:.0f}s"
 
     def _run_spare_creation(self, spare: SpareChatAgent, harness: HarnessType, work_dir: Path) -> None:
         """The spare's creation thread: ``_create_spare``, then ``_abandon_spare_left_starting``.
@@ -3604,12 +3609,7 @@ class AgentManager:
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
             self._tag_spares_for_shedding_first()
-            if not self._wait_for_spare_harness(spare, harness):
-                failure = (
-                    "the chat app stopped before the harness came up"
-                    if self._shutdown_event.is_set()
-                    else f"the harness did not come up within {SPARE_CHAT_BOOT_TIMEOUT_SECONDS:.0f}s"
-                )
+            failure = self._wait_for_spare_harness(spare, harness)
         self._settle_spare_creation(spare, None if failure is None else failure_notice(failure, output_tail.text()))
 
     def _settle_spare_creation(self, spare: SpareChatAgent, error: str | None) -> None:
