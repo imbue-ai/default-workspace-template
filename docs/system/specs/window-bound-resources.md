@@ -90,7 +90,7 @@ The `focus` browser shortcut raises this client's most recent browser window on 
 Shortcuts are seeded when a desktop is created; afterwards a desktop gains only the default shortcut of an app never offered before, and a workspace from before the offered record counts every app with a shortcut on a desktop as offered ([plan 3.2](../blueprint/desktop-interface/plan-desktop-interface.md)).
 So an existing desktop keeps its stored shortcuts (the chat's at `(chat, new)` in `new` mode, the others in `focus` mode).
 There is no automatic migration in this release, as for every other desktop-file change (plan section 15).
-A user flips a shortcut from its context menu ("Change shortcut to ...") or makes a new desktop; an agent runs `workspace-layout shortcut remove chat --launch new` and `workspace-layout shortcut set chat --launch root --mode new --cell <column,row>`.
+A user flips a shortcut from its context menu ("Change shortcut to ...") or makes a new desktop; an agent runs `uv run workspace-layout shortcut remove chat new` and `uv run workspace-layout shortcut set chat root --mode new --cell <column,row>`.
 The changelog entry says so.
 
 ## 4. Part B: window-bound resources
