@@ -5,8 +5,10 @@ import importlib.util
 import io
 import json
 import os
+import threading
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -416,13 +418,11 @@ def test_get_event_detail_serves_and_404s(client: FlaskClient, app: Flask, tmp_p
     assert missing.status_code == 404
 
 
-def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
-    """Eviction releases the watcher (resident transcript, watch thread); a later read
-    rebuilds it from disk transparently -- the chat-memory lifecycle's two halves."""
-    state = build_test_state()
-    agent_state_dir = tmp_path / "agent_state"
+def _claude_agent_info_with_one_message(tmp_path: Path, agent_id: str, state: str) -> AgentInfo:
+    """A claude agent whose transcript on disk holds one user message, "hello"."""
+    agent_state_dir = tmp_path / agent_id / "agent_state"
     agent_state_dir.mkdir(parents=True)
-    claude_config_dir = tmp_path / "claude_config"
+    claude_config_dir = tmp_path / agent_id / "claude_config"
     (claude_config_dir / "projects" / "hash123").mkdir(parents=True)
     (claude_config_dir / "projects" / "hash123" / "s1.jsonl").write_text(
         json.dumps(
@@ -436,13 +436,20 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
         + "\n"
     )
     (agent_state_dir / "claude_session_id_history").write_text("s1\n")
-    agent_info = AgentInfo(
-        id="evictable-agent",
-        name="evictable-agent",
-        state="RUNNING",
+    return AgentInfo(
+        id=agent_id,
+        name=agent_id,
+        state=state,
         agent_state_dir=agent_state_dir,
         claude_config_dir=claude_config_dir,
     )
+
+
+def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
+    """Eviction releases the watcher (resident transcript, watch thread); a later read
+    rebuilds it from disk transparently -- the chat-memory lifecycle's two halves."""
+    state = build_test_state()
+    agent_info = _claude_agent_info_with_one_message(tmp_path, "evictable-agent", "RUNNING")
 
     first = state.get_or_create_watcher(agent_info)
     assert state.watchers == {"evictable-agent": first}
@@ -457,6 +464,105 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
     assert rebuilt is not first
     assert [e["content"] for e in rebuilt.get_all_events()] == ["hello"]
     state.shutdown()
+
+
+def test_a_stopped_chat_read_after_its_stop_is_released_once_nobody_streams_it(tmp_path: Path) -> None:
+    """Reading a stopped chat rebuilds its transcript after the stop's own eviction; the
+    release drops that rebuild, but not while a stream of the chat is open or a send is
+    reviving it, and never a running chat's."""
+    state = build_test_state()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    seed_agent_state(state.agent_manager, "running-agent", name="running-agent", state="RUNNING")
+    stopped_info = _claude_agent_info_with_one_message(tmp_path, "stopped-agent", "STOPPED")
+    running_info = _claude_agent_info_with_one_message(tmp_path, "running-agent", "RUNNING")
+    try:
+        state.get_or_create_watcher(stopped_info)
+        running_watcher = state.get_or_create_watcher(running_info)
+
+        # A viewer's stream holds the stopped chat's transcript.
+        stream = state.event_queues.register("stopped-agent")
+        state.release_unviewed_stopped_transcripts()
+        assert set(state.watchers) == {"stopped-agent", "running-agent"}
+        state.event_queues.unregister("stopped-agent", stream)
+
+        # So does a send reviving it, which built the watcher before starting the agent.
+        with state.agent_manager.track_connecting_send("stopped-agent", "reviving-send") as mark_connecting:
+            mark_connecting()
+            state.release_unviewed_stopped_transcripts()
+            assert set(state.watchers) == {"stopped-agent", "running-agent"}
+
+        # With neither, the next release drops it; the running chat keeps its own.
+        state.release_unviewed_stopped_transcripts()
+        assert state.watchers == {"running-agent": running_watcher}
+    finally:
+        state.shutdown()
+
+
+class _ReleasingWhileSeedingAgentManager(AgentManager):
+    """Runs the chat app's release once, while a watcher is seeded and before it starts."""
+
+    release: Callable[[], None] | None = None
+
+    def update_session_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
+        release, self.release = self.release, None
+        if release is not None:
+            release()
+        super().update_session_events(agent_id, events)
+
+
+def test_a_watcher_released_before_it_starts_leaves_no_watch_thread_running(tmp_path: Path) -> None:
+    manager = _ReleasingWhileSeedingAgentManager.build(WebSocketBroadcaster())
+    state = build_test_state(agent_manager=manager)
+    seed_agent_state(manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    stopped_info = _claude_agent_info_with_one_message(tmp_path, "stopped-agent", "STOPPED")
+    manager.release = state.release_unviewed_stopped_transcripts
+    threads_before = set(threading.enumerate())
+    try:
+        watcher = state.get_or_create_watcher(stopped_info)
+
+        assert state.watchers == {}
+        assert len(watcher.get_all_events()) == 1
+        assert set(threading.enumerate()) - threads_before == set()
+    finally:
+        state.shutdown()
+
+
+def _fake_watcher(
+    get_all_events: Callable[[], list[dict[str, Any]]],
+    start: Callable[[], None],
+    stop: Callable[[], None] = lambda: None,
+) -> SimpleNamespace:
+    """A stand-in for ``build_watcher``'s result: no-op queue hooks around the given seed, start, and stop."""
+    return SimpleNamespace(
+        set_queue_snapshot_callback=lambda _callback: None,
+        notify_idle=lambda: [],
+        notify_busy=lambda: None,
+        set_flush_hooks=lambda _send, _is_alive: None,
+        get_all_events=get_all_events,
+        start=start,
+        stop=stop,
+    )
+
+
+def test_a_watcher_released_while_it_starts_is_stopped_once_after_its_start() -> None:
+    state = build_test_state()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    calls: list[str] = []
+
+    def start_while_released() -> None:
+        calls.append("start")
+        state.release_unviewed_stopped_transcripts()
+        calls.append("started")
+
+    fake_watcher = _fake_watcher(lambda: [], start_while_released, lambda: calls.append("stop"))
+    try:
+        with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
+            state.get_or_create_watcher(_agent_info(agent_id="stopped-agent"))
+
+        assert state.watchers == {}
+        assert calls == ["start", "started", "stop"]
+    finally:
+        state.shutdown()
 
 
 def test_get_events_caps_initial_load_to_tail(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
@@ -704,6 +810,38 @@ def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     assert messenger.sent == [(agent_id, "wake up")]
     tracked = manager.get_agent_by_id(agent_id)
     assert tracked is not None and tracked.state == "WAITING"
+
+
+class _ReleasingAsEachSendEndsAgentManager(AgentManager):
+    """Runs the chat app's release the moment a send's connecting scope ends, as an observe event could."""
+
+    release: Callable[[], None] | None = None
+
+    @contextmanager
+    def track_connecting_send(self, agent_id: str, message_id: str) -> Iterator[Callable[[], None]]:
+        with super().track_connecting_send(agent_id, message_id) as mark_connecting:
+            yield mark_connecting
+        if self.release is not None:
+            self.release()
+
+
+def test_a_send_reviving_a_stopped_chat_keeps_the_chats_watcher(tmp_path: Path) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _claude_agent_info_with_one_message(tmp_path, agent_id, "STOPPED")
+    manager = _ReleasingAsEachSendEndsAgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name=agent_id, state="STOPPED")
+    state = build_test_state(agent_manager=manager)
+    manager.release = state.release_unviewed_stopped_transcripts
+    client = create_application(state).test_client()
+    try:
+        with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+            response = client.post(f"/api/chats/{agent_id}/message", json={"message": "wake up"})
+
+        assert response.status_code == 200
+        assert set(state.watchers) == {agent_id}
+    finally:
+        state.shutdown()
 
 
 def _send_and_record_connecting_pushes(state: str, *, is_ready_marker_written: bool) -> tuple[int, list[bool]]:
@@ -2397,14 +2535,7 @@ def test_get_or_create_watcher_seeds_activity_before_starting_the_watcher() -> N
         calls.append("get_all_events")
         return []
 
-    fake_watcher = SimpleNamespace(
-        set_queue_snapshot_callback=lambda _callback: None,
-        notify_idle=lambda: [],
-        notify_busy=lambda: None,
-        set_flush_hooks=lambda _send, _is_alive: None,
-        get_all_events=_record_get_all_events,
-        start=lambda: calls.append("start"),
-    )
+    fake_watcher = _fake_watcher(_record_get_all_events, lambda: calls.append("start"))
     state = build_test_state()
     with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
         state.get_or_create_watcher(_agent_info())
