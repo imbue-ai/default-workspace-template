@@ -138,7 +138,7 @@ target client's placements only:
 
 | Goal | Command |
 |---|---|
-| Snap a window to a half of the screen, or maximize it | `uv run workspace-layout place <window> --zone left\|right\|maximized` |
+| Snap a window to a half of the screen, or maximize it | `uv run workspace-layout place <window> --state snapped-left\|snapped-right\|maximized` |
 | Put a window at an exact frame (fractions of the backdrop) | `uv run workspace-layout place <window> --frame 0.05,0.05,0.6,0.7` |
 | Minimize / restore / maximize | `uv run workspace-layout minimize <window>` / `restore <window>` / `maximize <window>` |
 | Point a window at another path under its app | `uv run workspace-layout navigate <window> /other/path` |
@@ -160,8 +160,8 @@ uv run workspace-layout open terminal --beside
 Two `place`s put two windows that are both already open on the halves:
 
 ```bash
-uv run workspace-layout place self --zone left
-uv run workspace-layout place "$(uv run workspace-layout open terminal)" --zone right
+uv run workspace-layout place self --state snapped-left
+uv run workspace-layout place "$(uv run workspace-layout open terminal)" --state snapped-right
 ```
 
 ## Shortcuts and the wallpaper

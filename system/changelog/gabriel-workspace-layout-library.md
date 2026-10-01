@@ -3,3 +3,5 @@ The agent-facing desktop command is now `uv run workspace-layout` (from the new 
 - AGENTS.md, the automation agents' system prompt, and the docs name the new command.
 
 - `refresh_workspace_view.py` stays stdlib-only; a test now checks the body it posts against the shell's own request models.
+
+- The desktop contract's op route table gives `place` a `state` or a `frame` record and a shortcut op's `cell` as a record, and says the arguments and answers are the `workspace_layout` models.

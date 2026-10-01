@@ -404,7 +404,7 @@ uv run workspace-layout desktops
 uv run workspace-layout context
 uv run workspace-layout open files --path /home/user/workspace/data/notes/ --desktop Research
 uv run workspace-layout open terminal
-uv run workspace-layout place self --zone left
+uv run workspace-layout place self --state snapped-left
 uv run workspace-layout navigate win-0123456789abcdef /other/
 ```
 
