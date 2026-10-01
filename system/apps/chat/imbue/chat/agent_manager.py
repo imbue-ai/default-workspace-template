@@ -3260,6 +3260,9 @@ class AgentManager:
                 )
         else:
             _loguru_logger.info("Claimed spare agent {} for a new chat while it starts", spare.chat_id)
+            # The chat it boots for is the user's from now on, so memory pressure must not shed it
+            # first; it reaches the engaged floor once it is up (``_settle_claimed_spare``).
+            self._move_spare_tree_into_chat_launch_band(spare.chat_id, is_main_process_moved=True)
             self._broadcaster.broadcast_provisional_chat_created(provisional)
         self.ensure_spare_chat_in_background()
         return CreatedChat(
@@ -3439,10 +3442,18 @@ class AgentManager:
         process moves first, so a subprocess spawned meanwhile inherits the chat band.
         """
         self._oom_prioritizer.record_chat_started(chat_id)
+        self._move_spare_tree_into_chat_launch_band(chat_id, is_main_process_moved=False)
+
+    def _move_spare_tree_into_chat_launch_band(self, chat_id: ChatId, is_main_process_moved: bool) -> None:
+        """Write the chat launch band (``CHAT_AGENT_BASE``) to a taken spare's harness subprocesses, and to its
+        main process first when ``is_main_process_moved``. Nothing for an agent with no registered pid yet: the
+        launch wrapper starts it in the chat band, and a spare no longer pooled is never tagged again."""
         writer = self._oom_score_adj_writer
         pid = None if writer is None else self._resolve_agent_pid(str(chat_id))
         if writer is None or pid is None:
             return
+        if is_main_process_moved:
+            writer(pid, CHAT_AGENT_BASE)
         for descendant_pid in self._list_descendant_pids(pid):
             writer(descendant_pid, CHAT_AGENT_BASE)
 
