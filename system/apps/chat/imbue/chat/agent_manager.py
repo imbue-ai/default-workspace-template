@@ -3602,7 +3602,7 @@ class AgentManager:
         """Write the chat launch band (``CHAT_AGENT_BASE``) to a taken spare's registered pids and their
         subprocesses, leaving its main process (the first pid) to the prioritizer unless ``is_main_process_moved``.
         Nothing for an agent with no registered pid yet: a claimed spare's launch starts in the spare band, as
-        its label still says, and is moved once its chat is settled."""
+        its label still says, and is moved by the boot wait (``_wait_for_spare_harness``)."""
         writer = self._oom_score_adj_writer
         if writer is None:
             return
@@ -3729,7 +3729,9 @@ class AgentManager:
 
         ``mngr create`` with no message returns before the harness is up, and a spare handed over
         then takes its chat's first message into a harness still booting. A spare a chat claimed
-        waits the same way: its chat is settled only once the harness is up.
+        waits the same way: its chat is settled only once the harness is up. Meanwhile each poll
+        moves a claimed spare's processes out of the spare band, since the ones its launch registers
+        after the claim start there.
         """
         spec = get_harness_spec(harness)
         state_dir = self._get_agent_state_dir(str(spare.chat_id))
@@ -3739,8 +3741,12 @@ class AgentManager:
                 return None
             with self._lock:
                 is_dead = not self._is_spare_process_alive_locked(spare)
+                current = self._spare_locked(spare.chat_id)
+                is_claimed = current is not None and current.phase is SpareChatPhase.CLAIMED
             if is_dead:
                 return "the agent's process exited before the harness came up"
+            if is_claimed:
+                self._move_spare_tree_into_chat_launch_band(spare.chat_id, is_main_process_moved=True)
             if self._shutdown_event.wait(timeout=SPARE_CHAT_BOOT_POLL_SECONDS):
                 return "the chat app stopped before the harness came up"
         return f"the harness did not come up within {SPARE_CHAT_BOOT_TIMEOUT_SECONDS:.0f}s"

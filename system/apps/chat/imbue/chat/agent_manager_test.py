@@ -6076,3 +6076,37 @@ def test_a_spare_claimed_while_it_starts_leaves_the_spare_band_at_once_and_is_en
         assert bands.SPARE_AGENT not in [adj for pid, adj in adj_writes if pid in (spare_pid, harness_child_pid)]
     finally:
         manager.stop()
+
+
+def test_a_spare_claimed_before_its_processes_register_moves_them_out_of_the_spare_band_while_it_boots(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, _argv_log = _write_booting_mngr_binary(tmp_path)
+    manager, adj_writes, pids_by_agent_id, descendant_pids_by_pid = _band_recording_spare_manager(
+        broadcaster, monkeypatch, tmp_path, mngr_binary
+    )
+    manager.set_handoff_capabilities(_handoff_capabilities([]))
+    try:
+        manager.ensure_spare_chat()
+        booting = _wait_for_created_spare(manager)
+
+        created = manager.create_chat("")
+        assert created.chat_id == booting.chat_id
+        # Its launch has registered nothing yet, so the claim had nothing to move.
+        assert adj_writes == []
+
+        spare_pid = 48220
+        harness_child_pid = 48222
+        descendant_pids_by_pid[spare_pid] = [harness_child_pid]
+        pids_by_agent_id[booting.chat_id] = [spare_pid]
+
+        wait_until_true(
+            lambda: {pid for pid, adj in adj_writes if adj == bands.CHAT_AGENT_BASE} == {spare_pid, harness_child_pid},
+            timeout_seconds=15.0,
+            what="the claimed spare's late-registered processes leaving the spare band",
+        )
+        assert manager.get_provisional_chat(created.chat_id) is not None
+        _mark_harness_ready(tmp_path, booting.chat_id)
+        assert manager.wait_for_chat_creation(created.chat_id, timeout=15.0) == ChatCreationOutcome(is_created=True)
+    finally:
+        manager.stop()
