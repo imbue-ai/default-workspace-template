@@ -1435,7 +1435,10 @@ def test_the_phone_layout_keeps_the_chat_list_in_a_drawer_over_the_chat(
     expect(page.locator(".chat-header-title")).to_have_text("Chats")
 
     page.locator("[data-chat-header-list]").click()
-    drawer.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]').click()
+    row = drawer.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]')
+    row_box = row.bounding_box()
+    assert row_box is not None and row_box["height"] >= 44, row_box
+    row.click()
     expect(drawer).to_have_count(0)
     expect(page.locator(".chat-header-title")).to_have_text("test-agent")
     expect(_shown_chat_of_root(page).locator(".message-user").first).to_contain_text("Hello agent!", timeout=15000)

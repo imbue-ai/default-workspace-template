@@ -312,7 +312,7 @@ function drawerHead(attrs: ChatRailAttrs): m.Vnode {
 function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
   const isSelected = row.chatId === attrs.selectedChatId;
   const isDeleting = deletingChatIds.has(row.chatId);
-  if (rename !== null && rename.chatId === row.chatId) return renameRow(row, isSelected);
+  if (rename !== null && rename.chatId === row.chatId) return renameRow(row, isSelected, attrs.isCompact);
   const status = displayStatus(row);
   return m(
     "button",
@@ -321,6 +321,8 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       type: "button",
       class: [
         "chat-rail-row group flex w-full items-center gap-2 rounded-md py-1.5 text-left",
+        // A finger's height in the drawer; the rail's rows stay dense under a pointer.
+        attrs.isCompact ? "min-h-11" : "",
         isAgentStarted(row) ? "chat-rail-row--nested pr-2 pl-5" : "px-2",
         isDeleting
           ? "chat-rail-row--deleting text-danger line-through opacity-50"
@@ -445,13 +447,14 @@ export function renameField(row: ChatRow): m.Vnode {
   });
 }
 
-function renameRow(row: ChatRow, isSelected: boolean): m.Vnode {
+function renameRow(row: ChatRow, isSelected: boolean, isCompact: boolean): m.Vnode {
   return m(
     "div",
     {
       key: row.chatId,
       class: [
         "chat-rail-row chat-rail-row--renaming flex w-full items-center gap-2 rounded-md py-1.5",
+        isCompact ? "min-h-11" : "",
         isAgentStarted(row) ? "pr-2 pl-5" : "px-2",
         isSelected ? "bg-fill-active text-primary" : "text-primary",
       ].join(" "),
