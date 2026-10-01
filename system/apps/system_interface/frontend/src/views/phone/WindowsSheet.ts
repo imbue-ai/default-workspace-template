@@ -104,6 +104,12 @@ export const WindowsSheet: m.Component<WindowsSheetAttrs> = {
                   "rounded-xl pr-1 pl-2 active:bg-fill-hover " +
                   (row.window.id === shownWindowId ? "bg-fill-active" : ""),
                 onclick: () => onShow(row.window.id),
+                // A row is a button to the keyboard too; its X and kebab, whose keys bubble here, are their own.
+                onkeydown: (event: KeyboardEvent) => {
+                  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                  event.preventDefault();
+                  onShow(row.window.id);
+                },
               },
               [
                 windowIcon(row.window, row.app, avatar, "size-(--desk-phone-row-icon)", ROW_GLYPH_SIZE),
