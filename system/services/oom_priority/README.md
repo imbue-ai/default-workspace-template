@@ -55,11 +55,11 @@ docker, lima), earlyoom logs that once and uses `/proc/meminfo` alone.
   `priority` an app's manifest declares; the chat app sits at 25, just above
   the agent observer at 24, itself just above the shell) <
   user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
-  (600) < agent subprocess (900) < Chromium's own processes (910-1000, renderers
-  at the ceiling) and a spare chat agent (`SPARE_AGENT`, 1000: an agent the chat
-  app started ahead of the next new chat, which no one uses yet). Chat agents
-  occupy a *dynamic* range that straddles the worker band: `CHAT_AGENT_FLOOR`
-  (300, a chat being engaged with right now) through
+  (600) < agent subprocess (900) < Chromium's own processes (910-990, renderers
+  at the top of the band) < a spare chat agent (`SPARE_AGENT`, 1000, the
+  ceiling: an agent the chat app started ahead of the next new chat, which no
+  one uses yet). Chat agents occupy a *dynamic* range that straddles the worker
+  band: `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
   `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
   `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).
   The chat app's prioritizer moves a chat within that range from live
@@ -94,7 +94,7 @@ without inspecting the process tree:
 | a spare chat agent's registered processes (codex registers two) and the subprocesses its harness started | right after its create, and on every chat-app sweep (a restart relaunches it at the chat band) | spare agent (1000, the ceiling); once a chat takes it, the chat band, and its harness's subprocesses the chat launch band (560) | the chat app's `AgentManager` (`system/apps/chat/imbue/chat/agent_manager.py`) |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/agent_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
 | the browser coordinator | launch | its `SERVICE_BANDS` value (70, an ordinary service band; the file viewer and Getting Started sit above it) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |
-| Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000), renderers at the ceiling | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
+| Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-990), renderers at the top of the band | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
 
 Each supervisord service tags itself the same way an agent's main process does:
 its `command` in `system/supervisord.conf.d/<name>.conf` runs `system/services/oom_priority/bin/oom_tag_service.py <key> <the
@@ -191,11 +191,13 @@ lands -- which is what makes earlyoom shed one tab's renderer before the whole
 browser. The sweep only remaps values below the floor, so it is idempotent.
 
 The input range is Chrome's own gradation (0-300), **not** 0-1000. Scaling
-against 1000 would compress every Chromium process into 910-937, the bottom
+against 1000 would compress every Chromium process into 910-934, the bottom
 third of the band, and leave the top to whatever merely *inherited* a high value
 -- which is never a renderer, since a renderer always self-writes. That is
 exactly backwards: the renderers hold nearly all of a browser's memory and cost
-one tab to shed, so they belong at the ceiling.
+one tab to shed, so they belong at the top of the band. The band stops at 990,
+below the ceiling, so a spare chat agent (`SPARE_AGENT`, 1000), which holds no
+one's work, is shed before any renderer.
 
 The same reasoning is why the **coordinator is not in this band at all**. It is
 the daemon that launches and drives Chromium, and it is tagged as an ordinary
