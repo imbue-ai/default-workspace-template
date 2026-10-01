@@ -1,7 +1,8 @@
 /**
  * The shell's toasts (plan-phone-interface.md), on both layouts: the notes a refused operation leaves, stacked at
  * the foot of the screen above the taskbar or the phone's bar, each going on its own. They take no press, so a
- * note never stands between the user and what is under it.
+ * note never stands between the user and what is under it. The stack is a live region that stays mounted while
+ * empty: a screen reader announces a note added to a region it already knows, not one that arrives with it.
  */
 
 import m from "mithril";
@@ -17,7 +18,6 @@ export interface ToastsAttrs {
 export const Toasts: m.Component<ToastsAttrs> = {
   view(vnode) {
     const { toasts, placementClass } = vnode.attrs;
-    if (toasts.length === 0) return null;
     return m(
       "div",
       {
