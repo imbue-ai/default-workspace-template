@@ -110,7 +110,7 @@ import type {
   PhoneSheet,
   PhoneShown,
 } from "../reducers/desktopState";
-import { focusTargetOf, isShownWindowGone, phoneLanding, pinnedChatWindowOf, shownWindowOf } from "../reducers/phone";
+import { focusTargetOf, isShownWindowGone, phoneLanding, shownWindowOf } from "../reducers/phone";
 import { STILL_CONNECTING_NOTICE, cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
 import type {
@@ -535,8 +535,9 @@ export class DesktopStore {
   }
 
   /** Keep what the phone shows honest after any change: a shown window that no desktop holds any longer sends the
-   *  phone home, a pinned window that is not the active desktop's gives way to the one that is (the phone keeps one),
-   *  and a window an agent op showed before the desktops that hold it arrived is shown once they do. */
+   *  phone home, a pinned window that is not the active desktop's gives way to its app's pinned window there (the
+   *  phone lists only those), and a window an agent op showed before the desktops that hold it arrived is shown once
+   *  they do. */
   private followShownWindow(): void {
     if (!this.isPhoneLayout() || !this.state.isDesktopsLoaded) return;
     const pending = this.pendingPhoneShowId;
@@ -552,10 +553,9 @@ export class DesktopStore {
       return;
     }
     const shown = shownWindowOf(this.state);
-    const pinned = pinnedChatWindowOf(this.state);
-    if (shown?.is_pinned === true && pinned !== null && shown.id !== pinned.id) {
-      this.showOnPhone({ kind: "window", windowId: pinned.id });
-    }
+    if (shown?.is_pinned !== true) return;
+    const pinned = pinnedWindowOf(this.state, shown.app);
+    if (pinned !== null && pinned.id !== shown.id) this.showOnPhone({ kind: "window", windowId: pinned.id });
   }
 
   /** Put ``shown`` on the phone's screen and record it with the shell, which keeps it as this client's history: a

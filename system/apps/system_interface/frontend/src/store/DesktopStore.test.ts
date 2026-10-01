@@ -1898,6 +1898,35 @@ describe("the phone layout", () => {
     expect(api.calls).toContain(`recordShown:${CLIENT}:chat-2`);
   });
 
+  it("shows a second pinned app's window, and on a move that app's pinned window of the new desktop", async () => {
+    const store = await phoneStore();
+    const board = appRecord("board", { pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" } });
+    api.apps = [...api.apps, board];
+    socket.deliver().onAppsUpdated(api.apps);
+    socket.deliver().onDesktopsUpdated([
+      {
+        ...api.desktops[0],
+        windows: [...api.desktops[0].windows, windowRecord("board-1", "board", "/", { is_pinned: true })],
+      },
+      {
+        ...api.desktops[1],
+        windows: [
+          ...api.desktops[1].windows,
+          windowRecord("chat-2", "chat", "/", { is_pinned: true }),
+          windowRecord("board-2", "board", "/", { is_pinned: true }),
+        ],
+      },
+    ]);
+    await settle();
+
+    await store.runHomeTile("board");
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "board-1" });
+    await store.switchDesktop("work");
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "board-2" });
+  });
+
   it("closes the window it shows on the close chord, and leaves the pinned chat it shows open", async () => {
     const store = await phoneStore(["win-2"]);
     await store.closeFocusedWindow();

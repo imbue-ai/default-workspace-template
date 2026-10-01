@@ -20,17 +20,16 @@ export interface PhoneWindowRow {
   readonly title: string;
 }
 
-/** The pinned window the phone keeps: the one on the client's active desktop (the shell keeps one per desktop). */
+/** The pinned window the phone lands on and keeps mounted: the first on the client's active desktop. */
 export function pinnedChatWindowOf(state: DesktopState): WindowRecord | null {
   return activeDesktop(state)?.windows.find((window) => window.is_pinned) ?? null;
 }
 
 /** Every window the phone lists: every desktop's, less the pinned windows of the desktops the client is not on,
- *  since the phone keeps one pinned window. */
+ *  since the shell keeps a pinned app's window on every desktop and the phone keeps the active desktop's. */
 function phoneWindows(state: DesktopState): WindowRecord[] {
-  const pinned = pinnedChatWindowOf(state);
   return state.desktops.flatMap((desktop) =>
-    desktop.windows.filter((window) => !window.is_pinned || window.id === pinned?.id),
+    desktop.id === state.activeDesktopId ? desktop.windows : desktop.windows.filter((window) => !window.is_pinned),
   );
 }
 
@@ -82,8 +81,8 @@ export function windowsSheetRows(state: DesktopState): PhoneWindowRow[] {
   });
 }
 
-/** The start sheet's rows: the launcher's, its window rows narrowed to the windows the phone lists (one pinned
- *  window, the active desktop's). */
+/** The start sheet's rows: the launcher's, its window rows narrowed to the windows the phone lists (of the
+ *  pinned windows, the active desktop's alone). */
 export function startSheetRows(state: DesktopState, query: string): LauncherMenuRows {
   const menu = launcherRowsOf(state, query);
   const listedIds = new Set(phoneWindows(state).map((window) => window.id));
@@ -97,7 +96,7 @@ export function startSheetRows(state: DesktopState, query: string): LauncherMenu
   };
 }
 
-/** How many windows the pill counts: every window the sheet lists but the pinned one. */
+/** How many windows the pill counts: every window the sheet lists but the pinned ones. */
 export function openWindowCount(state: DesktopState): number {
   return phoneWindows(state).filter((window) => !window.is_pinned).length;
 }

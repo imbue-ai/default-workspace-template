@@ -127,6 +127,26 @@ describe("the windows sheet", () => {
         .slice(0, 2),
     ).toEqual(["docs-old", "notes-1"]);
   });
+
+  it("lists the active desktop's pinned window of every pinned app, and no other desktop's", () => {
+    const board = appRecord("board", { pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" } });
+    const [home, work] = desktops();
+    const state = phoneState(
+      { type: "apps_updated", apps: [docs, notes, chat, board] },
+      {
+        type: "desktops_updated",
+        desktops: [
+          { ...home, windows: [...home.windows, windowRecord("board-home", "board", "/", { is_pinned: true })] },
+          { ...work, windows: [...work.windows, windowRecord("board-work", "board", "/", { is_pinned: true })] },
+        ],
+      },
+    );
+    const listed = windowsSheetRows(state).map((row) => row.window.id);
+    expect(listed).toEqual(expect.arrayContaining(["chat-home", "board-home"]));
+    expect(listed).not.toContain("chat-work");
+    expect(listed).not.toContain("board-work");
+    expect(openWindowCount(state)).toBe(3);
+  });
 });
 
 describe("the start sheet", () => {
