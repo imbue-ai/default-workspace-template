@@ -458,7 +458,11 @@ Two cases, two patterns:
   `update-app`), so keep every read/write going through `DATA_DIR`
   -- a hardcoded `data/.apps/<name>/` silently bypasses the override and
   re-exposes the live data. Do NOT use `Path(__file__)`-based paths for
-  state.
+  state. A store the app can rebuild (downloads, extracted archives,
+  clones, caches) gets its own directory under `DATA_DIR` with a
+  `CACHEDIR.TAG` in it, so the hourly backup skips it; see "Keep
+  rebuildable data out of the backup" in
+  `.agents/shared/worker/references/harden-creation.md`.
 - **Static assets shipped alongside the .py file** (templates,
   default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
   is the right pattern.

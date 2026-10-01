@@ -128,6 +128,22 @@ def test_load_backup_config_applies_user_settings(tmp_path: Path) -> None:
     assert config.minimum_backup_gap_seconds == 60.0
 
 
+def test_extra_excludes_add_to_the_default_excludes(tmp_path: Path) -> None:
+    path = tmp_path / "backup.toml"
+    path.write_text("extra_excludes = ['**/data/.apps/pr-review/repos']\n")
+    config = load_backup_config(path)
+    assert config.effective_excludes == BackupConfig().excludes + (
+        "**/data/.apps/pr-review/repos",
+    )
+
+
+def test_extra_excludes_add_to_user_replaced_excludes(tmp_path: Path) -> None:
+    path = tmp_path / "backup.toml"
+    path.write_text("excludes = ['**/only-this']\nextra_excludes = ['**/and-this']\n")
+    config = load_backup_config(path)
+    assert config.effective_excludes == ("**/only-this", "**/and-this")
+
+
 def test_load_backup_config_applies_restore_marker_max_age(tmp_path: Path) -> None:
     path = tmp_path / "backup.toml"
     path.write_text("[retention]\nrestore_marker_max_age_days = 3\n")

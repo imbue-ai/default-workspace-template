@@ -21,6 +21,11 @@ from pathlib import Path
 import pytest
 from host_backup.capabilities import BackupCapabilities, SnapshotMethod
 from host_backup.config import BackupConfig, RetentionSettings
+from host_backup.heavy_dirs import (
+    count_snapshot_listing,
+    select_heavy_directories,
+    stream_snapshot_listing,
+)
 from host_backup.restic import (
     backup as restic_backup,
 )
@@ -212,6 +217,84 @@ def test_default_excludes_drop_app_data_copies_but_keep_what_they_copy(
         assert f"/{path.relative_to(home)}" in listed, path
     for path in dropped:
         assert f"/{path.relative_to(home)}" not in listed, path
+
+
+_CACHEDIR_TAG_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55\n"
+
+
+def test_a_cachedir_tag_keeps_its_directorys_contents_out_of_the_backup(
+    tmp_path: Path,
+) -> None:
+    """An app marks a rebuildable directory with CACHEDIR.TAG; only the tag itself is backed up."""
+    repo_dir = tmp_path / "repo"
+    home = tmp_path / "home"
+    apps = home / "workspace" / "data" / ".apps"
+    tagged = apps / "pr-review" / "repos"
+    wrongly_tagged = apps / "reading-room" / "articles"
+    untagged = apps / "finances" / "raw"
+    for directory in (tagged / "repo-a" / "sha-1", wrongly_tagged, untagged):
+        directory.mkdir(parents=True)
+    (tagged / "CACHEDIR.TAG").write_text(_CACHEDIR_TAG_SIGNATURE)
+    (tagged / "repo-a" / "sha-1" / "main.py").write_text("print('rebuildable')")
+    # restic honors only a tag that starts with the standard signature.
+    (wrongly_tagged / "CACHEDIR.TAG").write_text("not the signature\n")
+    (wrongly_tagged / "article.md").write_text("kept")
+    (untagged / "statement.csv").write_text("kept")
+
+    env = _env_for_local_repo(repo_dir)
+    assert init_repo(env).returncode == 0
+    backup_result = restic_backup(
+        source_path=home, excludes=(), tag="cachedir-tag", env_overrides=env
+    )
+    assert backup_result.returncode == 0, backup_result.stderr
+
+    listing = run_restic(("ls", "latest"), env_overrides=env)
+    assert listing.returncode == 0, listing.stderr
+    listed = set(listing.stdout.splitlines())
+    assert "/workspace/data/.apps/pr-review/repos/CACHEDIR.TAG" in listed
+    assert not any(
+        path.startswith("/workspace/data/.apps/pr-review/repos/repo-a") for path in listed
+    )
+    assert "/workspace/data/.apps/reading-room/articles/article.md" in listed
+    assert "/workspace/data/.apps/finances/raw/statement.csv" in listed
+
+
+def test_heavy_dirs_names_the_directory_holding_most_of_a_real_snapshot(
+    tmp_path: Path,
+) -> None:
+    """The heavy-directories listing, read from a real repository, points at the big tree."""
+    repo_dir = tmp_path / "repo"
+    home = tmp_path / "home"
+    heavy_tree = home / "workspace" / "data" / ".apps" / "pr-review" / "repos"
+    for tree in range(4):
+        tree_dir = heavy_tree / f"sha-{tree}"
+        tree_dir.mkdir(parents=True)
+        for index in range(50):
+            (tree_dir / f"file-{index}.py").write_text(f"{tree}-{index}")
+    notes = home / "workspace" / "data" / "notes"
+    notes.mkdir(parents=True)
+    for index in range(5):
+        (notes / f"note-{index}.md").write_text(str(index))
+
+    env = _env_for_local_repo(repo_dir)
+    assert init_repo(env).returncode == 0
+    backup_result = restic_backup(
+        source_path=home, excludes=(), tag="heavy-dirs", env_overrides=env
+    )
+    assert backup_result.returncode == 0, backup_result.stderr
+
+    counts = count_snapshot_listing(
+        stream_snapshot_listing("latest", env), max_depth=8
+    )
+    heavy_by_path = {
+        directory.path: directory.entry_count
+        for directory in select_heavy_directories(counts, min_share=0.5)
+    }
+
+    # 200 files and 4 tree directories under repos/, out of 215 entries in all.
+    assert counts.entry_count_by_directory["/"] == 215
+    assert heavy_by_path["/workspace/data/.apps/pr-review/repos"] == 204
+    assert "/workspace/data/notes" not in heavy_by_path
 
 
 def _state_recording_events(tmp_path: Path) -> _LoopState:

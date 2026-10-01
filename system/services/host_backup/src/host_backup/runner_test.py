@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from host_backup.events import EVENTS_LOG_ROTATION_BYTES, TICK_TERMINAL_EVENT_TY
 from host_backup.runner import (
     CONSECUTIVE_FAILURE_ALARM_THRESHOLD,
     ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
+    SLOW_BACKUP_NOTICE_INTERVAL_SECONDS,
     _age_out_restore_markers,
     _check_secrets_present,
     _cleanup_snapshot,
@@ -579,6 +581,92 @@ def test_run_restic_backup_no_alarm_below_threshold(tmp_path: Path) -> None:
         if e["type"] == "BACKUP_REPEATEDLY_FAILING"
     ]
     assert alarms == []
+
+
+_SLOW_BACKUP_SUMMARY_STDOUT = json.dumps(
+    {
+        "message_type": "summary",
+        "snapshot_id": "snap-slow",
+        "files_new": 3,
+        "files_changed": 41,
+        "files_unmodified": 865722,
+        "dirs_unmodified": 150112,
+        "total_files_processed": 865766,
+    }
+)
+
+_SLOW_BACKUP_NOTICE_PATH = "data/.state/last-slow-backup-notice"
+
+
+def _run_backup_with_threshold(
+    tmp_path: Path, *, slow_backup_threshold_seconds: float
+) -> _LoopState:
+    state = _state_recording_events(tmp_path)
+    _run_restic_backup(
+        state=state,
+        config=BackupConfig(slow_backup_threshold_seconds=slow_backup_threshold_seconds),
+        snapshot=_direct_snapshot(),
+        env_overrides={},
+        backup_fn=_ScriptedRestic([_completed(0, stdout=_SLOW_BACKUP_SUMMARY_STDOUT)]),
+        unlock_fn=_ScriptedRestic([]),
+    )
+    return state
+
+
+def _slow_events(state: _LoopState) -> list[dict]:
+    return [e for e in _events_in(state.events_dir) if e["type"] == "BACKUP_SLOW"]
+
+
+def test_a_backup_over_the_threshold_records_a_slow_notice_with_restics_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The notice's gate file lives under the relative data/.state/.
+    monkeypatch.chdir(tmp_path)
+    # A scripted backup returns at once, so a zero threshold is the only one it can pass.
+    state = _run_backup_with_threshold(tmp_path, slow_backup_threshold_seconds=0.0)
+
+    slow = _slow_events(state)
+    assert len(slow) == 1
+    assert slow[0]["total_files_processed"] == 865766
+    assert slow[0]["files_unmodified"] == 865722
+    assert slow[0]["dirs_unmodified"] == 150112
+    assert "host-backup-heavy-dirs" in slow[0]["hint"]
+    assert (tmp_path / _SLOW_BACKUP_NOTICE_PATH).exists()
+
+
+def test_a_backup_under_the_threshold_records_no_slow_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    state = _run_backup_with_threshold(tmp_path, slow_backup_threshold_seconds=3600.0)
+
+    assert _slow_events(state) == []
+    assert not (tmp_path / _SLOW_BACKUP_NOTICE_PATH).exists()
+
+
+@pytest.mark.parametrize(
+    ("last_notice_age_seconds", "expected_notice_count"),
+    [
+        pytest.param(3600.0, 0, id="notified-an-hour-ago"),
+        pytest.param(SLOW_BACKUP_NOTICE_INTERVAL_SECONDS + 3600.0, 1, id="notified-over-a-day-ago"),
+    ],
+)
+def test_the_slow_notice_is_recorded_at_most_once_a_day(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    last_notice_age_seconds: float,
+    expected_notice_count: int,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    gate = tmp_path / _SLOW_BACKUP_NOTICE_PATH
+    gate.parent.mkdir(parents=True)
+    gate.write_text("earlier notice")
+    noticed_at = time.time() - last_notice_age_seconds
+    os.utime(gate, (noticed_at, noticed_at))
+
+    state = _run_backup_with_threshold(tmp_path, slow_backup_threshold_seconds=0.0)
+
+    assert len(_slow_events(state)) == expected_notice_count
 
 
 # forget / prune under a stale lock

@@ -53,6 +53,7 @@ class BackupEventType(UpperCaseStrEnum):
     RESTIC_BACKUP_SUCCEEDED = auto()
     RESTIC_BACKUP_FAILED = auto()
     BACKUP_REPEATEDLY_FAILING = auto()
+    BACKUP_SLOW = auto()
     FORGET_COMPLETED = auto()
     RESTORE_MARKERS_FORGOTTEN = auto()
     PRUNE_COMPLETED = auto()
@@ -209,6 +210,27 @@ class BackupRepeatedlyFailingEvent(BackupEvent):
     threshold: int = Field(
         description="The consecutive-failure count that triggers the alarm"
     )
+
+
+class BackupSlowEvent(BackupEvent):
+    """A successful `restic backup` took longer than the configured threshold.
+
+    Recorded at most once a day. restic's time follows the number of files and
+    directories it walks, so the counts from its summary are carried here, with
+    a hint naming the command that shows which directories hold them.
+    """
+
+    tick_id: str
+    duration_seconds: float
+    threshold_seconds: float
+    total_files_processed: int | None = Field(
+        default=None, description="From restic's summary; None when it had none"
+    )
+    files_new: int | None = None
+    files_changed: int | None = None
+    files_unmodified: int | None = None
+    dirs_unmodified: int | None = None
+    hint: str = Field(description="What to run and read next")
 
 
 class ForgetCompletedEvent(BackupEvent):
