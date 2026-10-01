@@ -30,7 +30,10 @@ does. Under runc (the macOS fallback) `/proc/meminfo` still reports the whole
 machine, so earlyoom only reacts once the machine itself runs short, and a
 workspace at its cgroup limit is shed by the kernel instead. A resize while the
 container runs changes the cgroup cap at once but a gVisor container's reported
-MemTotal only after a restart.
+MemTotal only after a restart. A lima workspace runs directly in its VM, so
+MemTotal is the VM's own RAM (the lima create template's `--memory`,
+changeable with `mngr lima resize`): earlyoom's thresholds follow the VM's
+size, and a resize takes effect once the VM restarts at the new size.
 
 - **`bands`** -- the `oom_score_adj` value per band and the helper that writes
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in
