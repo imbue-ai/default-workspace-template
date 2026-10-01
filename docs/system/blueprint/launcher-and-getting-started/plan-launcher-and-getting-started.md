@@ -240,6 +240,7 @@ A second client's first visit sees the pinned window minimized and the Getting S
 
 ### 4.7 Compact and touch
 
+Compact mode is gone: a viewport whose shorter side is under 700px gets the phone layout, whose start sheet is this menu made tappable, and `../desktop-interface/plan-phone-interface.md` supersedes the compact-mode rules throughout this plan.
 Compact mode shows the field as a button, the menu full width over the taskbar, and every window maximized as today.
 Ctrl+Enter has no key on a touch keyboard; the secondary text action is a tappable row and needs none.
 Long press replaces nothing here, since the menu has no context menus.

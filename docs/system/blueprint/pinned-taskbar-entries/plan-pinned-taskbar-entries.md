@@ -261,6 +261,7 @@ A chat root that had drifted to a chat-specific path is not adopted; the desktop
 
 ### 4.9 Compact and touch
 
+Compact mode is gone: a viewport whose shorter side is under 700px gets the phone layout, which has no taskbar or floating entries, and `../desktop-interface/plan-phone-interface.md` supersedes the compact-mode rules throughout this plan.
 Compact mode renders every pinned entry in the bar in its style, image only for `avatar`, and hides the floating verb from the menu.
 Touch mode uses long press for the menus, as elsewhere; the floating entry has the theme's touch target size at minimum.
 

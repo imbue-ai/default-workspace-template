@@ -1,6 +1,6 @@
 # The workspace on a phone
 
-Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compact mode); touch mode stays as that section describes it. Contracts this plan changes are called out against `contracts.md` by section. The interactive mock the layout was iterated in lives beside this plan at `phone-mock/mock.html`; it is the reference for measurements, spacing and copy this plan does not restate, and where the two disagree, this plan wins.
+Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compact mode), and the compact-mode rules of `../launcher-and-getting-started/plan-launcher-and-getting-started.md` and `../pinned-taskbar-entries/plan-pinned-taskbar-entries.md`; touch mode stays as those sections describe it. Contracts this plan changes are called out against `contracts.md` by section. The interactive mock the layout was iterated in lives beside this plan at `phone-mock/mock.html`; it is the reference for measurements, spacing and copy this plan does not restate, and where the two disagree, this plan wins.
 
 ## Overview
 
