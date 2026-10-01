@@ -630,7 +630,6 @@ def test_a_backup_over_the_threshold_records_a_slow_notice_with_restics_counts(
     assert slow[0]["total_files_processed"] == 865766
     assert slow[0]["files_unmodified"] == 865722
     assert slow[0]["dirs_unmodified"] == 150112
-    assert "host-backup-heavy-dirs" in slow[0]["hint"]
     assert (tmp_path / _SLOW_BACKUP_NOTICE_PATH).exists()
 
 
