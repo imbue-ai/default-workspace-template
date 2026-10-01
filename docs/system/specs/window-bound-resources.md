@@ -124,7 +124,7 @@ This is accepted for V1.
 
 ### 4.2 Reading the shell's windows
 
-A small stdlib reader in `system/libs/app_manifest` (the library both apps already depend on, beside `register_app`):
+A small reader in `system/libs/workspace_layout` (`workspace_layout.windows`, in the library both apps depend on to reach the shell):
 
 ```python
 def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
@@ -132,7 +132,7 @@ def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
 ```
 
 It GETs `{shell_url}/api/desktops` with a 2 second timeout over `urllib.request`, reads the document as `workspace_layout`'s `DesktopsListing` (every window carrying its `app`, `path`, and `client_paths`; a document that is not one reads as unknown), and returns the paths of the windows whose `app` matches: each window's `path`, and every value of its `client_paths` (a pinned window with the `independent` scope keeps its shared path at its home path, and what each client's page shows rides beside it; any one of those views keeps the resource alive).
-The shell URL is `MINDS_WORKSPACE_SERVER_URL` with the default `http://127.0.0.1:8000`, resolved as `workspace-layout` and the chat's `shell_client.py` resolve it; a helper `shell_base_url()` moves into the same module so the three agree.
+The shell URL is `MINDS_WORKSPACE_SERVER_URL` with the default `http://127.0.0.1:8000`, resolved by `workspace_layout.shell_url.shell_base_url()`, which the apps, `workspace-layout`, and the chat's `shell_client.py` share, so they agree.
 
 A window-seen flag is one additive boolean on each app's record, defaulting to false, so a store written by the previous release reads unchanged.
 
