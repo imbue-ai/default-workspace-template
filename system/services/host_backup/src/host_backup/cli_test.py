@@ -7,18 +7,22 @@ import time
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
 from host_backup.cli import (
     _TAIL_READ_MAX_BYTES,
     EXIT_BACKUP_FAILED,
     EXIT_BACKUP_SUCCEEDED,
     EXIT_BACKUPS_NOT_CONFIGURED,
+    EXIT_NO_COMPLETION_OBSERVED,
+    backup_now_main,
     _EventsLogFollower,
     _exit_code_for_completion,
     _read_tail_lines,
-    _scan_for_inflight_tick_ids,
+    _scan_for_inflight_tick_id,
     _wait_for_next_completion,
 )
+from host_backup.config import BACKUP_TOML_PATH
 from host_backup.events import (
     EVENTS_LOG_ROTATION_BYTES,
     BackupEventType,
@@ -179,8 +183,68 @@ def test_inflight_scan_treats_every_tick_ending_as_finished(tmp_path: Path) -> N
         tick_id="tick-skip",
     )
     _write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-running")
-    pending = _scan_for_inflight_tick_ids(tmp_path / "events.jsonl", max_lines=200)
-    assert pending == {"tick-running"}
+    pending = _scan_for_inflight_tick_id(tmp_path / "events.jsonl", max_lines=200)
+    assert pending == "tick-running"
+
+
+def test_a_tick_that_never_finished_is_not_in_flight_once_a_later_tick_started(
+    tmp_path: Path,
+) -> None:
+    """A tick killed mid-restic (an OOM shed, the update's services restart) never emits
+    a terminal event. The runner runs one tick at a time, so a later tick starting
+    means it is dead, and waiting on it held `host-backup-now` for its whole timeout."""
+    _write_tick(tmp_path, BackupEventType.BACKUP_STARTED, tick_id="tick-killed")
+    _write_tick(
+        tmp_path,
+        BackupEventType.BACKUP_STARTED,
+        BackupEventType.RESTIC_BACKUP_SUCCEEDED,
+        tick_id="tick-after-restart",
+    )
+    assert (
+        _scan_for_inflight_tick_id(tmp_path / "events.jsonl", max_lines=200) is None
+    )
+
+
+@pytest.fixture
+def backup_events_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The events dir `host-backup-now` resolves, with backup.toml's relative path under
+    `tmp_path`."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
+    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path / "state"))
+    return tmp_path / "state" / "events" / "backup"
+
+
+def test_backup_now_triggers_nothing_when_the_inflight_tick_outlasts_the_timeout(
+    tmp_path: Path, backup_events_dir: Path
+) -> None:
+    """A tick triggered after the deadline is one nobody waits for: the command used to
+    bump the config anyway and then exit 2 at once, leaving a backup running that its
+    caller had already reported as timed out."""
+    _write_tick(backup_events_dir, BackupEventType.BACKUP_STARTED, tick_id="tick-busy")
+
+    result = CliRunner().invoke(backup_now_main, ["--timeout", "0.2"])
+
+    assert result.exit_code == EXIT_NO_COMPLETION_OBSERVED
+    assert not (tmp_path / BACKUP_TOML_PATH).exists()
+
+
+def test_backup_now_triggers_past_a_tick_that_never_finished(
+    tmp_path: Path, backup_events_dir: Path
+) -> None:
+    _write_tick(backup_events_dir, BackupEventType.BACKUP_STARTED, tick_id="tick-killed")
+    _write_tick(
+        backup_events_dir,
+        BackupEventType.BACKUP_STARTED,
+        BackupEventType.RESTIC_BACKUP_SUCCEEDED,
+        tick_id="tick-after-restart",
+    )
+
+    result = CliRunner().invoke(backup_now_main, ["--timeout", "0.2"])
+
+    # No runner is reading the bumped config here, so the triggered tick never ends.
+    assert result.exit_code == EXIT_NO_COMPLETION_OBSERVED
+    assert (tmp_path / BACKUP_TOML_PATH).exists()
 
 
 def test_inflight_scan_ignores_foreign_event_sources(tmp_path: Path) -> None:
@@ -196,7 +260,7 @@ def test_inflight_scan_ignores_foreign_event_sources(tmp_path: Path) -> None:
         )
         + "\n"
     )
-    assert _scan_for_inflight_tick_ids(events_path, max_lines=200) == set()
+    assert _scan_for_inflight_tick_id(events_path, max_lines=200) is None
 
 
 def test_the_inflight_scan_never_reads_the_whole_events_log(tmp_path: Path) -> None:
@@ -228,6 +292,14 @@ def test_the_inflight_scan_never_reads_the_whole_events_log(tmp_path: Path) -> N
                 )
                 + "\n"
             )
+    assert events_path.stat().st_size > _TAIL_READ_MAX_BYTES
+
+    # The log is 51 lines, so `max_lines` excludes nothing: the only thing that can
+    # keep the tick at the top of the file out of this answer is a window that never
+    # reached it. A scan that read the file whole reports it as in flight.
+    assert _scan_for_inflight_tick_id(events_path, max_lines=200) is None
+
+    with events_path.open("a") as fh:
         fh.write(
             json.dumps(
                 {
@@ -238,14 +310,7 @@ def test_the_inflight_scan_never_reads_the_whole_events_log(tmp_path: Path) -> N
             )
             + "\n"
         )
-    assert events_path.stat().st_size > _TAIL_READ_MAX_BYTES
-
-    pending = _scan_for_inflight_tick_ids(events_path, max_lines=200)
-
-    # The log is 52 lines, so `max_lines` excludes nothing: the only thing that can
-    # keep the tick at the top of the file out of this answer is a window that never
-    # reached it. A scan that read the file whole reports it as in flight too.
-    assert pending == {"in-flight"}
+    assert _scan_for_inflight_tick_id(events_path, max_lines=200) == "in-flight"
 
 
 def test_the_tail_read_drops_the_line_its_window_cut_in_half(tmp_path: Path) -> None:

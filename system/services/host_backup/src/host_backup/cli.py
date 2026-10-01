@@ -10,7 +10,8 @@ than the in-flight one).
 It then waits for the triggered tick to reach any terminal event and prints it,
 exiting 0 on success, 3 when backups are not configured, 1 on any other tick
 outcome, and 2 when no outcome was observed at all (no terminal event before the
-timeout, or no events log to read in the first place).
+timeout, or no events log to read in the first place). When the in-flight tick is
+still running at the timeout, it exits 2 without triggering a tick.
 """
 
 import json
@@ -73,7 +74,12 @@ def backup_now_main(timeout_seconds: float) -> None:
 
     deadline = time.monotonic() + timeout_seconds
     with closing(_EventsLogFollower(events_path)) as follower:
-        _wait_for_no_inflight_backup(events_path, follower, deadline)
+        is_idle = _wait_for_no_inflight_backup(events_path, follower, deadline)
+    if not is_idle:
+        logger.error(
+            "Timed out waiting for the in-flight backup tick to finish; triggered nothing"
+        )
+        sys.exit(EXIT_NO_COMPLETION_OBSERVED)
     # Opened before the bump, so every event of the triggered tick lands after it.
     with closing(_EventsLogFollower(events_path)) as follower:
         _bump_config_mtime()
@@ -174,30 +180,26 @@ def _wait_for_no_inflight_backup(
     events_path: Path,
     follower: _EventsLogFollower,
     deadline: float,
-) -> None:
-    """Block until every tick in flight when this began emits a terminal event, or
-    the deadline passes.
+) -> bool:
+    """Block until the tick in flight when this began emits a terminal event, or the
+    deadline passes. Returns False when the deadline passed first.
 
     `follower` has to be opened before this scans the log, so a tick that ends
     between the scan and the first poll is still seen ending.
     """
-    pending_tick_ids = _scan_for_inflight_tick_ids(events_path, max_lines=200)
-    if not pending_tick_ids:
-        return
-    logger.info(
-        "Waiting for {} in-flight backup tick(s) to complete...", len(pending_tick_ids)
-    )
-    while pending_tick_ids:
-        if time.monotonic() >= deadline:
-            return
+    inflight_tick_id = _scan_for_inflight_tick_id(events_path, max_lines=200)
+    if inflight_tick_id is None:
+        return True
+    logger.info("Waiting for the in-flight backup tick to complete...")
+    while time.monotonic() < deadline:
         for event in follower.read_new_events():
-            tick_id = event.get("tick_id")
             if (
-                isinstance(tick_id, str)
+                event.get("tick_id") == inflight_tick_id
                 and event.get("type") in TICK_TERMINAL_EVENT_TYPES
             ):
-                pending_tick_ids.discard(tick_id)
+                return True
         time.sleep(_POLL_INTERVAL_SECONDS)
+    return False
 
 
 def _wait_for_next_completion(
@@ -242,15 +244,20 @@ def _read_tail_lines(events_path: Path, *, max_lines: int, max_bytes: int) -> li
     return lines[-max_lines:]
 
 
-def _scan_for_inflight_tick_ids(
+def _scan_for_inflight_tick_id(
     events_path: Path, *, max_lines: int, max_bytes: int = _TAIL_READ_MAX_BYTES
-) -> set[str]:
-    """Return the tick_ids that started but did not finish among the last `max_lines`
-    events that fit in the final `max_bytes` of the log."""
+) -> str | None:
+    """Return the tick_id of the tick in flight, judged from the last `max_lines` events
+    that fit in the final `max_bytes` of the log, or None when none is.
+
+    Only the newest tick to start can be in flight: the runner runs one tick at a time,
+    so an earlier tick with no terminal event was killed mid-run (an OOM shed, a
+    services restart) and will never emit one.
+    """
     if not events_path.exists():
-        return set()
+        return None
     lines = _read_tail_lines(events_path, max_lines=max_lines, max_bytes=max_bytes)
-    started: set[str] = set()
+    newest_started: str | None = None
     finished: set[str] = set()
     for raw in lines:
         try:
@@ -266,10 +273,12 @@ def _scan_for_inflight_tick_ids(
             continue
         event_type = event.get("type")
         if event_type == BackupEventType.BACKUP_STARTED.value:
-            started.add(tick_id)
+            newest_started = tick_id
         elif event_type in TICK_TERMINAL_EVENT_TYPES:
             finished.add(tick_id)
-    return started - finished
+    if newest_started is None or newest_started in finished:
+        return None
+    return newest_started
 
 
 def _parse_event_lines(raw_lines: Sequence[bytes]) -> list[dict[str, object]]:
