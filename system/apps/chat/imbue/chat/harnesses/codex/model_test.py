@@ -54,6 +54,7 @@ def _codex_model(
     *,
     tiers: tuple[str, ...] = (),
     hidden: bool = False,
+    default_effort: str | None = None,
 ) -> CodexModel:
     """A ``model/list`` entry for tests (id == model, given per-model efforts and service tiers).
 
@@ -66,6 +67,7 @@ def _codex_model(
             "hidden": hidden,
             "supportedReasoningEfforts": [{"reasoningEffort": level} for level in efforts],
             "serviceTiers": [{"id": tier} for tier in tiers],
+            "defaultReasoningEffort": default_effort,
         }
     )
 
@@ -108,6 +110,20 @@ def test_model_mapper_pulls_efforts_and_fast_per_model() -> None:
     assert plain_option.supports_fast is False
     hidden = _codex_model("gpt-secret", "Secret", ("medium",), hidden=True)
     assert codex_model_to_option(hidden).in_picker is False
+
+
+def test_a_models_default_effort_reaches_its_option_through_the_sidecar(tmp_path: Path) -> None:
+    # A thread that never had an effort picked records none, so the bar shows the model's default
+    # in its place. That default comes from model/list, so it must survive the sidecar the chip
+    # resolves from after a restart. A model that reports no default maps to None.
+    models = (
+        _codex_model("gpt-6-sol", "GPT-6-Sol", ("low", "medium", "high"), default_effort="medium"),
+        _codex_model("gpt-5.2", "GPT-5.2", ("low", "xhigh")),
+    )
+    path = get_codex_model_options_path(tmp_path)
+    write_codex_model_options(path, models)
+    options = codex_models_to_options(read_codex_model_options(path))
+    assert [option.default_effort for option in options] == ["medium", None]
 
 
 def test_state_relative_path_is_under_codex_home() -> None:

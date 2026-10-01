@@ -175,6 +175,7 @@ const OPUS = {
   supports_fast: false,
   in_picker: true,
   harness_reported_model_id: null,
+  default_effort: null,
 };
 const ACCOUNT = {
   id: "acct-1",
@@ -506,6 +507,54 @@ describe("the combo card", () => {
     click(".model-selector-trigger");
     expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Ultra");
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
+  });
+
+  it("shows the model's default effort for a chat that never picked one", () => {
+    // codex records no effort until one is picked, while the thread runs at the model's default.
+    // Showing nothing (or the slider's far-left stop) misstates what the agent is running at.
+    const efforts = [
+      { level: "low", in_picker: true },
+      { level: "medium", in_picker: true },
+      { level: "high", in_picker: true },
+    ];
+    const model = { ...OPUS, id: "gpt-6-sol", label: "GPT-6-Sol", efforts, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ picker_mode: "dynamic", switch_mode: "on_change", options: [] });
+    settingsState.choice = {
+      identity: { model_id: "gpt-6-sol", effort: null, fast: false },
+      matched: model,
+      pending: null,
+    };
+    render();
+    expect(document.querySelector(".model-selector-trigger")?.textContent).toContain("Medium");
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Medium");
+    expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("1");
+  });
+
+  it("carries the default effort in effect onto a newly picked model", () => {
+    const efforts = [
+      { level: "low", in_picker: true },
+      { level: "medium", in_picker: true },
+      { level: "high", in_picker: true },
+    ];
+    const current = { ...OPUS, efforts, default_effort: "medium" };
+    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts, default_effort: "medium" };
+    catalogState.catalog = catalogOf({ options: [current, other] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: null, fast: false },
+      matched: current,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    const row = [...document.querySelectorAll<HTMLElement>('[data-menu-part="submenu"] button')].find((button) =>
+      button.textContent?.includes("Sonnet"),
+    );
+    if (row === undefined) throw new Error("no Sonnet row");
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(picks).toHaveLength(1);
+    expect((picks[0] as unknown[])[1]).toEqual({ model_id: "sonnet", effort: "medium", fast: false });
   });
 
   it("colours each tick for the part of the track it is drawn on", () => {

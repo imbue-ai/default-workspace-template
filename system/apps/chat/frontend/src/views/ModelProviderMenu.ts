@@ -97,6 +97,12 @@ function clampEffort(option: CatalogModelOption, currentEffort: string | null): 
   return (shown[0] ?? option.efforts[0]).level;
 }
 
+/** The effort an agent is running at: the one it recorded, else its model's default. A harness that
+ *  records no effort until one is picked (codex) runs at the default meanwhile. */
+function effortInEffect(recordedEffort: string | null, option: CatalogModelOption | null): string | null {
+  return recordedEffort ?? option?.default_effort ?? null;
+}
+
 /** The model a switch in progress is taking the chat to, as the chip reads it; null when the chat
  *  is not converging, the switch failed, or it picked no model, all of which leave the chip on the
  *  live choice. A failed switch still carries its pick, for the retry to rerun the model step from,
@@ -695,7 +701,7 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
                     onclick: () => {
                       const next: ModelIdentity = {
                         model_id: option.id,
-                        effort: clampEffort(option, currentIdentity.effort),
+                        effort: clampEffort(option, effortInEffect(currentIdentity.effort, matched)),
                         fast: option.supports_fast ? currentIdentity.fast : false,
                       };
                       setModelChoice(chatId, next, option, changedAxes(currentIdentity, next), optimistic);
@@ -754,7 +760,10 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
       const readOnly = catalog === null || catalog.switch_mode === "read_only";
       const interactive = !readOnly && matched !== null;
       const optimistic = catalog?.switch_mode === "eager_then_reconcile";
-      const currentEffort = choice?.identity.effort ?? null;
+      // What the agent recorded, which a switch diffs against; null while it runs at the default.
+      const recordedEffort = choice?.identity.effort ?? null;
+      // What every effort display shows.
+      const currentEffort = effortInEffect(recordedEffort, matched);
       const currentFast = choice?.identity.fast ?? false;
       const shownEfforts = (matched?.efforts ?? []).filter((effort) => effort.in_picker);
       const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
@@ -811,8 +820,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
 
       const currentIdentity: ModelIdentity =
         matched === null
-          ? { model_id: "", effort: currentEffort, fast: currentFast }
-          : { model_id: matched.id, effort: currentEffort, fast: currentFast };
+          ? { model_id: "", effort: recordedEffort, fast: currentFast }
+          : { model_id: matched.id, effort: recordedEffort, fast: currentFast };
       const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
 
       const rows: MenuRow[] = [];

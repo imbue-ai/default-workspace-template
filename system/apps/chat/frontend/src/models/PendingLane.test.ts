@@ -40,6 +40,7 @@ const HAIKU = {
   supports_fast: false,
   in_picker: true,
   harness_reported_model_id: "claude-haiku-4-5",
+  default_effort: null,
 };
 const HAIKU_PICK = {
   identity: { model_id: "haiku", effort: "low", fast: false },

@@ -106,6 +106,7 @@ const ASTRA = {
   supports_fast: true,
   in_picker: true,
   harness_reported_model_id: null,
+  default_effort: null,
 };
 const WELCOME = { type: "user_message", event_id: "u-w", content: "/welcome", display: "hidden", timestamp: "t1" };
 const TYPED = { type: "user_message", event_id: "u-1", content: "hello", timestamp: "t2" };

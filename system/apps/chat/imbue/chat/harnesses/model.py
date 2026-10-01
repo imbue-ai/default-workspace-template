@@ -66,6 +66,10 @@ class ModelOption(FrozenModel):
     # The DECLARED effort set: the validity + matching universe for this model.
     # An empty tuple means the model has no effort axis (the slot is hidden).
     efforts: tuple[EffortChoice, ...]
+    # The effort the model runs at when none has been picked, for a harness whose live state records
+    # no effort until one is (codex). The bar shows it in place of that missing effort. None when the
+    # harness does not report one.
+    default_effort: str | None = None
     # Whether fast mode applies to this model. Per-MODEL, not per-harness.
     supports_fast: bool
     # False = a hidden model: matchable (a live read of it still displays) but not

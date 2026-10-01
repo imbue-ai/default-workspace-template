@@ -22,6 +22,9 @@ export interface CatalogModelOption {
   id: string;
   label: string;
   efforts: EffortChoice[];
+  // The effort the model runs at when none has been picked (codex), or null when the harness does
+  // not report one. A live choice whose effort is null is running at this level.
+  default_effort: string | null;
   supports_fast: boolean;
   in_picker: boolean;
   // The raw model id the harness reports in its live state file (or null = same as `id`).
