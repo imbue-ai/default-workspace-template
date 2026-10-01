@@ -74,9 +74,7 @@ def _bare_wrapper_html() -> str:
 def _real_client_html() -> bytes:
     compressed_client = load_ttyd_web_client(None)
     assert compressed_client is not None
-    with_script = add_pty_page_script(gzip.decompress(compressed_client))
-    assert with_script is not None
-    return with_script
+    return add_pty_page_script(gzip.decompress(compressed_client))
 
 
 def _serve(context: BrowserContext, pty_page: str | bytes) -> None:
@@ -239,9 +237,7 @@ def test_the_frame_is_nudged_after_it_loads_and_after_the_visual_viewport_resize
 
 
 def _open_with_stub_term(context: BrowserContext) -> tuple[Page, Frame]:
-    with_script = add_pty_page_script(_STUB_TERM_PTY_PAGE.encode())
-    assert with_script is not None
-    return _open(context, with_script)
+    return _open(context, add_pty_page_script(_STUB_TERM_PTY_PAGE.encode()))
 
 
 def test_the_pty_page_script_turns_strip_keys_into_the_sequences_xterm_sends(

@@ -10,7 +10,7 @@ from imbue.mngr_ttyd import resources as ttyd_resources
 from loguru import logger
 
 from terminal_app.data_types import TerminalPaths
-from terminal_app.errors import UnsafeDispatchPathError
+from terminal_app.errors import ClientHasNoBodyCloseError, UnsafeDispatchPathError
 from terminal_app.primitives import TERMINAL_SESSION_BAND_KEY
 from terminal_app.pty_page import add_pty_page_script
 
@@ -232,15 +232,21 @@ def install_ttyd_web_client(compressed_client: bytes, destination: Path) -> bool
     # stream that is not gzip at all is a BadGzipFile, which is an OSError.
     try:
         client_html = gzip.decompress(compressed_client)
-        with_script = add_pty_page_script(client_html)
-        if with_script is None:
-            logger.warning("The ttyd web client has no closing body tag; serving it without the phone keys")
-        destination.write_bytes(client_html if with_script is None else with_script)
+        destination.write_bytes(_with_pty_page_script(client_html))
     except (OSError, EOFError, zlib.error) as e:
         logger.warning("Failed to decompress the ttyd web client: {}; using the stock client", e)
         destination.unlink(missing_ok=True)
         return False
     return True
+
+
+def _with_pty_page_script(client_html: bytes) -> bytes:
+    """The web client with the phone-key script added, or as it is for a client with nowhere to add it."""
+    try:
+        return add_pty_page_script(client_html)
+    except ClientHasNoBodyCloseError:
+        logger.warning("The ttyd web client has no closing body tag; serving it without the phone keys")
+        return client_html
 
 
 @pure

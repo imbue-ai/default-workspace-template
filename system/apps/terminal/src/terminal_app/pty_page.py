@@ -23,6 +23,8 @@ from typing import Final
 
 from imbue.imbue_common.pure import pure
 
+from terminal_app.errors import ClientHasNoBodyCloseError
+
 # The script's text inside a <script> element: it must never contain a closing script tag.
 PTY_PAGE_SCRIPT: Final[str] = r"""
 (() => {
@@ -123,9 +125,10 @@ _BODY_CLOSE: Final[bytes] = b"</body>"
 
 
 @pure
-def add_pty_page_script(client_html: bytes) -> bytes | None:
-    """The web client with the script inserted before its closing body tag, or None when it has none."""
+def add_pty_page_script(client_html: bytes) -> bytes:
+    """The web client with the script inserted before its closing body tag; raises ClientHasNoBodyCloseError for a
+    client with none."""
     index = client_html.rfind(_BODY_CLOSE)
     if index < 0:
-        return None
+        raise ClientHasNoBodyCloseError("The ttyd web client has no closing body tag")
     return client_html[:index] + _SCRIPT_TAG + client_html[index:]
