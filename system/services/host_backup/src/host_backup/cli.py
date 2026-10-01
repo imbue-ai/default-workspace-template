@@ -63,7 +63,7 @@ EXIT_BACKUPS_NOT_CONFIGURED: Final[int] = 3
     "timeout_seconds",
     default=DEFAULT_TIMEOUT_SECONDS,
     show_default=True,
-    help="How long (seconds) to wait for the triggered backup to finish",
+    help="How long (seconds) to wait in all: for a tick already in flight, then for the triggered one",
 )
 @click.option(
     "--wait-only",
