@@ -18,7 +18,7 @@ import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows"
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
-import { launchPathOf } from "../model/launch";
+import { appShortcutOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
 import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
 import { shortcutKey } from "../model/records";
@@ -44,7 +44,7 @@ import {
   secondaryTextRow,
 } from "../reducers/launcherRows";
 import type { LauncherMenuRows, LauncherRow } from "../reducers/launcherRows";
-import { nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
+import { findShortcut, nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
 import { PINNED_ENTRY_ATTRIBUTE, SHORTCUT_ATTRIBUTE } from "../gestures/pointerGestures";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
@@ -74,6 +74,7 @@ type OpenMenu =
   | { readonly kind: "size"; readonly windowId: string }
   | { readonly kind: "entry"; readonly windowId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut; readonly referenceRows: readonly MenuRow[] }
+  | { readonly kind: "app-shortcut"; readonly app: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "desktops" }
   | { readonly kind: "desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
@@ -503,9 +504,8 @@ export function App(): m.Component<AppAttrs> {
             openMenuAt({ kind: "window", windowId: binding.windowId }, anchor);
             break;
           case "shortcut": {
-            const shortcut = activeDesktop(current.getState())?.shortcuts.find(
-              (candidate) => candidate.target.app === binding.app && candidate.target.launch === binding.launch,
-            );
+            const desktop = activeDesktop(current.getState());
+            const shortcut = desktop === null ? undefined : findShortcut(desktop, binding.app, binding.launch);
             if (shortcut !== undefined) {
               openMenuAt({ kind: "shortcut", shortcut, referenceRows: referenceRows() }, anchor);
             }
@@ -598,6 +598,7 @@ export function App(): m.Component<AppAttrs> {
                 setStyle: (style) => void current.setEntryStyle(window.app, style),
                 changeAvatar: () => openAvatarChooser(current),
               },
+        desktopShortcut: desktopShortcutRow(current, window.app),
       },
       state.modes.isCompact,
     );
@@ -606,11 +607,10 @@ export function App(): m.Component<AppAttrs> {
   function rowsOfShortcutMenu(current: DesktopStore, opened: DesktopShortcut): MenuRow[] | null {
     const state = current.getState();
     const desktop = activeDesktop(state);
+    if (desktop === null) return null;
     // The record as it is now (its mode may have flipped elsewhere), and nothing once it is removed.
-    const shortcut = desktop?.shortcuts.find(
-      (candidate) => candidate.target.app === opened.target.app && candidate.target.launch === opened.target.launch,
-    );
-    if (desktop === null || shortcut === undefined) return null;
+    const shortcut = findShortcut(desktop, opened.target.app, opened.target.launch);
+    if (shortcut === undefined) return null;
     const app = appByName(state, shortcut.target.app);
     const launchPath = app === undefined ? null : launchPathOf(app, shortcut.target.launch);
     const recent = app === undefined ? null : mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
@@ -644,16 +644,42 @@ export function App(): m.Component<AppAttrs> {
         onSelect: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
       },
       { kind: "divider" },
-      {
-        kind: "action",
-        key: "remove",
-        label: "Remove",
-        icon: "trash",
-        tone: "danger",
-        onSelect: () => void current.removeShortcut(shortcut.target.app, shortcut.target.launch),
-      },
+      removeFromDesktopRow(current, shortcut.target.app, shortcut.target.launch),
     );
     return rows;
+  }
+
+  function removeFromDesktopRow(current: DesktopStore, app: string, launch: string): MenuRow {
+    return {
+      kind: "action",
+      key: "remove-from-desktop",
+      label: "Remove from desktop",
+      onSelect: () => void current.removeShortcut(app, launch),
+    };
+  }
+
+  /** Add the app's own shortcut (``appShortcutOf``) to the desktop on screen, or take it off when it is there; null
+   *  with no desktop, no such app, or no shortcut the app may have. */
+  function desktopShortcutRow(current: DesktopStore, appName: string): MenuRow | null {
+    const state = current.getState();
+    const desktop = activeDesktop(state);
+    const app = appByName(state, appName);
+    const own = app === undefined ? null : appShortcutOf(app);
+    if (desktop === null || own === null) return null;
+    if (findShortcut(desktop, appName, own.launch) !== undefined) {
+      return removeFromDesktopRow(current, appName, own.launch);
+    }
+    return {
+      kind: "action",
+      key: "add-to-desktop",
+      label: "Add to desktop",
+      onSelect: () => void current.addShortcut(appName, own.launch, own.mode),
+    };
+  }
+
+  function rowsOfAppShortcutMenu(current: DesktopStore, appName: string): MenuRow[] | null {
+    const row = desktopShortcutRow(current, appName);
+    return row === null ? null : [row];
   }
 
   function rowsOfDesktopsMenu(current: DesktopStore): MenuRow[] {
@@ -722,6 +748,8 @@ export function App(): m.Component<AppAttrs> {
         return withReferenceRows(rowsOfEntryMenu(current, open.windowId), open.referenceRows);
       case "shortcut":
         return withReferenceRows(rowsOfShortcutMenu(current, open.shortcut), open.referenceRows);
+      case "app-shortcut":
+        return withReferenceRows(rowsOfAppShortcutMenu(current, open.app), open.referenceRows);
       case "desktops":
         return rowsOfDesktopsMenu(current);
       case "desktop":
@@ -1047,6 +1075,12 @@ export function App(): m.Component<AppAttrs> {
                     onRun: (row) => runLauncherRow(current, row),
                     onHighlight: (index) => {
                       launcherHighlight = index;
+                    },
+                    onAppShortcutContextMenu: (app, x, y, target) => {
+                      openMenuAt(
+                        { kind: "app-shortcut", app, referenceRows: referenceRowsFor(current, target, x, y) },
+                        anchorForPoint(x, y),
+                      );
                     },
                   })
                 : null,

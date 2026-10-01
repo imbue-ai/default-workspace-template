@@ -97,6 +97,8 @@ export interface TaskbarEntryMenuActions {
   readonly close: () => void;
   /** Null for an ordinary window's entry, which has no presentation to choose. */
   readonly presentation: EntryPresentationActions | null;
+  /** Add the window's app to the desktop, or take it off; null when the app has no shortcut to add. */
+  readonly desktopShortcut: MenuRow | null;
 }
 
 /** What "Show as <style>" reads for a style the pin declares. */
@@ -112,7 +114,7 @@ function styleLabel(style: PinStyle): string {
 /** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size (for a pulled-out window, Show,
  *  Hide placeholder or Show placeholder, and Bring back to desktop instead of those), then for a pinned entry
  *  Float or Move to taskbar (not in compact mode, where every entry is in the bar), the style to show it in, and
- *  the avatar chooser while it shows the avatar, then Close. */
+ *  the avatar chooser while it shows the avatar, then Add to desktop or Remove from desktop, then Close. */
 export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact: boolean): MenuRow[] {
   // A pulled-out window's arrangement is the chrome's: the entry shows its window, hides or shows its
   // placeholder here, or brings it back.
@@ -166,6 +168,7 @@ export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact
     }
     if (presentationRows.length > 0) rows.push({ kind: "divider" }, ...presentationRows);
   }
+  if (actions.desktopShortcut !== null) rows.push({ kind: "divider" }, actions.desktopShortcut);
   rows.push(
     { kind: "divider" },
     { kind: "action", key: "close", label: "Close", icon: "close", onSelect: actions.close },
