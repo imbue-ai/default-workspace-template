@@ -43,7 +43,7 @@ export interface SlotState {
   isChatListKnown: boolean;
   /** An intake is choosing the chat, or the user is picking one. */
   isChoosing: boolean;
-  /** The phone layout, where the list alone is the page while nothing is selected. */
+  /** The phone layout, where the list's drawer is open over the empty chat while nothing is selected. */
   isCompact: boolean;
   isShown: boolean;
 }

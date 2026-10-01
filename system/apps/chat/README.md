@@ -24,8 +24,16 @@ observe`, its own supervised service) writes, and serves:
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title. Loading the page sends and writes nothing. With nothing selected it
   shows the most recent chat, and with no chats one awaiting its first send
-  (`POST /api/chats/awaiting`, held in memory until that send launches it); on a
-  phone the list alone is the page until a chat is picked. An
+  (`POST /api/chats/awaiting`, held in memory until that send launches it). At
+  700px wide or less (a phone, or a narrow window) the root takes its phone
+  layout (`frontend/src/compactLayout.ts`, docs/system/blueprint/desktop-interface/plan-phone-interface.md):
+  a 44px header with a list button, the chat's title and a kebab of its verbs,
+  and the list in a drawer over the chat, each row carrying a kebab with the
+  right-click menu's verbs; with nothing selected the drawer is open over an
+  empty chat. The root tells each chat page it frames which layout it is in, and
+  a page in the phone layout opens its model menu from a settings button at the
+  composer's left, with submenus sliding over the card, effort as segments, and
+  the Source view switch as a row. An
   `intake` query parameter names a pending intake (below) the root applies once
   (`docs/system/blueprint/post-launch-paths/`): the text goes into a composer,
   unsent, a chat is picked from a picker the root opens over the list, or a chat

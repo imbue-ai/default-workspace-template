@@ -39,11 +39,12 @@ A window is named by its id (``win-<hex>``, from ``desktops`` or the ``open`` th
 window on the target client's active desktop).
 
 Every op targets exactly one client: ``--client <id>`` (from ``context``), else the client
-that most recently messaged you, else the one connected client; with several clients and no
-way to tell, the op is refused and lists them. The shell edits that client's placements
-itself, so an op lands whether or not a browser is connected, and a connected window shows it
-within a redraw. An op edits the client's active desktop; ``--desktop <name>`` edits that
-desktop and switches the client to it.
+that most recently messaged you while it is connected, else the one connected client (when
+a client messaged you, only if it is the same user's), else that messaging client though it
+is not connected; with several clients and no way to tell, the op is refused and lists them.
+The shell edits that client's placements itself, so an op lands whether or not a browser is
+connected, and a connected window shows it within a redraw. An op edits the client's active
+desktop; ``--desktop <name>`` edits that desktop and switches the client to it.
 
 ``open`` opens a window at ``--path``, or at one of the app's *launch paths* (``--launch <id>``
 with ``--param name=value`` for its parameters; with neither, the app's default launch path).
@@ -518,6 +519,7 @@ def _listed_clients(inventory: dict[str, Any]) -> list[dict[str, Any]]:
             "active_desktop": client.get("active_desktop"),
             "is_connected": client.get("is_connected"),
             "shown": client.get("shown", []),
+            "shown_history": client.get("shown_history", []),
             "last_seen": client.get("last_seen"),
         }
         for client in inventory.get("clients", []) or []
@@ -796,7 +798,9 @@ def _cmd_retired(args: argparse.Namespace) -> int:
 
 _CLIENT_HELP = (
     "The client whose desktop the op targets (an id from ``context``). Defaults to the client that "
-    "most recently messaged you, else the one connected client; refused when that settles nothing."
+    "most recently messaged you while it is connected, else the one connected client (when a client "
+    "messaged you, only if it is the same user's), else that messaging client though it is not "
+    "connected; refused when that settles nothing."
 )
 _DESKTOP_HELP = (
     "The desktop to edit, by name or id. Defaults to the target client's active desktop; naming "

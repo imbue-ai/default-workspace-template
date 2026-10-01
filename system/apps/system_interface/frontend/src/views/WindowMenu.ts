@@ -10,13 +10,18 @@
  */
 
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { windowSizeSubmenuRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
 import type { AppRecord, EntryMode, PinStyle } from "../model/records";
 import type { EntryLook } from "../reducers/desktopState";
 
+/** The width the shell's menus, the desktop's and the phone's, never go under, so a menu of two-word verbs is still
+ *  a card. */
+export const MENU_MIN_WIDTH = 176;
+
 export interface WindowMenuActions {
-  /** The zone grid's actions, or null in compact mode, where every window renders maximized. */
+  /** The zone grid's actions, or null where there is nothing to place (a window since closed). */
   readonly size: WindowSizeActions | null;
   /** Run after a size is picked, to take the menu down. */
   readonly onSized: () => void;
@@ -25,10 +30,39 @@ export interface WindowMenuActions {
   /** Null when the workspace cannot stop the app (a critical one). */
   readonly quit: (() => void) | null;
   /** Pull the window out into a desktop window of the embedding chrome's own (the pull-out-window spec); null
-   *  where the chrome cannot (a plain browser, an older chrome, compact mode). */
+   *  where the chrome cannot (a plain browser, an older chrome). */
   readonly popOut: (() => void) | null;
   /** Close the window for everyone; for a pinned window, which is never closed, this minimizes it instead. */
   readonly close: () => void;
+}
+
+/** Ask the Imbue Studio chrome to open its share settings for ``app``; the embed contract names the app by the
+ *  key it gives it. */
+export function openShareSettings(app: AppRecord): void {
+  sendToEmbedder(OPEN_SHARE_SETTINGS, { serviceName: app.name });
+}
+
+/** Share and Quit, each where it applies. */
+function shareAndQuitRows(
+  app: AppRecord | undefined,
+  share: (() => void) | null,
+  quit: (() => void) | null,
+): MenuRow[] {
+  if (app === undefined) return [];
+  const rows: MenuRow[] = [];
+  if (share !== null) {
+    rows.push({
+      kind: "action",
+      key: "share",
+      label: `Share ${app.display_name}`,
+      icon: "user-plus",
+      onSelect: share,
+    });
+  }
+  if (quit !== null) {
+    rows.push({ kind: "action", key: "quit", label: `Quit ${app.display_name}`, icon: "power", onSelect: quit });
+  }
+  return rows;
 }
 
 /** The window menu's rows, in display order. */
@@ -44,29 +78,30 @@ export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuAc
       onSelect: actions.popOut,
     });
   }
-  if (actions.share !== null && app !== undefined) {
-    rows.push({
-      kind: "action",
-      key: "share",
-      label: `Share ${app.display_name}`,
-      icon: "user-plus",
-      onSelect: actions.share,
-    });
-  }
-  if (actions.quit !== null && app !== undefined) {
-    rows.push({
-      kind: "action",
-      key: "quit",
-      label: `Quit ${app.display_name}`,
-      icon: "power",
-      onSelect: actions.quit,
-    });
-  }
+  rows.push(...shareAndQuitRows(app, actions.share, actions.quit));
   // A rule, not a second one, and none at all above the first row: with neither Share nor Quit
   // between them, the divider under Move and resize is already the one Close needs.
   if (rows.length > 0 && rows[rows.length - 1]?.kind !== "divider") rows.push({ kind: "divider" });
   rows.push({ kind: "action", key: "close", label: "Close", icon: "close", onSelect: actions.close });
   return rows;
+}
+
+/** What a phone's window menu offers (plan-phone-interface.md): no placement verbs, no pull-out, and no Close,
+ *  since a window's row has its own X. */
+export interface PhoneWindowMenuActions {
+  readonly refresh: () => void;
+  /** Null when there is no share surface: a critical app, or a page no chrome embeds. */
+  readonly share: (() => void) | null;
+  /** Null when the workspace cannot stop the app. */
+  readonly quit: (() => void) | null;
+}
+
+/** The phone's window menu: Refresh, then Share and Quit where they apply. */
+export function phoneWindowMenuRows(app: AppRecord | undefined, actions: PhoneWindowMenuActions): MenuRow[] {
+  return [
+    { kind: "action", key: "refresh", label: "Refresh", icon: "refresh", onSelect: actions.refresh },
+    ...shareAndQuitRows(app, actions.share, actions.quit),
+  ];
 }
 
 /** The presentation verbs of a pinned entry's menu (pinned-taskbar-entries plan section 4.4). */
@@ -113,9 +148,9 @@ function styleLabel(style: PinStyle): string {
 
 /** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size (for a pulled-out window, Show,
  *  Hide placeholder or Show placeholder, and Bring back to desktop instead of those), then for a pinned entry
- *  Float or Move to taskbar (not in compact mode, where every entry is in the bar), the style to show it in, and
- *  the avatar chooser while it shows the avatar, then Add to desktop or Remove from desktop, then Close. */
-export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact: boolean): MenuRow[] {
+ *  Float or Move to taskbar, the style to show it in, and the avatar chooser while it shows the avatar, then Add
+ *  to desktop or Remove from desktop, then Close. */
+export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions): MenuRow[] {
   // A pulled-out window's arrangement is the chrome's: the entry shows its window, hides or shows its
   // placeholder here, or brings it back.
   const rows: MenuRow[] = actions.isDetached
@@ -131,7 +166,7 @@ export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact
           ? { kind: "action", key: "restore", label: "Restore", onSelect: actions.restore }
           : { kind: "action", key: "minimize", label: "Minimize", onSelect: actions.minimize },
       ];
-  if (!isCompact && !actions.isDetached) {
+  if (!actions.isDetached) {
     rows.push(
       actions.isMaximized
         ? { kind: "action", key: "unmaximize", label: "Restore size", onSelect: actions.unmaximize }
@@ -141,14 +176,11 @@ export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions, isCompact
   const presentation = actions.presentation;
   if (presentation !== null) {
     const { look, setMode, setStyle, changeAvatar } = presentation;
-    const presentationRows: MenuRow[] = [];
-    if (!isCompact) {
-      presentationRows.push(
-        look.mode === "floating"
-          ? { kind: "action", key: "move-to-taskbar", label: "Move to taskbar", onSelect: () => setMode("bar") }
-          : { kind: "action", key: "float", label: "Float", onSelect: () => setMode("floating") },
-      );
-    }
+    const presentationRows: MenuRow[] = [
+      look.mode === "floating"
+        ? { kind: "action", key: "move-to-taskbar", label: "Move to taskbar", onSelect: () => setMode("bar") }
+        : { kind: "action", key: "float", label: "Float", onSelect: () => setMode("floating") },
+    ];
     if (look.declaredStyle !== "plain") {
       const other: PinStyle = look.style === "plain" ? look.declaredStyle : "plain";
       presentationRows.push({

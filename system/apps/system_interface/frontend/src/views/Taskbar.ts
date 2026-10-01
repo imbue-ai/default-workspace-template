@@ -1,7 +1,7 @@
 /**
  * The taskbar (plan section 4.10), left to right: the launcher field, one entry per window of
- * the active desktop in opening order, the system tray. Always visible in V1; in compact mode
- * it takes the compact height.
+ * the active desktop in opening order, the system tray. Always visible on the desktop layout; a
+ * phone draws its own bar instead.
  */
 
 import m from "mithril";

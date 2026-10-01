@@ -34,6 +34,31 @@
   }
 }
 
+/* The phone layout's drawer (root/ChatDrawer.ts) comes in from the left, a short slide rather
+   than the panel's whole width, so it reads as arriving rather than travelling. */
+@keyframes chat-drawer-in {
+  from {
+    transform: translateX(-30px);
+    opacity: 0.6;
+  }
+}
+
+/* The phone layout's model card (views/slidingMenuTrack.ts): a submenu slides in over the card's
+   own rows, and back out. */
+.sliding-menu-track {
+  transition: transform 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-drawer-panel,
+  .chat-drawer-scrim {
+    animation: none;
+  }
+  .sliding-menu-track {
+    transition: none;
+  }
+}
+
 /* On .app-content (ChatPanel / SubagentView), native scroll anchoring stays ON
    (the browser default) so the viewport holds steady when rows above it load or
    measure to their real height, with no per-frame JS scrollTop writes. The
@@ -322,6 +347,10 @@
   flex-direction: column;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+  /* A face must be its own stacking context, or a z-indexed descendant (a transcript row's
+     z-[2], a timeline bullet) stacks in the turner's context instead and is painted mirrored
+     over the other face: WebKit and Firefox draw it there, Chromium happens not to. */
+  isolation: isolate;
   /* Each face paints the surface, so the card reads as one solid object mid-turn rather than
      as a hole with two pictures behind it. */
   background: var(--c-surface);

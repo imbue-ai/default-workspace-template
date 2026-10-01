@@ -1,0 +1,3 @@
+The `manage-desktop` skill now tells agents about each client's `shown_history` in `layout.py desktops` and `list`: what a phone layout showed, most recent last, as window ids or `home` for the home grid. A phone places the windows it shows minimized, so its `shown` is usually empty, and the last `shown_history` entry is what is on its screen.
+
+The `manage-desktop` and `agentic-browser-fleet` skills describe the client an op with no `--client` targets as the shell now picks it: the client that last messaged the agent while it is connected, else the one connected client if it is the same user's, else that messaging client though it has gone.

@@ -959,3 +959,139 @@ describe("the combo card", () => {
     }).not.toThrow();
   });
 });
+
+describe("the phone layout's card", () => {
+  const EFFORTS = [
+    { level: "low", in_picker: true },
+    { level: "medium", in_picker: true },
+    { level: "high", in_picker: true },
+    { level: "ultra", in_picker: false },
+  ];
+  const toggles: number[] = [];
+
+  function renderPhone(isSourceViewOn = false): void {
+    m.render(
+      ROOT(),
+      m(ModelProviderMenu as never, {
+        chatId: "a1",
+        isCompact: true,
+        sourceView: { on: isSourceViewOn, onToggle: () => toggles.push(1) },
+      }),
+    );
+  }
+
+  function tap(selector: string): void {
+    const node = document.querySelector<HTMLElement>(selector);
+    if (node === null) throw new Error(`no ${selector} on screen`);
+    node.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    renderPhone();
+  }
+
+  beforeEach(() => {
+    toggles.length = 0;
+    const model = { ...OPUS, efforts: EFFORTS };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "medium", fast: false },
+      matched: model,
+      pending: null,
+    };
+  });
+
+  it("opens from a settings button instead of the chip", () => {
+    renderPhone();
+    expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();
+    tap("[data-composer-settings]");
+    expect(document.querySelector(".model-provider-menu--compact")).not.toBeNull();
+    expect(screenText()).toContain("Provider");
+    expect(screenText()).toContain("Stop agent");
+  });
+
+  it("offers the picker's effort levels as segments, and a press sets the chat's effort at once", () => {
+    renderPhone();
+    tap("[data-composer-settings]");
+    expect(document.querySelector('input[type="range"]')).toBeNull();
+    const segments = [...document.querySelectorAll<HTMLElement>("[data-effort-level]")];
+    expect(segments.map((segment) => segment.textContent)).toEqual(["Low", "Medium", "High"]);
+    expect(segments.map((segment) => segment.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
+
+    tap('[data-effort-level="high"]');
+    expect(picks).toHaveLength(1);
+    expect((picks[0] as unknown[])[1]).toEqual({ model_id: "opus", effort: "high", fast: false });
+    // The chat's own level again is not a change.
+    tap('[data-effort-level="medium"]');
+    expect(picks).toHaveLength(1);
+  });
+
+  it("slides a submenu in over the card's rows, and its back row slides it out", () => {
+    // Browsers reflect `inert` as a boolean property, which mithril assigns rather than setting the attribute;
+    // jsdom has none.
+    Object.defineProperty(HTMLElement.prototype, "inert", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("inert");
+      },
+      set(this: HTMLElement, value: unknown) {
+        this.toggleAttribute("inert", Boolean(value));
+      },
+    });
+    try {
+      renderPhone();
+      tap("[data-composer-settings]");
+      const track = (): string | null =>
+        document.querySelector("[data-menu-track]")?.getAttribute("data-menu-track") ?? null;
+      const inertPanes = (): boolean[] =>
+        [...document.querySelectorAll<HTMLElement>(".sliding-menu-track > div")].map((pane) => pane.inert);
+      expect(track()).toBe("menu");
+      expect(inertPanes()).toEqual([false, true]);
+
+      tap('[data-menu-row="providers"]');
+      expect(track()).toBe("submenu");
+      expect(inertPanes()).toEqual([true, false]);
+      // A slide, not a flyout: the submenu is inside the card, and there is no second box beside it.
+      expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
+      expect(screenText()).toContain("+ Add a provider");
+
+      tap("[data-menu-track-back]");
+      expect(track()).toBe("menu");
+      expect(inertPanes()).toEqual([false, true]);
+      expect(screenText()).not.toContain("+ Add a provider");
+    } finally {
+      delete (HTMLElement.prototype as { inert?: boolean }).inert;
+    }
+  });
+
+  it("carries the Source view switch as a row, whose press turns the card over and closes the menu", () => {
+    renderPhone();
+    tap("[data-composer-settings]");
+    const row = document.querySelector<HTMLElement>('[data-menu-row="source-view"] [role="switch"]');
+    expect(row?.getAttribute("aria-checked")).toBe("false");
+    tap('[data-menu-row="source-view"] [role="switch"]');
+    expect(toggles).toHaveLength(1);
+    expect(document.querySelector(".model-provider-menu")).toBeNull();
+  });
+
+  it("keeps the settings button for a chat with no account and no model, with Source view and Stop agent", () => {
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "" } });
+    settingsState.choice = null;
+    // Whether or not some other provider is signed in.
+    for (const accounts of [[], [ACCOUNT]]) {
+      providerState.accounts = accounts;
+      renderPhone();
+      tap("[data-composer-settings]");
+      expect(screenText()).toContain("No account");
+      expect(document.querySelector('[data-menu-row="source-view"]')).not.toBeNull();
+      expect(screenText()).toContain("Stop agent");
+      tap("[data-composer-settings]");
+    }
+  });
+
+  it("leaves the desktop card as it was: the chip, the slider, and no Source view row", () => {
+    render();
+    click(".model-selector-trigger");
+    expect(document.querySelector('input[type="range"]')).not.toBeNull();
+    expect(document.querySelector("[data-effort-level]")).toBeNull();
+    expect(document.querySelector("[data-menu-track]")).toBeNull();
+    expect(document.querySelector('[data-menu-row="source-view"]')).toBeNull();
+  });
+});

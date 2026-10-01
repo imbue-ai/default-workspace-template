@@ -56,9 +56,8 @@ async function mountApp(options: { isDetached?: boolean; soloWindowId?: string }
     api,
     socket,
     metrics: themeMetricsRecord(),
-    modes: { isCompact: false, isTouch: false },
+    modes: { isPhone: false, isTouch: false },
     redraw: () => m.redraw(),
-    notify: () => undefined,
     reloadInterface: () => undefined,
     soloWindowId: options.soloWindowId ?? null,
   });
@@ -603,11 +602,17 @@ describe("the desktop shortcut rows", () => {
     expect(shownApps()).toEqual([]);
     await settle();
     expect(shownApps()).toEqual(["docs"]);
+    const toastMessages = (): string[] => store.toasts.current().map((toast) => toast.message);
+    expect(toastMessages()).toEqual(["Could not remove the shortcut: the shell said no"]);
 
     void store.addShortcut("docs", "other", "focus");
     expect(shownApps()).toEqual(["docs", "docs"]);
     await settle();
     expect(shownApps()).toEqual(["docs"]);
+    expect(toastMessages()).toEqual([
+      "Could not remove the shortcut: the shell said no",
+      "Could not add the shortcut: the shell said no",
+    ]);
   });
 
   it("keeps a shortcut a broadcast put on the desktop while a refused add was in flight", async () => {
@@ -767,11 +772,12 @@ describe("a hidden ghost", () => {
   });
 });
 
-describe("a solo shell", () => {
-  /** What the App observes for its size, recorded so a test can resize it: under jsdom every box measures as
-   *  empty and the real observer never fires. */
-  const observed: { element: Element; callback: ResizeObserverCallback }[] = [];
+/** What the App observes for its size, recorded so a test can resize it: under jsdom every box measures as
+ *  empty and the real observer never fires. */
+const observed: { element: Element; callback: ResizeObserverCallback }[] = [];
 
+/** Record the App's size observations for the tests of the enclosing describe. */
+function recordResizeObservers(): void {
   beforeEach(() => {
     observed.length = 0;
     vi.stubGlobal(
@@ -790,20 +796,24 @@ describe("a solo shell", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
+}
+
+/** Give a pages host a size and fire the App's observation of it, as a resize of the viewport does. */
+function resizeHost(host: HTMLElement, width: number, height: number): void {
+  host.getBoundingClientRect = () => ({ left: 0, top: 0, width, height }) as DOMRect;
+  const watch = observed.find((candidate) => candidate.element === host);
+  if (watch === undefined) throw new Error("the pages host is not observed");
+  watch.callback([], {} as ResizeObserver);
+  m.redraw.sync();
+}
+
+describe("a solo shell", () => {
+  recordResizeObservers();
 
   /** Mount the App over a fresh store opened to show win-1 alone, the window pulled out in the stored layout. */
   async function mountSolo(): Promise<void> {
     unmountViews();
     await mountApp({ isDetached: true, soloWindowId: "win-1" });
-  }
-
-  /** Give the host a size and fire the App's observation of it, as a resize of the desktop window does. */
-  function resizeHost(host: HTMLElement, width: number, height: number): void {
-    host.getBoundingClientRect = () => ({ left: 0, top: 0, width, height }) as DOMRect;
-    const watch = observed.find((candidate) => candidate.element === host);
-    if (watch === undefined) throw new Error("the solo host is not observed");
-    watch.callback([], {} as ResizeObserver);
-    m.redraw.sync();
   }
 
   it("lays its one page over the whole host, live, and re-lays it as the host's size changes", async () => {
@@ -858,5 +868,55 @@ describe("the desktop's wallpaper", () => {
     chooseWallpaper("arcs");
     expect(layoutStyle()).toContain('url("/wallpapers/bundled/arcs")');
     expect(layoutStyle()).toContain("var(--desk-default-wallpaper)");
+  });
+});
+
+describe("the switch to the phone layout", () => {
+  recordResizeObservers();
+
+  it("re-lays the shown page as its host shrinks under a keyboard and turns with the phone", () => {
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    store.showOnPhone({ kind: "window", windowId: "win-1" });
+    m.redraw.sync();
+    const host = document.querySelector("[data-phone-page-host] .live-pages") as HTMLElement;
+    resizeHost(host, 393, 760);
+    const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+    expect([page.style.display, page.style.width, page.style.height]).toEqual(["", "393px", "760px"]);
+    resizeHost(host, 393, 420);
+    expect([page.style.width, page.style.height]).toEqual(["393px", "420px"]);
+    resizeHost(host, 852, 300);
+    expect([page.style.width, page.style.height]).toEqual(["852px", "300px"]);
+  });
+
+  it("leaves a right-click to the browser on the phone, and takes it for the element menu again on the desktop", () => {
+    const rightClick = (): MouseEvent => {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
+      document.body.dispatchEvent(event);
+      m.redraw.sync();
+      return event;
+    };
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    expect(rightClick().defaultPrevented).toBe(false);
+    expect(document.body.querySelector(".element-menu")).toBeNull();
+
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: false, isTouch: false });
+    m.redraw.sync();
+    expect(rightClick().defaultPrevented).toBe(true);
+  });
+
+  it("creates no page for a window the phone does not show", () => {
+    // win-1 is shown on the desktop; the phone lands on its home grid, where no window's page lives.
+    const createElement = vi.spyOn(document, "createElement");
+    try {
+      store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+      m.redraw.sync();
+      expect(document.querySelector("[data-phone-layout]")).not.toBeNull();
+      expect(store.getState().phone.shown).toEqual({ kind: "home" });
+      expect(createElement.mock.calls.filter(([tag]) => tag === "iframe")).toEqual([]);
+    } finally {
+      createElement.mockRestore();
+    }
   });
 });

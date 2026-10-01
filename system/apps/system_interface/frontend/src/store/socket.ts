@@ -30,9 +30,10 @@ import type {
   UpdateNoticeWire,
 } from "../model/records";
 
-/** The ops that reach the browser as messages: the transient ones, and a ``show`` that landed on a pulled-out
- *  window. The rest are applied to the files. */
-export type LayoutOpName = "refresh" | "reload_system_interface" | "show";
+/** The ops that reach the browser as messages: the transient ones, and those that put a window on this client's
+ *  screen (applied to the files too; a phone shows the window, and a desktop acts only on a ``show`` of a
+ *  pulled-out window). */
+export type LayoutOpName = "refresh" | "reload_system_interface" | "show" | "open" | "focus";
 
 export interface LayoutOpEvent {
   readonly op: LayoutOpName;
@@ -96,7 +97,7 @@ interface RawSocketEvent {
   entries?: unknown;
 }
 
-const LAYOUT_OP_NAMES: readonly string[] = ["refresh", "reload_system_interface", "show"];
+const LAYOUT_OP_NAMES: readonly string[] = ["refresh", "reload_system_interface", "show", "open", "focus"];
 
 export class ShellSocket implements DesktopSocket {
   private ws: WebSocket | null = null;
