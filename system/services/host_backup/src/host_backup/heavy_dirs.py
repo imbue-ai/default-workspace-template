@@ -25,7 +25,11 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 
-from host_backup.config import load_restic_env, missing_required_restic_keys
+from host_backup.config import (
+    HOST_BACKUP_README_PATH,
+    load_restic_env,
+    missing_required_restic_keys,
+)
 from host_backup.restic import build_restic_environment
 
 _ROOT: Final[str] = "/"
@@ -158,7 +162,7 @@ def format_heavy_directories_report(
         "Paths are relative to the backed-up home directory (/home/user in a workspace).",
         "Keep a directory that can be rebuilt out of the backup with a CACHEDIR.TAG file",
         "in it, or a pattern in `extra_excludes` in data/system/backup.toml.",
-        "See 'Slow backups' in system/services/host_backup/README.md.",
+        f"See 'Slow backups' in {HOST_BACKUP_README_PATH}.",
     ]
     return "\n".join(lines)
 

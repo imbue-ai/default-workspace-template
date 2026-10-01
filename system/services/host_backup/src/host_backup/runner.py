@@ -20,6 +20,7 @@ from loguru import logger
 from host_backup.capabilities import BackupCapabilities, detect_backup_capabilities
 from host_backup.config import (
     BACKUP_TOML_PATH,
+    HOST_BACKUP_README_PATH,
     PRUNE_TIMESTAMP_PATH,
     RESTIC_ENV_PATH,
     SLOW_BACKUP_NOTICE_TIMESTAMP_PATH,
@@ -79,7 +80,7 @@ SLOW_BACKUP_NOTICE_INTERVAL_SECONDS: Final[float] = 24 * 3600.0
 SLOW_BACKUP_HINT: Final[str] = (
     "Backup time follows how many files and directories the backup walks, not "
     "their size. Run `uv run host-backup-heavy-dirs` to see which directories "
-    "hold them, and read 'Slow backups' in system/services/host_backup/README.md."
+    f"hold them, and read 'Slow backups' in {HOST_BACKUP_README_PATH}."
 )
 
 # The restic-call signatures the backup and retention steps depend on, injected so

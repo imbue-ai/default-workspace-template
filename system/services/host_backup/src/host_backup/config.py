@@ -40,6 +40,9 @@ PRUNE_TIMESTAMP_PATH: Final[Path] = Path("data/.state/last-restic-prune")
 SLOW_BACKUP_NOTICE_TIMESTAMP_PATH: Final[Path] = Path(
     "data/.state/last-slow-backup-notice"
 )
+# Resolved from this file because the service's directory depends on the
+# workspace's layout (an injected update lands wherever the old one lived).
+HOST_BACKUP_README_PATH: Final[Path] = Path(__file__).resolve().parents[2] / "README.md"
 
 # Top-level backup.toml keys that are known-stale rather than unknown: old
 # bootstraps rewrite a `[snapshot]` section into backup.toml on every boot
