@@ -73,7 +73,8 @@ async function bootstrap(): Promise<void> {
     isPresenceReported: isChatPage,
     path: isChatPage ? `/${chatId}` : `/${chatId}.${agentId}.${sessionId}`,
   });
-  // What a link opens through: the shell when one stands above the page, else the page's own fallbacks.
+  // What links and the element menu act through: framed only when a shell stands above the page, so a link takes the
+  // page's own fallbacks, and a sub-agent view's draft rows grey, under a root opened on its own.
   const linkConnection = { ...connection, isFramed: isShellAbove(window) };
   // The element menu (element-reference-menu plan section 7.3): a chat page drafts a reference straight into its
   // own composer (which attaches it as a file), whoever frames it; a sub-agent view has no composer and asks the
