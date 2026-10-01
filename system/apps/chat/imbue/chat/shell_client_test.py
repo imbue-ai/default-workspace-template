@@ -2,13 +2,13 @@
 app as the requester, over a loopback stand-in for the shell."""
 
 from workspace_layout.primitives import ClientId
-from workspace_layout.testing import fake_desktop
-from workspace_layout.primitives import WindowPath
-from workspace_layout.primitives import WindowPage
 from workspace_layout.primitives import ShowOutcome
+from workspace_layout.primitives import WindowPage
+from workspace_layout.primitives import WindowPath
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 from workspace_layout.testing import LoopbackShell
 from workspace_layout.testing import desktop_answer
+from workspace_layout.testing import fake_desktop
 
 from imbue.chat.shell_client import build_chat_shell_client
 from imbue.chat.shell_client import chat_show_request

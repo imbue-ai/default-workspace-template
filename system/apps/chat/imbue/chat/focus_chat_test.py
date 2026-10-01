@@ -9,9 +9,9 @@ from workspace_layout.errors import ShellOpError
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.primitives import ClientId
-from workspace_layout.primitives import WindowPath
-from workspace_layout.primitives import WindowPage
 from workspace_layout.primitives import ShowOutcome
+from workspace_layout.primitives import WindowPage
+from workspace_layout.primitives import WindowPath
 from workspace_layout.testing import FakeShell
 
 from imbue.chat.server import create_application

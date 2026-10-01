@@ -9,9 +9,9 @@ from workspace_layout.errors import ShellOpError
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.ops import ShowRequest
 from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WindowPath
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import connected_client
-from workspace_layout.primitives import WindowPath
 
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
