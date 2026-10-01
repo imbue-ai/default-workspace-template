@@ -37,13 +37,14 @@ process (dormant, revives on its next message) is simply skipped until its
 process exists.
 
 Re-tagging is event-driven plus a slow sweep. The events (presence reports,
-sends, and lifecycle changes) cover everything that *raises* a chat's
-protection; the sweep exists because staleness, and the end of a started chat's
-grace, change with no event to announce them -- a chat crosses a ramp threshold
-simply by sitting there. The messaged-revive path is race-free without the sweep: the send blocks
-until the revived process is ready (and the launch wrapper registers its pid
-before that), and the send route records the message only after the send
-returns, so ``reapply``'s pid lookup finds the live process.
+sends, lifecycle changes, and hand-overs) cover everything that *raises* a
+chat's protection; the sweep exists because staleness, and the end of a started
+chat's grace, change with no event to announce them -- a chat crosses a ramp
+threshold simply by sitting there. The messaged-revive path is race-free
+without the sweep: the send blocks until the revived process is ready (and the
+launch wrapper registers its pid before that), and the send route records the
+message only after the send returns, so ``reapply``'s pid lookup finds the live
+process.
 
 The band arithmetic lives in ``oom_priority.bands`` (the stdlib-only, testable
 policy); this engine only holds the activity state and drives the writes. All
