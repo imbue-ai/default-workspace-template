@@ -8,6 +8,65 @@ to a GitHub orphan branch as a fine-grained checkpoint. `host_backup` covers the
 host_dir (code, worktrees, agent state, chat sessions, logs) and pushes to
 an encrypted restic repo on cheaper object storage.
 
+## Slow backups
+
+A backup's time follows how many files and directories restic walks, not how
+many bytes changed. It checks every entry against the previous snapshot, and
+under gVisor each check costs a few hundred microseconds, so a home tree of a
+million entries takes five minutes or more every hour even when only a few
+dozen files changed. A slow backup therefore almost always means a large tree
+that nothing excludes, usually something that can be rebuilt: a cache,
+downloads, extracted archives, clones.
+
+1. Confirm it. A backup that takes longer than `slow_backup_threshold_seconds`
+   (default 300) records a `BACKUP_SLOW` event, at most once a day, carrying
+   `duration_seconds` and restic's counts. Every tick's
+   `RESTIC_BACKUP_SUCCEEDED` event has the same numbers: `duration_seconds`,
+   and restic's `summary` as the last JSON line of `stdout`
+   (`total_files_processed`, `files_new`, `files_changed`, `files_unmodified`).
+   A long duration with nearly every file unmodified means the tree is too big,
+   not that too much changed.
+2. Find the tree. `uv run host-backup-heavy-dirs` (from `/home/user/workspace`)
+   lists the latest snapshot and prints the directories holding at least 2% of
+   its entries, nested under their parents. On a large snapshot it takes a
+   minute or two, so run it in the background and read its output afterwards.
+   It counts what the backup actually held, with every exclude applied.
+3. Exclude what can be rebuilt:
+   - A directory an app owns and can rebuild on demand: the app creates an
+     empty `.nobackup` file in it when it creates the directory. The backup
+     then keeps only that file. This is the fix to make in the app itself; see
+     "Keep rebuildable data out of the backup" in
+     `.agents/shared/worker/references/harden-creation.md`. (`CACHEDIR.TAG` is
+     deliberately not honored: uv writes one into every virtualenv and tool
+     environment, which a restore could not refill.)
+   - Anything else, or until the app is changed: add a pattern to
+     `extra_excludes` in `data/system/backup.toml`, e.g.
+     `extra_excludes = ["**/data/.apps/pr-review/repos"]`. Do not use
+     `excludes` for this: setting it replaces the built-in defaults.
+4. Check the result. Saving `backup.toml` starts a backup at once; its
+   `total_files_processed` should have dropped by the tree's size.
+
+Excluded data is not restored. A restore deletes whatever its snapshot lacks,
+so whoever owns an excluded directory must rebuild it when it is missing.
+
+Old snapshots still hold the excluded tree, and the daily `restic prune` walks
+every tree they hold until they age out (monthly snapshots are kept for two
+years). To drop it from history now, rewrite the snapshots with the same
+pattern. This permanently removes those paths from every backup, so ask the
+user first:
+
+```
+supervisorctl stop host-backup
+set -a; source /home/user/workspace/data/.secrets/restic.env; set +a
+restic rewrite --dry-run --exclude '**/data/.apps/pr-review/repos'
+restic rewrite --forget --exclude '**/data/.apps/pr-review/repos'
+restic prune
+supervisorctl start host-backup
+```
+
+`rewrite` has no counterpart to the `.nobackup` marker, so a marked directory
+is rewritten out of history by its path pattern.
+
 ## Behavior
 
 - Single long-running tick loop run as the `host-backup` supervisord program
@@ -75,7 +134,10 @@ an encrypted restic repo on cheaper object storage.
   - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
-  `excludes` list (default: `**/.venv`, `**/node_modules`, etc). Rust's
+  `excludes` list (default: `**/.venv`, `**/node_modules`, etc) followed by
+  its `extra_excludes` list (default empty; for adding patterns without
+  restating the defaults), and with `--exclude-if-present .nobackup`, which
+  keeps only the marker file of any directory holding one. Rust's
   regenerable caches (`~/.cargo/registry`, `~/.cargo/git`,
   `~/.rustup/toolchains`, `~/.rustup/downloads`) are excluded by default while
   the user-data parts of those trees (`~/.cargo/bin` binaries, config,
@@ -174,6 +236,9 @@ Structured events at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`:
   snapshot -- `outer_trigger` may emit several per tick when it sweeps leftovers)
 - `restic_backup_succeeded`, `restic_backup_failed`
 - `backup_repeatedly_failing` (escalation alarm after N consecutive failures)
+- `backup_slow` (a backup took longer than `slow_backup_threshold_seconds`;
+  at most once a day, gated by `data/.state/last-slow-backup-notice`; see
+  "Slow backups")
 - `forget_completed`, `prune_completed`, `prune_skipped`
 - `config_reloaded`
 - `tick_skipped_due_to_missing_secrets`, `tick_error`

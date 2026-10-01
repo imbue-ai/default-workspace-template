@@ -230,15 +230,9 @@ reason drops the bridge first (Step 6's opening command); a retry rebuilds it.
 
 ### 3b. Launch
 
-Surface your own chat window first (the Imbue Studio app sends the user into this
-workspace when it starts an update, and this conversation is where they should
-land). The command detaches a helper that retries until a client is there; it
-is best-effort, and a failure is not a reason to stop:
-
-```bash
-python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    surface-chat-tab --chat-id "${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"
-```
+Do not open a window for your own chat: when the Imbue Studio app starts an
+update, the chat app already shows this conversation in the user's pinned chat
+window.
 
 Open a tracking ticket (note the id it prints), then `tk start <ticket-id>` as
 its own tool call:
@@ -575,12 +569,14 @@ resumes), and how to honor a rollback request are in
 
 Before composing the results message, collect every finding the worker labelled
 a `submit-upstream-changes` candidate, plus any other defect in built-in code
-you hit this pass (a failing built-in test, a step of this flow that broke and
-had to be worked around). Escalate them together as AGENTS.md's "Updates"
+you hit this pass (a failing built-in test, a built-in test the worker's
+Validation names as flaky, a step of this flow that broke and had to be worked
+around). Escalate them together as AGENTS.md's "Updates"
 section describes -- one report via
 `.agents/shared/references/report-built-in-issues.md`, or
 `submit-upstream-changes` for a template fix -- or name each in the results
-message with the submission offered.
+message with the submission offered. A flaky test of a creation the workspace
+built is not built-in: file a regular ticket for it (`tk create`).
 
 Then compose the results message per `references/results-message.md`.
 

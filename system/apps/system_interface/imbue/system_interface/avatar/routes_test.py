@@ -9,10 +9,13 @@ from flask.testing import FlaskClient
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
+from imbue.system_interface.avatar.designs import GUMMY_SEAL_DESIGN_ID
+from imbue.system_interface.avatar.designs import LIVE_DESIGN_ID
 from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
 from imbue.system_interface.avatar.selection import SELECTION_FILENAME
 from imbue.system_interface.avatar.testing import MINIMAL_DESIGN_SVG
 from imbue.system_interface.avatar.testing import design_registration
+from imbue.system_interface.avatar.testing import png_size
 from imbue.system_interface.shell.testing import drain_messages
 
 _REGISTRATION = design_registration("mine").model_dump(mode="json")
@@ -23,26 +26,59 @@ def _window(app: Flask) -> "queue.Queue[str | None]":
     return state_of(app).shell.broadcaster.register()
 
 
-def test_the_listing_offers_the_bundled_designs_and_the_default_selection(client: FlaskClient) -> None:
+def test_the_listing_offers_the_character_and_the_bundled_designs_and_the_default_selection(
+    client: FlaskClient,
+) -> None:
     listing = client.get("/api/avatars").get_json()
-    assert [design["id"] for design in listing["designs"]] == [str(design.id) for design in BUNDLED_DESIGNS]
+    assert [design["id"] for design in listing["designs"]] == [
+        str(LIVE_DESIGN_ID),
+        *(str(design.id) for design in BUNDLED_DESIGNS),
+    ]
     assert listing["selected"] == listing["default"] == str(DEFAULT_DESIGN_ID)
 
 
+def test_the_character_is_served_as_a_still_the_chooser_can_preview(client: FlaskClient) -> None:
+    """The character is drawn by the client, so the route answers the still of its resting pose -- which is what
+    the chooser previews, and what any client that cannot run the rig falls back to."""
+    response = client.get(f"/api/avatars/{LIVE_DESIGN_ID}/image.svg")
+    assert response.status_code == 200
+    assert response.mimetype == "image/svg+xml"
+    body = response.get_data(as_text=True)
+    assert 'viewBox="0 0 100 100"' in body
+    assert "<path" in body
+    # It has no face, so the bundled eye treatment must not have drawn one; the shared stylesheet still
+    # names the class, which is why this looks for the element rather than the word.
+    assert 'class="jelly-eyes"' not in body
+
+
 def test_the_image_is_an_isolated_svg_wearing_the_mood(client: FlaskClient) -> None:
-    response = client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg?mood=working")
+    response = client.get(f"/api/avatars/{GUMMY_SEAL_DESIGN_ID}/image.svg?mood=working")
     assert response.status_code == 200
     assert response.mimetype == "image/svg+xml"
     assert response.headers["Content-Security-Policy"] == "default-src 'none'; style-src 'unsafe-inline'; sandbox"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Cache-Control"] == "no-cache"
     assert 'data-mood="working"' in response.get_data(as_text=True)
-    assert 'data-mood="idle"' in client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg").get_data(as_text=True)
-    assert "animation:none" in client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg?preview=1").get_data(
+    assert 'data-mood="idle"' in client.get(f"/api/avatars/{GUMMY_SEAL_DESIGN_ID}/image.svg").get_data(as_text=True)
+    assert "animation:none" in client.get(f"/api/avatars/{GUMMY_SEAL_DESIGN_ID}/image.svg?preview=1").get_data(
         as_text=True
     )
-    assert client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg?mood=angry").status_code == 400
+    assert client.get(f"/api/avatars/{GUMMY_SEAL_DESIGN_ID}/image.svg?mood=angry").status_code == 400
     assert client.get("/api/avatars/nobody/image.svg").status_code == 404
+
+
+def test_the_icon_is_a_png_of_the_asked_size_defaulting_to_the_touch_icons(client: FlaskClient) -> None:
+    response = client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/icon.png?size=64")
+    assert response.status_code == 200
+    assert response.mimetype == "image/png"
+    assert response.headers["Cache-Control"] == "no-cache"
+    assert png_size(response.data) == (64, 64)
+    assert png_size(client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/icon.png").data) == (180, 180)
+    client.post("/api/avatars", json=_REGISTRATION)
+    assert png_size(client.get("/api/avatars/mine/icon.png?size=512").data) == (512, 512)
+    assert client.get("/api/avatars/nobody/icon.png").status_code == 404
+    for size in ("0", "4096", "big"):
+        assert client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/icon.png?size={size}").status_code == 400
 
 
 def test_the_source_is_the_original_as_an_attachment(client: FlaskClient) -> None:

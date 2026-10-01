@@ -130,6 +130,15 @@ export function accountForAgent(accountId: string | undefined): ProviderAccount 
   return accounts.find((candidate) => candidate.id === accountId) ?? null;
 }
 
+/** Whether a chat's `account` label names an account that is no longer signed in (it was signed out).
+ *
+ * False for a chat from before accounts (no label) and until the account list has loaded, when
+ * no account reads as signed in, which says nothing about whether this one is gone.
+ */
+export function isAccountSignedOut(accountId: string | null | undefined): boolean {
+  return !!accountId && areAccountsLoaded() && accountForAgent(accountId) === null;
+}
+
 export function getMruAccountId(): string | null {
   return mru;
 }

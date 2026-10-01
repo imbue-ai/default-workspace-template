@@ -14,6 +14,8 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.parse
@@ -67,7 +69,7 @@ def _frontend_built() -> bool:
 
 
 pytestmark = [
-    pytest.mark.release,
+    pytest.mark.browser,
     pytest.mark.skipif(not is_e2e_browser_installed(), reason="Playwright browsers not installed"),
     pytest.mark.skipif(
         not _frontend_built(),
@@ -114,8 +116,6 @@ _CELL_WIDTH = 96
 _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
-# --desk-touch-target under [data-touch], which a taskbar entry takes there.
-_TOUCH_TARGET = 44
 _GEOMETRY_TOLERANCE_PX = 4
 
 
@@ -502,25 +502,14 @@ def _taskbar_entry(page: Page, window_id: str) -> Locator:
     return page.locator(f'[data-taskbar-entry="{window_id}"]')
 
 
-def _double_click(shortcut: Locator) -> None:
-    shortcut.dblclick()
-
-
-def _tap(shortcut: Locator) -> None:
-    shortcut.tap()
-
-
-def _open_via_shortcut(
-    page: Page, server: E2EServer, key: str = _STUB_SHORTCUT_KEY, run: Callable[[Locator], None] = _double_click
-) -> str:
-    """Run a shortcut (by double click unless ``run`` says otherwise) and wait for the one new window it opens;
-    answers the window id."""
+def _open_via_shortcut(page: Page, server: E2EServer, key: str = _STUB_SHORTCUT_KEY) -> str:
+    """Run a shortcut by double click and wait for the one new window it opens; answers the window id."""
     before = {window["id"] for window in _windows(server.base_url)}
 
     def _opened() -> set[str]:
         return {window["id"] for window in _windows(server.base_url)} - before
 
-    run(page.locator(f'[data-shortcut="{key}"]'))
+    page.locator(f'[data-shortcut="{key}"]').dblclick()
     assert poll_until(lambda: len(_opened()) == 1, timeout=15.0, poll_interval=0.1), (
         f"the shortcut opened {len(_opened())} windows, not one"
     )
@@ -677,7 +666,7 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     cell, nothing is open, the taskbar carries the launcher field and the Desktops tray widget, and the shell soon
     knows the client with home as its active desktop."""
     _land(page, e2e_server)
-    expect(page).to_have_title("System Interface")
+    expect(page).to_have_title(_get_json(f"{e2e_server.base_url}/api/inventory")["workspace_name"])
     shortcut = page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]')
     expect(shortcut).to_have_attribute("data-cell", "0,0")
     expect(shortcut.locator(".shortcut-label")).to_have_text(_STUB_APP_DISPLAY_NAME)
@@ -1404,7 +1393,7 @@ def test_shortcut_menu_changes_mode_and_removes(e2e_server: E2EServer, page: Pag
     expect(shortcut.locator(".shortcut-label")).to_have_text(_STUB_APP_DISPLAY_NAME)
 
     shortcut.click(button="right")
-    page.locator('[data-menu-row="remove"]').click()
+    page.locator('[data-menu-row="remove-from-desktop"]').click()
     expect(shortcut).to_have_count(0, timeout=10000)
     wait_for(
         lambda: _desktop(e2e_server.base_url)["shortcuts"] == [],
@@ -1772,12 +1761,13 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         expect(entry).to_have_attribute("data-entry-style", "avatar")
         expect(entry).to_have_attribute("data-mood", "idle")
         expect(entry).to_have_attribute("data-stale", "true")
-        assert _avatar_image_source(entry).endswith("/api/avatars/gummy-seal/image.svg?mood=idle")
+        # The default design is the character, which the page draws itself rather than loading as an image.
+        expect(entry.locator("[data-character-body]")).to_have_count(1)
+        expect(entry.locator("img")).to_have_count(0)
 
         _write_agent_events(server.agent_events_path, "RUNNING")
         expect(entry).to_have_attribute("data-mood", "working", timeout=15000)
         expect(entry).to_have_attribute("data-stale", "false")
-        assert _avatar_image_source(entry).endswith("/api/avatars/gummy-seal/image.svg?mood=working")
         _write_agent_events(server.agent_events_path, "STOPPED")
         expect(entry).to_have_attribute("data-mood", "idle", timeout=15000)
 
@@ -1785,7 +1775,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         _open_entry_menu(page, entry).locator('[data-menu-row="style-plain"]').click()
         expect(entry).to_have_attribute("data-entry-style", "plain", timeout=10000)
         expect(entry.locator("svg")).to_have_count(1)
-        expect(entry.locator("img")).to_have_count(0)
+        expect(entry.locator("[data-character-body]")).to_have_count(0)
         _wait_for_client_entry(
             server.base_url,
             _client_id(page),
@@ -1794,7 +1784,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         )
         _open_entry_menu(page, entry).locator('[data-menu-row="style-avatar"]').click()
         expect(entry).to_have_attribute("data-entry-style", "avatar", timeout=10000)
-        expect(entry.locator("img")).to_have_count(1)
+        expect(entry.locator("[data-character-body]")).to_have_count(1)
 
         with _second_client(page, server) as other:
             other_entry = _pinned_entry(other)
@@ -1806,7 +1796,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             _open_entry_menu(page, entry).locator('[data-menu-row="change-avatar"]').click()
             chooser = page.locator("[data-avatar-chooser]")
             expect(chooser).to_be_visible(timeout=5000)
-            expect(chooser.locator('[data-avatar-design="gummy-seal"]')).to_have_attribute("aria-pressed", "true")
+            expect(chooser.locator('[data-avatar-design="imbue-character"]')).to_have_attribute("aria-pressed", "true")
             chooser.locator('[data-avatar-design="jelly-cat"]').click()
             expect(chooser.locator('[data-avatar-design="jelly-cat"]')).to_have_attribute(
                 "aria-pressed", "true", timeout=10000
@@ -1879,134 +1869,262 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             )
 
 
-@pytest.mark.timeout(90, func_only=False)
-def test_a_phone_shows_a_floating_entry_in_the_bar_without_rewriting_its_mode(tmp_path: Path, page: Page) -> None:
-    """Compact mode renders every pinned entry in the bar whatever its mode says, and offers no float verb; the
-    client record's mode is untouched, so a laptop still draws it floating."""
-    with _running_e2e_server(tmp_path, pin=("plain", "linked", "floating")) as server:
-        _land(page, server)
-        pinned = _pinned_window(server.base_url)
-        expect(_pinned_entry(page)).to_have_attribute("data-entry-mode", "floating", timeout=15000)
-        with _second_client(page, server, **_MOBILE_CONTEXT_ARGS) as phone_page:
-            phone_entry = _taskbar_entry(phone_page, pinned["id"])
-            expect(phone_entry).to_be_visible(timeout=15000)
-            expect(phone_entry).to_have_attribute("data-entry-mode", "bar")
-            expect(phone_page.locator("[data-floating-entries] [data-pinned-entry]")).to_have_count(0)
-            phone_entry.tap()
-            expect(_window(phone_page, pinned["id"])).to_have_attribute(
-                "data-window-state", "MAXIMIZED", timeout=15000
-            )
-            # The second tap minimizes only the entry of the FOCUSED window; focus lands on its own
-            # broadcast, after the state does, so a tap before it arrives raises the window again.
-            expect(_window(phone_page, pinned["id"])).to_have_attribute("data-focused", "true", timeout=15000)
-            phone_entry.tap()
-            expect(_shown_windows(phone_page)).to_have_count(0, timeout=15000)
-            # A long press (a touch press held still) opens the entry's menu, which offers no Float (its Close minimizes)
-            # on a phone.
-            phone_entry.dispatch_event(
-                "pointerdown", {"pointerType": "touch", "button": 0, "buttons": 1, "pointerId": 3, "bubbles": True}
-            )
-            expect(phone_page.locator(".entry-menu")).to_be_visible(timeout=5000)
-            expect(phone_page.locator('.entry-menu [data-menu-row="float"]')).to_have_count(0)
-            expect(phone_page.locator('.entry-menu [data-menu-row="close"]')).to_have_count(1)
-            phone_page.keyboard.press("Escape")
-            assert _client_entries(server.base_url, _client_id(phone_page)) == {}
-        expect(_pinned_entry(page)).to_have_attribute("data-entry-mode", "floating")
-
-
 # A phone-shaped browser context, inlined so the emulated UA is pinned rather than drifting with the Playwright
-# version. The shell reads compactness off the viewport width and touch off the coarse pointer.
+# version. The shell reads the phone layout off the viewport's size and touch off the coarse pointer.
 _MOBILE_CONTEXT_ARGS: dict[str, Any] = {
     "user_agent": (
         "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
     ),
-    "viewport": {"width": 412, "height": 915},
+    "viewport": {"width": 393, "height": 852},
     "device_scale_factor": 2.625,
     "is_mobile": True,
     "has_touch": True,
 }
 
 
-@pytest.mark.timeout(90, func_only=False)
-def test_phone_shows_every_window_maximized_with_finger_sized_taskbar_entries(
-    e2e_server: E2EServer, page: Page
+@contextlib.contextmanager
+def _phone_client(
+    page: Page, server: E2EServer, viewport: dict[str, int] | None = None
+) -> Generator[Page, None, None]:
+    """A phone of its own (a second browser context, so its own client id), landed in the phone layout."""
+    context = _second_context(
+        page, **{**_MOBILE_CONTEXT_ARGS, "viewport": viewport or _MOBILE_CONTEXT_ARGS["viewport"]}
+    )
+    try:
+        phone = context.new_page()
+        phone.goto(f"{server.base_url}/")
+        expect(phone.locator("[data-phone-bar]")).to_be_visible(timeout=15000)
+        yield phone
+    finally:
+        context.close()
+
+
+def _phone_pill(phone: Page) -> Locator:
+    return phone.locator("[data-phone-pill]")
+
+
+def _phone_shows(phone: Page, window_id: str) -> None:
+    """Wait until the phone shows the window: the pill names it and its page is laid over the page host."""
+    expect(_phone_pill(phone)).to_have_attribute("data-phone-pill", window_id, timeout=15000)
+    expect(phone.locator(f'iframe[data-live-page="{window_id}"]')).to_be_visible(timeout=15000)
+
+
+def _phone_sheet_rows(phone: Page) -> list[str]:
+    """The windows sheet's rows, in order, by window id."""
+    return [row.get_attribute("data-phone-window-row") or "" for row in phone.locator("[data-phone-window-row]").all()]
+
+
+def _long_press(target: Locator) -> None:
+    """A touch press held still past the long-press time."""
+    target.dispatch_event(
+        "pointerdown", {"pointerType": "touch", "button": 0, "buttons": 1, "pointerId": 7, "bubbles": True}
+    )
+
+
+def _shown_history(base_url: str, client_id: str) -> list[str]:
+    (client,) = [client for client in _get_json(f"{base_url}/api/clients")["clients"] if client["id"] == client_id]
+    return list(client["shown_history"])
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_only_a_phone_sized_viewport_gets_the_phone_layout(e2e_server: E2EServer, page: Page) -> None:
+    """Phones either way round get the phone layout; a tablet, the Studio's smallest window, and a desktop window
+    that is short but wide keep the desktop. The layout follows the viewport live, without a reload."""
+    _land(page, e2e_server)
+    # Each size flips the layout, so every assertion waits for the media query's change rather than passing on the
+    # state the previous size left.
+    sizes_and_phone = [
+        ((393, 852), True),
+        ((800, 562), False),
+        ((852, 393), True),
+        ((1255, 561), False),
+        ((440, 956), True),
+        ((1200, 480), False),
+        ((956, 440), True),
+        ((744, 1133), False),
+    ]
+    for (width, height), is_phone in sizes_and_phone:
+        page.set_viewport_size({"width": width, "height": height})
+        if is_phone:
+            expect(page.locator("html"), f"{width}x{height}").to_have_attribute("data-phone", "")
+        else:
+            expect(page.locator("html"), f"{width}x{height}").not_to_have_attribute("data-phone", "")
+
+
+@pytest.mark.timeout(120, func_only=False)
+@pytest.mark.parametrize("viewport", [{"width": 393, "height": 852}, {"width": 852, "height": 393}])
+def test_a_phone_in_either_orientation_lands_on_the_pinned_window(
+    tmp_path: Path, page: Page, viewport: dict[str, int]
 ) -> None:
-    """On a phone the shell is compact and touch: a tap on the shortcut opens the window, every window fills the
-    backdrop with no resize edges or maximize controls, the taskbar's entries grow to the finger's touch target
-    (this is the client where an entry has to be reachable by thumb), the launcher field is a button that opens
-    the overlay, and the stored placement is the client's own (still a normal frame, since compactness is how
-    this client renders, not what it saves)."""
-    with _second_client(page, e2e_server, **_MOBILE_CONTEXT_ARGS) as phone_page:
-        expect(phone_page.locator("html")).to_have_attribute("data-compact", "")
-        expect(phone_page.locator("html")).to_have_attribute("data-touch", "")
+    """Upright or on its side, a phone gets the phone layout (the bar, no taskbar, no window chrome) and lands on the
+    pinned window, its page filling the space above the bar and the pill wearing the avatar; a reload lands on what
+    it showed last, home included."""
+    with _running_e2e_server(tmp_path, pin=("avatar", "linked", "bar")) as server:
+        pinned = _pinned_window(server.base_url)
+        with _phone_client(page, server, viewport) as phone:
+            expect(phone.locator("html")).to_have_attribute("data-phone", "")
+            expect(phone.locator("[data-taskbar]")).to_have_count(0)
+            expect(phone.locator("[data-window-id] .title-bar")).to_have_count(0)
+            _phone_shows(phone, pinned["id"])
+            expect(_phone_pill(phone).locator("[data-character-body]")).to_be_visible()
+            host = _box(phone.locator("[data-phone-page-host]"))
+            _assert_same_box(_box(phone.locator(f'iframe[data-live-page="{pinned["id"]}"]')), host, "phone page")
+            bar = _box(phone.locator("[data-phone-bar]"))
+            _assert_close(host["y"] + host["height"], bar["y"], "the page's foot against the bar")
+            _assert_close(bar["y"] + bar["height"], viewport["height"], "the bar's foot against the screen's")
 
-        window_id = _open_via_shortcut(phone_page, e2e_server, run=_tap)
-        window = _window(phone_page, window_id)
-        expect(window).to_have_attribute("data-window-state", "MAXIMIZED")
-        expect(window.locator("[data-resize-edge]")).to_have_count(0)
-        expect(window.locator('[data-window-control="maximize"]')).to_have_count(0)
-        expect(window.locator('[data-window-control="restore"]')).to_have_count(0)
-        backdrop = _box(phone_page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
-        _assert_same_box(_box(window), backdrop, "phone window")
-        expect(_taskbar_entry(phone_page, window_id)).to_be_visible()
-        # As tall as the finger's target, with the window's name on it: --desk-taskbar-entry-size takes
-        # --desk-touch-target here, and the chip is the whole of the target rather than a tile inside one.
-        entry_box = _box(_taskbar_entry(phone_page, window_id))
-        assert entry_box["height"] >= _TOUCH_TARGET - 1, entry_box
-        expect(_taskbar_entry(phone_page, window_id).locator(".taskbar-entry-title")).to_have_text(
-            f"Stub {_STUB_LAUNCH_PATH}"
-        )
-        assert _placements(e2e_server.base_url, _client_id(phone_page))[window_id]["state"] == "NORMAL"
-        frame = _page_frame(phone_page, window_id)
-        assert frame.url == f"{e2e_server.stub_url}{_STUB_LAUNCH_PATH}"
-
-        expect(phone_page.locator("[data-launcher-field]")).to_be_visible()
-        phone_page.locator("[data-launcher-field]").tap()
-        expect(phone_page.locator("[data-launcher-overlay]")).to_be_visible(timeout=10000)
-        # The menu spans the taskbar on a phone; a window row appears once its title is typed.
-        menu_box = _box(phone_page.locator("[data-launcher-overlay]"))
-        taskbar_box = _box(phone_page.locator("[data-taskbar]"))
-        assert abs(menu_box["width"] - taskbar_box["width"]) <= _GRID_INSET, (menu_box, taskbar_box)
-        # The expanded field keeps the collapsed button's place, centred in the taskbar, over the entries.
-        field_box = _box(phone_page.locator("[data-launcher-field]"))
-        assert abs(_center(field_box)[1] - _center(taskbar_box)[1]) <= 2, (field_box, taskbar_box)
-        phone_page.locator("[data-launcher-field] textarea").fill("stub")
-        expect(phone_page.locator(f'[data-launcher-overlay] [data-launcher-window="{window_id}"]')).to_be_visible()
-        phone_page.keyboard.press("Escape")
-        expect(phone_page.locator("[data-launcher-field] textarea")).to_have_value("")
-        phone_page.keyboard.press("Escape")
-        expect(phone_page.locator("[data-launcher-overlay]")).to_be_hidden()
-
-        _taskbar_entry(phone_page, window_id).tap()
-        expect(_shown_windows(phone_page)).to_have_count(0)
-        expect(_taskbar_entry(phone_page, window_id)).to_have_attribute("data-minimized", "true")
-        _taskbar_entry(phone_page, window_id).tap()
-        expect(window).to_be_visible()
+            phone.locator("[data-phone-home]").tap()
+            expect(phone.locator(f'[data-phone-app="{_STUB_APP_NAME}"]')).to_be_visible()
+            expect(phone.locator("[data-phone-home]")).to_be_disabled()
+            wait_for(
+                lambda: _shown_history(server.base_url, _client_id(phone))[-1:] == ["home"],
+                timeout=10.0,
+                poll_interval=0.1,
+                error_message="the phone never recorded going home",
+            )
+            phone.reload()
+            expect(phone.locator(f'[data-phone-app="{_STUB_APP_NAME}"]')).to_be_visible(timeout=15000)
+            expect(_phone_pill(phone)).to_have_attribute("data-phone-pill", "home")
 
 
-@pytest.mark.timeout(90, func_only=False)
-def test_a_phone_and_a_laptop_share_the_windows_but_not_the_arrangement(e2e_server: E2EServer, page: Page) -> None:
-    """A window the laptop opens reaches the phone's taskbar minimized (its own client's arrangement); the focus-mode
-    shortcut on the phone restores that window there rather than opening another; a window the phone opens from a
-    launcher row is a window on the laptop too, minimized there in turn."""
+@pytest.mark.timeout(120, func_only=False)
+def test_a_phone_and_a_laptop_share_the_windows_but_the_phone_moves_nothing(e2e_server: E2EServer, page: Page) -> None:
+    """A window the laptop opens is in the phone's windows sheet, and showing it on the phone writes no placement
+    anywhere; a window the phone opens from the start sheet lands on the first desktop, shown on the phone and
+    minimized on the laptop; and when the laptop closes the window the phone shows, the phone goes home."""
     _land(page, e2e_server)
     laptop_window = _open_via_shortcut(page, e2e_server)
-    with _second_client(page, e2e_server, **_MOBILE_CONTEXT_ARGS) as phone_page:
-        expect(_taskbar_entry(phone_page, laptop_window)).to_have_attribute("data-minimized", "true", timeout=15000)
+    laptop_client = _client_id(page)
+    laptop_placements = _placements(e2e_server.base_url, laptop_client)
+    with _phone_client(page, e2e_server) as phone:
+        phone_client = _client_id(phone)
+        _phone_pill(phone).tap()
+        expect(phone.locator(f'[data-phone-window-row="{laptop_window}"]')).to_be_visible(timeout=15000)
+        phone.locator(f'[data-phone-window-row="{laptop_window}"]').tap()
+        _phone_shows(phone, laptop_window)
+        expect(phone.locator('[data-phone-sheet="windows"]')).to_have_count(0)
+        phone.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+        assert _placements(e2e_server.base_url, laptop_client) == laptop_placements
+        assert laptop_window not in _placements(e2e_server.base_url, phone_client)
 
-        phone_page.locator(f'[data-shortcut="{_STUB_SHORTCUT_KEY}"]').tap()
-        expect(_window(phone_page, laptop_window)).to_have_attribute("data-window-state", "MAXIMIZED", timeout=15000)
-        _assert_no_further_window(phone_page, e2e_server, [laptop_window])
+        phone.locator("[data-phone-new]").tap()
+        field = phone.locator("[data-phone-start-field]")
+        expect(field).to_have_attribute("placeholder", "Open an app or send a message")
+        expect(field).not_to_be_focused()
+        field.fill(_STUB_LAUNCH_LABEL)
+        field.press("Enter")
+        (opened,) = [
+            window["id"] for window in _wait_for_window_count(e2e_server.base_url, 2) if window["id"] != laptop_window
+        ]
+        _phone_shows(phone, opened)
+        assert _placements(e2e_server.base_url, phone_client)[opened]["is_minimized"] is True
+        expect(_taskbar_entry(page, opened)).to_have_attribute("data-minimized", "true", timeout=15000)
+        assert opened not in _placements(e2e_server.base_url, laptop_client)
 
-        phone_page.locator("[data-launcher-field]").tap()
-        overlay = phone_page.locator("[data-launcher-overlay]")
-        expect(overlay).to_be_visible(timeout=10000)
-        overlay.locator(f'[data-launch="{_STUB_SHORTCUT_KEY}"]').tap()
-        windows = _wait_for_window_count(e2e_server.base_url, 2)
-        (phone_window,) = [window["id"] for window in windows if window["id"] != laptop_window]
-        expect(_window(phone_page, phone_window)).to_have_attribute("data-window-state", "MAXIMIZED", timeout=15000)
-        expect(_taskbar_entry(page, phone_window)).to_have_attribute("data-minimized", "true", timeout=15000)
-        expect(_window(page, laptop_window)).to_have_attribute("data-focused", "true")
+        _taskbar_entry(page, opened).click()
+        expect(_window(page, opened)).to_be_visible(timeout=15000)
+        _window(page, opened).locator('[data-window-control="close"]').click()
+        expect(phone.locator(f'[data-phone-app="{_STUB_APP_NAME}"]')).to_be_visible(timeout=15000)
+        expect(_phone_pill(phone)).to_have_attribute("data-phone-pill", "home")
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_phone_home_grid_and_windows_sheet(tmp_path: Path, page: Page) -> None:
+    """A home tile shows the app's window when it has one and launches it when it has none; the windows sheet puts
+    what the phone showed first and has no X on the pinned window; an X closes a window, and Close all, once
+    confirmed, closes every window but the pinned one."""
+    with _running_e2e_server(tmp_path, is_second_app_offered=True, pin=("avatar", "linked", "bar")) as server:
+        pinned = _pinned_window(server.base_url)
+        with _phone_client(page, server) as phone:
+            phone.locator("[data-phone-home]").tap()
+            phone.locator(f'[data-phone-app="{_STUB_APP_NAME}"]').tap()
+            (docs,) = [
+                window["id"] for window in _wait_for_window_count(server.base_url, 2) if not window["is_pinned"]
+            ]
+            _phone_shows(phone, docs)
+            phone.locator("[data-phone-home]").tap()
+            phone.locator(f'[data-phone-app="{_SECOND_APP_NAME}"]').tap()
+            (notes,) = [
+                window["id"]
+                for window in _wait_for_window_count(server.base_url, 3)
+                if not window["is_pinned"] and window["id"] != docs
+            ]
+            _phone_shows(phone, notes)
+            # Docs has a window: its tile shows that window rather than opening another.
+            phone.locator("[data-phone-home]").tap()
+            phone.locator(f'[data-phone-app="{_STUB_APP_NAME}"]').tap()
+            _phone_shows(phone, docs)
+            assert len(_windows(server.base_url)) == 3
+            expect(phone.locator("[data-phone-count]")).to_have_text("2")
+
+            _phone_pill(phone).tap()
+            expect(phone.locator('[data-phone-sheet="windows"]')).to_be_visible()
+            assert _phone_sheet_rows(phone) == [docs, notes, pinned["id"]]
+            expect(phone.locator(f'[data-phone-window-close="{pinned["id"]}"]')).to_have_count(0)
+            phone.locator(f'[data-phone-window-close="{notes}"]').tap()
+            _wait_for_window_count(server.base_url, 2)
+            expect(phone.locator(f'[data-phone-window-row="{notes}"]')).to_have_count(0)
+            # The sheet covers the bar; a tap on the scrim above it takes it down.
+            phone.locator('[data-phone-sheet-scrim="windows"]').click(position={"x": 200, "y": 20})
+            expect(phone.locator('[data-phone-sheet="windows"]')).to_have_count(0)
+
+            phone.locator("[data-phone-home]").tap()
+            phone.locator(f'[data-phone-app="{_SECOND_APP_NAME}"]').tap()
+            _wait_for_window_count(server.base_url, 3)
+            _phone_pill(phone).tap()
+            prompts: list[str] = []
+
+            def _accept(dialog: Any) -> None:
+                prompts.append(dialog.message)
+                dialog.accept()
+
+            phone.on("dialog", _accept)
+            phone.locator("[data-phone-close-all]").tap()
+            _wait_for_window_count(server.base_url, 1)
+            assert prompts == ["Close 2 windows?"]
+            assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_phone_pill_menu_start_sheet_message_and_a_refused_open(tmp_path: Path, page: Page) -> None:
+    """A long press on the pill offers the shown window's menu without the desktop's placement verbs; a message
+    typed into the start sheet goes to the pinned window's app and the phone shows that window; and an open the
+    shell refuses says so in a toast rather than an alert."""
+    with _running_e2e_server(tmp_path, pin=("avatar", "linked", "bar")) as server:
+        pinned = _pinned_window(server.base_url)
+        with _phone_client(page, server) as phone:
+            _phone_shows(phone, pinned["id"])
+            _long_press(_phone_pill(phone))
+            menu = phone.locator(".phone-window-menu")
+            expect(menu).to_be_visible(timeout=5000)
+            expect(menu.locator('[data-menu-row="refresh"]')).to_have_count(1)
+            for absent in ("minimize", "close", "size", "pop-out"):
+                expect(menu.locator(f'[data-menu-row="{absent}"]')).to_have_count(0)
+            phone.keyboard.press("Escape")
+
+            phone.locator("[data-phone-home]").tap()
+            phone.locator("[data-phone-new]").tap()
+            field = phone.locator("[data-phone-start-field]")
+            field.fill("plan the trip")
+            field.press("Enter")
+            wait_for(
+                lambda: any(
+                    launch["body"].get(_PINNED_TEXT_PARAM) == "plan the trip"
+                    for launch in _posted_launches(server.pinned_url)
+                ),
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the message never reached the pinned app",
+            )
+            _phone_shows(phone, pinned["id"])
+
+            phone.route(
+                re.compile(r".*/api/desktops/[^/]+/launch$"),
+                lambda route: route.fulfill(status=503, json={"detail": "the shell is restarting"}),
+            )
+            phone.locator("[data-phone-home]").tap()
+            phone.locator(f'[data-phone-app="{_STUB_APP_NAME}"]').tap()
+            expect(phone.locator("[data-toast]")).to_contain_text("the shell is restarting", timeout=10000)
 
 
 def _visiting_client(
@@ -2085,6 +2203,89 @@ def test_a_kept_rollback_point_raises_one_banner_naming_its_apps_and_everything_
     assert _get_json(f"{e2e_server.base_url}/api/updates/pending") is None
 
 
+# Past the grace a freshly torn-out pop-out gives the desktop's detach save before writing the detach itself
+# (``SOLO_HEAL_GRACE_MS`` in DesktopStore.ts): long enough for a pop-out that was going to write it to have.
+_PAST_SOLO_HEAL_GRACE_MS = 2000
+
+# Records, in the page it is added to, every ``minds:detached-windows`` report the page's shell sends its
+# embedder: a top-level page is its own parent, so it hears its own reports.
+_RECORD_DETACHED_REPORTS_SCRIPT = """
+window.__detachedReports = [];
+window.addEventListener("message", (event) => {
+  if (event.data?.type === "minds:detached-windows") window.__detachedReports.push(event.data.windows);
+});
+"""
+
+
+def _pop_out(page: Page, server: E2EServer, window_id: str, is_reopened: bool = False) -> Page:
+    """A pulled-out window's own page as the chrome's desktop window loads it: a second page of ``page``'s browser
+    context (so the same client) at ``/?solo=<window_id>``, marked reopened when asked, showing the window's page."""
+    pop_out = page.context.new_page()
+    pop_out.add_init_script(_RECORD_DETACHED_REPORTS_SCRIPT)
+    query = f"?solo={window_id}" + ("&reopened=1" if is_reopened else "")
+    pop_out.goto(f"{server.base_url}/{query}")
+    _page_frame(pop_out, window_id)
+    return pop_out
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_pop_out_is_reached_by_a_refresh_of_its_window_and_stays_a_pop_out_over_the_interface_reload(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """A pulled-out window's own page registers with the shell under its client, so ``refresh <window>`` reloads
+    it (and the main window's hidden copy of it), and it keeps ``?solo=`` in its URL, so the interface reload
+    brings it back as the pop-out rather than as a whole desktop."""
+    _land(page, e2e_server)
+    client_id = _client_id(page)
+    window_id = _broadcast_op(e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id})[
+        "window_id"
+    ]
+    main_copy = _page_frame(page, window_id)
+    pop_out = _pop_out(page, e2e_server, window_id)
+    # No drag wrote the detach, so the fresh pop-out writes it itself once its grace is over.
+    _wait_for_stored_placement(e2e_server, client_id, window_id, lambda placement: placement["is_detached"], "detach")
+    expect(_window(page, window_id)).to_have_count(0, timeout=15000)
+
+    pop_out_page = _page_frame(pop_out, window_id)
+    for frame in (pop_out_page, main_copy):
+        frame.evaluate("() => { window.__beforeRefresh = true; }")
+    _broadcast_op(e2e_server.base_url, "refresh", {"window": window_id, "client": client_id})
+    for frame in (pop_out_page, main_copy):
+        frame.wait_for_function(
+            "() => window.__beforeRefresh === undefined && window.__handshake !== undefined", timeout=15000
+        )
+
+    with pop_out.expect_navigation(timeout=15000):
+        _broadcast_op(e2e_server.base_url, "reload_system_interface", {"client": client_id})
+    assert urllib.parse.parse_qs(urllib.parse.urlparse(pop_out.url).query)["solo"] == [window_id]
+    _page_frame(pop_out, window_id)
+    expect(pop_out.locator("[data-taskbar]")).to_have_count(0)
+    assert _stored_placements(e2e_server.state_dir, client_id)[window_id]["is_detached"] is True
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_pop_out_reopened_at_launch_over_a_window_brought_back_closes_rather_than_pulling_it_out_again(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """A pop-out the chrome reopened (a relaunch) whose window was brought back while it was away reports the
+    window back at once, which is what closes it, and never writes the window out again after the grace."""
+    _land(page, e2e_server)
+    client_id = _client_id(page)
+    window_id = _broadcast_op(e2e_server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id})[
+        "window_id"
+    ]
+    _wait_for_stored_placement(
+        e2e_server, client_id, window_id, lambda placement: not placement["is_detached"], "the open"
+    )
+    pop_out = _pop_out(page, e2e_server, window_id, is_reopened=True)
+
+    pop_out.wait_for_function("() => window.__detachedReports.length > 0", timeout=15000)
+    pop_out.wait_for_timeout(_PAST_SOLO_HEAL_GRACE_MS)
+    assert pop_out.evaluate("() => window.__detachedReports") == [[]]
+    assert _stored_placements(e2e_server.state_dir, client_id)[window_id]["is_detached"] is False
+    expect(_window(page, window_id)).to_be_visible()
+
+
 # The Imbue Studio chrome, played by a page on its own origin: it frames the shell, waits for the shell's
 # ``minds:workspace-ready``, and then posts the chat notification's ask down to it, as the Imbue Studio app does.
 _CHROME_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Chrome</title></head><body>
@@ -2151,3 +2352,177 @@ def test_a_message_from_the_minds_chrome_reaches_the_app_that_registered_its_typ
                 chrome_server.server_close()
     assert isinstance(client_id, str) and client_id
     assert received == [{"type": _FOCUS_CHAT_TYPE, "client_id": client_id, "chatId": _FOCUSED_CHAT_ID}]
+
+
+# The File Viewer (``system/apps/files``): dufs over a folder of the test's own, with the workspace's vendored and
+# patched frontend, registered as the ``files`` app. The workspace image installs dufs; elsewhere these tests skip.
+_FILES_APP_NAME = "files"
+_FILES_ASSETS_DIRECTORY = Path(__file__).resolve().parents[3] / "files" / "assets"
+_DUFS_BINARY = shutil.which("dufs")
+# dufs answers a client it takes for a script (curl and the like) with a bare "Not Found" instead of the assets'
+# ``404.html``, so a direct request says it is a browser.
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36"
+)
+
+
+@contextlib.contextmanager
+def _running_file_viewer(root: Path) -> Generator[str, None, None]:
+    """Run dufs over ``root`` as the File Viewer's program line runs it over ``/``; yields its URL."""
+    assert _DUFS_BINARY is not None
+    port = find_free_port()
+    url = f"http://127.0.0.1:{port}"
+    command = [_DUFS_BINARY, "--allow-all", "--bind", "127.0.0.1", "--port", str(port)]
+    command += ["--assets", str(_FILES_ASSETS_DIRECTORY), str(root)]
+    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for(
+            lambda: is_server_answering(url),
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message=f"dufs did not come up at {url}",
+        )
+        yield url
+    finally:
+        process.terminate()
+        process.wait(timeout=5.0)
+
+
+@contextlib.contextmanager
+def _running_e2e_server_with_file_viewer(tmp_path: Path, root: Path) -> Generator[tuple[E2EServer, str], None, None]:
+    """The shell over the stub app and a File Viewer serving ``root``; yields the shell and the viewer's URL."""
+    with _running_file_viewer(root) as viewer_url:
+        row = registry_row_toml(
+            _FILES_APP_NAME,
+            viewer_url,
+            display_name="File Viewer",
+            launch_paths=(("new", "File Viewer", "/"),),
+        )
+        with _running_e2e_server(tmp_path, extra_rows=(row,)) as server:
+            yield server, viewer_url
+
+
+def _file_viewer_frame(page: Page, window_id: str) -> Frame:
+    """The frame of a File Viewer window; it speaks only its location beacon, so there is no handshake to await."""
+    handle = page.locator(f'iframe[data-live-page="{window_id}"]').element_handle(timeout=15000)
+    frame = handle.content_frame()
+    assert frame is not None
+    return frame
+
+
+def _raise_window(page: Page, server: E2EServer, client_id: str, window_id: str) -> None:
+    """Bring a window covered by a newer one back on top, as an agent's ``focus`` op does."""
+    _broadcast_op(server.base_url, "focus", {"window": window_id, "client": client_id})
+    expect(_window(page, window_id)).to_have_attribute("data-focused", "true", timeout=15000)
+
+
+def _window_record(base_url: str, window_id: str) -> dict[str, Any]:
+    return next(window for window in _windows(base_url) if window["id"] == window_id)
+
+
+def _wait_for_window_at(base_url: str, window_id: str, path: str) -> dict[str, Any]:
+    wait_for(
+        lambda: _window_record(base_url, window_id)["path"] == path,
+        timeout=15.0,
+        poll_interval=0.1,
+        error_message=f"window {window_id} never reached {path!r}",
+    )
+    return _window_record(base_url, window_id)
+
+
+@pytest.mark.skipif(_DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
+@pytest.mark.timeout(120, func_only=False)
+def test_the_file_viewer_opens_files_in_workspace_windows_and_raises_one_already_on_the_page(
+    tmp_path: Path, page: Page
+) -> None:
+    """In a File Viewer window, a folder opens in place; a file's name opens its view page in a new window of the
+    File Viewer, titled after the file, and a second click raises that window; the view page's Edit takes the same
+    window to the edit page; the listing's Edit then raises that window, and a modified click on the name opens a
+    view page again, as no window is on it any more. No click opens a browser window of its own."""
+    root = tmp_path / "viewer-root"
+    (root / "notes").mkdir(parents=True)
+    (root / "notes" / "plan 1.txt").write_text("the plan\n")
+    view_path = "/notes/plan%201.txt?view"
+    edit_path = "/notes/plan%201.txt?edit"
+    with _running_e2e_server_with_file_viewer(tmp_path, root) as (server, _):
+        _land(page, server)
+        client_id = _client_id(page)
+        listing_id = _broadcast_op(
+            server.base_url, "open", {"app": _FILES_APP_NAME, "path": "/", "client": client_id}
+        )["window_id"]
+        listing = _file_viewer_frame(page, listing_id)
+
+        listing.get_by_role("link", name="notes", exact=True).click()
+        _wait_for_window_at(server.base_url, listing_id, "/notes/")
+        assert [window["id"] for window in _windows(server.base_url)] == [listing_id]
+
+        listing.get_by_role("link", name="plan 1.txt", exact=True).click()
+        (viewer,) = [window for window in _wait_for_window_count(server.base_url, 2) if window["id"] != listing_id]
+        assert viewer["app"] == _FILES_APP_NAME and viewer["path"] == view_path
+        wait_for(
+            lambda: _window_record(server.base_url, viewer["id"])["title"] == "plan 1.txt",
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the view page's window was never titled after the file",
+        )
+        expect(_window(page, viewer["id"])).to_have_attribute("data-focused", "true", timeout=15000)
+
+        _raise_window(page, server, client_id, listing_id)
+        listing.get_by_role("link", name="plan 1.txt", exact=True).click()
+        expect(_window(page, viewer["id"])).to_have_attribute("data-focused", "true", timeout=15000)
+        _assert_no_further_window(page, server, [listing_id, viewer["id"]])
+
+        viewer_frame = _file_viewer_frame(page, viewer["id"])
+        viewer_frame.locator(".edit-file").click()
+        _wait_for_window_at(server.base_url, viewer["id"], edit_path)
+        assert [window["id"] for window in _windows(server.base_url)] == [listing_id, viewer["id"]]
+
+        _raise_window(page, server, client_id, listing_id)
+        listing.locator('a[title="Edit file"]').click()
+        expect(_window(page, viewer["id"])).to_have_attribute("data-focused", "true", timeout=15000)
+        _assert_no_further_window(page, server, [listing_id, viewer["id"]])
+
+        _raise_window(page, server, client_id, listing_id)
+        listing.get_by_role("link", name="plan 1.txt", exact=True).click(modifiers=["ControlOrMeta"])
+        (second_viewer,) = [
+            window
+            for window in _wait_for_window_count(server.base_url, 3)
+            if window["id"] not in (listing_id, viewer["id"])
+        ]
+        assert second_viewer["path"] == view_path
+        assert page.context.pages == [page], "a File Viewer click opened a browser window of its own"
+
+
+@pytest.mark.skipif(_DUFS_BINARY is None, reason="dufs is not installed (the workspace image installs it)")
+@pytest.mark.timeout(90, func_only=False)
+def test_the_file_viewer_answers_a_missing_path_with_its_own_page_naming_it_and_the_nearest_folder(
+    tmp_path: Path, page: Page
+) -> None:
+    """A path that does not exist answers 404 with the File Viewer's own page, which, in a window, names the path
+    asked for, links the nearest folder above it that exists, and titles the window after the missing name."""
+    root = tmp_path / "viewer-root"
+    (root / "notes").mkdir(parents=True)
+    missing = "/notes/gone/missing.txt"
+    with _running_e2e_server_with_file_viewer(tmp_path, root) as (server, viewer_url):
+        request = urllib.request.Request(f"{viewer_url}{missing}?view", headers={"User-Agent": _BROWSER_USER_AGENT})
+        with pytest.raises(urllib.error.HTTPError) as answered:
+            urllib.request.urlopen(request, timeout=5)
+        assert answered.value.code == 404
+        assert "<h1>Not found</h1>" in answered.value.read().decode()
+
+        _land(page, server)
+        client_id = _client_id(page)
+        window_id = _broadcast_op(
+            server.base_url, "open", {"app": _FILES_APP_NAME, "path": f"{missing}?view", "client": client_id}
+        )["window_id"]
+        frame = _file_viewer_frame(page, window_id)
+        expect(frame.locator(".asked-path")).to_have_text(missing, timeout=15000)
+        nearest = frame.locator(".nearest-folder")
+        expect(nearest).to_have_text("/notes/", timeout=15000)
+        assert nearest.get_attribute("href") == "/notes/"
+        wait_for(
+            lambda: _window_record(server.base_url, window_id)["title"] == "missing.txt",
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the not-found page's window was never titled after the missing name",
+        )

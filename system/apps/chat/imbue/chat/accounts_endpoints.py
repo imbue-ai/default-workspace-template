@@ -286,8 +286,8 @@ def abort_flow(flow_id: str) -> Response:
 
 
 def delete_account(account_id: str) -> Response:
-    """Remove an account. Chats bound to it keep their transcripts; a harness already holding
-    the credential keeps working until it restarts. The confirmation is the client's job."""
+    """Remove an account. Chats bound to it keep their transcripts and stop taking messages until
+    they move to another provider. The confirmation is the client's job."""
     try:
         accounts.delete_account(account_id)
     except accounts.AccountError as e:

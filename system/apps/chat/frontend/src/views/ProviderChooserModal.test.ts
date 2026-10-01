@@ -211,7 +211,7 @@ describe("the provider chooser", () => {
     (root.querySelector('[aria-label="Remove Anthropic (Claude Code)"]') as HTMLElement).click();
     draw();
     expect(root.textContent).toContain("Remove account");
-    expect(root.textContent).toContain("New chats can't be started on it.");
+    expect(root.textContent).toContain("chats running on it stop taking messages");
     expect(root.querySelector(".destroy-dialog-btn-destroy")?.textContent).toBe("Remove");
 
     (root.querySelector(".destroy-dialog-btn-cancel") as HTMLElement).click();

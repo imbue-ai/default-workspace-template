@@ -20,8 +20,10 @@ from loguru import logger
 from host_backup.capabilities import BackupCapabilities, detect_backup_capabilities
 from host_backup.config import (
     BACKUP_TOML_PATH,
+    HOST_BACKUP_README_PATH,
     PRUNE_TIMESTAMP_PATH,
     RESTIC_ENV_PATH,
+    SLOW_BACKUP_NOTICE_TIMESTAMP_PATH,
     BackupConfig,
     get_events_dir,
     load_backup_config,
@@ -38,6 +40,7 @@ from host_backup.events import (
 from host_backup.restic import (
     RESTORE_MARKER_TAGS,
     extract_snapshot_id_from_backup_output,
+    find_backup_summary,
     is_repo_locked_error,
 )
 from host_backup.restic import backup as restic_backup
@@ -71,6 +74,14 @@ WORKSPACE_DIR: Final[Path] = Path("/home/user/workspace")
 # (dpkg/npm/uv listings) normally take a few seconds; a wedged probe must not
 # stall the backup cadence.
 ENV_RECORD_CAPTURE_TIMEOUT_SECONDS: Final[float] = 120.0
+
+SLOW_BACKUP_NOTICE_INTERVAL_SECONDS: Final[float] = 24 * 3600.0
+
+SLOW_BACKUP_HINT: Final[str] = (
+    "Backup time follows how many files and directories the backup walks, not "
+    "their size. Run `uv run host-backup-heavy-dirs` to see which directories "
+    f"hold them, and read 'Slow backups' in {HOST_BACKUP_README_PATH}."
+)
 
 # The restic-call signatures the backup and retention steps depend on, injected so
 # the orchestration can be unit-tested without shelling out to restic.
@@ -497,7 +508,7 @@ def _run_restic_backup(
         operation="backup",
         run=lambda: backup_fn(
             source_path=snapshot.read_path,
-            excludes=config.excludes,
+            excludes=config.effective_excludes,
             tag=tag,
             env_overrides=env_overrides,
         ),
@@ -539,7 +550,57 @@ def _run_restic_backup(
             stderr=result.stderr,
         ),
     )
+    _maybe_emit_slow_backup_notice(
+        state=state,
+        config=config,
+        duration_seconds=duration,
+        backup_stdout=result.stdout,
+    )
     return True
+
+
+def _maybe_emit_slow_backup_notice(
+    *,
+    state: _LoopState,
+    config: BackupConfig,
+    duration_seconds: float,
+    backup_stdout: str,
+) -> None:
+    """Record a BACKUP_SLOW event when the backup ran past the threshold, at most once a day.
+
+    The daily limit is kept in a timestamp file rather than in memory, so a
+    restarting service cannot repeat the notice every tick.
+    """
+    if duration_seconds < config.slow_backup_threshold_seconds:
+        return
+    last_notice = _safe_mtime(SLOW_BACKUP_NOTICE_TIMESTAMP_PATH)
+    if (
+        last_notice is not None
+        and time.time() - last_notice < SLOW_BACKUP_NOTICE_INTERVAL_SECONDS
+    ):
+        return
+    summary = find_backup_summary(backup_stdout) or {}
+    logger.warning(
+        "restic backup took {:.0f}s (threshold {:.0f}s); see the backup_slow event",
+        duration_seconds,
+        config.slow_backup_threshold_seconds,
+    )
+    write_event(
+        state.events_dir,
+        make_event(
+            BackupEventType.BACKUP_SLOW,
+            tick_id=state.current_tick_id,
+            duration_seconds=duration_seconds,
+            threshold_seconds=config.slow_backup_threshold_seconds,
+            total_files_processed=summary.get("total_files_processed"),
+            files_new=summary.get("files_new"),
+            files_changed=summary.get("files_changed"),
+            files_unmodified=summary.get("files_unmodified"),
+            dirs_unmodified=summary.get("dirs_unmodified"),
+            hint=SLOW_BACKUP_HINT,
+        ),
+    )
+    _write_timestamp_file(SLOW_BACKUP_NOTICE_TIMESTAMP_PATH)
 
 
 def _run_with_unlock_retry(
@@ -791,22 +852,20 @@ def _maybe_run_prune(
         ),
     )
     if result.returncode == 0:
-        _touch_prune_timestamp()
+        _write_timestamp_file(PRUNE_TIMESTAMP_PATH)
     else:
         logger.warning(
             "restic prune failed (rc={}): {}", result.returncode, result.stderr.strip()
         )
 
 
-def _touch_prune_timestamp() -> None:
-    """Update PRUNE_TIMESTAMP_PATH to mark the prune as completed."""
+def _write_timestamp_file(path: Path) -> None:
+    """Write the current time to a gate file, whose mtime then records when it last fired."""
     try:
-        PRUNE_TIMESTAMP_PATH.parent.mkdir(parents=True, exist_ok=True)
-        PRUNE_TIMESTAMP_PATH.write_text(datetime.now(timezone.utc).isoformat())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(datetime.now(timezone.utc).isoformat())
     except OSError as e:
-        logger.warning(
-            "Could not update prune timestamp at {}: {}", PRUNE_TIMESTAMP_PATH, e
-        )
+        logger.warning("Could not update timestamp file at {}: {}", path, e)
 
 
 def _emit_tick_error(state: _LoopState, e: Exception) -> None:

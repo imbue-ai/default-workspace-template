@@ -53,7 +53,6 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
     launcher: {
       query: "",
       isOpen: false,
-      isCompact: false,
       onOpen: vi.fn(),
       onClose: vi.fn(),
       onQuery: vi.fn(),
@@ -129,6 +128,15 @@ describe("Taskbar", () => {
       false,
     ]);
     expect(entries.map((entry) => entry.querySelector(".opacity-70") !== null)).toEqual([true, false]);
+  });
+
+  it("does not dim the avatar when its window is minimized, the way it dims an app's icon", () => {
+    // The fixture's third entry is the pinned chat in the avatar style, minimized. A dimmed icon reads
+    // as "not on screen"; a dimmed character reads as unwell.
+    const entries = [...render().querySelectorAll("[data-taskbar-entry]")];
+    expect(entries.map((entry) => entry.getAttribute("data-minimized"))).toEqual(["false", "true", "true"]);
+    expect(entries.map((entry) => entry.querySelector(".opacity-70") !== null)).toEqual([false, true, false]);
+    expect(entries[2].getAttribute("data-mood")).not.toBeNull();
   });
 
   it("writes each window's title on its entry, with the whole of it in a bubble above", () => {
@@ -217,7 +225,6 @@ describe("Taskbar", () => {
         launcher: {
           query: "docs",
           isOpen: true,
-          isCompact: false,
           onOpen: vi.fn(),
           onClose,
           onQuery,

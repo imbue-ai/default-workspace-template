@@ -8,6 +8,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
+import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
@@ -55,9 +56,8 @@ async function mountApp(options: { isDetached?: boolean; soloWindowId?: string }
     api,
     socket,
     metrics: themeMetricsRecord(),
-    modes: { isCompact: false, isTouch: false },
+    modes: { isPhone: false, isTouch: false },
     redraw: () => m.redraw(),
-    notify: () => undefined,
     reloadInterface: () => undefined,
     soloWindowId: options.soloWindowId ?? null,
   });
@@ -528,6 +528,166 @@ describe("the element menu", () => {
   });
 });
 
+describe("the desktop shortcut rows", () => {
+  const DOCS_NEW: DesktopShortcut = {
+    target: { kind: "launch", app: "docs", launch: "new" },
+    mode: "focus",
+    cell: { column: 0, row: 0 },
+  };
+
+  function homeWith(shortcuts: DesktopShortcut[]): Desktop {
+    return desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")], shortcuts });
+  }
+
+  beforeEach(() => {
+    store.setBackdropSize({ width: 1000, height: 800 });
+  });
+
+  function rightClick(element: Element): MouseEvent {
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 });
+    element.dispatchEvent(event);
+    m.redraw.sync();
+    return event;
+  }
+
+  function openLaunchMenu(key: string): void {
+    store.openLauncher();
+    m.redraw.sync();
+    const row = document.querySelector(`[data-launcher-overlay] [data-launch="${key}"]`) as HTMLElement;
+    expect(rightClick(row).defaultPrevented).toBe(true);
+  }
+
+  function chooseRow(key: string): void {
+    const row = document.querySelector(`[data-menu-part="menu"] [data-menu-row="${key}"]`) as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+    m.redraw.sync();
+  }
+
+  it("adds the launch path to the desktop on screen in its default mode, then offers to take it off", async () => {
+    const chat = appRecord("chat", {
+      launch_paths: [launchPathRecord({ id: "new", path: "/new" })],
+      default_shortcut: { launch: "new", mode: "new" },
+    });
+    socket.deliver().onAppsUpdated([appRecord("docs"), chat]);
+
+    openLaunchMenu("chat:new");
+    expect(document.querySelector(".app-shortcut-menu")).not.toBeNull();
+    chooseRow("add-to-desktop");
+    await settle();
+
+    expect(api.calls).toContain("setDesktopShortcut:home:chat:new:0,0");
+    expect(api.desktops[0].shortcuts.map((shortcut) => shortcut.mode)).toEqual(["new"]);
+    expect(store.isLauncherOpen()).toBe(false);
+
+    openLaunchMenu("chat:new");
+    chooseRow("remove-from-desktop");
+    await settle();
+    expect(api.calls).toContain("removeDesktopShortcut:home:chat:new");
+  });
+
+  it("draws an added or removed shortcut at once, and puts the desktop back when the shell refuses", async () => {
+    const shownApps = (): string[] =>
+      (store.getState().desktops[0]?.shortcuts ?? []).map((shortcut) => shortcut.target.app);
+
+    openLaunchMenu("docs:new");
+    chooseRow("add-to-desktop");
+    expect(shownApps()).toEqual(["docs"]);
+    await settle();
+    expect(shownApps()).toEqual(["docs"]);
+
+    api.refusal = "the shell said no";
+    openLaunchMenu("docs:new");
+    chooseRow("remove-from-desktop");
+    expect(shownApps()).toEqual([]);
+    await settle();
+    expect(shownApps()).toEqual(["docs"]);
+    const toastMessages = (): string[] => store.toasts.current().map((toast) => toast.message);
+    expect(toastMessages()).toEqual(["Could not remove the shortcut: the shell said no"]);
+
+    void store.addShortcut("docs", "other", "focus");
+    expect(shownApps()).toEqual(["docs", "docs"]);
+    await settle();
+    expect(shownApps()).toEqual(["docs"]);
+    expect(toastMessages()).toEqual([
+      "Could not remove the shortcut: the shell said no",
+      "Could not add the shortcut: the shell said no",
+    ]);
+  });
+
+  it("keeps a shortcut a broadcast put on the desktop while a refused add was in flight", async () => {
+    api.refusal = "the answer was lost";
+    void store.addShortcut("docs", "new", "focus");
+    const broadcast = homeWith([DOCS_NEW]);
+    socket.deliver().onDesktopsUpdated([broadcast]);
+    await settle();
+    expect(store.getState().desktops[0].shortcuts).toEqual(broadcast.shortcuts);
+  });
+
+  it("leaves a shortcut off when a broadcast says it is gone while a refused removal was in flight", async () => {
+    socket.deliver().onDesktopsUpdated([homeWith([DOCS_NEW])]);
+    api.refusal = "the answer was lost";
+    void store.removeShortcut("docs", "new");
+    socket.deliver().onDesktopsUpdated([homeWith([])]);
+    await settle();
+    expect(store.getState().desktops[0].shortcuts).toEqual([]);
+  });
+
+  it("offers the same row on a taskbar entry's menu, for the app's own shortcut", async () => {
+    const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
+
+    rightClick(entry);
+    chooseRow("add-to-desktop");
+    await settle();
+    expect(api.calls).toContain("setDesktopShortcut:home:docs:new:0,0");
+
+    rightClick(entry);
+    chooseRow("remove-from-desktop");
+    await settle();
+    expect(api.calls).toContain("removeDesktopShortcut:home:docs:new");
+  });
+
+  it("gives the icon's own menu the same plain Remove from desktop row as the other menus, taking it off at once", () => {
+    api.desktops = [homeWith([DOCS_NEW])];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    m.redraw.sync();
+    rightClick(document.querySelector('[data-shortcut="docs:new"]') as HTMLElement);
+    const row = document.querySelector('[data-menu-part="menu"] [data-menu-row="remove-from-desktop"]') as HTMLElement;
+    expect(row.textContent?.trim()).toBe("Remove from desktop");
+    // Taking an icon off the desktop deletes nothing, so it reads as an ordinary verb: no danger tone, no trash.
+    expect(row.outerHTML).not.toContain("text-danger");
+    expect(row.querySelector("svg")).toBeNull();
+    chooseRow("remove-from-desktop");
+    expect(store.getState().desktops[0].shortcuts).toEqual([]);
+  });
+
+  it("offers only an app's own desktop shortcut: its first launch path taking no text, focusing", async () => {
+    const notes = appRecord("notes", {
+      launch_paths: [
+        launchPathRecord({ id: "ask", path: "/ask", params: ["question"], text_param: "question" }),
+        launchPathRecord({ id: "browse", path: "/" }),
+        launchPathRecord({ id: "add", path: "/add" }),
+      ],
+      default_shortcut: null,
+    });
+    socket.deliver().onAppsUpdated([appRecord("docs"), notes]);
+
+    store.openLauncher();
+    m.redraw.sync();
+    rightClick(document.querySelector('[data-launcher-overlay] [data-launch="notes:add"]') as HTMLElement);
+    expect(document.querySelector(".app-shortcut-menu")).toBeNull();
+    expect(document.querySelector(".element-menu")).not.toBeNull();
+    pressEscape();
+
+    openLaunchMenu("notes:browse");
+    chooseRow("add-to-desktop");
+    await settle();
+    expect(api.desktops[0].shortcuts.map((shortcut) => [shortcut.target.launch, shortcut.mode])).toEqual([
+      ["browse", "focus"],
+    ]);
+  });
+});
+
 describe("a press outside what is open", () => {
   it("closes an open menu through its own sheet, with the focused page shielded under it", () => {
     expect(focusedShield()).toBeNull();
@@ -612,11 +772,12 @@ describe("a hidden ghost", () => {
   });
 });
 
-describe("a solo shell", () => {
-  /** What the App observes for its size, recorded so a test can resize it: under jsdom every box measures as
-   *  empty and the real observer never fires. */
-  const observed: { element: Element; callback: ResizeObserverCallback }[] = [];
+/** What the App observes for its size, recorded so a test can resize it: under jsdom every box measures as
+ *  empty and the real observer never fires. */
+const observed: { element: Element; callback: ResizeObserverCallback }[] = [];
 
+/** Record the App's size observations for the tests of the enclosing describe. */
+function recordResizeObservers(): void {
   beforeEach(() => {
     observed.length = 0;
     vi.stubGlobal(
@@ -635,20 +796,24 @@ describe("a solo shell", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
+}
+
+/** Give a pages host a size and fire the App's observation of it, as a resize of the viewport does. */
+function resizeHost(host: HTMLElement, width: number, height: number): void {
+  host.getBoundingClientRect = () => ({ left: 0, top: 0, width, height }) as DOMRect;
+  const watch = observed.find((candidate) => candidate.element === host);
+  if (watch === undefined) throw new Error("the pages host is not observed");
+  watch.callback([], {} as ResizeObserver);
+  m.redraw.sync();
+}
+
+describe("a solo shell", () => {
+  recordResizeObservers();
 
   /** Mount the App over a fresh store opened to show win-1 alone, the window pulled out in the stored layout. */
   async function mountSolo(): Promise<void> {
     unmountViews();
     await mountApp({ isDetached: true, soloWindowId: "win-1" });
-  }
-
-  /** Give the host a size and fire the App's observation of it, as a resize of the desktop window does. */
-  function resizeHost(host: HTMLElement, width: number, height: number): void {
-    host.getBoundingClientRect = () => ({ left: 0, top: 0, width, height }) as DOMRect;
-    const watch = observed.find((candidate) => candidate.element === host);
-    if (watch === undefined) throw new Error("the solo host is not observed");
-    watch.callback([], {} as ResizeObserver);
-    m.redraw.sync();
   }
 
   it("lays its one page over the whole host, live, and re-lays it as the host's size changes", async () => {
@@ -703,5 +868,55 @@ describe("the desktop's wallpaper", () => {
     chooseWallpaper("arcs");
     expect(layoutStyle()).toContain('url("/wallpapers/bundled/arcs")');
     expect(layoutStyle()).toContain("var(--desk-default-wallpaper)");
+  });
+});
+
+describe("the switch to the phone layout", () => {
+  recordResizeObservers();
+
+  it("re-lays the shown page as its host shrinks under a keyboard and turns with the phone", () => {
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    store.showOnPhone({ kind: "window", windowId: "win-1" });
+    m.redraw.sync();
+    const host = document.querySelector("[data-phone-page-host] .live-pages") as HTMLElement;
+    resizeHost(host, 393, 760);
+    const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
+    expect([page.style.display, page.style.width, page.style.height]).toEqual(["", "393px", "760px"]);
+    resizeHost(host, 393, 420);
+    expect([page.style.width, page.style.height]).toEqual(["393px", "420px"]);
+    resizeHost(host, 852, 300);
+    expect([page.style.width, page.style.height]).toEqual(["852px", "300px"]);
+  });
+
+  it("leaves a right-click to the browser on the phone, and takes it for the element menu again on the desktop", () => {
+    const rightClick = (): MouseEvent => {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
+      document.body.dispatchEvent(event);
+      m.redraw.sync();
+      return event;
+    };
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    expect(rightClick().defaultPrevented).toBe(false);
+    expect(document.body.querySelector(".element-menu")).toBeNull();
+
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: false, isTouch: false });
+    m.redraw.sync();
+    expect(rightClick().defaultPrevented).toBe(true);
+  });
+
+  it("creates no page for a window the phone does not show", () => {
+    // win-1 is shown on the desktop; the phone lands on its home grid, where no window's page lives.
+    const createElement = vi.spyOn(document, "createElement");
+    try {
+      store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+      m.redraw.sync();
+      expect(document.querySelector("[data-phone-layout]")).not.toBeNull();
+      expect(store.getState().phone.shown).toEqual({ kind: "home" });
+      expect(createElement.mock.calls.filter(([tag]) => tag === "iframe")).toEqual([]);
+    } finally {
+      createElement.mockRestore();
+    }
   });
 });

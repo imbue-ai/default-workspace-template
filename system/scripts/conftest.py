@@ -3,7 +3,6 @@ layout.py, and a fake chat app and a fake ``mngr`` for message_chat.py and run_i
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import socket
@@ -16,27 +15,7 @@ from typing import Any
 import pytest
 import tomlkit
 from layout_testing import desktop_answer
-
-
-def _load_script_module(module_name: str, filename: str) -> Any:
-    """Import one of the scripts beside this file under ``module_name`` (they are not a package)."""
-    spec = importlib.util.spec_from_file_location(
-        module_name, Path(__file__).parent / filename
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-layout = _load_script_module("layout_for_fixtures", "layout.py")
-message_chat = _load_script_module("message_chat_for_fixtures", "message_chat.py")
-run_in_background = _load_script_module(
-    "run_in_background_for_fixtures", "run_in_background.py"
-)
-seed_welcome_chat = _load_script_module(
-    "seed_welcome_chat_for_fixtures", "seed_welcome_chat.py"
-)
+from script_modules_testing import layout, message_chat
 
 
 def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
@@ -86,7 +65,15 @@ def _isolate_agent_identity(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "apps.toml"
-    _write_apps_toml(path, {"files": (), "terminal": ("new",), "chat": ("subagent", "new"), "browser": ("new",)})
+    _write_apps_toml(
+        path,
+        {
+            "files": (),
+            "terminal": ("new",),
+            "chat": ("subagent", "new"),
+            "browser": ("new",),
+        },
+    )
     monkeypatch.setenv(layout.ENV_APPS_FILE, str(path))
     return path
 
@@ -131,7 +118,9 @@ class _FakeShellHandler(BaseHTTPRequestHandler):
             if body.get("op") == "context":
                 self._respond(200, {"ok": True, "clients": server.context_clients})
             elif body.get("op") == "refresh":
-                self._respond(200, {"ok": True, "target_client_id": server.refresh_target})
+                self._respond(
+                    200, {"ok": True, "target_client_id": server.refresh_target}
+                )
             elif server.op_refusal is not None:
                 self._respond(*server.op_refusal)
             else:

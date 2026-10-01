@@ -20,7 +20,7 @@ loudly here instead of silently breaking workspace auth:
 5. `env` maps deep-merge across settings scopes (a project-level
    `.claude/settings.json` env key composes with the user-level block).
 
-Release-marked: they run the real claude binary (no network beyond loopback
+Marked `real_claude`: they run the real claude binary (no network beyond loopback
 -- a local capture server plays the API and answers 401, which is enough to
 observe the credential headers). Skipped when the binary is missing or its
 version differs from the pin in .mngr/settings.toml, so they only ever
@@ -41,7 +41,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.release
+pytestmark = pytest.mark.real_claude
 
 _REPO_ROOT = Path(__file__).parents[3]
 _CAPTURE_WAIT_SECONDS = 60.0

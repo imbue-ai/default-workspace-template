@@ -1,0 +1,1 @@
+The shell's end-to-end suite now drives the real File Viewer (dufs with its vendored frontend) inside the desktop: a file click opens a File Viewer window on the file's view page and a second click raises it, the view page's Edit button moves the same window to the edit page, and a missing path shows the File Viewer's "not found" page. No change to the shell itself.
