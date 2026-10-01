@@ -432,7 +432,7 @@
     },
     {
       "slug": "networked-notebook",
-      "title": "Networked Notebook",
+      "title": "Mind Mapped Notebook",
       "description": "Roam-style networked notebook: an outliner with wiki-links and block references, a dense knowledge graph, backlink pages, and content pulled in from Slack and Google Docs as linkable nodes.",
       "what_it_is": "A Roam-style personal notebook for people who think by connecting ideas rather\nthan filing them into folders. You write in an outliner -- everything is a\nnested bullet -- and you link ideas inline with `[[wiki-links]]` and reference\nindividual bullets with `((block references))`. Every link is bidirectional, so\neach page automatically grows a **Backlinks** section (its \"linked references\")\nshowing every other place that mentions it, and a **force-directed graph** view\nrenders the whole web of pages and concepts so you can see clusters and bridges\nat a glance. What sets it apart from a plain notes app is that outside content\nis pulled in as first-class, linkable nodes: messages from **Slack** and\ndocuments from **Google Docs** appear inline as cards you can link to like any\nother note, each keeping a \"view original\" of the raw record and an \"open in\nsource\" jump back to the real message or doc. The result, when running, is a\nsingle web page: a left sidebar of pages and sources, a center outliner you type\ninto, a backlinks panel, and a toggle to the graph -- one connected knowledge\nbase that spans your own notes and the conversations and docs they came from.",
       "author": "jean-imbue",
