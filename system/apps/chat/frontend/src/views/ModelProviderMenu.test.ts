@@ -178,6 +178,11 @@ const OPUS = {
   harness_reported_model_id: null,
   default_effort: null,
 };
+const LOW_MEDIUM_HIGH = [
+  { level: "low", in_picker: true },
+  { level: "medium", in_picker: true },
+  { level: "high", in_picker: true },
+];
 const ACCOUNT = {
   id: "acct-1",
   lane: "anthropic",
@@ -399,12 +404,7 @@ describe("the combo card", () => {
   it("commits an effort on release, not on every notch of the drag", () => {
     // Each notch is a live switch typed into the agent's pane, and setModelChoice chains
     // rather than debounces -- a low-to-max drag would queue one per stop.
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const model = { ...OPUS, efforts };
+    const model = { ...OPUS, efforts: LOW_MEDIUM_HIGH };
     catalogState.catalog = catalogOf({ options: [model] });
     settingsState.choice = {
       identity: { model_id: "opus", effort: "low", fast: false },
@@ -430,12 +430,7 @@ describe("the combo card", () => {
     // Uncommitted is not the same as unshown: the row is what you are aiming with, so it reads
     // off the thumb from the first notch. The TRIGGER keeps saying the committed level, since
     // that is still what the agent is running on until release.
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const model = { ...OPUS, efforts };
+    const model = { ...OPUS, efforts: LOW_MEDIUM_HIGH };
     catalogState.catalog = catalogOf({ options: [model] });
     settingsState.choice = {
       identity: { model_id: "opus", effort: "low", fast: false },
@@ -512,12 +507,7 @@ describe("the combo card", () => {
 
   it("shows the model's default effort for a chat that never picked one", () => {
     // codex records no effort until one is picked, while the thread runs at the model's default.
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const model = { ...OPUS, id: "gpt-6-sol", label: "GPT-6-Sol", efforts, default_effort: "medium" };
+    const model = { ...OPUS, id: "gpt-6-sol", label: "GPT-6-Sol", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
     catalogState.catalog = catalogOf({ picker_mode: "dynamic", switch_mode: "on_change", options: [] });
     settingsState.choice = {
       identity: { model_id: "gpt-6-sol", effort: null, fast: false },
@@ -532,13 +522,8 @@ describe("the combo card", () => {
   });
 
   it("carries the default effort in effect onto a newly picked model", () => {
-    const efforts = [
-      { level: "low", in_picker: true },
-      { level: "medium", in_picker: true },
-      { level: "high", in_picker: true },
-    ];
-    const current = { ...OPUS, efforts, default_effort: "medium" };
-    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts, default_effort: "medium" };
+    const current = { ...OPUS, efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
+    const other = { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" };
     catalogState.catalog = catalogOf({ options: [current, other] });
     settingsState.choice = {
       identity: { model_id: "opus", effort: null, fast: false },
