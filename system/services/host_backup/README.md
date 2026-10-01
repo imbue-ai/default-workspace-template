@@ -57,7 +57,7 @@ user first:
 
 ```
 supervisorctl stop host-backup
-set -a; source data/.secrets/restic.env; set +a
+set -a; source /home/user/workspace/data/.secrets/restic.env; set +a
 restic rewrite --dry-run --exclude '**/data/.apps/pr-review/repos'
 restic rewrite --forget --exclude '**/data/.apps/pr-review/repos'
 restic prune
