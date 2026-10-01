@@ -3896,6 +3896,7 @@ version = "0.1.0"
 source = { editable = "system/libs/workspace_layout" }
 dependencies = [
     { name = "app-manifest" },
+    { name = "click" },
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "pydantic" },
@@ -3905,9 +3906,10 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "click", specifier = ">=8.1" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=b9adf75086bcf0e2aeda5d88fa669fe4fc4c4670" },
     { name = "loguru", specifier = ">=0.7" },
-    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic", specifier = ">=2.12" },
     { name = "tenacity", specifier = ">=8.0" },
 ]
 

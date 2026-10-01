@@ -6,7 +6,7 @@ New library `workspace_layout`: the shell's layout routes (the op route, the des
 
 - `FakeShell` and `LoopbackShell` are the shared test stand-ins; `LoopbackShell` refuses any op body the shell itself would refuse.
 
-- The agent-facing desktop command is now `uv run workspace-layout`, this library's console script, replacing `python3 system/scripts/layout.py`. Every subcommand, flag, output line, and exit code is unchanged (the hints for retired verbs and spellings name the new command), and a new `show <app> --path P [--showing P ...] [--repoint PAGE ...]` runs the shell's `show` op: it raises a window already showing the page rather than opening another.
+- The agent-facing desktop command is now `uv run workspace-layout`, this library's console script, replacing `python3 system/scripts/layout.py`. Every subcommand, output line, and exit code is unchanged, and every flag but `place --zone`, which became `--state` (the hints for retired verbs and spellings name the new command), and a new `show <app> --path P [--showing P ...] [--repoint PAGE ...]` runs the shell's `show` op: it raises a window already showing the page rather than opening another.
 
 - The shell's records and answers are defined here and nowhere else: `records` (frames, cells, windows, desktops, placements, layouts, client records, and the views answers carry), every answer the shell gives (`DesktopOpAnswer` with its desktop and layout, `ShowAnswer.shown` as a `ShowOutcome`, the transient, `context`, inventory, desktops, and clients answers, and the `layout_op` message), and the wire's values (`WindowPath`, `WindowPage`, `WindowTitle`, `UserId`, `WindowState`, `SpecialWindow`). The shell builds from them and callers parse with them, ignoring fields a newer shell adds.
 

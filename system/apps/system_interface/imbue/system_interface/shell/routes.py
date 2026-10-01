@@ -16,8 +16,7 @@ from loguru import logger
 from workspace_layout.answers import ClientsListing
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.ops import ClientActivityReport
-from workspace_layout.ops import parse_layout_op
-from workspace_layout.ops import parse_op_requester
+from workspace_layout.ops import parse_op_body
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
 from workspace_layout.records import EntryPresentation
@@ -357,16 +356,8 @@ def layout_broadcast() -> ResponseReturnValue:
     except ValueError as e:
         logger.opt(exception=e).warning("layout broadcast received invalid JSON body")
         return detail_response("Invalid JSON in request body", HTTP_BAD_REQUEST)
-    if not isinstance(body, dict):
-        return detail_response("Request body must be a JSON object", HTTP_BAD_REQUEST)
-    op = parse_layout_op(body.get("op"))
-    args_raw = body.get("args", {})
-    requester = parse_op_requester(body.get("requester"))
-    if op is None:
-        return detail_response(f"Unknown layout op: {body.get('op')!r}", HTTP_BAD_REQUEST)
-    if not isinstance(args_raw, dict):
-        return detail_response("``args`` must be a JSON object", HTTP_BAD_REQUEST)
-    return dispatch_desktop_op(_shell(), op, args_raw, requester)
+    parsed = parse_op_body(body)
+    return dispatch_desktop_op(_shell(), parsed.op, parsed.args, parsed.requester)
 
 
 def register_shell_routes(application: Flask) -> None:

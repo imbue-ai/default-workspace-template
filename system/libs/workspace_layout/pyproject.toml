@@ -6,9 +6,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "app-manifest",
+    "click>=8.1",
     "imbue-common",
     "loguru>=0.7",
-    "pydantic>=2.0",
+    # 2.12 is the first whose model_validate takes ``extra``, which every answer is read with.
+    "pydantic>=2.12",
     # Polls the registry for an app `open` names until its row appears.
     "tenacity>=8.0",
 ]

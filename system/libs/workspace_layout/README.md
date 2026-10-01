@@ -43,7 +43,11 @@ answer shapes live in one place the shell and its callers share.
   `ClientsListing`, and the `layout_op` WebSocket message (`LayoutOpMessage`).
   `parse_answer` and `parse_listing` read an answer with unknown fields ignored
   (the shell's to add to); a listing skips one entry it cannot read, with a
-  warning, and raises when none of a non-empty list reads.
+  warning, and raises when none of a non-empty list reads. A caller reads an
+  answer through them, never with a model's own `model_validate`, which is as
+  strict as the shell's files are. The tolerance covers added fields only: a
+  value outside an enum or a rule (a new `ShowOutcome`, say) makes the answer
+  malformed.
 - `workspace_layout.errors`: `WorkspaceLayoutError`; `InvalidLayoutValueError`;
   and `ShellOpError`, raised by every op that did not happen, as
   `ShellUnreachableError` (down, restarting, timed out), `ShellRefusedOpError`
@@ -100,7 +104,8 @@ else points an on-screen window on one of the `--repoint` pages at it, else the
 app's pinned window, else opens one.
 
 The command replaced `system/scripts/layout.py`, keeping its subcommands,
-flags, output, and exit codes; the hints for retired verbs and spellings name
+output, and exit codes and every flag but `place --zone`, which is refused with
+the `--state` form; the hints for retired verbs and spellings name
 `uv run workspace-layout`. Unlike the script it runs in the root venv, so it
 builds every op from the request models the shell reads and reads every answer
 through the answer models the shell builds. `place` takes `--state
