@@ -75,10 +75,6 @@ INTERACTIVE_CAPABILITY: Final[str] = "interactive"
 # has to run against -- set every value here to that alias. Editing the table is the
 # only way to do it, on purpose: the value a build used is then a property of the commit
 # it ran, which is what lets two eval arms differ by nothing else.
-# What every worker runs on when the build uses one pool instead of a model per difficulty.
-# Opus 5.5's own default effort is medium, so naming the model is the whole setting.
-POOL_MODEL: Final[str] = "opus[1m]"
-
 MODEL_BY_CAPABILITY: Final[dict[str, str]] = {
     "low": "haiku",
     "medium": "sonnet[1m]",
@@ -333,7 +329,7 @@ def parse_plan(
     reduce_access: bool = False,
     shared_worktree: bool = False,
     tier_agents: bool = False,
-    worker_pool: int = 0,
+    worker_pool: dict[str, int] | None = None,
 ) -> dict[str, object]:
     """Turn the planner's output into the validated plan the orchestrator runs.
 
@@ -353,11 +349,14 @@ def parse_plan(
     They are independent. Shared folders with per-node agents still pay the cold starts;
     tier agents in separate worktrees still pay the syncs.
 
-    ``worker_pool`` is a third shape and it replaces the other two's idea of who runs what.
-    With a pool of N identical workers, all on ``POOL_MODEL``, no node names an agent: the
-    orchestrator sends each ready node to whichever worker is free, preferring one that already
-    holds context for it. A tier agent idles whenever the plan has no node of its capability
-    ready, which a pool cannot do, and the cap on nodes running at once becomes the pool size.
+    ``worker_pool`` is a third shape: a count of workers per capability, such as
+    ``{"high": 2, "medium": 2, "low": 1}``. Every node still runs on the model its capability
+    names, exactly as with one agent per capability -- what changes is that a capability can
+    have several workers, so two ``medium`` nodes run at once instead of queueing behind one
+    agent. No node names an agent: the orchestrator sends each ready node to whichever worker
+    *of that capability* is free. The cap on nodes running at once is per capability, not one
+    number for the build, so a plan heavy in one difficulty is held by that difficulty's count
+    rather than by the others sitting idle.
 
     """
     output_block = _extract_output_block(plan_text)
@@ -431,11 +430,7 @@ def parse_plan(
             # Nodes sharing this number are consecutive work for the orchestrator, to be
             # done as one piece rather than one at a time. None when a worker does it.
             "own_group": group_by_node.get(idx),
-            "model": (
-                None
-                if idx not in with_worker
-                else (POOL_MODEL if worker_pool else model_for_capability(capabilities[idx]))
-            ),
+            "model": model_for_capability(capabilities[idx]) if idx in with_worker else None,
         }
         for idx in range(node_count)
     ]
@@ -447,7 +442,7 @@ def parse_plan(
         "settings": {
             "shared_worktree": shared_worktree,
             "tier_agents": tier_agents,
-            "worker_pool": worker_pool,
+            "worker_pool": dict(worker_pool) if worker_pool else {},
             "reduce_access": reduce_access,
         },
     }
@@ -490,16 +485,36 @@ def find_ready_nodes(
         and node["index"] not in running
         and set(node["access"]) <= done
     ]
-    running_worker_count = sum(1 for idx in running if has_worker(idx))
-    # A pool of N workers can run N nodes at once and no more, which is a tighter cap than the
-    # flow's own. Without a pool the cap is the flow's.
     settings = plan.get("settings") or {}
     assert isinstance(settings, dict)
-    cap = settings.get("worker_pool") or MAX_RUNNING_NODE_COUNT
-    free_worker_slot_count = max(cap - running_worker_count, 0)
-    ready_workers = [idx for idx in unblocked if has_worker(idx)][
-        :free_worker_slot_count
-    ]
+    pool = settings.get("worker_pool") or {}
+    assert isinstance(pool, dict)
+
+    if pool:
+        # Each capability has its own workers, so each has its own cap. A `low` node cannot
+        # start because a `high` worker is free, and a plan heavy in one difficulty is held by
+        # that difficulty's count rather than by the whole pool's size.
+        free = {
+            capability: count - sum(
+                1 for idx in running
+                if has_worker(idx) and nodes[idx]["capability"] == capability
+            )
+            for capability, count in pool.items()
+        }
+        ready_workers = []
+        for idx in unblocked:
+            if not has_worker(idx):
+                continue
+            capability = nodes[idx]["capability"]
+            if free.get(capability, 0) > 0:
+                ready_workers.append(idx)
+                free[capability] -= 1
+    else:
+        running_worker_count = sum(1 for idx in running if has_worker(idx))
+        free_worker_slot_count = max(MAX_RUNNING_NODE_COUNT - running_worker_count, 0)
+        ready_workers = [idx for idx in unblocked if has_worker(idx)][
+            :free_worker_slot_count
+        ]
     ready_on_lead = [idx for idx in unblocked if not has_worker(idx)]
     return sorted(ready_workers + ready_on_lead)
 
@@ -587,13 +602,38 @@ def _parse_node_index_list(text: str) -> list[int]:
         ) from None
 
 
+def _parse_worker_pool(text: str) -> dict[str, int]:
+    """Parse ``high=2,medium=2,low=1`` into the count of workers per capability."""
+    pool: dict[str, int] = {}
+    for part in text.split(","):
+        capability, _, count = part.strip().partition("=")
+        capability = capability.strip()
+        if capability not in MODEL_BY_CAPABILITY:
+            raise argparse.ArgumentTypeError(
+                f"{capability!r} is not a worker capability; expected one of "
+                f"{', '.join(MODEL_BY_CAPABILITY)}"
+            )
+        try:
+            pool[capability] = int(count)
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"expected <capability>=<count>, got {part.strip()!r}"
+            ) from None
+        if pool[capability] < 1:
+            raise argparse.ArgumentTypeError(
+                f"{capability} needs at least one worker, got {pool[capability]}"
+            )
+    if not pool:
+        raise argparse.ArgumentTypeError("the pool names no workers")
+    return pool
+
+
 def _run_models() -> int:
     """Print each worker capability and the model it runs on, one per line.
 
     Exists so the skill can start one agent per capability without writing the mapping out
     a second time: the table here stays the only place it lives.
     """
-    print(f"pool {POOL_MODEL}")
     for capability, model in MODEL_BY_CAPABILITY.items():
         print(f"{capability} {model}")
     return 0
@@ -620,7 +660,7 @@ def _run_parse(
     assert isinstance(settings, dict)
     folders = "one shared folder" if settings["shared_worktree"] else "a worktree per node"
     agents = (
-        f"a pool of {settings['worker_pool']} workers on {POOL_MODEL}"
+        "a pool of " + ", ".join(f"{n} {c}" for c, n in settings["worker_pool"].items())
         if settings.get("worker_pool")
         else ("one agent per capability" if settings["tier_agents"] else "an agent per node")
     )
@@ -727,14 +767,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parse_parser.add_argument(
         "--worker-pool",
-        type=int,
-        default=0,
-        metavar="N",
+        type=_parse_worker_pool,
+        default=None,
+        metavar="high=2,medium=2,low=1",
         help=(
-            "Run the build on a pool of N identical workers, all on "
-            f"{POOL_MODEL}, instead of an agent per node or per capability. No node names an "
-            "agent: the orchestrator sends each ready node to whichever worker is free. N is "
-            "also the cap on nodes running at once. 0 (the default) means no pool."
+            "Run the build on a pool with this many workers of each capability. Every node "
+            "still runs on the model its capability names; what a pool adds is more than one "
+            "worker per capability, so two nodes of the same difficulty run at once instead of "
+            "queueing. No node names an agent -- the orchestrator sends each ready node to "
+            "whichever worker of that capability is free. Omitted means no pool."
         ),
     )
 

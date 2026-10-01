@@ -122,16 +122,16 @@ git worktree add -b "build-app/$APP" "$BUILD" HEAD
 (cd "$BUILD" && nohup uv sync --all-packages > "$RUN/sync.log" 2>&1 &)
 ```
 
-**Then start the three workers, before the plan exists.** With
-`settings.worker_pool` (Step 2) they are a pool of identical agents, all on one model,
-named `1`, `2` and `3` -- nothing about them depends on the plan. So they can go up now,
+**Then start the workers, before the plan exists.** With `settings.worker_pool`
+(Step 2) the pool is so many workers of each capability -- two `high`, two `medium`, one
+`low` -- each on that capability's model, named `high-1`, `high-2`, `medium-1`,
+`medium-2`, `low-1`. The composition does not depend on the plan, so they can go up now
 and spend the clarifying and the planning doing the reading every node would otherwise
 repeat: in one measured build an agent spent 171 seconds reading before it wrote
 anything.
 
-With `settings.tier_agents` instead, the three are `low`, `medium` and `high`, each on
-its own model and each running only its own difficulty's nodes. Everything below is the
-same but for the names and the per-agent model.
+With `settings.tier_agents` instead there is exactly one agent per capability, named
+`low`, `medium` and `high`. Everything below is the same but for the names and the count.
 
 `references/tier-agent-priming.md` is their first task: read `worker-node.md`,
 `app-building-guidance.md`, `worker-reporting.md` and the scaffolder, report ready, and
@@ -150,7 +150,7 @@ Prepare all three runtime dirs in one command:
 
 ```bash
 APP=<your app slug>; RUN="$PWD/data/.tasks/build-app/$APP"
-for T in 1 2 3; do            # low medium high, with tier agents
+for T in high-1 high-2 medium-1 medium-2 low-1; do   # low medium high, with tier agents
     mkdir -p "$RUN/agents/$T/reports"
     cp .agents/skills/build-app/references/tier-agent-priming.md "$RUN/agents/$T/task.md"
 done
@@ -163,30 +163,31 @@ written down here:
 ```bash
 APP=<your app slug>; RUN="$PWD/data/.tasks/build-app/$APP"; BUILD="$HOME/worktrees/build-app-$APP"
 MODEL=$(python3 .agents/skills/build-app/scripts/plan_orchestration.py models \
-    | awk '$1 == "pool" { print $2 }')   # the capability name, with tier agents
+    | awk '$1 == "high" { print $2 }')   # the capability this worker serves
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
-    --name "$APP-worker-1" \
+    --name "$APP-high-1" \
     --template shared_worker \
     --work-folder "$BUILD" \
-    --runtime-dir "$RUN/agents/1/" \
-    --task-file "$RUN/agents/1/task.md" \
+    --runtime-dir "$RUN/agents/high-1/" \
+    --task-file "$RUN/agents/high-1/task.md" \
     --create-arg=-S \
     --create-arg=agent_types.claude.settings_overrides.model="$MODEL" \
     --message-with-mngr
 ```
 
-Run that twice more with `1` replaced by `2` and then by `3`, in the three places it
-appears: the `--name`, the `--runtime-dir` and the `--task-file`. A pool is one model, so
-the `awk` line does not change; with tier agents it names each capability in turn and the
-names become `low`, `medium`, `high`.
+Run that once per worker the pool names, replacing `high-1` in the `--name`, the
+`--runtime-dir` and the `--task-file`, and setting the `awk` test to that worker's
+capability -- `high` for `high-1` and `high-2`, `medium` for the two `medium`s, `low` for
+`low-1`. Two workers of the same capability share a model and differ only in their name.
 
 Do not wait for their ready reports. They read while you clarify, and Step 4 sends the
 first node to an agent that is already warm -- `launch` there becomes a `reply`, since
 all three exist from here.
 
-A pool has no idle-by-design agent: any worker can take any node. With tier agents, a
-plan that uses only two difficulties leaves the third idle, which costs a create and is
-destroyed with the rest in Step 6.
+A pool of two per capability lets two nodes of the same difficulty run at once, which one
+agent per capability cannot. A plan that uses only two difficulties still leaves the third
+capability's workers idle, which costs their creates and they are destroyed with the rest
+in Step 6.
 
 Then ask only the questions that genuinely block: a fork that is both genuinely
 uncertain and expensive to reverse. Most apps have none. Default to the simplest
@@ -234,14 +235,14 @@ When it exits 0, check the plan:
 
 ```bash
 python3 .agents/skills/build-app/scripts/plan_orchestration.py parse --run-dir "$RUN" \
-    --reduce-access --shared-worktree --worker-pool 3
+    --reduce-access --shared-worktree --worker-pool high=2,medium=2,low=1
 ```
 
 Those flags decide the shape of the whole build, and `parse` prints which it wrote.
 `--shared-worktree` runs every worker in `$BUILD` rather than cutting a worktree each, so
-there is no per-worker `uv sync` and no branch to merge. `--worker-pool N` runs the build on
-N identical workers on one model, with no node naming an agent -- you send each ready node
-to whichever worker is free, and N caps how many run at once. `--tier-agents` is the
+there is no per-worker `uv sync` and no branch to merge. `--worker-pool high=2,medium=2,low=1` gives each capability that many workers, each on
+that capability's model, with no node naming an agent -- you send each ready node to
+whichever worker *of its capability* is free, and each capability caps its own. `--tier-agents` is the
 alternative: one agent per difficulty, each on its own model, each taking only its own
 difficulty's nodes. Use one or the other, not both. Step 4 has the launch commands for each.
 
@@ -358,17 +359,24 @@ Repeat until every node is done.
        --message-with-mngr
    ```
 
-   **`settings.worker_pool` N true** -- the pool shape. No node names an agent: `plan.json`
-   gives every node `"agent": null` and the same `model`, and **you decide who runs what**.
-   All N workers exist already, started in Step 1 and primed, so a node is a message to a
-   warm agent exactly as below.
+   **`settings.worker_pool` set** -- the pool shape. `plan.json` gives every node
+   `"agent": null` and the model its capability names, and **you decide which worker runs
+   it**. Every worker exists already, started in Step 1 and primed, so a node is a message
+   to a warm agent exactly as below.
+
+   **A node goes to a worker of its own capability.** The planner graded each node's
+   difficulty and the model follows from that, so a `medium` node goes to `medium-1` or
+   `medium-2` and never to a `high` worker. Running it on the wrong model is the thing the
+   grading exists to prevent.
 
    **Assign to minimise how long the whole build takes, not how long one node takes.**
    That is the only thing this decision optimises, and it is a fast one -- a glance at who is
    free and what they last touched, never an analysis:
 
-   - **Never leave a worker idle while a node is ready.** An idle worker is the most
-     expensive thing in the build. This outranks every preference below.
+   - **Never leave a worker idle while a node of its capability is ready.** An idle worker
+     is the most expensive thing in the build. This outranks every preference below. It does
+     not license sending a node to the wrong capability: a free `high` worker and a waiting
+     `low` node means the `low` node waits.
    - **Start the node that unblocks the most first.** When more nodes are ready than you have
      free workers, send the one the most other nodes wait on -- `access` lists say which.
      A node nothing waits on can go last without costing anyone.
@@ -385,7 +393,7 @@ Repeat until every node is done.
    python3 .agents/skills/build-app/scripts/plan_orchestration.py write-task \
        --run-dir "$RUN" --node N
    uv run .agents/skills/launch-task/scripts/create_worker.py reply \
-       --name "$APP-worker-K" \
+       --name "$APP-<capability>-K" \
        --task-file "$RUN/nodes/N/task.md" \
        --message-file "$RUN/nodes/N/task.md" \
        --message-with-mngr
@@ -394,7 +402,8 @@ Repeat until every node is done.
    Keep `$RUN/progress.txt` naming which worker holds which node, since nothing else records
    it and you need it to know who is free.
 
-   `ready` already caps itself at the pool size, so every node it prints can start now.
+   `ready` counts free workers **per capability**, so every node it prints has a worker of
+   its own difficulty free right now.
 
    **`settings.tier_agents` true** -- the node's `agent` is a capability (`low`, `medium`,
    `high`), not a node number, and several nodes name the same one. **All three exist already**, started
@@ -654,7 +663,8 @@ live comes first and the teardown happens afterwards, while the user already has
    gets; no worker ran one. It runs in a worker of its own, so start it before the
    teardown rather than after it.
 5. **Stop the workers.** Destroy every worker still running, naming each one.
-   With `settings.worker_pool` that is `$APP-worker-1` through `$APP-worker-N`; with
+   With `settings.worker_pool` that is one per worker the pool named (`$APP-high-1`,
+   `$APP-high-2`, `$APP-medium-1`, ...); with
    `settings.tier_agents` it is `$APP-low`, `$APP-medium` and `$APP-high`; otherwise it
    is one per `$APP-node-N` you launched, and the destroy also removes that worker's
    worktree.
