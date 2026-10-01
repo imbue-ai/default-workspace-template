@@ -165,7 +165,8 @@ def format_heavy_directories_report(
         )
     lines += [
         "",
-        "Paths are relative to the backed-up home directory (/home/user in a workspace).",
+        "Paths are as the snapshot recorded them: an hourly backup's are relative to the backed-up",
+        "home directory (/home/user in a workspace).",
         f"Keep a directory that can be rebuilt out of the backup with a `{NO_BACKUP_MARKER_FILENAME}` file",
         "in it, or a pattern in `extra_excludes` in data/system/backup.toml.",
         f"See 'Slow backups' in {HOST_BACKUP_README_PATH}.",
