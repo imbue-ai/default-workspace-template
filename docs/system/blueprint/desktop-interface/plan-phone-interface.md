@@ -46,6 +46,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 - The launcher's rows, tappable: launch rows first with their real labels ("New Chat", "File Viewer", "Browser", "Terminal", and the synthesized "Open Getting Started"), then window rows while typing, then the free-text rows at the foot. The field uses the launcher's placeholder, "Open an app or send a message", and is not focused on open.
 - Enter runs the highlighted row with the launcher's default (the first launch or window match; New Chat when the text is a message). "Send to chat..." and "Draft into chat" are tappable rows rather than key chords. A text with a newline is a message, as today. Disabled rows keep their reasons ("Too long to send from here").
 - After a send the phone switches to the chat window showing that chat. No toast.
+- No row offers Add to desktop or Remove from desktop (launcher plan section 4.2), since the phone draws no desktop icons.
 
 ### The window menu
 
@@ -80,7 +81,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 - The chat app switches layout by its own width under 700px, as it does today, everywhere: on a phone and in a narrow desktop window. In that layout the rail is a drawer over the transcript, opened by a list button in a 44px header that shows the chat's title and a kebab. There is no monogram strip and no collapse toggle.
 - Drawer rows are the rail's rows at a finger's height (at least 44px): status dot and title, helpers nested under their lead, stopped rows faded in place with the pause mark, unread as the green check and bold green title. Each row gains a kebab offering Rename, Stop chat or Restart chat, Delete chat, the same rows the right-click menu offers; the header kebab offers them for the chat being viewed. "New chat" is a plus in the drawer header.
 - With no chat selected the drawer is open over an empty transcript that says to pick or start a chat.
-- The composer keeps its placeholders, attachments, queue and stop behavior. In the phone layout the model chip moves from the under-bar to a settings button at the left of the textbox; its menu opens above the composer with the real rows (Provider with its account rows, Model, Reasoning effort, Fast Mode, Stop agent) plus a Source view row, submenus sliding on one track instead of flying out, and effort as a segmented control instead of a slider. The switch dialog and every sign-in flow keep their content and copy.
+- The composer keeps its placeholders, attachments, queue and stop behavior. In the phone layout the model chip moves from the under-bar to a settings button at the left of the textbox; its menu opens above the composer with the real rows (Provider with its account rows, Model, Reasoning effort, Fast Mode, Stop agent) plus a Source view row, submenus sliding on one track instead of flying out, and effort as a segmented control instead of a slider. The settings button stays when the chat's account was signed out and "Choose a provider" takes the textbox's place. The switch dialog and every sign-in flow keep their content and copy.
 - Composer drafts already persist per chat in the browser and are restored on reload, which is what makes single mounting safe for an unsent message.
 
 ### The file viewer
