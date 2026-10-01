@@ -1975,6 +1975,7 @@ def test_a_phone_and_a_laptop_share_the_windows_but_the_phone_moves_nothing(e2e_
         phone.locator(f'[data-phone-window-row="{laptop_window}"]').tap()
         _phone_shows(phone, laptop_window)
         expect(phone.locator('[data-phone-sheet="windows"]')).to_have_count(0)
+        phone.wait_for_timeout(_NEGATIVE_SETTLE_MS)
         assert _placements(e2e_server.base_url, laptop_client) == laptop_placements
         assert laptop_window not in _placements(e2e_server.base_url, phone_client)
 
