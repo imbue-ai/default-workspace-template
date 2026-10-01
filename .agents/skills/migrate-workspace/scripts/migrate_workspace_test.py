@@ -313,6 +313,13 @@ def test_is_excluded_agent_excludes_the_source_primary_by_label_or_name() -> Non
     assert migrate_workspace.is_excluded_agent("chat-1", {"user_created": "true"}) == ""
 
 
+def test_is_excluded_agent_excludes_an_unused_chat_spare() -> None:
+    spare = {"user_created": "true", "chat_spare": "true"}
+    assert "spare" in migrate_workspace.is_excluded_agent("chat-4", spare)
+    taken = {"user_created": "true", "chat_spare": "false"}
+    assert migrate_workspace.is_excluded_agent("chat-5", taken) == ""
+
+
 def test_resolve_agent_sessions_maps_history_ids_to_files_in_order() -> None:
     history = "sess-a startup\nsess-b clear\nsess-c compact\n"
     paths = [

@@ -1,0 +1,1 @@
+`migrate-workspace` no longer recreates a spare agent of the source workspace's chat app (labelled `chat_spare=true`): one started ahead of the next new chat that no one has used. Its `list-agents` output marks such an agent excluded, as it does the source's primary. A spare a chat took carries `chat_spare=false` and comes over like any chat.

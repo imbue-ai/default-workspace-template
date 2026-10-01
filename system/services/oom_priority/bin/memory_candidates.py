@@ -12,7 +12,7 @@ It joins three sources, each read independently so one failing leaves the others
   (``user_created``) or worker (``agent_created``) whose state is ``WAITING`` and whose latest
   activity is at least ``IDLE_AFTER_SECONDS`` old. Its memory is the summed RSS of its process trees, rooted at the pid
   mngr reports plus every live pid the agent-pid registry holds for it. The chat app's spare agents
-  (``CHAT_SPARES_FILE``) are left out: a spare is no chat until a chat takes it;
+  (labelled ``chat_spare=true``) are left out: a spare is no chat until a chat takes it;
 - browsers, from the browser service's ``GET /browsers``: a ``running`` browser that no desktop
   window shows, per the shell's ``GET /api/desktops``. Its memory is the summed RSS of every
   Chromium process on its profile.
@@ -33,7 +33,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final, NamedTuple
@@ -46,6 +46,7 @@ from oom_priority import app_registry
 from oom_priority.agent_identity import (
     CHAT_LABEL,
     PRIMARY_LABEL,
+    SPARE_LABEL,
     WORKER_LABEL,
     is_label_true,
 )
@@ -57,9 +58,6 @@ from oom_priority.registry import live_pids_by_agent_id
 # still reading its reply.
 IDLE_AFTER_SECONDS: Final[float] = 15 * 60
 IDLE_AGENT_STATE: Final[str] = "WAITING"
-# The chat app's record of the spare agents it keeps started for new chats (its ``spare_chat.py``), relative to
-# the repo root: ``{"spares": [{"chat_id": <agent id>, ...}, ...]}``. A spare is shown nowhere until a chat takes it.
-CHAT_SPARES_FILE: Final[Path] = Path("data/.state/chat/spare_chat.json")
 CHAT_KIND: Final[str] = "chat"
 WORKER_KIND: Final[str] = "worker"
 
@@ -76,6 +74,7 @@ MNGR_LIST_FIELDS: Final[tuple[str, ...]] = (
     f"labels.{PRIMARY_LABEL}",
     f"labels.{CHAT_LABEL}",
     f"labels.{WORKER_LABEL}",
+    f"labels.{SPARE_LABEL}",
     "labels.display_name",
 )
 MNGR_LIST_FIELD_SEPARATOR: Final[str] = "|"
@@ -204,7 +203,6 @@ class Sources(NamedTuple):
     browser_service_url: str
     shell_url: str
     now: datetime
-    spare_chat_file: Path
 
 
 # Free memory
@@ -327,8 +325,9 @@ def run_mngr_list(run_command: RunCommand) -> tuple[list[ListedAgent] | None, li
 
 def agent_kind(labels: Mapping[str, str]) -> str | None:
     """``chat`` or ``worker`` by the agent's labels, in the launch wrapper's order; None for the
-    primary services agent and for anything carrying neither label (never a candidate)."""
-    if is_label_true(labels, PRIMARY_LABEL):
+    primary services agent, for one of the chat app's spare agents (no chat until a chat takes it),
+    and for anything carrying neither label (never a candidate)."""
+    if is_label_true(labels, PRIMARY_LABEL) or is_label_true(labels, SPARE_LABEL):
         return None
     if is_label_true(labels, CHAT_LABEL):
         return CHAT_KIND
@@ -348,40 +347,17 @@ def _parse_timestamp(value: str) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
-def read_spare_agent_ids(path: Path) -> tuple[frozenset[str], tuple[str, ...]]:
-    """The agent ids the chat app's spares file records, plus a note when it cannot be read. An absent file
-    records none."""
-    try:
-        payload = json.loads(path.read_text())
-    except FileNotFoundError:
-        return frozenset(), ()
-    except (OSError, ValueError) as error:
-        return frozenset(), (f"could not read the chat app's spare agents at {path}: {error}",)
-    spares = payload.get("spares") if isinstance(payload, dict) else None
-    if not isinstance(spares, list):
-        return frozenset(), (f"the chat app's spare agents file at {path} is not shaped as one",)
-    return (
-        frozenset(
-            spare["chat_id"] for spare in spares if isinstance(spare, dict) and isinstance(spare.get("chat_id"), str)
-        ),
-        (),
-    )
-
-
 def idle_agent_candidates(
     agents: Sequence[ListedAgent],
     registry_pids: Mapping[str, Sequence[int]],
     proc_dir: Path,
     now: datetime,
-    spare_agent_ids: Collection[str],
 ) -> list[AgentCandidate]:
-    """The idle chats and workers, largest memory first, leaving out the chat app's spare agents."""
+    """The idle chats and workers, largest memory first."""
     candidates: list[AgentCandidate] = []
     for agent in agents:
         kind = agent_kind(agent.labels)
         if kind is None or agent.state != IDLE_AGENT_STATE or agent.last_activity is None:
-            continue
-        if agent.agent_id in spare_agent_ids:
             continue
         idle_seconds = (now - agent.last_activity).total_seconds()
         if idle_seconds < IDLE_AFTER_SECONDS:
@@ -412,9 +388,8 @@ def collect_agent_section(sources: Sources) -> AgentSection:
     if agents is None:
         return AgentSection(candidates=None, notes=tuple(notes))
     registry_pids = live_pids_by_agent_id(is_alive=lambda pid: (sources.proc_dir / str(pid)).is_dir())
-    spare_agent_ids, spare_notes = read_spare_agent_ids(sources.spare_chat_file)
-    candidates = idle_agent_candidates(agents, registry_pids, sources.proc_dir, sources.now, spare_agent_ids)
-    return AgentSection(candidates=tuple(candidates), notes=(*notes, *spare_notes))
+    candidates = idle_agent_candidates(agents, registry_pids, sources.proc_dir, sources.now)
+    return AgentSection(candidates=tuple(candidates), notes=tuple(notes))
 
 
 # Browsers
@@ -720,7 +695,6 @@ def main() -> None:
         browser_service_url=resolve_browser_service_url(),
         shell_url=os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/"),
         now=datetime.now(timezone.utc),
-        spare_chat_file=_REPO_ROOT / CHAT_SPARES_FILE,
     )
     report = collect_report(sources)
     output = json.dumps(report_to_json(report), indent=2) + "\n" if args.json else render_table(report)

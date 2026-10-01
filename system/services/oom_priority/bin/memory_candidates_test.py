@@ -155,7 +155,7 @@ def _desktops(*windows: Mapping[str, object]) -> dict[str, object]:
     return {"desktops": [{"id": "desktop-1", "windows": list(windows)}]}
 
 
-def _sources(proc_dir: Path, mngr: _FakeMngr, http: _FakeHttp, spare_chat_file: Path | None = None) -> object:
+def _sources(proc_dir: Path, mngr: _FakeMngr, http: _FakeHttp) -> object:
     return memory_candidates.Sources(
         proc_dir=proc_dir,
         run_command=mngr,
@@ -163,7 +163,6 @@ def _sources(proc_dir: Path, mngr: _FakeMngr, http: _FakeHttp, spare_chat_file: 
         browser_service_url=_BROWSER_URL,
         shell_url=_SHELL_URL,
         now=_NOW,
-        spare_chat_file=spare_chat_file or proc_dir.parent / "no-spare_chat.json",
     )
 
 
@@ -245,30 +244,27 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
     assert "Browsers no window shows (running):\n  none" in table
 
 
-def test_leaves_out_the_chat_apps_spare_agents_and_notes_a_spares_file_it_cannot_read(
-    tmp_path: Path, runtime_dir: Path
-) -> None:
+def test_leaves_out_the_chat_apps_spare_agents_by_their_label(tmp_path: Path, runtime_dir: Path) -> None:
     proc = tmp_path / "proc"
     _write_meminfo(proc, {"MemTotal": 4 * 1024 * 1024, "MemAvailable": 100 * 1024})
     old = _NOW - timedelta(days=2)
     chat = _agent_record("chat-a", "WAITING", {"user_created": "true", "display_name": "Trip plan"}, old, 10)
-    spare = _agent_record("chat-7", "WAITING", {"user_created": "true", "display_name": "Chat 7"}, old, 11)
-    _fake_process(proc, 10, 100)
-    _fake_process(proc, 11, 100)
-    spare_chat_file = tmp_path / "spare_chat.json"
-    spare_chat_file.write_text(json.dumps({"spares": [{"chat_id": spare["id"], "phase": "READY"}]}))
+    spare = _agent_record(
+        "chat-7", "WAITING", {"user_created": "true", "chat_spare": "true", "display_name": "Chat 7"}, old, 11
+    )
+    # A spare a chat took is relabelled, and is a chat like any other.
+    taken = _agent_record(
+        "chat-8", "WAITING", {"user_created": "true", "chat_spare": "false", "display_name": "Chat 8"}, old, 12
+    )
+    for pid in (10, 11, 12):
+        _fake_process(proc, pid, 100)
     http = _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()})
 
-    report = memory_candidates.collect_report(_sources(proc, _FakeMngr([chat, spare]), http, spare_chat_file))
+    report = memory_candidates.collect_report(_sources(proc, _FakeMngr([chat, spare, taken]), http))
 
-    assert [a.name for a in report.agents.candidates] == ["chat-a"]
+    assert report.agents.candidates is not None
+    assert sorted(a.name for a in report.agents.candidates) == ["chat-8", "chat-a"]
     assert report.agents.notes == ()
-
-    spare_chat_file.write_text("{not json")
-    report = memory_candidates.collect_report(_sources(proc, _FakeMngr([chat, spare]), http, spare_chat_file))
-
-    assert sorted(a.name for a in report.agents.candidates) == ["chat-7", "chat-a"]
-    assert [note.split(" at ")[0] for note in report.agents.notes] == ["could not read the chat app's spare agents"]
 
 
 def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(tmp_path: Path, runtime_dir: Path) -> None:
