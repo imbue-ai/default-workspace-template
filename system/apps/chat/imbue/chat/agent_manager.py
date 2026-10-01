@@ -3882,9 +3882,10 @@ class AgentManager:
 
     def _discard_spare_unless_stopping(self, chat_id: ChatId) -> None:
         """``_discard_spare``, except while the app stops: the agent is still labelled a spare, so the next
-        start destroys it, and a destroy run now would hold up the stop for as long as mngr takes."""
+        start deals with it (``_handle_spares_from_before_start``: destroyed, or listed as its chat when a
+        chat claimed it), and a destroy run now would hold up the stop for as long as mngr takes."""
         if self._shutdown_event.is_set():
-            _loguru_logger.info("Left spare agent {} for the next start to destroy", chat_id)
+            _loguru_logger.info("Left spare agent {} for the next start", chat_id)
             return
         self._discard_spare(chat_id)
 
