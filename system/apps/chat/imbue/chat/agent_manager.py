@@ -17,7 +17,6 @@ from uuid import uuid4
 
 from loguru import logger as _loguru_logger
 from oom_priority.bands import CHAT_AGENT_BASE
-from oom_priority.bands import SPARE_AGENT
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.proctree import list_descendant_pids
 from oom_priority.registry import live_pids_by_agent_id
@@ -1531,7 +1530,7 @@ class AgentManager:
         (``is_primary=true``), and archived members of a chat; those keep their launch
         bands -- workers maximally expendable, the primary pinned -- so no UI activity
         moves their score. Spare agents are excluded too: they keep the ``SPARE_AGENT``
-        band ``ensure_spare_chat`` tags them with until a chat takes one. Remote agents
+        band their label launches them in until a chat takes one. Remote agents
         are left in (they have no local pid, so the prioritizer's pid lookup skips them
         harmlessly).
         """
@@ -3494,19 +3493,17 @@ class AgentManager:
     def ensure_spare_chat(self) -> None:
         """Keep the pool of spare agents full on the terms the next new chat would get.
 
-        Every call first tags the pooled spares' processes with the ``SPARE_AGENT`` band. A ready
-        spare whose terms went stale (the default account, the project, or the fast mode a new
-        chat starts in changed) or whose process died is destroyed, and a spare is started while
-        the pool holds fewer than its size, one at a time (mngr's host lock runs creates one at a
-        time anyway). Nothing happens in a manager that keeps no spares (a secondary chat) or once
-        the app is stopping, and nothing past the tagging before the agent list is known or during
-        the backoff that follows a spare's failed create or destroy or its process dying (most
-        likely shed for memory); with no account to start one on, the ready spares are destroyed
-        and none is started. The mngr commands run on threads of their own.
+        A ready spare whose terms went stale (the default account, the project, or the fast mode a
+        new chat starts in changed) or whose process died is destroyed, and a spare is started
+        while the pool holds fewer than its size, one at a time (mngr's host lock runs creates one
+        at a time anyway). Nothing happens in a manager that keeps no spares (a secondary chat),
+        once the app is stopping, before the agent list is known, or during the backoff that
+        follows a spare's failed create or destroy or its process dying (most likely shed for
+        memory); with no account to start one on, the ready spares are destroyed and none is
+        started. The mngr commands run on threads of their own.
         """
         if not self._is_keeping_spares or self._shutdown_event.is_set():
             return
-        self._tag_spares_for_shedding_first()
         try:
             account: Account | None = resolve_binding()
         except (AccountError, BindingError) as e:
@@ -3580,40 +3577,15 @@ class AgentManager:
         self._spares = (*self._spares, new_spare)
         return new_spare
 
-    def _tag_spares_for_shedding_first(self) -> None:
-        """Put every spare's process tree in the ``SPARE_AGENT`` band, the first to be shed under memory
-        pressure: every pid it registered (codex registers two) and their descendants. Rewritten on every
-        sweep, since a restart of the agent relaunches it in the chat band, and the subprocesses its harness
-        spawned before a write keep the band they started in."""
-        writer = self._oom_score_adj_writer
-        if writer is None:
-            return
-        with self._lock:
-            spare_ids = [spare.chat_id for spare in pooled_spares(self._spares)]
-        pids_by_spare_id: dict[ChatId, list[int]] = {}
-        for spare_id in spare_ids:
-            pids_by_spare_id[spare_id] = [
-                pid
-                for root_pid in self._resolve_agent_pids(str(spare_id))
-                for pid in (root_pid, *self._list_descendant_pids(root_pid))
-            ]
-        # Written under the lock, and only for a spare still pooled: a hand-over takes the spare under
-        # it and moves it into the chat band after.
-        with self._lock:
-            pooled_ids = {spare.chat_id for spare in pooled_spares(self._spares)}
-            for spare_id, pids in pids_by_spare_id.items():
-                if spare_id in pooled_ids:
-                    for pid in pids:
-                        writer(pid, SPARE_AGENT)
-
     def _move_handed_spare_into_chat_band(self, chat_id: ChatId) -> None:
         """Move a spare a chat just took out of the ``SPARE_AGENT`` band, as a chat just started.
 
-        The chat prioritizer moves its main process (the first pid it registered). Its other
-        registered pid (codex's app-server daemon) and the subprocesses its harness spawned while
-        it waited are in ``SPARE_AGENT`` too and the prioritizer does not re-tag them, so they are
-        brought down to the chat launch band, where a chat's harness processes start. Each process
-        moves before its subprocesses, so one spawned meanwhile inherits the chat band.
+        Its ``chat_spare`` label launched every process it has in that band. The chat prioritizer
+        moves its main process (the first pid it registered). Its other registered pid (codex's
+        app-server daemon) and the subprocesses its harness spawned while it waited are in
+        ``SPARE_AGENT`` too and the prioritizer does not re-tag them, so they are brought down to
+        the chat launch band, where a chat's harness processes start. Each process moves before its
+        subprocesses, so one spawned meanwhile inherits the chat band.
         """
         self._oom_prioritizer.record_chat_started(chat_id)
         self._move_spare_tree_into_chat_launch_band(chat_id, is_main_process_moved=False)
@@ -3621,8 +3593,8 @@ class AgentManager:
     def _move_spare_tree_into_chat_launch_band(self, chat_id: ChatId, is_main_process_moved: bool) -> None:
         """Write the chat launch band (``CHAT_AGENT_BASE``) to a taken spare's registered pids and their
         subprocesses, leaving its main process (the first pid) to the prioritizer unless ``is_main_process_moved``.
-        Nothing for an agent with no registered pid yet: the launch wrapper starts it in the chat band, and a
-        spare no longer pooled is never tagged again."""
+        Nothing for an agent with no registered pid yet: a claimed spare's launch starts in the spare band, as
+        its label still says, and is moved once its chat is settled."""
         writer = self._oom_score_adj_writer
         if writer is None:
             return
@@ -3854,7 +3826,6 @@ class AgentManager:
                 )
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
-            self._tag_spares_for_shedding_first()
             failure = self._wait_for_spare_harness(spare, harness)
         self._settle_spare_creation(spare, None if failure is None else failure_notice(failure, output_tail.text()))
 

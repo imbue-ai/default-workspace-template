@@ -114,6 +114,25 @@ def test_band_for_starts_a_chat_expendable(
     assert wrapper._band_for("c1") == wrapper.bands.CHAT_AGENT_BASE
 
 
+def test_band_for_starts_a_spare_chat_agent_in_the_spare_band(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A spare the chat app started ahead of the next new chat carries
+    user_created too, but launches in the spare band, the most expendable; once a
+    chat takes it and relabels it, a relaunch starts it as a chat."""
+    host = tmp_path / "host"
+    labels = {"user_created": "true", "chat_spare": "true"}
+    _write_agent_record(host, "c2", is_worker=False, labels=labels)
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host))
+    assert wrapper._band_for("c2") == wrapper.bands.SPARE_AGENT
+
+    labels["chat_spare"] = "false"
+    (host / "agents" / "id" / "data.json").write_text(
+        json.dumps({"name": "c2", "labels": labels})
+    )
+    assert wrapper._band_for("c2") == wrapper.bands.CHAT_AGENT_BASE
+
+
 def test_band_for_puts_workers_and_unidentifiable_agents_in_the_worker_band(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

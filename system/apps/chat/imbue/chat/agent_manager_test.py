@@ -5966,7 +5966,7 @@ def test_a_restart_relabels_a_spare_a_chat_took_and_destroys_every_other_labelle
         manager.stop()
 
 
-def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_takes_it(
+def test_a_spare_is_left_in_its_launch_band_and_takes_the_chat_band_once_a_chat_takes_it(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
@@ -5987,11 +5987,9 @@ def test_a_spare_is_tagged_to_be_shed_first_and_takes_the_chat_band_once_a_chat_
         descendant_pids_by_pid[daemon_pid] = [daemon_child_pid]
         spare_tree = (spare_pid, harness_child_pid, daemon_pid, daemon_child_pid)
 
+        # Its label launched it in the spare band, so the sweep leaves its processes alone.
         manager.ensure_spare_chat()
-
-        # The spare's creation thread sweeps once more after it is ready, and may tag it again.
-        assert set(adj_writes) == {(pid, bands.SPARE_AGENT) for pid in spare_tree}
-        adj_writes.clear()
+        assert adj_writes == []
 
         assert manager.create_chat("").chat_id == spare.chat_id
 
@@ -6023,8 +6021,7 @@ def test_a_spare_claimed_while_it_starts_leaves_the_spare_band_at_once_and_is_en
         pids_by_agent_id[booting.chat_id] = [spare_pid]
         descendant_pids_by_pid[spare_pid] = [harness_child_pid]
         manager.ensure_spare_chat()
-        assert set(adj_writes) >= {(spare_pid, bands.SPARE_AGENT), (harness_child_pid, bands.SPARE_AGENT)}
-        adj_writes.clear()
+        assert adj_writes == []
 
         created = manager.create_chat("")
         assert created.chat_id == booting.chat_id

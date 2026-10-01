@@ -1,11 +1,13 @@
-"""Resolve an agent's priority class -- worker, primary (services), or a plain
-user-created chat -- from the host's agent records.
+"""Resolve an agent's priority class -- worker, primary (services), a spare chat
+agent, or a plain user-created chat -- from the host's agent records.
 
 mngr writes one record per agent at ``$MNGR_HOST_DIR/agents/<id>/data.json``
 carrying the agent ``name`` and a ``labels`` dict. The agent-creation paths label
 worker creations ``agent_created=true`` and user-facing creations
 ``user_created=true``; the workspace's own services agent additionally carries
-``is_primary=true``. This maps a name to the right priority band.
+``is_primary=true``, and a spare the chat app starts ahead of the next new chat
+``chat_spare=true`` until a chat takes it. This maps a name to the right priority
+band.
 
 An agent we cannot classify is *not* primary, *not* a chat, and *not* a worker,
 so it falls through to the least-protected agent tier (the worker band): we must
@@ -27,6 +29,7 @@ from typing import Final
 PRIMARY_LABEL: Final[str] = "is_primary"
 CHAT_LABEL: Final[str] = "user_created"
 WORKER_LABEL: Final[str] = "agent_created"
+SPARE_LABEL: Final[str] = "chat_spare"
 
 
 def _labels_for_agent(agent_name: str) -> dict | None:
@@ -89,6 +92,16 @@ def is_chat_agent(agent_name: str) -> bool:
     than given a chat's engagement-based protection.
     """
     return _has_true_label(agent_name, CHAT_LABEL)
+
+
+def is_spare_agent(agent_name: str) -> bool:
+    """Whether ``agent_name`` carries the ``chat_spare=true`` label.
+
+    A spare is a chat agent the chat app started ahead of the next new chat, which
+    no one uses yet; the chat app sets the label to false when a chat takes it.
+    Returns False when the record is unavailable or the agent is not found.
+    """
+    return _has_true_label(agent_name, SPARE_LABEL)
 
 
 def is_primary_agent(agent_name: str) -> bool:

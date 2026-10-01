@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from oom_priority.agent_identity import is_chat_agent, is_primary_agent, is_worker_agent
+from oom_priority.agent_identity import (
+    is_chat_agent,
+    is_primary_agent,
+    is_spare_agent,
+    is_worker_agent,
+)
 
 
 def _write_agent(host_dir: Path, agent_id: str, name: str, labels: dict) -> None:
@@ -95,3 +100,21 @@ def test_unknown_agent_is_not_primary(
     # Only an agent we can positively identify as primary is pinned; a miss falls
     # back to the ordinary (shed-able) default rather than accidentally pinning.
     assert is_primary_agent("missing") is False
+
+
+def test_chat_spare_label_is_a_spare(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    _write_agent(
+        tmp_path, "id-1", "chat-3", {"user_created": "true", "chat_spare": "true"}
+    )
+    _write_agent(
+        tmp_path, "id-2", "chat-4", {"user_created": "true", "chat_spare": "false"}
+    )
+    assert is_spare_agent("chat-3") is True
+    # A spare a chat took is relabelled false; a plain chat has no such label.
+    assert is_spare_agent("chat-4") is False
+    _write_agent(tmp_path, "id-3", "chat-5", {"user_created": "true"})
+    assert is_spare_agent("chat-5") is False
+    assert is_spare_agent("missing") is False
