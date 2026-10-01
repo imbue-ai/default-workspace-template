@@ -28,6 +28,7 @@ from pydantic import Field
 from host_backup.cli import EXIT_BACKUPS_NOT_CONFIGURED
 from host_backup.config import (
     HOST_BACKUP_README_PATH,
+    RESTIC_ENV_PATH,
     load_restic_env,
     missing_required_restic_keys,
 )
@@ -223,7 +224,9 @@ def heavy_dirs_main(snapshot: str, min_share: float, max_depth: int) -> None:
     missing = missing_required_restic_keys(env)
     if missing:
         logger.error(
-            "Backups are not configured: restic.env is missing {}", ", ".join(missing)
+            "Backups are not configured: {} is missing {} (run this from the workspace root)",
+            RESTIC_ENV_PATH.absolute(),
+            ", ".join(missing),
         )
         sys.exit(EXIT_BACKUPS_NOT_CONFIGURED)
     try:
