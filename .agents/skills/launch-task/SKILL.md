@@ -195,7 +195,7 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 - If a task fails (stuck report, or 30m poll timeout with no report and
   the worker is dead), see `references/worker-failure.md` -- do not
   silently retry.
-- If a worker is `STOPPED` with uncommitted work and carries no
+- If a worker is `STOPPED` with uncommitted work and carries no non-empty
   `archived_at` label, default to `mngr start <worker>` and message it to
   continue with `create_worker.py reply` -- the worktree is preserved across
   restart. One with the label was stopped on purpose by its lead after a

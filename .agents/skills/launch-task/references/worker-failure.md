@@ -45,7 +45,8 @@ is not where worker bugs get fixed.
    (`.agents/shared/references/harden-contention.md`) or the user asks. When
    the user overrides the failure, a calling skill with a resume path (such as
    update-self's "Resuming after `stuck`") revives it with `mngr start
-   <worker> --restart` and continues the same task.
+   <worker> --restart`, blanks the label (`mngr label <worker> -l
+   archived_at=`), and continues the same task.
 4. **Update any outstanding tickets** (e.g. `tk` lifecycle tickets) with a
    note describing the failure; do not close them -- leave them open so the
    user can resume.

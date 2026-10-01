@@ -6,8 +6,10 @@ Before changing a test that failed after the merge, the worker runs it on the pr
 
 Resolving the merge is governed by the worker guide, not update-app, so the worker has no "lapse" to report for not reading another skill, and the lead relays a worker's self-reported deviation only when it changed the outcome.
 
-SKILL.md has a "Resuming after `stuck`" path for when the user overrides the verdict: re-take the lease, record the run, rebuild the history bridge, revive the stopped worker with `mngr start update-self --restart`, reply with the user's decision, and re-arm the poll. The lead never runs the worker's validation itself. launch-task's worker-failure reference names the same revival.
+SKILL.md has a "Resuming after `stuck`" path for when the user overrides the verdict: re-take the lease, record the run, rebuild the history bridge, revive the stopped worker with `mngr start update-self --restart` and blank its `archived_at` label, reply with the user's decision, and re-arm the poll. The lead never runs the worker's validation itself. launch-task's worker-failure reference names the same revival.
 
 Step 1's backup now runs in the background through `run_in_background.py` (`host-backup-now --timeout 1800`) and overlaps the worker; the lead reads its exit code before the apply, so the results message reports the real outcome.
 
-The apply waits up to 15 minutes for a backup tick already in flight before restarting the services, which used to kill it mid-restic, and says on stderr whether it waited, interrupted the tick, or could not check; an interrupted tick is a caveat in the results message.
+Before restarting the services, the apply checks for a backup tick in flight and notes on stderr when the restart interrupts one; it does not wait, since the restarted backup service records the tick as abandoned and backs up again as its first tick, and Step 1's restore point is complete before the apply. A pass that ends before the apply leaves the Step 1 backup running, and its late report needs nothing.
+
+launch-task's recovery docs treat a STOPPED worker as deliberately stopped only when its `archived_at` label is non-empty, so a worker revived after `stuck` is restarted like any other if it later crashes.

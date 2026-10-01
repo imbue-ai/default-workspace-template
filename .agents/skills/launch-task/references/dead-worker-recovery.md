@@ -2,7 +2,7 @@
 
 When a worker (sub-agent created via `launch-task`) is in `STOPPED` state -- claude session died mid-iteration, but the worktree (and any uncommitted work in it) is still intact -- the default path is to restart it, not to manually salvage. `mngr start` only re-creates the tmux session and re-execs claude in the existing worktree; it does not touch git state, so uncommitted changes survive the restart.
 
-This applies to a worker that *crashed*: STOPPED with no `archived_at` label in `mngr list --format jsonl`. A STOPPED worker that carries `archived_at` was stopped on purpose by its lead (`create_worker.py stop`, the failure flow's last step) and is not a restart candidate -- its lead has already reported the failure; read its branch and transcript instead.
+This applies to a worker that *crashed*: STOPPED with no `archived_at` label, or an empty one, in `mngr list --format jsonl`. A STOPPED worker whose `archived_at` is set was stopped on purpose by its lead (`create_worker.py stop`, the failure flow's last step) and is not a restart candidate -- its lead has already reported the failure; read its branch and transcript instead.
 
 ## First: was the worker shed for memory pressure?
 

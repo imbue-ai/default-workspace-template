@@ -7091,36 +7091,30 @@ def test_an_env_converge_that_cannot_be_spawned_is_a_warning_not_a_traceback(
     assert "uv: not found" in err
 
 
-_BACKUP_WAIT = ("uv", "run", "host-backup-now", "--wait-only")
+_BACKUP_CHECK = ("uv", "run", "host-backup-now", "--wait-only")
 
 
-def test_the_apply_waits_for_an_inflight_backup_tick_before_restarting(
+def test_the_apply_notes_a_backup_tick_its_restart_interrupts(
     apply_repo: Path, capsys
 ) -> None:
-    """The restart kills a backup tick mid-restic, which loses that backup and leaves a
-    tick with no ending in the events log."""
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
     runner.respond(
-        ("uv", "run", "host-backup-now"), _backup_wait_result("tick-1", True)
+        ("uv", "run", "host-backup-now"),
+        _backup_wait_result("tick-1", False, returncode=2),
     )
 
     code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
 
     assert code == 0
-    [wait] = runner.argvs_starting(*_BACKUP_WAIT)
-    assert wait[wait.index("--timeout") + 1] == "900"
-    assert runner.calls.index(wait) < runner.calls.index(list(_RESTART))
-    assert "waited" in capsys.readouterr().err
+    [check] = runner.argvs_starting(*_BACKUP_CHECK)
+    assert check[check.index("--timeout") + 1] == "0"
+    assert runner.calls.index(check) < runner.calls.index(list(_RESTART))
+    assert "interrupted an in-flight backup tick" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
     ("response", "expected_line"),
     [
-        pytest.param(
-            _backup_wait_result("tick-1", False, returncode=2),
-            "interrupted an in-flight backup tick",
-            id="still-running-at-the-budget",
-        ),
         pytest.param(
             _Result(returncode=2, stderr="Error: No such option: --wait-only"),
             "could not check for an in-flight backup tick",
@@ -7133,7 +7127,7 @@ def test_the_apply_waits_for_an_inflight_backup_tick_before_restarting(
         ),
     ],
 )
-def test_a_backup_tick_the_apply_cannot_wait_out_is_reported_not_a_rollback(
+def test_a_backup_check_that_cannot_run_is_a_note_not_a_rollback(
     apply_repo: Path, capsys, response: object, expected_line: str
 ) -> None:
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
@@ -7144,6 +7138,17 @@ def test_a_backup_tick_the_apply_cannot_wait_out_is_reported_not_a_rollback(
     assert code == 0
     assert runner.ran(*_RESTART)
     assert expected_line in capsys.readouterr().err
+
+
+def test_the_apply_says_nothing_of_backups_when_none_is_in_flight(
+    apply_repo: Path, capsys
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert "backup tick" not in capsys.readouterr().err
 
 
 def test_the_apply_reads_what_host_backup_now_wait_only_prints(
@@ -7163,7 +7168,7 @@ def test_the_apply_reads_what_host_backup_now_wait_only_prints(
         + "\n"
     )
 
-    result = CliRunner().invoke(backup_now_main, ["--wait-only", "--timeout", "0.1"])
+    result = CliRunner().invoke(backup_now_main, ["--wait-only", "--timeout", "0"])
 
     assert update_apply.parse_backup_wait_report(
         result.stdout

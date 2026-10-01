@@ -57,7 +57,8 @@ by then, end your turn and let it wake you. Exit 0 means
 observable) mean there is **no** confirmed restore point. **None of them
 blocks the pass**: carry the real outcome into the results message as a
 caveat, and continue -- git still holds every version of the tree. Do not
-stop to ask for a go-ahead.
+stop to ask for a go-ahead. A pass that ends before the apply leaves the
+backup running; when its report arrives after that, it needs nothing from you.
 
 **Take the "updating workspace" lease.** One update flow at a time (worker
 name, branch and runtime dir are fixed, and two applies must never interleave).
@@ -536,8 +537,8 @@ affected environments, re-runs `system/scripts/setup_system.sh` when a file it
 reads changed, pre-flights the merged backend (the shell, and the chat app in its
 side-effect-free `--preflight` mode, since the chat is the process that imports
 mngr and the harness plugins), installs or builds the frontend
-bundle, waits up to 15 minutes for a backup tick already in flight (the
-restart would kill it), restarts the services
+bundle, checks for a backup tick in flight (the restart interrupts it, and the
+backup service runs it again), restarts the services
 agent (every apply; the fresh supervisord it brings up reads the merged program
 table, so a program the update adds starts on its own), probes the shell's health
 route and the health route of every critical app the user can open (the chat, the
@@ -551,9 +552,8 @@ Exit codes:
   broken beforehand still exits 0 naming the breakage (report it separately);
   `applied with incomplete provisioning` means one tool-install step is still
   pending and the record at `data/.state/update-apply/provision-incomplete.json`
-  is yours to close. An `interrupted an in-flight backup tick` line (the
-  restart stopped a backup the apply could not wait out) is a caveat for the
-  results message.
+  is yours to close. An `interrupted an in-flight backup tick` note needs
+  nothing: the restarted backup service backs up again on its own.
 - **`2` -- automatically rolled back.** The entire merge was reverted and the
   workspace confirmed healthy on the previous revision; the update did not
   land. Record `run-status verdict REFUSED --detail "<what failed, one plain
@@ -632,7 +632,14 @@ own command, as in Step 1:
 
 3. Rebuild the history bridge with Step 3a's two commands (the forced tag
    fetch, then `bridge-history --ref "$REF"`).
-4. Revive the worker Step 5 stopped: `mngr start update-self --restart`.
+4. Revive the worker Step 5 stopped, and blank the label that stop left
+   (it marks a worker nobody should restart):
+
+   ```bash
+   mngr start update-self --restart
+   mngr label update-self -l archived_at=
+   ```
+
 5. Send it the user's decision with `create_worker.py reply`, as in Step 4,
    then `run-status delegate update-self` and the `await` poll exactly as in
    Step 3b, and end your turn.
