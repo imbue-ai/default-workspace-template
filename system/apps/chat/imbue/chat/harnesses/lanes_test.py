@@ -146,10 +146,10 @@ def test_key_provider_ids_are_unique_within_a_lane() -> None:
 
 
 def test_account_label_numbers_from_the_second() -> None:
-    assert account_label("Anthropic", HarnessType.CLAUDE, 1) == "Anthropic (Claude Code)"
-    assert account_label("Anthropic", HarnessType.CLAUDE, 2) == "Anthropic 2 (Claude Code)"
+    assert account_label("Anthropic", HarnessType.CLAUDE, 1) == "Claude Code (Anthropic)"
+    assert account_label("Anthropic", HarnessType.CLAUDE, 2) == "Claude Code (Anthropic 2)"
     # The key lane's display noun is the provider, not the words "API key".
-    assert account_label("OpenRouter", HarnessType.PI_CODING, 1) == "OpenRouter (Pi)"
+    assert account_label("OpenRouter", HarnessType.PI_CODING, 1) == "Pi (OpenRouter)"
 
 
 def test_the_number_sits_on_the_provider_noun() -> None:

@@ -35,6 +35,17 @@ export function emptyAccountRowState(): AccountRowState {
   return { confirmingRemoval: null, renamingId: null, renameDraft: "" };
 }
 
+/** A row listed for show under the real accounts: a harness and a provider nobody is signed in to, drawn as
+ *  the rows above it but not a button, so nothing that presses or counts account rows finds it. */
+export function decorativeAccountRow(harnessLabel: string, provider: string, rowClass: string): m.Vnode {
+  return m("div", { key: `decorative-${harnessLabel}-${provider}`, class: css.ROW_WRAP }, [
+    m("div", { class: rowClass, onclick: (event: MouseEvent) => event.stopPropagation() }, [
+      m("span", { class: css.SUBMENU_ROW_NAME }, harnessLabel),
+      m("span", { class: css.SUBMENU_ROW_SUB }, `(${provider})`),
+    ]),
+  ]);
+}
+
 export interface AccountRowOptions {
   row: ProviderAccount;
   /** The account this menu marks with a tick. */
@@ -166,8 +177,8 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
         },
       },
       [
-        m("span", { class: css.SUBMENU_ROW_NAME }, row.provider),
-        m("span", { class: css.SUBMENU_ROW_SUB }, `(${row.harness_label})`),
+        m("span", { class: css.SUBMENU_ROW_NAME }, row.harness_label),
+        m("span", { class: css.SUBMENU_ROW_SUB }, `(${row.provider})`),
         opts.badge !== undefined
           ? m("span", { class: `account-row-badge ${css.NEXT_BADGE} ml-1 shrink-0 font-medium` }, opts.badge)
           : null,

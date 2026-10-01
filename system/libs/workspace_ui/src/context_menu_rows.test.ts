@@ -213,7 +213,7 @@ describe("elementReferenceRows", () => {
       [draftTextOf(modifyPromptOf(id), referenceBlock(reference))],
     ]);
     expect(draftTextOf(explainPromptOf("REF-abc"), "B")).toBe("Explain what I attached in REF-abc\n\nB");
-    expect(modifyPromptOf("REF-abc")).toBe("Change REF-abc to ");
+    expect(modifyPromptOf("REF-abc")).toBe("Change this ");
   });
 
   it("greys Explain and Modify with the reason when no draft can go", () => {

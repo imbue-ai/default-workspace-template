@@ -47,13 +47,13 @@ export interface ContextMenuTarget {
   click: ReferenceClick;
 }
 
-/** The prompt each reference row drafts beside the block, calling the reference by its id: the chat attaches the
- *  block as a file of that name, so the message names what it attached. */
+/** The prompt each reference row drafts beside the block. Explain calls the reference by its id (the chat attaches
+ *  the block as a file of that name); Modify reads as plain speech, since the attachment names the element. */
 export function explainPromptOf(referenceId: string): string {
   return `Explain what I attached in ${referenceId}`;
 }
-export function modifyPromptOf(referenceId: string): string {
-  return `Change ${referenceId} to `;
+export function modifyPromptOf(_referenceId: string): string {
+  return "Change this ";
 }
 /** Why Explain and Modify are greyed on a page no shell frames. */
 export const NO_SHELL_DRAFT_REASON = "Open this page in the workspace to draft into a chat";

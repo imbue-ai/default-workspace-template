@@ -75,7 +75,17 @@ import {
   startTruncated,
   type MenuRow,
 } from "@imbue/workspace-ui/src/components/menu";
-import { accountRow, emptyAccountRowState } from "./accountRow";
+import { accountRow, decorativeAccountRow, emptyAccountRowState } from "./accountRow";
+
+// Rows the Provider submenu lists under the signed-in accounts for the launch video: harnesses and providers
+// the studio could run, named as the real rows are ("Codex (OpenAI)"), pressable to no effect.
+const DECORATIVE_PROVIDER_ROWS: ReadonlyArray<readonly [string, string]> = [
+  ["Muse", "Meta"],
+  ["Dot", "OpenAI"],
+  ["GLM-5.3", "Z.ai"],
+  ["qwen-3.8", "Ollama"],
+  ["Antigravity", "Google"],
+];
 import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import * as css from "./modelProviderMenuStyles";
 
@@ -593,7 +603,8 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
         { class: css.SUBMENU_SCROLL },
         rows.length === 0
           ? [m("div", { class: css.SUBMENU_EMPTY }, "No providers yet.")]
-          : rows.map((row) => {
+          : [
+              ...rows.map((row) => {
               const isCurrent = current !== null && row.id === current.id;
               const isPending = row.id === pendingId;
               return accountRow({
@@ -613,7 +624,11 @@ export function ModelProviderMenu(): m.Component<{ chatId: string }> {
                 },
                 state: rowState,
               });
-            }),
+              }),
+              ...DECORATIVE_PROVIDER_ROWS.map(([harnessLabel, provider]) =>
+                decorativeAccountRow(harnessLabel, provider, css.ACCOUNT_ROW),
+              ),
+            ],
       ),
       m(
         "button",

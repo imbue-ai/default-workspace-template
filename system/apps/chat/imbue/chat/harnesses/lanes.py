@@ -561,5 +561,5 @@ def numbered_provider(provider_display: str, seq: int) -> str:
 
 
 def account_label(provider_display: str, harness: HarnessType, seq: int) -> str:
-    """ "Anthropic (Claude Code)", and "Anthropic 2 (Claude Code)" for the second one."""
-    return f"{numbered_provider(provider_display, seq)} ({HARNESS_LABEL[harness]})"
+    """ "Claude Code (Anthropic)", and "Claude Code (Anthropic 2)" for the second one."""
+    return f"{HARNESS_LABEL[harness]} ({numbered_provider(provider_display, seq)})"
