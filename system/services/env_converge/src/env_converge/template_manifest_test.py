@@ -726,3 +726,21 @@ def test_a_program_running_under_an_undeclared_secret_file_is_flagged(
         tmp_path / "declared",
     )
     assert check_secret_references(tmp_path, declared) == ()
+
+
+def test_a_conf_comment_mentioning_a_secrets_file_is_not_flagged(
+    tmp_path: Path,
+) -> None:
+    # A base-template service (e.g. host-backup) whose secret is injected by the
+    # platform documents the file it reads in a comment -- never a
+    # `with_secrets.py` wrapper on the `command=` line. That comment must not be
+    # flagged as an undeclared reference for every template build.
+    _write_tree(tmp_path)
+    (tmp_path / "system/supervisord.conf.d").mkdir(parents=True)
+    (tmp_path / "system/supervisord.conf.d/host-backup.conf").write_text(
+        "# Continuous backup. data/.secrets/restic.env is injected by the minds app.\n"
+        "[program:host-backup]\n"
+        "command=uv run host-backup\n"
+    )
+
+    assert validate_template_tree(tmp_path) == ()

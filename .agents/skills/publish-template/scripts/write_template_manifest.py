@@ -278,6 +278,21 @@ def collect_declarations(
     return declaration_by_file
 
 
+def _conf_scan_text(text: str) -> str:
+    """A `.conf` file's text with `#`-comment lines blanked out.
+
+    Supervisord drop-ins routinely document which `data/.secrets/<file>.env` a
+    program reads in a leading comment (e.g. "injected by the minds app" for a
+    base-template service that is never part of an `--include` set and whose
+    secret is supplied by the platform, not an adopter) -- a mention that is
+    not a `with_secrets.py` wrapper invocation and must not trip the
+    undeclared-reference check. Only `command=` (and similar) lines are real
+    references; blanking comment lines before the regex scan keeps the line
+    numbers stable (irrelevant here, but cheap) while dropping only prose.
+    """
+    return "\n".join("" if line.lstrip().startswith("#") else line for line in text.splitlines())
+
+
 def collect_references(repo_root: Path) -> dict[str, list[str]]:
     """Every secret file the snapshot's MCP config and supervisord programs name, with where."""
     sources_by_file: dict[str, list[str]] = {}
@@ -289,9 +304,10 @@ def collect_references(repo_root: Path) -> dict[str, list[str]]:
         if not path.is_file():
             continue
         relative = path.relative_to(repo_root).as_posix()
-        for match in _SECRET_REFERENCE_RE.finditer(
-            path.read_text(encoding="utf-8", errors="replace")
-        ):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if path.suffix == ".conf":
+            text = _conf_scan_text(text)
+        for match in _SECRET_REFERENCE_RE.finditer(text):
             sources_by_file.setdefault(match.group(1), []).append(relative)
     return sources_by_file
 
