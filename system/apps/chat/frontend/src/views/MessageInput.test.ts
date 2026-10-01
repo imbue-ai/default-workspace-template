@@ -1155,6 +1155,16 @@ describe("MessageInput on a chat whose account was signed out", () => {
     expect(mocks.beginSwitchToAccountId).toHaveBeenCalledWith("agent-signed-out", "account-chosen-5522");
   });
 
+  it("keeps the phone's leading settings button beside the reason", () => {
+    const component = MessageInput();
+    const leading = m("button", { "aria-label": "Chat settings" });
+    const tree = component.view!({ attrs: { chatId: "agent-signed-out", leading } } as never);
+
+    expect(findByAttr(tree, "aria-label", "Chat settings")).toBeDefined();
+    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findButton(tree, "Choose a provider")).toBeDefined();
+  });
+
   it("gives the composer back once a switch to another provider is armed", () => {
     mocks.switching.target = { id: "account-chosen-5522", harness: "claude", label: "Claude" };
     const component = MessageInput();
