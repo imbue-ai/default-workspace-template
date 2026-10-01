@@ -1240,7 +1240,7 @@ def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskCli
     assert _op(client, "place", {"window": first_id, "frame": "0.1,0.2,0.5,0.5"}, requester).status_code == 400
     assert _op(client, "focus", {"window": "files"}, requester).status_code == 404
     refused = _op(client, "open", {"app": "chat:alice"}, requester)
-    assert refused.status_code == 400 and "app" in refused.get_json()["detail"]
+    assert refused.status_code == 400 and "invalid app name 'chat:alice'" in refused.get_json()["detail"]
 
     # A refresh of one window goes to the target client; a refresh of a whole app and the interface reload to
     # every window.
