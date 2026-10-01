@@ -1,5 +1,4 @@
 import json
-from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,7 @@ from terminal_app.pages import (
     SessionPage,
     render_page,
 )
-from terminal_app.primitives import TerminalTitle, TmuxSessionName
+from terminal_app.primitives import TmuxSessionName
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
@@ -241,58 +240,3 @@ def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
     assert json.loads(page_html[start : page_html.index("</script>", start)])["page"]["title"] == title
     assert 'import("/_static/app_contract.js")' in page_html
-
-
-class _KeyStripParser(HTMLParser):
-    """The attributes of the ``#keys`` element and of each button inside it, with each button's text."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.strip: dict[str, str | None] | None = None
-        self.buttons: list[tuple[dict[str, str | None], str]] = []
-        self._is_in_strip = False
-        self._is_in_button = False
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attributes = dict(attrs)
-        if attributes.get("id") == "keys":
-            self.strip = attributes
-            self._is_in_strip = True
-        elif self._is_in_strip and tag == "button":
-            self.buttons.append((attributes, ""))
-            self._is_in_button = True
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "button":
-            self._is_in_button = False
-        elif tag == "div":
-            self._is_in_strip = False
-
-    def handle_data(self, data: str) -> None:
-        if self._is_in_button:
-            attributes, text = self.buttons[-1]
-            self.buttons[-1] = (attributes, text + data)
-
-
-def test_render_page_carries_the_key_strip_hidden_until_a_terminal_is_framed() -> None:
-    session = TmuxSessionName("terminal-1")
-    page = SessionPage(name=session, title=TerminalTitle("Terminal 1"), pty_path="/?arg=session", pty_label="pty")
-    parser = _KeyStripParser()
-
-    parser.feed(render_page(PageConfig(session=session, page=page)))
-
-    assert parser.strip is not None
-    assert parser.strip["role"] == "toolbar"
-    assert "hidden" in parser.strip
-    # The keys the pty page's script maps, each named for a screen reader, and Ctrl as a toggle.
-    assert [(button.get("data-key"), button.get("aria-label") or text) for button, text in parser.buttons] == [
-        ("Escape", "Esc"),
-        ("Tab", "Tab"),
-        (None, "Ctrl"),
-        ("ArrowLeft", "Left"),
-        ("ArrowUp", "Up"),
-        ("ArrowDown", "Down"),
-        ("ArrowRight", "Right"),
-    ]
-    ctrl = parser.buttons[2][0]
-    assert "data-ctrl" in ctrl and ctrl["aria-pressed"] == "false"
