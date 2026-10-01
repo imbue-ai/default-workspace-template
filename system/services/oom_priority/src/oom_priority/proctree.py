@@ -2,8 +2,9 @@
 
 Used by the taggers that must find the processes something has already
 spawned: the supervisord event listener (``system/services/oom_priority/bin/oom_tag_backstop.py``),
-the browser service's Chromium re-tagging sweep, and the chat app moving a spare
-chat agent's subprocesses out of the spare band when a chat takes it. Stdlib-only
+the browser service's Chromium re-tagging sweep, and the chat app tagging a spare
+chat agent's subprocesses into the spare band on every sweep and out of it when a
+chat takes the spare. Stdlib-only
 (see ``paths``): the backstop listener imports it under a plain ``python3``.
 """
 
