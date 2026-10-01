@@ -1,0 +1,1 @@
+The terminal's touch key strip follows the shell's narrower phone rule: it shows on a page at most 500px one way and 1000px the other (still only with a touch screen), where it used to show whenever either side was under 700px.

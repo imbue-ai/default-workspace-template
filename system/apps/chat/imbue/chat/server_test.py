@@ -5,8 +5,10 @@ import importlib.util
 import io
 import json
 import os
+import threading
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,8 +26,10 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from pydantic import SecretStr
 
+from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account
+from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
@@ -34,6 +38,7 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
@@ -48,6 +53,7 @@ from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
+from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
@@ -71,6 +77,7 @@ from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
+from imbue.chat.testing import InlineExecutor
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import VanishedAgentMngrMessenger
@@ -414,13 +421,11 @@ def test_get_event_detail_serves_and_404s(client: FlaskClient, app: Flask, tmp_p
     assert missing.status_code == 404
 
 
-def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
-    """Eviction releases the watcher (resident transcript, watch thread); a later read
-    rebuilds it from disk transparently -- the chat-memory lifecycle's two halves."""
-    state = build_test_state()
-    agent_state_dir = tmp_path / "agent_state"
+def _claude_agent_info_with_one_message(tmp_path: Path, agent_id: str, state: str) -> AgentInfo:
+    """A claude agent whose transcript on disk holds one user message, "hello"."""
+    agent_state_dir = tmp_path / agent_id / "agent_state"
     agent_state_dir.mkdir(parents=True)
-    claude_config_dir = tmp_path / "claude_config"
+    claude_config_dir = tmp_path / agent_id / "claude_config"
     (claude_config_dir / "projects" / "hash123").mkdir(parents=True)
     (claude_config_dir / "projects" / "hash123" / "s1.jsonl").write_text(
         json.dumps(
@@ -434,13 +439,20 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
         + "\n"
     )
     (agent_state_dir / "claude_session_id_history").write_text("s1\n")
-    agent_info = AgentInfo(
-        id="evictable-agent",
-        name="evictable-agent",
-        state="RUNNING",
+    return AgentInfo(
+        id=agent_id,
+        name=agent_id,
+        state=state,
         agent_state_dir=agent_state_dir,
         claude_config_dir=claude_config_dir,
     )
+
+
+def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
+    """Eviction releases the watcher (resident transcript, watch thread); a later read
+    rebuilds it from disk transparently -- the chat-memory lifecycle's two halves."""
+    state = build_test_state()
+    agent_info = _claude_agent_info_with_one_message(tmp_path, "evictable-agent", "RUNNING")
 
     first = state.get_or_create_watcher(agent_info)
     assert state.watchers == {"evictable-agent": first}
@@ -455,6 +467,105 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
     assert rebuilt is not first
     assert [e["content"] for e in rebuilt.get_all_events()] == ["hello"]
     state.shutdown()
+
+
+def test_a_stopped_chat_read_after_its_stop_is_released_once_nobody_streams_it(tmp_path: Path) -> None:
+    """Reading a stopped chat rebuilds its transcript after the stop's own eviction; the
+    release drops that rebuild, but not while a stream of the chat is open or a send is
+    reviving it, and never a running chat's."""
+    state = build_test_state()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    seed_agent_state(state.agent_manager, "running-agent", name="running-agent", state="RUNNING")
+    stopped_info = _claude_agent_info_with_one_message(tmp_path, "stopped-agent", "STOPPED")
+    running_info = _claude_agent_info_with_one_message(tmp_path, "running-agent", "RUNNING")
+    try:
+        state.get_or_create_watcher(stopped_info)
+        running_watcher = state.get_or_create_watcher(running_info)
+
+        # A viewer's stream holds the stopped chat's transcript.
+        stream = state.event_queues.register("stopped-agent")
+        state.release_unviewed_stopped_transcripts()
+        assert set(state.watchers) == {"stopped-agent", "running-agent"}
+        state.event_queues.unregister("stopped-agent", stream)
+
+        # So does a send reviving it, which built the watcher before starting the agent.
+        with state.agent_manager.track_connecting_send("stopped-agent", "reviving-send") as mark_connecting:
+            mark_connecting()
+            state.release_unviewed_stopped_transcripts()
+            assert set(state.watchers) == {"stopped-agent", "running-agent"}
+
+        # With neither, the next release drops it; the running chat keeps its own.
+        state.release_unviewed_stopped_transcripts()
+        assert state.watchers == {"running-agent": running_watcher}
+    finally:
+        state.shutdown()
+
+
+class _ReleasingWhileSeedingAgentManager(AgentManager):
+    """Runs the chat app's release once, while a watcher is seeded and before it starts."""
+
+    release: Callable[[], None] | None = None
+
+    def update_session_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
+        release, self.release = self.release, None
+        if release is not None:
+            release()
+        super().update_session_events(agent_id, events)
+
+
+def test_a_watcher_released_before_it_starts_leaves_no_watch_thread_running(tmp_path: Path) -> None:
+    manager = _ReleasingWhileSeedingAgentManager.build(WebSocketBroadcaster())
+    state = build_test_state(agent_manager=manager)
+    seed_agent_state(manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    stopped_info = _claude_agent_info_with_one_message(tmp_path, "stopped-agent", "STOPPED")
+    manager.release = state.release_unviewed_stopped_transcripts
+    threads_before = set(threading.enumerate())
+    try:
+        watcher = state.get_or_create_watcher(stopped_info)
+
+        assert state.watchers == {}
+        assert len(watcher.get_all_events()) == 1
+        assert set(threading.enumerate()) - threads_before == set()
+    finally:
+        state.shutdown()
+
+
+def _fake_watcher(
+    get_all_events: Callable[[], list[dict[str, Any]]],
+    start: Callable[[], None],
+    stop: Callable[[], None] = lambda: None,
+) -> SimpleNamespace:
+    """A stand-in for ``build_watcher``'s result: no-op queue hooks around the given seed, start, and stop."""
+    return SimpleNamespace(
+        set_queue_snapshot_callback=lambda _callback: None,
+        notify_idle=lambda: [],
+        notify_busy=lambda: None,
+        set_flush_hooks=lambda _send, _is_alive: None,
+        get_all_events=get_all_events,
+        start=start,
+        stop=stop,
+    )
+
+
+def test_a_watcher_released_while_it_starts_is_stopped_once_after_its_start() -> None:
+    state = build_test_state()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    calls: list[str] = []
+
+    def start_while_released() -> None:
+        calls.append("start")
+        state.release_unviewed_stopped_transcripts()
+        calls.append("started")
+
+    fake_watcher = _fake_watcher(lambda: [], start_while_released, lambda: calls.append("stop"))
+    try:
+        with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
+            state.get_or_create_watcher(_agent_info(agent_id="stopped-agent"))
+
+        assert state.watchers == {}
+        assert calls == ["start", "started", "stop"]
+    finally:
+        state.shutdown()
 
 
 def test_get_events_caps_initial_load_to_tail(client: FlaskClient, app: Flask, tmp_path: Path) -> None:
@@ -559,6 +670,109 @@ def test_send_message_success() -> None:
     assert messenger.sent == [(agent_id, "hello")]
 
 
+def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    agent_id = "agent-00000000000000000000000000000731"
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id, name="Chat-4", state="RUNNING", labels={"display_name": "Chat 4"}, work_dir=None
+        )
+    completion = ScriptedOneShotCompletion(["Rome trip: plan five days in May"])
+    renames: list[tuple[ChatId, str]] = []
+    namer = ChatNamer(
+        chat_files_root=tmp_path / "chats",
+        get_active_agent_info=manager.get_active_agent_info,
+        resolve_chat_account_binding=manager.resolve_chat_account_binding,
+        show_automatic_title=manager.show_automatic_title,
+        clear_automatic_title=manager.clear_automatic_title,
+        has_placeholder_name=manager.has_placeholder_name,
+        rename_placeholder_named_chat=lambda chat_id, name: (renames.append((chat_id, name)), True)[1],
+        build_one_shot_completion=lambda _harness: completion,
+        executor=InlineExecutor(),
+    )
+    client = create_application(build_test_state(agent_manager=manager, chat_namer=namer)).test_client()
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "Help me plan 5 days in Rome"})
+
+    assert response.status_code == 200
+    assert completion.prompts == ["Help me plan 5 days in Rome"]
+    assert renames == [(ChatId(agent_id), "Rome trip: plan five days in May")]
+
+
+def _client_with_account_labeled_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_id: str, account_id: str
+) -> tuple[FlaskClient, RecordingMngrMessenger]:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id, name="Chat-7", state="RUNNING", labels={"account": account_id}, work_dir=None
+        )
+    return create_application(build_test_state(agent_manager=manager)).test_client(), messenger
+
+
+def test_a_chat_whose_account_was_signed_out_takes_no_more_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000732"
+    # The agent's label names an account the index no longer has: it was signed out.
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8812")
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "are you still there?"})
+
+    assert response.status_code == 409
+    assert response.get_json()["kind"] == "account_signed_out"
+    assert messenger.sent == []
+
+
+def test_a_secret_request_notice_still_reaches_a_chat_whose_account_was_signed_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000734"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8813")
+    bridge = state_of(client.application).secret_request_bridge
+    assert bridge is not None
+
+    with client.application.app_context():
+        bridge.deliver_notice(agent_id, "The secret you asked for is ready.")
+
+    assert messenger.sent == [(agent_id, "The secret you asked for is ready.")]
+
+
+def test_an_unreadable_account_index_does_not_refuse_a_chats_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account_id, _account_path = mint_account_dir()
+    commit_account(account_id, "openai", "OpenAI")
+    # An index written by a newer build is refused as unreadable, which says nothing about this account.
+    index_path().write_text(json.dumps({"version": INDEX_VERSION + 1, "accounts": []}))
+    agent_id = "agent-00000000000000000000000000000735"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, account_id)
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "hello")]
+
+
+def test_a_chat_on_a_signed_in_account_still_takes_messages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    account_id, _account_path = mint_account_dir()
+    commit_account(account_id, "openai", "OpenAI")
+    agent_id = "agent-00000000000000000000000000000733"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, account_id)
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "hello")]
+
+
 def test_send_message_to_an_agent_destroyed_mid_send_answers_not_found() -> None:
     """A chat destroyed while a send to it is in flight answers 404, which an in-workspace
     sender (``message_chat.py``) reads as a chat that no longer exists; it reads a 500 as a refusal
@@ -599,6 +813,38 @@ def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     assert messenger.sent == [(agent_id, "wake up")]
     tracked = manager.get_agent_by_id(agent_id)
     assert tracked is not None and tracked.state == "WAITING"
+
+
+class _ReleasingAsEachSendEndsAgentManager(AgentManager):
+    """Runs the chat app's release the moment a send's connecting scope ends, as an observe event could."""
+
+    release: Callable[[], None] | None = None
+
+    @contextmanager
+    def track_connecting_send(self, agent_id: str, message_id: str) -> Iterator[Callable[[], None]]:
+        with super().track_connecting_send(agent_id, message_id) as mark_connecting:
+            yield mark_connecting
+        if self.release is not None:
+            self.release()
+
+
+def test_a_send_reviving_a_stopped_chat_keeps_the_chats_watcher(tmp_path: Path) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _claude_agent_info_with_one_message(tmp_path, agent_id, "STOPPED")
+    manager = _ReleasingAsEachSendEndsAgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name=agent_id, state="STOPPED")
+    state = build_test_state(agent_manager=manager)
+    manager.release = state.release_unviewed_stopped_transcripts
+    client = create_application(state).test_client()
+    try:
+        with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+            response = client.post(f"/api/chats/{agent_id}/message", json={"message": "wake up"})
+
+        assert response.status_code == 200
+        assert set(state.watchers) == {agent_id}
+    finally:
+        state.shutdown()
 
 
 def _send_and_record_connecting_pushes(state: str, *, is_ready_marker_written: bool) -> tuple[int, list[bool]]:
@@ -2370,14 +2616,7 @@ def test_get_or_create_watcher_seeds_activity_before_starting_the_watcher() -> N
         calls.append("get_all_events")
         return []
 
-    fake_watcher = SimpleNamespace(
-        set_queue_snapshot_callback=lambda _callback: None,
-        notify_idle=lambda: [],
-        notify_busy=lambda: None,
-        set_flush_hooks=lambda _send, _is_alive: None,
-        get_all_events=_record_get_all_events,
-        start=lambda: calls.append("start"),
-    )
+    fake_watcher = _fake_watcher(_record_get_all_events, lambda: calls.append("start"))
     state = build_test_state()
     with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
         state.get_or_create_watcher(_agent_info())

@@ -1,6 +1,6 @@
 /**
- * The one query-string edit the boot-time parameters share: the deep link (``deepLinks.ts``) and solo mode
- * (``soloMode.ts``) are each read once and then removed from the URL, leaving every other parameter as it was.
+ * The query-string edit a boot-time parameter is removed with once read: the deep link (``deepLinks.ts``) is
+ * taken out of the URL, leaving every other parameter (solo mode's among them) as it was.
  */
 
 /** The query string with ``names`` removed (other parameters kept), "" when none remain. */

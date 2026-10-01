@@ -240,6 +240,42 @@ evicts is not hardened, no matter how well-tested its happy path is.
   the eviction path is exactly the kind of behavior that silently rots if
   nothing exercises it.
 
+## Keep rebuildable data out of the backup
+
+This is also an always-applies invariant. The workspace's hourly backup
+(`host-backup`, a restic snapshot of the whole home tree) takes time in
+proportion to how many files and directories it walks, not their size: a store
+of a few hundred thousand small files adds minutes to every backup, every hour,
+even when none of them changed. A byte cap from the section above does not help
+here -- 8 GB of extracted source trees is a million files. So whenever the
+creation keeps a store it can rebuild -- downloaded or extracted archives,
+clones, fetched pages, thumbnails, model or package caches -- mark it:
+
+- **Give the rebuildable store its own directory** (e.g. `DATA_DIR / "repos"`),
+  apart from records only the user could recreate.
+- **Create an empty `.nobackup` file in that directory wherever the code
+  creates it**, so the marker comes back whenever the directory does. The
+  backup then keeps only the marker:
+
+  ```python
+  def ensure_rebuildable_store_dir(path: Path) -> Path:
+      path.mkdir(parents=True, exist_ok=True)
+      (path / ".nobackup").touch()
+      return path
+  ```
+
+  (A `CACHEDIR.TAG` does nothing here: the backup ignores it on purpose,
+  because uv writes one into every virtualenv and tool environment.)
+- **Rebuild on demand.** A missing or empty store is a cold cache to refill,
+  never an error: a restore deletes whatever the backup did not hold, so after
+  one the directory is gone or holds only the marker.
+- **Mark only what really can be rebuilt from its source.** Anything the user
+  made, or that could not be fetched again (a source that may disappear, past
+  results of a paid call), stays unmarked. When in doubt, leave it in the
+  backup.
+- **Cover it with a test**: the directory holds the marker once the code has
+  created it, and the code refills the store after it is deleted.
+
 ## Review gates
 
 1. Ensure all in-flight changes have settled and are committed

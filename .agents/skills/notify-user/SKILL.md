@@ -1,6 +1,6 @@
 ---
 name: notify-user
-description: "Tell the user, through the Imbue Studio app's notification feed (bell, badge, toast, and a system banner when they are away), that work in THIS CHAT has finished. For chat agents only -- never for launch-task workers, whose results reach the user through their parent chat. Use at the end of every turn in which you actually did work, not only after long ones."
+description: "Tell the user, through the Imbue Studio app's notification feed (bell, badge, toast, and a system banner when they are away), that a turn in THIS CHAT ended with something they will want to know about or act on: a finished deliverable, a result they were waiting for, or a question only they can answer. For chat agents only -- never for launch-task workers, whose results reach the user through their parent chat. Not for chitchat, acknowledgements, progress with no result yet, or trivial answers."
 compatibility: Requires the latchkey gateway env mngr injects into every agent (LATCHKEY_GATEWAY, LATCHKEY_GATEWAY_PASSWORD); python3 only.
 metadata:
   author: imbue
@@ -15,33 +15,34 @@ into that feed. Clicking the notification lands the user in this chat.
 
 ## When to use it
 
-**At the end of every turn in which you actually did work.** Not only after
-long tasks: the user cannot tell from outside whether a turn took ten seconds
-or ten minutes, so anything they might have walked away from is worth one
-line. One notification per turn, sent once, when the work is done (or when it
-failed and needs them).
+**When a turn ends with something the user will want to know about or act
+on:** a finished deliverable, a result they were waiting for, or a question
+only they can answer (including a failure that needs them). The amount of work
+or time is not the test; what matters is whether the user cares about the
+outcome. A quick result they were waiting for is worth one line; an hour of
+groundwork with nothing to show yet is not. A question
+you cannot go on without is a reason to send one, since the user may not be
+looking. One notification per turn, sent once, as the turn ends.
 
-Skip it for the turns that carry nothing: chitchat, a single-line
-acknowledgement, a trivial answer, a turn that only asks the user a question,
-or a reply that is one quick file read. Roughly the same line `AGENTS.md`
-draws for step records -- if the turn warranted a step, the user should hear
-it is finished.
+Skip it when the turn produced nothing of that kind: chitchat, an
+acknowledgement, progress with no result yet, or the answer to a trivial
+question.
 
 Do NOT use it:
 
 - from a launch-task worker or any other sub-agent: a worker's results reach
   the user through the chat that launched it, and only chats show up in the
   app's feed;
-- as a progress ticker. It goes out when the turn's work is done, never
-  partway through, and never more than once per turn.
+- as a progress ticker. It goes out as the turn ends, never partway
+  through, and never more than once per turn.
 
 No hook reminds you at the end of the turn: the decision is yours as you finish, and
 it is never narrated to the user.
 
 ## How
 
-One sentence summarizing what was done, in the user's terms (what they can
-now see, use, or decide), never the tool names or steps:
+One sentence saying what is ready or what you need from them, in the user's
+terms (what they can now see, use, or decide), never the tool names or steps:
 
 ```bash
 python3 .agents/skills/notify-user/scripts/notify_user.py "The migration finished: 3 tables moved and verified."

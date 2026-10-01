@@ -244,7 +244,7 @@ def remove_desktop_shortcut(desktop_id: str) -> ResponseReturnValue:
 
 def open_window(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(WindowOpenRequest)
-    outcome = _shell().open_window(desktop_id, body, is_minimized=False)
+    outcome = _shell().open_window(desktop_id, body)
     return (
         jsonify({"window": _shell().window_wire_json(outcome.window), "is_new": outcome.is_new}),
         HTTP_CREATED if outcome.is_new else HTTP_OK,
@@ -360,8 +360,9 @@ def resolved_client_wire_json(record: ClientRecord, is_connected: bool, desktops
 
 
 def inventory_document_json(shell: ShellState) -> dict[str, Any]:
-    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, every desktop, every
-    app, and every known client with ``shown``, the windows of its active desktop that its layout does not minimize."""
+    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, the workspace's name,
+    every desktop, every app, and every known client with ``shown``, the windows of its active desktop that its layout
+    does not minimize."""
     desktops = shell.list_desktops()
     desktops_by_id = {desktop.id: desktop for desktop in desktops}
     connected = shell.broadcaster.connected_client_ids()
@@ -376,6 +377,7 @@ def inventory_document_json(shell: ShellState) -> dict[str, Any]:
         clients.append({**_client_wire_json_on(record, str(record.id) in connected, active), "shown": shown})
     return {
         "is_preview": get_state().is_preview,
+        "workspace_name": get_state().workspace_name.resolve(),
         "desktops": shell.desktops_wire_json(desktops),
         "apps": shell.inventory.serialized(),
         "clients": clients,
@@ -619,7 +621,13 @@ def _open_request(
     shell: ShellState, arguments: DesktopOpArguments, client_id: ClientId, desktop_id: DesktopId
 ) -> WindowOpenRequest:
     target = _open_target(shell, arguments, client_id, desktop_id)
-    return WindowOpenRequest(app=target.app, path=target.path, client_id=client_id, if_present=arguments.if_present)
+    return WindowOpenRequest(
+        app=target.app,
+        path=target.path,
+        client_id=client_id,
+        if_present=arguments.if_present,
+        minimized=arguments.minimized,
+    )
 
 
 def _open_unplaced(
@@ -721,6 +729,7 @@ def _op_window(
             shell.edit_desktop_layout(
                 desktop, target.client_id, lambda current: with_window_raised(current, window.id)
             )
+            _announce_window_op(shell, "focus", window.id, target.client_id, requester)
         case "minimize":
             shell.edit_desktop_layout(
                 desktop, target.client_id, lambda current: with_window_minimized(current, window.id)
@@ -797,28 +806,24 @@ def _show(
         _client_desktop_view(shell, target.desktop, client_id), others, app, path, showing, repoint
     )
     desktop = shell.get_desktop(choice.desktop_id)
+    is_detached = False
     if choice.window is None:
         request = WindowOpenRequest(app=app, path=path, client_id=client_id, if_present=IfPresent.NEW)
-        window_id = shell.open_window(desktop.id, request, is_minimized=False).window.id
+        window_id = shell.open_window(desktop.id, request).window.id
     else:
         window_id = choice.window.id
         if choice.outcome is not ShowOutcome.RAISED:
             # As a ``navigate`` does: an independent window moves for this client alone, a linked one for everyone.
             shell.report_window_location(desktop.id, window_id, client_id, path, choice.window.title)
-        if placement_of(shell.read_desktop_layout(desktop, client_id), window_id).is_detached:
-            # Its desktop window is the chrome's, which only the client's page can bring forward; raising the
-            # placement would pull the window back onto the desktop instead.
-            shell.broadcaster.broadcast_layout_op(
-                SHOW_OP,
-                {"window": str(window_id)},
-                requester=_requester_wire(requester),
-                target_client_id=str(client_id),
-            )
-        else:
+        # A pulled-out window's desktop window is the chrome's, which only the client's page can bring forward (on
+        # the show message below); raising the placement would pull the window back onto the desktop instead.
+        is_detached = placement_of(shell.read_desktop_layout(desktop, client_id), window_id).is_detached
+        if not is_detached:
             shell.edit_desktop_layout(desktop, client_id, lambda current: with_window_raised(current, window_id))
             # Switched after the raise, so the layout the client fetches on arriving already has the window on top.
             if desktop.id != target.desktop.id:
                 shell.set_client_active_desktop(client_id, desktop.id)
+    _announce_window_op(shell, SHOW_OP, window_id, client_id, requester, {"is_detached": is_detached})
     logger.info(
         "layout op={} requester={} desktop={} client={} app={} path={} shown={}",
         SHOW_OP,
@@ -941,11 +946,11 @@ def dispatch_desktop_op(
         case "open":
             anchor = _beside_anchor(shell, arguments, target, requester)
             window_id = shell.open_window(
-                target.desktop.id,
-                _open_request(shell, arguments, target.client_id, target.desktop.id),
-                arguments.minimized,
+                target.desktop.id, _open_request(shell, arguments, target.client_id, target.desktop.id)
             ).window.id
             _pair_beside(shell, target, anchor, window_id)
+            if not arguments.minimized:
+                _announce_window_op(shell, "open", window_id, target.client_id, requester)
         case "refresh":
             return _refresh_window(shell, arguments, target, requester)
         case "show":
@@ -971,6 +976,24 @@ def _requester_wire(requester: OpRequester | None) -> str:
     if requester is None:
         return ""
     return str(requester.app) + (f":{requester.marker}" if requester.marker else "")
+
+
+def _announce_window_op(
+    shell: ShellState,
+    op: str,
+    window_id: WindowId,
+    client_id: ClientId,
+    requester: OpRequester | None,
+    extra_args: Mapping[str, Any] | None = None,
+) -> None:
+    """Tell the target client's windows which window an op put in front of it, so a page that shows one window at a
+    time (the phone layout) can switch to it; the op's own edit has already been written."""
+    shell.broadcaster.broadcast_layout_op(
+        op,
+        {"window": str(window_id), **(extra_args or {})},
+        requester=_requester_wire(requester),
+        target_client_id=str(client_id),
+    )
 
 
 def _reload_system_interface(shell: ShellState, requester: OpRequester | None) -> ResponseReturnValue:
