@@ -6,4 +6,4 @@ An agent's layout ops no longer quietly undo a window the user popped out into i
 
 - The op answers say what happened: raised in its own window, brought back, not paired, and whether the client has only pop-outs open (so a window shown on its desktop waits for a desktop window). The inventory lists each client's popped-out windows with whether their ghost is hidden.
 
-- A pulled-out window's own page raises its window when a `show` or `focus` names it, so the raise works with the main window closed.
+- A pulled-out window's own page raises its window when a `show`, a `focus`, or an `open` that finds it names it, so the raise works with the main window closed.
