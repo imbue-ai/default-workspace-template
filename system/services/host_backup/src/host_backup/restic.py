@@ -27,6 +27,10 @@ _RESOURCE_LIMIT_ENV: Final[Mapping[str, str]] = {
 # preserves any snapshot carrying either so a recent "Restored from ..." timeline
 # marker survives the normal hourly/daily thinning; the runner ages old ones out.
 RESTORE_MARKER_TAGS: Final[tuple[str, ...]] = ("restored", "pre-restore")
+# A directory holding a file of this name is backed up as just that file: how an
+# app marks a store it can rebuild. Not CACHEDIR.TAG, which uv writes into every
+# virtualenv and tool environment, and a restore would leave those empty.
+NO_BACKUP_MARKER_FILENAME: Final[str] = ".nobackup"
 _REPO_MISSING_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"unable to open config file", re.IGNORECASE),
     re.compile(r"repository does not exist", re.IGNORECASE),
@@ -54,6 +58,14 @@ def is_repo_locked_error(stderr: str) -> bool:
     return any(p.search(stderr) for p in _REPO_LOCKED_PATTERNS)
 
 
+def build_restic_environment(env_overrides: Mapping[str, str]) -> dict[str, str]:
+    """This process's environment plus the resource limits, with `env_overrides` merged on top."""
+    env = dict(os.environ)
+    env.update(_RESOURCE_LIMIT_ENV)
+    env.update(env_overrides)
+    return env
+
+
 def run_restic(
     args: tuple[str, ...],
     *,
@@ -62,15 +74,12 @@ def run_restic(
     cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run `restic <args...>` under the resource limits, with `env_overrides` merged on top."""
-    env = dict(os.environ)
-    env.update(_RESOURCE_LIMIT_ENV)
-    env.update(env_overrides)
     return subprocess.run(
         ["restic", *args],
         capture_output=True,
         text=True,
         check=False,
-        env=env,
+        env=build_restic_environment(env_overrides),
         timeout=timeout_seconds,
         cwd=cwd,
     )
@@ -120,6 +129,9 @@ def backup(
     newest snapshot as the parent instead of looking for one with the same
     path. `--ignore-inode` judges files by size and mtime alone, since a fresh
     snapshot is not guaranteed to keep the inode numbers of the last one.
+
+    `--exclude-if-present` skips the contents of any directory holding the
+    no-backup marker file.
     """
     args: list[str] = [
         "backup",
@@ -128,6 +140,8 @@ def backup(
         "--group-by",
         "",
         "--ignore-inode",
+        "--exclude-if-present",
+        NO_BACKUP_MARKER_FILENAME,
         "--tag",
         tag,
     ]
