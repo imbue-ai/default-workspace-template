@@ -230,7 +230,7 @@ FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO: Final[int] = 2
 
 
 # How many idle spare agents (``spare_chat.py``) are kept started for new chats: the default for
-# ``AgentManager.build``. Each costs one idle harness process (for claude, about 140 MB of its own).
+# ``AgentManager.build``. Each costs one idle harness process.
 # Raise it so a burst of new chats each finds one already up.
 SPARE_CHAT_POOL_SIZE: Final[int] = 1
 # How long after a hand-over the pool is left short when another spare is still ready: long enough
@@ -882,14 +882,12 @@ class AgentManager:
     _spare_claim_by_chat: dict[ChatId, _SpareClaim]
     # ``time.monotonic()`` before which the pool is not topped up while a spare is ready (a hand-over).
     _spare_replenish_not_before: float
-    # How many idle spares the pool is kept at.
     _spare_chat_pool_size: int
     # Writes a pid's ``oom_score_adj`` (the spares' shedding band, and the chat prioritizer's);
     # None in a secondary chat, whose writes would be the live chat's.
     _oom_score_adj_writer: Callable[[int, int], bool] | None
     # The live main-process pid mngr's launch wrapper registered for an agent id, or None.
     _resolve_agent_pid: Callable[[str], int | None]
-    # Every live descendant of a pid.
     _list_descendant_pids: Callable[[int], list[int]]
     # The spares whose ``mngr destroy`` is running, so a sweep does not start a second one.
     _spare_ids_being_discarded: set[ChatId]
@@ -3384,9 +3382,7 @@ class AgentManager:
         is provisional, as for a create of its own, and becomes that spare once its harness is
         up (``_run_spare_creation``), which is sooner than a create started now, queued behind
         the spare's on mngr's host lock, would be. The pool is topped up after either, on a
-        thread of its own; while another spare is ready, only once
-        ``SPARE_CHAT_REPLENISH_DELAY_SECONDS`` have passed, so the next spare's boot does not
-        compete with this chat's first turn.
+        thread of its own.
         """
         if self._spare_chat_store is None or self._is_secondary:
             return None
@@ -3488,9 +3484,8 @@ class AgentManager:
         nothing past the tagging before the agent list is known or during the backoff that follows
         a spare's failed create or destroy or its process dying (most likely shed for memory); with
         no account to start one on, the ready spares are destroyed and none is started. The mngr
-        commands run on threads of their own; the sweep calls this every few seconds, and so do a
-        sign-in, a hand-over, and a spare coming up. In a secondary chat it does none of this: it
-        only re-reads the live chat's spares, so they stay hidden there and a handed-over one appears.
+        commands run on threads of their own. In a secondary chat it does none of this: it only
+        re-reads the live chat's spares, so they stay hidden there and a handed-over one appears.
         """
         if self._spare_chat_store is None or self._shutdown_event.is_set():
             return
@@ -3587,7 +3582,7 @@ class AgentManager:
             if pid is not None:
                 pids_by_spare_id[spare_id] = [pid, *self._list_descendant_pids(pid)]
         # Written under the lock, and only for a spare still pooled: a hand-over takes the spare under
-        # it and moves it into the chat band after, so this write can never land on a chat.
+        # it and moves it into the chat band after.
         with self._lock:
             pooled_ids = {spare.chat_id for spare in pooled_spares(self._spares)}
             for spare_id, pids in pids_by_spare_id.items():

@@ -52,9 +52,6 @@ AGENT_SUBPROCESS: Final[int] = 900
 # used by no one yet. At the ceiling, beside the browser's renderers (``SHARED_BROWSER``) and
 # above every agent's subprocesses: shedding it loses no work, and the chat app starts another
 # after its retry backoff.
-# The chat app tags it; once a chat takes it, the chat app moves the subprocesses its harness
-# spawned meanwhile to ``CHAT_AGENT_BASE`` (its main process too, while it is still starting), and
-# the chat prioritizer scores its main process like any chat's once it is up.
 SPARE_AGENT: Final[int] = 1000
 
 # Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` and is re-tagged

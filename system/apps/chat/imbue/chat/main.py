@@ -145,8 +145,6 @@ def build_production_state(
         chat_files_root=chat_records_root,
         chat_settings=chat_settings,
         is_secondary=is_secondary,
-        # The agents kept started for the next new chats: machine state, so a secondary reads the
-        # live chat's record (only to hide them) whatever data dir it was pointed at.
         spare_chat_store=SpareChatStore(path=config.chat_state_dir / SPARE_CHAT_FILENAME),
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
