@@ -42,9 +42,12 @@ active belong to one client.
 ## Which client an op targets
 
 Every op targets exactly one client. With no `--client`, that is the client
-that most recently messaged you, else the one connected client. When neither
-settles it (several clients, an agent nobody messaged), the op is refused with
-the connected clients listed; pass `--client <id>` (from `context`). Ops are
+that most recently messaged you while it is connected, else the one connected
+client, else the client that messaged you though it has gone (a user who
+messaged you from a phone's browser tab and carried on in its home-screen app
+is on a different client now). When none of those settles it (several
+clients, an agent nobody messaged), the op is refused with the connected
+clients listed; pass `--client <id>` (from `context`). Ops are
 never applied to every client at once.
 
 - **An op with no `--desktop` edits the client's active desktop.** That is what

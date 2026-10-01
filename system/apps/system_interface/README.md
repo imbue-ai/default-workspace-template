@@ -404,7 +404,8 @@ The document ops are applied by the shell to the desktop and to the target
 client's placements and announced as `desktops_updated` and
 `placements_updated`, so an op lands whether or not a browser is connected.
 Every op targets exactly one client (`--client <id>`, else the client that last
-messaged the requesting agent, else the one connected client; refused with the
+messaged the requesting agent while it is connected, else the one connected
+client, else that messaging client though it is not connected; refused with the
 clients listed otherwise); `--desktop` edits that desktop and switches the
 client to it; `open` opens a window at `--path` or at a launch path
 (`--launch`, `--param`; a bare URL is the browser's `new`; a POST launch path

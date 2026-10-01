@@ -84,8 +84,13 @@ def is_known_client(shell: ShellState, client_id: str) -> bool:
 
 
 def resolve_client(shell: ShellState, args_raw: Mapping[str, Any], requester: OpRequester | None) -> ClientId | None:
-    """The client an op addresses: ``args.client``, else the client that last messaged the requester's chat, else
-    the one connected client; None when nothing settles it."""
+    """The client an op addresses: ``args.client``, else the client that last messaged the requester's chat while
+    it is connected, else the one connected client, else that messaging client though it is not connected; None
+    when nothing settles it.
+
+    A messaging client that has gone yields to the one connected client because the user carried on there: a
+    phone's browser tab and its home-screen app are two clients, and the window belongs where the user is looking.
+    """
     explicit = args_raw.get("client")
     if isinstance(explicit, str) and explicit:
         # Held to the client id rule before it names a layout file.
@@ -93,14 +98,19 @@ def resolve_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
         if not is_known_client(shell, client_id):
             raise ClientNotFoundError(f"No client {client_id!r}: see `layout.py context` for the known clients")
         return client_id
+    attributed: str | None = None
     # Only a requester with a marker has a client that last messaged it; a bare app names none.
     if requester is not None and requester.marker:
         attributed = find_client_id_for_page(shell.activity.read_events(), str(requester.app), requester.marker)
-        if attributed is not None and is_known_client(shell, attributed):
-            return ClientId(attributed)
+        if attributed is not None and not is_known_client(shell, attributed):
+            attributed = None
     connected = shell.broadcaster.connected_client_ids()
+    if attributed is not None and attributed in connected:
+        return ClientId(attributed)
     if len(connected) == 1:
         return ClientId(next(iter(connected)))
+    if attributed is not None:
+        return ClientId(attributed)
     return None
 
 

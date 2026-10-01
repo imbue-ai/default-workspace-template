@@ -508,6 +508,24 @@ def test_an_op_is_attributed_to_the_client_that_last_messaged_the_requesting_age
     assert _op(client, "open", {"app": "files", "client": "ghost"}, requester).status_code == 404
 
 
+def test_an_op_goes_to_the_one_connected_client_once_the_messaging_client_has_gone(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A user who messages a chat from one browser and then carries on in another (a phone's Safari tab and its
+    home-screen app are two clients) sees the agent's window in the one they are using: the messaging client is
+    passed over while it is not connected and another is, and targeted again when nothing else is connected."""
+    shell = _shell(app)
+    requester = {"app": "chat", "marker": "agent-1"}
+    messaging_window = _register_client(app, "c7", "home")
+    shell.activity.append_message("c7", "home", "chat", "agent-1", "build me a calculator")
+    shell.broadcaster.unregister(messaging_window)
+
+    assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] == "c7"
+
+    _register_client(app, "c1", "home")
+    assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] == "c1"
+
+
 def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
     """A requester that names an app and no marker has no client that last messaged it: the log is not
     searched under a made-up key."""

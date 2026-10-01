@@ -191,7 +191,7 @@ def _open_viewer_window(browser_name: str, *, is_minimized: bool) -> None:
     """Surface browser ``browser_name`` as its own window on the requesting agent's desktop.
 
     ``layout.py open browser --path /?session=<name>`` lands the window on the client that most recently
-    messaged this chat (else the one connected client, else unplaced on the first desktop). With
+    messaged this chat while it is connected (else the one connected client, else unplaced on the first desktop). With
     ``is_minimized`` the window lands out of the way of what the human is doing and a window already there is
     left as they placed it; without it, the window (new or existing) is restored and raised. The window is
     what keeps the browser alive (docs/system/specs/window-bound-resources.md): a browser no window shows
