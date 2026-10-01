@@ -185,6 +185,7 @@ def builtin_rows_toml_before_chat() -> tuple[str, ...]:
         registry_row_toml(
             "browser",
             "http://localhost:7500",
+            is_shareable=False,
             launcher_rank=30,
             default_shortcut=("new", "focus"),
             launch_paths=[("new", "Browser", "/new")],
@@ -194,6 +195,7 @@ def builtin_rows_toml_before_chat() -> tuple[str, ...]:
             "terminal",
             TEST_TERMINAL_URL,
             is_critical=True,
+            is_shareable=False,
             launcher_rank=40,
             default_shortcut=("new", "new"),
             launch_paths=[("new", "Terminal", "/new")],
@@ -208,6 +210,7 @@ def builtin_chat_row_toml() -> str:
         "chat",
         "http://localhost:7800",
         is_critical=True,
+        is_shareable=False,
         launcher_rank=10,
         default_shortcut=("root", "new"),
         launch_paths=[("root", "Chat", "/"), ("new", "New Chat", "/api/chats/intake")],
