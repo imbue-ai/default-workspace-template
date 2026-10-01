@@ -14,16 +14,13 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from loguru import logger
 from workspace_layout.errors import InvalidLayoutValueError
-from workspace_layout.ops import CONTEXT_OP
 from workspace_layout.ops import ClientActivityReport
-from workspace_layout.ops import OpRequester
-from workspace_layout.ops import is_known_op
+from workspace_layout.ops import parse_layout_op
 from workspace_layout.ops import parse_op_requester
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
 
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.shell.client_activity import summarize_client_activity
 from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientShownRequest
@@ -360,22 +357,14 @@ def layout_broadcast() -> ResponseReturnValue:
         return detail_response("Invalid JSON in request body", HTTP_BAD_REQUEST)
     if not isinstance(body, dict):
         return detail_response("Request body must be a JSON object", HTTP_BAD_REQUEST)
-    op = body.get("op")
+    op = parse_layout_op(body.get("op"))
     args_raw = body.get("args", {})
     requester = parse_op_requester(body.get("requester"))
-    if not isinstance(op, str) or not is_known_op(op):
-        return detail_response(f"Unknown layout op: {op!r}", HTTP_BAD_REQUEST)
+    if op is None:
+        return detail_response(f"Unknown layout op: {body.get('op')!r}", HTTP_BAD_REQUEST)
     if not isinstance(args_raw, dict):
         return detail_response("``args`` must be a JSON object", HTTP_BAD_REQUEST)
-    if op == CONTEXT_OP:
-        return _op_context(_shell(), requester)
     return dispatch_desktop_op(_shell(), op, args_raw, requester)
-
-
-def _op_context(shell: ShellState, requester: OpRequester | None) -> ResponseReturnValue:
-    clients = summarize_client_activity(shell.activity.read_events(), shell.broadcaster.get_connected_client_infos())
-    logger.info("layout op=context requester={} clients={}", requester, len(clients))
-    return jsonify({"ok": True, "clients": clients})
 
 
 def register_shell_routes(application: Flask) -> None:

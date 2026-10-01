@@ -14,17 +14,19 @@ answer shapes live in one place the shell and its callers share.
   else `http://127.0.0.1:8000`) and the route constants.
 - `workspace_layout.primitives`: the identifiers the wire carries
   (`ClientId`, `DesktopId`, `WindowId`, `WallpaperName`, and the
-  `IfPresent`, `WallpaperKind`, `ClientActivityKind` values). A value off its
-  rule raises `InvalidLayoutValueError`.
-- `workspace_layout.ops`: the op route's request side. The op names and
-  `is_known_op`; `OpRequester` and `parse_op_requester` (who asked:
-  `{app, marker}` or nothing); `DesktopOpArguments`, the arguments model the
-  shell reads every op with; `ClientActivityReport`, the client-activity
-  route's body; the typed requests (`ShowRequest`, `OpenRequest`,
-  `WindowRequest`, `NavigateRequest`, `PlaceRequest`), each naming its target
-  client (None leaves the choice to the shell: the requester's client, else the
-  one connected client); and the pure functions that spell a request as the
-  wire does (`op_request_body`, `show_op_arguments`, ...).
+  `IfPresent`, `WallpaperKind`, `ClientActivityKind` values), and `LayoutOp`,
+  every op the op route knows. A value off its rule raises
+  `InvalidLayoutValueError`.
+- `workspace_layout.ops`: the op route's request side. `parse_layout_op`
+  (a body's op, or None for one the route does not know); `OpRequester` and
+  `parse_op_requester` (who asked: `{app, marker}` or nothing);
+  `DesktopOpArguments`, the arguments model the shell reads every op with;
+  `ClientActivityReport`, the client-activity route's body; the typed requests
+  (`ShowRequest`, `OpenRequest`, `WindowRequest`, `NavigateRequest`,
+  `PlaceRequest`), each naming its target client (None leaves the choice to
+  the shell: the requester's client, else the one connected client); and the
+  pure functions that spell a request as the wire does (`op_request_body`,
+  `show_op_arguments`, ...).
 - `workspace_layout.answers`: the answers, parsed with unknown fields ignored
   (the shell's to add to): `DesktopOpAnswer`, `OpenAnswer`, `ShowAnswer`,
   `ConnectedClient`, `DesktopSummary`. A list answer skips one entry it

@@ -95,3 +95,32 @@ class IfPresent(LowerCaseStrEnum):
 
     FOCUS = auto()
     NEW = auto()
+
+
+class LayoutOp(LowerCaseStrEnum):
+    """An op of the op route (desktop contracts.md section 8), as the body's ``op`` spells it."""
+
+    CONTEXT = auto()
+    # Read-only: answered with the inventory document (desktop contracts.md section 5.5).
+    DESKTOPS = auto()
+    LIST = auto()
+    LOAD = auto()
+    OPEN = auto()
+    # Put a path of an app on the target client's screen, choosing the window itself.
+    SHOW = auto()
+    FOCUS = auto()
+    MINIMIZE = auto()
+    RESTORE = auto()
+    MAXIMIZE = auto()
+    PLACE = auto()
+    CLOSE = auto()
+    NAVIGATE = auto()
+    SHORTCUTS = auto()
+    SHORTCUT_SET = auto()
+    SHORTCUT_MOVE = auto()
+    SHORTCUT_REMOVE = auto()
+    WALLPAPER = auto()
+    # Change what is on screen without changing the files: they reach the browser as a ``layout_op`` message, as
+    # does a ``show`` that lands on a pulled-out window.
+    REFRESH = auto()
+    RELOAD_SYSTEM_INTERFACE = auto()

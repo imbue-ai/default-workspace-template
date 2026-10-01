@@ -8,6 +8,7 @@ from typing import Any
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from workspace_layout.primitives import LayoutOp
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -228,7 +229,7 @@ class WebSocketBroadcaster(MutableModel):
 
     def broadcast_layout_op(
         self,
-        op: str,
+        op: LayoutOp,
         args: dict[str, Any],
         requester: str = "",
         target_client_id: str | None = None,

@@ -21,15 +21,6 @@ from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.errors import ShellOpError
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.interfaces import ShellLayoutInterface
-from workspace_layout.ops import CLOSE_OP
-from workspace_layout.ops import CONTEXT_OP
-from workspace_layout.ops import FOCUS_OP
-from workspace_layout.ops import INVENTORY_OPS
-from workspace_layout.ops import NAVIGATE_OP
-from workspace_layout.ops import OPEN_OP
-from workspace_layout.ops import PLACE_OP
-from workspace_layout.ops import REFRESH_OP
-from workspace_layout.ops import SHOW_OP
 from workspace_layout.ops import TARGET_ARG_KEYS
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import DesktopOpArguments
@@ -38,11 +29,12 @@ from workspace_layout.ops import OpenRequest
 from workspace_layout.ops import PlaceRequest
 from workspace_layout.ops import ShowRequest
 from workspace_layout.ops import WindowRequest
-from workspace_layout.ops import is_known_op
 from workspace_layout.ops import op_only_args
+from workspace_layout.ops import parse_layout_op
 from workspace_layout.ops import parse_op_requester
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import LayoutOp
 from workspace_layout.primitives import WindowId
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
@@ -75,7 +67,7 @@ class FakeShell(ShellLayoutInterface):
         description="The desktops the shell lists, the first being the fallback",
     )
     refused_client_ids: list[ClientId] = Field(default_factory=list, description="Clients every op for is refused")
-    refused_ops: list[str] = Field(default_factory=list, description="Ops that are refused whoever they are for")
+    refused_ops: list[LayoutOp] = Field(default_factory=list, description="Ops that are refused whoever they are for")
     error: ShellOpError | None = Field(default=None, description="What every op raises while set")
     listing_error: ShellOpError | None = Field(
         default=None, description="What the client and desktop lists raise while set"
@@ -92,7 +84,7 @@ class FakeShell(ShellLayoutInterface):
     refreshes: list[WindowRequest] = Field(default_factory=list, description="Every refresh asked for")
     activities: list[ClientActivityReport] = Field(default_factory=list, description="Every activity reported")
 
-    def _check(self, op: str, client_id: ClientId | None) -> None:
+    def _check(self, op: LayoutOp, client_id: ClientId | None) -> None:
         if self.error is not None:
             raise self.error
         if op in self.refused_ops:
@@ -108,39 +100,39 @@ class FakeShell(ShellLayoutInterface):
 
     def show(self, request: ShowRequest) -> ShowAnswer:
         self.shows.append(request)
-        self._check(SHOW_OP, request.client_id)
+        self._check(LayoutOp.SHOW, request.client_id)
         return ShowAnswer(
             desktop_id=self.desktop_id, client_id=request.client_id, window_id=self.window_id, shown=self.shown
         )
 
     def open(self, request: OpenRequest) -> OpenAnswer:
         self.opens.append(request)
-        self._check(OPEN_OP, request.client_id)
+        self._check(LayoutOp.OPEN, request.client_id)
         return OpenAnswer(desktop_id=self.desktop_id, client_id=request.client_id, window_id=self.window_id)
 
     def focus(self, request: WindowRequest) -> DesktopOpAnswer:
         self.focuses.append(request)
-        self._check(FOCUS_OP, request.client_id)
+        self._check(LayoutOp.FOCUS, request.client_id)
         return self._answer(request.client_id)
 
     def navigate(self, request: NavigateRequest) -> DesktopOpAnswer:
         self.navigations.append(request)
-        self._check(NAVIGATE_OP, request.client_id)
+        self._check(LayoutOp.NAVIGATE, request.client_id)
         return self._answer(request.client_id)
 
     def place(self, request: PlaceRequest) -> DesktopOpAnswer:
         self.placements.append(request)
-        self._check(PLACE_OP, request.client_id)
+        self._check(LayoutOp.PLACE, request.client_id)
         return self._answer(request.client_id)
 
     def close(self, request: WindowRequest) -> DesktopOpAnswer:
         self.closes.append(request)
-        self._check(CLOSE_OP, request.client_id)
+        self._check(LayoutOp.CLOSE, request.client_id)
         return self._answer(request.client_id)
 
     def refresh(self, request: WindowRequest) -> None:
         self.refreshes.append(request)
-        self._check(REFRESH_OP, request.client_id)
+        self._check(LayoutOp.REFRESH, request.client_id)
 
     def connected_clients(self) -> list[ConnectedClient]:
         if self.listing_error is not None:
@@ -162,9 +154,9 @@ def describe_op_body_problem(body: Any) -> str | None:
     shared ``DesktopOpArguments`` model accepts."""
     if not isinstance(body, dict):
         return "the body is not a JSON object"
-    op = body.get("op")
-    if not isinstance(op, str) or not is_known_op(op):
-        return f"unknown op {op!r}"
+    op = parse_layout_op(body.get("op"))
+    if op is None:
+        return f"unknown op {body.get('op')!r}"
     try:
         parse_op_requester(body.get("requester"))
     except InvalidLayoutValueError as e:
@@ -172,7 +164,7 @@ def describe_op_body_problem(body: Any) -> str | None:
     arguments = body.get("args", {})
     if not isinstance(arguments, dict):
         return "``args`` is not a JSON object"
-    if op == CONTEXT_OP or op in INVENTORY_OPS:
+    if op in (LayoutOp.CONTEXT, LayoutOp.DESKTOPS, LayoutOp.LIST):
         return None
     for key in TARGET_ARG_KEYS & arguments.keys():
         if not isinstance(arguments[key], str):
@@ -263,9 +255,9 @@ class LoopbackShell(MutableModel):
         if problem is not None:
             return 400, {"detail": problem}
         op = body["op"]
-        if op == CONTEXT_OP:
+        if op == LayoutOp.CONTEXT:
             return 200, {"ok": True, "clients": self.context_clients}
-        if op == REFRESH_OP:
+        if op == LayoutOp.REFRESH:
             return 200, {"ok": True, "target_client_id": self.refresh_target}
         if self.op_refusal is not None:
             return self.op_refusal

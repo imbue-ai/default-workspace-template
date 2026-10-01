@@ -26,15 +26,11 @@ from workspace_layout.client import request_shell
 from workspace_layout.client import requester_from_environment
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.errors import ShellUnreachableError
-from workspace_layout.ops import CONTEXT_OP
-from workspace_layout.ops import LOAD_OP
-from workspace_layout.ops import OPEN_OP
 from workspace_layout.ops import PINNED_WINDOW
-from workspace_layout.ops import REFRESH_OP
 from workspace_layout.ops import SELF_WINDOW
-from workspace_layout.ops import SHOW_OP
 from workspace_layout.ops import OpRequester
 from workspace_layout.ops import op_request_body
+from workspace_layout.primitives import LayoutOp
 from workspace_layout.primitives import WindowId
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
@@ -364,14 +360,16 @@ def _request(method: str, url: str, body: Mapping[str, Any] | None, timeout_seco
     return response.status_code, response.body
 
 
-def _post_layout(context: LayoutCliContext, op: str, args: Mapping[str, Any], timeout_seconds: float) -> _ShellAnswer:
+def _post_layout(
+    context: LayoutCliContext, op: LayoutOp, args: Mapping[str, Any], timeout_seconds: float
+) -> _ShellAnswer:
     """POST {op, args, requester} to the op route and return (status, parsed_or_raw)."""
     return _request(
         "POST", f"{context.shell_url}{LAYOUT_OP_ROUTE}", op_request_body(op, args, context.requester), timeout_seconds
     )
 
 
-def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
+def _report_failure(op: LayoutOp, status: int, body: dict[str, Any] | str) -> int:
     """Translate (status, body) into a stderr message + exit code; only a 409 or a 503 (the shell or an app cannot do it right now) has its own code."""
     if status == _UNREACHABLE_STATUS:
         _write_stderr(f"error: could not reach the workspace shell: {body}\n")
@@ -380,21 +378,21 @@ def _report_failure(op: str, status: int, body: dict[str, Any] | str) -> int:
     if isinstance(body, dict):
         detail = str(body.get("detail", body))
         if status == 412:
-            _write_stderr(f"error: {op!r} has no client to apply it to (HTTP 412): {detail}\n")
+            _write_stderr(f"error: '{op}' has no client to apply it to (HTTP 412): {detail}\n")
             return EXIT_ERROR
         if status in (409, 503):
             # The shell or the app cannot do it right now (a save in flight, an app still starting up): retry later.
-            _write_stderr(f"error: {op!r} rejected (HTTP {status}): {detail}\n")
+            _write_stderr(f"error: '{op}' rejected (HTTP {status}): {detail}\n")
             return EXIT_CONFLICT
         if status == 404:
-            _write_stderr(f"error: {op!r} target not found (HTTP 404): {detail}\n")
+            _write_stderr(f"error: '{op}' target not found (HTTP 404): {detail}\n")
             return EXIT_ERROR
         if status == 400:
-            _write_stderr(f"error: {op!r} rejected (HTTP 400): {detail}\n")
+            _write_stderr(f"error: '{op}' rejected (HTTP 400): {detail}\n")
             return EXIT_ERROR
     else:
         detail = body
-    _write_stderr(f"error: {op!r} failed (HTTP {status}): {detail}\n")
+    _write_stderr(f"error: '{op}' failed (HTTP {status}): {detail}\n")
     return EXIT_ERROR
 
 
@@ -442,7 +440,7 @@ def _describe_target(answer: dict[str, Any]) -> str:
 
 def _run_desktop_op(
     context: LayoutCliContext,
-    op: str,
+    op: LayoutOp,
     args: Mapping[str, Any],
     describe: Callable[[dict[str, Any]], str],
     emit: Callable[[dict[str, Any]], None] | None,
@@ -461,7 +459,7 @@ def _run_desktop_op(
     return EXIT_OK
 
 
-def _run_transient_op(context: LayoutCliContext, op: str, args: Mapping[str, Any]) -> int:
+def _run_transient_op(context: LayoutCliContext, op: LayoutOp, args: Mapping[str, Any]) -> int:
     """Post one of the verbs with nothing to store (refresh); the target client's windows apply it."""
     status, body = _post_layout(context, op, args, context.read_timeout_seconds)
     if status != 200:
@@ -559,9 +557,9 @@ def _listed_apps(inventory: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _cmd_context(args: argparse.Namespace, context: LayoutCliContext) -> int:
-    status, body = _post_layout(context, CONTEXT_OP, {}, context.read_timeout_seconds)
+    status, body = _post_layout(context, LayoutOp.CONTEXT, {}, context.read_timeout_seconds)
     if status != 200 or not isinstance(body, dict):
-        return _report_failure(CONTEXT_OP, status, body)
+        return _report_failure(LayoutOp.CONTEXT, status, body)
     _emit_structured(body.get("clients", []))
     return EXIT_OK
 
@@ -591,7 +589,7 @@ def _cmd_list(args: argparse.Namespace, context: LayoutCliContext) -> int:
 def _cmd_load(args: argparse.Namespace, context: LayoutCliContext) -> int:
     return _run_desktop_op(
         context,
-        LOAD_OP,
+        LayoutOp.LOAD,
         _target_args(args.desktop, args.client),
         lambda answer: f"switched client {answer.get('client_id')} onto desktop {answer.get('desktop_id')}",
         None,
@@ -659,7 +657,7 @@ def _cmd_open(args: argparse.Namespace, context: LayoutCliContext) -> int:
     alongside = f" beside {beside}" if beside else ""
     return _run_desktop_op(
         context,
-        OPEN_OP,
+        LayoutOp.OPEN,
         op_args,
         lambda answer: (
             f"opened window {_describe_window(answer, answer.get('window_id'))}{alongside} "
@@ -702,7 +700,7 @@ def _cmd_show(args: argparse.Namespace, context: LayoutCliContext) -> int:
     op_args.update(_target_args(args.desktop, args.client))
     return _run_desktop_op(
         context,
-        SHOW_OP,
+        LayoutOp.SHOW,
         op_args,
         lambda answer: (
             f"{answer.get('shown')} window {_describe_window(answer, answer.get('window_id'))} "
@@ -715,7 +713,7 @@ def _cmd_show(args: argparse.Namespace, context: LayoutCliContext) -> int:
 # The window verbs
 
 
-def _window_op(op: str, past_tense: str) -> Callable[[argparse.Namespace, LayoutCliContext], int]:
+def _window_op(op: LayoutOp, past_tense: str) -> Callable[[argparse.Namespace, LayoutCliContext], int]:
     def run(args: argparse.Namespace, context: LayoutCliContext) -> int:
         window = window_argument(args.window)
         return _run_desktop_op(
@@ -744,7 +742,7 @@ def _cmd_place(args: argparse.Namespace, context: LayoutCliContext) -> int:
         what = f"at frame {args.frame}"
     return _run_desktop_op(
         context,
-        "place",
+        LayoutOp.PLACE,
         op_args,
         lambda answer: (
             f"placed window {_describe_window(answer, answer.get('window_id'))} {what} on {_describe_target(answer)}"
@@ -759,7 +757,7 @@ def _cmd_navigate(args: argparse.Namespace, context: LayoutCliContext) -> int:
         _fail(f"navigate takes a path under the window's app, starting with '/', not {args.path!r}")
     return _run_desktop_op(
         context,
-        "navigate",
+        LayoutOp.NAVIGATE,
         {"window": window, "path": args.path, **_target_args(args.desktop, args.client)},
         lambda answer: (
             f"pointed window {_describe_window(answer, answer.get('window_id'))} at {args.path} on {_describe_target(answer)}"
@@ -778,9 +776,9 @@ def _cmd_refresh(args: argparse.Namespace, context: LayoutCliContext) -> int:
             _fail(
                 "refresh --app reloads every page of the app on every client; --client and --desktop do not apply to it"
             )
-        return _run_transient_op(context, REFRESH_OP, {"app": app_name_argument(args.app)})
+        return _run_transient_op(context, LayoutOp.REFRESH, {"app": app_name_argument(args.app)})
     return _run_transient_op(
-        context, REFRESH_OP, {"window": window_argument(args.window), **_target_args(args.desktop, args.client)}
+        context, LayoutOp.REFRESH, {"window": window_argument(args.window), **_target_args(args.desktop, args.client)}
     )
 
 
@@ -794,7 +792,7 @@ def _shortcuts_document(answer: dict[str, Any]) -> dict[str, Any]:
     return {"desktop": answer.get("desktop_id"), "shortcuts": shortcuts}
 
 
-def _run_shortcut_write(context: LayoutCliContext, op: str, op_args: dict[str, Any], done: str) -> int:
+def _run_shortcut_write(context: LayoutCliContext, op: LayoutOp, op_args: dict[str, Any], done: str) -> int:
     """Post one shortcut write and print the desktop's shortcuts as they stand after it."""
     return _run_desktop_op(
         context,
@@ -807,10 +805,10 @@ def _run_shortcut_write(context: LayoutCliContext, op: str, op_args: dict[str, A
 
 def _cmd_shortcuts(args: argparse.Namespace, context: LayoutCliContext) -> int:
     status, body = _post_layout(
-        context, "shortcuts", _target_args(args.desktop, args.client), context.read_timeout_seconds
+        context, LayoutOp.SHORTCUTS, _target_args(args.desktop, args.client), context.read_timeout_seconds
     )
     if status != 200 or not isinstance(body, dict):
-        return _report_failure("shortcuts", status, body)
+        return _report_failure(LayoutOp.SHORTCUTS, status, body)
     _emit_structured(_shortcuts_document(body))
     return EXIT_OK
 
@@ -821,7 +819,9 @@ def _cmd_shortcut_set(args: argparse.Namespace, context: LayoutCliContext) -> in
     if args.cell:
         op_args["cell"] = args.cell
     op_args.update(_target_args(args.desktop, args.client))
-    return _run_shortcut_write(context, "shortcut_set", op_args, f"set shortcut {app} {args.launch} ({args.mode})")
+    return _run_shortcut_write(
+        context, LayoutOp.SHORTCUT_SET, op_args, f"set shortcut {app} {args.launch} ({args.mode})"
+    )
 
 
 def _cmd_shortcut_move(args: argparse.Namespace, context: LayoutCliContext) -> int:
@@ -829,7 +829,7 @@ def _cmd_shortcut_move(args: argparse.Namespace, context: LayoutCliContext) -> i
     op_args: dict[str, Any] = {"app": app, "launch": args.launch, "cell": args.cell}
     op_args.update(_target_args(args.desktop, args.client))
     return _run_shortcut_write(
-        context, "shortcut_move", op_args, f"moved shortcut {app} {args.launch} to cell {args.cell}"
+        context, LayoutOp.SHORTCUT_MOVE, op_args, f"moved shortcut {app} {args.launch} to cell {args.cell}"
     )
 
 
@@ -837,7 +837,7 @@ def _cmd_shortcut_remove(args: argparse.Namespace, context: LayoutCliContext) ->
     app = app_name_argument(args.app)
     op_args: dict[str, Any] = {"app": app, "launch": args.launch}
     op_args.update(_target_args(args.desktop, args.client))
-    return _run_shortcut_write(context, "shortcut_remove", op_args, f"removed shortcut {app} {args.launch}")
+    return _run_shortcut_write(context, LayoutOp.SHORTCUT_REMOVE, op_args, f"removed shortcut {app} {args.launch}")
 
 
 def _cmd_wallpaper(args: argparse.Namespace, context: LayoutCliContext) -> int:
@@ -852,7 +852,9 @@ def _cmd_wallpaper(args: argparse.Namespace, context: LayoutCliContext) -> int:
         wallpaper = {"kind": args.kind, "name": args.name}
         done = f"set the wallpaper to {args.kind} {args.name}"
     op_args: dict[str, Any] = {"wallpaper": wallpaper, **_target_args(args.desktop, args.client)}
-    return _run_desktop_op(context, "wallpaper", op_args, lambda answer: f"{done} on {_describe_target(answer)}", None)
+    return _run_desktop_op(
+        context, LayoutOp.WALLPAPER, op_args, lambda answer: f"{done} on {_describe_target(answer)}", None
+    )
 
 
 # The retired verbs
@@ -891,7 +893,7 @@ def _add_json_argument(subparser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_window_verb(subparsers: Any, verb: str, help_text: str, past_tense: str) -> None:
+def _add_window_verb(subparsers: Any, verb: LayoutOp, help_text: str, past_tense: str) -> None:
     subparser = subparsers.add_parser(verb, help=help_text)
     subparser.add_argument("window", help="A window id (win-<hex>), 'self', 'pinned', or an app name")
     _add_target_arguments(subparser)
@@ -997,11 +999,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_target_arguments(p_show)
     p_show.set_defaults(func=_cmd_show)
 
-    _add_window_verb(subparsers, "focus", "Restore and raise a window", "focused")
-    _add_window_verb(subparsers, "minimize", "Put a window out of sight", "minimized")
-    _add_window_verb(subparsers, "restore", "Bring a window back to its frame", "restored")
-    _add_window_verb(subparsers, "maximize", "Fill the backdrop with a window", "maximized")
-    _add_window_verb(subparsers, "close", "Close a window for everyone", "closed")
+    _add_window_verb(subparsers, LayoutOp.FOCUS, "Restore and raise a window", "focused")
+    _add_window_verb(subparsers, LayoutOp.MINIMIZE, "Put a window out of sight", "minimized")
+    _add_window_verb(subparsers, LayoutOp.RESTORE, "Bring a window back to its frame", "restored")
+    _add_window_verb(subparsers, LayoutOp.MAXIMIZE, "Fill the backdrop with a window", "maximized")
+    _add_window_verb(subparsers, LayoutOp.CLOSE, "Close a window for everyone", "closed")
 
     p_place = subparsers.add_parser("place", help="Snap a window to a zone or set its frame")
     p_place.add_argument("window", help="A window id (win-<hex>), 'self', 'pinned', or an app name")

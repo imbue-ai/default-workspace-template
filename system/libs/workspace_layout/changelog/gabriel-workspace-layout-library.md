@@ -2,7 +2,7 @@ New library `workspace_layout`: the shell's layout routes (the op route, the des
 
 - `ShellLayoutClient` asks the shell to `show`, `open`, `focus`, `navigate`, `place`, `close`, and `refresh`, lists its connected clients and desktops, and reports client activity; every op names the client it targets and raises a typed error when the shell is unreachable, refuses, or answers something else.
 
-- The op route's request models (`DesktopOpArguments`, `OpRequester`, the op names), the ids the wire carries, and the window readers an app with window-bound resources sweeps against now live here, so the shell and its callers read one definition.
+- The op route's request models (`DesktopOpArguments`, `OpRequester`, and `LayoutOp`, the enum of every op), the ids the wire carries, and the window readers an app with window-bound resources sweeps against now live here, so the shell and its callers read one definition.
 
 - `FakeShell` and `LoopbackShell` are the shared test stand-ins; `LoopbackShell` refuses any op body the shell itself would refuse.
 

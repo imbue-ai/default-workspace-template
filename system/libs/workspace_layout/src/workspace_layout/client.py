@@ -27,13 +27,6 @@ from workspace_layout.answers import quote_answer
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.interfaces import ShellLayoutInterface
-from workspace_layout.ops import CLOSE_OP
-from workspace_layout.ops import FOCUS_OP
-from workspace_layout.ops import NAVIGATE_OP
-from workspace_layout.ops import OPEN_OP
-from workspace_layout.ops import PLACE_OP
-from workspace_layout.ops import REFRESH_OP
-from workspace_layout.ops import SHOW_OP
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import NavigateRequest
 from workspace_layout.ops import OpenRequest
@@ -47,6 +40,7 @@ from workspace_layout.ops import open_op_arguments
 from workspace_layout.ops import place_op_arguments
 from workspace_layout.ops import show_op_arguments
 from workspace_layout.ops import window_op_arguments
+from workspace_layout.primitives import LayoutOp
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import DESKTOPS_ROUTE
@@ -161,29 +155,37 @@ class ShellLayoutClient(ShellLayoutInterface):
             )
         return response
 
-    def _post_op(self, op: str, arguments: Mapping[str, Any]) -> dict[str, Any] | str:
+    def _post_op(self, op: LayoutOp, arguments: Mapping[str, Any]) -> dict[str, Any] | str:
         return self._request("POST", LAYOUT_OP_ROUTE, op_request_body(op, arguments, self.requester), op).body
 
     def show(self, request: ShowRequest) -> ShowAnswer:
-        return parse_answer(ShowAnswer, self._post_op(SHOW_OP, show_op_arguments(request)), SHOW_OP)
+        return parse_answer(ShowAnswer, self._post_op(LayoutOp.SHOW, show_op_arguments(request)), LayoutOp.SHOW)
 
     def open(self, request: OpenRequest) -> OpenAnswer:
-        return parse_answer(OpenAnswer, self._post_op(OPEN_OP, open_op_arguments(request)), OPEN_OP)
+        return parse_answer(OpenAnswer, self._post_op(LayoutOp.OPEN, open_op_arguments(request)), LayoutOp.OPEN)
 
     def focus(self, request: WindowRequest) -> DesktopOpAnswer:
-        return parse_answer(DesktopOpAnswer, self._post_op(FOCUS_OP, window_op_arguments(request)), FOCUS_OP)
+        return parse_answer(
+            DesktopOpAnswer, self._post_op(LayoutOp.FOCUS, window_op_arguments(request)), LayoutOp.FOCUS
+        )
 
     def navigate(self, request: NavigateRequest) -> DesktopOpAnswer:
-        return parse_answer(DesktopOpAnswer, self._post_op(NAVIGATE_OP, navigate_op_arguments(request)), NAVIGATE_OP)
+        return parse_answer(
+            DesktopOpAnswer, self._post_op(LayoutOp.NAVIGATE, navigate_op_arguments(request)), LayoutOp.NAVIGATE
+        )
 
     def place(self, request: PlaceRequest) -> DesktopOpAnswer:
-        return parse_answer(DesktopOpAnswer, self._post_op(PLACE_OP, place_op_arguments(request)), PLACE_OP)
+        return parse_answer(
+            DesktopOpAnswer, self._post_op(LayoutOp.PLACE, place_op_arguments(request)), LayoutOp.PLACE
+        )
 
     def close(self, request: WindowRequest) -> DesktopOpAnswer:
-        return parse_answer(DesktopOpAnswer, self._post_op(CLOSE_OP, window_op_arguments(request)), CLOSE_OP)
+        return parse_answer(
+            DesktopOpAnswer, self._post_op(LayoutOp.CLOSE, window_op_arguments(request)), LayoutOp.CLOSE
+        )
 
     def refresh(self, request: WindowRequest) -> None:
-        self._post_op(REFRESH_OP, window_op_arguments(request))
+        self._post_op(LayoutOp.REFRESH, window_op_arguments(request))
 
     def connected_clients(self) -> list[ConnectedClient]:
         body = self._request("GET", CLIENTS_ROUTE, None, "client list").body

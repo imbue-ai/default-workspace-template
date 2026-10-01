@@ -9,12 +9,11 @@ from getting_started.first_window import FIRST_WINDOW_PATH
 from getting_started.first_window import FirstWindowLedger
 from getting_started.first_window import FirstWindowOpener
 from workspace_layout.errors import ShellUnreachableError
-from workspace_layout.ops import OPEN_OP
 from workspace_layout.ops import OpenRequest
-from workspace_layout.ops import PLACE_OP
 from workspace_layout.ops import PlaceRequest
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import LayoutOp
 from workspace_layout.testing import FAKE_WINDOW_ID
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import connected_client
@@ -79,12 +78,12 @@ def test_the_open_is_held_while_the_shell_cannot_list_its_clients(tmp_path: Path
 
 
 def test_a_refused_open_or_place_leaves_the_delivery_owed(tmp_path: Path) -> None:
-    shell = FakeShell(clients=[connected_client("client-a")], refused_ops=[OPEN_OP])
+    shell = FakeShell(clients=[connected_client("client-a")], refused_ops=[LayoutOp.OPEN])
     opener = _opener(tmp_path, shell)
     assert opener.deliver_once().is_delivered is False
     assert shell.placements == [] and opener.ledger.is_delivered() is False
 
-    shell.refused_ops = [PLACE_OP]
+    shell.refused_ops = [LayoutOp.PLACE]
     assert opener.deliver_once().is_delivered is False
     assert opener.ledger.is_delivered() is False
 

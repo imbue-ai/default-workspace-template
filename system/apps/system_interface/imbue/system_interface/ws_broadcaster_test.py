@@ -3,6 +3,8 @@
 import json
 import queue
 
+from workspace_layout.primitives import LayoutOp
+
 from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.ws_broadcaster import _CLIENT_QUEUE_MAX_SIZE
@@ -71,7 +73,7 @@ def test_broadcast_layout_op_refresh_of_a_window() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
-    broadcaster.broadcast_layout_op("refresh", {"window": "win-0000000000000001"}, requester="chat:agent-1")
+    broadcaster.broadcast_layout_op(LayoutOp.REFRESH, {"window": "win-0000000000000001"}, requester="chat:agent-1")
 
     msg = json.loads(_get_message(q))
     assert msg == {
@@ -89,8 +91,8 @@ def test_broadcast_layout_op_passes_args_through_unchanged() -> None:
     q = broadcaster.register()
 
     payload = {"app": "files"}
-    broadcaster.broadcast_layout_op("refresh", payload, requester="chat:agent-2")
-    broadcaster.broadcast_layout_op("reload_system_interface", {}, requester="chat")
+    broadcaster.broadcast_layout_op(LayoutOp.REFRESH, payload, requester="chat:agent-2")
+    broadcaster.broadcast_layout_op(LayoutOp.RELOAD_SYSTEM_INTERFACE, {}, requester="chat")
 
     assert json.loads(_get_message(q)) == {
         "type": "layout_op",
@@ -113,7 +115,7 @@ def test_broadcast_layout_op_defaults_the_requester_to_an_empty_string() -> None
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
-    broadcaster.broadcast_layout_op("refresh", {"app": "files"})
+    broadcaster.broadcast_layout_op(LayoutOp.REFRESH, {"app": "files"})
 
     msg = json.loads(_get_message(q))
     assert msg["requester"] == ""
@@ -302,7 +304,7 @@ def test_a_pop_out_registration_is_targeted_and_connected_but_names_no_desktop()
     broadcaster.set_pop_out_info(pop_out_queue, "client-1")
     broadcaster.set_client_info(other_queue, "client-2", "home")
 
-    broadcaster.broadcast_layout_op("refresh", {"window": "win-0000000000000001"}, target_client_id="client-1")
+    broadcaster.broadcast_layout_op(LayoutOp.REFRESH, {"window": "win-0000000000000001"}, target_client_id="client-1")
 
     assert json.loads(_get_message(pop_out_queue))["target_client_id"] == "client-1"
     assert other_queue.empty()
@@ -337,7 +339,7 @@ def test_broadcast_layout_op_without_target_reaches_everyone() -> None:
     unregistered_queue = broadcaster.register()
     broadcaster.set_client_info(desktop_queue, "client-1", "home")
 
-    broadcaster.broadcast_layout_op("refresh", {"app": "files"}, "chat:agent-1")
+    broadcaster.broadcast_layout_op(LayoutOp.REFRESH, {"app": "files"}, "chat:agent-1")
 
     assert json.loads(_get_message(desktop_queue))["op"] == "refresh"
     assert json.loads(_get_message(unregistered_queue))["op"] == "refresh"
@@ -354,7 +356,7 @@ def test_broadcast_to_client_reaches_every_window_of_that_client_only() -> None:
     broadcaster.set_client_info(other_client, "client-2", "home")
 
     broadcaster.broadcast_layout_op(
-        "refresh", {"window": "win-0000000000000001"}, "chat:agent-1", target_client_id="client-1"
+        LayoutOp.REFRESH, {"window": "win-0000000000000001"}, "chat:agent-1", target_client_id="client-1"
     )
 
     for window in (first_window, second_window):

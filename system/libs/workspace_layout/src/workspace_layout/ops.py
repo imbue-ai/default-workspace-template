@@ -14,35 +14,9 @@ from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import LayoutOp
 from workspace_layout.primitives import WallpaperKind
 from workspace_layout.primitives import WallpaperName
-
-# The ops the op route (desktop contracts.md section 8) dispatches on. Anything else is a 400.
-CONTEXT_OP: Final[str] = "context"
-LOAD_OP: Final[str] = "load"
-# Put a path of an app on the target client's screen, choosing the window itself.
-SHOW_OP: Final[str] = "show"
-OPEN_OP: Final[str] = "open"
-FOCUS_OP: Final[str] = "focus"
-CLOSE_OP: Final[str] = "close"
-NAVIGATE_OP: Final[str] = "navigate"
-PLACE_OP: Final[str] = "place"
-REFRESH_OP: Final[str] = "refresh"
-RELOAD_SYSTEM_INTERFACE_OP: Final[str] = "reload_system_interface"
-# Read-only: answered with the inventory document (desktop contracts.md section 5.5).
-INVENTORY_OPS: Final[frozenset[str]] = frozenset({"desktops", "list"})
-WINDOW_OPS: Final[frozenset[str]] = frozenset(
-    {FOCUS_OP, "minimize", "restore", "maximize", PLACE_OP, CLOSE_OP, NAVIGATE_OP}
-)
-SHORTCUT_OPS: Final[frozenset[str]] = frozenset(
-    {"shortcuts", "shortcut_set", "shortcut_move", "shortcut_remove", "wallpaper"}
-)
-# Ops that change what is on screen without changing the files: they reach the browser as a ``layout_op``
-# message, as does a ``show`` that lands on a pulled-out window.
-TRANSIENT_OPS: Final[frozenset[str]] = frozenset({REFRESH_OP, RELOAD_SYSTEM_INTERFACE_OP})
-KNOWN_OPS: Final[frozenset[str]] = (
-    frozenset({CONTEXT_OP, LOAD_OP, SHOW_OP, OPEN_OP}) | INVENTORY_OPS | WINDOW_OPS | SHORTCUT_OPS | TRANSIENT_OPS
-)
 
 # The one non-id a window argument accepts: the requester's own window, which the op's ``requester`` names.
 SELF_WINDOW: Final[str] = "self"
@@ -56,8 +30,14 @@ TARGET_ARG_KEYS: Final[frozenset[str]] = frozenset({CLIENT_ARG_KEY, DESKTOP_ARG_
 
 
 @pure
-def is_known_op(op: str) -> bool:
-    return op in KNOWN_OPS
+def parse_layout_op(raw: Any) -> LayoutOp | None:
+    """The op a body's ``op`` names, or None when it names none the op route knows (a 400)."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        return LayoutOp(raw)
+    except ValueError:
+        return None
 
 
 @pure
@@ -199,7 +179,7 @@ class PlaceRequest(WindowRequest):
 
 
 @pure
-def op_request_body(op: str, arguments: Mapping[str, Any], requester: OpRequester | None) -> dict[str, Any]:
+def op_request_body(op: LayoutOp, arguments: Mapping[str, Any], requester: OpRequester | None) -> dict[str, Any]:
     """The op route's body: the op, its arguments, and who asked."""
     return {
         "op": op,

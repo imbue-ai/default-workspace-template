@@ -4,44 +4,34 @@ import pytest
 from app_manifest.primitives import AppName
 
 from workspace_layout.errors import InvalidLayoutValueError
-from workspace_layout.ops import KNOWN_OPS
 from workspace_layout.ops import NavigateRequest
 from workspace_layout.ops import OpenRequest
 from workspace_layout.ops import OpRequester
 from workspace_layout.ops import PlaceRequest
 from workspace_layout.ops import ShowRequest
 from workspace_layout.ops import WindowRequest
-from workspace_layout.ops import is_known_op
 from workspace_layout.ops import navigate_op_arguments
 from workspace_layout.ops import op_request_body
 from workspace_layout.ops import open_op_arguments
+from workspace_layout.ops import parse_layout_op
 from workspace_layout.ops import parse_op_requester
 from workspace_layout.ops import place_op_arguments
 from workspace_layout.ops import show_op_arguments
 from workspace_layout.ops import window_op_arguments
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import LayoutOp
 from workspace_layout.testing import describe_op_body_problem
 
 _CLIENT = ClientId("client-1")
 
 
-def test_the_op_route_knows_the_desktop_verbs_and_nothing_else() -> None:
-    assert {
-        "context",
-        "desktops",
-        "list",
-        "load",
-        "open",
-        "show",
-        "focus",
-        "place",
-        "navigate",
-        "refresh",
-    } <= KNOWN_OPS
-    assert {"shortcuts", "shortcut_set", "shortcut_move", "shortcut_remove", "wallpaper"} <= KNOWN_OPS
-    for retired in ("inspect", "where", "views", "split", "move", "rename", "delete", "stop", "start", "replace-url"):
-        assert not is_known_op(retired), retired
+def test_an_op_parses_from_its_wire_spelling_and_a_retired_or_malformed_one_is_refused() -> None:
+    assert parse_layout_op("shortcut_set") is LayoutOp.SHORTCUT_SET
+    assert parse_layout_op("reload_system_interface") is LayoutOp.RELOAD_SYSTEM_INTERFACE
+    retired = ("inspect", "where", "views", "split", "move", "rename", "delete", "stop", "start", "replace-url")
+    for malformed in (*retired, "SHOW", "", None, 7, ["show"]):
+        assert parse_layout_op(malformed) is None, malformed
 
 
 def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> None:
@@ -63,7 +53,7 @@ def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> 
     ("op", "arguments", "expected"),
     [
         (
-            "show",
+            LayoutOp.SHOW,
             show_op_arguments(
                 ShowRequest(
                     app=AppName("chat"),
@@ -76,12 +66,12 @@ def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> 
             {"app": "chat", "path": "/?chat=agent-1", "showing": ["/agent-1"], "repoint": ["/"], "client": "client-1"},
         ),
         (
-            "show",
+            LayoutOp.SHOW,
             show_op_arguments(ShowRequest(app=AppName("files"), path="/a", showing=(), repoint=(), client_id=None)),
             {"app": "files", "path": "/a", "showing": [], "repoint": []},
         ),
         (
-            "open",
+            LayoutOp.OPEN,
             open_op_arguments(
                 OpenRequest(
                     app=AppName("getting-started"),
@@ -102,17 +92,17 @@ def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> 
             },
         ),
         (
-            "focus",
+            LayoutOp.FOCUS,
             window_op_arguments(WindowRequest(window="self", client_id=None, desktop="Research")),
             {"window": "self", "desktop": "Research"},
         ),
         (
-            "navigate",
+            LayoutOp.NAVIGATE,
             navigate_op_arguments(NavigateRequest(window="files", path="/b/", client_id=_CLIENT, desktop=None)),
             {"window": "files", "path": "/b/", "client": "client-1"},
         ),
         (
-            "place",
+            LayoutOp.PLACE,
             place_op_arguments(
                 PlaceRequest(window="win-0123456789abcdef", frame="0,0,0.5,1", client_id=_CLIENT, desktop="home")
             ),
@@ -122,7 +112,7 @@ def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> 
     ids=["show", "show-for-the-shells-choice-of-client", "open", "focus", "navigate", "place"],
 )
 def test_each_request_is_spelled_as_the_op_route_reads_it(
-    op: str, arguments: dict[str, Any], expected: dict[str, Any]
+    op: LayoutOp, arguments: dict[str, Any], expected: dict[str, Any]
 ) -> None:
     """Only what the request names goes on the wire, the target keys among it, and the shell's own reading of the
     body takes it."""
