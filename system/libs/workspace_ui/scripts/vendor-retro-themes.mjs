@@ -76,6 +76,8 @@ const THEMES = [
         selector: /^(input|select|\.btn|\.btn-default|\.btn:disabled)$/,
         property: /^(font-size|width|min-width|min-height)$/,
       },
+      // Fields bring their own padding, which leaves room for an icon inside them.
+      { selector: /^input$/, property: /^padding-left$/ },
       // A 20px side padding would push the icon out of the desktop's square icon buttons.
       { selector: /^(\.btn|\.btn-default)$/, property: /^padding$/ },
       // A window is positioned by the desktop: no margin, and no floor under its own minimum size.
