@@ -134,13 +134,14 @@ so the apply writes it.
 Manifests no longer have a `[handles]` table (it was reserved, and could only
 ever be empty): a manifest that still carries one fails to load, so its app
 would stop registering once the apply lands. After the merge commit, find
-every app manifest that still has the table:
+every app manifest that still has the table, in either of its TOML spellings:
 
 ```bash
-git grep -l '^\[handles\]' -- 'system/apps/*/app.toml'
+git grep -lE '^(\[handles\]|handles *=)' -- 'system/apps/*/app.toml'
 ```
 
-In each one, delete the `[handles]` line (it has no keys under it), and commit
+In each one, delete the `[handles]` line (it has no keys under it) or the
+inline `handles = {}` line, and commit
 the edits together as `Drop the retired [handles] table from app manifests`.
 Name each app you edited in the report's **Customization survival** item.
 Nothing to find is the common case; say so there too.
