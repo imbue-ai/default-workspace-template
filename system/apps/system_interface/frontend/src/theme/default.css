@@ -86,8 +86,8 @@
   --desk-phone-pill-height: 48px;
   --desk-phone-pill-max-width: 210px;
   --desk-phone-pill-icon: 32px;
-  /* The bar's own height; the safe-area inset under it is added where it is laid out. */
-  --desk-phone-bar-height: calc(var(--desk-phone-pill-height) + 2 * var(--desk-phone-bar-padding));
+  /* The bar's height above its bottom padding, which is --desk-phone-safe-bottom. */
+  --desk-phone-bar-height: calc(var(--desk-phone-pill-height) + var(--desk-phone-bar-padding));
   --desk-phone-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--desk-phone-bar-padding));
   --desk-phone-sheet-radius: 18px;
   /* How far below the top a sheet stops, so the page it covers still shows above it. */
