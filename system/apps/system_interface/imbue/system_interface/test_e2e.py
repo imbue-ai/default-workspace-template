@@ -114,8 +114,6 @@ _CELL_WIDTH = 96
 _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
-# --desk-touch-target under [data-touch], which a taskbar entry takes there.
-_TOUCH_TARGET = 44
 _GEOMETRY_TOLERANCE_PX = 4
 
 
@@ -502,25 +500,14 @@ def _taskbar_entry(page: Page, window_id: str) -> Locator:
     return page.locator(f'[data-taskbar-entry="{window_id}"]')
 
 
-def _double_click(shortcut: Locator) -> None:
-    shortcut.dblclick()
-
-
-def _tap(shortcut: Locator) -> None:
-    shortcut.tap()
-
-
-def _open_via_shortcut(
-    page: Page, server: E2EServer, key: str = _STUB_SHORTCUT_KEY, run: Callable[[Locator], None] = _double_click
-) -> str:
-    """Run a shortcut (by double click unless ``run`` says otherwise) and wait for the one new window it opens;
-    answers the window id."""
+def _open_via_shortcut(page: Page, server: E2EServer, key: str = _STUB_SHORTCUT_KEY) -> str:
+    """Run a shortcut by double click and wait for the one new window it opens; answers the window id."""
     before = {window["id"] for window in _windows(server.base_url)}
 
     def _opened() -> set[str]:
         return {window["id"] for window in _windows(server.base_url)} - before
 
-    run(page.locator(f'[data-shortcut="{key}"]'))
+    page.locator(f'[data-shortcut="{key}"]').dblclick()
     assert poll_until(lambda: len(_opened()) == 1, timeout=15.0, poll_interval=0.1), (
         f"the shortcut opened {len(_opened())} windows, not one"
     )
