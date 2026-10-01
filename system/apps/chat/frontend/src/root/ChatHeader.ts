@@ -1,7 +1,8 @@
 /**
  * The chat root's header in the phone layout: a list button that opens the chats' drawer, the
  * title of the chat on screen, and a kebab offering that chat's verbs, the same rows its row in
- * the list offers. A rename from here is typed in place of the title.
+ * the list offers. A rename from here is typed in place of the title; while the drawer is open, the
+ * row there holds the field instead.
  */
 
 import m from "mithril";
@@ -16,6 +17,8 @@ export interface ChatHeaderAttrs {
   row: ChatRow | null;
   /** What the kebab's verbs need of the root, as the list's own menu does. */
   context: RowMenuContext;
+  /** Whether the drawer is open over the header. */
+  isListOpen: boolean;
   onOpenList: () => void;
 }
 
@@ -55,7 +58,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
             },
             listGlyph(),
           ),
-          row !== null && isRenaming(row.chatId)
+          row !== null && !attrs.isListOpen && isRenaming(row.chatId)
             ? m("span", { class: "ml-1 flex min-w-0 flex-1" }, renameField(row))
             : m(
                 "span",

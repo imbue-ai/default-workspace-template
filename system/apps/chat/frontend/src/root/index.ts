@@ -352,6 +352,7 @@ const ChatRoot: m.Component = {
           ? m(ChatHeader, {
               row: rows.find((row) => row.chatId === selectedChatId) ?? null,
               context: rail,
+              isListOpen: isDrawerOpen,
               onOpenList: () => {
                 isDrawerOpen = true;
               },
