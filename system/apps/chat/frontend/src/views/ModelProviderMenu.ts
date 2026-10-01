@@ -228,12 +228,13 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     limitDraft = null;
   }
 
-  const track = createSlidingMenuTrack({
-    onSubmenuChange: () => {
-      resetSubmenuState();
-      modelQuery = "";
-    },
-  });
+  /** The open submenu changed, on the phone's track or the desktop's flyout. */
+  function takeSubmenuChange(): void {
+    resetSubmenuState();
+    modelQuery = "";
+  }
+
+  const track = createSlidingMenuTrack({ onSubmenuChange: takeSubmenuChange });
 
   const menu = createMenu({
     // The menu hangs off the chip's top edge, because the composer sits at the bottom of the
@@ -259,10 +260,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       track.showSubmenu(null);
       resetSubmenuState();
     },
-    onSubmenuChange: () => {
-      resetSubmenuState();
-      modelQuery = "";
-    },
+    onSubmenuChange: takeSubmenuChange,
     // A rename mid-type or an armed "Remove?" (providers), a typed search (model) and a
     // half-typed turn limit (fast) are all work a drifting pointer must not throw away.
     holdsSubmenuOpen: (key) => {

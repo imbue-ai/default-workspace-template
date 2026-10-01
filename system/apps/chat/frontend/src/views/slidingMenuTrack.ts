@@ -36,8 +36,6 @@ export interface SlidingMenuTrackOptions {
 }
 
 export interface SlidingMenuTrack {
-  /** The submenu on the track, or null for the menu's own rows. */
-  shownSubmenu(): string | null;
   /** Slide `key`'s submenu in, or with null slide back to the menu's own rows. */
   showSubmenu(key: string | null): void;
   /** The track for `rows`. `close` closes the card, which an action row does after its pick. */
@@ -185,7 +183,6 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
   }
 
   return {
-    shownSubmenu: () => shownKey,
     showSubmenu,
     view(rows, close) {
       const submenu =
