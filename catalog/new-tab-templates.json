@@ -605,18 +605,18 @@
       "title": "Just for the fun of it",
       "slugs": [
         "calm-waves",
-        "topic-graph",
-        "dictionary-feed"
+        "dictionary-feed",
+        "topic-graph"
       ]
     },
     {
       "key": "workspace-utilities",
       "title": "Workspace utilities",
       "slugs": [
-        "local-print-bridge",
         "minds-apps-homepage",
         "red-scribble",
-        "minds-rqlite-wip"
+        "minds-rqlite-wip",
+        "local-print-bridge"
       ]
     }
   ]
