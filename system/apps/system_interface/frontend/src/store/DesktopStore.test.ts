@@ -1881,6 +1881,25 @@ describe("the phone layout", () => {
     expect(api.calls).toContain(`recordShown:${CLIENT}:home`);
   });
 
+  it("shows the pinned chat of the desktop it is moved to, which is the one it lists", async () => {
+    const store = await phoneStore();
+    socket
+      .deliver()
+      .onDesktopsUpdated([
+        api.desktops[0],
+        {
+          ...api.desktops[1],
+          windows: [...api.desktops[1].windows, windowRecord("chat-2", "chat", "/", { is_pinned: true })],
+        },
+      ]);
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "chat-1" });
+    await store.switchDesktop("work");
+    await settle();
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "chat-2" });
+    expect(api.calls).toContain(`recordShown:${CLIENT}:chat-2`);
+  });
+
   it("leaves the windows sheet open when the window it shows is closed from the sheet", async () => {
     const store = await phoneStore(["win-2"]);
     store.openPhoneSheet("windows");

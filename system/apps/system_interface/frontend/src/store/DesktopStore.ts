@@ -102,7 +102,7 @@ import {
   reduceDesktopState,
 } from "../reducers/desktopState";
 import type { DesktopEvent, DesktopState, DetachedWindowReport, PhoneShown } from "../reducers/desktopState";
-import { focusTargetOf, isShownWindowGone, phoneLanding, shownWindowOf } from "../reducers/phone";
+import { focusTargetOf, isShownWindowGone, phoneLanding, pinnedChatWindowOf, shownWindowOf } from "../reducers/phone";
 import { STILL_CONNECTING_NOTICE, cellForAddedShortcut, resolveLaunchRun } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
 import type {
@@ -527,7 +527,8 @@ export class DesktopStore {
   }
 
   /** Keep what the phone shows honest after any change: a shown window that no desktop holds any longer sends the
-   *  phone home, and a window an agent op showed before the desktops that hold it arrived is shown once they do. */
+   *  phone home, a pinned window that is not the active desktop's gives way to the one that is (the phone keeps one),
+   *  and a window an agent op showed before the desktops that hold it arrived is shown once they do. */
   private followShownWindow(): void {
     if (!this.isPhoneLayout() || !this.state.isDesktopsLoaded) return;
     const pending = this.pendingPhoneShowId;
@@ -540,6 +541,12 @@ export class DesktopStore {
       const sheet = this.state.phone.sheet;
       this.showOnPhone({ kind: "home" });
       if (sheet !== null) this.openPhoneSheet(sheet);
+      return;
+    }
+    const shown = shownWindowOf(this.state);
+    const pinned = pinnedChatWindowOf(this.state);
+    if (shown?.is_pinned === true && pinned !== null && shown.id !== pinned.id) {
+      this.showOnPhone({ kind: "window", windowId: pinned.id });
     }
   }
 
