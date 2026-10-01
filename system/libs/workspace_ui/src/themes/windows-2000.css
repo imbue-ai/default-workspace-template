@@ -116,7 +116,7 @@
   color: inherit;
 }
 /* Caption buttons: 16 by 14, raised, with the system's pixel glyphs; Close stands apart. */
-:root[data-ui-theme="windows-2000"] .title-bar .window-control {
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control {
   min-width: 0;
   min-height: 0;
   width: 16px;
@@ -128,28 +128,28 @@
   box-shadow: var(--win-raised);
   translate: none;
 }
-:root[data-ui-theme="windows-2000"] .title-bar .window-control > * {
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control > * {
   display: none;
 }
-:root[data-ui-theme="windows-2000"] .title-bar .window-control:active {
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control:active {
   box-shadow: var(--win-pressed);
   background-position: calc(50% + 1px) calc(50% + 1px);
 }
-:root[data-ui-theme="windows-2000"] .title-bar .window-control[data-window-control="close"] {
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control[data-window-control="close"] {
   margin-left: 2px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='7' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h2v1H0zM6 0h2v1H6zM1 1h2v1H1zM5 1h2v1H5zM2 2h4v1H2zM3 3h2v1H3zM2 4h4v1H2zM1 5h2v1H1zM5 5h2v1H5zM0 6h2v1H0zM6 6h2v1H6z'/%3E%3C/svg%3E");
 }
-:root[data-ui-theme="windows-2000"] .title-bar .window-control[data-window-control="minimize"] {
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control[data-window-control="minimize"] {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='7' shape-rendering='crispEdges'%3E%3Cpath d='M1 5h6v2H1z'/%3E%3C/svg%3E");
 }
-:root[data-ui-theme="windows-2000"] .title-bar .window-control[data-window-control="maximize"] {
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control[data-window-control="maximize"] {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='9' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h9v2H0zM0 2h1v7H0zM8 2h1v7H8zM0 8h9v1H0z'/%3E%3C/svg%3E");
 }
-:root[data-ui-theme="windows-2000"] .title-bar .window-control[data-window-control="restore"] {
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control[data-window-control="restore"] {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' shape-rendering='crispEdges'%3E%3Cpath d='M2 0h6v2H2zM7 2h1v3H7zM6 4h1v1H6zM2 2h1v1H2zM0 3h6v2H0zM0 5h1v3H0zM5 5h1v3H5zM0 7h6v1H0z'/%3E%3C/svg%3E");
 }
 /* The window's own actions (reload, the window menu): white glyphs on the caption, raised under the pointer. */
-:root[data-ui-theme="windows-2000"] .title-bar .btn:not(.window-control) {
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]) {
   width: 18px;
   height: 16px;
   margin-left: 2px;
@@ -157,10 +157,10 @@
   background: transparent;
   color: inherit;
 }
-:root[data-ui-theme="windows-2000"] .title-bar .btn:not(.window-control):hover {
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]):hover {
   box-shadow: var(--win-thin-raised);
 }
-:root[data-ui-theme="windows-2000"] .title-bar .btn:not(.window-control):active {
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]):active {
   box-shadow: var(--win-thin-pressed);
 }
 

@@ -122,7 +122,7 @@
   color: #808080;
 }
 /* Every control sits on a white patch that parts the stripes around it. */
-:root[data-ui-theme="mac-classic"] .title-bar .btn {
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control {
   position: relative;
   min-width: 0;
   min-height: 0;
@@ -138,35 +138,35 @@
   color: transparent;
   translate: none;
 }
-:root[data-ui-theme="mac-classic"] .title-bar .btn > * {
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control > * {
   display: none;
 }
-:root[data-ui-theme="mac-classic"] .title-bar .btn:active {
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:active {
   background: #000000;
 }
-:root[data-ui-theme="mac-classic"] .title-bar .window-control[data-window-control="close"] {
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control[data-window-control="close"] {
   order: -1;
   margin: 0;
 }
-:root[data-ui-theme="mac-classic"] .title-bar .window-control[data-window-control="close"]:active {
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control[data-window-control="close"]:active {
   background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='9' shape-rendering='crispEdges'%3E%3Cpath d='M4 0h1v3H4zM4 6h1v3H4zM0 4h3v1H0zM6 4h3v1H6zM1 1h1v1H1zM7 1h1v1H7zM1 7h1v1H1zM7 7h1v1H7zM2 2h1v1H2zM6 2h1v1H6zM2 6h1v1H2zM6 6h1v1H6z'/%3E%3C/svg%3E")
     center no-repeat #ffffff;
 }
 /* The collapse box (System 7.5's window shade): two lines across the middle. */
-:root[data-ui-theme="mac-classic"] .title-bar .window-control[data-window-control="minimize"] {
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control[data-window-control="minimize"] {
   background: linear-gradient(#000000, #000000) center 3px / 100% 1px no-repeat,
     linear-gradient(#000000, #000000) center 5px / 100% 1px no-repeat, #ffffff;
 }
 /* The zoom box: a small box in the box's top-left corner. */
-:root[data-ui-theme="mac-classic"] .title-bar .window-control:is([data-window-control="maximize"], [data-window-control="restore"]) {
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:is([data-window-control="maximize"], [data-window-control="restore"]) {
   background: linear-gradient(#000000, #000000) 5px 0 / 1px 6px no-repeat,
     linear-gradient(#000000, #000000) 0 5px / 6px 1px no-repeat, #ffffff;
 }
-:root[data-ui-theme="mac-classic"] .title-bar .window-control:is([data-window-control="minimize"], [data-window-control="maximize"], [data-window-control="restore"]):active {
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:is([data-window-control="minimize"], [data-window-control="maximize"], [data-window-control="restore"]):active {
   background: #000000;
 }
 /* The window's own actions (reload, the window menu) keep their glyphs, on white patches by the close box. */
-:root[data-ui-theme="mac-classic"] .title-bar .btn:not(.window-control) {
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]) {
   height: 14px;
   width: 16px;
   margin-left: 8px;
@@ -174,10 +174,10 @@
   box-shadow: 0 0 0 1px #ffffff;
   color: #000000;
 }
-:root[data-ui-theme="mac-classic"] .title-bar .btn:not(.window-control) > * {
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]) > * {
   display: block;
 }
-:root[data-ui-theme="mac-classic"] .title-bar .btn:not(.window-control):active {
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]):active {
   color: #ffffff;
 }
 
