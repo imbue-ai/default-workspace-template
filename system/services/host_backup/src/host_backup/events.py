@@ -1,4 +1,4 @@
-"""Structured event types + writer for the host_backup service.
+"""Structured event types, writer and in-flight reader for the host_backup service.
 
 Events land at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`, one
 JSONL line per event, with the standard envelope (timestamp, type,
@@ -7,6 +7,10 @@ restic command is embedded in the matching event so operators can diagnose
 failures without rerunning anything, with each field capped at write time
 (see `_truncated_for_storage`). The runner rotates the file between ticks
 (see `rotate_events_log_if_over`).
+
+`find_inflight_tick_id` reads the log back for the tick still running, which
+`host-backup-now` waits on; at startup the runner records the tick its previous
+run was killed in as `TICK_ABANDONED` (see `record_abandoned_tick`).
 """
 
 import json
