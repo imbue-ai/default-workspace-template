@@ -1,6 +1,6 @@
 The terminal on a phone (`docs/system/blueprint/desktop-interface/plan-phone-interface.md`):
 
-- When either side of the terminal page is under 700px (a phone upright or on its side) it shows a key strip under the terminal, above the soft keyboard: Esc, Tab, Ctrl and the four arrows. Ctrl is one-shot: it applies to the next key, whether from the strip or typed on the keyboard, and then releases. The strip's keys never take focus, so the keyboard stays up while you use them.
+- When either side of the terminal page is under 700px and it is driven by touch (a phone upright or on its side, never a small terminal window on a laptop) it shows a key strip under the terminal, above the soft keyboard: Esc, Tab, Ctrl and the four arrows. Ctrl is one-shot: it applies to the next key, whether from the strip or typed on the keyboard, and then releases. The strip's keys never take focus, so the keyboard stays up while you use them.
 
 - Tapping the terminal focuses it from inside the terminal's own page, which is what lets iOS raise the soft keyboard (a focus passed in from the surrounding page cannot); a swipe to scroll does not.
 

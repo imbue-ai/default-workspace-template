@@ -91,7 +91,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 
 ### The terminal
 
-- Under 700px on the wrapper page's shorter side, a tap anywhere on the terminal focuses it and raises the keyboard, and a key strip above the keyboard offers Esc, Tab, Ctrl (one-shot: the next key is sent with it), and the arrows.
+- Under 700px on the wrapper page's shorter side, with a coarse pointer, a tap anywhere on the terminal focuses it and raises the keyboard, and a key strip above the keyboard offers Esc, Tab, Ctrl (one-shot: the next key is sent with it), and the arrows.
 - The soft keyboard opening or closing produces a resize the ttyd frame sees, so its grid refits; the page uses `100dvh`.
 
 ### The browser
@@ -141,7 +141,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 
 ### Terminal (`system/apps/terminal/src/terminal_app/pages.py`, `system/apps/terminal_pty/`)
 
-- The wrapper page template gains a `#keys` strip shown under 700px on the shorter side; keys post `{type: "terminal:key", key, ctrl}` and Ctrl `{type: "terminal:ctrl", armed}`. The pty origin's page gets a script (`terminal_app/pty_page.py`, added to the ttyd client as it is installed; see Decisions) that listens, feeds xterm, and focuses it from a tap in its own frame. The wrapper uses `100dvh` and re-nudges the frame height on `visualViewport` resize so ttyd refits.
+- The wrapper page template gains a `#keys` strip shown under 700px on the shorter side with a coarse pointer; keys post `{type: "terminal:key", key, ctrl}` and Ctrl `{type: "terminal:ctrl", armed}`. The pty origin's page gets a script (`terminal_app/pty_page.py`, added to the ttyd client as it is installed; see Decisions) that listens, feeds xterm, and focuses it from a tap in its own frame. The wrapper uses `100dvh` and re-nudges the frame height on `visualViewport` resize so ttyd refits.
 - Page tests in `pages_test.py` for the template; a `browser` test for the strip posting keys into a stub frame.
 
 ### Browser (`system/apps/browser/src/browser/assets/index.html`)
@@ -185,5 +185,5 @@ The questions this plan left open, as they were settled:
 - **Focus target across desktops.** As read above: the active desktop's stack top, else the app's newest window anywhere.
 - **Recording "home".** Through the same route with `window_id: null`.
 - **Agent ops a phone follows.** The shell announces every targeted `show`, placed `open`, and `focus` to the target client as a `layout_op` naming the window (contracts.md section 6), which is how a phone learns what an agent put on its screen.
-- **The terminal's key strip** shows on the same shorter-side rule as the shell's layout, so a phone on its side keeps it.
+- **The terminal's key strip** shows on the same shorter-side rule as the shell's layout, so a phone on its side keeps it, and only with a coarse pointer: the rule reads the window's own page, and a laptop's terminal windows are mostly under 700px tall.
 - **Follow-ups deliberately deferred**: browser-history integration for the back gesture; touch input and tab close for the browser app; agent notifications on phone browsers; a phone kind visible to agents; WebKit e2e; the avatar chooser and desktop settings on the phone; per-window status in the sheet and pill.

@@ -85,7 +85,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   #keys { display: none; flex: none; gap: 6px; padding: 6px; background: #111; border-top: 1px solid #262626; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
   #keys button { flex: 1 1 0; min-width: 0; height: 36px; padding: 0; border: 1px solid #333; border-radius: 6px; background: #1c1c1c; color: #ddd; font: 13px system-ui, sans-serif; }
   #keys button[aria-pressed="true"] { background: #ddd; border-color: #ddd; color: #000; }
-  @media (max-width: 700px), (max-height: 700px) { #keys { display: flex; } }
+  /* A finger on a page under 700px on its shorter side: a mouse-driven desktop window that small never gets it. */
+  @media (pointer: coarse) and (max-width: 700px), (pointer: coarse) and (max-height: 700px) { #keys { display: flex; } }
   [hidden] { display: none !important; }
 </style>
 </head>

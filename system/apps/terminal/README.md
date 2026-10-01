@@ -10,8 +10,8 @@ like every Python app with a manifest):
   pty origin, reports its path and the session's title to the shell through the app
   contract (the shell's built module, served from this origin at
   `/_static/app_contract.js`), re-points the frame on `shell:navigate`,
-  and passes the shell's `ttyd-focus` grant on to ttyd. Under 700px on its shorter side it
-  shows a key strip under the frame (Esc, Tab, a one-shot Ctrl, the arrows) that
+  and passes the shell's `ttyd-focus` grant on to ttyd. Under 700px on its shorter side,
+  with a coarse pointer (a phone; never a mouse-driven desktop window), it shows a key strip under the frame (Esc, Tab, a one-shot Ctrl, the arrows) that
   posts `{type: "terminal:key", key, ctrl}` and `{type: "terminal:ctrl", armed}` into
   the frame, followed by a `ttyd-focus`; the pty page posts
   `{type: "terminal:ctrl", armed: false}` back when a typed key used the Ctrl. The

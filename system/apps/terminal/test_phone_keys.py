@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Final
 
 import pytest
-from playwright.sync_api import BrowserContext, Frame, Locator, Page, Route, expect
+from playwright.sync_api import Browser, BrowserContext, Frame, Locator, Page, Route, expect
 from terminal_app.dispatch import load_ttyd_web_client
 from terminal_app.pages import PageConfig, SessionPage, render_page
 from terminal_app.primitives import TerminalTitle, TmuxSessionName
@@ -174,8 +174,8 @@ def test_a_key_press_leaves_focus_in_the_terminal(
     assert frame.evaluate("document.activeElement.id") == "input"
 
 
-def test_the_strip_shows_only_on_a_phone_sized_page_that_frames_a_terminal(
-    phone_context: BrowserContext,
+def test_the_strip_shows_only_on_a_phone_sized_touch_page_that_frames_a_terminal(
+    phone_context: BrowserContext, module_browser: Browser
 ) -> None:
     page, _frame = _open(phone_context, _RECORDING_PTY_PAGE)
     strip = page.locator("#keys")
@@ -204,6 +204,15 @@ def test_the_strip_shows_only_on_a_phone_sized_page_that_frames_a_terminal(
     page.goto(_BARE_WRAPPER_URL)
     expect(page.get_by_text("Open a terminal from the launcher.")).to_be_visible()
     expect(strip).to_be_hidden()
+
+    # A desktop window as small as a phone, driven by a mouse, keeps the whole page for the terminal.
+    mouse_context = module_browser.new_context(viewport=viewport)
+    try:
+        mouse_page, _mouse_frame = _open(mouse_context, _RECORDING_PTY_PAGE)
+        expect(mouse_page.locator("#pty")).to_be_visible()
+        expect(mouse_page.locator("#keys")).to_be_hidden()
+    finally:
+        mouse_context.close()
 
 
 def test_the_frame_is_nudged_after_it_loads_and_after_the_visual_viewport_resizes(
