@@ -100,6 +100,8 @@ import {
   openableApps,
   pinnedWindowOf,
   reduceDesktopState,
+  shownHistoryEntry,
+  withShownRecorded,
 } from "../reducers/desktopState";
 import type {
   DesktopEvent,
@@ -561,10 +563,27 @@ export class DesktopStore {
   showOnPhone(shown: PhoneShown): void {
     this.pendingPhoneShowId = null;
     this.dispatch({ type: "phone_shown", shown });
+    this.recordShownWithShell(shown);
+  }
+
+  private recordShownWithShell(shown: PhoneShown): void {
     const windowId = shown.kind === "window" ? shown.windowId : null;
     void this.deps.api.recordShown(this.deps.clientId, windowId).catch((error: unknown) => {
       console.warn("[si] could not record what the phone shows", error);
     });
+  }
+
+  /** Take the shell's record of what this client showed. A phone showing something the record does not end on (a
+   *  show whose recording failed, or one this read overtook) keeps it as the newest entry and records it again, so
+   *  the shell, the windows sheet's order and the screen agree. */
+  private takeShownHistory(history: readonly string[]): void {
+    const shown = this.state.phone.shown;
+    if (!this.isPhoneLayout() || shown === null || history[history.length - 1] === shownHistoryEntry(shown)) {
+      this.dispatch({ type: "phone_history_loaded", history });
+      return;
+    }
+    this.dispatch({ type: "phone_history_loaded", history: withShownRecorded(history, shownHistoryEntry(shown)) });
+    this.recordShownWithShell(shown);
   }
 
   goHome(): void {
@@ -637,7 +656,7 @@ export class DesktopStore {
     this.takeDesktops(inventory.desktops);
     this.dispatch({ type: "workspace_name_updated", workspaceName: inventory.workspace_name });
     const own = inventory.clients.find((client) => client.id === this.deps.clientId);
-    if (own !== undefined) this.dispatch({ type: "phone_history_loaded", history: own.shown_history });
+    if (own !== undefined) this.takeShownHistory(own.shown_history);
   }
 
   private notifyListeners(): void {
@@ -730,7 +749,7 @@ export class DesktopStore {
     this.replacedDesktop = replacedDesktopOf(arrival);
     const own = inventory.clients.find((client) => client.id === this.deps.clientId);
     this.takeFetchedEntries(own, entryPushesBefore);
-    if (own !== undefined) this.dispatch({ type: "phone_history_loaded", history: own.shown_history });
+    if (own !== undefined) this.takeShownHistory(own.shown_history);
     // The shell's answer says where this client lands; without one (the arrival failed), the recorded desktop.
     // A solo shell lands on the desktop that holds its window, wherever the client is.
     const landing = arrival?.desktop_id ?? own?.active_desktop ?? null;
@@ -779,7 +798,7 @@ export class DesktopStore {
       const clients = await this.deps.api.fetchClients();
       const own = clients.find((client) => client.id === this.deps.clientId);
       this.takeFetchedEntries(own, entryPushesBefore);
-      if (own !== undefined) this.dispatch({ type: "phone_history_loaded", history: own.shown_history });
+      if (own !== undefined) this.takeShownHistory(own.shown_history);
       recorded = own?.active_desktop ?? null;
     } catch (error) {
       console.warn("[si] could not read the client records after reconnecting", error);

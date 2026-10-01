@@ -1968,6 +1968,19 @@ describe("the phone layout", () => {
     expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-3" });
   });
 
+  it("tells the shell again what it shows when a reread finds the show unrecorded", async () => {
+    const store = await phoneStore(["win-1"]);
+    api.refusal = "the shell is restarting";
+    store.showOnPhone({ kind: "window", windowId: "win-2" });
+    await settle();
+    api.refusal = null;
+    store.onVisibilityChange(false);
+    store.onVisibilityChange(true);
+    await settle();
+    expect(store.getState().phone.history).toEqual(["win-1", "win-2"]);
+    expect(api.clients.find((client) => client.id === CLIENT)?.shown_history).toEqual(["win-1", "win-2"]);
+  });
+
   it("reloads the shown page when the socket comes back after the page was out of sight", async () => {
     const store = await phoneStore(["win-1"]);
     const reloaded: string[] = [];
