@@ -14,15 +14,19 @@
 // The protocol and the index go in as two system prompt sections. pi records the prompt once and
 // appends a section's full text again only when it changes, so the fixed protocol is recorded
 // once per chat and the index only on messages where a note changed. Neither may depend on the
-// clock, or every message would re-append it. If another extension already replaced the whole
-// prompt for this turn (tk_workflow.ts does, to carry open steps), sections would no longer be
-// rendered, so the text is appended to that prompt instead. pi loads project extensions in
-// directory order, so either can run first.
+// clock, or every message would re-append it.
+//
+// tk_workflow.ts replaces the whole prompt on turns with open steps. pi loads project extensions
+// in raw directory order, so either may run first, and both orders keep the memory: run after
+// this, it builds its prompt from event.systemPrompt, which pi renders from the sections set
+// here; run before it, it has set forceSystemPrompt, and the text is appended to that prompt.
 //
 // Fails open: if the script fails or prints nothing, the turn runs without memory, and a note
-// that cannot be stamped stays as pi wrote it.
+// that cannot be stamped stays as pi wrote it. Both are logged to a file, not stderr, which
+// lands on pi's screen.
 
 import { spawnSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -35,6 +39,7 @@ const PROTOCOL_SECTION = "workspace_memory_protocol";
 const MEMORY_SECTION = "workspace_memory";
 const NOTE_WRITING_TOOLS = new Set(["write", "edit"]);
 const SCRIPT_TIMEOUT_MS = 5000;
+const LOG_PATH = join(process.env.MNGR_AGENT_STATE_DIR || "/tmp", "pi_workspace_memory.log");
 
 interface MemorySections {
   readonly protocol: string;
@@ -42,7 +47,11 @@ interface MemorySections {
 }
 
 function note(message: string): void {
-  process.stderr.write(`[workspace-memory] ${message}\n`);
+  try {
+    appendFileSync(LOG_PATH, `${new Date().toISOString()} ${message}\n`);
+  } catch {
+    // Logging must never cost the turn.
+  }
 }
 
 /** The protocol and the index for this turn, or null when they cannot be had. Never throws. */
@@ -56,7 +65,11 @@ function memorySections(): MemorySections | null {
       note(`${CONTEXT_SCRIPT} exited ${result.status ?? result.signal}; running this turn without memory`);
       return null;
     }
-    if (typeof result.stdout !== "string" || result.stdout.trim() === "") return null;
+    if (typeof result.stdout !== "string" || result.stdout.trim() === "") {
+      const reason = typeof result.stderr === "string" ? result.stderr.trim() : "";
+      note(`${CONTEXT_SCRIPT} printed nothing${reason ? `: ${reason}` : ""}; running this turn without memory`);
+      return null;
+    }
     const parsed = JSON.parse(result.stdout);
     if (typeof parsed?.protocol !== "string" || typeof parsed?.memory !== "string") {
       note(`${CONTEXT_SCRIPT} printed an unexpected shape; running this turn without memory`);

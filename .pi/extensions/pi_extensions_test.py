@@ -573,7 +573,7 @@ def _memory_output(
     (notes_dir / "MEMORY.md").write_text(_MEMORY_INDEX_LINE + "\n")
     if changes is not None:
         record = (
-            home / "workspace" / "data" / ".state" / "memories" / "user-changes.jsonl"
+            home / "workspace" / "data" / ".apps" / "memories" / "user-changes.jsonl"
         )
         record.parent.mkdir(parents=True, exist_ok=True)
         record.write_text(changes)
@@ -708,7 +708,9 @@ def test_memory_fails_open_when_its_script_is_missing(tmp_path: Path) -> None:
 
     assert out["result"] is None
     assert out["payload"]["systemPromptOptions"]["sections"] == {}
-    assert "running this turn without memory" in proc.stderr
+    log = (tmp_path / "state" / "pi_workspace_memory.log").read_text()
+    assert "running this turn without memory" in log
+    assert "running this turn without memory" not in proc.stderr
 
 
 def test_memory_tells_pi_which_notes_the_user_deleted(tmp_path: Path) -> None:

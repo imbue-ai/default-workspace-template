@@ -9,12 +9,12 @@ from pathlib import Path
 import httpx
 import pytest
 
+from memories.attribution import AuthorKind
 from memories.attribution import NoteAuthor
 from memories.attribution import NoteToolUse
 from memories.attribution import TranscriptSources
 from memories.attribution import attribute_notes
 from memories.attribution import default_transcript_sources
-from memories.attribution import encode_project_dir_name
 from memories.attribution import fetch_chat_title_by_agent_id
 from memories.attribution import note_tool_uses
 from memories.attribution import parse_session_history
@@ -47,7 +47,6 @@ def _sources(tmp_path: Path) -> TranscriptSources:
     notes_dir.mkdir(parents=True)
     return TranscriptSources(
         claude_config_dirs=(tmp_path / "account-a", tmp_path / "account-b", tmp_path / "missing"),
-        project_dir_name=_PROJECT_DIR_NAME,
         mngr_agents_dir=tmp_path / "mngr" / "agents",
         notes_dir=notes_dir,
     )
@@ -109,7 +108,8 @@ def test_note_tool_uses_tolerates_lines_that_are_not_tool_calls() -> None:
     assert bad_time.at is None
 
 
-def test_read_note_tool_uses_reads_every_accounts_transcripts_for_this_workspace(tmp_path: Path) -> None:
+def test_read_note_tool_uses_reads_every_accounts_transcripts_from_every_project(tmp_path: Path) -> None:
+    """A worker runs in a worktree of its own (a project folder of its own) and writes to the same notes."""
     sources = _sources(tmp_path)
     notes = sources.notes_dir
     _write_transcript(
@@ -122,15 +122,16 @@ def test_read_note_tool_uses_reads_every_accounts_transcripts_for_this_workspace
         ],
     )
     _write_transcript(tmp_path / "account-b", "session-b", [_tool_line("Read", f"{notes}/units.md")])
-    other_project = tmp_path / "account-b" / "projects" / "-some-other-project"
-    other_project.mkdir(parents=True)
-    (other_project / "session-c.jsonl").write_text(_tool_line("Write", f"{notes}/units.md") + "\n")
+    worker_project = tmp_path / "account-b" / "projects" / "-home-user-worktrees-worker-1"
+    worker_project.mkdir(parents=True)
+    (worker_project / "session-c.jsonl").write_text(_tool_line("Write", f"{notes}/units.md") + "\n")
 
     uses = read_note_tool_uses(sources)
 
     assert sorted((use.session_id, use.file_name, use.is_write) for use in uses) == [
         ("session-a", "units.md", True),
         ("session-b", "units.md", False),
+        ("session-c", "units.md", True),
     ]
 
 
@@ -176,7 +177,7 @@ def test_an_unreachable_or_failing_chat_app_gives_no_titles(status: int) -> None
         assert fetch_chat_title_by_agent_id(client, _CHAT_APP_URL) is None
 
 
-def test_attribution_keeps_each_chats_latest_write_newest_first_and_counts_distinct_readers() -> None:
+def test_attribution_keeps_each_writers_latest_write_newest_first_and_counts_other_readers() -> None:
     uses = [
         _use("s1", "units.md", is_write=True, hour=9),
         _use("s2", "units.md", is_write=True, hour=11),
@@ -195,10 +196,12 @@ def test_attribution_keeps_each_chats_latest_write_newest_first_and_counts_disti
 
     units = attributions["units.md"]
     assert units.authors == (
-        NoteAuthor(chat_title="Plan the launch", at=datetime(2026, 10, 1, 11, tzinfo=timezone.utc)),
-        NoteAuthor(chat_title=None, at=datetime(2026, 10, 1, 8, tzinfo=timezone.utc)),
+        NoteAuthor(
+            kind=AuthorKind.CHAT, chat_title="Plan the launch", at=datetime(2026, 10, 1, 11, tzinfo=timezone.utc)
+        ),
+        NoteAuthor(kind=AuthorKind.NOT_A_CHAT, chat_title=None, at=datetime(2026, 10, 1, 8, tzinfo=timezone.utc)),
     )
-    assert units.reader_count == 2
+    assert units.reader_count == 1
     assert attributions["role.md"].authors == ()
     assert attributions["role.md"].reader_count == 1
 
@@ -213,8 +216,10 @@ def test_read_attributions_says_when_chat_names_could_not_be_read(tmp_path: Path
     with _chat_app({}, status=503) as client:
         unnamed, unnamed_messages = read_attributions(sources, client, _CHAT_APP_URL)
 
+    assert named["units.md"].authors[0].kind == AuthorKind.CHAT
     assert named["units.md"].authors[0].chat_title == "Plan the launch"
     assert named_messages == []
+    assert unnamed["units.md"].authors[0].kind == AuthorKind.UNKNOWN
     assert unnamed["units.md"].authors[0].chat_title is None
     assert unnamed_messages == ["Chat names could not be read from the chat app, so writers are shown without them."]
 
@@ -228,17 +233,15 @@ def test_default_sources_read_every_account_then_the_plain_claude_dir(
         (tmp_path / ".minds" / "accounts" / account).mkdir(parents=True)
     (tmp_path / ".minds" / "accounts" / "index.json").write_text("{}")
 
-    sources = default_transcript_sources(notes_dir=Path("data/memories"), work_dir=Path("/home/user/workspace"))
+    sources = default_transcript_sources(notes_dir=Path("data/memories"))
 
     assert sources.claude_config_dirs == (
         tmp_path / ".minds" / "accounts" / "a-account",
         tmp_path / ".minds" / "accounts" / "b-account",
         tmp_path / ".claude",
     )
-    assert sources.project_dir_name == "-home-user-workspace"
     assert sources.mngr_agents_dir == tmp_path / "host" / "agents"
     assert sources.notes_dir.is_absolute()
-    assert encode_project_dir_name(Path("/home/user/my.workspace")) == "-home-user-my-workspace"
 
 
 def _pi_tool_line(tool: str, path: str, role: str = "assistant") -> str:
@@ -308,3 +311,23 @@ def test_a_pi_chats_note_is_attributed_to_its_chat_through_the_agent_folder(tmp_
     assert attributions["user-profession.md"].authors[0].chat_title == "pi-test"
     assert attributions["user-profession.md"].reader_count == 1
     assert attributions["user-location.md"].reader_count == 1
+
+
+def test_a_session_no_agent_claims_is_unknown_and_a_writer_is_not_its_own_reader() -> None:
+    uses = [
+        _use("plain-claude", "units.md", is_write=True, hour=9),
+        _use("plain-claude", "units.md", is_write=False, hour=9),
+    ]
+
+    (author,) = attribute_notes(uses, {}, {"agent-1": "Plan the launch"})["units.md"].authors
+
+    assert author.kind == AuthorKind.UNKNOWN
+    assert attribute_notes(uses, {}, {})["units.md"].reader_count == 0
+
+
+def test_without_the_chat_app_every_writer_is_unknown_rather_than_a_deleted_chat() -> None:
+    uses = [_use("s1", "units.md", is_write=True, hour=9)]
+
+    (author,) = attribute_notes(uses, {"s1": "agent-1"}, None)["units.md"].authors
+
+    assert author.kind == AuthorKind.UNKNOWN

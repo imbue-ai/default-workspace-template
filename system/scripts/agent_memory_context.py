@@ -19,15 +19,16 @@ and adds ``metadata.source`` when the note names none. pi's memory extension run
 of a note.
 
 It also prints the notes the user deleted or edited in the "Agent Memory" app, from the record that app keeps
-(``data/.state/memories/user-changes.jsonl``: a file name, what was done and when, never the content). An open chat
+(``data/.apps/memories/user-changes.jsonl``: a file name, what was done and when, never the content). An open chat
 still has a note it saw in its conversation, and without this it writes a deleted note back, or reverts an edit,
 the next time it saves. Every harness needs that notice, Claude included.
 
 Claude has one more gap: Claude Code loads ``MEMORY.md`` once, when a chat starts, so a note another chat saves later
 never reaches it. pi reads the index on every message and has no such gap. So ``--claude-hook``, which Claude's
-UserPromptSubmit hook in ``.claude/settings.json`` runs before every message, reads the hook's input (the chat's
-session id and transcript path) and prints the change notice plus the index lines of notes saved or changed since the
-chat started, leaving out the ones the chat saved itself -- and nothing at all when there is nothing new.
+UserPromptSubmit hook in ``.claude/settings.json`` runs before every message, reads the chat's transcript (its path is
+in the hook's input) and prints the deletes and edits, and the index lines of notes others saved or changed, that are
+newer than its last run for that chat (kept in the agent's state directory) -- each once, since the chat keeps what an
+earlier message's hook added, and nothing at all when there is nothing new.
 
 Fails open: if the protocol cannot be read, it prints nothing and exits 0, so a broken checkout costs a chat its
 memory, never its turn. An unreadable or malformed change record reads as no changes. Stdlib only, since harness
@@ -37,11 +38,12 @@ hooks run it under a plain ``python3``.
 import argparse
 import json
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Final
+from typing import Final, NamedTuple
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 PROTOCOL_PATH: Final[Path] = (
@@ -50,15 +52,19 @@ PROTOCOL_PATH: Final[Path] = (
 # The folder Claude's autoMemoryDirectory names: absolute, so a worker in its own worktree shares the main one.
 DEFAULT_NOTES_DIR: Final[Path] = Path.home() / "workspace" / "data" / "memories"
 DEFAULT_CHANGES_PATH: Final[Path] = (
-    Path.home() / "workspace" / "data" / ".state" / "memories" / "user-changes.jsonl"
+    Path.home() / "workspace" / "data" / ".apps" / "memories" / "user-changes.jsonl"
 )
 # The memories app drops older entries itself; this keeps a stale record from being read as news.
 CHANGE_MAX_AGE: Final[timedelta] = timedelta(days=30)
 INDEX_FILENAME: Final[str] = "MEMORY.md"
 NON_NOTE_FILENAMES: Final[frozenset[str]] = frozenset({"MEMORY.md", "README.md"})
-# Claude Code stamps this on every note a Claude session saves.
-CLAUDE_SESSION_KEY: Final[str] = "originSessionId"
 SAVED_SINCE_MAX_NOTES: Final[int] = 20
+HOOK_MAX_CHANGES: Final[int] = 20
+# A note this chat wrote is stamped a moment after its Write call is recorded.
+OWN_WRITE_TOLERANCE: Final[timedelta] = timedelta(seconds=5)
+_CLAUDE_WRITE_TOOLS: Final[frozenset[str]] = frozenset({"Write", "Edit", "MultiEdit"})
+_WATERMARK_PREFIX: Final[str] = "memory-hook-"
+_EPOCH: Final[datetime] = datetime(1970, 1, 1, tzinfo=timezone.utc)
 INDEX_MAX_LINES: Final[int] = 200
 INDEX_MAX_BYTES: Final[int] = 25 * 1024
 
@@ -104,9 +110,13 @@ def render_memory_context(
 def stamp_note_text(text: str, harness: str, now: datetime) -> str | None:
     """The note with ``metadata.modified`` set to ``now`` and ``metadata.source`` added when it names no source.
 
-    Returns None for a note with no frontmatter, which is left as written.
+    Only the frontmatter's own keys are touched: a top-level ``modified`` (moved into ``metadata``) and the
+    ``metadata`` block's direct children. Returns None for a note left as written: one with no frontmatter, or whose
+    ``metadata`` is written inline (``metadata: {...}``), which a line-based edit cannot extend safely. Keeps the
+    note's line endings.
     """
-    lines = text.split("\n")
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(newline)
     if not lines or lines[0].strip() != "---":
         return None
     closing_idx = next(
@@ -115,23 +125,48 @@ def stamp_note_text(text: str, harness: str, now: datetime) -> str | None:
     if closing_idx is None:
         return None
     frontmatter = lines[1:closing_idx]
-    has_source = any(line.strip().startswith("source:") for line in frontmatter)
-    kept = [line for line in frontmatter if not line.strip().startswith("modified:")]
-    stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    additions = ([] if has_source else [f"  source: {harness}"]) + [
-        f"  modified: {stamp}"
-    ]
+    if any(
+        line.startswith("metadata:") and line.split(":", 1)[1].strip()
+        for line in frontmatter
+    ):
+        return None
     metadata_idx = next(
-        (idx for idx, line in enumerate(kept) if line.rstrip() == "metadata:"), None
+        (idx for idx, line in enumerate(frontmatter) if line.rstrip() == "metadata:"),
+        None,
     )
+    block_end = metadata_idx + 1 if metadata_idx is not None else len(frontmatter)
+    while (
+        metadata_idx is not None
+        and block_end < len(frontmatter)
+        and frontmatter[block_end][:1] in (" ", "\t")
+    ):
+        block_end += 1
+    child_indent = "  "
+    if metadata_idx is not None and block_end > metadata_idx + 1:
+        first_child = frontmatter[metadata_idx + 1]
+        child_indent = first_child[: len(first_child) - len(first_child.lstrip())]
+
+    def is_own_key(idx: int, key: str) -> bool:
+        line = frontmatter[idx]
+        if line.startswith(f"{key}:"):
+            return True
+        is_metadata_child = metadata_idx is not None and metadata_idx < idx < block_end
+        return is_metadata_child and line.startswith(f"{child_indent}{key}:")
+
+    has_source = any(is_own_key(idx, "source") for idx in range(len(frontmatter)))
+    stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    additions = ([] if has_source else [f"{child_indent}source: {harness}"]) + [
+        f"{child_indent}modified: {stamp}"
+    ]
+    stamped: list[str] = []
+    for idx, line in enumerate(frontmatter):
+        if not is_own_key(idx, "modified"):
+            stamped.append(line)
+        if idx == block_end - 1 and metadata_idx is not None:
+            stamped.extend(additions)
     if metadata_idx is None:
-        stamped = [*kept, "metadata:", *additions]
-    else:
-        block_end = metadata_idx + 1
-        while block_end < len(kept) and kept[block_end][:1] in (" ", "\t"):
-            block_end += 1
-        stamped = [*kept[:block_end], *additions, *kept[block_end:]]
-    return "\n".join(["---", *stamped, *lines[closing_idx:]])
+        stamped.extend(["metadata:", *additions])
+    return newline.join(["---", *stamped, *lines[closing_idx:]])
 
 
 def stamp_note(path: Path, notes_dir: Path, harness: str, now: datetime) -> bool:
@@ -226,20 +261,114 @@ def read_changes_text(changes_path: Path) -> str:
         return ""
 
 
-def session_start(transcript_path: Path) -> datetime | None:
-    """When a Claude chat started: the first timestamp its transcript records, or None when it cannot be read."""
+class TranscriptFacts(NamedTuple):
+    """What a Claude chat's transcript says about its memory: when it loaded the index, and its own writes."""
+
+    started: datetime | None
+    own_write_at_by_file: dict[str, datetime]
+
+
+def _record_timestamp(line: str) -> datetime | None:
+    """A transcript record's own timestamp (never one inside its content), or None."""
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return None
+    raw = record.get("timestamp") if isinstance(record, dict) else None
+    if not isinstance(raw, str):
+        return None
+    try:
+        at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return at if at.tzinfo is not None else None
+
+
+def read_transcript_facts(transcript_path: Path, notes_dir: Path) -> TranscriptFacts:
+    """One pass over a transcript, parsing only the lines that matter: the first that has a timestamp, and the ones
+    whose Write/Edit calls touched a note."""
+    started: datetime | None = None
+    own_write_at_by_file: dict[str, datetime] = {}
     try:
         with transcript_path.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
-                try:
-                    timestamp = json.loads(line).get("timestamp")
-                    if isinstance(timestamp, str):
-                        return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                except (ValueError, AttributeError):
+                if started is None:
+                    started = _record_timestamp(line)
+                if notes_dir.name not in line or '"tool_use"' not in line:
                     continue
+                at = _record_timestamp(line)
+                for file_name in _written_note_names(line, notes_dir):
+                    if at is not None and at > own_write_at_by_file.get(
+                        file_name, _EPOCH
+                    ):
+                        own_write_at_by_file[file_name] = at
     except OSError:
+        return TranscriptFacts(started=None, own_write_at_by_file={})
+    return TranscriptFacts(started=started, own_write_at_by_file=own_write_at_by_file)
+
+
+def _watermark_path(state_dir: Path, session_id: str) -> Path:
+    return (
+        state_dir
+        / f"{_WATERMARK_PREFIX}{re.sub(r'[^A-Za-z0-9_-]', '_', session_id)}.json"
+    )
+
+
+def read_watermark(state_dir: Path | None, session_id: str) -> datetime | None:
+    """When the hook last ran for this chat, or None (never, or nowhere to keep it)."""
+    if state_dir is None or not session_id:
         return None
-    return None
+    try:
+        raw = json.loads(
+            _watermark_path(state_dir, session_id).read_text(encoding="utf-8")
+        ).get("checked_at")
+        at = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (OSError, ValueError, AttributeError):
+        return None
+    return at if at.tzinfo is not None else None
+
+
+def write_watermark(state_dir: Path | None, session_id: str, at: datetime) -> None:
+    if state_dir is None or not session_id:
+        return
+    path = _watermark_path(state_dir, session_id)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(
+            json.dumps({"checked_at": at.astimezone(timezone.utc).isoformat()}),
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+
+
+def _written_note_names(line: str, notes_dir: Path) -> list[str]:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return []
+    content = (
+        (record.get("message") or {}).get("content")
+        if isinstance(record, dict)
+        else None
+    )
+    names: list[str] = []
+    for item in content if isinstance(content, list) else []:
+        if (
+            not isinstance(item, dict)
+            or item.get("type") != "tool_use"
+            or item.get("name") not in _CLAUDE_WRITE_TOOLS
+        ):
+            continue
+        file_path = (item.get("input") or {}).get("file_path")
+        if (
+            isinstance(file_path, str)
+            and Path(file_path).expanduser().parent == notes_dir
+        ):
+            names.append(Path(file_path).name)
+    return names
 
 
 def _note_description(note_text: str) -> str:
@@ -253,9 +382,12 @@ def _note_description(note_text: str) -> str:
 
 
 def notes_saved_since(
-    notes_dir: Path, since: datetime, session_id: str, index_text: str | None
+    notes_dir: Path,
+    since: datetime,
+    own_write_at_by_file: dict[str, datetime],
+    index_text: str | None,
 ) -> list[str]:
-    """The index line (or a stand-in) of each note saved or changed after ``since`` by anyone but this session."""
+    """The index line (or a stand-in) of each note changed after ``since`` whose last change was not this chat's."""
     index_lines = (index_text or "").splitlines()
     found: list[tuple[float, str]] = []
     try:
@@ -267,12 +399,20 @@ def notes_saved_since(
             continue
         try:
             modified = path.stat().st_mtime
-            text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         if modified <= since.timestamp():
             continue
-        if session_id and f"{CLAUDE_SESSION_KEY}: {session_id}" in text:
+        own_write_at = own_write_at_by_file.get(path.name)
+        if (
+            own_write_at is not None
+            and own_write_at.timestamp()
+            >= modified - OWN_WRITE_TOLERANCE.total_seconds()
+        ):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
             continue
         line = next(
             (candidate for candidate in index_lines if f"]({path.name})" in candidate),
@@ -296,26 +436,47 @@ def render_saved_since_notice(lines: list[str]) -> str:
 
 
 def claude_hook_output(
-    hook_input: str, notes_dir: Path, changes_path: Path, now: datetime
+    hook_input: str,
+    notes_dir: Path,
+    changes_path: Path,
+    state_dir: Path | None,
+    now: datetime,
 ) -> str:
-    """What Claude's UserPromptSubmit hook adds to the next message: the change notice, then new notes."""
-    notice = render_changes_notice(latest_changes(read_changes_text(changes_path), now))
+    """What Claude's UserPromptSubmit hook adds to the next message: what changed since the chat last heard.
+
+    The chat keeps what an earlier message's hook added, so each change and each note is announced once: the hook
+    records when it ran (a watermark per chat, in the agent's state directory) and announces only what is newer than
+    that, or than the chat's start the first time. Nothing at all most of the time.
+    """
+    all_changes = latest_changes(read_changes_text(changes_path), now)
     try:
         payload = json.loads(hook_input)
     except ValueError:
         payload = None
-    saved_since = ""
-    if isinstance(payload, dict) and isinstance(payload.get("transcript_path"), str):
-        started = session_start(Path(payload["transcript_path"]))
-        if started is not None and started.tzinfo is not None:
-            saved_since = render_saved_since_notice(
-                notes_saved_since(
-                    notes_dir,
-                    started,
-                    str(payload.get("session_id") or ""),
-                    read_index(notes_dir),
-                )
-            )
+    transcript = payload.get("transcript_path") if isinstance(payload, dict) else None
+    session_id = (
+        str(payload.get("session_id") or "") if isinstance(payload, dict) else ""
+    )
+    facts = (
+        read_transcript_facts(Path(transcript), notes_dir)
+        if isinstance(transcript, str)
+        else None
+    )
+    if facts is None or facts.started is None:
+        # Without the transcript there is no telling what the chat already heard, and a missed delete costs more than
+        # a repeated notice, so the deletes and edits still go out.
+        return render_changes_notice(all_changes[-HOOK_MAX_CHANGES:])
+    since = max(facts.started, read_watermark(state_dir, session_id) or facts.started)
+    changes = [change for change in all_changes if change[2] > since][
+        -HOOK_MAX_CHANGES:
+    ]
+    notice = render_changes_notice(changes)
+    saved_since = render_saved_since_notice(
+        notes_saved_since(
+            notes_dir, since, facts.own_write_at_by_file, read_index(notes_dir)
+        )
+    )
+    write_watermark(state_dir, session_id, now)
     return "\n".join(part for part in (notice, saved_since) if part)
 
 
@@ -345,6 +506,14 @@ def main(argv: list[str]) -> int:
         help="The record of notes the user deleted or edited",
     )
     parser.add_argument(
+        "--state-dir",
+        type=Path,
+        default=Path(os.environ["MNGR_AGENT_STATE_DIR"])
+        if os.environ.get("MNGR_AGENT_STATE_DIR")
+        else None,
+        help="Where --claude-hook keeps when it last ran for each chat (default: the agent's state directory)",
+    )
+    parser.add_argument(
         "--claude-hook",
         action="store_true",
         help="Run as Claude's UserPromptSubmit hook: read its input on stdin, print only what is new",
@@ -367,7 +536,11 @@ def main(argv: list[str]) -> int:
     if arguments.claude_hook:
         sys.stdout.write(
             claude_hook_output(
-                sys.stdin.read(), arguments.notes_dir, arguments.changes, now
+                sys.stdin.read(),
+                arguments.notes_dir,
+                arguments.changes,
+                arguments.state_dir,
+                now,
             )
         )
         return 0

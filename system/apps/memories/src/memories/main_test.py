@@ -50,7 +50,7 @@ def test_the_config_defaults_to_the_workspace_paths_and_reads_overrides_from_the
     assert defaults.memories_notes_dir == Path("data/memories")
     assert defaults.memories_backup_config_path == BACKUP_TOML_PATH
     assert defaults.memories_restic_env_path == RESTIC_ENV_PATH
-    assert defaults.memories_changes_path == Path("data/.state/memories/user-changes.jsonl")
+    assert defaults.memories_changes_path == Path("data/.apps/memories/user-changes.jsonl")
 
     monkeypatch.setenv("MEMORIES_PORT", "8123")
     monkeypatch.setenv("MEMORIES_NOTES_DIR", "/elsewhere/memories")
