@@ -42,6 +42,8 @@ from memories.errors import NoteWriteError
 from memories.notes import INDEX_FILENAME
 from memories.notes import delete_note
 from memories.notes import list_notes
+from memories.notes import relist_in_index
+from memories.notes import unlist_from_index
 from memories.notes import update_note
 from memories.request_guard import is_write_allowed
 
@@ -214,6 +216,11 @@ def build_pages_blueprint(
             except MemoriesError as e:
                 return _error_response(e)
             unrecorded = record_or_explain(file_name, NoteChangeKind.EDITED)
+            try:
+                relist_in_index(notes_dir, note)
+            except MemoriesError as e:
+                # The next index sync, run before any chat's next message, writes the line from the note.
+                logger.opt(exception=e).error("Could not update the index line for {}", file_name)
         if unrecorded is not None:
             return unrecorded
         return jsonify(note.model_dump(mode="json"))
@@ -229,6 +236,11 @@ def build_pages_blueprint(
             except MemoriesError as e:
                 return _error_response(e)
             unrecorded = record_or_explain(file_name, NoteChangeKind.DELETED)
+            try:
+                unlist_from_index(notes_dir, file_name)
+            except MemoriesError as e:
+                # The next index sync, run before any chat's next message, drops lines for notes that are gone.
+                logger.opt(exception=e).error("Could not remove {} from the index", file_name)
         if unrecorded is not None:
             return unrecorded
         return jsonify({"file_name": file_name})

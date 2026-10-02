@@ -127,12 +127,12 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
             m(
               "p",
               { class: "m-0 mt-2" },
-              `Deleting a note erases its file and removes its line from ${document.index_path}. Nothing in the workspace keeps a copy.`,
+              `Deleting a note erases its file and its line in ${document.index_path}. Chat transcripts that read or listed the note still hold its text or summary.`,
             ),
             m(
               "p",
               { class: "m-0 mt-2" },
-              "Each delete or edit made here is recorded (the note's file name and when, never what it said) in data/.apps/memories/user-changes.jsonl for 30 days. Every chat reads that record before each message, so one that still remembers the note in its conversation doesn't save it again.",
+              "Each delete or edit made here is recorded (the note's file name, what was done and when; never its text) in data/.apps/memories/user-changes.jsonl for 30 days. Every chat reads that record before each message, so one that still remembers the note in its conversation doesn't save it again.",
             ),
             m("p", { class: "m-0 mt-2" }, backupsDetail(document.backups)),
             m(

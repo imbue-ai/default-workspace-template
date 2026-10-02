@@ -314,3 +314,17 @@ def test_a_note_that_cannot_be_read_is_named_on_the_page(tmp_path: Path) -> None
 
     assert [note["file_name"] for note in body["notes"]] == ["units.md"]
     assert "locked.md could not be read, so it isn't shown." in body["messages"]
+
+
+def test_a_delete_is_recorded_even_when_the_index_cannot_be_rewritten(tmp_path: Path) -> None:
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        notes_dir = tmp_path / "memories"
+        version = client.get("/api/notes").get_json()["notes"][0]["version"]
+        (notes_dir / INDEX_FILENAME).unlink()
+        (notes_dir / INDEX_FILENAME).mkdir()
+        response = client.delete("/api/notes/units.md", json={"version": version})
+
+    assert response.status_code == 200
+    assert not (notes_dir / "units.md").exists()
+    assert [change.file_name for change in _changes(tmp_path)] == ["units.md"]

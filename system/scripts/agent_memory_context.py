@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print the workspace memory a harness without Claude's built-in memory needs: how to keep it, and its index.
+"""What every chat is told about the workspace's shared memory, and the upkeep that keeps the notes consistent.
 
 Claude chats keep their notes in ``data/memories/`` through Claude Code's own auto memory (``autoMemoryDirectory``
 in ``.claude/settings.json``): Claude Code tells the model how to write a note and loads the first 200 lines of
@@ -36,11 +36,13 @@ hooks run it under a plain ``python3``.
 """
 
 import argparse
+import fcntl
 import json
 import os
 import re
 import sys
 import uuid
+from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final, NamedTuple
@@ -59,7 +61,11 @@ CHANGE_MAX_AGE: Final[timedelta] = timedelta(days=30)
 INDEX_FILENAME: Final[str] = "MEMORY.md"
 NON_NOTE_FILENAMES: Final[frozenset[str]] = frozenset({"MEMORY.md", "README.md"})
 SAVED_SINCE_MAX_NOTES: Final[int] = 20
-HOOK_MAX_CHANGES: Final[int] = 20
+# Held while MEMORY.md is read and rewritten; the Agent Memory app (memories/notes.py) takes the same lock file.
+INDEX_LOCK_FILENAME: Final[str] = ".MEMORY.md.lock"
+# The hook's mark is set this far before its clock, so a change the app timestamped just before the hook ran, but
+# wrote just after it read the record, is announced next time rather than never.
+HOOK_MARK_SLACK: Final[timedelta] = timedelta(seconds=5)
 # A note this chat wrote is stamped a moment after its Write call is recorded.
 OWN_WRITE_TOLERANCE: Final[timedelta] = timedelta(seconds=5)
 _CLAUDE_WRITE_TOOLS: Final[frozenset[str]] = frozenset({"Write", "Edit", "MultiEdit"})
@@ -178,22 +184,44 @@ def stamp_note(path: Path, notes_dir: Path, harness: str, now: datetime) -> bool
     ):
         return False
     try:
-        text = path.read_text(encoding="utf-8")
+        text = _read_keeping_newlines(path)
         mode = path.stat().st_mode
-    except OSError:
+    except (OSError, ValueError):
         return False
     stamped = stamp_note_text(text, harness, now)
     if stamped is None or stamped == text:
         return False
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        temporary.write_text(stamped, encoding="utf-8")
+        _write_keeping_newlines(temporary, stamped)
         os.chmod(temporary, mode)
         os.replace(temporary, path)
     except OSError:
         temporary.unlink(missing_ok=True)
         return False
     return True
+
+
+def _read_keeping_newlines(path: Path) -> str:
+    with path.open(encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
+def _write_keeping_newlines(path: Path, text: str) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
+
+
+def _is_note_file_name(file_name: str) -> bool:
+    """The Agent Memory app's rule (``is_note_file_name``): any visible Markdown file directly in the folder."""
+    return (
+        file_name.endswith(".md")
+        and file_name != ".md"
+        and not file_name.startswith(".")
+        and "/" not in file_name
+        and "\\" not in file_name
+        and file_name not in NON_NOTE_FILENAMES
+    )
 
 
 def read_index(notes_dir: Path) -> str | None:
@@ -251,14 +279,18 @@ def _index_title(note_name: str, file_name: str) -> str:
 
 
 def sync_index_text(
-    index_text: str, description_by_file: dict[str, str], name_by_file: dict[str, str]
+    index_text: str,
+    description_by_file: dict[str, str],
+    name_by_file: dict[str, str],
+    note_files: AbstractSet[str],
 ) -> str:
     """``MEMORY.md`` with each note's line summarizing it as its own ``description`` says.
 
     A chat that changes a note does not always change its line, and every chat starts from these lines, so the line
     is the note's description, kept in step here rather than left to each model. A note's first line is rewritten,
-    later lines for it are dropped, and a note with no line gets one appended. Everything else (headings, prose,
-    lines for files that are gone) is left as it is.
+    later lines for it are dropped, a note with no line gets one appended, and a line for a note file that is gone
+    is dropped, so a deleted fact never stays in what chats start from. Everything else (headings, prose, links to
+    anything that is not a note) is left as it is.
     """
     newline = "\r\n" if "\r\n" in index_text else "\n"
     kept: list[str] = []
@@ -266,6 +298,12 @@ def sync_index_text(
     for line in index_text.splitlines():
         match = _INDEX_LINE_PATTERN.match(line)
         file_name = match.group("file") if match is not None else None
+        if (
+            file_name is not None
+            and _is_note_file_name(file_name)
+            and file_name not in note_files
+        ):
+            continue
         if match is None or file_name not in description_by_file:
             kept.append(line)
             continue
@@ -282,19 +320,32 @@ def sync_index_text(
 def sync_index(notes_dir: Path) -> bool:
     """Bring ``MEMORY.md`` in line with the notes (see ``sync_index_text``); True when it was rewritten.
 
-    A note that cannot be read, or has no description, keeps whatever line it has. Writes go through a temporary
-    file and a rename, and only when something changed. A chat appending a line between the read and the rename
-    loses it, and the next sync puts it back, since the line is rebuilt from the note.
+    The notes and the index are read and the index rewritten under the index lock the Agent Memory app also takes,
+    so a delete in the app and a sync here never write over each other. A note that cannot be read, or has no
+    description, keeps whatever line it has. The write goes through a temporary file and a rename, only when
+    something changed, and keeps the file's line endings and permissions.
     """
+    try:
+        lock = (notes_dir / INDEX_LOCK_FILENAME).open("a")
+    except OSError:
+        return False
+    with lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        return _sync_index_locked(notes_dir)
+
+
+def _sync_index_locked(notes_dir: Path) -> bool:
     description_by_file: dict[str, str] = {}
     name_by_file: dict[str, str] = {}
     try:
-        paths = sorted(notes_dir.glob("*.md"))
+        note_paths = [
+            path
+            for path in sorted(notes_dir.glob("*.md"))
+            if _is_note_file_name(path.name)
+        ]
     except OSError:
         return False
-    for path in paths:
-        if path.name in NON_NOTE_FILENAMES:
-            continue
+    for path in note_paths:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -304,16 +355,24 @@ def sync_index(notes_dir: Path) -> bool:
             description_by_file[path.name] = description
             name_by_file[path.name] = _frontmatter_value(text, "name")
     index_path = notes_dir / INDEX_FILENAME
-    index_text = read_index(notes_dir)
-    if index_text is None and index_path.exists():
+    try:
+        index_text = _read_keeping_newlines(index_path)
+    except FileNotFoundError:
+        index_text = ""
+    except (OSError, ValueError):
         return False
-    synced = sync_index_text(index_text or "", description_by_file, name_by_file)
-    if synced == (index_text or ""):
+    synced = sync_index_text(
+        index_text,
+        description_by_file,
+        name_by_file,
+        {path.name for path in note_paths},
+    )
+    if synced == index_text:
         return False
     temporary = index_path.with_name(f".{INDEX_FILENAME}.{uuid.uuid4().hex}.tmp")
     try:
-        temporary.write_text(synced, encoding="utf-8")
-        if index_text is not None:
+        _write_keeping_newlines(temporary, synced)
+        if index_path.exists():
             os.chmod(temporary, index_path.stat().st_mode)
         os.replace(temporary, index_path)
     except OSError:
@@ -322,8 +381,14 @@ def sync_index(notes_dir: Path) -> bool:
     return True
 
 
-def latest_changes(changes_text: str, now: datetime) -> list[tuple[str, str, datetime]]:
-    """Each note's latest delete or edit within ``CHANGE_MAX_AGE`` as (file name, change, when), oldest first."""
+def latest_changes(
+    changes_text: str, now: datetime, notes_dir: Path
+) -> list[tuple[str, str, datetime]]:
+    """Each note's latest delete or edit within ``CHANGE_MAX_AGE`` as (file name, change, when), oldest first.
+
+    A delete is left out once a chat has saved that note again since (the user told it the fact again), so chats
+    are not told to keep away from a note that is back.
+    """
     latest: dict[str, tuple[str, datetime]] = {}
     for line in changes_text.splitlines():
         try:
@@ -341,9 +406,20 @@ def latest_changes(changes_text: str, now: datetime) -> list[tuple[str, str, dat
         if previous is None or at >= previous[1]:
             latest[file_name] = (change, at)
     return sorted(
-        ((name, change, at) for name, (change, at) in latest.items()),
+        (
+            (name, change, at)
+            for name, (change, at) in latest.items()
+            if not (change == "deleted" and _saved_after(notes_dir / name, at))
+        ),
         key=lambda item: item[2],
     )
+
+
+def _saved_after(path: Path, at: datetime) -> bool:
+    try:
+        return path.stat().st_mtime > at.timestamp()
+    except OSError:
+        return False
 
 
 def render_changes_notice(changes: list[tuple[str, str, datetime]]) -> str:
@@ -527,18 +603,23 @@ def notes_saved_since(
         )
         found.append((modified, line))
     found.sort()
-    return [line for _, line in found[-SAVED_SINCE_MAX_NOTES:]]
+    return [line for _, line in found]
 
 
-def render_saved_since_notice(lines: list[str]) -> str:
+def render_saved_since_notice(lines: list[str], index_path: Path) -> str:
+    """The newest ``SAVED_SINCE_MAX_NOTES`` lines, and how many more there are, so none goes unmentioned."""
     if not lines:
         return ""
+    shown = lines[-SAVED_SINCE_MAX_NOTES:]
+    more = len(lines) - len(shown)
+    tail = f"- and {more} more; read `{index_path}` for the full list\n" if more else ""
     return (
         "## Notes saved since this chat started\n\n"
         "This chat loaded the memory index when it started. Other chats (or the user) saved or changed these notes "
         "since then, so they are not in that index; open a note's file when it looks relevant:\n"
-        + "\n".join(lines)
+        + "\n".join(shown)
         + "\n"
+        + tail
     )
 
 
@@ -555,7 +636,7 @@ def claude_hook_output(
     records when it ran (a watermark per chat, in the agent's state directory) and announces only what is newer than
     that, or than the chat's start the first time. Nothing at all most of the time.
     """
-    all_changes = latest_changes(read_changes_text(changes_path), now)
+    all_changes = latest_changes(read_changes_text(changes_path), now, notes_dir)
     try:
         payload = json.loads(hook_input)
     except ValueError:
@@ -572,18 +653,17 @@ def claude_hook_output(
     if facts is None or facts.started is None:
         # Without the transcript there is no telling what the chat already heard, and a missed delete costs more than
         # a repeated notice, so the deletes and edits still go out.
-        return render_changes_notice(all_changes[-HOOK_MAX_CHANGES:])
+        return render_changes_notice(all_changes)
     since = max(facts.started, read_watermark(state_dir, session_id) or facts.started)
-    changes = [change for change in all_changes if change[2] > since][
-        -HOOK_MAX_CHANGES:
-    ]
+    changes = [change for change in all_changes if change[2] > since]
     notice = render_changes_notice(changes)
     saved_since = render_saved_since_notice(
         notes_saved_since(
             notes_dir, since, facts.own_write_at_by_file, read_index(notes_dir)
-        )
+        ),
+        notes_dir / INDEX_FILENAME,
     )
-    write_watermark(state_dir, session_id, now)
+    write_watermark(state_dir, session_id, now - HOOK_MARK_SLACK)
     return "\n".join(part for part in (notice, saved_since) if part)
 
 
@@ -662,7 +742,7 @@ def main(argv: list[str]) -> int:
         )
         return 0
     notice = render_changes_notice(
-        latest_changes(read_changes_text(arguments.changes), now)
+        latest_changes(read_changes_text(arguments.changes), now, arguments.notes_dir)
     )
     try:
         protocol_text = arguments.protocol.read_text(encoding="utf-8")

@@ -1,6 +1,7 @@
 """Tests for the notes: parsing Claude's note format, correcting a note and its index line, listing, and deleting a
 note so that its file and its index line both go while a note a chat changed meanwhile is kept."""
 
+import fcntl
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -12,15 +13,19 @@ from memories.errors import NoteNameError
 from memories.errors import NoteNotFoundError
 from memories.errors import NoteWriteError
 from memories.notes import INDEX_FILENAME
+from memories.notes import INDEX_LOCK_FILENAME
 from memories.notes import NoteType
 from memories.notes import delete_note
 from memories.notes import file_version
+from memories.notes import index_lock
 from memories.notes import list_notes
 from memories.notes import parse_note
 from memories.notes import read_index
+from memories.notes import relist_in_index
 from memories.notes import render_note
 from memories.notes import rewrite_index_hook
 from memories.notes import split_index_lines
+from memories.notes import unlist_from_index
 from memories.notes import update_note
 from memories.notes import validate_note_name
 from memories.notes import write_atomically
@@ -51,11 +56,17 @@ def test_delete_erases_the_note_and_its_index_line_and_keeps_the_others(tmp_path
     notes_dir = _notes_dir(tmp_path)
 
     delete_note(notes_dir, "units.md", file_version(notes_dir / "units.md"))
+    unlist_from_index(notes_dir, "units.md")
 
     assert not (notes_dir / "units.md").exists()
     assert (notes_dir / "role.md").is_file()
     assert (notes_dir / INDEX_FILENAME).read_text() == "- [Role](role.md) — Is a designer\n"
-    assert sorted(path.name for path in tmp_path.rglob("*")) == ["MEMORY.md", "memories", "role.md"]
+    assert sorted(path.name for path in tmp_path.rglob("*")) == [
+        INDEX_LOCK_FILENAME,
+        "MEMORY.md",
+        "memories",
+        "role.md",
+    ]
 
 
 def test_delete_works_when_the_note_has_no_index_line_or_there_is_no_index(tmp_path: Path) -> None:
@@ -63,6 +74,7 @@ def test_delete_works_when_the_note_has_no_index_line_or_there_is_no_index(tmp_p
     (notes_dir / INDEX_FILENAME).unlink()
 
     delete_note(notes_dir, "units.md", file_version(notes_dir / "units.md"))
+    unlist_from_index(notes_dir, "units.md")
 
     assert not (notes_dir / "units.md").exists()
     assert not (notes_dir / INDEX_FILENAME).exists()
@@ -166,6 +178,8 @@ def test_update_note_rewrites_the_note_and_its_index_line_and_returns_the_new_ve
     notes_dir = _notes_dir(tmp_path)
 
     note = update_note(notes_dir, "units.md", "Prefers metric", "Kilometres.", file_version(notes_dir / "units.md"))
+    assert "- [Units](units.md) — Prefers metric\n" not in read_index(notes_dir)
+    relist_in_index(notes_dir, note)
 
     assert note.description == "Prefers metric"
     assert note.body == "Kilometres.\n"
@@ -321,6 +335,15 @@ def test_an_index_with_a_bad_byte_still_reads_and_rewrites(tmp_path: Path) -> No
     notes_dir = _notes_dir(tmp_path)
     (notes_dir / INDEX_FILENAME).write_bytes(b"# Memory \xff\n- [Units](units.md) \xe2\x80\x94 Prefers metric units\n")
 
-    delete_note(notes_dir, "units.md", file_version(notes_dir / "units.md"))
+    unlist_from_index(notes_dir, "units.md")
 
     assert read_index(notes_dir) == "# Memory \ufffd\n"
+
+
+def test_the_index_lock_is_exclusive_on_the_file_the_chats_lock_too(tmp_path: Path) -> None:
+    notes_dir = _notes_dir(tmp_path)
+
+    with index_lock(notes_dir):
+        with (notes_dir / ".MEMORY.md.lock").open("a") as other:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

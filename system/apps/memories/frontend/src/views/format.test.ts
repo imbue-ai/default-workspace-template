@@ -62,12 +62,14 @@ function savedBy(source: string | null, chatTitle: string | null = null): Note {
 
 describe("who saved a note", () => {
   it("names the Claude chat from its transcript, and other harnesses by name", () => {
-    expect(writerLine(savedBy("claude", "Plan the launch"))).toBe('Written by "Plan the launch" · not read since');
+    expect(writerLine(savedBy("claude", "Plan the launch"))).toBe(
+      'Written by "Plan the launch" · not opened by another chat yet',
+    );
     expect(writerLine(savedBy(null))).toBe("Who wrote this isn't recorded");
     expect(writerLine(savedBy("pi-coding"))).toBe("Saved by a pi chat");
     expect(writerLine(savedBy("codex"))).toBe("Saved by a Codex chat");
     expect(writerLine(savedBy("something-new"))).toBe("Saved by a something-new chat");
-    expect(writerLine(savedBy("pi-coding", "pi-test"))).toBe('Written by "pi-test" · not read since');
+    expect(writerLine(savedBy("pi-coding", "pi-test"))).toBe('Written by "pi-test" · not opened by another chat yet');
   });
 });
 

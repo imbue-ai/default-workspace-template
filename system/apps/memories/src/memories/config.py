@@ -13,7 +13,7 @@ class Config(BaseSettings):
 
     memories_host: str = "127.0.0.1"
     memories_port: int = 8050
-    # The notes folder Claude's built-in memory writes to (``autoMemoryDirectory`` in .claude/settings.json).
+    # The notes folder Claude and pi chats share (Claude's ``autoMemoryDirectory`` in .claude/settings.json).
     memories_notes_dir: Path = Path("data/memories")
     # The backups' retention settings and credentials, read to tell the user how long a deleted note survives in them.
     memories_backup_config_path: Path = BACKUP_TOML_PATH
