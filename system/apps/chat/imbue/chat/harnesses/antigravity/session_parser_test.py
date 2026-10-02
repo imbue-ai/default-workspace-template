@@ -123,6 +123,68 @@ def test_conversation_history_step_is_skipped() -> None:
     assert parse_step(_step(step_type_name="CONVERSATION_HISTORY", source_name="SYSTEM")) == []
 
 
+# --- agy's auto-continue nudge --------------------------------------------------------------
+
+# Verbatim, from the agy binary's own string table (agy 1.1.20, byte offset 93974880).
+_RETRY_NOTICE = "The stream was interrupted. Please continue the task you were working on."
+
+
+def test_the_retry_nudge_is_suppressed_whatever_role_it_arrives_in() -> None:
+    """agy re-prompts ITSELF with this after a broken stream, so it is framework bookkeeping
+    in every role -- and against a persistent failure (a spent quota, hours from resetting)
+    agy repeats it until the user's transcript is nothing else.
+
+    All three roles are covered because the nudge has only been observed RENDERED, never
+    decoded out of a store: pinning it to one step type would break the moment agy picked
+    another, and the whole point is that none of them reaches the user.
+    """
+    assert parse_step(_step(user_text=_RETRY_NOTICE)) == []
+    assert parse_step(_step(user_text=f"<USER_REQUEST>\n{_RETRY_NOTICE}\n</USER_REQUEST>")) == []
+    assert (
+        parse_step(_step(step_type_name="PLANNER_RESPONSE", source_name="MODEL", assistant_text=_RETRY_NOTICE)) == []
+    )
+    assert parse_step(_step(step_type_name="ERROR_MESSAGE", status_name="ERROR", error_text=_RETRY_NOTICE)) == []
+
+
+def test_a_planner_response_carrying_the_nudge_is_suppressed_even_with_thinking() -> None:
+    """The step is agy's, not the model's, so its reasoning is not the user's to read either --
+    and an emitted event would still draw a row."""
+    step = _step(
+        step_type_name="PLANNER_RESPONSE", source_name="MODEL", assistant_text=_RETRY_NOTICE, thinking="reasoning"
+    )
+    assert parse_step(step) == []
+
+
+def test_a_message_merely_discussing_a_broken_stream_still_renders() -> None:
+    """The suppression is anchored at the START of the text. An assistant explaining what the
+    nudge is -- exactly what a debugging session looks like -- is real output."""
+    step = _step(
+        idx=3,
+        step_type_name="PLANNER_RESPONSE",
+        source_name="MODEL",
+        assistant_text=f'agy retries by sending itself "{_RETRY_NOTICE}"',
+    )
+    events = parse_step(step)
+    assert len(events) == 1
+    assert events[0]["type"] == "assistant_message"
+
+
+def test_the_quota_error_behind_the_nudges_is_offered_a_re_auth() -> None:
+    """The message the nudges were burying. Suppressing them is only half the fix: the error
+    that explains the stall has to arrive as something the user can act on, not as prose."""
+    step = _step(
+        idx=9,
+        step_type_name="ERROR_MESSAGE",
+        status_name="ERROR",
+        error_text="Individual quota reached. Please upgrade your subscription to increase your limits. "
+        "Resets in 57h47m8s.",
+    )
+    events = parse_step(step)
+    assert len(events) == 1
+    assert events[0]["is_api_error"] is True
+    assert events[0]["is_auth_error"] is True
+
+
 # --- shared tool_output behaviour (parity with claude / codex / pi) ------------------------
 
 
