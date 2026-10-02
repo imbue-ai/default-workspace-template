@@ -93,12 +93,16 @@ def test_a_refused_show_keeps_the_chat_pending() -> None:
 
 
 @pytest.mark.parametrize(
-    "error",
-    [ShellUnreachableError("the shell is restarting"), ShellAnswerMalformedError("the shell answered []")],
+    ("error", "level"),
+    [
+        (ShellUnreachableError("the shell is restarting"), "INFO"),
+        # A contract mismatch rather than a restarting shell.
+        (ShellAnswerMalformedError("the shell answered []"), "WARNING"),
+    ],
     ids=["unreachable", "malformed"],
 )
 def test_a_show_the_shell_did_not_carry_out_keeps_the_chat_pending_and_the_next_flush_retries_it(
-    error: ShellOpError,
+    error: ShellOpError, level: str, loguru_records: list[str]
 ) -> None:
     shell = FakeShell(clients=[connected_client("c1")], error=error)
     reactor = _reactor(shell)
@@ -107,6 +111,7 @@ def test_a_show_the_shell_did_not_carry_out_keeps_the_chat_pending_and_the_next_
     reactor.flush()
     assert reactor.pending_chat_ids() == {ChatId("chat-1")}
     assert not reactor.ledger.is_delivered(ChatId("chat-1"))
+    assert any(record.startswith(f"{level} ") and str(error) in record for record in loguru_records)
 
     shell.error = None
     reactor.flush()

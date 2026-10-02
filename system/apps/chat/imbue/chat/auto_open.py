@@ -296,6 +296,14 @@ class AutoOpenReactor(MutableModel):
         request = chat_show_request(chat_root_path(chat_id), showing=(), repoint=(), client_id=client_id)
         try:
             self.shell.show(request)
+        except ShellAnswerMalformedError as e:
+            logger.warning(
+                "The shell answered the show of chat {} to client {} with something else, so it is held: {}",
+                chat_id,
+                client_id,
+                e,
+            )
+            return False
         except ShellOpError as e:
             logger.info("The shell did not show chat {} to client {}, so it is held: {}", chat_id, client_id, e)
             return False
