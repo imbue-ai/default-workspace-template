@@ -183,9 +183,12 @@ class ClientStore(MutableModel):
                 return record
         return None
 
-    def record_report(self, report: ClientStateReport, now: datetime) -> ClientReportOutcome:
+    def record_report(
+        self, report: ClientStateReport, now: datetime, is_redirected: bool = False
+    ) -> ClientReportOutcome:
         """Record a ``client_state`` report: the client's last-seen stamp and the desktop it names; the user it last
-        arrived as stays."""
+        arrived as stays. A report the shell redirected off a deleted desktop (``is_redirected``) bumps the desktop
+        revision even when the stored desktop stays, so the window that made it takes the news of where it landed."""
         stamped = now.astimezone(timezone.utc)
         return self._store_client(
             report.client_id,
@@ -196,6 +199,7 @@ class ClientStore(MutableModel):
                 entries=previous.entries if previous is not None else {},
                 shown_history=previous.shown_history if previous is not None else (),
             ),
+            is_revised_regardless=is_redirected,
         )
 
     def set_active_desktop(self, client_id: ClientId, desktop_id: DesktopId, now: datetime) -> ClientReportOutcome:
@@ -221,11 +225,15 @@ class ClientStore(MutableModel):
         )
 
     def _store_client(
-        self, client_id: ClientId, build: Callable[[_StoredClient | None], _StoredClient]
+        self,
+        client_id: ClientId,
+        build: Callable[[_StoredClient | None], _StoredClient],
+        is_revised_regardless: bool = False,
     ) -> ClientReportOutcome:
         """Replace one client's entry with what ``build`` makes of the previous one (None for a new client), and
-        answer whether the stored desktop moved. A move bumps the desktop revision under the same lock as the write,
-        so the revisions order the moves as they were written, whatever order their broadcasts go out in."""
+        answer whether the stored desktop moved. A move (or any write when ``is_revised_regardless``) bumps the
+        desktop revision under the same lock as the write, so the revisions order the moves as they were written,
+        whatever order their broadcasts go out in."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             previous = document.clients.get(str(client_id))
@@ -233,9 +241,8 @@ class ClientStore(MutableModel):
             previous_desktop = previous.active_desktop if previous is not None else None
             previous_revision = previous.desktop_revision if previous is not None else 0
             is_moved = previous_desktop != built.active_desktop
-            stored = built.model_copy_update(
-                to_update(built.field_ref().desktop_revision, previous_revision + 1 if is_moved else previous_revision)
-            )
+            revision = previous_revision + 1 if is_moved or is_revised_regardless else previous_revision
+            stored = built.model_copy_update(to_update(built.field_ref().desktop_revision, revision))
             clients = {**document.clients, str(client_id): stored}
             self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
         return ClientReportOutcome(record=_record_of(client_id, stored), is_active_desktop_changed=is_moved)

@@ -759,10 +759,10 @@ class ShellState(MutableModel):
         resolved = report
         if desktops and report.active_desktop not in {desktop.id for desktop in desktops}:
             resolved = report.model_copy_update(to_update(report.field_ref().active_desktop, desktops[0].id))
-        outcome = self.clients.record_report(resolved, datetime.now(timezone.utc))
+        is_redirected = resolved is not report
+        outcome = self.clients.record_report(resolved, datetime.now(timezone.utc), is_redirected=is_redirected)
         # Only a report that moved the stored desktop, or that was redirected off a desktop that no longer exists,
         # is broadcast.
-        is_redirected = resolved is not report
         if outcome.is_active_desktop_changed or is_redirected:
             self.broadcaster.broadcast_active_desktop_changed(
                 str(report.client_id),

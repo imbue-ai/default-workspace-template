@@ -131,7 +131,7 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 
 `{"version": 2, "clients": {"<client_id>": {"active_desktop": "<desktop_id>", "last_seen": "<RFC 3339>", "user_id": "<user_id>" | null, "entries": {"<app>": {"mode": "bar" | "floating", "style": "plain" | "avatar", "position": {"x": 0.9, "y": 0.85} | null}}, "shown_history": ["<window_id>" | "home", ...], "desktop_revision": 0}}}`.
 `user_id` is the signed-in visitor the client last arrived as (section 5.5), null for the owner or an anonymous client; an entry without the key reads as null. `entries` (default `{}`) is how the client shows each pinned entry.
-`desktop_revision` (default `0`) counts the moves of `active_desktop`: every write that changes it adds one, under the same lock as the write, so the revisions order the moves as they were written.
+`desktop_revision` (default `0`) counts the moves of `active_desktop`: every write that changes it adds one, as does a report the shell lands off a deleted desktop (section 6) even when the stored desktop stays, under the same lock as the write, so the revisions order the moves as they were written.
 `shown_history` (default `[]`) is what the client's phone layout showed (`plan-phone-interface.md`), most recent last: window ids, and `"home"` for the home grid, each at most once and at most 20; a close drops the window from every client's history.
 A version-1 file (with `device_kind` and `active_view`) is read with `active_view` taken as the active desktop when a desktop of that id exists, else the first desktop, and rewritten at version 2 on the next write.
 

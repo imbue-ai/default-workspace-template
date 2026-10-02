@@ -857,12 +857,13 @@ def test_a_report_of_a_deleted_desktop_lands_the_client_on_the_first_one_and_say
         assert landed is not None and landed.active_desktop == "home"
         events = shell.activity.read_events()
         assert [(event["type"], event["to_desktop_id"]) for event in events] == [("desktop_switch", "gone")]
-        # The redirected window is told where it landed, once; a report of that desktop then changes nothing.
+        # The redirected window is told where it landed, once, at a revision newer than the one it already heard (the
+        # stored desktop did not move); a report of that desktop then changes nothing.
         assert [
-            message["desktop_id"]
+            (message["desktop_id"], message["revision"])
             for message in drain_messages(client_queue)
             if message["type"] == "active_desktop_changed"
-        ] == ["home"]
+        ] == [("home", 2)]
         settled = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
         assert _handle_client_state_message(settled, client_queue, shell, is_first_report=False) is True
         assert drain_messages(client_queue) == []
