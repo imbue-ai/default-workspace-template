@@ -913,20 +913,37 @@ export class DesktopStore {
     }
   }
 
-  /** Tell the shell the desktop this window is on: as a move of the client (``previousDesktop`` the one it left,
-   *  "" when it left none), or, when ``isFollowing``, as a window that followed the client's stored desktop, which
-   *  registers it there and moves nothing. */
-  private reportClientState(previousDesktop: string, isFollowing = false): void {
+  /** Tell the shell this window moved the client onto the desktop it is on, leaving ``previousDesktop`` ("" when it
+   *  left none). */
+  private reportClientState(previousDesktop: string): void {
+    const active = this.reportedDesktopId();
+    if (active === null) return;
+    this.deps.socket.reportClientState({
+      activeDesktop: active,
+      previousDesktop,
+      reportId: this.reportIds.mint(),
+      isFollowing: false,
+    });
+  }
+
+  /** Tell the shell this window followed the client's stored desktop, which registers it there and moves nothing. */
+  private reportFollowedDesktop(): void {
+    const active = this.reportedDesktopId();
+    if (active === null) return;
+    this.deps.socket.reportClientState({
+      activeDesktop: active,
+      previousDesktop: "",
+      reportId: null,
+      isFollowing: true,
+    });
+  }
+
+  /** The desktop this window reports as its own, null when it reports none. */
+  private reportedDesktopId(): string | null {
     // A solo shell sits on its window's desktop without moving the client there: the client's active desktop
     // is its main window's.
-    if (this.soloWindowId !== null) return;
-    const active = this.state.activeDesktopId;
-    if (active === null) return;
-    this.deps.socket.reportClientState(
-      isFollowing
-        ? { activeDesktop: active, previousDesktop: "", reportId: null, isFollowing: true }
-        : { activeDesktop: active, previousDesktop, reportId: this.reportIds.mint(), isFollowing: false },
-    );
+    if (this.soloWindowId !== null) return null;
+    return this.state.activeDesktopId;
   }
 
   /** Take note of a revision of the client's stored desktop; answers whether it is newer than any heard before. */
@@ -1182,8 +1199,17 @@ export class DesktopStore {
     await this.flushPendingSave();
     this.cancelGesture();
     this.dispatch({ type: "desktop_activated", desktopId });
-    if (cause === "push") this.reportClientState("", true);
-    else this.reportClientState(cause === "user" ? (previous ?? "") : "");
+    switch (cause) {
+      case "user":
+        this.reportClientState(previous ?? "");
+        break;
+      case "landing":
+        this.reportClientState("");
+        break;
+      case "push":
+        this.reportFollowedDesktop();
+        break;
+    }
     await this.refetchLayout();
   }
 
