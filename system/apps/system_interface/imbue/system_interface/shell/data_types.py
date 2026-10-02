@@ -30,6 +30,7 @@ from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import IfPresent
 from imbue.system_interface.shell.primitives import LaunchTargetKind
+from imbue.system_interface.shell.primitives import ReportId
 from imbue.system_interface.shell.primitives import SaveId
 from imbue.system_interface.shell.primitives import ShortcutTargetKind
 from imbue.system_interface.shell.primitives import ShowOutcome
@@ -176,8 +177,10 @@ class ClientStateReport(FrozenModel):
     client_id: ClientId = Field(description="The reporting client")
     active_desktop: DesktopId = Field(description="The desktop the client is on now")
     previous_desktop: str = Field(default="", description="The desktop it was on before, empty on connect")
-    report_id: str = Field(
-        default="", description="The window's id for this report, echoed on the broadcast it causes; empty for none"
+    report_id: ReportId | None = Field(
+        default=None,
+        description="The window's id for a report that moves the client, echoed on the broadcast it causes; None for a "
+        "following report",
     )
     is_following: bool = Field(
         default=False,

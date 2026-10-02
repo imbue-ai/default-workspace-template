@@ -39,7 +39,7 @@ function moveReport(activeDesktop: string, previousDesktop: string): ClientState
 
 /** The report of a window that followed the client's stored desktop, which moves nothing. */
 function followingReport(activeDesktop: string): ClientStateReport {
-  return { activeDesktop, previousDesktop: "", reportId: "", isFollowing: true };
+  return { activeDesktop, previousDesktop: "", reportId: null, isFollowing: true };
 }
 
 function last<T>(items: readonly T[]): T | undefined {
@@ -757,11 +757,11 @@ describe("windows", () => {
 
   it("follows a pushed desktop switch without re-reporting a previous desktop", async () => {
     const store = await startedStore();
-    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 1, reportId: "" });
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 1, reportId: null });
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
     expect(last(socket.reports)).toEqual(followingReport("work"));
-    socket.deliver().onActiveDesktopChanged({ clientId: "other", desktopId: "home", revision: 2, reportId: "" });
+    socket.deliver().onActiveDesktopChanged({ clientId: "other", desktopId: "home", revision: 2, reportId: null });
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
   });
@@ -769,7 +769,7 @@ describe("windows", () => {
 
 describe("desktop news", () => {
   /** The id the store minted for the ``index``-th report it sent. */
-  function reportIdOf(index: number): string {
+  function reportIdOf(index: number): string | null {
     return socket.reports[index].reportId;
   }
 
@@ -783,7 +783,7 @@ describe("desktop news", () => {
     await settle();
     socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home", revision: 2, reportId: toHome });
     await settle();
-    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 2, reportId: "" });
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 2, reportId: null });
     await settle();
     expect(store.getState().activeDesktopId).toBe("home");
     expect(socket.reports).toHaveLength(reportsSent);
@@ -795,7 +795,7 @@ describe("desktop news", () => {
     await store.switchDesktop("work");
     const toWork = reportIdOf(socket.reports.length - 1);
     // An agent op moved the client home just before the switch was written, and its news arrives late.
-    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home", revision: 1, reportId: "" });
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home", revision: 1, reportId: null });
     await settle();
     expect(store.getState().activeDesktopId).toBe("home");
     socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 2, reportId: toWork });
@@ -807,7 +807,7 @@ describe("desktop news", () => {
   it("re-asserts a switch made while the socket was down over a record no newer than it heard", async () => {
     const store = await startedStore();
     socket.deliver().onConnected();
-    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 3, reportId: "" });
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 3, reportId: null });
     await settle();
     // The user goes home while the socket is down, and that report is lost with it.
     await store.switchDesktop("home");
@@ -1840,7 +1840,7 @@ describe("pulled-out windows", () => {
     await store.closeFocusedWindow();
     expect(api.calls.filter((call) => call.startsWith("closeWindow"))).toEqual([]);
     // A push moving the client to another desktop is the main window's business.
-    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home", revision: 1, reportId: "" });
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home", revision: 1, reportId: null });
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
     // Another window's pull-out verbs are the main window's too: a return named for one on another desktop

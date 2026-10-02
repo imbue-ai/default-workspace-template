@@ -55,8 +55,8 @@ export interface ActiveDesktopChangedEvent {
   readonly desktopId: string;
   /** The client's desktop revision the move was written at: a window takes only a revision newer than any it heard. */
   readonly revision: number;
-  /** The id of the window report that made the move, "" when something else did. */
-  readonly reportId: string;
+  /** The id of the window report that made the move, null when something else did. */
+  readonly reportId: string | null;
 }
 
 /** What a window tells the shell about the desktop it is on. */
@@ -64,8 +64,8 @@ export interface ClientStateReport {
   readonly activeDesktop: string;
   /** The desktop the window left, "" on connect and when following. */
   readonly previousDesktop: string;
-  /** The window's id for a move (``REPORT_ID_PREFIX``), echoed on the broadcast it causes; "" when following. */
-  readonly reportId: string;
+  /** The window's id for a move (``REPORT_ID_PREFIX``), echoed on the broadcast it causes; null when following. */
+  readonly reportId: string | null;
   /** Whether the window only followed the client's stored desktop (a push): the shell registers the connection
    *  on it and moves nothing, since the record may already have moved on. */
   readonly isFollowing: boolean;
@@ -217,7 +217,7 @@ export class ShellSocket implements DesktopSocket {
           clientId: String(event.client_id ?? ""),
           desktopId: String(event.desktop_id ?? ""),
           revision: typeof event.revision === "number" ? event.revision : 0,
-          reportId: String(event.report_id ?? ""),
+          reportId: typeof event.report_id === "string" ? event.report_id : null,
         });
         return;
       case "client_entries_changed":

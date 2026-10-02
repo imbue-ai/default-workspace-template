@@ -884,15 +884,17 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
         first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
         assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
         drain_messages(client_queue)
-        move = json.dumps(
-            {
-                "type": "client_state",
-                "client_id": "c1",
-                "active_desktop": str(work.id),
-                "previous_desktop": "home",
-                "report_id": "report-0123456789abcdef",
-            }
-        )
+        move_body = {
+            "type": "client_state",
+            "client_id": "c1",
+            "active_desktop": str(work.id),
+            "previous_desktop": "home",
+            "report_id": "report-0123456789abcdef",
+        }
+        unminted = json.dumps({**move_body, "report_id": "not-a-report-id"})
+        assert _handle_client_state_message(unminted, client_queue, shell, is_first_report=False) is False
+        assert drain_messages(client_queue) == []
+        move = json.dumps(move_body)
         assert _handle_client_state_message(move, client_queue, shell, is_first_report=False) is True
         assert drain_messages(client_queue) == [
             {

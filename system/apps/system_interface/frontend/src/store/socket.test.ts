@@ -94,7 +94,7 @@ describe("ShellSocket", () => {
       reportId: "report-2",
       isFollowing: false,
     });
-    socket.reportClientState({ activeDesktop: "work", previousDesktop: "", reportId: "", isFollowing: true });
+    socket.reportClientState({ activeDesktop: "work", previousDesktop: "", reportId: null, isFollowing: true });
     expect(current().sent.map((raw) => JSON.parse(raw) as unknown)).toEqual([
       {
         type: "client_state",
@@ -109,7 +109,7 @@ describe("ShellSocket", () => {
         client_id: "client-1",
         active_desktop: "work",
         previous_desktop: "",
-        report_id: "",
+        report_id: null,
         is_following: true,
       },
     ]);
@@ -151,7 +151,7 @@ describe("ShellSocket", () => {
       clientId: "client-1",
       desktopId: "",
       revision: 0,
-      reportId: "",
+      reportId: null,
     });
     expect(handlers.onActiveDesktopChanged).toHaveBeenCalledWith({
       clientId: "client-1",

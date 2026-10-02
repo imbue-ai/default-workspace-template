@@ -617,7 +617,7 @@ class ShellState(MutableModel):
         outcome = self.clients.set_active_desktop(client_id, desktop_id, datetime.now(timezone.utc))
         if outcome.is_active_desktop_changed:
             self.broadcaster.broadcast_active_desktop_changed(
-                str(client_id), str(desktop_id), outcome.record.desktop_revision, ""
+                str(client_id), str(desktop_id), outcome.record.desktop_revision, None
             )
         return outcome.is_active_desktop_changed
 
@@ -653,7 +653,7 @@ class ShellState(MutableModel):
         # A client that already had a record may have other windows open on the desktop it was moved off.
         if record is not None and recorded.is_active_desktop_changed:
             self.broadcaster.broadcast_active_desktop_changed(
-                str(client_id), str(outcome.desktop_id), recorded.record.desktop_revision, ""
+                str(client_id), str(outcome.desktop_id), recorded.record.desktop_revision, None
             )
         return outcome
 

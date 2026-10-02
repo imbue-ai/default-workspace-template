@@ -924,7 +924,7 @@ export class DesktopStore {
     if (active === null) return;
     this.deps.socket.reportClientState(
       isFollowing
-        ? { activeDesktop: active, previousDesktop: "", reportId: "", isFollowing: true }
+        ? { activeDesktop: active, previousDesktop: "", reportId: null, isFollowing: true }
         : { activeDesktop: active, previousDesktop, reportId: this.reportIds.mint(), isFollowing: false },
     );
   }
@@ -960,7 +960,8 @@ export class DesktopStore {
    *  has replaced since with another is followed by the later one's own echo. */
   private takeActiveDesktopChanged(event: ActiveDesktopChangedEvent): void {
     if (event.clientId !== this.deps.clientId || !this.hearDesktopRevision(event.revision)) return;
-    if (this.reportIds.isSuperseded(event.reportId) || event.desktopId === this.state.activeDesktopId) return;
+    if (event.reportId !== null && this.reportIds.isSuperseded(event.reportId)) return;
+    if (event.desktopId === this.state.activeDesktopId) return;
     // A solo shell stays on its window's desktop whatever the client's main window switches to.
     if (this.soloWindowId !== null) return;
     void this.switchDesktop(event.desktopId, "push");
