@@ -40,7 +40,7 @@ A fourth label, ``runtime_dir=<repo-relative runtime dir>``, records where the
 worker's task file and reports live, so ``destroy`` can carry a descendant's
 runtime dir upward without opening any task file.
 
-Six subcommands cover the lead-side lifecycle, and one (``report``) the
+Seven subcommands cover the lead-side lifecycle, and one (``report``) the
 worker side:
 
 ``launch``
@@ -114,6 +114,12 @@ worker side:
     and the ``archived_at`` label marks each one as stopped on purpose rather
     than crashed. This is what a lead does with a worker that failed.
     ``--no-recursive`` stops the one agent.
+
+``revive``
+    ``stop``'s inverse, for one agent: ``mngr start`` brings it back in its
+    worktree with its conversation intact, then its ``archived_at`` label is
+    blanked so a later crash is restarted like any other. A lead uses it to
+    resume a failed worker's task after the user overrides the failure.
 
 The ``launch`` / ``await`` / ``launch-sync`` subcommands take the same
 ``--task-file``: ``launch`` sends it to the worker, and ``await`` /
