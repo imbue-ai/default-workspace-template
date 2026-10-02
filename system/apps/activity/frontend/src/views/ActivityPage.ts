@@ -152,12 +152,18 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
     action: "stop" | "start",
     isInterruptConfirmed: boolean,
   ): Promise<void> {
-    if (item.chat_id === null) return;
+    if (item.chat_id === null || isActionRunning) return;
     isActionRunning = true;
     actionMessage = null;
     m.redraw();
-    const result = await attrs.onChatAction(item.chat_id, action, isInterruptConfirmed);
-    isActionRunning = false;
+    let result: ChatActionResult;
+    try {
+      result = await attrs.onChatAction(item.chat_id, action, isInterruptConfirmed);
+    } catch (error) {
+      result = { kind: "failed", message: String(error) };
+    } finally {
+      isActionRunning = false;
+    }
     switch (result.kind) {
       case "done":
         pendingStop = null;
@@ -223,31 +229,33 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
     const isAgent = isChat || item.kind === "HELPER_AGENT" || item.kind === "AGENT";
     const isStopped = isAgent ? item.state === "stopped" : item.state !== "RUNNING" && item.state !== "UNKNOWN";
     const subLine = isAgent ? chatStateLine(item, attrs.nowMs) : programStateLine(item);
-    const action: m.Children = isChat
-      ? isStopped
-        ? m(
-            Button,
-            {
-              variant: "ghost",
-              sm: true,
-              disabled: isActionRunning,
-              onclick: () => runAction(attrs, item, "start", false),
-            },
-            "Start",
-          )
-        : m(
-            Button,
-            {
-              variant: "secondary",
-              sm: true,
-              disabled: isActionRunning,
-              onclick: () => (pendingStop = stopFor(item)),
-            },
-            "Stop",
-          )
-      : item.always_on_reason !== null
-        ? m("span", { class: badgeClass("neutral"), title: item.always_on_reason }, "Always on")
-        : null;
+    // A preview of a proposed change shows the live workspace, so it offers nothing that would change it.
+    const action: m.Children =
+      isChat && !summary.is_preview
+        ? isStopped
+          ? m(
+              Button,
+              {
+                variant: "ghost",
+                sm: true,
+                disabled: isActionRunning,
+                onclick: () => runAction(attrs, item, "start", false),
+              },
+              "Start",
+            )
+          : m(
+              Button,
+              {
+                variant: "secondary",
+                sm: true,
+                disabled: isActionRunning,
+                onclick: () => (pendingStop = stopFor(item)),
+              },
+              "Stop",
+            )
+        : item.always_on_reason !== null
+          ? m("span", { class: badgeClass("neutral"), title: item.always_on_reason }, "Always on")
+          : null;
     const sharePercent = usedKib > 0 ? Math.min(100, (100 * item.rss_kib) / usedKib) : 0;
     const share = formatShare(item.rss_kib, usedKib);
     return m(
@@ -440,7 +448,7 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
   }
 
   function suggestions(summary: ActivitySummary, attrs: ActivityPageAttrs): m.Children {
-    if (summary.memory === null || summary.memory.status === "COMFORTABLE") return null;
+    if (summary.memory === null || summary.memory.status === "COMFORTABLE" || summary.is_preview) return null;
     const stoppable = summary.chats.filter((item) => isStopSuggested(item, attrs.nowMs));
     if (stoppable.length === 0) return null;
     return m("div", { class: "flex flex-col gap-2 rounded-lg border border-default bg-surface-secondary p-4" }, [
@@ -526,20 +534,20 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
         title: `Stop "${item.name}"?`,
         card: { role: "dialog", "aria-modal": "true", "aria-label": `Stop "${item.name}"?` },
         actions: [
-          m(Button, { variant: "secondary", disabled: isActionRunning, onclick: close }, "Keep running"),
-          // Focus lands on the action the dialog is for, so Enter confirms it.
+          // Focus lands on the safe choice, so a second press of Enter on the row's Stop cannot interrupt a chat.
           m(
             "span",
             { oncreate: (vnode: m.VnodeDOM) => vnode.dom.querySelector("button")?.focus() },
-            m(
-              Button,
-              {
-                variant: "primary",
-                disabled: isActionRunning,
-                onclick: () => runAction(attrs, item, "stop", isWorking),
-              },
-              isActionRunning ? "Stopping…" : "Stop chat",
-            ),
+            m(Button, { variant: "secondary", disabled: isActionRunning, onclick: close }, "Keep running"),
+          ),
+          m(
+            Button,
+            {
+              variant: "primary",
+              disabled: isActionRunning,
+              onclick: () => runAction(attrs, item, "stop", isWorking),
+            },
+            isActionRunning ? "Stopping…" : "Stop chat",
           ),
         ],
       },
@@ -573,6 +581,10 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
         );
       const summary = state.summary;
       const usedKib = shareBaseKib(summary);
+      // The likely first to close is flagged on its row, so a pick among the background services opens them.
+      const isServicesShown =
+        isServicesOpen || summary.services.some((item) => item.item_id === summary.likely_first_to_close?.item_id);
+      const servicesSize = formatKib(summary.services.reduce((sum, item) => sum + item.rss_kib, 0));
       const headline = summary.memory === null ? null : headlineFor(summary.memory);
       return [
         m("div", { class: "flex flex-col gap-6" }, [
@@ -583,6 +595,13 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
                 m("h2", { class: "m-0 type-heading-lg text-primary text-balance" }, headline.title),
                 m("p", { class: "m-0 type-body text-secondary" }, headline.body),
               ]),
+          summary.is_preview
+            ? m(
+                "p",
+                { class: "m-0 rounded-md bg-warning-surface px-3 py-2 type-helper text-primary", role: "status" },
+                "This is a preview of a proposed change to System Monitor. It shows the live workspace but can't stop anything in it.",
+              )
+            : null,
           attrs.refreshFailure === null
             ? null
             : m(
@@ -630,13 +649,13 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
                   sm: true,
                   quiet: true,
                   extra: "activity-services-toggle tabular-nums",
-                  "aria-expanded": String(isServicesOpen),
-                  "aria-label": isServicesOpen ? "Hide background services" : "Show background services",
-                  onclick: () => (isServicesOpen = !isServicesOpen),
+                  "aria-expanded": String(isServicesShown),
+                  "aria-label": `${isServicesShown ? "Hide" : "Show"} background services, ${servicesSize}`,
+                  onclick: () => (isServicesOpen = !isServicesShown),
                 },
                 [
-                  formatKib(summary.services.reduce((sum, item) => sum + item.rss_kib, 0)),
-                  m.trust(icon(isServicesOpen ? "chevron-down" : "chevron-right", { size: CHEVRON_SIZE })),
+                  servicesSize,
+                  m.trust(icon(isServicesShown ? "chevron-down" : "chevron-right", { size: CHEVRON_SIZE })),
                 ],
               ),
             ]),
@@ -645,7 +664,7 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
               { class: "m-0 pt-2 type-helper text-secondary" },
               "These keep the workspace running: backups, sharing, the desktop itself. You can't stop them here.",
             ),
-            isServicesOpen ? summary.services.map((item) => itemRow(item, summary, usedKib, attrs)) : null,
+            isServicesShown ? summary.services.map((item) => itemRow(item, summary, usedKib, attrs)) : null,
           ]),
           summary.notes.length === 0
             ? null

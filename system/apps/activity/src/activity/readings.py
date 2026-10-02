@@ -65,7 +65,7 @@ def read_app_rows(registry_path: Path) -> tuple[list[RegistryRow], str | None]:
 
 
 def collect_summary_inputs(
-    sources: ReadingSources, client: httpx.Client, read_process_info: ReadProcessInfo, now: datetime
+    sources: ReadingSources, client: httpx.Client, read_process_info: ReadProcessInfo, now: datetime, is_preview: bool
 ) -> SummaryInputs:
     notes: list[str] = []
     app_rows, registry_note = read_app_rows(sources.registry_path)
@@ -106,4 +106,5 @@ def collect_summary_inputs(
         agents=tuple(read_registered_agents(sources.proc_dir)),
         app_rows=tuple(app_rows),
         notes=tuple(notes),
+        is_preview=is_preview,
     )

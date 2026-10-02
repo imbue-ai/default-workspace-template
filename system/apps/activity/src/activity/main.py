@@ -57,6 +57,7 @@ def build_pages_app(arguments: ActivityArguments, client: httpx.Client) -> Flask
             client=client,
             read_process_info=socket_process_info_reader(supervisor_socket_path()),
             now=utc_now,
+            is_preview=not arguments.is_registered,
         )
     )
     return app

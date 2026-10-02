@@ -118,3 +118,70 @@ describe("the memory bar", () => {
     expect(widths.reduce((sum, width) => sum + width, 0)).toBeCloseTo(42.5, 5);
   });
 });
+
+describe("acting safely", () => {
+  afterEach(unmountViews);
+
+  function mountPage(
+    loaded: ReturnType<typeof summary>,
+    onChatAction: (
+      chatId: string,
+      action: "stop" | "start",
+      isInterruptConfirmed: boolean,
+    ) => Promise<ChatActionResult>,
+  ): HTMLElement {
+    return mountView(() =>
+      m(ActivityPage, {
+        state: { kind: "loaded", summary: loaded },
+        refreshFailure: null,
+        nowMs: Date.now(),
+        onAskInChat: () => true,
+        onChatAction,
+      }),
+    );
+  }
+
+  it("focuses Keep running, so a second Enter on the row's Stop cannot stop the chat", async () => {
+    const root = mountPage(summary("COMFORTABLE", [WALLPAPER], null), async () => ({ kind: "done" }));
+    buttonNamed(root, "Stop").click();
+    m.redraw.sync();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(document.activeElement?.textContent?.trim()).toBe("Keep running");
+  });
+
+  it("frees its buttons and says so when the stop itself throws", async () => {
+    const root = mountPage(summary("COMFORTABLE", [WALLPAPER], null), async () => {
+      throw new Error("network down");
+    });
+    buttonNamed(root, "Stop").click();
+    m.redraw.sync();
+    buttonNamed(document.body, "Stop chat").click();
+    await settle();
+    expect(document.body.textContent).toContain('Couldn\'t stop "Wallpaper": Error: network down');
+    expect(buttonNamed(root, "Stop").disabled).toBe(false);
+  });
+
+  it("offers no Stop or Start in a preview, and says why", () => {
+    const stopped = item({ item_id: "chat:c2", name: "Logo", chat_id: "c2", state: "stopped" });
+    const root = mountPage({ ...summary("TIGHT", [WALLPAPER, stopped], null), is_preview: true }, async () => ({
+      kind: "done",
+    }));
+    const labels = Array.from(root.querySelectorAll("button")).map((button) => button.textContent?.trim());
+    expect(labels).not.toContain("Stop");
+    expect(labels).not.toContain("Start");
+    expect(root.textContent).toContain("can't stop anything in it");
+  });
+
+  it("opens the background services when the likely first to close is one of them", () => {
+    const backup = item({
+      item_id: "service:host-backup",
+      name: "Backups",
+      kind: "SERVICE",
+      chat_id: null,
+      rss_kib: 900 * 1024,
+    });
+    const root = mountPage(summary("CRITICAL", [backup], "service:host-backup"), async () => ({ kind: "done" }));
+    const row = root.querySelector('[data-item-id="service:host-backup"]');
+    expect(row?.textContent).toContain("Likely closed first");
+  });
+});
