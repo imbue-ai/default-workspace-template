@@ -1,4 +1,4 @@
-Agent Memory has memory settings, modelled on the Claude apps': "Use memory" pauses memory for every chat, and a switch per kind of chat (Claude, pi) turns it off for just those. While it is off, chats keep what is saved but neither use it nor save anything new; the notes are not deleted.
+Agent Memory has memory settings, modelled on the Claude apps': "Use memory" pauses memory for every chat, and a switch per kind of chat (Claude, pi) turns it off for just those. While it is off, chats keep what is saved but neither use it nor save anything new; the notes are not deleted. The settings say plainly that a chat still knows what it was told earlier in the same conversation, since pausing memory can't take that back.
 
 - The first fact at the top says which chats use the notes ("Shared with your Claude and pi chats", "Used by your Claude chats only", "Memory paused"), and "Where your notes go" says who reads them.
 

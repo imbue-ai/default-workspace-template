@@ -328,6 +328,9 @@ describe("memory settings", () => {
     expect(root.querySelector(".memories-settings")?.textContent).toContain(
       "pi chats follow these from their next message. New Claude chats follow them right away",
     );
+    expect(root.querySelector(".memories-settings")?.textContent).toContain(
+      "A chat still knows what you told it earlier in the same conversation.",
+    );
 
     switchNamed(root, "memory-switch-pi_coding").click();
     await settle();

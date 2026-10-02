@@ -148,8 +148,11 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
       ),
       m("span", { class: badgeClass("neutral") }, "Not shared with other workspaces"),
       m("span", { class: backups.isWarning ? CAUTION_BADGE_CLASS : badgeClass("neutral") }, backups.text),
-      disclose("how", "How memory works", "Hide how memory works"),
-      disclose("settings", "Settings", "Hide settings"),
+      // The links share the chips' centre line, and stay together when the row wraps.
+      m("span", { class: "memories-fact-links flex items-center gap-3 [&>button]:self-center" }, [
+        disclose("how", "How memory works", "Hide how memory works"),
+        disclose("settings", "Settings", "Hide settings"),
+      ]),
     ]);
   }
 
@@ -210,7 +213,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
         memorySwitch(
           "memory-switch-all",
           "Use memory",
-          "Chats keep what's saved, but while this is off they don't use it or save anything new.",
+          "Chats keep what's saved, but while this is off they don't use it or save anything new. A chat still knows what you told it earlier in the same conversation.",
           !controls.is_paused,
           true,
           () => save({ is_paused: !controls.is_paused, disabled_harnesses: controls.disabled_harnesses }),
