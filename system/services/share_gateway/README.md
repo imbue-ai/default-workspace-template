@@ -138,11 +138,10 @@ declares `shareable = false` (the chat, terminal, browser, and Getting
 Started) is reached only through a workspace-level grant: a per-service grant
 on it admits nobody, and a visitor whose only grants are on such apps is
 refused at login. The gateway reads this from `data/.state/apps.toml` on every
-request, beside the label map. Within a scope the
-visitor's `user_id` is matched against `users` first, then their verified
-email against `emails` (case-insensitive), then its domain against
-`email_domains`. A document written before `users` existed reads as having
-none.
+request, beside the label map. Within a scope the visitor's `user_id` is
+matched against `users` first, then their verified email against `emails`
+(case-insensitive), then its domain against `email_domains`. A document
+written before `users` existed reads as having none.
 
 A `users` entry is an account's user id, the durable identity. An `emails`
 entry is an invitation: once a visitor with that verified email is admitted
