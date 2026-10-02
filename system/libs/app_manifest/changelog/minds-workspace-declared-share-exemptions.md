@@ -1,1 +1,1 @@
-Added the `shareable` manifest key (bool, default `true`) to `AppManifest` and `RegistryRow`: whether the minds Share tab offers the app as a share target of its own. An `internal` app is never offered, whatever it declares.
+Added the `shareable` manifest key (bool, default `true`) to `AppManifest` and `RegistryRow`: whether the minds Share tab offers the app as a share target of its own. An `internal` app is never offered, whatever it declares. `RegistryRow.is_share_target` gives that combined answer (shareable and not internal).

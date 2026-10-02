@@ -96,9 +96,7 @@ class AnnouncementDiff(FrozenModel):
 
 @pure
 def announced_row_of(row: RegistryRow) -> AnnouncedRow:
-    return AnnouncedRow(
-        url=str(row.url), label=row.label, icon=row.icon or "", is_shareable=row.shareable and not row.internal
-    )
+    return AnnouncedRow(url=str(row.url), label=row.label, icon=row.icon or "", is_shareable=row.is_share_target)
 
 
 @pure

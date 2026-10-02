@@ -129,6 +129,11 @@ class RegistryRow(FrozenModel):
         default=(), description="The messages the app takes and where the shell posts each; absent means none"
     )
 
+    @property
+    def is_share_target(self) -> bool:
+        """Whether the app is a share target of its own: shareable and not internal."""
+        return self.shareable and not self.internal
+
 
 def registry_path() -> Path:
     return Path(os.environ.get(ENV_APPS_FILE, DEFAULT_APPS_FILE))

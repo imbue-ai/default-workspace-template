@@ -475,7 +475,7 @@ class AppLifecycleManager(MutableModel):
         if (
             not entry.row.stop_when_no_windows
             or window_counts().get(app, 0) > 0
-            or (entry.row.shareable and not entry.row.internal and app in granted_apps())
+            or (entry.row.is_share_target and app in granted_apps())
         ):
             with self._lock:
                 self._idle_since_by_app.pop(app, None)
