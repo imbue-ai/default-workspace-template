@@ -77,7 +77,9 @@ class ClientRecord(FrozenModel):
         "each at most once",
     )
     desktop_revision: int = Field(
-        default=0, description="How many times the stored active desktop has moved: orders the client's desktop news"
+        default=0,
+        description="Counts the moves of the stored active desktop and the reports redirected off a deleted desktop: "
+        "orders the client's desktop news",
     )
 
 

@@ -63,7 +63,10 @@ class _StoredClient(FrozenModel):
     shown_history: tuple[str, ...] = Field(
         default=(), description="What the client has shown on the phone layout, most recent last"
     )
-    desktop_revision: int = Field(default=0, description="How many times the stored active desktop has moved")
+    desktop_revision: int = Field(
+        default=0,
+        description="Counts the moves of the stored active desktop and the reports redirected off a deleted desktop",
+    )
 
 
 class ClientsDocument(FrozenModel):

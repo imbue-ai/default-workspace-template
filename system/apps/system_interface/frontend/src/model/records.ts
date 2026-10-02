@@ -201,7 +201,8 @@ export interface ClientRecord {
   /** What the client's phone layout has shown (plan-phone-interface.md), most recent last: window ids, and
    *  ``SHOWN_HOME`` for the home grid. */
   readonly shown_history: readonly string[];
-  /** How many times the client's stored desktop has moved: orders what a window hears of its desktop. */
+  /** Counts the moves of the client's stored desktop and the reports the shell redirected off a deleted desktop:
+   *  orders what a window hears of its desktop. */
   readonly desktop_revision: number;
 }
 
