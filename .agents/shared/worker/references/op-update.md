@@ -57,7 +57,7 @@ what landed:
 Hardened <app> on branch `<branch>`.
 - Change: <one-sentence>
 - Frontend / backend: <which, and the files touched>
-- Bundles built: <the static/ path of every bundle you built, all three when the shared library changed>
+- Bundles built: <the static/ path of every bundle you built, every one when the shared library changed>
 - Tests run: <the test gate's commands (select-tests) and Playwright -- all pass>
 - Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 - Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>

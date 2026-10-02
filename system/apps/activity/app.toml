@@ -1,0 +1,21 @@
+# The Activity app, shown as "System Monitor": what is using the workspace's memory, grouped into things a user
+# recognizes (chats, apps, background services), with the raw process table and the files every
+# figure came from one click away. It reads everything when asked and keeps nothing between
+# requests, so the shell stops it once no window shows it: closed, it costs no memory.
+name = "activity"
+display_name = "System Monitor"
+icon = "icon.svg"
+critical = false
+stop_when_no_windows = true
+priority = "activity"
+# Last among the built-ins: a tool the user opens when they wonder what is slowing the workspace,
+# not one of the ways in.
+launcher_rank = 50
+
+# A preview serves the page on a free port, unregistered, so it never re-points the live row, and
+# reads the registry copy so its app rows are the live workspace's. The app keeps nothing under
+# data/.apps/, so there is nothing to copy.
+[preview]
+command = ["activity-app", "--no-register"]
+env = {ACTIVITY_PORT = "{port:main}", ACTIVITY_HOST = "{host}", MINDS_APPS_FILE = "{registry}"}
+health_path = "/api/health"
