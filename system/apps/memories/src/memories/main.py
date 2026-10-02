@@ -41,6 +41,8 @@ class MemoriesArguments(FrozenModel):
     backup_config_path: Path = Field(description="The backups' retention settings")
     restic_env_path: Path = Field(description="The backups' credentials, whose presence says backups are set up")
     changes_path: Path = Field(description="The record of notes the user deleted or edited, which chats read")
+    controls_path: Path = Field(description="The user's memory switches, which chats read")
+    claude_settings_path: Path = Field(description="The Claude settings file new chats read autoMemoryEnabled from")
     host: str = Field(description="The address the page server binds")
     is_registered: bool = Field(
         description="Whether this boot is the workspace's memories app and registers the manifest; a preview boots "
@@ -58,6 +60,8 @@ def build_pages_app(arguments: MemoriesArguments, client: httpx.Client) -> Flask
             backup_config_path=arguments.backup_config_path,
             restic_env_path=arguments.restic_env_path,
             changes_path=arguments.changes_path,
+            controls_path=arguments.controls_path,
+            claude_settings_path=arguments.claude_settings_path,
             now=utc_now,
             transcript_sources=default_transcript_sources(notes_dir=arguments.notes_dir),
             registry_path=registry_path(),
@@ -88,6 +92,8 @@ def arguments_from_config(
         backup_config_path=config.memories_backup_config_path,
         restic_env_path=config.memories_restic_env_path,
         changes_path=config.memories_changes_path,
+        controls_path=config.memories_controls_path,
+        claude_settings_path=config.memories_claude_settings_path,
         host=config.memories_host,
         is_registered=is_registered,
     )

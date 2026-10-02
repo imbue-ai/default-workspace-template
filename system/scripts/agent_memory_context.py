@@ -30,6 +30,11 @@ in the hook's input) and prints the deletes and edits, and the index lines of no
 newer than its last run for that chat (kept in the agent's state directory) -- each once, since the chat keeps what an
 earlier message's hook added, and nothing at all when there is nothing new.
 
+The user can pause memory, or turn it off for one kind of chat, in the Agent Memory app, which keeps the switches in
+``data/.apps/memories/settings.json``. While memory is off for a harness, this prints a short notice saying so in
+place of the protocol and the index (and, for Claude, on every message), and Claude's hook tells an open chat once
+when it is back on. A settings file that cannot be read counts as off.
+
 Fails open: if the protocol cannot be read, it prints nothing and exits 0, so a broken checkout costs a chat its
 memory, never its turn. An unreadable or malformed change record reads as no changes. Stdlib only, since harness
 hooks run it under a plain ``python3``.
@@ -54,6 +59,10 @@ DEFAULT_NOTES_DIR: Final[Path] = Path.home() / "workspace" / "data" / "memories"
 DEFAULT_CHANGES_PATH: Final[Path] = (
     Path.home() / "workspace" / "data" / ".apps" / "memories" / "user-changes.jsonl"
 )
+DEFAULT_CONTROLS_PATH: Final[Path] = (
+    Path.home() / "workspace" / "data" / ".apps" / "memories" / "settings.json"
+)
+_HARNESS_LABELS: Final[dict[str, str]] = {"claude": "Claude", "pi-coding": "pi"}
 # The memories app drops older entries itself; this keeps a stale record from being read as news.
 CHANGE_MAX_AGE: Final[timedelta] = timedelta(days=30)
 INDEX_FILENAME: Final[str] = "MEMORY.md"
@@ -431,34 +440,101 @@ def _watermark_path(state_dir: Path, session_id: str) -> Path:
     )
 
 
-def read_watermark(state_dir: Path | None, session_id: str) -> datetime | None:
-    """When the hook last ran for this chat, or None (never, or nowhere to keep it)."""
+class HookMark(NamedTuple):
+    """What Claude's hook last told a chat: up to when it announced changes, and whether memory was off."""
+
+    checked_at: datetime | None
+    is_memory_off: bool
+
+
+def read_hook_mark(state_dir: Path | None, session_id: str) -> HookMark | None:
+    """The hook's mark for this chat, or None (it never ran, or there is nowhere to keep it)."""
     if state_dir is None or not session_id:
         return None
     try:
-        raw = json.loads(
+        record = json.loads(
             _watermark_path(state_dir, session_id).read_text(encoding="utf-8")
-        ).get("checked_at")
-        at = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        )
+        raw = record.get("checked_at")
+        at = (
+            None
+            if raw is None
+            else datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        )
+        is_memory_off = record.get("is_memory_off") is True
     except (OSError, ValueError, AttributeError):
         return None
-    return at if at.tzinfo is not None else None
+    return HookMark(
+        checked_at=at if at is None or at.tzinfo is not None else None,
+        is_memory_off=is_memory_off,
+    )
 
 
-def write_watermark(state_dir: Path | None, session_id: str, at: datetime) -> None:
+def write_hook_mark(state_dir: Path | None, session_id: str, mark: HookMark) -> None:
     if state_dir is None or not session_id:
         return
     path = _watermark_path(state_dir, session_id)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    checked_at = (
+        None
+        if mark.checked_at is None
+        else mark.checked_at.astimezone(timezone.utc).isoformat()
+    )
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
         temporary.write_text(
-            json.dumps({"checked_at": at.astimezone(timezone.utc).isoformat()}),
+            json.dumps({"checked_at": checked_at, "is_memory_off": mark.is_memory_off}),
             encoding="utf-8",
         )
         os.replace(temporary, path)
     except OSError:
         temporary.unlink(missing_ok=True)
+
+
+def memory_off_reason(controls_path: Path, harness: str) -> str | None:
+    """Why memory is off for ``harness``, from the user's switches in the Agent Memory app, or None when it is on.
+
+    No settings file means on. A file that cannot be read or is not the expected shape means off: the user may have
+    turned memory off, and reading it as on would ignore that.
+    """
+    try:
+        text = controls_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "the memory settings could not be read"
+    try:
+        controls = json.loads(text)
+    except ValueError:
+        return "the memory settings could not be read"
+    if not isinstance(controls, dict):
+        return "the memory settings could not be read"
+    is_paused = controls.get("is_paused", False)
+    disabled = controls.get("disabled_harnesses", [])
+    if not isinstance(is_paused, bool) or not isinstance(disabled, list):
+        return "the memory settings could not be read"
+    if is_paused:
+        return "the user paused memory for every chat"
+    if harness.upper().replace("-", "_") in disabled:
+        return f"the user turned memory off for {_HARNESS_LABELS.get(harness, harness)} chats"
+    return None
+
+
+def render_memory_off_notice(reason: str, notes_dir: Path) -> str:
+    return (
+        "## Workspace memory is off\n\n"
+        f"Memory is off in this workspace: {reason} (in the Agent Memory app). Until it is turned back on, don't read, "
+        f"use or save memories in `{notes_dir}/`, don't change `MEMORY.md`, and don't bring up what is saved there, "
+        "even if it is already in this conversation. Notes already saved are kept; they just aren't used.\n"
+    )
+
+
+def render_memory_on_again_notice(notes_dir: Path) -> str:
+    return (
+        "## Workspace memory is on again\n\n"
+        f"The user turned memory back on. You may use and save memories in `{notes_dir}/` again, as before it was "
+        "turned off.\n"
+    )
 
 
 def _written_note_names(line: str, notes_dir: Path) -> list[str]:
@@ -547,13 +623,17 @@ def claude_hook_output(
     notes_dir: Path,
     changes_path: Path,
     state_dir: Path | None,
+    off_reason: str | None,
     now: datetime,
 ) -> str:
     """What Claude's UserPromptSubmit hook adds to the next message: what changed since the chat last heard.
 
     The chat keeps what an earlier message's hook added, so each change and each note is announced once: the hook
-    records when it ran (a watermark per chat, in the agent's state directory) and announces only what is newer than
+    records when it ran (a mark per chat, in the agent's state directory) and announces only what is newer than
     that, or than the chat's start the first time. Nothing at all most of the time.
+
+    While memory is off for Claude (``off_reason``), every message says so instead, and the mark keeps its old time,
+    so the changes made meanwhile are announced once memory is back on, together with a note that it is.
     """
     all_changes = latest_changes(read_changes_text(changes_path), now)
     try:
@@ -569,11 +649,42 @@ def claude_hook_output(
         if isinstance(transcript, str)
         else None
     )
+    mark = read_hook_mark(state_dir, session_id)
+    if off_reason is not None:
+        write_hook_mark(
+            state_dir,
+            session_id,
+            HookMark(
+                checked_at=None if mark is None else mark.checked_at, is_memory_off=True
+            ),
+        )
+        return render_memory_off_notice(off_reason, notes_dir)
+    on_again = (
+        render_memory_on_again_notice(notes_dir)
+        if mark is not None and mark.is_memory_off
+        else ""
+    )
     if facts is None or facts.started is None:
         # Without the transcript there is no telling what the chat already heard, and a missed delete costs more than
         # a repeated notice, so the deletes and edits still go out.
-        return render_changes_notice(all_changes[-HOOK_MAX_CHANGES:])
-    since = max(facts.started, read_watermark(state_dir, session_id) or facts.started)
+        write_hook_mark(
+            state_dir,
+            session_id,
+            HookMark(
+                checked_at=None if mark is None else mark.checked_at,
+                is_memory_off=False,
+            ),
+        )
+        return "\n".join(
+            part
+            for part in (
+                on_again,
+                render_changes_notice(all_changes[-HOOK_MAX_CHANGES:]),
+            )
+            if part
+        )
+    marked_at = None if mark is None else mark.checked_at
+    since = max(facts.started, marked_at or facts.started)
     changes = [change for change in all_changes if change[2] > since][
         -HOOK_MAX_CHANGES:
     ]
@@ -583,8 +694,10 @@ def claude_hook_output(
             notes_dir, since, facts.own_write_at_by_file, read_index(notes_dir)
         )
     )
-    write_watermark(state_dir, session_id, now)
-    return "\n".join(part for part in (notice, saved_since) if part)
+    write_hook_mark(
+        state_dir, session_id, HookMark(checked_at=now, is_memory_off=False)
+    )
+    return "\n".join(part for part in (on_again, notice, saved_since) if part)
 
 
 def main(argv: list[str]) -> int:
@@ -611,6 +724,12 @@ def main(argv: list[str]) -> int:
         type=Path,
         default=DEFAULT_CHANGES_PATH,
         help="The record of notes the user deleted or edited",
+    )
+    parser.add_argument(
+        "--controls",
+        type=Path,
+        default=DEFAULT_CONTROLS_PATH,
+        help="The user's memory switches from the Agent Memory app",
     )
     parser.add_argument(
         "--state-dir",
@@ -650,6 +769,7 @@ def main(argv: list[str]) -> int:
         sync_index(arguments.notes_dir)
         return 0
     sync_index(arguments.notes_dir)
+    off_reason = memory_off_reason(arguments.controls, arguments.harness)
     if arguments.claude_hook:
         sys.stdout.write(
             claude_hook_output(
@@ -657,8 +777,17 @@ def main(argv: list[str]) -> int:
                 arguments.notes_dir,
                 arguments.changes,
                 arguments.state_dir,
+                off_reason,
                 now,
             )
+        )
+        return 0
+    if off_reason is not None:
+        off_notice = render_memory_off_notice(off_reason, arguments.notes_dir)
+        sys.stdout.write(
+            json.dumps({"protocol": off_notice, "memory": ""})
+            if arguments.json
+            else off_notice
         )
         return 0
     notice = render_changes_notice(

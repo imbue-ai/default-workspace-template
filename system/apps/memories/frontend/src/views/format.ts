@@ -5,7 +5,15 @@
  * each is tested on its own; the body is returned as plain text pieces, never HTML, since an agent wrote it.
  */
 
-import type { AuthorKind, BackupRetention, IndexSummary, Note, NoteAttribution } from "../models/notes";
+import type {
+  AuthorKind,
+  BackupRetention,
+  IndexSummary,
+  MemoryControls,
+  MemoryHarness,
+  Note,
+  NoteAttribution,
+} from "../models/notes";
 
 export interface BodyBlock {
   readonly label: string | null;
@@ -180,4 +188,33 @@ export function attentionLine(notes: readonly Note[], missingFiles: readonly str
       : `The list chats start with still names ${countLabel(missingFiles.length, "note that no longer exists", "notes that no longer exist")}.`,
   ].filter((part): part is string => part !== null);
   return parts.length === 0 ? null : parts.join(" ");
+}
+
+export const HARNESS_LABEL: Readonly<Record<MemoryHarness, string>> = { CLAUDE: "Claude", PI_CODING: "pi" };
+export const MEMORY_HARNESSES: readonly MemoryHarness[] = ["CLAUDE", "PI_CODING"];
+
+/** The kinds of chat memory is on for. Unreadable settings count as off, as chats read them. */
+export function harnessesUsingMemory(controls: MemoryControls | null): readonly MemoryHarness[] {
+  if (controls === null || controls.is_paused) return [];
+  return MEMORY_HARNESSES.filter((harness) => !controls.disabled_harnesses.includes(harness));
+}
+
+/** The first fact at the top: which chats use the notes right now. */
+export function sharingChip(controls: MemoryControls | null): { readonly text: string; readonly isOff: boolean } {
+  if (controls === null) return { text: "Memory off: settings unreadable", isOff: true };
+  if (controls.is_paused) return { text: "Memory paused", isOff: true };
+  const using = harnessesUsingMemory(controls);
+  if (using.length === 0) return { text: "Memory off for every chat", isOff: true };
+  if (using.length === MEMORY_HARNESSES.length) return { text: "Shared with your Claude and pi chats", isOff: false };
+  return {
+    text: `Used by your ${using.map((harness) => HARNESS_LABEL[harness]).join(" and ")} chats only`,
+    isOff: false,
+  };
+}
+
+/** Who reads the notes, for "Where your notes go". */
+export function readersLine(controls: MemoryControls | null): string {
+  const using = harnessesUsingMemory(controls);
+  if (using.length === 0) return "No chats while memory is off. The notes are kept, and used again when it's back on.";
+  return `Every ${using.map((harness) => HARNESS_LABEL[harness]).join(" and ")} chat in this workspace, including new ones.`;
 }

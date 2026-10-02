@@ -9,6 +9,8 @@ import {
   deleteBackupsWarning,
   deletedStatus,
   formatDate,
+  readersLine,
+  sharingChip,
   indexWarning,
   indexSummaryLine,
   writerLine,
@@ -161,5 +163,24 @@ describe("dates", () => {
 
     expect(formatDate("2026-03-04T12:00:00Z", now)).not.toMatch(/2026/);
     expect(formatDate("2025-03-04T12:00:00Z", now)).toMatch(/2025/);
+  });
+});
+
+describe("which chats use the notes", () => {
+  it("names the chats memory is on for, or why it is off", () => {
+    expect(sharingChip({ is_paused: false, disabled_harnesses: [] })).toEqual({
+      text: "Shared with your Claude and pi chats",
+      isOff: false,
+    });
+    expect(sharingChip({ is_paused: false, disabled_harnesses: ["CLAUDE"] }).text).toBe("Used by your pi chats only");
+    expect(sharingChip({ is_paused: false, disabled_harnesses: ["CLAUDE", "PI_CODING"] })).toEqual({
+      text: "Memory off for every chat",
+      isOff: true,
+    });
+    expect(sharingChip({ is_paused: true, disabled_harnesses: [] }).text).toBe("Memory paused");
+    expect(sharingChip(null).text).toBe("Memory off: settings unreadable");
+    expect(readersLine({ is_paused: true, disabled_harnesses: [] })).toBe(
+      "No chats while memory is off. The notes are kept, and used again when it's back on.",
+    );
   });
 });

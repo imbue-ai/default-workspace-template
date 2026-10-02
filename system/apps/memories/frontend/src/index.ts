@@ -10,7 +10,7 @@ import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
-import { deleteNote, getNotesState, refreshNotes, saveNote } from "./models/notes";
+import { deleteNote, getNotesState, refreshNotes, saveControls, saveNote } from "./models/notes";
 import { MemoriesPage } from "./views/MemoriesPage";
 
 export const PAGE_PATH = "/";
@@ -38,7 +38,12 @@ function bootstrap(): void {
     view: () =>
       m("div", { class: "memories-page h-screen w-full overflow-y-auto bg-page" }, [
         m("div", { class: "mx-auto flex max-w-[760px] flex-col gap-6 px-6 py-6" }, [
-          m(MemoriesPage, { state: getNotesState(), onSave: saveNote, onDelete: deleteNote }),
+          m(MemoriesPage, {
+            state: getNotesState(),
+            onSave: saveNote,
+            onDelete: deleteNote,
+            onSaveControls: saveControls,
+          }),
         ]),
       ]),
   });

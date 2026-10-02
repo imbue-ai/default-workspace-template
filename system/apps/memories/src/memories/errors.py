@@ -20,3 +20,7 @@ class NoteChangedError(MemoriesError):
 
 class NoteWriteError(MemoriesError, OSError):
     """A note or the index could not be written or deleted."""
+
+
+class ControlsReadError(MemoriesError):
+    """The memory switches, or Claude's settings file they also set, could not be read as expected."""

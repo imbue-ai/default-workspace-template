@@ -3,7 +3,7 @@ import "@imbue/workspace-ui/src/testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it } from "vitest";
-import type { BackupRetention, Note, NotesDocument } from "../models/notes";
+import type { BackupRetention, MemoryControls, Note, NotesDocument } from "../models/notes";
 import { MemoriesPage } from "./MemoriesPage";
 
 afterEach(() => {
@@ -44,6 +44,7 @@ function documentWith(backups: BackupRetention): NotesDocument {
     index_path: "/home/user/workspace/data/memories/MEMORY.md",
     index: { line_count: 2, loaded_line_count: 2, max_lines: 200, max_bytes: 25600, missing_files: [] },
     backups,
+    controls: { is_paused: false, disabled_harnesses: [] },
     notes: [
       note("role.md", "Is a product designer", "USER"),
       note("units.md", "Prefers metric units", "FEEDBACK", "pi-coding"),
@@ -55,6 +56,7 @@ function documentWith(backups: BackupRetention): NotesDocument {
 interface Rendered {
   readonly root: HTMLElement;
   readonly deleted: string[];
+  readonly savedControls: MemoryControls[];
 }
 
 function render(
@@ -63,6 +65,7 @@ function render(
   document: NotesDocument = documentWith(backups),
 ): Rendered {
   const deleted: string[] = [];
+  const savedControls: MemoryControls[] = [];
   const root = mountView(() =>
     m(MemoriesPage, {
       state: { kind: "loaded", document },
@@ -71,9 +74,13 @@ function render(
         deleted.push(target.file_name);
         return deleteAnswer;
       },
+      onSaveControls: async (controls: MemoryControls) => {
+        savedControls.push(controls);
+        return null;
+      },
     }),
   );
-  return { root, deleted };
+  return { root, deleted, savedControls };
 }
 
 function buttonLabelled(root: HTMLElement, label: string): HTMLButtonElement {
@@ -306,6 +313,58 @@ describe("states of the list chats load", () => {
   });
 });
 
+describe("memory settings", () => {
+  const withControls = (controls: MemoryControls | null): NotesDocument => ({ ...documentWith(BACKED_UP), controls });
+  const switchNamed = (root: HTMLElement, id: string): HTMLButtonElement =>
+    root.querySelector<HTMLButtonElement>(`#${id}`)!;
+
+  it("opens switches that pause memory or turn it off for one kind of chat, saying when each takes effect", async () => {
+    const { root, savedControls } = render();
+
+    expect(root.querySelector(".memories-settings")).toBeNull();
+    click(root, "Settings");
+    expect(switchNamed(root, "memory-switch-all").getAttribute("aria-checked")).toBe("true");
+    expect(switchNamed(root, "memory-switch-pi_coding").getAttribute("aria-checked")).toBe("true");
+    expect(root.querySelector(".memories-settings")?.textContent).toContain(
+      "pi chats follow these from their next message. New Claude chats follow them right away",
+    );
+
+    switchNamed(root, "memory-switch-pi_coding").click();
+    await settle();
+    switchNamed(root, "memory-switch-all").click();
+    await settle();
+
+    expect(savedControls).toEqual([
+      { is_paused: false, disabled_harnesses: ["PI_CODING"] },
+      { is_paused: true, disabled_harnesses: [] },
+    ]);
+    expect(root.querySelector('[role="status"]')?.textContent).toContain("Saved. pi chats follow it");
+  });
+
+  it("shows which chats use the notes at the top and under How memory works", () => {
+    const piOff = render(BACKED_UP, null, withControls({ is_paused: false, disabled_harnesses: ["PI_CODING"] })).root;
+    expect(piOff.querySelector(".memories-sharing")?.textContent).toBe("Used by your Claude chats only");
+    click(piOff, "How memory works");
+    expect(piOff.textContent).toContain("Every Claude chat in this workspace, including new ones.");
+    unmountViews();
+
+    const paused = render(BACKED_UP, null, withControls({ is_paused: true, disabled_harnesses: [] })).root;
+    expect(paused.querySelector(".memories-sharing")?.textContent).toBe("Memory paused");
+    click(paused, "Settings");
+    expect(switchNamed(paused, "memory-switch-all").getAttribute("aria-checked")).toBe("false");
+    expect(switchNamed(paused, "memory-switch-claude").disabled).toBe(true);
+  });
+
+  it("says when the settings can't be read, and that chats treat that as off", () => {
+    const { root } = render(BACKED_UP, null, withControls(null));
+
+    expect(root.querySelector(".memories-sharing")?.textContent).toBe("Memory off: settings unreadable");
+    click(root, "Settings");
+    expect(root.textContent).toContain("The memory settings couldn't be read, so chats treat memory as off.");
+    expect(switchNamed(root, "memory-switch-all").getAttribute("aria-checked")).toBe("false");
+  });
+});
+
 interface SaveCall {
   readonly fileName: string;
   readonly description: string;
@@ -329,6 +388,7 @@ describe("editing a note", () => {
           return saveAnswer;
         },
         onDelete: async () => null,
+        onSaveControls: async () => null,
       }),
     );
     return { root, saves, document };

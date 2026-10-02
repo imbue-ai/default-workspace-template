@@ -60,11 +60,22 @@ export interface BackupRetention {
   readonly settings_path: string;
 }
 
+/** A kind of chat that uses the shared notes, as the memory settings name it. */
+export type MemoryHarness = "CLAUDE" | "PI_CODING";
+
+/** The user's memory switches: memory paused for every chat, or off for some kinds of chat. */
+export interface MemoryControls {
+  readonly is_paused: boolean;
+  readonly disabled_harnesses: readonly MemoryHarness[];
+}
+
 export interface NotesDocument {
   readonly notes_dir: string;
   readonly index_path: string;
   readonly index: IndexSummary;
   readonly backups: BackupRetention;
+  /** Null when the settings file can't be read, which chats treat as memory off. */
+  readonly controls: MemoryControls | null;
   readonly notes: readonly Note[];
   readonly messages: readonly string[];
 }
@@ -75,6 +86,9 @@ export type NotesState =
   | { readonly kind: "failed"; readonly message: string };
 
 export const NOTES_PATH = "/api/notes";
+export const CONTROLS_PATH = "/api/controls";
+
+const NOTE_CONFLICT = "A chat changed this note while you had it open, so nothing was changed.";
 
 let state: NotesState = { kind: "loading" };
 
@@ -98,7 +112,12 @@ export async function refreshNotes(): Promise<void> {
   }
 }
 
-async function send(method: "PUT" | "DELETE", path: string, body: object): Promise<string | null> {
+async function send(
+  method: "PUT" | "DELETE",
+  path: string,
+  body: object,
+  conflictMessage: string | null,
+): Promise<string | null> {
   try {
     const response = await fetch(path, {
       method,
@@ -106,7 +125,7 @@ async function send(method: "PUT" | "DELETE", path: string, body: object): Promi
       body: JSON.stringify(body),
     });
     if (response.ok) return null;
-    if (response.status === 409) return "A chat changed this note while you had it open, so nothing was changed.";
+    if (response.status === 409 && conflictMessage !== null) return conflictMessage;
     const detail = ((await response.json().catch(() => ({}))) as { detail?: string }).detail;
     return detail ?? `The page answered ${response.status}.`;
   } catch (error) {
@@ -123,9 +142,18 @@ export function saveNote(
   body: string,
   version: string,
 ): Promise<string | null> {
-  return send("PUT", `${NOTES_PATH}/${encodeURIComponent(fileName)}`, { description, body, version });
+  return send("PUT", `${NOTES_PATH}/${encodeURIComponent(fileName)}`, { description, body, version }, NOTE_CONFLICT);
 }
 
 export function deleteNote(note: Note): Promise<string | null> {
-  return send("DELETE", `${NOTES_PATH}/${encodeURIComponent(note.file_name)}`, { version: note.version });
+  return send(
+    "DELETE",
+    `${NOTES_PATH}/${encodeURIComponent(note.file_name)}`,
+    { version: note.version },
+    NOTE_CONFLICT,
+  );
+}
+
+export function saveControls(controls: MemoryControls): Promise<string | null> {
+  return send("PUT", CONTROLS_PATH, controls, null);
 }

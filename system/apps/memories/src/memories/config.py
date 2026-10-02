@@ -20,6 +20,10 @@ class Config(BaseSettings):
     memories_restic_env_path: Path = RESTIC_ENV_PATH
     # The record of notes the user deleted or edited, which agent_memory_context.py turns into a notice for chats.
     memories_changes_path: Path = Path("data/.apps/memories/user-changes.jsonl")
+    # The user's memory switches, which agent_memory_context.py reads before every chat message.
+    memories_controls_path: Path = Path("data/.apps/memories/settings.json")
+    # Where Claude Code reads autoMemoryEnabled for chats started at the workspace root.
+    memories_claude_settings_path: Path = Path(".claude/settings.local.json")
 
 
 def load_config() -> Config:

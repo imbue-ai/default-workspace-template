@@ -38,6 +38,8 @@ def _arguments(tmp_path: Path, *, port: int, is_registered: bool) -> MemoriesArg
         memories_backup_config_path=tmp_path / "backup.toml",
         memories_restic_env_path=tmp_path / "restic.env",
         memories_changes_path=tmp_path / "user-changes.jsonl",
+        memories_controls_path=tmp_path / "settings.json",
+        memories_claude_settings_path=tmp_path / "claude-settings.local.json",
     )
     return arguments_from_config(config, MANIFEST_PATH, tmp_path / "static", is_registered=is_registered)
 
@@ -51,6 +53,8 @@ def test_the_config_defaults_to_the_workspace_paths_and_reads_overrides_from_the
     assert defaults.memories_backup_config_path == BACKUP_TOML_PATH
     assert defaults.memories_restic_env_path == RESTIC_ENV_PATH
     assert defaults.memories_changes_path == Path("data/.apps/memories/user-changes.jsonl")
+    assert defaults.memories_controls_path == Path("data/.apps/memories/settings.json")
+    assert defaults.memories_claude_settings_path == Path(".claude/settings.local.json")
 
     monkeypatch.setenv("MEMORIES_PORT", "8123")
     monkeypatch.setenv("MEMORIES_NOTES_DIR", "/elsewhere/memories")
@@ -68,6 +72,8 @@ def test_arguments_come_from_the_config_and_the_flags(tmp_path: Path) -> None:
     assert arguments.backup_config_path == tmp_path / "backup.toml"
     assert arguments.restic_env_path == tmp_path / "restic.env"
     assert arguments.changes_path == tmp_path / "user-changes.jsonl"
+    assert arguments.controls_path == tmp_path / "settings.json"
+    assert arguments.claude_settings_path == tmp_path / "claude-settings.local.json"
     assert arguments.is_registered is True
     assert _arguments(tmp_path, port=8123, is_registered=False).is_registered is False
 

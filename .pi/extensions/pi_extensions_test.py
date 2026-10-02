@@ -627,6 +627,32 @@ def test_memory_sections_are_identical_on_messages_where_no_note_changed(
     )
 
 
+def test_memory_gives_pi_only_the_off_notice_while_the_user_has_memory_off(
+    tmp_path: Path,
+) -> None:
+    settings = (
+        tmp_path
+        / "home"
+        / "workspace"
+        / "data"
+        / ".apps"
+        / "memories"
+        / "settings.json"
+    )
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{"is_paused": true, "disabled_harnesses": []}')
+    payload = {"systemPrompt": "BASE", "systemPromptOptions": {"sections": {}}}
+
+    _, out = _memory_output(tmp_path, payload)
+
+    sections = out["payload"]["systemPromptOptions"]["sections"]
+    assert sections["workspace_memory_protocol"].startswith(
+        "## Workspace memory is off"
+    )
+    assert sections["workspace_memory"] == ""
+    assert _MEMORY_INDEX_LINE not in json.dumps(sections)
+
+
 def test_memory_stamps_a_note_pi_just_wrote(tmp_path: Path) -> None:
     notes_dir = _memory_notes_dir(tmp_path)
     notes_dir.mkdir(parents=True)

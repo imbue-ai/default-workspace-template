@@ -41,6 +41,15 @@ its `type` (about you, how you like things done, what you're working on, where t
   through `host_backup.config`), open chats' conversations (they are told of the delete; see below), and the
   transcript of the chat that wrote it. The top of the page states the backups' retention up front too.
 
+"Settings" pauses memory for every chat or turns it off for Claude or pi chats, as the Claude apps' memory settings
+do: chats keep what is saved but neither use it nor save anything new. The switches are kept in
+`data/.apps/memories/settings.json` (`{"is_paused": false, "disabled_harnesses": []}`; no file means on).
+`agent_memory_context.py` reads them before every message: pi gets a short "memory is off" notice in place of its
+memory, and Claude's UserPromptSubmit hook says the same on every message (and once that it is back on). Turning
+Claude's memory off also sets `autoMemoryEnabled: false` in the workspace's `.claude/settings.local.json`, keeping
+that file's other keys, so a new Claude chat neither loads nor saves memory; Claude Code reads it only when a chat
+starts, and workers in their own worktrees rely on the notice. A settings file that cannot be read counts as off.
+
 Every delete and edit is also recorded in `data/.apps/memories/user-changes.jsonl` (the note's file name, what was
 done and when; never what it said; kept 30 days). `system/scripts/agent_memory_context.py` turns that record into a
 notice chats read -- Claude through a UserPromptSubmit hook in `.claude/settings.json`, pi through its memory
@@ -60,9 +69,11 @@ environment, serving on `http://127.0.0.1:8050`:
 - `GET /`, `GET /assets/...`: the page.
 - `GET /api/health`: `{"status", "is_frontend_built"}`.
 - `GET /api/notes`: the notes with their attribution and index line, the index's size and missing files
-  (`index`), the backups' retention (`backups`), and `messages` for anything that could not be read.
+  (`index`), the backups' retention (`backups`), the memory switches (`controls`, null when unreadable), and
+  `messages` for anything that could not be read.
 - `PUT /api/notes/<file>`: `{"description", "body", "version"}`.
 - `DELETE /api/notes/<file>`: `{"version"}`.
+- `PUT /api/controls`: `{"is_paused", "disabled_harnesses"}`, the memory switches.
 - `GET /_static/app_contract.js`: the shell's browser-side contract module.
 
 The manifest declares `stop_when_no_windows`: the app holds nothing between requests, so the shell stops it a minute

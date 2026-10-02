@@ -1,6 +1,7 @@
 """Tests for the routes: the page and its assets, the contract module, the notes document (with the backups'
 retention and where chat names come from), correcting a note, and deleting one for good."""
 
+import json
 import os
 from datetime import datetime
 from datetime import timezone
@@ -50,6 +51,8 @@ def _client(tmp_path: Path, http_client: httpx.Client) -> FlaskClient:
             registry_path=tmp_path / "apps.toml",
             client=http_client,
             changes_path=tmp_path / "state" / "user-changes.jsonl",
+            controls_path=tmp_path / "state" / "settings.json",
+            claude_settings_path=tmp_path / "workspace" / ".claude" / "settings.local.json",
             now=lambda: _NOW,
         )
     )
@@ -76,6 +79,7 @@ def test_the_notes_document_says_how_long_the_backups_keep_a_deleted_note(tmp_pa
         "missing_files": [],
     }
     assert "forgotten" not in body
+    assert body["controls"] == {"is_paused": False, "disabled_harnesses": []}
 
 
 def test_delete_erases_the_note_and_its_index_line(tmp_path: Path) -> None:
@@ -325,3 +329,47 @@ def test_a_note_that_cannot_be_read_is_named_on_the_page_and_not_called_missing(
     assert [note["file_name"] for note in body["notes"]] == ["units.md"]
     assert "locked.md could not be read, so it isn't shown." in body["messages"]
     assert body["index"]["missing_files"] == []
+
+
+def test_the_switches_are_saved_and_read_back_and_new_claude_chats_follow_them(tmp_path: Path) -> None:
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        saved = client.put("/api/controls", json={"is_paused": True, "disabled_harnesses": []})
+        body = client.get("/api/notes").get_json()
+
+    assert saved.status_code == 200
+    assert body["controls"] == {"is_paused": True, "disabled_harnesses": []}
+    claude_settings = tmp_path / "workspace" / ".claude" / "settings.local.json"
+    assert json.loads(claude_settings.read_text()) == {"autoMemoryEnabled": False}
+
+
+def test_switches_that_are_not_the_expected_object_are_refused(tmp_path: Path) -> None:
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        unknown = client.put("/api/controls", json={"is_paused": False, "disabled_harnesses": ["CODEX"]})
+        extra = client.put("/api/controls", json={"is_paused": False, "disabled_harnesses": [], "x": 1})
+        foreign = client.put(
+            "/api/controls",
+            json={"is_paused": True, "disabled_harnesses": []},
+            headers={"Sec-Fetch-Site": "cross-site"},
+        )
+
+    assert (unknown.status_code, extra.status_code, foreign.status_code) == (400, 400, 403)
+    assert not (tmp_path / "state" / "settings.json").exists()
+
+
+def test_unreadable_switches_are_named_on_the_page_and_a_broken_claude_file_refuses_the_save(tmp_path: Path) -> None:
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        (tmp_path / "state").mkdir(exist_ok=True)
+        (tmp_path / "state" / "settings.json").write_text("{")
+        body = client.get("/api/notes").get_json()
+        claude_settings = tmp_path / "workspace" / ".claude" / "settings.local.json"
+        claude_settings.parent.mkdir(parents=True)
+        claude_settings.write_text("[]")
+        refused = client.put("/api/controls", json={"is_paused": True, "disabled_harnesses": []})
+
+    assert body["controls"] is None
+    assert any(message.startswith("The memory settings could not be read") for message in body["messages"])
+    assert refused.status_code == 409
+    assert "is not a JSON object" in refused.get_json()["detail"]

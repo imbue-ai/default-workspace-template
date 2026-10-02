@@ -1,10 +1,11 @@
 /**
- * The page, top to bottom: how many things the chats remember, in one sentence; three facts (shared with Claude and
- * pi chats, not shared with other workspaces, what the backups keep) and "How memory works", which opens what gets
- * saved, what chats use, where the notes go and the technical details; a warning only when something in the list chats
- * load is wrong; then the notes grouped by what they are about, each group saying what belongs in it (and what to try
- * when it is empty), each note with the line chats start with, who wrote it, the file as it is on disk, and Edit and
- * Delete. Delete asks first, saying what still holds a copy afterwards.
+ * The page, top to bottom: how many things the chats remember, in one sentence; three facts (which chats use the
+ * notes, not shared with other workspaces, what the backups keep), "How memory works", which opens what gets saved,
+ * what chats use, where the notes go and the technical details, and "Settings", which opens the switches that pause
+ * memory or turn it off for one kind of chat; a warning only when something in the list chats load is wrong; then the
+ * notes grouped by what they are about, each group saying what belongs in it (and what to try when it is empty), each
+ * note a short card whose full text and file open on "Show more", with Edit and Delete. Delete asks first, saying
+ * what still holds a copy afterwards.
  */
 
 import m from "mithril";
@@ -12,7 +13,15 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
-import type { BackupRetention, Note, NotesDocument, NotesState, NoteType } from "../models/notes";
+import type {
+  BackupRetention,
+  MemoryControls,
+  MemoryHarness,
+  Note,
+  NotesDocument,
+  NotesState,
+  NoteType,
+} from "../models/notes";
 import {
   backupsDetail,
   backupsLine,
@@ -23,12 +32,18 @@ import {
   attentionLine,
   backupsChip,
   formatDate,
+  HARNESS_LABEL,
   indexWarning,
+  MEMORY_HARNESSES,
+  readersLine,
+  sharingChip,
   indexSummaryLine,
   writerLine,
 } from "./format";
 
 const SECTION_HEADING_CLASS = "type-section text-secondary";
+const CONTROLS_SAVED =
+  "Saved. pi chats follow it from their next message, and new Claude chats right away. Open Claude chats are told on their next message.";
 const DETAILS_CLASS =
   "memories-details overflow-x-auto rounded-md bg-surface-secondary p-3 font-mono type-helper text-secondary";
 const DISCLOSE_CLASS = "memories-disclose self-start cursor-pointer type-helper text-accent hover:underline";
@@ -78,6 +93,7 @@ export interface MemoriesPageAttrs {
   readonly state: NotesState;
   readonly onSave: (fileName: string, description: string, body: string, version: string) => Promise<string | null>;
   readonly onDelete: (note: Note) => Promise<string | null>;
+  readonly onSaveControls: (controls: MemoryControls) => Promise<string | null>;
 }
 
 /** An edit in progress, and the version of the note it started from: the page re-reads the notes whenever its
@@ -123,12 +139,103 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
   /** The few facts worth seeing every time, and the way into the rest. */
   function memoryFacts(document: NotesDocument): m.Vnode {
     const backups = backupsChip(document.backups);
+    const sharing = sharingChip(document.controls);
     return m("div", { class: "memories-facts flex flex-wrap items-center gap-2" }, [
-      m("span", { class: badgeClass("accent") }, "Shared with your Claude and pi chats"),
+      m(
+        "span",
+        { class: `memories-sharing ${sharing.isOff ? CAUTION_BADGE_CLASS : badgeClass("accent")}` },
+        sharing.text,
+      ),
       m("span", { class: badgeClass("neutral") }, "Not shared with other workspaces"),
       m("span", { class: backups.isWarning ? CAUTION_BADGE_CLASS : badgeClass("neutral") }, backups.text),
       disclose("how", "How memory works", "Hide how memory works"),
+      disclose("settings", "Settings", "Hide settings"),
     ]);
+  }
+
+  function memorySwitch(
+    id: string,
+    label: string,
+    hint: string | null,
+    isOn: boolean,
+    isEnabled: boolean,
+    onToggle: () => void,
+  ): m.Vnode {
+    return m("div", { class: "flex items-start gap-3" }, [
+      m(
+        "button",
+        {
+          type: "button",
+          id,
+          role: "switch",
+          "aria-checked": String(isOn),
+          disabled: isBusy || !isEnabled,
+          class: `memories-switch relative mt-0.5 inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${isOn ? "border-accent bg-accent" : "border-strong bg-surface"}`,
+          onclick: onToggle,
+        },
+        m("span", {
+          class: `inline-block h-3.5 w-3.5 rounded-full shadow transition-transform ${isOn ? "translate-x-[18px] bg-surface" : "translate-x-[2px] border border-strong bg-surface-secondary"}`,
+        }),
+      ),
+      m("label", { class: "flex flex-col gap-0.5", for: id }, [
+        m("span", { class: "type-body text-primary" }, label),
+        hint === null ? null : m("span", { class: "type-helper text-secondary" }, hint),
+      ]),
+    ]);
+  }
+
+  /** The switches behind "Settings": pause memory for every chat, or turn it off for one kind of chat. */
+  function memorySettings(document: NotesDocument, attrs: MemoriesPageAttrs): m.Vnode {
+    // Unreadable settings are shown as chats read them: memory off.
+    const controls: MemoryControls = document.controls ?? { is_paused: true, disabled_harnesses: [] };
+    const save = (next: MemoryControls): void => void run(() => attrs.onSaveControls(next), CONTROLS_SAVED);
+    const toggleHarness = (harness: MemoryHarness): void =>
+      save({
+        is_paused: controls.is_paused,
+        disabled_harnesses: controls.disabled_harnesses.includes(harness)
+          ? controls.disabled_harnesses.filter((disabled) => disabled !== harness)
+          : [...controls.disabled_harnesses, harness],
+      });
+    return m(
+      "section",
+      { class: "memories-settings flex flex-col gap-3 rounded-lg border border-default bg-surface-secondary p-4" },
+      [
+        document.controls === null
+          ? m(
+              "p",
+              { class: "m-0 type-body text-warning", role: "note" },
+              "The memory settings couldn't be read, so chats treat memory as off. Choosing a setting here replaces them.",
+            )
+          : null,
+        memorySwitch(
+          "memory-switch-all",
+          "Use memory",
+          "Chats keep what's saved, but while this is off they don't use it or save anything new.",
+          !controls.is_paused,
+          true,
+          () => save({ is_paused: !controls.is_paused, disabled_harnesses: controls.disabled_harnesses }),
+        ),
+        m(
+          "div",
+          { class: "flex flex-wrap gap-x-8 gap-y-2 pl-12" },
+          MEMORY_HARNESSES.map((harness) =>
+            memorySwitch(
+              `memory-switch-${harness.toLowerCase()}`,
+              `${HARNESS_LABEL[harness]} chats`,
+              null,
+              !controls.disabled_harnesses.includes(harness),
+              !controls.is_paused,
+              () => toggleHarness(harness),
+            ),
+          ),
+        ),
+        m(
+          "p",
+          { class: "m-0 type-helper text-secondary" },
+          "pi chats follow these from their next message. New Claude chats follow them right away; open Claude chats are told on their next message, and only pick memory back up once restarted.",
+        ),
+      ],
+    );
   }
 
   /** Everything behind "How memory works": what is saved, what chats use, where notes go, and how it's built. */
@@ -170,7 +277,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
         m("div", { class: "flex flex-col gap-2" }, [
           heading("Where your notes go"),
           row("neutral", "Stored", "In this workspace, and in its backups. They aren't synced to GitHub."),
-          row("accent", "Read by", "Every Claude and pi chat in this workspace, including new ones."),
+          row("accent", "Read by", readersLine(document.controls)),
           row("neutral", "Not yet", "Codex, OpenCode and Antigravity chats. They don't use these notes."),
           row(
             "neutral",
@@ -212,6 +319,11 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
                 "p",
                 { class: "m-0 mt-2" },
                 "Each delete or edit made here is recorded (the note's file name and when, never what it said) in data/.apps/memories/user-changes.jsonl for 30 days. Every chat reads that record before each message, so one that still remembers the note in its conversation doesn't save it again.",
+              ),
+              m(
+                "p",
+                { class: "m-0 mt-2" },
+                "The switches under Settings are kept in data/.apps/memories/settings.json, which system/scripts/agent_memory_context.py reads before every pi and Claude message. Turning Claude's memory off also sets autoMemoryEnabled to false in .claude/settings.local.json, which Claude Code reads when a chat starts.",
               ),
               m("p", { class: "m-0 mt-2" }, backupsDetail(document.backups)),
               m(
@@ -435,6 +547,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
           ),
           memoryFacts(document),
           openDetails.has("how") ? howMemoryWorks(document) : null,
+          openDetails.has("settings") ? memorySettings(document, attrs) : null,
           attention === null
             ? null
             : m("p", { class: "memories-attention m-0 type-body text-warning", role: "note" }, attention),

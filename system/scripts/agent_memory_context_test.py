@@ -27,8 +27,10 @@ truncate_index = memory_context.truncate_index
 latest_changes = memory_context.latest_changes
 render_changes_notice = memory_context.render_changes_notice
 claude_hook_output = memory_context.claude_hook_output
-read_watermark = memory_context.read_watermark
-write_watermark = memory_context.write_watermark
+HookMark = memory_context.HookMark
+read_hook_mark = memory_context.read_hook_mark
+write_hook_mark = memory_context.write_hook_mark
+memory_off_reason = memory_context.memory_off_reason
 stamp_note_text = memory_context.stamp_note_text
 stamp_note = memory_context.stamp_note
 sync_index = memory_context.sync_index
@@ -404,7 +406,7 @@ def test_the_claude_hook_lists_notes_others_saved_since_the_chat_started(
     )
 
     out = claude_hook_output(
-        hook_input, notes_dir, tmp_path / "none.jsonl", tmp_path / "state", _NOW
+        hook_input, notes_dir, tmp_path / "none.jsonl", tmp_path / "state", None, _NOW
     )
 
     assert out == (
@@ -431,7 +433,7 @@ def test_a_note_this_chat_created_but_another_chat_changed_later_is_announced(
     )
 
     out = claude_hook_output(
-        hook_input, notes_dir, tmp_path / "none.jsonl", tmp_path / "state", _NOW
+        hook_input, notes_dir, tmp_path / "none.jsonl", tmp_path / "state", None, _NOW
     )
 
     assert "- `job.md` — changed by a pi chat" in out
@@ -444,7 +446,9 @@ def test_the_claude_hook_announces_only_what_is_newer_than_its_last_run_for_the_
     state_dir = tmp_path / "state"
     started = _NOW - timedelta(minutes=30)
     last_run = _NOW - timedelta(minutes=10)
-    write_watermark(state_dir, "session", last_run)
+    write_hook_mark(
+        state_dir, "session", HookMark(checked_at=last_run, is_memory_off=False)
+    )
     _note(
         notes_dir,
         "heard.md",
@@ -461,7 +465,7 @@ def test_the_claude_hook_announces_only_what_is_newer_than_its_last_run_for_the_
     )
     hook_input = _hook_input(tmp_path, [_user(started)])
 
-    out = claude_hook_output(hook_input, notes_dir, changes, state_dir, _NOW)
+    out = claude_hook_output(hook_input, notes_dir, changes, state_dir, None, _NOW)
 
     assert "`fresh.md` was deleted" in out
     assert "old.md" not in out
@@ -470,7 +474,9 @@ def test_the_claude_hook_announces_only_what_is_newer_than_its_last_run_for_the_
     assert out.index("## Changes the user made") < out.index(
         "## Notes saved since this chat started"
     )
-    assert read_watermark(state_dir, "session") == _NOW
+    assert read_hook_mark(state_dir, "session") == HookMark(
+        checked_at=_NOW, is_memory_off=False
+    )
 
 
 def test_each_note_and_change_is_announced_once_per_chat(tmp_path: Path) -> None:
@@ -487,12 +493,12 @@ def test_each_note_and_change_is_announced_once_per_chat(tmp_path: Path) -> None
         {"session_id": "other", "transcript_path": str(tmp_path / "session.jsonl")}
     )
 
-    first = claude_hook_output(hook_input, notes_dir, changes, state_dir, _NOW)
+    first = claude_hook_output(hook_input, notes_dir, changes, state_dir, None, _NOW)
     second = claude_hook_output(
-        hook_input, notes_dir, changes, state_dir, _NOW + timedelta(minutes=1)
+        hook_input, notes_dir, changes, state_dir, None, _NOW + timedelta(minutes=1)
     )
     other = claude_hook_output(
-        other_chat, notes_dir, changes, state_dir, _NOW + timedelta(minutes=1)
+        other_chat, notes_dir, changes, state_dir, None, _NOW + timedelta(minutes=1)
     )
 
     assert (
@@ -513,24 +519,28 @@ def test_without_a_state_dir_the_hook_measures_from_the_chats_start(
 
     for _ in range(2):
         assert "- `job.md` — software engineer" in claude_hook_output(
-            hook_input, notes_dir, tmp_path / "none.jsonl", None, _NOW
+            hook_input, notes_dir, tmp_path / "none.jsonl", None, None, _NOW
         )
 
 
 def test_an_unreadable_watermark_counts_as_none(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
-    write_watermark(state_dir, "../escape", _NOW)
+    write_hook_mark(
+        state_dir, "../escape", HookMark(checked_at=_NOW, is_memory_off=False)
+    )
     (state_dir / "memory-hook-broken.json").write_text("not json")
 
-    assert read_watermark(state_dir, "../escape") == _NOW
+    assert read_hook_mark(state_dir, "../escape") == HookMark(
+        checked_at=_NOW, is_memory_off=False
+    )
     assert [
         path.name
         for path in state_dir.iterdir()
         if path.name.startswith("memory-hook-___")
     ] == ["memory-hook-___escape.json"]
-    assert read_watermark(state_dir, "broken") is None
-    assert read_watermark(state_dir, "") is None
-    assert read_watermark(None, "session") is None
+    assert read_hook_mark(state_dir, "broken") is None
+    assert read_hook_mark(state_dir, "") is None
+    assert read_hook_mark(None, "session") is None
 
 
 @pytest.mark.parametrize(
@@ -545,7 +555,9 @@ def test_without_a_readable_transcript_the_hook_still_gives_the_change_notice(
     changes = tmp_path / "user-changes.jsonl"
     changes.write_text(_change("user-profile.md", "DELETED", _NOW))
 
-    out = claude_hook_output(hook_input, notes_dir, changes, tmp_path / "state", _NOW)
+    out = claude_hook_output(
+        hook_input, notes_dir, changes, tmp_path / "state", None, _NOW
+    )
 
     assert out.startswith("## Changes the user made to saved memories")
     assert "Notes saved since" not in out
@@ -804,3 +816,121 @@ def test_claudes_post_tool_use_hook_syncs_the_index_only_after_touching_the_note
 
     assert (result.returncode, result.stdout) == (0, "")
     assert ("California" in (notes_dir / "MEMORY.md").read_text()) is is_synced
+
+
+def _controls(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "settings.json"
+    path.write_text(text)
+    return path
+
+
+def test_memory_is_on_without_settings_and_off_when_paused_or_turned_off_for_the_harness(
+    tmp_path: Path,
+) -> None:
+    pi_off = _controls(
+        tmp_path, '{"is_paused": false, "disabled_harnesses": ["PI_CODING"]}'
+    )
+
+    assert memory_off_reason(tmp_path / "missing.json", "pi-coding") is None
+    assert memory_off_reason(pi_off, "claude") is None
+    assert (
+        memory_off_reason(pi_off, "pi-coding")
+        == "the user turned memory off for pi chats"
+    )
+    paused = _controls(tmp_path, '{"is_paused": true, "disabled_harnesses": []}')
+    assert (
+        memory_off_reason(paused, "claude") == "the user paused memory for every chat"
+    )
+
+
+@pytest.mark.parametrize(
+    "text", ["{", "[]", '{"is_paused": "yes"}', '{"disabled_harnesses": "CLAUDE"}']
+)
+def test_settings_that_cannot_be_read_count_as_memory_off(
+    tmp_path: Path, text: str
+) -> None:
+    assert (
+        memory_off_reason(_controls(tmp_path, text), "claude")
+        == "the memory settings could not be read"
+    )
+
+
+def test_a_pi_turn_gets_only_the_off_notice_while_memory_is_off(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    notes_dir = _notes_dir(tmp_path, "- [Units](units.md) — Prefers metric units\n")
+    controls = _controls(
+        tmp_path, '{"is_paused": false, "disabled_harnesses": ["PI_CODING"]}'
+    )
+
+    main(
+        [
+            "--json",
+            "--harness",
+            "pi-coding",
+            "--notes-dir",
+            str(notes_dir),
+            "--changes",
+            str(tmp_path / "user-changes.jsonl"),
+            "--controls",
+            str(controls),
+        ]
+    )
+
+    sections = json.loads(capsys.readouterr().out)
+    assert sections["memory"] == ""
+    assert sections["protocol"].startswith("## Workspace memory is off")
+    assert "the user turned memory off for pi chats" in sections["protocol"]
+    assert "Prefers metric" not in sections["protocol"]
+
+
+def test_claudes_hook_says_memory_is_off_on_every_message_then_once_that_it_is_back_on(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _notes_dir(tmp_path, None)
+    state_dir = tmp_path / "state"
+    started = _NOW - timedelta(minutes=30)
+    hook_input = _hook_input(tmp_path, [_user(started)])
+    paused = "the user paused memory for every chat"
+    assert (
+        claude_hook_output(
+            hook_input, notes_dir, tmp_path / "none.jsonl", state_dir, None, started
+        )
+        == ""
+    )
+
+    first_off = claude_hook_output(
+        hook_input, notes_dir, tmp_path / "none.jsonl", state_dir, paused, _NOW
+    )
+    second_off = claude_hook_output(
+        hook_input,
+        notes_dir,
+        tmp_path / "none.jsonl",
+        state_dir,
+        paused,
+        _NOW + timedelta(minutes=1),
+    )
+    _note(notes_dir, "job.md", "saved while it was off", _NOW + timedelta(minutes=2))
+    back_on = claude_hook_output(
+        hook_input,
+        notes_dir,
+        tmp_path / "none.jsonl",
+        state_dir,
+        None,
+        _NOW + timedelta(minutes=3),
+    )
+    after = claude_hook_output(
+        hook_input,
+        notes_dir,
+        tmp_path / "none.jsonl",
+        state_dir,
+        None,
+        _NOW + timedelta(minutes=4),
+    )
+
+    assert first_off == second_off
+    assert first_off.startswith("## Workspace memory is off")
+    assert paused in first_off
+    assert back_on.startswith("## Workspace memory is on again")
+    assert "- `job.md` — saved while it was off" in back_on
+    assert after == ""

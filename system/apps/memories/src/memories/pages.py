@@ -1,5 +1,5 @@
-"""The app's routes on its own origin: the page, the health probe, the notes, correcting and deleting a note, and
-the contract module. Everything is read when asked; the app keeps nothing between requests but the record of the
+"""The app's routes on its own origin: the page, the health probe, the notes, correcting and deleting a note, the
+memory switches, and the contract module. Everything is read when asked; the app keeps nothing between requests but the record of the
 user's changes (``changes``), which chats read."""
 
 import threading
@@ -34,6 +34,10 @@ from memories.attribution import read_attributions
 from memories.backups import read_backup_retention
 from memories.changes import NoteChangeKind
 from memories.changes import record_note_change
+from memories.controls import MemoryControls
+from memories.controls import read_controls
+from memories.controls import save_controls
+from memories.errors import ControlsReadError
 from memories.errors import MemoriesError
 from memories.errors import NoteChangedError
 from memories.errors import NoteNameError
@@ -51,6 +55,7 @@ from memories.request_guard import is_write_allowed
 BLUEPRINT_NAME: Final[str] = "memories_pages"
 HEALTH_PATH: Final[str] = "/api/health"
 NOTES_PATH: Final[str] = "/api/notes"
+CONTROLS_PATH: Final[str] = "/api/controls"
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 CHAT_APP_NAME: Final[str] = "chat"
 
@@ -106,6 +111,8 @@ def _error_response(error: MemoriesError) -> ResponseReturnValue:
             status = HTTP_NOT_FOUND
         case NoteChangedError():
             status = HTTP_CONFLICT
+        case ControlsReadError():
+            status = HTTP_CONFLICT
         case _:
             status = HTTP_SERVER_ERROR
     return jsonify({"detail": str(error)}), status
@@ -132,11 +139,14 @@ def build_pages_blueprint(
     registry_path: Path,
     client: httpx.Client,
     changes_path: Path,
+    controls_path: Path,
+    claude_settings_path: Path,
     now: Callable[[], datetime],
 ) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
     # Serializes the note writes and the change record's read-append-write: the server answers on several threads.
     changes_lock = threading.Lock()
+    controls_lock = threading.Lock()
 
     def record_or_explain(file_name: str, change: NoteChangeKind) -> ResponseReturnValue | None:
         """Record a change that already happened; when that fails, the answer says so instead of claiming success."""
@@ -184,11 +194,18 @@ def build_pages_blueprint(
         index_text = read_index(notes_dir)
         index_entry_by_file_name = parse_index(index_text)
         file_names_on_disk = {note.file_name for note in listing.notes} | set(listing.unreadable_file_names)
+        try:
+            controls: MemoryControls | None = read_controls(controls_path)
+            controls_messages: list[str] = []
+        except ControlsReadError as e:
+            controls = None
+            controls_messages = [f"The memory settings could not be read, so chats treat memory as off: {e}"]
         payload = {
             "notes_dir": str(notes_dir),
             "index_path": str(notes_dir / INDEX_FILENAME),
             "index": summarize_index(index_text, file_names_on_disk).model_dump(mode="json"),
             "backups": read_backup_retention(backup_config_path, restic_env_path).model_dump(mode="json"),
+            "controls": None if controls is None else controls.model_dump(mode="json"),
             "notes": [
                 {
                     **note.model_dump(mode="json"),
@@ -203,6 +220,7 @@ def build_pages_blueprint(
             ],
             "messages": [
                 *messages,
+                *controls_messages,
                 *(f"{file_name} could not be read, so it isn't shown." for file_name in listing.unreadable_file_names),
             ],
         }
@@ -242,6 +260,18 @@ def build_pages_blueprint(
         if unrecorded is not None:
             return unrecorded
         return jsonify({"file_name": file_name})
+
+    @blueprint.put(CONTROLS_PATH)
+    def set_controls() -> ResponseReturnValue:
+        controls = _request_model(MemoryControls)
+        if not isinstance(controls, MemoryControls):
+            return controls
+        with controls_lock:
+            try:
+                save_controls(controls, controls_path, claude_settings_path)
+            except MemoriesError as e:
+                return _error_response(e)
+        return jsonify(controls.model_dump(mode="json"))
 
     @blueprint.get(APP_CONTRACT_ROUTE)
     def app_contract() -> ResponseReturnValue:
