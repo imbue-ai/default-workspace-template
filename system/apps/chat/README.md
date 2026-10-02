@@ -19,11 +19,12 @@ observe`, its own supervised service) writes, and serves:
 
 - `GET /`: the chat root, the built `root.html`: the chat list down the left
   (`frontend/src/root/`, grouped by the chat that started each helper and
-  ordered by recency, with rename, stop and restart, and delete) beside an inner
+  ordered by recency under the default chat, with rename, stop and restart, and delete) beside an inner
   frame of the selected chat's page. The selection is the `chat` query parameter,
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
-  chat's title. Loading the page sends and writes nothing. With nothing selected it
-  shows the most recent chat, and with no chats one awaiting its first send
+  chat's title. Loading the page sends and writes nothing. With nothing selected
+  (opened bare, or after the chat on screen is deleted) it shows the default chat
+  (below), else the most recent chat, and with no chats one awaiting its first send
   (`POST /api/chats/awaiting`, held in memory until that send launches it). At
   700px wide or less (a phone, or a narrow window) the root takes its phone
   layout (`frontend/src/compactLayout.ts`, docs/system/blueprint/desktop-interface/plan-phone-interface.md):
@@ -227,7 +228,7 @@ seconds is retried rather than mistaken for an unknown chat. See `docs/system/bl
 The intake route is how a text enters a chat from outside a chat page
 (`docs/system/blueprint/post-launch-paths/`): `POST /api/chats/intake` takes the
 text, how the receiving chat is chosen (`target`: `new_chat`, `current_chat` from
-the `window_path` the text was typed into, else the most recently messaged chat;
+the `window_path` the text was typed into, else the default chat, else the most recently messaged chat;
 `chat_selector`, the one chat there is or the user's pick; or `chat` with a
 `chat_id`), and whether the text is sent or drafted (`is_draft`), plus the
 sender's `client_id` and `desktop_id` for the shell's activity log. The chat's
@@ -303,6 +304,16 @@ and shows the user's own words alone (`prompt_with_context` in
 out as typed, since a harness runs a command only when the slash leads the
 message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
+
+The seeded chat (the Mind app's "Welcome") is the workspace's **default chat**
+(`default_chat_id` in `chat_records.py`: the earliest chat whose record starts with a
+seed). Its snapshot and its provisional chat carry `is_default`, and it is where a text
+with no chat of its own goes: the chat list leads with it (its helpers under it), in a
+medium weight and set off from the rest by a rule; the root shows it when nothing is
+selected, including after the chat on screen is deleted; and a `current_chat` intake
+from a window showing no chat lands in it. It can be renamed and deleted like any chat;
+a workspace that was never seeded, or whose welcome chat was deleted, has no default
+chat, and each of those falls back to the most recent chat.
 
 A chat that starts with no message sends nothing and waits for the user's
 first one. Fast mode is a per-chat setting with three modes

@@ -5,7 +5,16 @@ import type { ChatRow } from "./rows";
 import { SendPicker, pickableRows } from "./SendPicker";
 
 function row(chatId: string, title: string, isProvisional = false): ChatRow {
-  return { chatId, title, status: "idle", labels: {}, agentIds: [chatId], lastActiveMs: null, isProvisional };
+  return {
+    chatId,
+    title,
+    status: "idle",
+    labels: {},
+    agentIds: [chatId],
+    lastActiveMs: null,
+    isProvisional,
+    isDefault: false,
+  };
 }
 
 const ROWS = [row("agent-1", "Plan the launch"), row("agent-2", "Fix the tests"), row("agent-3", "New chat", true)];

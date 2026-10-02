@@ -541,6 +541,10 @@ class ChatSnapshot(FrozenModel):
     last_messaged_at: float | None = Field(
         description="Epoch seconds of the chat's most recent message, or None when it has never been messaged; the chat list orders on it",
     )
+    is_default: bool = Field(
+        description="Whether this is the workspace's default chat (``default_chat_id``): listed first, and where a text "
+        "with no chat of its own goes"
+    )
 
 
 class ChatSegmentInfo(FrozenModel):
@@ -667,6 +671,10 @@ class ProvisionalChat(FrozenModel):
         default=False,
         description="Whether the chat has a seed segment to show while it is created (``chat_seed.py``)",
     )
+    is_default: bool = Field(
+        default=False,
+        description="Whether this is the workspace's default chat (``default_chat_id``); set on the copy the pages are sent",
+    )
 
 
 class SeedChatRequest(FrozenModel):
@@ -681,7 +689,8 @@ class IntakeTarget(LowerCaseStrEnum):
 
     # A chat created for the text, on the named account or the workspace's default.
     NEW_CHAT = auto()
-    # The chat the window the text was typed into shows, else the most recently messaged one, else a new one.
+    # The chat the window the text was typed into shows, else the default chat, else the most recently messaged one,
+    # else a new one.
     CURRENT_CHAT = auto()
     # The one chat there is, else the chat the user picks from the root's picker, else a new one.
     CHAT_SELECTOR = auto()

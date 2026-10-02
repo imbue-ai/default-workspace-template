@@ -56,8 +56,8 @@ params = [{name = "message", label = "Message to send", required = false}]
 presets = {target = "chat_selector"}
 text_param = "message"
 
-# A draft lands in the composer of the chat on screen (else the most recent, else a new one), unsent: what the
-# desktop's "Design your own..." hands the pinned chat window.
+# A draft lands in the composer of the chat on screen (else the default chat, else the most recent, else a new one),
+# unsent: what the desktop's "Design your own..." hands the pinned chat window.
 [[launch_paths]]
 id = "draft"
 label = "Draft into chat"

@@ -28,6 +28,7 @@ const ONLY_CHAT: ChatRow = {
   agentIds: ["agent-1"],
   lastActiveMs: null,
   isProvisional: false,
+  isDefault: false,
 };
 
 // The rename case's chat: the delete case leaves its chat marked as being deleted for the rest of the file.

@@ -22,7 +22,16 @@ import type { ChatRailAttrs } from "./ChatRail";
 import type { ChatRow } from "./rows";
 
 function row(chatId: string, title: string, status = "idle"): ChatRow {
-  return { chatId, title, status, labels: {}, agentIds: [chatId], lastActiveMs: null, isProvisional: false };
+  return {
+    chatId,
+    title,
+    status,
+    labels: {},
+    agentIds: [chatId],
+    lastActiveMs: null,
+    isProvisional: false,
+    isDefault: false,
+  };
 }
 
 const ROWS = [row("agent-1", "Plan the launch"), row("agent-2", "Fix the tests", "stopped")];

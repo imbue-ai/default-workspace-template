@@ -67,6 +67,7 @@ from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import ChatRecordStore
 from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
 from imbue.chat.chat_records import InMemoryChatRecordStore
+from imbue.chat.chat_records import default_chat_id
 from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_seed import seed_agent_info
@@ -683,6 +684,7 @@ def chat_snapshot_for_active_agent(
     shoulder_tap_available: bool,
     is_connecting: bool,
     last_messaged_at: float | None,
+    is_default: bool,
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
 
@@ -719,6 +721,7 @@ def chat_snapshot_for_active_agent(
             is_connecting=is_connecting,
         ),
         last_messaged_at=last_messaged_at,
+        is_default=is_default,
     )
 
 
@@ -1153,9 +1156,19 @@ class AgentManager:
     def _provisional_as_shown(self, provisional: ProvisionalChat) -> ProvisionalChat:
         with self._lock:
             title = self._title_override_by_chat.get(provisional.chat_id)
+            is_default = self._default_chat_id_locked() == provisional.chat_id
+        shown = provisional.model_copy_update(to_update(provisional.field_ref().is_default, is_default))
         if title is None:
-            return provisional
-        return provisional.model_copy_update(to_update(provisional.field_ref().name, title))
+            return shown
+        return shown.model_copy_update(to_update(shown.field_ref().name, title))
+
+    def get_default_chat_id(self) -> ChatId | None:
+        """The workspace's default chat (``default_chat_id``), or None for a workspace with none."""
+        with self._lock:
+            return self._default_chat_id_locked()
+
+    def _default_chat_id_locked(self) -> ChatId | None:
+        return default_chat_id(self._chat_record_by_id.values())
 
     def _snapshot_as_shown(self, snapshot: ChatSnapshot) -> ChatSnapshot:
         with self._lock:
@@ -1291,6 +1304,7 @@ class AgentManager:
             connecting_by_agent = {
                 agent.id: bool(self._connecting_message_ids_by_agent.get(agent.id)) for agent, _chat in listed
             }
+            default_id = self._default_chat_id_locked()
         last_messaged = self._message_stamps.read()
         return [
             self._snapshot_as_shown(
@@ -1301,6 +1315,7 @@ class AgentManager:
                     self._shoulder_tap_available(agent),
                     connecting_by_agent[agent.id],
                     last_messaged.get(chat.chat_id),
+                    chat.chat_id == default_id,
                 )
             )
             for agent, chat in listed
@@ -1321,6 +1336,7 @@ class AgentManager:
             agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
             is_pending = agent is not None and bool(self._pending_permission_ids_by_agent.get(agent.id))
             is_connecting = agent is not None and bool(self._connecting_message_ids_by_agent.get(agent.id))
+            default_id = self._default_chat_id_locked()
         if chat is None or agent is None or is_primary_agent(agent):
             return None
         return chat_snapshot_for_active_agent(
@@ -1330,6 +1346,7 @@ class AgentManager:
             self._shoulder_tap_available(agent),
             is_connecting,
             self._message_stamps.read().get(chat.chat_id),
+            chat.chat_id == default_id,
         )
 
     def get_active_agent_info(self, chat_id: ChatId) -> AgentInfo | None:

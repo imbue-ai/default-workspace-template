@@ -14,6 +14,7 @@ import os
 import shutil
 from abc import ABC
 from abc import abstractmethod
+from collections.abc import Iterable
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
@@ -378,6 +379,15 @@ class ChatRecord(FrozenModel):
         if self.entry_for(agent_id) is not None:
             return True
         return self.handoff is not None and self.handoff.next_agent_id == agent_id
+
+
+def default_chat_id(records: Iterable[ChatRecord]) -> ChatId | None:
+    """The workspace's default chat: the welcome chat the Imbue Studio app seeded (``chat_seed.py``), the earliest
+    should there be more than one; None for a workspace with none (never seeded, or its welcome chat was deleted)."""
+    seeded = [record for record in records if record.is_seeded]
+    if not seeded:
+        return None
+    return min(seeded, key=lambda record: (record.agents[0].started_at, record.chat_id)).chat_id
 
 
 class ChatRecordStore(MutableModel, ABC):

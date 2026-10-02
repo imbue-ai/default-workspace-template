@@ -556,6 +556,10 @@ def test_seed_chat_opens_a_provisional_chat_awaiting_its_first_send_on_the_seede
         broadcast = json.loads(raw)
         assert broadcast["type"] == "provisional_chat_created"
         assert broadcast["chat_id"] == created.chat_id
+        # The welcome chat is the workspace's default chat, before its first send as after.
+        assert broadcast["is_default"] is True
+        assert manager.get_default_chat_id() == chat_id
+        assert [shown.is_default for shown in manager.get_provisional_chats_as_shown()] == [True]
     finally:
         manager.stop()
 
@@ -583,6 +587,9 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
     assert launched.chat_id == seeded.chat_id
     assert launched.display_name == "Getting started"
     assert manager.get_provisional_chat(seeded.chat_id) is None
+    assert [(snapshot.chat_id, snapshot.is_default) for snapshot in manager.get_chat_snapshots()] == [
+        (seeded.chat_id, True)
+    ]
     record = store.read(ChatId(seeded.chat_id))
     assert record is not None
     seed, agent = record.agents
@@ -892,6 +899,7 @@ def test_discarding_a_seeded_chat_drops_its_record_with_it(broadcaster: WebSocke
         assert manager.get_provisional_chat(seeded.chat_id) is None
         assert store.read(ChatId(seeded.chat_id)) is None
         assert manager.get_chat_segments(ChatId(seeded.chat_id)) is None
+        assert manager.get_default_chat_id() is None
     finally:
         manager.stop()
 

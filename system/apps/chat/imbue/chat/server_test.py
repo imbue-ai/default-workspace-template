@@ -3896,6 +3896,21 @@ def test_intake_current_chat_falls_back_to_the_most_recently_messaged_chat(
     assert response.get_json()["path"].startswith("/?chat=agent-00000000000000000000000000000002&intake=")
 
 
+def test_intake_current_chat_falls_back_to_the_default_chat_over_a_more_recently_messaged_one(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A text typed where no chat is on screen goes to the welcome chat, even while it still awaits its first send."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    welcome_id = client.post("/api/chats/seed", json=_seed_body()).get_json()["chat_id"]
+    _track_claude_agent(app, "agent-00000000000000000000000000000002", "second", tmp_path / "claude_config")
+    state_of(app).agent_manager.record_message_sent(ChatId("agent-00000000000000000000000000000002"))
+
+    response = _intake(client, message="Draft", target="current_chat", is_draft=True, window_path="/")
+
+    assert response.status_code == 200
+    assert response.get_json()["path"].startswith(f"/?chat={welcome_id}&intake=")
+
+
 def test_intake_with_several_chats_to_choose_from_holds_the_choice_for_the_picker(
     app: Flask, client: FlaskClient, messenger: RecordingMngrMessenger, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -119,7 +119,7 @@ let isOpeningChatForEmptyList = false;
 // empty after that brings no push to ask again on (an unchanged list is not passed on).
 const emptyListChatBackoff = new ReconnectBackoff();
 
-/** The rail's rows in display order, most recent first. */
+/** The rail's rows in display order: the default chat first, then the most recent. */
 function railRows(): ChatRow[] {
   return groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats()), startedHere);
 }
@@ -136,7 +136,7 @@ function slotFillFor(chatId: string | null): SlotFill {
 }
 
 /** Show ``chatId``: the URL, the frame, the shell's location, and the unread mark follow. Asked to show nothing, the
- *  root shows the most recent chat instead, or with no chats one awaiting its first send (``slotFill``). */
+ *  root shows the default chat instead (else the most recent), or with no chats one awaiting its first send (``slotFill``). */
 function select(chatId: string | null): void {
   const fill = slotFillFor(chatId);
   const shown = fill.kind === "select" ? fill.chatId : chatId;

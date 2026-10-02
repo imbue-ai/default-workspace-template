@@ -844,7 +844,9 @@ class RunningWorkspace(FrozenModel):
     )
 
 
-def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name: str = "Chat-1") -> ChatSnapshot:
+def make_chat_snapshot(
+    chat_id: str, last_messaged_at: float | None = None, name: str = "Chat-1", is_default: bool = False
+) -> ChatSnapshot:
     """A listed chat as the pages see it: one idle claude agent, for tests that reason over snapshots alone."""
     return ChatSnapshot(
         chat_id=ChatId(chat_id),
@@ -868,6 +870,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             is_connecting=False,
         ),
         last_messaged_at=last_messaged_at,
+        is_default=is_default,
     )
 
 

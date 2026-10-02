@@ -1551,6 +1551,9 @@ def _resolve_intake_chat(agent_manager: AgentManager, intake: IntakeRequest) -> 
             selected = chat_id_selected_by_window_path(intake.window_path)
             if selected is not None and agent_manager.knows_chat(selected):
                 return _ResolvedIntakeChat(chat_id=selected)
+            default_id = agent_manager.get_default_chat_id()
+            if default_id is not None:
+                return _ResolvedIntakeChat(chat_id=default_id)
             return _ResolvedIntakeChat(chat_id=most_recently_messaged_chat_id(snapshots))
         case IntakeTarget.CHAT_SELECTOR:
             if len(snapshots) > 1:
