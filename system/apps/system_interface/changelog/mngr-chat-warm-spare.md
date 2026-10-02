@@ -1,1 +1,1 @@
-Two tests that failed intermittently under full-suite load are marked flaky so CI retries them: the avatar status reader's file-watch test and the layout pipeline's open/arrange/close test.
+Two tests that failed intermittently under full-suite load are marked flaky so CI retries them: the avatar status reader's file-watch test and the layout pipeline's open/arrange/close test. The avatar test's race is fixed: it read the broadcast queue as soon as the reader's status changed, but the reader broadcasts just after, so it now waits for the broadcasts themselves.
