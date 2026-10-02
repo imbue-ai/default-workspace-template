@@ -81,6 +81,15 @@ class ShellResponse(FrozenModel):
 
 
 @pure
+def _refusal_detail(body: dict[str, Any] | str) -> str:
+    """What a refusal says: the shell's ``detail`` whole (a 412 lists the connected clients at its end), else the
+    body shortened, as a proxy's error page is."""
+    if isinstance(body, dict) and "detail" in body:
+        return str(body["detail"]).strip()
+    return quote_answer(body)
+
+
+@pure
 def _json_object_or_text(text: str) -> dict[str, Any] | str:
     try:
         parsed = json.loads(text)
@@ -170,7 +179,7 @@ class ShellLayoutClient(ShellLayoutInterface):
         if elapsed > SHELL_REQUEST_SLOW_SECONDS:
             logger.warning("Asked the shell for the {} slowly, in {:.1f}s", described, elapsed)
         if not response.is_success:
-            detail = quote_answer(response.body)
+            detail = _refusal_detail(response.body)
             raise ShellRefusedOpError(
                 f"The shell refused the {described} ({response.status_code}): {detail}",
                 status_code=response.status_code,

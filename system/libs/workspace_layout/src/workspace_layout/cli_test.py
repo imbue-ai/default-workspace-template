@@ -584,6 +584,21 @@ def test_refusals_map_to_exit_codes(
     assert fragment in capsys.readouterr().err
 
 
+def test_a_refusal_is_printed_whole_so_the_412_names_the_clients_it_lists(
+    loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    detail = (
+        "Could not tell which client this op is for: no client has messaged the requesting agent and "
+        "2 client(s) are connected. Pass --client <id> (see `workspace-layout context`). "
+        "Connected clients: 9b2f0e8c-4a51-4c1e-9d0f-2f6a7c3b1e44 (desktop=home), "
+        "5d7a1c3e-8f20-4b6d-a1e9-0c4b2d8f6a13 (desktop=research)."
+    )
+    loopback_shell.op_refusal = (412, {"detail": detail})
+
+    assert run_layout_cli(["focus", "self"], layout_context) == EXIT_ERROR
+    assert detail in capsys.readouterr().err
+
+
 def test_an_unreachable_shell_is_an_error(
     loopback_shell: LoopbackShell, layout_context: LayoutCliContext, capsys: pytest.CaptureFixture[str]
 ) -> None:
