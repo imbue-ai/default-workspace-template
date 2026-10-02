@@ -130,7 +130,8 @@ def test_a_name_the_registry_could_never_hold_is_refused_without_waiting(
         app_name_argument(bad_name)
     assert fragment in capsys.readouterr().err
     with pytest.raises(SystemExit):
-        run_layout_cli(["open", "Foo.Bar", "--path", "/"], layout_context)
+        run_layout_cli(["open", "--path", "/", "--", bad_name], layout_context)
+    assert "not registered" not in capsys.readouterr().err
     assert loopback_shell.posted == []
 
 
