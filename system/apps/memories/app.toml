@@ -1,7 +1,8 @@
-# The memories app: what the workspace's Claude chats have written down about the user and their
-# work (Claude's built-in memory, data/memories/), who wrote each note and how many chats have
-# read it, and a way to correct or delete a note. It reads everything when asked
-# and keeps nothing between requests, so the shell stops it once no window shows it.
+# The memories app ("Agent Memory"): what the workspace's Claude and pi chats have written down
+# about the user and their work (the shared notes in data/memories/), who wrote each note and how
+# many chats have read it, a way to correct or delete a note, and switches that pause memory. It
+# reads everything when asked and keeps nothing between requests, so the shell stops it once no
+# window shows it.
 name = "memories"
 display_name = "Agent Memory"
 icon = "icon.svg"
