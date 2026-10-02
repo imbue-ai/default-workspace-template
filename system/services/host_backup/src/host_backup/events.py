@@ -31,6 +31,7 @@ from imbue.imbue_common.event_envelope import (
     IsoTimestamp,
 )
 from imbue.imbue_common.logging import (
+    ROTATED_JSONL_PATTERN,
     cleanup_old_rotated_files,
     generate_rotation_timestamp,
 )
@@ -534,6 +535,43 @@ def scan_recent_ticks(
                 newest_success = event
     inflight = None if newest_started in finished else newest_started
     return RecentTicks(inflight, newest_terminal, newest_success)
+
+
+def scan_recent_ticks_across_rotation(events_path: Path) -> RecentTicks:
+    """`scan_recent_ticks`, taking the outcomes from the newest rotated log when the
+    current one holds no success yet.
+
+    The runner rotates the log as a tick starts, so until that tick succeeds the newest
+    success is in the file it rotated away. The tick in flight is always the current
+    log's: a rotation happens before its BACKUP_STARTED.
+    """
+    current = scan_recent_ticks(events_path)
+    if current.newest_success_event is not None:
+        return current
+    rotated = _newest_rotated_events_log(events_path.parent)
+    if rotated is None:
+        return current
+    previous = scan_recent_ticks(rotated)
+    return RecentTicks(
+        current.inflight_tick_id,
+        current.newest_terminal_event or previous.newest_terminal_event,
+        previous.newest_success_event,
+    )
+
+
+def _newest_rotated_events_log(events_dir: Path) -> Path | None:
+    try:
+        rotated = [
+            child
+            for child in events_dir.iterdir()
+            if ROTATED_JSONL_PATTERN.match(child.name)
+        ]
+    except OSError as e:
+        logger.warning(
+            "Cannot list rotated backup events logs in {}: {}", events_dir, e
+        )
+        return None
+    return max(rotated, key=lambda child: child.name, default=None)
 
 
 def find_inflight_tick_id(events_path: Path) -> str | None:

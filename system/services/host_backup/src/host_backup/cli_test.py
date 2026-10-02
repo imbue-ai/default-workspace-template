@@ -301,6 +301,34 @@ def test_check_reports_the_newest_outcomes_and_triggers_nothing(
     assert not (tmp_path / BACKUP_TOML_PATH).exists()
 
 
+def test_check_finds_the_success_the_rotation_moved_aside(
+    tmp_path: Path, backup_events_dir: Path
+) -> None:
+    """The runner rotates the log as a tick starts, so while that tick runs the newest
+    success is only in the rotated file."""
+    backup_events_dir.mkdir(parents=True)
+    (backup_events_dir / "events.jsonl").write_text(
+        "x" * EVENTS_LOG_ROTATION_BYTES + "\n"
+    )
+    _write_aged_tick(
+        backup_events_dir,
+        BackupEventType.RESTIC_BACKUP_SUCCEEDED,
+        "tick-before-rotation",
+        timedelta(minutes=50),
+    )
+    rotate_events_log_if_over(backup_events_dir)
+    write_tick(
+        backup_events_dir, BackupEventType.BACKUP_STARTED, tick_id="tick-running"
+    )
+
+    result = CliRunner().invoke(backup_now_main, ["--check"])
+
+    assert result.exit_code == EXIT_BACKUP_SUCCEEDED
+    report = json.loads(result.stdout)
+    assert report["newest_outcome"] == BackupEventType.RESTIC_BACKUP_SUCCEEDED.value
+    assert report["inflight_tick_id"] == "tick-running"
+
+
 def test_the_wait_for_the_triggered_tick_skips_a_restart_and_reports_the_next_tick(
     tmp_path: Path,
 ) -> None:

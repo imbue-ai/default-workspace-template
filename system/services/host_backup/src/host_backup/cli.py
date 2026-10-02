@@ -43,6 +43,7 @@ from host_backup.events import (
     TICK_TERMINAL_EVENT_TYPES,
     BackupEventType,
     scan_recent_ticks,
+    scan_recent_ticks_across_rotation,
 )
 
 DEFAULT_TIMEOUT_SECONDS = 1800.0  # 30 minutes
@@ -117,7 +118,7 @@ def _check_recent_backup(events_path: Path) -> int:
     previous one ended, so its newest success is at most one interval plus one run
     old, and a run longer than the interval is the slow-backup notice's business.
     """
-    recent = scan_recent_ticks(events_path)
+    recent = scan_recent_ticks_across_rotation(events_path)
     max_age_seconds = 2 * load_backup_config().backup_interval_seconds
     success_at = _event_time(recent.newest_success_event)
     age_seconds = (
