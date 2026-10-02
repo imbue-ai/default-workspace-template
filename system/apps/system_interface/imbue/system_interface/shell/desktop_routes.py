@@ -1,10 +1,8 @@
 """The desktop's routes (desktop-interface contracts.md sections 5 and 8): desktops, windows, placements, wallpapers,
 and the verbs of the op route."""
 
-from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
-from typing import Literal
 from typing import assert_never
 
 from app_manifest.manifest import ShortcutMode
@@ -29,12 +27,33 @@ from workspace_layout.answers import LayoutOpMessageArgs
 from workspace_layout.answers import OpenAnswer
 from workspace_layout.answers import ShowAnswer
 from workspace_layout.answers import TransientOpAnswer
-from workspace_layout.ops import DESKTOP_ARG_KEY
-from workspace_layout.ops import DesktopOpArguments
+from workspace_layout.ops import ContextBody
+from workspace_layout.ops import InventoryBody
+from workspace_layout.ops import LoadBody
+from workspace_layout.ops import NavigateArgs
+from workspace_layout.ops import NavigateBody
+from workspace_layout.ops import OpBody
 from workspace_layout.ops import OpRequester
-from workspace_layout.ops import PLACEABLE_STATES
+from workspace_layout.ops import OpTarget
+from workspace_layout.ops import OpenArgs
+from workspace_layout.ops import OpenBody
+from workspace_layout.ops import PlaceArgs
+from workspace_layout.ops import PlaceBody
+from workspace_layout.ops import RefreshAppArgs
+from workspace_layout.ops import RefreshBody
+from workspace_layout.ops import RefreshWindowArgs
+from workspace_layout.ops import ReloadSystemInterfaceBody
+from workspace_layout.ops import ShortcutMoveBody
+from workspace_layout.ops import ShortcutRemoveBody
+from workspace_layout.ops import ShortcutSetBody
+from workspace_layout.ops import ShortcutsBody
+from workspace_layout.ops import ShowArgs
+from workspace_layout.ops import ShowBody
+from workspace_layout.ops import WallpaperBody
+from workspace_layout.ops import WindowArgs
+from workspace_layout.ops import WindowOp
+from workspace_layout.ops import WindowOpBody
 from workspace_layout.ops import parse_window_reference
-from workspace_layout.ops import read_op_arguments
 from workspace_layout.ops import requester_spelling
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
@@ -485,21 +504,15 @@ class _DesktopOpTarget(FrozenModel):
     desktop: Desktop = Field(description="The desktop the op edits (the client's active one, or ``args.desktop``)")
 
 
-def _requested_desktop(args_raw: Mapping[str, Any]) -> str | None:
-    requested = args_raw.get(DESKTOP_ARG_KEY)
-    return requested if isinstance(requested, str) and requested else None
-
-
-def _resolve_target(shell: ShellState, args_raw: Mapping[str, Any], requester: OpRequester | None) -> _DesktopOpTarget:
+def _resolve_target(shell: ShellState, arguments: OpTarget, requester: OpRequester | None) -> _DesktopOpTarget:
     """The client and desktop an op targets: ``args.desktop`` (by name or id, switching the client to it), else the
     client's active desktop by the rule of desktop contracts.md section 4.3."""
-    client_id = require_client(shell, args_raw, requester)
+    client_id = require_client(shell, arguments.client, requester)
     desktops = shell.list_desktops()
-    requested = _requested_desktop(args_raw)
-    if requested is not None:
-        desktop = find_desktop_by_name_or_id(desktops, requested)
+    if arguments.desktop is not None:
+        desktop = find_desktop_by_name_or_id(desktops, arguments.desktop)
         if desktop is None:
-            raise DesktopNotFoundError(requested)
+            raise DesktopNotFoundError(arguments.desktop)
         if shell.active_desktop_of_client(client_id) != desktop.id:
             shell.set_client_active_desktop(client_id, desktop.id)
         return _DesktopOpTarget(client_id=client_id, desktop=desktop)
@@ -507,13 +520,6 @@ def _resolve_target(shell: ShellState, args_raw: Mapping[str, Any], requester: O
     if active is None:
         raise LayoutOpError("there is no desktop to edit yet")
     return _DesktopOpTarget(client_id=client_id, desktop=shell.get_desktop(active))
-
-
-@pure
-def _required_app(arguments: DesktopOpArguments, op: LayoutOp) -> AppName:
-    if arguments.app is None:
-        raise LayoutOpError(f"{op} needs an app in args.app")
-    return arguments.app
 
 
 def _resolve_window(
@@ -576,17 +582,14 @@ class _OpenTarget(FrozenModel):
 
 
 def _open_target(
-    shell: ShellState, arguments: DesktopOpArguments, client_id: ClientId | None, desktop_id: DesktopId | None
+    shell: ShellState, arguments: OpenArgs, client_id: ClientId | None, desktop_id: DesktopId | None
 ) -> _OpenTarget:
     """What an ``open`` op opens: an explicit path, else the page of the launch path it names (the app's default, or
     its first), resolved as the launch route resolves one (a GET launch path with its params as the query, a POST one
     asked for its page with the client and its desktop as the envelope, or no envelope for an open with no client)."""
-    app = _required_app(arguments, LayoutOp.OPEN)
-    entry = shell.require_app_entry(str(app))
+    entry = shell.require_app_entry(str(arguments.app))
     if arguments.path is not None:
-        if arguments.launch is not None or arguments.params:
-            raise LayoutOpError("an open names a path or a launch path, not both")
-        return _OpenTarget(app=app, path=arguments.path)
+        return _OpenTarget(app=arguments.app, path=arguments.path)
     default_launch = default_launch_path_id(entry.row)
     offered = effective_launch_paths(entry.row)
     launch_id = (
@@ -596,12 +599,13 @@ def _open_target(
     )
     launch_path = shell.require_launch_path(entry, launch_id)
     return _OpenTarget(
-        app=app, path=shell.launch_destination(entry, launch_path, arguments.params, client_id, desktop_id, None)
+        app=arguments.app,
+        path=shell.launch_destination(entry, launch_path, arguments.params, client_id, desktop_id, None),
     )
 
 
 def _open_request(
-    shell: ShellState, arguments: DesktopOpArguments, client_id: ClientId, desktop_id: DesktopId
+    shell: ShellState, arguments: OpenArgs, client_id: ClientId, desktop_id: DesktopId
 ) -> WindowOpenRequest:
     target = _open_target(shell, arguments, client_id, desktop_id)
     return WindowOpenRequest(
@@ -613,24 +617,23 @@ def _open_request(
     )
 
 
-def _open_unplaced(
-    shell: ShellState, arguments: DesktopOpArguments, args_raw: Mapping[str, Any], requester: OpRequester | None
-) -> ResponseReturnValue:
+def _open_unplaced(shell: ShellState, arguments: OpenArgs, requester: OpRequester | None) -> ResponseReturnValue:
     """An ``open`` with no client to target (desktop contracts.md section 8): the window is written on the named
     desktop, else the first, with no placement, so it shows minimized for every client rather than being refused."""
     desktops = shell.list_desktops()
-    requested = _requested_desktop(args_raw)
-    if requested is not None:
-        desktop = find_desktop_by_name_or_id(desktops, requested)
+    if arguments.desktop is not None:
+        desktop = find_desktop_by_name_or_id(desktops, arguments.desktop)
         if desktop is None:
-            raise DesktopNotFoundError(requested)
+            raise DesktopNotFoundError(arguments.desktop)
     elif desktops:
         desktop = desktops[0]
     else:
         raise LayoutOpError("there is no desktop to open on yet")
     target = _open_target(shell, arguments, None, None)
     outcome = shell.open_window_unplaced(desktop.id, target.app, target.path, arguments.if_present)
-    logger.info("layout op=open requester={} desktop={} client=none args={}", requester, desktop.id, args_raw)
+    logger.info(
+        "layout op=open requester={} desktop={} client=none args={}", requester, desktop.id, _logged(arguments)
+    )
     answer = OpenAnswer(
         desktop_id=desktop.id,
         client_id=None,
@@ -652,71 +655,74 @@ def _answer_document(shell: ShellState, target: _DesktopOpTarget, window_id: Win
     )
 
 
-def _answer(shell: ShellState, target: _DesktopOpTarget, window_id: WindowId | None) -> ResponseReturnValue:
+@pure
+def _logged(arguments: FrozenModel) -> dict[str, Any]:
+    """An op's arguments as the log line records them: the ones the caller sent."""
+    return arguments.model_dump(mode="json", exclude_unset=True)
+
+
+def _applied(
+    shell: ShellState, body: OpBody, target: _DesktopOpTarget, window_id: WindowId | None
+) -> ResponseReturnValue:
+    """Answer a document op the shell has applied, with the desktop and the target client's layout of it."""
+    logger.info(
+        "layout op={} requester={} desktop={} client={} args={}",
+        body.op,
+        body.requester,
+        target.desktop.id,
+        target.client_id,
+        _logged(body.args),
+    )
     return jsonify(_answer_document(shell, target, window_id).model_dump(mode="json"))
 
 
-_ShortcutOp = Literal[
-    LayoutOp.SHORTCUTS, LayoutOp.SHORTCUT_SET, LayoutOp.SHORTCUT_MOVE, LayoutOp.SHORTCUT_REMOVE, LayoutOp.WALLPAPER
-]
-_WindowOp = Literal[
-    LayoutOp.FOCUS,
-    LayoutOp.MINIMIZE,
-    LayoutOp.RESTORE,
-    LayoutOp.MAXIMIZE,
-    LayoutOp.PLACE,
-    LayoutOp.CLOSE,
-    LayoutOp.NAVIGATE,
-]
+_ShortcutBody = ShortcutsBody | ShortcutSetBody | ShortcutMoveBody | ShortcutRemoveBody | WallpaperBody
 
 
-@pure
-def _required_launch(arguments: DesktopOpArguments, op: LayoutOp) -> LaunchPathId:
-    if arguments.launch is None:
-        raise LayoutOpError(f"{op} needs a launch path id in args.launch")
-    return arguments.launch
-
-
-def _op_shortcuts(shell: ShellState, op: _ShortcutOp, arguments: DesktopOpArguments, target: _DesktopOpTarget) -> None:
+def _op_shortcuts(shell: ShellState, body: _ShortcutBody, target: _DesktopOpTarget) -> None:
     desktop_id = target.desktop.id
-    match op:
-        case LayoutOp.SHORTCUTS:
+    match body:
+        case ShortcutsBody():
             return
-        case LayoutOp.SHORTCUT_SET:
-            shortcut_target = _validated_target(
-                shell,
-                ShortcutTarget(app=_required_app(arguments, op), launch=_required_launch(arguments, op)),
-            )
+        case ShortcutSetBody(args=arguments):
+            shortcut_target = _validated_target(shell, ShortcutTarget(app=arguments.app, launch=arguments.launch))
             cell = arguments.cell if arguments.cell is not None else next_shortcut_cell(target.desktop)
             shell.desktops.set_shortcut(
                 desktop_id, DesktopShortcut(target=shortcut_target, mode=arguments.mode, cell=cell)
             )
-        case LayoutOp.SHORTCUT_MOVE:
-            if arguments.cell is None:
-                raise LayoutOpError("shortcut_move needs a cell")
-            shell.desktops.move_shortcut(
-                desktop_id, _required_app(arguments, op), _required_launch(arguments, op), arguments.cell
-            )
-        case LayoutOp.SHORTCUT_REMOVE:
-            shell.desktops.remove_shortcut(desktop_id, _required_app(arguments, op), _required_launch(arguments, op))
-        case LayoutOp.WALLPAPER:
+        case ShortcutMoveBody(args=arguments):
+            shell.desktops.move_shortcut(desktop_id, arguments.app, arguments.launch, arguments.cell)
+        case ShortcutRemoveBody(args=arguments):
+            shell.desktops.remove_shortcut(desktop_id, arguments.app, arguments.launch)
+        case WallpaperBody(args=arguments):
             shell.desktops.set_wallpaper(desktop_id, _existing_wallpaper(arguments.wallpaper))
         case _:
-            assert_never(op)
+            assert_never(body)
     shell.broadcast_desktops_updated()
 
 
-def _op_window(
-    shell: ShellState,
-    op: _WindowOp,
-    arguments: DesktopOpArguments,
-    target: _DesktopOpTarget,
-    requester: OpRequester | None,
-) -> WindowId:
+class _NamedWindow(FrozenModel):
+    """The window an op names on its target, and the desktop's windows as the target client sees them."""
+
+    window: Window = Field(description="The window, as the shared record")
+    seen_windows: tuple[Window, ...] = Field(description="The desktop's windows as the target client sees them")
+
+
+def _named_window(
+    shell: ShellState, target: _DesktopOpTarget, raw: str, requester: OpRequester | None
+) -> _NamedWindow:
     desktop = target.desktop
     layout = shell.read_desktop_layout(desktop, target.client_id)
     seen_windows = shell.windows_for_client(desktop, target.client_id)
-    window = _resolve_window(desktop, seen_windows, layout, arguments.window, requester)
+    window = _resolve_window(desktop, seen_windows, layout, raw, requester)
+    return _NamedWindow(window=window, seen_windows=seen_windows)
+
+
+def _op_window(
+    shell: ShellState, op: WindowOp, arguments: WindowArgs, target: _DesktopOpTarget, requester: OpRequester | None
+) -> WindowId:
+    desktop = target.desktop
+    window = _named_window(shell, target, arguments.window, requester).window
     match op:
         case LayoutOp.FOCUS:
             shell.edit_desktop_layout(
@@ -735,36 +741,40 @@ def _op_window(
             shell.edit_desktop_layout(
                 desktop, target.client_id, lambda current: with_window_state(current, window.id, WindowState.MAXIMIZED)
             )
-        case LayoutOp.PLACE:
-            state = arguments.state
-            frame = arguments.frame
-            if state is not None and frame is not None:
-                raise LayoutOpError("place takes a state or a frame, not both")
-            if state is not None:
-                shell.edit_desktop_layout(
-                    desktop, target.client_id, lambda current: with_window_state(current, window.id, state)
-                )
-            elif frame is not None:
-                shell.edit_desktop_layout(
-                    desktop, target.client_id, lambda current: with_window_frame(current, window.id, frame)
-                )
-            else:
-                raise LayoutOpError(
-                    f"place needs a state (one of {[placeable.value for placeable in PLACEABLE_STATES]}) or a frame"
-                )
         case LayoutOp.CLOSE:
             if window.is_pinned:
                 raise LayoutOpError(f"window {window.id} is pinned and cannot be closed; minimize it instead")
             shell.close_window(desktop.id, window.id)
-        case LayoutOp.NAVIGATE:
-            if arguments.path is None:
-                raise LayoutOpError("navigate needs a path")
-            # As if the target client's page had reported it: an independent window moves for that client alone.
-            seen = next(candidate for candidate in seen_windows if candidate.id == window.id)
-            shell.report_window_location(desktop.id, window.id, target.client_id, arguments.path, seen.title)
         case _:
             assert_never(op)
     return window.id
+
+
+def _place(
+    shell: ShellState, arguments: PlaceArgs, target: _DesktopOpTarget, requester: OpRequester | None
+) -> WindowId:
+    window = _named_window(shell, target, arguments.window, requester).window
+    state = arguments.state
+    frame = arguments.frame
+    if state is not None:
+        shell.edit_desktop_layout(
+            target.desktop, target.client_id, lambda current: with_window_state(current, window.id, state)
+        )
+    elif frame is not None:
+        shell.edit_desktop_layout(
+            target.desktop, target.client_id, lambda current: with_window_frame(current, window.id, frame)
+        )
+    return window.id
+
+
+def _navigate(
+    shell: ShellState, arguments: NavigateArgs, target: _DesktopOpTarget, requester: OpRequester | None
+) -> WindowId:
+    named = _named_window(shell, target, arguments.window, requester)
+    # As if the target client's page had reported it: an independent window moves for that client alone.
+    seen = next(candidate for candidate in named.seen_windows if candidate.id == named.window.id)
+    shell.report_window_location(target.desktop.id, named.window.id, target.client_id, arguments.path, seen.title)
+    return named.window.id
 
 
 def _client_desktop_view(shell: ShellState, desktop: Desktop, client_id: ClientId) -> ClientDesktopView:
@@ -776,14 +786,12 @@ def _client_desktop_view(shell: ShellState, desktop: Desktop, client_id: ClientI
 
 
 def _show(
-    shell: ShellState, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
+    shell: ShellState, arguments: ShowArgs, target: _DesktopOpTarget, requester: OpRequester | None
 ) -> ResponseReturnValue:
     """The ``show`` op: put the path of the app on the target client's screen, choosing the window by the rule
     ``choose_show_target`` spells, and answer which way it went."""
-    app = _required_app(arguments, LayoutOp.SHOW)
+    app = arguments.app
     shell.require_app_entry(str(app))
-    if arguments.path is None:
-        raise LayoutOpError("show needs a path")
     path = arguments.path
     showing = set(arguments.showing)
     repoint = set(arguments.repoint)
@@ -833,7 +841,7 @@ def _show(
 
 
 def _beside_anchor(
-    shell: ShellState, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
+    shell: ShellState, arguments: OpenArgs, target: _DesktopOpTarget, requester: OpRequester | None
 ) -> Window | None:
     """The window an ``open``'s ``beside`` names, resolved before the window is opened; None when it names none.
 
@@ -842,22 +850,15 @@ def _beside_anchor(
     spelling that is no window at all is the caller's mistake, and refuses the op here, while there is still nothing
     to leave behind.
     """
-    if not arguments.beside:
+    if arguments.beside is None:
         return None
-    desktop = target.desktop
     try:
-        return _resolve_window(
-            desktop,
-            shell.windows_for_client(desktop, target.client_id),
-            shell.read_desktop_layout(desktop, target.client_id),
-            arguments.beside,
-            requester,
-        )
+        return _named_window(shell, target, arguments.beside, requester).window
     except (WindowNotFoundError, NoRequesterWindowError):
         logger.info(
             "open beside={} matched no window on desktop {}; leaving the window as placed",
             arguments.beside,
-            desktop.id,
+            target.desktop.id,
         )
         return None
 
@@ -913,39 +914,29 @@ def _op_context(shell: ShellState, requester: OpRequester | None) -> ResponseRet
     return jsonify(ContextAnswer(clients=tuple(clients)).model_dump(mode="json"))
 
 
-def dispatch_desktop_op(
-    shell: ShellState, op: LayoutOp, args_raw: Mapping[str, Any], requester: OpRequester | None
-) -> ResponseReturnValue:
+def dispatch_desktop_op(shell: ShellState, body: OpBody) -> ResponseReturnValue:
     """Apply one verb of the op route (desktop contracts.md section 8): ``context`` answers the clients' recent
     activity, the inventory ops the inventory document, a whole-app ``refresh`` and the interface reload reach every
     client; the rest resolve their client and desktop, edit the files, and answer the resulting state."""
-    if op is LayoutOp.CONTEXT:
-        return _op_context(shell, requester)
-    if op is LayoutOp.DESKTOPS or op is LayoutOp.LIST:
-        document = inventory_document(shell)
-        logger.info("layout op={} requester={} desktops={}", op, requester, len(document.desktops))
-        return jsonify(InventoryOpAnswer.model_validate(dict(document)).model_dump(mode="json"))
-    arguments = read_op_arguments(args_raw)
-    # The rules an op's own arguments settle come before any client is looked for, so a caller is told what to
-    # fix rather than which client to name.
-    if op is LayoutOp.LOAD and _requested_desktop(args_raw) is None:
-        raise LayoutOpError("'load' requires a desktop name in args.desktop")
-    if op is LayoutOp.OPEN and arguments.minimized and arguments.beside:
-        raise LayoutOpError("'open' puts the window out of sight with minimized or beside another window, not both")
-    if op is LayoutOp.REFRESH and arguments.app is not None:
-        return _refresh_app(shell, arguments.app, requester)
-    if op is LayoutOp.RELOAD_SYSTEM_INTERFACE:
-        return _reload_system_interface(shell, requester)
-    # An open is the one client-scoped op that still means something with no client: the window is shared.
-    if op is LayoutOp.OPEN and resolve_client(shell, args_raw, requester) is None:
-        return _open_unplaced(shell, arguments, args_raw, requester)
-    target = _resolve_target(shell, args_raw, requester)
-    window_id: WindowId | None = None
-    match op:
-        case LayoutOp.LOAD:
-            # Resolving the target already switched the client to ``args.desktop``.
-            pass
-        case LayoutOp.OPEN:
+    requester = body.requester
+    match body:
+        case ContextBody():
+            return _op_context(shell, requester)
+        case InventoryBody():
+            document = inventory_document(shell)
+            logger.info("layout op={} requester={} desktops={}", body.op, requester, len(document.desktops))
+            return jsonify(InventoryOpAnswer.model_validate(dict(document)).model_dump(mode="json"))
+        case ReloadSystemInterfaceBody():
+            return _reload_system_interface(shell, requester)
+        case RefreshBody(args=arguments):
+            if isinstance(arguments, RefreshAppArgs):
+                return _refresh_app(shell, arguments.app, requester)
+            return _refresh_window(shell, arguments, _resolve_target(shell, arguments, requester), requester)
+        case OpenBody(args=arguments):
+            # An open is the one client-scoped op that still means something with no client: the window is shared.
+            if resolve_client(shell, arguments.client, requester) is None:
+                return _open_unplaced(shell, arguments, requester)
+            target = _resolve_target(shell, arguments, requester)
             anchor = _beside_anchor(shell, arguments, target, requester)
             window_id = shell.open_window(
                 target.desktop.id, _open_request(shell, arguments, target.client_id, target.desktop.id)
@@ -953,39 +944,27 @@ def dispatch_desktop_op(
             _pair_beside(shell, target, anchor, window_id)
             if not arguments.minimized:
                 _announce_window_op(shell, LayoutOp.OPEN, window_id, target.client_id, requester)
-        case LayoutOp.REFRESH:
-            return _refresh_window(shell, arguments, target, requester)
-        case LayoutOp.SHOW:
-            return _show(shell, arguments, target, requester)
-        case (
-            LayoutOp.SHORTCUTS
-            | LayoutOp.SHORTCUT_SET
-            | LayoutOp.SHORTCUT_MOVE
-            | LayoutOp.SHORTCUT_REMOVE
-            | LayoutOp.WALLPAPER
-        ):
-            _op_shortcuts(shell, op, arguments, target)
-        case (
-            LayoutOp.FOCUS
-            | LayoutOp.MINIMIZE
-            | LayoutOp.RESTORE
-            | LayoutOp.MAXIMIZE
-            | LayoutOp.PLACE
-            | LayoutOp.CLOSE
-            | LayoutOp.NAVIGATE
-        ):
-            window_id = _op_window(shell, op, arguments, target, requester)
+            return _applied(shell, body, target, window_id)
+        case LoadBody(args=arguments):
+            # Resolving the target is the load: it switches the client to the named desktop.
+            return _applied(shell, body, _resolve_target(shell, arguments, requester), None)
+        case ShowBody(args=arguments):
+            return _show(shell, arguments, _resolve_target(shell, arguments, requester), requester)
+        case WindowOpBody(args=arguments):
+            target = _resolve_target(shell, arguments, requester)
+            return _applied(shell, body, target, _op_window(shell, body.op, arguments, target, requester))
+        case PlaceBody(args=arguments):
+            target = _resolve_target(shell, arguments, requester)
+            return _applied(shell, body, target, _place(shell, arguments, target, requester))
+        case NavigateBody(args=arguments):
+            target = _resolve_target(shell, arguments, requester)
+            return _applied(shell, body, target, _navigate(shell, arguments, target, requester))
+        case ShortcutsBody() | ShortcutSetBody() | ShortcutMoveBody() | ShortcutRemoveBody() | WallpaperBody():
+            target = _resolve_target(shell, body.args, requester)
+            _op_shortcuts(shell, body, target)
+            return _applied(shell, body, target, None)
         case _:
-            assert_never(op)
-    logger.info(
-        "layout op={} requester={} desktop={} client={} args={}",
-        op,
-        requester,
-        target.desktop.id,
-        target.client_id,
-        args_raw,
-    )
-    return _answer(shell, target, window_id)
+            assert_never(body)
 
 
 def _announce_window_op(
@@ -1042,12 +1021,10 @@ def _refresh_app(shell: ShellState, app: AppName, requester: OpRequester | None)
 
 
 def _refresh_window(
-    shell: ShellState, arguments: DesktopOpArguments, target: _DesktopOpTarget, requester: OpRequester | None
+    shell: ShellState, arguments: RefreshWindowArgs, target: _DesktopOpTarget, requester: OpRequester | None
 ) -> ResponseReturnValue:
     """The transient one-window ``refresh``: the window's page on the target client."""
-    layout = shell.read_desktop_layout(target.desktop, target.client_id)
-    seen_windows = shell.windows_for_client(target.desktop, target.client_id)
-    window = _resolve_window(target.desktop, seen_windows, layout, arguments.window, requester)
+    window = _named_window(shell, target, arguments.window, requester).window
     shell.broadcaster.broadcast_layout_op(
         LayoutOpMessage(
             op=LayoutOp.REFRESH,

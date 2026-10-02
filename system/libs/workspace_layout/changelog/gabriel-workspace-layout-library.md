@@ -2,7 +2,7 @@ New library `workspace_layout`: the shell's layout routes (the op route, the des
 
 - `ShellLayoutClient` asks the shell to `show`, `open`, `focus`, `navigate`, `place`, `close`, and `refresh`, lists its connected clients and desktops, and reports client activity; every op names the client it targets and raises a typed error when the shell is unreachable, refuses, or answers something else.
 
-- The op route's request models (`DesktopOpArguments`, `OpRequester`, and `LayoutOp`, the enum of every op), the ids the wire carries, and the window readers an app with window-bound resources sweeps against now live here, so the shell and its callers read one definition.
+- The op route's request models (one body model per op with its own arguments model, `OpBody` their union keyed on `op`, `OpRequester`, and `LayoutOp`, the enum of every op), the ids the wire carries, and the window readers an app with window-bound resources sweeps against now live here, so the shell and its callers read one definition.
 
 - `FakeShell` and `LoopbackShell` are the shared test stand-ins; `LoopbackShell` refuses any op body the shell itself would refuse.
 
@@ -10,11 +10,11 @@ New library `workspace_layout`: the shell's layout routes (the op route, the des
 
 - The shell's records and answers are defined here and nowhere else: `records` (frames, cells, windows, desktops, placements, layouts, client records, and the views answers carry), every answer the shell gives (`DesktopOpAnswer` with its desktop and layout, `ShowAnswer.shown` as a `ShowOutcome`, the transient, `context`, inventory, desktops, and clients answers, and the `layout_op` message), and the wire's values (`WindowPath`, `WindowPage`, `WindowTitle`, `UserId`, `WindowState`, `SpecialWindow`). The shell builds from them and callers parse with them, ignoring fields a newer shell adds.
 
-- The op route's arguments are typed: `place` takes a `state` (`SNAPPED_LEFT`, `SNAPPED_RIGHT`, `MAXIMIZED`) or a `frame` record instead of a `zone` or an `x,y,width,height` string, a shortcut's `cell` is a `{column, row}` record, and paths and pages are checked as the shell checks them before anything is posted. `OpBody`, `parse_op_body`, `read_op_arguments`, and `parse_window_reference` read a body as the shell does.
+- The op route's arguments are typed: `place` takes a `state` (`SNAPPED_LEFT`, `SNAPPED_RIGHT`, `MAXIMIZED`) or a `frame` record instead of a `zone` or an `x,y,width,height` string, a shortcut's `cell` is a `{column, row}` record, and paths and pages are checked as the shell checks them before anything is posted. `parse_op_body` and `parse_window_reference` read a body as the shell does, and an op's body refuses an argument the op does not take (a `refresh` of an app refuses `client` and `desktop`, `reload_system_interface` refuses any), naming every argument it refuses. `ShellLayoutClient`'s ops take the arguments models (`ShowArgs`, `OpenArgs`, `WindowArgs`, `PlaceArgs`, `NavigateArgs`, `RefreshWindowArgs` or `RefreshAppArgs`), and the client and the `workspace-layout` command post every op the same way.
 
 - Every `workspace-layout` subcommand reads the shell's answer through the answer models rather than picking keys out of it.
 
-- A property that holds for some ops (`op_reads_arguments`, the shell's window and shortcut handlers) is an exhaustive match over `LayoutOp` rather than a set of op names, so a new op fails type checking until each says what it does for it.
+- A property that holds for some ops is carried by its body model or by a `Literal` subset of `LayoutOp` (`WindowOp`) rather than a set of op names, so a new op fails type checking until the shell handles it.
 
 - `WindowClosedHint` and `parse_window_closed_hint` are the body the shell posts when a window closes.
 

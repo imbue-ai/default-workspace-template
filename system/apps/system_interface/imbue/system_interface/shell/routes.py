@@ -360,8 +360,7 @@ def layout_broadcast() -> ResponseReturnValue:
     except ValueError as e:
         logger.opt(exception=e).warning("layout broadcast received invalid JSON body")
         return detail_response("Invalid JSON in request body", HTTP_BAD_REQUEST)
-    parsed = parse_op_body(body)
-    return dispatch_desktop_op(_shell(), parsed.op, parsed.args, parsed.requester)
+    return dispatch_desktop_op(_shell(), parse_op_body(body))
 
 
 def register_shell_routes(application: Flask) -> None:

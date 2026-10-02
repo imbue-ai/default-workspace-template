@@ -15,12 +15,13 @@ from workspace_layout.errors import ShellAnswerMalformedError
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.ops import ClientActivityReport
-from workspace_layout.ops import NavigateRequest
-from workspace_layout.ops import OpenRequest
+from workspace_layout.ops import NavigateArgs
+from workspace_layout.ops import OpenArgs
 from workspace_layout.ops import OpRequester
-from workspace_layout.ops import PlaceRequest
-from workspace_layout.ops import ShowRequest
-from workspace_layout.ops import WindowRequest
+from workspace_layout.ops import PlaceArgs
+from workspace_layout.ops import RefreshWindowArgs
+from workspace_layout.ops import ShowArgs
+from workspace_layout.ops import WindowArgs
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
@@ -43,12 +44,12 @@ from workspace_layout.testing import fake_window
 _WINDOW = "win-0123456789abcdef"
 _CLIENT = ClientId("client-1")
 _REQUESTER = OpRequester(app=AppName("chat"), marker="")
-_SHOW = ShowRequest(
+_SHOW = ShowArgs(
     app=AppName("chat"),
     path=WindowPath("/?chat=agent-1"),
     showing=(WindowPath("/agent-1"),),
     repoint=(WindowPage("/"),),
-    client_id=_CLIENT,
+    client=_CLIENT,
 )
 _SHOWN_ANSWER = {**desktop_answer(fake_desktop("home"), "client-1", _WINDOW), "shown": "navigated"}
 _ACTIVITY = ClientActivityReport(
@@ -119,36 +120,32 @@ def test_an_answer_carrying_fields_the_library_does_not_know_still_reads(loopbac
     [
         (
             lambda client: client.open(
-                OpenRequest(
+                OpenArgs(
                     app=AppName("browser"),
                     path=WindowPath("/?session=browser-1"),
                     if_present=IfPresent.FOCUS,
-                    is_minimized=True,
-                    client_id=None,
-                    desktop=None,
+                    minimized=True,
                 )
             ),
             "open",
             {"app": "browser", "path": "/?session=browser-1", "if_present": "focus", "minimized": True},
         ),
         (
-            lambda client: client.focus(WindowRequest(window="self", client_id=_CLIENT, desktop=None)),
+            lambda client: client.focus(WindowArgs(window="self", client=_CLIENT)),
             "focus",
             {"window": "self", "client": "client-1"},
         ),
         (
-            lambda client: client.navigate(
-                NavigateRequest(window="files", path=WindowPath("/b/"), client_id=None, desktop=None)
-            ),
+            lambda client: client.navigate(NavigateArgs(window="files", path=WindowPath("/b/"))),
             "navigate",
             {"window": "files", "path": "/b/"},
         ),
         (
             lambda client: client.place(
-                PlaceRequest(
+                PlaceArgs(
                     window=_WINDOW,
                     frame=Frame(x=0.07, y=0.05, width=0.38, height=0.9),
-                    client_id=_CLIENT,
+                    client=_CLIENT,
                     desktop="home",
                 )
             ),
@@ -161,7 +158,7 @@ def test_an_answer_carrying_fields_the_library_does_not_know_still_reads(loopbac
             },
         ),
         (
-            lambda client: client.close(WindowRequest(window=_WINDOW, client_id=None, desktop=None)),
+            lambda client: client.close(WindowArgs(window=_WINDOW)),
             "close",
             {"window": _WINDOW},
         ),
@@ -184,21 +181,14 @@ def test_each_document_op_posts_its_body_and_answers_the_window_the_shell_named(
 
 def test_an_open_answered_with_no_window_is_malformed(loopback_shell: LoopbackShell) -> None:
     loopback_shell.op_answer = desktop_answer(fake_desktop("home"), "client-1", None)
-    request = OpenRequest(
-        app=AppName("files"),
-        path=WindowPath("/"),
-        if_present=IfPresent.FOCUS,
-        is_minimized=False,
-        client_id=None,
-        desktop=None,
-    )
+    request = OpenArgs(app=AppName("files"), path=WindowPath("/"))
 
     with pytest.raises(ShellAnswerMalformedError, match="open"):
         _client(loopback_shell.url).open(request)
 
 
 def test_a_refresh_posts_the_window_and_answers_the_client_it_reached(loopback_shell: LoopbackShell) -> None:
-    answer = _client(loopback_shell.url).refresh(WindowRequest(window="self", client_id=None, desktop=None))
+    answer = _client(loopback_shell.url).refresh(RefreshWindowArgs(window="self"))
 
     assert answer.target_client_id == ClientId("c1")
     assert loopback_shell.posted_ops() == [("refresh", {"window": "self"})]
@@ -359,7 +349,7 @@ def test_the_disconnected_shell_reaches_nobody() -> None:
     with pytest.raises(ShellUnreachableError):
         shell.show(_SHOW)
     with pytest.raises(ShellUnreachableError):
-        shell.focus(WindowRequest(window="self", client_id=None, desktop=None))
+        shell.focus(WindowArgs(window="self"))
 
 
 def test_the_requester_is_the_calling_agents_chat(monkeypatch: pytest.MonkeyPatch) -> None:

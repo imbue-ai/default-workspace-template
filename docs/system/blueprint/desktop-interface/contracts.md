@@ -313,13 +313,13 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `place` | `window`, `state` (`SNAPPED_LEFT`, `SNAPPED_RIGHT`, `MAXIMIZED`) or `frame` (a frame record, section 4.2) | set the state, or the frame with state `NORMAL` |
 | `close` | `window` | close for everyone |
 | `navigate` | `window`, `path` | set the window's path as if its page had reported it; the client's page follows |
-| `refresh` | `window` or `app` | transient: reload the page(s) |
+| `refresh` | `window`, or `app` alone | transient: reload the window's page on the client, or every page of the app on every client |
 | `reload_system_interface` | | transient: reload every window of the shell |
 | `shortcuts`, `shortcut_set`, `shortcut_move`, `shortcut_remove` | as section 5.2, `cell` a grid cell record (`{"column", "row"}`) | edit the desktop's shortcuts |
 | `wallpaper` | `wallpaper` | set the desktop's wallpaper |
 
 `window` is a window id, `self`, `pinned`, or an app name (that app's most recently focused window on the target client's active desktop).
-The arguments, the answers, and the records they carry are the models of `system/libs/workspace_layout` (`ops`, `answers`, `records`), which the shell builds its answers from and every caller reads them with; a value off a model's rule (a path that is not a window path, a `state` `place` does not set, a frame outside the unit square) is a `400`.
+The bodies, the answers, and the records they carry are the models of `system/libs/workspace_layout` (`ops`, `answers`, `records`): one body model per op, carrying the arguments the table gives it, which the shell reads every body with, builds its answers from, and every caller reads them with. A body is refused with `400` before anything is looked up when it carries an argument its op does not take (`client` and `desktop` included: a `refresh` of an `app` and `reload_system_interface` take neither), lacks one the op requires, or breaks a rule of its arguments (a path that is not a window path, a `state` `place` does not set, a frame outside the unit square, an `open` naming both a `path` and a `launch` or `params`); the `detail` names every such argument. `context`, `desktops`, and `list` read no arguments and ignore what they are sent.
 `show` knows nothing of what the path shows and reads no meaning into a query string. `showing` is a list of the app's other paths that count as already showing it (`path` itself always does). `repoint` is a list of the app's pages, each a path with no query string or fragment, whose windows `show` may point at `path`; absent or empty, step 2 below repoints nothing. A `showing` entry that is not a path, or a `repoint` entry that is not a page, is a `400`. For the target client, every path as that client sees it (its own stored path for an independent window), the first of these that applies:
 
 1. `raised`: a window of `app` at `path` or a `showing` path, on the client's active desktop before any other and nearest the top of the client's stack first, minimized or not, is restored and raised; one on another desktop is raised there and the client switched to that desktop.

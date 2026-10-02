@@ -15,7 +15,7 @@ from workspace_layout.primitives import WindowPath
 from workspace_layout.testing import FakeShell
 
 from imbue.chat.server import create_application
-from imbue.chat.shell_client import chat_show_request
+from imbue.chat.shell_client import chat_show_args
 from imbue.chat.testing import build_test_state
 
 _CHAT_ID = "agent-5f0c2e"
@@ -39,7 +39,7 @@ def test_a_focus_chat_shows_the_chat_root_on_the_chat_counting_its_own_page_and_
     assert answered.status_code == 200
     assert answered.get_json() == {"shown": "navigated", "window_id": "win-0123456789abcdef"}
     assert shell.shows == [
-        chat_show_request(
+        chat_show_args(
             WindowPath(f"/?chat={_CHAT_ID}"),
             showing=(WindowPath(f"/{_CHAT_ID}"),),
             repoint=(WindowPage("/"),),
@@ -71,7 +71,9 @@ def test_a_secondary_chat_refuses_to_open_a_window() -> None:
     "error",
     [
         ShellUnreachableError("Could not reach the shell at http://127.0.0.1:1/api/layout/broadcast"),
-        ShellRefusedOpError("The shell refused the show (404): No client 'client-1'", status_code=404),
+        ShellRefusedOpError(
+            "The shell refused the show (404): No client 'client-1'", status_code=404, detail="No client 'client-1'"
+        ),
         ShellAnswerMalformedError("The shell answered the show with something else: []"),
     ],
     ids=["unreachable", "refused", "malformed"],

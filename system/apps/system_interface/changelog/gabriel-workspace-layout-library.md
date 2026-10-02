@@ -2,7 +2,7 @@ The op route's request models, the client, desktop, and window ids, the wallpape
 
 - The op route's hints for an unknown or unsettled client name `workspace-layout context` instead of the removed `layout.py`.
 
-- The op route parses the op into a `LayoutOp` once, and the dispatcher and its window and shortcut handlers match on it exhaustively, so an op added to the enum but not handled fails type checking instead of reaching a runtime "no handler" error.
+- The op route reads each body into its op's own body model from `workspace_layout`, and the dispatcher matches on the body exhaustively, so an op added but not handled fails type checking instead of reaching a runtime "no handler" error. An argument the op does not take is refused with a 400 naming it (a `refresh` of an `app` with a `client` or `desktop`, and `reload_system_interface` with any argument, were accepted before), and the 400 names every argument it refuses rather than the first; `context`, `desktops`, and `list` still ignore their arguments.
 
 - The shell's records (windows, desktops, placements, frames, cells, client records) and every answer it gives (the op answers, the inventory, the desktops and clients listings, the `context` answer, and the `layout_op` message) are `workspace_layout` models the shell builds its JSON from, rather than dicts it writes by hand; the JSON is unchanged but for timestamps, which now end in `Z`.
 

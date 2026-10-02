@@ -24,8 +24,8 @@ from imbue.imbue_common.mutable_model import MutableModel
 from workspace_layout.errors import ShellAnswerMalformedError
 from workspace_layout.errors import ShellOpError
 from workspace_layout.interfaces import ShellLayoutInterface
-from workspace_layout.ops import OpenRequest
-from workspace_layout.ops import PlaceRequest
+from workspace_layout.ops import OpenArgs
+from workspace_layout.ops import PlaceArgs
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
@@ -92,13 +92,8 @@ class FirstWindowOpener(MutableModel):
         if target is None:
             return FirstWindowDelivery(is_delivered=False, client_id=None)
         client_id, desktop_id = target
-        open_request = OpenRequest(
-            app=self.app,
-            path=FIRST_WINDOW_PATH,
-            if_present=IfPresent.FOCUS,
-            is_minimized=False,
-            client_id=client_id,
-            desktop=str(desktop_id),
+        open_request = OpenArgs(
+            app=self.app, path=FIRST_WINDOW_PATH, if_present=IfPresent.FOCUS, client=client_id, desktop=str(desktop_id)
         )
         try:
             window_id = self.shell.open(open_request).window_id
@@ -108,8 +103,8 @@ class FirstWindowOpener(MutableModel):
         except ShellOpError as e:
             logger.info("The shell did not open the {} window, so it stays owed: {}", self.app, e)
             return FirstWindowDelivery(is_delivered=False, client_id=None)
-        place_request = PlaceRequest(
-            window=str(window_id), frame=FIRST_WINDOW_FRAME, client_id=client_id, desktop=str(desktop_id)
+        place_request = PlaceArgs(
+            window=str(window_id), frame=FIRST_WINDOW_FRAME, client=client_id, desktop=str(desktop_id)
         )
         try:
             self.shell.place(place_request)

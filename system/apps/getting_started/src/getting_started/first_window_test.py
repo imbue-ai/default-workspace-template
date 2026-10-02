@@ -9,8 +9,8 @@ from getting_started.first_window import FIRST_WINDOW_PATH
 from getting_started.first_window import FirstWindowLedger
 from getting_started.first_window import FirstWindowOpener
 from workspace_layout.errors import ShellUnreachableError
-from workspace_layout.ops import OpenRequest
-from workspace_layout.ops import PlaceRequest
+from workspace_layout.ops import OpenArgs
+from workspace_layout.ops import PlaceArgs
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import IfPresent
 from workspace_layout.primitives import LayoutOp
@@ -25,14 +25,9 @@ def _opener(tmp_path: Path, shell: FakeShell) -> FirstWindowOpener:
     return FirstWindowOpener(app=_APP, ledger=FirstWindowLedger(path=tmp_path / "first_window.json"), shell=shell)
 
 
-def _open_request(client_id: str) -> OpenRequest:
-    return OpenRequest(
-        app=_APP,
-        path=FIRST_WINDOW_PATH,
-        if_present=IfPresent.FOCUS,
-        is_minimized=False,
-        client_id=ClientId(client_id),
-        desktop="home",
+def _open_request(client_id: str) -> OpenArgs:
+    return OpenArgs(
+        app=_APP, path=FIRST_WINDOW_PATH, if_present=IfPresent.FOCUS, client=ClientId(client_id), desktop="home"
     )
 
 
@@ -45,7 +40,7 @@ def test_the_window_is_opened_and_placed_for_the_first_connected_client_and_then
     assert first.is_delivered is True and first.client_id == "client-b"
     assert shell.opens == [_open_request("client-b")]
     assert shell.placements == [
-        PlaceRequest(window=FAKE_WINDOW_ID, frame=FIRST_WINDOW_FRAME, client_id=ClientId("client-b"), desktop="home")
+        PlaceArgs(window=FAKE_WINDOW_ID, frame=FIRST_WINDOW_FRAME, client=ClientId("client-b"), desktop="home")
     ]
     assert opener.ledger.is_delivered() is True
     # A second attempt (a restart, say) opens nothing: the ledger says so.

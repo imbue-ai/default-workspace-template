@@ -34,14 +34,14 @@ from workspace_layout.errors import ShellOpError
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.ops import ClientActivityReport
-from workspace_layout.ops import NavigateRequest
-from workspace_layout.ops import OpenRequest
-from workspace_layout.ops import PlaceRequest
-from workspace_layout.ops import ShowRequest
-from workspace_layout.ops import WindowRequest
-from workspace_layout.ops import op_reads_arguments
+from workspace_layout.ops import NavigateArgs
+from workspace_layout.ops import OpenArgs
+from workspace_layout.ops import PlaceArgs
+from workspace_layout.ops import RefreshArgs
+from workspace_layout.ops import RefreshWindowArgs
+from workspace_layout.ops import ShowArgs
+from workspace_layout.ops import WindowArgs
 from workspace_layout.ops import parse_op_body
-from workspace_layout.ops import read_op_arguments
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import LayoutOp
@@ -160,24 +160,26 @@ class FakeShell(ShellLayoutInterface):
     shown: ShowOutcome = Field(default=ShowOutcome.OPENED, description="How a show says it put its path on screen")
     window_id: WindowId = Field(default=FAKE_WINDOW_ID, description="The window every op answers")
     desktop_id: DesktopId = Field(default=FAKE_DESKTOP_ID, description="The desktop every op answers")
-    shows: list[ShowRequest] = Field(default_factory=list, description="Every show asked for")
-    opens: list[OpenRequest] = Field(default_factory=list, description="Every open asked for")
-    focuses: list[WindowRequest] = Field(default_factory=list, description="Every focus asked for")
-    navigations: list[NavigateRequest] = Field(default_factory=list, description="Every navigate asked for")
-    placements: list[PlaceRequest] = Field(default_factory=list, description="Every place asked for")
-    closes: list[WindowRequest] = Field(default_factory=list, description="Every close asked for")
-    refreshes: list[WindowRequest] = Field(default_factory=list, description="Every refresh asked for")
+    shows: list[ShowArgs] = Field(default_factory=list, description="Every show asked for")
+    opens: list[OpenArgs] = Field(default_factory=list, description="Every open asked for")
+    focuses: list[WindowArgs] = Field(default_factory=list, description="Every focus asked for")
+    navigations: list[NavigateArgs] = Field(default_factory=list, description="Every navigate asked for")
+    placements: list[PlaceArgs] = Field(default_factory=list, description="Every place asked for")
+    closes: list[WindowArgs] = Field(default_factory=list, description="Every close asked for")
+    refreshes: list[RefreshArgs] = Field(default_factory=list, description="Every refresh asked for")
     activities: list[ClientActivityReport] = Field(default_factory=list, description="Every activity reported")
 
     def _check(self, op: LayoutOp, client_id: ClientId | None) -> None:
         if self.error is not None:
             raise self.error
         if op in self.refused_ops:
-            raise ShellRefusedOpError(f"The shell refused the {op} ({_REFUSED_STATUS})", status_code=_REFUSED_STATUS)
-        if client_id is not None and client_id in self.refused_client_ids:
             raise ShellRefusedOpError(
-                f"The shell refused the {op} ({_REFUSED_STATUS}): No client {client_id!r}",
-                status_code=_REFUSED_STATUS,
+                f"The shell refused the {op} ({_REFUSED_STATUS})", status_code=_REFUSED_STATUS, detail=""
+            )
+        if client_id is not None and client_id in self.refused_client_ids:
+            detail = f"No client {client_id!r}"
+            raise ShellRefusedOpError(
+                f"The shell refused the {op} ({_REFUSED_STATUS}): {detail}", status_code=_REFUSED_STATUS, detail=detail
             )
 
     def _answer(self, client_id: ClientId | None) -> OpenAnswer:
@@ -189,40 +191,41 @@ class FakeShell(ShellLayoutInterface):
             window_id=self.window_id,
         )
 
-    def show(self, request: ShowRequest) -> ShowAnswer:
-        self.shows.append(request)
-        self._check(LayoutOp.SHOW, request.client_id)
-        return ShowAnswer.model_validate({**dict(self._answer(request.client_id)), "shown": self.shown})
+    def show(self, args: ShowArgs) -> ShowAnswer:
+        self.shows.append(args)
+        self._check(LayoutOp.SHOW, args.client)
+        return ShowAnswer.model_validate({**dict(self._answer(args.client)), "shown": self.shown})
 
-    def open(self, request: OpenRequest) -> OpenAnswer:
-        self.opens.append(request)
-        self._check(LayoutOp.OPEN, request.client_id)
-        return self._answer(request.client_id)
+    def open(self, args: OpenArgs) -> OpenAnswer:
+        self.opens.append(args)
+        self._check(LayoutOp.OPEN, args.client)
+        return self._answer(args.client)
 
-    def focus(self, request: WindowRequest) -> DesktopOpAnswer:
-        self.focuses.append(request)
-        self._check(LayoutOp.FOCUS, request.client_id)
-        return self._answer(request.client_id)
+    def focus(self, args: WindowArgs) -> DesktopOpAnswer:
+        self.focuses.append(args)
+        self._check(LayoutOp.FOCUS, args.client)
+        return self._answer(args.client)
 
-    def navigate(self, request: NavigateRequest) -> DesktopOpAnswer:
-        self.navigations.append(request)
-        self._check(LayoutOp.NAVIGATE, request.client_id)
-        return self._answer(request.client_id)
+    def navigate(self, args: NavigateArgs) -> DesktopOpAnswer:
+        self.navigations.append(args)
+        self._check(LayoutOp.NAVIGATE, args.client)
+        return self._answer(args.client)
 
-    def place(self, request: PlaceRequest) -> DesktopOpAnswer:
-        self.placements.append(request)
-        self._check(LayoutOp.PLACE, request.client_id)
-        return self._answer(request.client_id)
+    def place(self, args: PlaceArgs) -> DesktopOpAnswer:
+        self.placements.append(args)
+        self._check(LayoutOp.PLACE, args.client)
+        return self._answer(args.client)
 
-    def close(self, request: WindowRequest) -> DesktopOpAnswer:
-        self.closes.append(request)
-        self._check(LayoutOp.CLOSE, request.client_id)
-        return self._answer(request.client_id)
+    def close(self, args: WindowArgs) -> DesktopOpAnswer:
+        self.closes.append(args)
+        self._check(LayoutOp.CLOSE, args.client)
+        return self._answer(args.client)
 
-    def refresh(self, request: WindowRequest) -> TransientOpAnswer:
-        self.refreshes.append(request)
-        self._check(LayoutOp.REFRESH, request.client_id)
-        return TransientOpAnswer(target_client_id=request.client_id)
+    def refresh(self, args: RefreshArgs) -> TransientOpAnswer:
+        self.refreshes.append(args)
+        client = args.client if isinstance(args, RefreshWindowArgs) else None
+        self._check(LayoutOp.REFRESH, client)
+        return TransientOpAnswer(target_client_id=client)
 
     def connected_clients(self) -> list[ClientView]:
         if self.listing_error is not None:
@@ -242,9 +245,7 @@ def describe_op_body_problem(body: Any) -> str | None:
     """Why the shell's op route would refuse ``body`` as it reads one (desktop contracts.md section 8), or None when
     it would take it."""
     try:
-        parsed = parse_op_body(body)
-        if op_reads_arguments(parsed.op):
-            read_op_arguments(parsed.args)
+        parse_op_body(body)
     except InvalidLayoutValueError as e:
         return str(e)
     return None

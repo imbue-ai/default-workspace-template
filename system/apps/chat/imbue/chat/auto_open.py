@@ -39,7 +39,7 @@ from workspace_layout.primitives import WindowPage
 from workspace_layout.primitives import WindowPath
 
 from imbue.chat.primitives import ChatId
-from imbue.chat.shell_client import chat_show_request
+from imbue.chat.shell_client import chat_show_args
 from imbue.imbue_common.mutable_model import MutableModel
 
 logger = _loguru_logger
@@ -293,7 +293,7 @@ class AutoOpenReactor(MutableModel):
 
     def _is_shown(self, chat_id: ChatId, client_id: ClientId) -> bool:
         """Ask the shell to show the chat root on the chat to one client; whichever way it shows it counts."""
-        request = chat_show_request(chat_root_path(chat_id), showing=(), repoint=(), client_id=client_id)
+        request = chat_show_args(chat_root_path(chat_id), showing=(), repoint=(), client_id=client_id)
         try:
             self.shell.show(request)
         except ShellAnswerMalformedError as e:

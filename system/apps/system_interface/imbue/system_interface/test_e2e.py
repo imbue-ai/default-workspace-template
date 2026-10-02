@@ -2256,7 +2256,7 @@ def test_a_pop_out_is_reached_by_a_refresh_of_its_window_and_stays_a_pop_out_ove
         )
 
     with pop_out.expect_navigation(timeout=15000):
-        _broadcast_op(e2e_server.base_url, "reload_system_interface", {"client": client_id})
+        _broadcast_op(e2e_server.base_url, "reload_system_interface", {})
     assert urllib.parse.parse_qs(urllib.parse.urlparse(pop_out.url).query)["solo"] == [window_id]
     _page_frame(pop_out, window_id)
     expect(pop_out.locator("[data-taskbar]")).to_have_count(0)

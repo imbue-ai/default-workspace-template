@@ -17,7 +17,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.errors import ShellOpError
-from workspace_layout.ops import ShowRequest
+from workspace_layout.ops import ShowArgs
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import WindowPath
 
@@ -28,7 +28,7 @@ from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import ChatId
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import parse_request_body
-from imbue.chat.shell_client import chat_show_request
+from imbue.chat.shell_client import chat_show_args
 from imbue.chat.state import get_state
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
@@ -58,10 +58,10 @@ def chat_page_path(chat_id: ChatId) -> WindowPath:
 
 
 @pure
-def show_chat_request(chat_id: ChatId, client_id: ClientId) -> ShowRequest:
+def show_chat_args(chat_id: ChatId, client_id: ClientId) -> ShowArgs:
     """The ``show`` that puts the chat on the client's screen: the chat root with the chat selected, the chat's own
     page counting as already showing it, and a chat root window on another chat moved to it."""
-    return chat_show_request(
+    return chat_show_args(
         chat_root_path(chat_id), showing=(chat_page_path(chat_id),), repoint=(CHAT_ROOT_PAGE,), client_id=client_id
     )
 
@@ -86,7 +86,7 @@ def focus_chat_endpoint() -> Response:
         return _error(str(e), HTTP_BAD_REQUEST)
     chat_id = ChatId(focus_request.chat_id)
     try:
-        answer = state.shell.show(show_chat_request(chat_id, client_id))
+        answer = state.shell.show(show_chat_args(chat_id, client_id))
     except ShellOpError as e:
         logger.warning("Could not show chat {} to client {}: {}", chat_id, focus_request.client_id, e)
         return _error(str(e), HTTP_BAD_GATEWAY)

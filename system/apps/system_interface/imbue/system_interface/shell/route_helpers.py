@@ -1,8 +1,6 @@
 """The request helpers the shell's route modules share: status codes, the loopback gate, error bodies, the requester's
 identity, and how an op settles on the one client it targets (desktop contracts.md section 8)."""
 
-from collections.abc import Mapping
-from typing import Any
 from typing import Final
 from typing import TypeVar
 
@@ -12,7 +10,6 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from pydantic import BaseModel
 from pydantic import ValidationError
-from workspace_layout.ops import CLIENT_ARG_KEY
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 
@@ -82,8 +79,8 @@ def _is_same_user(shell: ShellState, client_id: str, other_client_id: str) -> bo
     return record is not None and other_record is not None and record.user_id == other_record.user_id
 
 
-def resolve_client(shell: ShellState, args_raw: Mapping[str, Any], requester: OpRequester | None) -> ClientId | None:
-    """The client an op addresses: ``args.client``, else the client that last messaged the requester's chat while
+def resolve_client(shell: ShellState, explicit: ClientId | None, requester: OpRequester | None) -> ClientId | None:
+    """The client an op addresses: the one it names, else the client that last messaged the requester's chat while
     it is connected, else the one connected client (when a client messaged, only if it is the same user's), else
     that messaging client though it is not connected; None when nothing settles it.
 
@@ -92,13 +89,10 @@ def resolve_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
     Another user's client (a visitor's, while the owner messaged) is not where they are looking, so it never takes
     over from theirs.
     """
-    explicit = args_raw.get(CLIENT_ARG_KEY)
-    if isinstance(explicit, str) and explicit:
-        # Held to the client id rule before it names a layout file.
-        client_id = ClientId(explicit)
-        if not is_known_client(shell, client_id):
-            raise ClientNotFoundError(f"No client {client_id!r}: see `workspace-layout context` for the known clients")
-        return client_id
+    if explicit is not None:
+        if not is_known_client(shell, explicit):
+            raise ClientNotFoundError(f"No client {explicit!r}: see `workspace-layout context` for the known clients")
+        return explicit
     attributed: str | None = None
     # Only a requester with a marker has a client that last messaged it; a bare app names none.
     if requester is not None and requester.marker:
@@ -117,9 +111,9 @@ def resolve_client(shell: ShellState, args_raw: Mapping[str, Any], requester: Op
     return None
 
 
-def require_client(shell: ShellState, args_raw: Mapping[str, Any], requester: OpRequester | None) -> ClientId:
+def require_client(shell: ShellState, explicit: ClientId | None, requester: OpRequester | None) -> ClientId:
     """Exactly one client, or a 412 that lists the connected ones: an op is never applied to a guessed client."""
-    client_id = resolve_client(shell, args_raw, requester)
+    client_id = resolve_client(shell, explicit, requester)
     if client_id is not None:
         return client_id
     connected_clients = shell.broadcaster.get_connected_client_infos()

@@ -9,7 +9,6 @@ from app_manifest.primitives import AppName
 from flask import Flask
 from flask.testing import FlaskClient
 from workspace_layout.ops import OpRequester
-from workspace_layout.ops import op_reads_arguments
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import LayoutOp
@@ -557,7 +556,7 @@ def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
     shell.activity.append_message(message_report("c7", "home", "files", "None", "hello"))
     _register_client(app, "c1", "home")
 
-    assert resolve_client(shell, {}, OpRequester(app=AppName("files"), marker="")) is None
+    assert resolve_client(shell, None, OpRequester(app=AppName("files"), marker="")) is None
 
 
 # Pinned windows (pinned-taskbar-entries plan sections 3.2 and 4.5)
@@ -1170,17 +1169,15 @@ def test_placements_are_saved_per_client_and_a_stale_save_is_refused(client: Fla
 
 
 @pytest.mark.parametrize("op", list(LayoutOp), ids=lambda op: op.value)
-def test_an_op_refuses_an_argument_it_does_not_take_exactly_when_it_reads_its_arguments(
+def test_an_op_refuses_an_argument_it_does_not_take_unless_it_reads_none(
     client: FlaskClient, app: Flask, op: LayoutOp
 ) -> None:
-    """The shell reads an op's arguments exactly when ``op_reads_arguments`` says so, which is what the library's
-    stand-in shell refuses a body by."""
     _register_client(app, "c1", "home")
 
     answered = _op(client, op.value, {"no_such_argument": 1}, _TERMINAL_REQUESTER)
 
     is_refused_for_the_argument = answered.status_code == 400 and "no_such_argument" in answered.get_json()["detail"]
-    assert is_refused_for_the_argument is op_reads_arguments(op)
+    assert is_refused_for_the_argument is (op not in (LayoutOp.CONTEXT, LayoutOp.DESKTOPS, LayoutOp.LIST))
 
 
 def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskClient, app: Flask) -> None:

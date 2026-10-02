@@ -11,7 +11,7 @@ from workspace_layout.testing import desktop_answer
 from workspace_layout.testing import fake_desktop
 
 from imbue.chat.shell_client import build_chat_shell_client
-from imbue.chat.shell_client import chat_show_request
+from imbue.chat.shell_client import chat_show_args
 
 
 def test_a_show_is_asked_for_as_the_chat_app_of_one_of_its_pages() -> None:
@@ -19,7 +19,7 @@ def test_a_show_is_asked_for_as_the_chat_app_of_one_of_its_pages() -> None:
         op_answer={**desktop_answer(fake_desktop("home"), "client-1", "win-0123456789abcdef"), "shown": "raised"}
     ) as shell:
         answer = build_chat_shell_client(shell.url).show(
-            chat_show_request(
+            chat_show_args(
                 WindowPath("/?chat=agent-1"),
                 showing=(WindowPath("/agent-1"),),
                 repoint=(WindowPage("/"),),

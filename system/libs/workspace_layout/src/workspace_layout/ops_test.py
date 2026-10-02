@@ -4,20 +4,25 @@ import pytest
 from app_manifest.primitives import AppName
 
 from workspace_layout.errors import InvalidLayoutValueError
-from workspace_layout.ops import NavigateRequest
-from workspace_layout.ops import OpenRequest
+from workspace_layout.ops import ContextBody
+from workspace_layout.ops import NavigateArgs
+from workspace_layout.ops import NavigateBody
+from workspace_layout.ops import OpBody
+from workspace_layout.ops import OpenArgs
+from workspace_layout.ops import OpenBody
 from workspace_layout.ops import OpRequester
-from workspace_layout.ops import PlaceRequest
-from workspace_layout.ops import ShowRequest
-from workspace_layout.ops import WindowRequest
-from workspace_layout.ops import navigate_op_arguments
+from workspace_layout.ops import PlaceArgs
+from workspace_layout.ops import PlaceBody
+from workspace_layout.ops import RefreshAppArgs
+from workspace_layout.ops import RefreshBody
+from workspace_layout.ops import ShowArgs
+from workspace_layout.ops import ShowBody
+from workspace_layout.ops import WindowArgs
+from workspace_layout.ops import WindowOpBody
 from workspace_layout.ops import op_request_body
-from workspace_layout.ops import open_op_arguments
 from workspace_layout.ops import parse_layout_op
+from workspace_layout.ops import parse_op_body
 from workspace_layout.ops import parse_op_requester
-from workspace_layout.ops import place_op_arguments
-from workspace_layout.ops import show_op_arguments
-from workspace_layout.ops import window_op_arguments
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import IfPresent
 from workspace_layout.primitives import LayoutOp
@@ -52,71 +57,61 @@ def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> 
             parse_op_requester(malformed)
 
 
+_REQUESTER = OpRequester(app=AppName("chat"), marker="")
+
+
 @pytest.mark.parametrize(
-    ("op", "arguments", "expected"),
+    ("body", "expected"),
     [
         (
-            LayoutOp.SHOW,
-            show_op_arguments(
-                ShowRequest(
+            ShowBody(
+                args=ShowArgs(
                     app=AppName("chat"),
                     path=WindowPath("/?chat=agent-1"),
                     showing=(WindowPath("/agent-1"),),
                     repoint=(WindowPage("/"),),
-                    client_id=_CLIENT,
-                )
+                    client=_CLIENT,
+                ),
+                requester=_REQUESTER,
             ),
             {"app": "chat", "path": "/?chat=agent-1", "showing": ["/agent-1"], "repoint": ["/"], "client": "client-1"},
         ),
         (
-            LayoutOp.SHOW,
-            show_op_arguments(
-                ShowRequest(app=AppName("files"), path=WindowPath("/a"), showing=(), repoint=(), client_id=None)
-            ),
-            {"app": "files", "path": "/a", "showing": [], "repoint": []},
+            ShowBody(args=ShowArgs(app=AppName("files"), path=WindowPath("/a")), requester=_REQUESTER),
+            {"app": "files", "path": "/a"},
         ),
         (
-            LayoutOp.OPEN,
-            open_op_arguments(
-                OpenRequest(
+            OpenBody(
+                args=OpenArgs(
                     app=AppName("getting-started"),
                     path=WindowPath("/"),
                     if_present=IfPresent.FOCUS,
-                    is_minimized=False,
-                    client_id=_CLIENT,
+                    client=_CLIENT,
                     desktop="home",
-                )
+                ),
+                requester=_REQUESTER,
             ),
-            {
-                "app": "getting-started",
-                "path": "/",
-                "if_present": "focus",
-                "minimized": False,
-                "client": "client-1",
-                "desktop": "home",
-            },
+            {"app": "getting-started", "path": "/", "if_present": "focus", "client": "client-1", "desktop": "home"},
         ),
         (
-            LayoutOp.FOCUS,
-            window_op_arguments(WindowRequest(window="self", client_id=None, desktop="Research")),
+            WindowOpBody(op=LayoutOp.FOCUS, args=WindowArgs(window="self", desktop="Research"), requester=_REQUESTER),
             {"window": "self", "desktop": "Research"},
         ),
         (
-            LayoutOp.NAVIGATE,
-            navigate_op_arguments(
-                NavigateRequest(window="files", path=WindowPath("/b/"), client_id=_CLIENT, desktop=None)
+            NavigateBody(
+                args=NavigateArgs(window="files", path=WindowPath("/b/"), client=_CLIENT), requester=_REQUESTER
             ),
             {"window": "files", "path": "/b/", "client": "client-1"},
         ),
         (
-            LayoutOp.PLACE,
-            place_op_arguments(
-                PlaceRequest(
+            PlaceBody(
+                args=PlaceArgs(
                     window="win-0123456789abcdef",
                     frame=Frame(x=0.0, y=0.0, width=0.5, height=1.0),
-                    client_id=_CLIENT,
+                    client=_CLIENT,
                     desktop="home",
-                )
+                ),
+                requester=_REQUESTER,
             ),
             {
                 "window": "win-0123456789abcdef",
@@ -125,18 +120,19 @@ def test_a_requester_parses_from_an_app_and_marker_and_the_rest_is_refused() -> 
                 "desktop": "home",
             },
         ),
+        (RefreshBody(args=RefreshAppArgs(app=AppName("files")), requester=_REQUESTER), {"app": "files"}),
     ],
-    ids=["show", "show-for-the-shells-choice-of-client", "open", "focus", "navigate", "place"],
+    ids=["show", "show-for-the-shells-choice-of-client", "open", "focus", "navigate", "place", "refresh-an-app"],
 )
-def test_each_request_is_spelled_as_the_op_route_reads_it(
-    op: LayoutOp, arguments: dict[str, Any], expected: dict[str, Any]
-) -> None:
-    """Only what the request names goes on the wire, the target keys among it, and the shell's own reading of the
-    body takes it."""
-    assert arguments == expected
-    body = op_request_body(op, arguments, OpRequester(app=AppName("chat"), marker=""))
-    assert body == {"op": op, "args": expected, "requester": {"app": "chat", "marker": ""}}
-    assert describe_op_body_problem(body) is None
+def test_each_body_is_spelled_as_the_op_route_reads_it(body: OpBody, expected: dict[str, Any]) -> None:
+    """Only the arguments the caller set go on the wire, and the shell's own reading of the body gives it back."""
+    wire = op_request_body(body)
+    assert wire == {"op": body.op.value, "args": expected, "requester": {"app": "chat", "marker": ""}}
+    assert parse_op_body(wire) == body
+
+
+def test_an_op_that_reads_no_arguments_ignores_whatever_it_is_sent() -> None:
+    assert parse_op_body({"op": "context", "args": {"window": "self"}}) == ContextBody()
 
 
 @pytest.mark.parametrize(
@@ -153,7 +149,15 @@ def test_each_request_is_spelled_as_the_op_route_reads_it(
         ({"op": "place", "args": {"window": "self", "frame": {"x": 0.6, "y": 0, "width": 0.5, "height": 1}}}, "unit"),
         ({"op": "show", "args": {"app": "files", "path": "//elsewhere"}}, "single '/'"),
         ({"op": "show", "args": {"app": "files", "path": "/a", "repoint": ["/?x"]}}, "no query string"),
-        ({"op": "shortcut_move", "args": {"app": "files", "cell": "0,1"}}, "cell"),
+        ({"op": "shortcut_move", "args": {"app": "files", "launch": "new", "cell": "0,1"}}, "cell"),
+        ({"op": "load", "args": {}}, "desktop"),
+        ({"op": "open", "args": {"app": "files", "path": "/a", "launch": "new"}}, "not both"),
+        ({"op": "open", "args": {"app": "files", "minimized": True, "beside": "self"}}, "not both"),
+        ({"op": "refresh", "args": {"app": "files", "window": "self"}}, "window"),
+        ({"op": "refresh", "args": {"app": "files", "client": "client-1"}}, "client"),
+        ({"op": "refresh", "args": {}}, "window"),
+        ({"op": "reload_system_interface", "args": {"window": "self"}}, "window"),
+        ({"op": "focus", "args": "self"}, "args"),
     ],
 )
 def test_a_body_the_shell_would_refuse_is_named_with_the_reason(body: dict[str, Any], fragment: str) -> None:

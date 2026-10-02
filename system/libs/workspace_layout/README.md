@@ -25,17 +25,24 @@ answer shapes live in one place the shell and its callers share.
   `Window`, `Desktop`, `WindowPlacement`, `DesktopLayout`, `StoredWindowPath`,
   `ClientRecord`, `EntryPresentation`, and the views an answer carries
   (`WindowView`, `DesktopView`, `DesktopLayoutView`).
-- `workspace_layout.ops`: the op route's request side. `OpBody` (`{op, args,
-  requester}`), `op_request_body` to spell one, and `parse_op_body` and
-  `read_op_arguments` to read one as the shell does; `DesktopOpArguments`, the
-  arguments every op is read with (`place` takes a `state` of
-  `PLACEABLE_STATES` or a `frame`); `parse_window_reference` (a window id,
-  `self`, `pinned`, or an app name); `op_reads_arguments`; `OpRequester`,
-  `parse_op_requester`, and `requester_spelling`; `ClientActivityReport`; and
-  the typed requests (`ShowRequest`, `OpenRequest`, `WindowRequest`,
-  `NavigateRequest`, `PlaceRequest`), each naming its target client (None
-  leaves the choice to the shell: the requester's client, else the one
-  connected client), with the functions that spell each as the wire does.
+- `workspace_layout.ops`: the op route's request side. One body model per op
+  (or per group of ops that take the same arguments: `WindowOpBody` for
+  `focus`, `minimize`, `restore`, `maximize`, and `close`, `InventoryBody` for
+  `desktops` and `list`), each carrying its own arguments model (`ShowArgs`,
+  `OpenArgs`, `WindowArgs`, `PlaceArgs`, `NavigateArgs`, `RefreshWindowArgs` or
+  `RefreshAppArgs`, `LoadArgs`, the shortcut and wallpaper arguments), and
+  `OpBody`, their union, keyed on `op`. The client-scoped arguments extend
+  `OpTarget` (`client`, `desktop`; None leaves the choice to the shell: the
+  requester's client, else the one connected client, and the client's active
+  desktop). A body refuses an argument its op does not take and any rule its
+  arguments break (`place` takes a `state` of `PLACEABLE_STATES` or a `frame`;
+  an `open` names a path or a launch path); `context`, `desktops`, and `list`
+  read none and ignore what they are sent. `op_request_body` spells a body as
+  the wire does (only the arguments the caller set) and `parse_op_body` reads
+  one as the shell does, naming every argument it refuses. Also
+  `parse_window_reference` (a window id, `self`, `pinned`, or an app name),
+  `OpRequester`, `parse_op_requester`, `requester_spelling`, and
+  `ClientActivityReport`.
 - `workspace_layout.answers`: every answer the shell gives, which the shell
   builds from these models and a caller parses with them: `DesktopOpAnswer`,
   `OpenAnswer`, `ShowAnswer`, `TransientOpAnswer`, `ContextAnswer`,
@@ -79,12 +86,12 @@ answer shapes live in one place the shell and its callers share.
 
 ## Ops by kind
 
-A property that holds for some ops and not others is a function of the op with
-an exhaustive `match` (ending in `assert_never`), as `op_reads_arguments` is,
-or a `Literal` subset of `LayoutOp` that a handler takes, as the shell's window
-and shortcut handlers do; never a set of op names. Either way, an op added to
-`LayoutOp` fails type checking until every such property says what it does for
-the new op.
+A property that holds for some ops and not others is carried by the op's body
+model (its arguments, and so what the shell does with them) or by a `Literal`
+subset of `LayoutOp` that a handler takes, as `WindowOp` is; never a set of op
+names. The shell dispatches on the body with an exhaustive `match` ending in
+`assert_never`, so an op added to `LayoutOp` and `OpBody` fails type checking
+until the shell handles it.
 
 ## The `workspace-layout` command
 
@@ -107,7 +114,7 @@ The command replaced `system/scripts/layout.py`, keeping its subcommands, its
 output but `place`'s description and a client's `last_seen` (UTC spelled `Z`),
 and its exit codes; the hints for retired
 verbs and spellings name `uv run workspace-layout`. Unlike the script it runs
-in the root venv, so it builds every op from the request models the shell reads
+in the root venv, so it builds every op from the body models the shell reads
 and reads every answer through the answer models the shell builds. `place`
 takes `--state snapped-left|snapped-right|maximized` (the `WindowState` the op
 sets, which its description names: `as snapped-left`) or `--frame
