@@ -647,6 +647,38 @@ def test_an_app_with_a_per_app_share_grant_is_kept_running_until_the_grant_goes(
     _assert_docs_stops_only_once_the_grace_elapses(manager, supervisor)
 
 
+def test_a_per_app_share_grant_on_an_unshareable_app_keeps_nothing_running(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    closed_port: int,
+    supervisor: FakeSupervisor,
+    share_grants: FakeShareGrants,
+) -> None:
+    """The gateway admits nobody through a grant on an app that declares ``shareable = false``, so the grant stands
+    in for no window."""
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml(
+            "docs",
+            f"http://127.0.0.1:{closed_port}",
+            program="docs",
+            is_shareable=False,
+            stop_when_no_windows=True,
+        ),
+    )
+    supervisor.statename_by_program["docs"] = "RUNNING"
+    share_grants.granted = {"docs"}
+    unshareable = _manager_over(
+        build_inventory(registry_path, broadcaster), supervisor, granted_app_names=share_grants.get_granted
+    )
+    try:
+        unshareable.mark_visited()
+        unshareable.sweep_once()
+        _assert_docs_stops_only_once_the_grace_elapses(unshareable, supervisor)
+    finally:
+        unshareable.stop()
+
+
 def test_a_pass_reads_the_share_grants_at_most_once_and_only_for_an_app_with_no_window(
     tmp_path: Path,
     broadcaster: WebSocketBroadcaster,

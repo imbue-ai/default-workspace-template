@@ -468,10 +468,15 @@ class AppLifecycleManager(MutableModel):
     ) -> bool:
         """Stop a running app that declares ``stop_when_no_windows`` once no window has shown it for the grace
         period, and only once the workspace has been visited (spec section 6.1); True when the program was told to
-        stop. An app with a per-app share grant counts as one with windows: its visitors reach it without the
-        shell, so their use leaves no window to count."""
+        stop. A shareable app with a per-app share grant counts as one with windows: its visitors reach it without
+        the shell, so their use leaves no window to count. The gateway admits nobody through a grant on an
+        internal or unshareable app, so such a grant keeps nothing running."""
         app = str(entry.row.name)
-        if not entry.row.stop_when_no_windows or window_counts().get(app, 0) > 0 or app in granted_apps():
+        if (
+            not entry.row.stop_when_no_windows
+            or window_counts().get(app, 0) > 0
+            or (entry.row.shareable and not entry.row.internal and app in granted_apps())
+        ):
             with self._lock:
                 self._idle_since_by_app.pop(app, None)
             return False

@@ -3,8 +3,8 @@
 The minds desktop writes ``data/.secrets/share_grants.toml`` while the workspace is shared (``data/.secrets/share.env``
 exists), one ``[services.<name>]`` table per app the owner shares on its own, and the gateway admits a visitor holding
 only such a grant to that app's origin and nothing else: not the shell, so no window of the app exists anywhere while
-they use it. The no-window rule (the stop-when-no-windows spec, section 6.1) therefore treats an app with a per-app
-grant as one that has windows. The shell reads the document itself, with the gateway's shape but not its package: a
+they use it. The no-window rule (the stop-when-no-windows spec, section 6.1) therefore treats a shareable app with a
+per-app grant as one that has windows; the gateway admits nobody through a grant on an internal or unshareable app. The shell reads the document itself, with the gateway's shape but not its package: a
 document the gateway would refuse admits nobody there, so here it grants no app.
 """
 

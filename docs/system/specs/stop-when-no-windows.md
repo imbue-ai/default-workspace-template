@@ -52,9 +52,10 @@ Facts this design builds on, as of `main` at `02eb68c02` (2026-09-28).
 9. A close hint (window-bound-resources section 4.6) is posted only to an app that is running: posting it to a stopped app's port would wake the app to tell it a window closed.
 10. The shell announces registrations to the services event file itself, from the registry read it already does; the `app-watcher` program, package, and band go away.
 11. The service-start `uv sync` stays for now (bootstrap already runs one; dropping the per-service sync is a later cleanup).
-12. An app with a per-app share grant (a `[services.<name>]` table of `data/.secrets/share_grants.toml` that names anyone, while the workspace is shared) is exempt from the automatic stop.
+12. A shareable app with a per-app share grant (a `[services.<name>]` table of `data/.secrets/share_grants.toml` that names anyone, while the workspace is shared) is exempt from the automatic stop.
     A visitor holding only such a grant reaches the app's origin through the share gateway and never loads the shell, so no window of theirs exists to count; without the exemption the app would stop a minute after each of their requests and, past the wake budget, answer them the failure page.
     A workspace-level grant needs no exemption: its visitors load the shell and get a desktop of their own, whose windows count.
+    Nor does a grant on an app that is `internal` or declares `shareable = false`: the gateway admits nobody through it.
 
 ## 3. Part A: no resident `uv run`
 
@@ -196,7 +197,7 @@ The visitor's next request wakes the app through the parker exactly as the owner
 On every pass of the lifecycle sweep, for each app that is stoppable, whose row carries `stop_when_no_windows = true`, and whose program is `RUNNING` or `STARTING`:
 
 - count the windows of the app across every desktop (the owner's and every visitor's; minimized, detached, pinned, linked, and independent alike);
-- with at least one window, or with a per-app share grant (decision 12), clear the app's idle mark;
+- with at least one window, or shareable with a per-app share grant (decision 12), clear the app's idle mark;
 - with none, and once a client has arrived at the shell since it started (decision 5), set the idle mark to now when it is unset, and stop the program when the mark is at least 60 seconds old.
 
 A stop is `stopProcess(program, wait=False)`, logged at info, followed by a liveness refresh; the next pass parks the port.
