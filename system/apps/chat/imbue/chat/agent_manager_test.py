@@ -6187,6 +6187,31 @@ def test_an_awaiting_chat_minted_with_no_spare_has_the_next_spare_started_under_
         manager.stop()
 
 
+def test_the_pool_is_not_topped_up_while_an_awaiting_chats_spare_is_still_booting(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = _write_booting_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        awaiting = manager.awaiting_chat_for_empty_list()
+        manager.ensure_spare_chat()
+        booting = _wait_for_created_spare(manager)
+        assert (booting.chat_id, booting.phase) == (awaiting.chat_id, SpareChatPhase.RESERVED)
+
+        manager.ensure_spare_chat()
+
+        assert [spare.chat_id for spare in manager._spares] == [awaiting.chat_id]
+        _mark_harness_ready(tmp_path, booting.chat_id)
+        wait_until_true(
+            lambda: len(_mngr_calls(argv_log, "create")) == 2,
+            timeout_seconds=15.0,
+            what="the pool's spare starting once the reserved one is up",
+        )
+        assert [spare.ready_at is not None for spare in _reserved_spares(manager)] == [True]
+    finally:
+        manager.stop()
+
+
 def test_an_awaiting_chats_reserved_spare_is_not_replaced_when_its_terms_go_stale(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

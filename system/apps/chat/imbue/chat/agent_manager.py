@@ -3716,13 +3716,17 @@ class AgentManager:
         A chat awaiting its first send that holds no spare and would fit one on ``terms`` (minted before
         any account was signed in, say, or after its reserved spare was destroyed) comes first: the spare
         is started under its id and name, reserved for it. Otherwise one is started for the pool when the
-        pool is short and may grow now.
+        pool is short and may grow now. Nothing is started while a spare for either is still being created.
         """
         pooled = pooled_spares(self._spares)
         if (
             terms is None
             or now < self._spare_retry_not_before
-            or any(spare.phase is SpareChatPhase.CREATING for spare in pooled)
+            or any(
+                spare.phase is SpareChatPhase.CREATING
+                or (spare.phase is SpareChatPhase.RESERVED and spare.ready_at is None)
+                for spare in self._spares
+            )
         ):
             return None
         awaiting = self._awaiting_chat_without_spare_locked(terms)
