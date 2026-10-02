@@ -101,7 +101,8 @@ class RegistryRow(FrozenModel):
     internal: bool = Field(default=False, description="Hidden from every open surface")
     shareable: bool = Field(
         default=True,
-        description="Whether the minds Share tab offers the app as a share target of its own; an internal app never is",
+        description="Whether the app is a share target of its own: offered by the minds Share tab, and admitted to by "
+        "a per-app share grant; an internal app never is",
     )
     program: str | None = Field(default=None, description="The supervisord program that runs the app, when supervised")
     display_name: DisplayName | None = Field(default=None, description="What users see; absent on manifest-less rows")
