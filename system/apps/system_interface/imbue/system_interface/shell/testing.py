@@ -170,6 +170,7 @@ def builtin_rows_toml_before_chat() -> tuple[str, ...]:
         registry_row_toml(
             "getting-started",
             "http://localhost:7400",
+            is_shareable=False,
             display_name="Getting Started",
             launcher_rank=15,
             default_shortcut=("open", "focus"),

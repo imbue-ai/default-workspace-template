@@ -396,7 +396,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "terminal-pty": False,
         "files": True,
         "browser": False,
-        "getting-started": True,
+        "getting-started": False,
     }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
     # focuses it like the browser's; it declares no launch path, so the desktop synthesizes ``open`` at its root.

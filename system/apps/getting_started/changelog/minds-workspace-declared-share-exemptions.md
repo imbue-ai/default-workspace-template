@@ -1,0 +1,1 @@
+The manifest declares `shareable = false`. Studio's Share tab no longer offers Getting Started as a share target of its own, and the share gateway no longer admits a per-app grant on it. It is shared only as part of the whole machine.
