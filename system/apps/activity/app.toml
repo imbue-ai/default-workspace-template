@@ -1,4 +1,4 @@
-# The Activity app, shown as "System Monitor": what is using the workspace's memory, grouped into things a user
+# The Activity app, shown as "System Monitor": what is using the workspace's memory and disk, grouped into things a user
 # recognizes (chats, apps, background services), with the raw process table and the files every
 # figure came from one click away. It reads everything when asked and keeps nothing between
 # requests, so the shell stops it once no window shows it: closed, it costs no memory.

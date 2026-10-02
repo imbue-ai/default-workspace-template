@@ -1,7 +1,8 @@
-"""Fakes the tests share: a /proc tree, the chat app, and supervisord's socket."""
+"""Fakes the tests share: a /proc tree, the chat app, supervisord's socket, and the command runner."""
 
 import json
 import socketserver
+import subprocess
 import threading
 from collections.abc import Iterator
 from collections.abc import Mapping
@@ -88,6 +89,25 @@ class FakeChatApp:
 def process_info(name: str, statename: str, pid: int) -> dict[str, Any]:
     """One ``getAllProcessInfo`` entry, as supervisord answers it (pid 0 for a program that is not running)."""
     return {"name": name, "group": name, "statename": statename, "pid": pid}
+
+
+class FakeRunner:
+    """A command runner answering each argv's first word from a table, recording what it ran."""
+
+    def __init__(self, results_by_command: Mapping[str, subprocess.CompletedProcess[str] | Exception]) -> None:
+        self.results_by_command = dict(results_by_command)
+        self.calls: list[tuple[str, ...]] = []
+
+    def __call__(self, argv: Sequence[str], timeout_seconds: float) -> subprocess.CompletedProcess[str]:
+        self.calls.append(tuple(argv))
+        result = self.results_by_command[argv[0]]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def completed(stdout: str, returncode: int = 0, stderr: str = "") -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 def write_registry(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:

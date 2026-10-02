@@ -1,6 +1,9 @@
-"""Tests for the routes over fake sources: the page, the summary, the write guard, and chat actions."""
+"""Tests for the routes over fake sources: the page, the summary, storage, the write guard, and chat actions."""
 
 import json
+import subprocess
+import threading
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -9,11 +12,14 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
+from activity.commands import RunCommand
 from activity.memory_reading import MemorySources
 from activity.pages import build_pages_blueprint
 from activity.readings import ReadingSources
 from activity.testing import FakeChatApp
+from activity.testing import FakeRunner
 from activity.testing import chat_snapshot
+from activity.testing import completed
 from activity.testing import process_info
 from activity.testing import write_fake_process
 from activity.testing import write_registry
@@ -22,7 +28,9 @@ _NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
 _JSON = "application/json"
 
 
-def _client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chat_app: FakeChatApp) -> FlaskClient:
+def _client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chat_app: FakeChatApp, du_runner: RunCommand | None = None
+) -> FlaskClient:
     proc_dir = tmp_path / "proc"
     write_fake_process(proc_dir, 415, "supervisord", 1, 31 * 1024, -1000, ["supervisord"])
     write_fake_process(proc_dir, 544, "chat-app", 415, 160 * 1024, 25, ["chat-app"])
@@ -57,6 +65,12 @@ def _client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chat_app: FakeChatA
             },
         ],
     )
+    (tmp_path / "data" / "uploads").mkdir(parents=True)
+    runner = (
+        du_runner
+        if du_runner is not None
+        else FakeRunner({"du": completed(f"2048\t{(tmp_path / 'data' / 'uploads').absolute()}\n")})
+    )
     app = Flask("activity-under-test", static_folder=None)
     app.register_blueprint(
         build_pages_blueprint(
@@ -73,7 +87,10 @@ def _client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chat_app: FakeChatA
             ),
             client=chat_app.client(),
             read_process_info=lambda: [process_info("chat", "RUNNING", 544), process_info("files", "STOPPED", 0)],
+            run_command=runner,
             now=lambda: _NOW,
+            data_dir=tmp_path / "data",
+            clock=lambda: 0.0,
             history_path=tmp_path / "memory-history.tsv",
             shed_ledger_path=tmp_path / "shed.jsonl",
         )
@@ -109,6 +126,12 @@ def test_the_summary_credits_the_chat_and_reads_the_cgroup_limit(
     ]
     assert {app["name"]: app["state"] for app in summary["apps"]} == {"Chat": "RUNNING", "File Viewer": "STOPPED"}
     assert summary["notes"] == []
+
+
+def test_storage_is_measured_on_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage = _client(tmp_path, monkeypatch, _chat_app("idle")).get("/api/storage").get_json()
+    files = next(category for category in storage["categories"] if category["category_id"] == "files")
+    assert files["size_kib"] == 2048
 
 
 def test_a_write_that_is_not_json_or_comes_from_another_origin_is_refused(
@@ -186,11 +209,32 @@ def test_only_the_workspaces_owner_reaches_the_api(tmp_path: Path, monkeypatch: 
     visitor = {"X-Imbue-Identity": json.dumps({"owner": False, "user_id": "u2", "email": "guest@example.com"})}
     owner = {"X-Imbue-Identity": json.dumps({"owner": True, "user_id": "u1", "email": "me@example.com"})}
     assert client.get("/api/summary", headers=visitor).status_code == 403
+    assert client.get("/api/storage", headers=visitor).status_code == 403
     assert client.post("/api/chats/c1/stop", json={}, headers=visitor).status_code == 403
     assert client.get("/api/health", headers=visitor).status_code == 200
     assert client.get("/api/summary", headers=owner).status_code == 200
     assert client.get("/api/summary", headers={"X-Imbue-Identity": "not json"}).status_code == 200
     assert chat_app.actions == []
+
+
+def test_a_second_measurement_while_one_runs_is_turned_away(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_du(argv: Sequence[str], timeout_seconds: float) -> subprocess.CompletedProcess[str]:
+        started.set()
+        release.wait(timeout=5)
+        return completed("")
+
+    client = _client(tmp_path, monkeypatch, _chat_app("idle"), du_runner=slow_du)
+    statuses: list[int] = []
+    first = threading.Thread(target=lambda: statuses.append(client.get("/api/storage").status_code))
+    first.start()
+    assert started.wait(timeout=5)
+    assert client.get("/api/storage").status_code == 429
+    release.set()
+    first.join(timeout=5)
+    assert statuses == [200]
 
 
 def test_a_stop_from_the_desktop_page_goes_through_although_the_forwarder_dropped_its_host(

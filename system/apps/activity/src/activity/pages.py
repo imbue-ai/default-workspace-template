@@ -1,4 +1,4 @@
-"""The app's routes on its own origin: the page, the health probe, the memory summary, the chat actions,
+"""The app's routes on its own origin: the page, the health probe, the memory summary, storage, the chat actions,
 and the contract module.
 
 Everything is read when asked: the app keeps nothing between requests, so the shell can stop it once no window
@@ -6,6 +6,7 @@ shows it and nothing is lost. Only the workspace's owner reaches the API, and a 
 page (``request_guard``).
 """
 
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from datetime import timezone
@@ -26,6 +27,7 @@ from activity.chats import ChatAction
 from activity.chats import chat_app_url
 from activity.chats import fetch_chats
 from activity.chats import request_chat_action
+from activity.commands import RunCommand
 from activity.errors import ChatAppUnavailableError
 from activity.history import HistoryRange
 from activity.history_view import collect_history_view
@@ -36,6 +38,7 @@ from activity.request_guard import IDENTITY_HEADER
 from activity.request_guard import SAFE_METHODS
 from activity.request_guard import is_owner_request
 from activity.request_guard import is_write_allowed
+from activity.storage import measure_storage
 from activity.summary import build_summary
 from activity.supervised_programs import ReadProcessInfo
 from app_manifest.primitives import AppName
@@ -47,6 +50,7 @@ BLUEPRINT_NAME: Final[str] = "activity_pages"
 API_PREFIX: Final[str] = "/api/"
 HEALTH_PATH: Final[str] = "/api/health"
 SUMMARY_PATH: Final[str] = "/api/summary"
+STORAGE_PATH: Final[str] = "/api/storage"
 HISTORY_PATH_ROUTE: Final[str] = "/api/history"
 HTTP_BAD_REQUEST: Final[int] = 400
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
@@ -56,6 +60,7 @@ WORKING_CHAT_STATUS: Final[str] = "working"
 HTTP_FORBIDDEN: Final[int] = 403
 HTTP_NOT_FOUND: Final[int] = 404
 HTTP_CONFLICT: Final[int] = 409
+HTTP_TOO_MANY_REQUESTS: Final[int] = 429
 HTTP_BAD_GATEWAY: Final[int] = 502
 
 _NOT_BUILT_PAGE: Final[str] = (
@@ -75,11 +80,16 @@ def build_pages_blueprint(
     sources: ReadingSources,
     client: httpx.Client,
     read_process_info: ReadProcessInfo,
+    run_command: RunCommand,
     now: Callable[[], datetime],
+    data_dir: Path,
+    clock: Callable[[], float],
     history_path: Path,
     shed_ledger_path: Path,
 ) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
+    # One du at a time: it walks every file, and a second request while one runs would only double the work.
+    storage_lock = threading.Lock()
 
     @blueprint.before_request
     def guard() -> ResponseReturnValue | None:
@@ -137,6 +147,18 @@ def build_pages_blueprint(
             now=now(),
         )
         response = jsonify(view.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @blueprint.get(STORAGE_PATH)
+    def storage() -> ResponseReturnValue:
+        if not storage_lock.acquire(blocking=False):
+            return jsonify({"detail": "already measuring; try again in a moment"}), HTTP_TOO_MANY_REQUESTS
+        try:
+            summary = measure_storage(data_dir=data_dir, run_command=run_command, now=now, clock=clock)
+        finally:
+            storage_lock.release()
+        response = jsonify(summary.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
         return response
 

@@ -1,5 +1,6 @@
 import shutil
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
@@ -9,6 +10,7 @@ import httpx
 from flask import Flask
 from pydantic import Field
 
+from activity.commands import run_subprocess
 from activity.config import Config
 from activity.config import load_config
 from activity.cron_entry import RECORDER_LOG_PATH
@@ -26,6 +28,7 @@ from activity.readings import ReadingSources
 from activity.serving import app_url_port
 from activity.serving import serve_in_background
 from activity.serving import wait_for_shutdown_signal
+from activity.storage import DATA_DIR
 from activity.supervised_programs import socket_process_info_reader
 from activity.supervised_programs import supervisor_socket_path
 from app_manifest.primitives import AppUrl
@@ -67,7 +70,10 @@ def build_pages_app(arguments: ActivityArguments, client: httpx.Client) -> Flask
             sources=ReadingSources(memory=DEFAULT_MEMORY_SOURCES, proc_dir=PROC_DIR, registry_path=registry_path()),
             client=client,
             read_process_info=socket_process_info_reader(supervisor_socket_path()),
+            run_command=run_subprocess,
             now=utc_now,
+            data_dir=DATA_DIR,
+            clock=time.monotonic,
             history_path=HISTORY_PATH,
             shed_ledger_path=shed_ledger_path(),
         )
@@ -129,7 +135,7 @@ def arguments_from_config(
     help="Skip the registration: a throwaway boot, such as a preview, that must not re-point the live row",
 )
 def main(manifest_path: Path, static_directory: Path, is_unregistered: bool) -> None:
-    """Run the Activity app: what is using the workspace's memory, in terms the user recognizes."""
+    """Run the Activity app: what is using the workspace's memory and disk, in terms the user recognizes."""
     arguments = arguments_from_config(
         config=load_config(),
         manifest_path=manifest_path,

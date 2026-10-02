@@ -1,7 +1,7 @@
 [project]
 name = "activity"
 version = "0.1.0"
-description = "The Activity app: what is using the workspace's memory, in terms a user recognizes, with the raw readings one click away"
+description = "The Activity app: what is using the workspace's memory and disk, in terms a user recognizes, with the raw readings one click away"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

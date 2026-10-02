@@ -1,6 +1,6 @@
 # activity
 
-The Activity app ("System Monitor" on the desktop): what is using the workspace's memory, on one page a window of the desktop frames at the
+The Activity app ("System Monitor" on the desktop): what is using the workspace's memory and disk, on one page a window of the desktop frames at the
 app's own origin. It answers the question a user has ("is my workspace running out of room, and what can I do about
 it?") in their terms first, and keeps the raw readings one click away.
 
@@ -24,6 +24,9 @@ environment (`system/scripts/build_workspace.sh`), serving on `http://127.0.0.1:
   come from `/proc`, credited to chats through the agent-pid registry (`system/services/oom_priority`), to apps and
   services through supervisord's XML-RPC socket (`getAllProcessInfo`), and to the chat titles and harnesses the chat app's `GET /api/chats`
   reports. A source that cannot be read becomes a note, never an empty list.
+- `GET /api/storage`: the storage tab: one `du -sk` over disjoint folders grouped into categories (the user's files
+  under `data/`, chats and agents, app data, installed tools, download caches, logs), measured when asked, never on a
+  timer. No limit is reported: `df` inside the container sees the host's disk, and a cloud quota is not published in.
 - `GET /api/history?range=hour|day|week` (default `day`): the memory-over-time chart. Readings grouped into periods
   (a minute, five minutes, half an hour), each with its average, lowest and highest, so a spike survives grouping; a
   period with no reading is left out, so a gap in recording stays a gap. Also the closures in range and the last
@@ -55,8 +58,8 @@ The memory tab's questions open short answers in place; "Ask in chat" drafts, un
 that starts with the user's question followed by "I'm looking at System Monitor" and quotes what the page shows. An agent answering it:
 
 - Reads the live figures rather than the quoted ones, which may be minutes old: `curl -s localhost:8040/api/summary`
-  (memory and what uses it) and `curl -s 'localhost:8040/api/history?range=day'` (how it has gone, and what was
-  closed). A request from inside the workspace
+  (memory and what uses it), `curl -s 'localhost:8040/api/history?range=day'` (how it has gone, and what was closed)
+  and `curl -s localhost:8040/api/storage` (disk). A request from inside the workspace
   carries no identity header and counts as the owner. If the app was stopped, the shell answers the first request
   with a 503 "starting" page while it wakes the app; retry after a second or two.
 - Explains in the page's terms: chats, apps, background services. "Likely closed first" is the predicted next pick of

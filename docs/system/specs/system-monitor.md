@@ -3,7 +3,7 @@
 Status: implemented (2026-10-02). It lands as a stack of PRs, one feature each, and this document grows with them.
 Audience: reviewers of the app (`system/apps/activity`), and anyone extending it or the memory machinery it reads (`system/services/oom_priority`, earlyoom, the shell's app lifecycle).
 
-System Monitor is a built-in desktop app (package `activity`, port 8040) that answers the question a user actually has when the workspace feels slow or something vanished: *is my workspace running out of room, what is using it, and what can I do about it?* It answers in the user's terms first (chats, apps, background services) and keeps every raw number, and where it came from, one click away.
+System Monitor is a built-in desktop app (package `activity`, port 8040) that answers the question a user actually has when the workspace feels slow or something vanished: *is my workspace running out of room, what is using it, and what can I do about it?* It answers in the user's terms first (chats, apps, background services, your files) and keeps every raw number, and where it came from, one click away.
 
 ## 1. Why
 
@@ -16,7 +16,7 @@ Goals:
 - **No idle cost.** The shell stops the app a minute after its last window closes (`stop_when_no_windows`), and nothing it adds stays resident.
 - **Safe actions only.** The user can stop what is safe to stop (a chat), told first what happens. Nothing is killed raw.
 
-Non-goals for this change: alerts while the app is closed, stopping arbitrary apps (a stacked change), and acting on the user's behalf.
+Non-goals for this change: alerts while the app is closed, stopping arbitrary apps (a stacked change), a disk quota figure (not readable from inside the container, see section 4.6), and acting on the user's behalf.
 
 ## 2. What the user sees
 
@@ -29,13 +29,15 @@ Non-goals for this change: alerts while the app is closed, stopping arbitrary ap
 5. When memory is getting tight, "Ways to free up memory" lists chats idle for 15 minutes or more, largest first, each with Stop.
 6. Every chat (all harnesses), app and background service, with its size and share of memory in use ("171 MB · 7%"). Every running chat offers Stop (a working one warns that stopping interrupts it) and a stopped chat offers Start; the process most likely closed first is flagged. Each row opens to its processes.
 
+**Storage tab**: what is taking up disk, grouped as your files, chats and agents, app data, installed tools, download caches and logs, with the total of the measured folders, each group's folders and the largest folders. It measures the first time the tab opens and then only when asked, never on a timer.
+
 ## 3. Architecture
 
 ```
   desktop window (Mithril page, app origin)            cron, once a minute
         |  GET /api/summary   every 5 s, while shown        |
         |  GET /api/history   every 60 s, while shown       v
-        |                                              activity-record-memory
+        |  GET /api/storage   on open / on request     activity-record-memory
         |  POST /api/chats/<id>/stop|start                  |  one reading, appended
         v                                                   v
   activity-app (Flask on 127.0.0.1:8040) ------------> data/.state/activity/memory-history.tsv
@@ -48,9 +50,10 @@ Non-goals for this change: alerts while the app is closed, stopping arbitrary ap
         +-- data/.state/apps.toml (the app registry: names, criticality)
         +-- chat app GET /api/chats (titles, harness, status) and its stop/start
         +-- oom_priority shed ledger (what earlyoom closed)
+        +-- du -sk over category folders (storage, on request)
 ```
 
-The backend reads everything per request and holds no state between requests. The frontend polls only between the shell's `shell:shown` and `shell:hidden`, and while the browser tab is visible. The manifest sets `stop_when_no_windows`, so the shell stops the app a minute after its last window closes and starts it again on the next request (`docs/system/specs/stop-when-no-windows.md`; a minimized window, a share grant or a request from an agent keeps it up a while longer).
+The backend reads everything per request and holds no state between requests (a try-lock turns away a second `du` while one runs). The frontend polls only while the memory tab is selected, between the shell's `shell:shown` and `shell:hidden`, and while the browser tab is visible. The manifest sets `stop_when_no_windows`, so the shell stops the app a minute after its last window closes and starts it again on the next request (`docs/system/specs/stop-when-no-windows.md`; a minimized window, a share grant or a request from an agent keeps it up a while longer).
 
 Code map (`system/apps/activity/src/activity/`):
 
@@ -64,10 +67,11 @@ Code map (`system/apps/activity/src/activity/`):
 | `supervised_programs.py` | supervisord's `getAllProcessInfo` over its unix socket |
 | `history.py`, `record_memory.py`, `cron_entry.py`, `history_view.py` | Memory over time (section 4.5) |
 | `closures.py` | Shed-ledger records in plain words |
+| `storage.py` | Disk use by category |
 | `request_guard.py`, `pages.py` | The owner-only API, the write guard, the routes |
 | `main.py`, `serving.py` | Registration, the recorder's install, and the background server |
 
-The frontend (`frontend/src/`) is Mithril, TypeScript and Tailwind on the shared `workspace_ui` library: `models/` (fetching, one shared poller), `views/` (the memory tab, the chart, formatting and copy), with pure helpers (`chartGeometry.ts`, `format.ts`, `questions.ts`) kept apart from components so they test without a DOM.
+The frontend (`frontend/src/`) is Mithril, TypeScript and Tailwind on the shared `workspace_ui` library: `models/` (fetching, one shared poller), `views/` (the two tabs, the chart, formatting and copy), with pure helpers (`chartGeometry.ts`, `format.ts`, `questions.ts`) kept apart from components so they test without a DOM.
 
 ## 4. How it works
 
@@ -114,9 +118,13 @@ The entry is code-owned, so like the bootstrap's `update-apply-recover` guard it
 
 `GET /api/history?range=hour|day|week` groups readings into periods (1, 5 or 30 minutes) with each period's average, lowest and highest, so a short spike survives grouping. A period with no reading is left out, so a gap in recording draws as a gap, not a line across it. The same document carries the closures in range and the last week's, read from earlyoom's shed ledger (`oom_priority.paths.shed_ledger_path()`) and described in plain words: a chat's agent, a browser tab, or a program an agent was running, each with what to do next.
 
-### 4.6 Asking in chat
+### 4.6 Storage
 
-The page's answers cover the common questions. When they are not enough, "Ask in chat" drafts the user's question, followed by "I'm looking at System Monitor" and the figures on screen, into the user's current chat through the shell contract's `draftText`, unsent, so it never starts a new chat. The app's README tells the answering agent to read the live figures (`curl localhost:8040/api/summary`, `/api/history`) rather than trust the quoted ones, and to follow `.agents/shared/references/freeing-memory.md`: list candidates, let the user choose, and stop nothing on their behalf.
+One `du -sk` (60 s timeout) over disjoint category folders, so nothing is counted twice, plus the largest folders. It runs the first time the tab opens and then only when the user asks, never on a timer, and a second request while one runs is answered `429`. The total shown is the sum of the measured folders; no disk size or quota is shown: `df` inside the container reports the host's disk, and a cloud workspace's quota is set outside the container and not published inside it.
+
+### 4.7 Asking in chat
+
+The page's answers cover the common questions. When they are not enough, "Ask in chat" drafts the user's question, followed by "I'm looking at System Monitor" and the figures on screen, into the user's current chat through the shell contract's `draftText`, unsent, so it never starts a new chat. The app's README tells the answering agent to read the live figures (`curl localhost:8040/api/summary`, `/api/history`, `/api/storage`) rather than trust the quoted ones, and to follow `.agents/shared/references/freeing-memory.md`: list candidates, let the user choose, and stop nothing on their behalf.
 
 ## 5. Cost
 
@@ -145,22 +153,25 @@ Each reading is taken independently (`readings.py`). If the chat app does not an
 
 ## 9. Testing
 
-- **Backend** (`cd system/apps/activity && uv run pytest`): 107 tests, 96% line coverage, covering each memory source and the closing point under cloud, runc and gVisor layouts; Linux and gVisor `/proc` (including non-UTF-8 `smaps`); crediting and the first-to-close prediction; the chat stop re-check; the owner and write guards (with a regression test for the dropped `Host`); history append, rotation, grouping and corrupt bytes; closure descriptions, including malformed ledger records; the cron entry; and the supervisord reader against a real unix-socket XML-RPC server. The app's ratchets (`test_activity_ratchets.py`) pass, and `ty` and `ruff` are clean.
-- **Frontend** (`cd system && npm test --workspace=apps/activity/frontend`): 62 vitest tests: the poller's stop-and-start-while-a-read-is-in-flight behaviour, stale range replies, the forbidden state, chat-action results, the stop dialog's re-ask flow, the memory bar's scaling, chart geometry and rendering (gaps, closures, empty and paused states), copy, and WCAG AA contrast of every colour pair against `workspace_ui`'s tokens, with a scan that fails if a view uses a text colour no pair checks.
+- **Backend** (`cd system/apps/activity && uv run pytest`): 113 tests, 96% line coverage, covering each memory source and the closing point under cloud, runc and gVisor layouts; Linux and gVisor `/proc` (including non-UTF-8 `smaps`); crediting and the first-to-close prediction; the chat stop re-check; the owner and write guards (with a regression test for the dropped `Host`); storage grouping and the concurrent-measure lock; history append, rotation, grouping and corrupt bytes; closure descriptions, including malformed ledger records; the cron entry; and the supervisord reader against a real unix-socket XML-RPC server. The app's ratchets (`test_activity_ratchets.py`) pass, and `ty` and `ruff` are clean.
+- **Frontend** (`cd system && npm test --workspace=apps/activity/frontend`): 65 vitest tests: the poller's stop-and-start-while-a-read-is-in-flight behaviour, stale range replies, the forbidden state, chat-action results, the stop dialog's re-ask flow, the memory bar's scaling, the storage tab, chart geometry and rendering (gaps, closures, empty and paused states), copy, and WCAG AA contrast of every colour pair against `workspace_ui`'s tokens, with a scan that fails if a view uses a text colour no pair checks.
 - **Template suites**, run as CI runs them in a workspace-image container on the whole stack: the root suite (3370 passed; 2 tests fail identically on unmodified `main`), and `system_interface` (687) and `chat` (2026) with `-m ''`. On each layer of the stack, the app's suites, every frontend check and the always-run checks pass.
-- **Manual**: the app against seeded history and a seeded shed ledger, checked at desktop and phone widths; the recorder run by hand; the memory tab, ask-in-chat and stopping a chat in a local Studio workspace.
+- **Manual**: the app against seeded history and a seeded shed ledger, checked at desktop and phone widths; the recorder run by hand; the memory and storage tabs, ask-in-chat and stopping a chat in a local Studio workspace.
 
 ## 10. Limitations
 
 - Closures the kernel makes at the container's own limit are recorded nowhere, so they cannot be listed; the page says so when the kernel is the closer.
 - The recorder samples once a minute: a spike shorter than that can fall between two readings (the chart's "How this is recorded" says so).
+- Storage shows no disk size or quota, only the total of the folders it measured (section 4.6).
 - On a local workspace, the closing point assumes nothing outside the workspace is using the machine's memory (section 4.1).
 - There is a small window between the stop re-check and the stop itself in which a chat could start a turn; the chat app's stop is still safe, but the user is not warned in that window.
 - A request with no identity header counts as the owner (section 6). A page in the agents' browser inside the container that reached this port by DNS rebinding would pass both guards; the shell has the same exposure, and whether Chromium's Private Network Access blocks it is unverified.
+- A folder whose name contains a newline breaks `du`'s one-line-per-path output and is left out of the storage totals.
 - `serving.py`, the supervisord socket client and the identity parsing are copies of code in other apps (Getting Started, the shell); see section 11.
 
 ## 11. Next steps
 
 - **Stop apps** (stacked change): stop a non-critical app through the shell's own Quit, never the browser or this app.
+- **Disk quota on cloud workspaces**: publish the VM's disk use into the container as `.host-meminfo` does for memory, so the storage tab can show used against the limit.
 - **Shared libraries**: move the background server, the supervisord socket client and the identity parsing into shared libraries (`app_manifest` or a new one), so the apps that copy them cannot drift.
 - **Design-only ideas**: agent hooks that read the history before starting a memory-heavy command; automatic stopping of long-idle chats. The latter conflicts with "memory is the user's to spend" (`freeing-memory.md`) and needs the user's opt-in, so it stays a proposal.

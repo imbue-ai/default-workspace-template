@@ -25,7 +25,7 @@ Built-in apps:
   first desktop for the first client that connects, and remembers having done
   so under `data/.state/getting-started/`. Served on port 8030 by the
   `getting-started` package.
-- `activity/` - System Monitor (the Activity app): what is using the workspace's memory, grouped
+- `activity/` - System Monitor (the Activity app): what is using the workspace's memory and disk, grouped
   into chats (every harness), apps and background services, with the processes
   and readings behind each figure one click away. Idle chats can be stopped
   through the chat app's own route. It reads everything on request and holds
