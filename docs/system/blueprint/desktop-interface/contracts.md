@@ -315,8 +315,11 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `navigate` | `window`, `path` | set the window's path as if its page had reported it; the client's page follows |
 | `refresh` | `window`, or `app` alone | transient: reload the window's page on the client, or every page of the app on every client |
 | `reload_system_interface` | | transient: reload every window of the shell |
-| `shortcuts`, `shortcut_set`, `shortcut_move`, `shortcut_remove` | as section 5.2, `cell` a grid cell record (`{"column", "row"}`) | edit the desktop's shortcuts |
-| `wallpaper` | `wallpaper` | set the desktop's wallpaper |
+| `shortcuts` | | answer the desktop (its `shortcuts` included) |
+| `shortcut_set` | `app`, `launch`, `mode?` (`focus`, the default, or `new`), `cell?` (a grid cell record, `{"column", "row"}`; the next free cell when absent) | add the shortcut, or change its mode or cell, as section 5.2's shortcut route does |
+| `shortcut_move` | `app`, `launch`, `cell` | move the shortcut, as section 5.2's move route does |
+| `shortcut_remove` | `app`, `launch` | take the shortcut off the desktop |
+| `wallpaper` | `wallpaper` (a wallpaper record, `{"kind", "name"}`, or `null`; required) | set the desktop's wallpaper, or clear it with `null` |
 
 `window` is a window id, `self`, `pinned`, or an app name (that app's most recently focused window on the target client's active desktop).
 The bodies, the answers, and the records they carry are the models of `system/libs/workspace_layout` (`ops`, `answers`, `records`): one body model per op, carrying the arguments the table gives it, which the shell reads every body with, builds its answers from, and every caller reads them with. A body is refused with `400` before anything is looked up when it carries an argument its op does not take (`client` and `desktop` included: a `refresh` of an `app` and `reload_system_interface` take neither), lacks one the op requires, or breaks a rule of its arguments (a path that is not a window path, a `state` `place` does not set, a frame outside the unit square, an `open` naming both a `path` and a `launch` or `params`); the `detail` names every such argument. `context`, `desktops`, and `list` read no arguments and ignore what they are sent.
