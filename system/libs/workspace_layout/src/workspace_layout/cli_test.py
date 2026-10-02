@@ -354,7 +354,14 @@ def test_place_and_navigate_check_their_arguments(
     assert "exactly one of" in capsys.readouterr().err
     with pytest.raises(SystemExit):
         run_layout_cli(["place", "self", "--frame", "0,0,1.5,1"], layout_context)
-    assert "inside the unit square" in capsys.readouterr().err
+    frame_error = capsys.readouterr().err
+    assert "inside the unit square" in frame_error and "fractions in 0..1" in frame_error
+    with pytest.raises(SystemExit):
+        run_layout_cli(["shortcut", "move", "docs", "open", "--cell=-1,0"], layout_context)
+    cell_error = capsys.readouterr().err
+    assert "at least zero" in cell_error and "'column'" in cell_error
+    # A value off a record's rule is named in the command's one error line, not in pydantic's own report.
+    assert [len(error.splitlines()) for error in (frame_error, cell_error)] == [1, 1]
     with pytest.raises(SystemExit):
         run_layout_cli(["navigate", "self", "notes"], layout_context)
     assert "starts with a single '/'" in capsys.readouterr().err

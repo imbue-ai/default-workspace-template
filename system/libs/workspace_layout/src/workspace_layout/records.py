@@ -7,6 +7,7 @@ from app_manifest.manifest import EntryMode
 from app_manifest.manifest import LocationScope
 from app_manifest.manifest import PinStyle
 from app_manifest.manifest import ShortcutMode
+from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -63,7 +64,11 @@ def parse_frame(raw: str) -> Frame:
     try:
         x, y, width, height = (float(part) for part in parts)
         return Frame(x=x, y=y, width=width, height=height)
-    except (ValueError, ValidationError) as e:
+    except ValidationError as e:
+        raise InvalidLayoutValueError(
+            f"a frame is 'x,y,width,height' in fractions inside the unit square: {describe_validation_error(e)}"
+        ) from e
+    except ValueError as e:
         raise InvalidLayoutValueError(f"a frame is 'x,y,width,height' in fractions inside the unit square: {e}") from e
 
 
@@ -83,7 +88,11 @@ def parse_cell(raw: str) -> GridCell:
     try:
         column, row = (int(part) for part in parts)
         return GridCell(column=column, row=row)
-    except (ValueError, ValidationError) as e:
+    except ValidationError as e:
+        raise InvalidLayoutValueError(
+            f"a cell is 'column,row' with both at least zero: {describe_validation_error(e)}"
+        ) from e
+    except ValueError as e:
         raise InvalidLayoutValueError(f"a cell is 'column,row' with both at least zero: {e}") from e
 
 
