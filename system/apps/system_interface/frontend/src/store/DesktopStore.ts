@@ -57,7 +57,7 @@ import type {
 } from "../model/records";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { ToastQueue } from "../model/Toasts";
-import { OwnIdMinter, REPORT_ID_PREFIX, SAVE_ID_PREFIX } from "../model/saveIds";
+import { OwnIdMinter, REPORT_ID_PREFIX, SAVE_ID_PREFIX } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
 import type { DeepLink } from "../model/deepLinks";
