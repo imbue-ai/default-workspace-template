@@ -114,12 +114,8 @@ unreachable), and `3` (the shell or an app cannot act right now: retry).
 else points an on-screen window on one of the `--repoint` pages at it, else the
 app's pinned window, else opens one.
 
-The command replaced `system/scripts/layout.py`, keeping its subcommands, its
-output but `place`'s description and a client's `last_seen` (UTC spelled `Z`),
-and its exit codes; the hints for retired
-verbs and spellings name `uv run workspace-layout`. Unlike the script it runs
-in the root venv, so it builds every op from the body models the shell reads
-and reads every answer through the answer models the shell builds. `place`
-takes `--state snapped-left|snapped-right|maximized` (the `WindowState` the op
-sets, which its description names: `as snapped-left`) or `--frame
-x,y,width,height`; the retired `--zone` is refused with that form.
+The command runs in the root venv, so it builds every op from the body models
+the shell reads and reads every answer through the answer models the shell
+builds. `place` takes `--state snapped-left|snapped-right|maximized` (the
+`WindowState` the op sets, which its description names: `as snapped-left`) or
+`--frame x,y,width,height`; the retired `--zone` is refused with that form.
