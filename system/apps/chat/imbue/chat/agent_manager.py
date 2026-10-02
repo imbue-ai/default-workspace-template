@@ -326,7 +326,8 @@ def live_registered_pids_of_agent(agent_id: str) -> list[int]:
 
 @pure
 def _chat_agent_labels(display_name: str, account_id: str, project_label: str) -> dict[str, str]:
-    """The labels ``_build_chat_create_command`` gives a chat's agent, for the tracked copy made before observe reports it."""
+    """The labels ``_build_chat_create_command`` gives a chat's agent, for the tracked copy made before observe
+    reports it."""
     labels = {"user_created": "true", "display_name": display_name, "account": account_id}
     if project_label:
         labels["project"] = project_label
@@ -3728,7 +3729,8 @@ class AgentManager:
         A chat awaiting its first send that holds no spare and would fit one on ``terms`` (minted before
         any account was signed in, say, or after its reserved spare was destroyed) comes first: the spare
         is started under its id and name, reserved for it, while awaiting chats hold fewer spares than the
-        pool keeps. Otherwise one is started for the pool when the pool is short and may grow now. Nothing is started while a spare for either is still being created.
+        pool keeps. Otherwise one is started for the pool when the pool is short and may grow now. Nothing
+        is started while a spare for either is still being created.
         """
         pooled = pooled_spares(self._spares)
         if (
@@ -3913,7 +3915,8 @@ class AgentManager:
             self.ensure_spare_chat_in_background()
 
     def ensure_spare_chat_in_background(self) -> None:
-        """``ensure_spare_chat`` on a thread of its own, for a caller that must not wait on or fail by it (a sign-in, a hand-over)."""
+        """``ensure_spare_chat`` on a thread of its own, for a caller that must not wait on or fail by it (a sign-in,
+        a hand-over)."""
         # A stopping app's creation group takes no new threads.
         if self._shutdown_event.is_set():
             return
