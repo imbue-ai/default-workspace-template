@@ -145,7 +145,7 @@ A user id matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, as the identity header c
 
 ### 4.5 `avatar_selection.json`
 
-`{"version": 1, "design": "<design id>"}`: the workspace's avatar design; absent or unreadable reads as the default (`gummy-seal`). The registered designs live at `data/.apps/system_interface/avatars/catalog.json` (`docs/system/avatar-designs.md`).
+`{"version": 1, "design": "<design id>"}`: the workspace's avatar design; absent or unreadable reads as the default (`imbue-character`). The registered designs live at `data/.apps/system_interface/avatars/catalog.json` (`docs/system/avatar-designs.md`).
 
 ### 4.6 Wallpapers
 

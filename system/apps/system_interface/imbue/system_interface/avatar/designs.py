@@ -60,7 +60,7 @@ class BundledDesign(FrozenModel):
     eyes_y: int = Field(description="Both eyes' centre, y")
 
 
-DEFAULT_DESIGN_ID: Final[DesignId] = DesignId("gummy-seal")
+GUMMY_SEAL_DESIGN_ID: Final[DesignId] = DesignId("gummy-seal")
 
 BUNDLED_DESIGNS: Final[tuple[BundledDesign, ...]] = (
     BundledDesign(
@@ -96,7 +96,7 @@ BUNDLED_DESIGNS: Final[tuple[BundledDesign, ...]] = (
         eyes_y=64,
     ),
     BundledDesign(
-        id=DEFAULT_DESIGN_ID,
+        id=GUMMY_SEAL_DESIGN_ID,
         label="Gummy seal",
         filename="15-gummy-seal.svg",
         eyes_left_x=36,
@@ -131,6 +131,8 @@ BUNDLED_DESIGNS: Final[tuple[BundledDesign, ...]] = (
 LIVE_DESIGN_ID: Final[DesignId] = DesignId("imbue-character")
 LIVE_DESIGN_LABEL: Final[str] = "Imbue character"
 _LIVE_DESIGN_FILENAME: Final[str] = "imbue-character.svg"
+
+DEFAULT_DESIGN_ID: Final[DesignId] = LIVE_DESIGN_ID
 
 
 def live_design_source() -> str:
@@ -296,7 +298,7 @@ def _apply_bundled_expression(root: Element, design: BundledDesign, is_awake: bo
 
 def _apply_bundled_motion(root: Element, design: BundledDesign) -> None:
     """The seal paddles its flippers; every other bundled design has a motion of its own in the shared sheet."""
-    if design.id == DEFAULT_DESIGN_ID:
+    if design.id == GUMMY_SEAL_DESIGN_ID:
         body = root.find(f"{{{SVG_NAMESPACE}}}g[@class='{_BODY_CLASS}']")
         if body is None:
             raise InvalidShellValueError(f"bundled design {design.id} has no {_BODY_CLASS} group")

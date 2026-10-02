@@ -9,6 +9,7 @@ from flask.testing import FlaskClient
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
+from imbue.system_interface.avatar.designs import GUMMY_SEAL_DESIGN_ID
 from imbue.system_interface.avatar.designs import LIVE_DESIGN_ID
 from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
 from imbue.system_interface.avatar.selection import SELECTION_FILENAME
@@ -51,18 +52,18 @@ def test_the_character_is_served_as_a_still_the_chooser_can_preview(client: Flas
 
 
 def test_the_image_is_an_isolated_svg_wearing_the_mood(client: FlaskClient) -> None:
-    response = client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg?mood=working")
+    response = client.get(f"/api/avatars/{GUMMY_SEAL_DESIGN_ID}/image.svg?mood=working")
     assert response.status_code == 200
     assert response.mimetype == "image/svg+xml"
     assert response.headers["Content-Security-Policy"] == "default-src 'none'; style-src 'unsafe-inline'; sandbox"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Cache-Control"] == "no-cache"
     assert 'data-mood="working"' in response.get_data(as_text=True)
-    assert 'data-mood="idle"' in client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg").get_data(as_text=True)
-    assert "animation:none" in client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg?preview=1").get_data(
+    assert 'data-mood="idle"' in client.get(f"/api/avatars/{GUMMY_SEAL_DESIGN_ID}/image.svg").get_data(as_text=True)
+    assert "animation:none" in client.get(f"/api/avatars/{GUMMY_SEAL_DESIGN_ID}/image.svg?preview=1").get_data(
         as_text=True
     )
-    assert client.get(f"/api/avatars/{DEFAULT_DESIGN_ID}/image.svg?mood=angry").status_code == 400
+    assert client.get(f"/api/avatars/{GUMMY_SEAL_DESIGN_ID}/image.svg?mood=angry").status_code == 400
     assert client.get("/api/avatars/nobody/image.svg").status_code == 404
 
 
