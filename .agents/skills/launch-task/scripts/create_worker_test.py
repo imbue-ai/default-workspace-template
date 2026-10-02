@@ -4061,6 +4061,21 @@ def test_reply_writes_no_label_on_a_worker_that_was_never_archived(
     assert _mngr_argvs(runner, "label") == []
 
 
+def test_reply_blanks_the_label_when_the_listing_cannot_say(tmp_path: Path) -> None:
+    """A failed listing is no evidence the worker was never stopped, and leaving
+    a revived worker marked as stopped on purpose is the costlier mistake."""
+    task = _stamped_task_file(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _StubResult(returncode=1))
+
+    rc = create_worker_mod.reply(
+        task_file=task, message="go", message_file=None, runner=runner
+    )
+
+    assert rc == 0
+    assert _mngr_argvs(runner, "label") == [_UNARCHIVE_ARGV]
+
+
 def test_reply_leaves_the_label_when_the_send_fails(tmp_path: Path) -> None:
     """A worker the reply did not reach stays marked as stopped on purpose, so
     nobody restarts it as a crash."""
