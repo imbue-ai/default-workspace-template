@@ -6192,9 +6192,7 @@ def test_an_awaiting_chats_reserved_spare_that_aged_out_or_died_is_destroyed_and
             with manager._lock:
                 aged_out_at = time.monotonic() - SPARE_CHAT_MAX_AGE_SECONDS
                 manager._spares = tuple(
-                    other.model_copy_update(to_update(other.field_ref().ready_at, aged_out_at))
-                    if other.chat_id == spare.chat_id
-                    else other
+                    other.as_ready(aged_out_at) if other.chat_id == spare.chat_id else other
                     for other in manager._spares
                 )
 
