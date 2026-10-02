@@ -39,9 +39,9 @@ from workspace_layout.ops import OpenArgs
 from workspace_layout.ops import OpenBody
 from workspace_layout.ops import PlaceArgs
 from workspace_layout.ops import PlaceBody
-from workspace_layout.ops import RefreshAppArgs
-from workspace_layout.ops import RefreshBody
+from workspace_layout.ops import RefreshAppBody
 from workspace_layout.ops import RefreshWindowArgs
+from workspace_layout.ops import RefreshWindowBody
 from workspace_layout.ops import ReloadSystemInterfaceBody
 from workspace_layout.ops import ShortcutMoveBody
 from workspace_layout.ops import ShortcutRemoveBody
@@ -928,9 +928,9 @@ def dispatch_desktop_op(shell: ShellState, body: OpBody) -> ResponseReturnValue:
             return jsonify(InventoryOpAnswer.model_validate(dict(document)).model_dump(mode="json"))
         case ReloadSystemInterfaceBody():
             return _reload_system_interface(shell, requester)
-        case RefreshBody(args=arguments):
-            if isinstance(arguments, RefreshAppArgs):
-                return _refresh_app(shell, arguments.app, requester)
+        case RefreshAppBody(args=arguments):
+            return _refresh_app(shell, arguments.app, requester)
+        case RefreshWindowBody(args=arguments):
             return _refresh_window(shell, arguments, _resolve_target(shell, arguments, requester), requester)
         case OpenBody(args=arguments):
             # An open is the one client-scoped op that still means something with no client: the window is shared.

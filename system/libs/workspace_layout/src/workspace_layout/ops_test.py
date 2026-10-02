@@ -14,7 +14,7 @@ from workspace_layout.ops import OpRequester
 from workspace_layout.ops import PlaceArgs
 from workspace_layout.ops import PlaceBody
 from workspace_layout.ops import RefreshAppArgs
-from workspace_layout.ops import RefreshBody
+from workspace_layout.ops import RefreshAppBody
 from workspace_layout.ops import ShowArgs
 from workspace_layout.ops import ShowBody
 from workspace_layout.ops import WindowArgs
@@ -120,7 +120,7 @@ _REQUESTER = OpRequester(app=AppName("chat"), marker="")
                 "desktop": "home",
             },
         ),
-        (RefreshBody(args=RefreshAppArgs(app=AppName("files")), requester=_REQUESTER), {"app": "files"}),
+        (RefreshAppBody(args=RefreshAppArgs(app=AppName("files")), requester=_REQUESTER), {"app": "files"}),
     ],
     ids=["show", "show-for-the-shells-choice-of-client", "open", "focus", "navigate", "place", "refresh-an-app"],
 )

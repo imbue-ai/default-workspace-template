@@ -1,7 +1,7 @@
-from typing import Annotated
 from typing import Any
 from typing import Final
 from typing import Literal
+from typing import assert_never
 
 from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
@@ -9,12 +9,10 @@ from app_manifest.primitives import LaunchPathId
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from pydantic import ConfigDict
-from pydantic import Discriminator
 from pydantic import Field
-from pydantic import Tag
-from pydantic import TypeAdapter
 from pydantic import ValidationError
 from pydantic import model_validator
+from pydantic_core import ErrorDetails
 
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import ClientActivityKind
@@ -208,13 +206,17 @@ class OpenArgs(OpTarget):
         return self
 
 
-class WindowArgs(OpTarget):
-    """An op on one window: ``focus``, ``minimize``, ``restore``, ``maximize``, ``close``."""
+class _WindowTarget(OpTarget):
+    """The keys of an op on one window: its target, and the window."""
 
     window: str = Field(description="A window id, ``self``, ``pinned``, or an app name")
 
 
-class PlaceArgs(WindowArgs):
+class WindowArgs(_WindowTarget):
+    """An op on one window that takes nothing else: ``focus``, ``minimize``, ``restore``, ``maximize``, ``close``."""
+
+
+class PlaceArgs(_WindowTarget):
     """``place``: set a window's state, or its frame with the state ``NORMAL``."""
 
     state: WindowState | None = Field(default=None, description="The state to set, one of PLACEABLE_STATES")
@@ -235,13 +237,13 @@ class PlaceArgs(WindowArgs):
         return self
 
 
-class NavigateArgs(WindowArgs):
+class NavigateArgs(_WindowTarget):
     """``navigate``: point a window at another path under its app."""
 
     path: WindowPath = Field(description="The path to point the window at")
 
 
-class RefreshWindowArgs(WindowArgs):
+class RefreshWindowArgs(_WindowTarget):
     """``refresh`` of one window: reload its page on the target client."""
 
 
@@ -251,14 +253,22 @@ class RefreshAppArgs(FrozenModel):
     app: AppName = Field(description="The app every page of which to reload")
 
 
-class ShortcutArgs(OpTarget):
-    """``shortcut_remove``, and what every shortcut write names: the shortcut's app and launch path."""
+class ShortcutsArgs(OpTarget):
+    """``shortcuts``: answer the desktop's shortcuts."""
+
+
+class _ShortcutTarget(OpTarget):
+    """What every shortcut write names: its target, and the shortcut's app and launch path."""
 
     app: AppName = Field(description="The shortcut's app")
     launch: LaunchPathId = Field(description="The launch path the shortcut runs")
 
 
-class ShortcutSetArgs(ShortcutArgs):
+class ShortcutArgs(_ShortcutTarget):
+    """``shortcut_remove``: remove a shortcut from the desktop."""
+
+
+class ShortcutSetArgs(_ShortcutTarget):
     """``shortcut_set``: add a shortcut to the desktop, or change its mode or cell."""
 
     mode: ShortcutMode = Field(
@@ -267,7 +277,7 @@ class ShortcutSetArgs(ShortcutArgs):
     cell: GridCell | None = Field(default=None, description="The cell; None for the next free one")
 
 
-class ShortcutMoveArgs(ShortcutArgs):
+class ShortcutMoveArgs(_ShortcutTarget):
     """``shortcut_move``: move a shortcut to another cell."""
 
     cell: GridCell = Field(description="The cell to move it to")
@@ -329,21 +339,17 @@ class NavigateBody(_OpBodyBase):
     args: NavigateArgs = Field(description="The window and its new path")
 
 
-def _refresh_kind(raw: Any) -> str:
-    """Which refresh an ``args`` asks for: of an app when it names one, else of a window."""
-    named = raw if isinstance(raw, dict) else dict(raw)
-    return "app" if "app" in named else "window"
+RefreshArgs = RefreshWindowArgs | RefreshAppArgs
 
 
-RefreshArgs = Annotated[
-    Annotated[RefreshWindowArgs, Tag("window")] | Annotated[RefreshAppArgs, Tag("app")],
-    Discriminator(_refresh_kind),
-]
-
-
-class RefreshBody(_OpBodyBase):
+class RefreshWindowBody(_OpBodyBase):
     op: Literal[LayoutOp.REFRESH] = LayoutOp.REFRESH
-    args: RefreshArgs = Field(description="The window, or the app")
+    args: RefreshWindowArgs = Field(description="The window")
+
+
+class RefreshAppBody(_OpBodyBase):
+    op: Literal[LayoutOp.REFRESH] = LayoutOp.REFRESH
+    args: RefreshAppArgs = Field(description="The app")
 
 
 class ReloadSystemInterfaceBody(_OpBodyBase):
@@ -353,7 +359,7 @@ class ReloadSystemInterfaceBody(_OpBodyBase):
 
 class ShortcutsBody(_OpBodyBase):
     op: Literal[LayoutOp.SHORTCUTS] = LayoutOp.SHORTCUTS
-    args: OpTarget = Field(default_factory=OpTarget, description="The desktop whose shortcuts to answer")
+    args: ShortcutsArgs = Field(default_factory=ShortcutsArgs, description="The desktop whose shortcuts to answer")
 
 
 class ShortcutSetBody(_OpBodyBase):
@@ -385,7 +391,8 @@ OpBody = (
     | WindowOpBody
     | PlaceBody
     | NavigateBody
-    | RefreshBody
+    | RefreshWindowBody
+    | RefreshAppBody
     | ReloadSystemInterfaceBody
     | ShortcutsBody
     | ShortcutSetBody
@@ -394,7 +401,50 @@ OpBody = (
     | WallpaperBody
 )
 
-_OP_BODY_ADAPTER: Final[TypeAdapter[OpBody]] = TypeAdapter(Annotated[OpBody, Field(discriminator="op")])
+
+def _body_model(op: LayoutOp, args: dict[str, Any]) -> type[OpBody]:
+    """The body model an op is read with; a ``refresh`` is of an app when its arguments name one, else of a window."""
+    match op:
+        case LayoutOp.CONTEXT:
+            return ContextBody
+        case LayoutOp.DESKTOPS | LayoutOp.LIST:
+            return InventoryBody
+        case LayoutOp.LOAD:
+            return LoadBody
+        case LayoutOp.SHOW:
+            return ShowBody
+        case LayoutOp.OPEN:
+            return OpenBody
+        case LayoutOp.FOCUS | LayoutOp.MINIMIZE | LayoutOp.RESTORE | LayoutOp.MAXIMIZE | LayoutOp.CLOSE:
+            return WindowOpBody
+        case LayoutOp.PLACE:
+            return PlaceBody
+        case LayoutOp.NAVIGATE:
+            return NavigateBody
+        case LayoutOp.REFRESH:
+            return RefreshAppBody if "app" in args else RefreshWindowBody
+        case LayoutOp.RELOAD_SYSTEM_INTERFACE:
+            return ReloadSystemInterfaceBody
+        case LayoutOp.SHORTCUTS:
+            return ShortcutsBody
+        case LayoutOp.SHORTCUT_SET:
+            return ShortcutSetBody
+        case LayoutOp.SHORTCUT_MOVE:
+            return ShortcutMoveBody
+        case LayoutOp.SHORTCUT_REMOVE:
+            return ShortcutRemoveBody
+        case LayoutOp.WALLPAPER:
+            return WallpaperBody
+        case _:
+            assert_never(op)
+
+
+@pure
+def _describe_argument_problem(error: ErrorDetails) -> str:
+    """One refused argument: where it is in the body, and why, in the rule's own words for a rule of ours."""
+    location = ".".join(str(part) for part in error["loc"]) or "args"
+    reason = error.get("ctx", {}).get("error") if error["type"] == "value_error" else None
+    return f"{location}: {reason if reason is not None else error['msg']}"
 
 
 @pure
@@ -420,9 +470,7 @@ def parse_op_body(raw: Any) -> OpBody:
     if not isinstance(args, dict):
         raise InvalidLayoutValueError("``args`` must be a JSON object")
     try:
-        return _OP_BODY_ADAPTER.validate_python({"op": op, "args": args, "requester": requester})
+        return _body_model(op, args).model_validate({"op": op, "args": args, "requester": requester})
     except ValidationError as e:
-        problems = "; ".join(
-            f"field {'.'.join(str(part) for part in error['loc'])!r}: {error['msg']}" for error in e.errors()
-        )
-        raise InvalidLayoutValueError(f"bad op arguments: {problems}") from e
+        problems = "; ".join(_describe_argument_problem(error) for error in e.errors())
+        raise InvalidLayoutValueError(f"bad {op} arguments: {problems}") from e

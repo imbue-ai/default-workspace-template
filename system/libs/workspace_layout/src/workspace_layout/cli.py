@@ -51,16 +51,17 @@ from workspace_layout.ops import OpBody
 from workspace_layout.ops import OpenArgs
 from workspace_layout.ops import OpenBody
 from workspace_layout.ops import OpRequester
-from workspace_layout.ops import OpTarget
 from workspace_layout.ops import PlaceArgs
 from workspace_layout.ops import PlaceBody
 from workspace_layout.ops import RefreshAppArgs
-from workspace_layout.ops import RefreshBody
+from workspace_layout.ops import RefreshAppBody
 from workspace_layout.ops import RefreshWindowArgs
+from workspace_layout.ops import RefreshWindowBody
 from workspace_layout.ops import ShortcutArgs
 from workspace_layout.ops import ShortcutMoveArgs
 from workspace_layout.ops import ShortcutMoveBody
 from workspace_layout.ops import ShortcutRemoveBody
+from workspace_layout.ops import ShortcutsArgs
 from workspace_layout.ops import ShortcutsBody
 from workspace_layout.ops import ShortcutSetArgs
 from workspace_layout.ops import ShortcutSetBody
@@ -510,7 +511,7 @@ def _run_desktop_op(
     return EXIT_OK
 
 
-def _run_transient_op(context: LayoutCliContext, body: RefreshBody) -> int:
+def _run_transient_op(context: LayoutCliContext, body: RefreshWindowBody | RefreshAppBody) -> int:
     """Post one of the verbs with nothing to store (refresh); the target client's windows apply it."""
     answer = _post(context, body, TransientOpAnswer, context.read_timeout_seconds)
     if isinstance(answer, int):
@@ -798,10 +799,10 @@ def _cmd_refresh(args: argparse.Namespace, context: LayoutCliContext) -> int:
                 "refresh --app reloads every page of the app on every client; --client and --desktop do not apply to it"
             )
         return _run_transient_op(
-            context, RefreshBody(args=_arguments(RefreshAppArgs, {"app": app_name_argument(args.app)}))
+            context, RefreshAppBody(args=_arguments(RefreshAppArgs, {"app": app_name_argument(args.app)}))
         )
     arguments = _arguments(RefreshWindowArgs, {"window": window_argument(args.window), **_target_fields(args)})
-    return _run_transient_op(context, RefreshBody(args=arguments))
+    return _run_transient_op(context, RefreshWindowBody(args=arguments))
 
 
 # Shortcuts and the wallpaper
@@ -829,7 +830,7 @@ def _run_shortcut_write(
 
 
 def _cmd_shortcuts(args: argparse.Namespace, context: LayoutCliContext) -> int:
-    body = ShortcutsBody(args=_arguments(OpTarget, _target_fields(args)))
+    body = ShortcutsBody(args=_arguments(ShortcutsArgs, _target_fields(args)))
     answer = _post(context, body, DesktopOpAnswer, context.read_timeout_seconds)
     if isinstance(answer, int):
         return answer

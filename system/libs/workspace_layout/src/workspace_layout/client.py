@@ -40,8 +40,9 @@ from workspace_layout.ops import OpRequester
 from workspace_layout.ops import PlaceArgs
 from workspace_layout.ops import PlaceBody
 from workspace_layout.ops import RefreshAppArgs
+from workspace_layout.ops import RefreshAppBody
 from workspace_layout.ops import RefreshArgs
-from workspace_layout.ops import RefreshBody
+from workspace_layout.ops import RefreshWindowBody
 from workspace_layout.ops import ShowArgs
 from workspace_layout.ops import ShowBody
 from workspace_layout.ops import WindowArgs
@@ -160,7 +161,9 @@ class ShellLayoutClient(ShellLayoutInterface):
         url = f"{self.shell_url}{route}"
         started_at = time.monotonic()
         try:
-            response = request_shell(method, url, body, timeout_seconds or self.timeout_seconds)
+            response = request_shell(
+                method, url, body, self.timeout_seconds if timeout_seconds is None else timeout_seconds
+            )
         except ShellUnreachableError as e:
             raise ShellUnreachableError(f"Could not reach the shell at {url} for the {described}: {e}") from e
         elapsed = time.monotonic() - started_at
@@ -200,7 +203,9 @@ class ShellLayoutClient(ShellLayoutInterface):
         return self.post_op(WindowOpBody(op=LayoutOp.CLOSE, args=args), DesktopOpAnswer)
 
     def refresh(self, args: RefreshArgs) -> TransientOpAnswer:
-        return self.post_op(RefreshBody(args=args), TransientOpAnswer)
+        if isinstance(args, RefreshAppArgs):
+            return self.post_op(RefreshAppBody(args=args), TransientOpAnswer)
+        return self.post_op(RefreshWindowBody(args=args), TransientOpAnswer)
 
     def inventory(self, timeout_seconds: float | None = None) -> InventoryDocument:
         """The inventory document (desktop contracts.md section 5.5)."""

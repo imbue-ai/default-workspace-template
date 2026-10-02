@@ -30,7 +30,7 @@ answer shapes live in one place the shell and its callers share.
   `focus`, `minimize`, `restore`, `maximize`, and `close`, `InventoryBody` for
   `desktops` and `list`), each carrying its own arguments model (`ShowArgs`,
   `OpenArgs`, `WindowArgs`, `PlaceArgs`, `NavigateArgs`, `RefreshWindowArgs` or
-  `RefreshAppArgs`, `LoadArgs`, the shortcut and wallpaper arguments), and
+  `RefreshAppArgs` (a `refresh` is of an app when it names one), `LoadArgs`, the shortcut and wallpaper arguments), and
   `OpBody`, their union, keyed on `op`. The client-scoped arguments extend
   `OpTarget` (`client`, `desktop`; None leaves the choice to the shell: the
   requester's client, else the one connected client, and the client's active
@@ -89,9 +89,12 @@ answer shapes live in one place the shell and its callers share.
 A property that holds for some ops and not others is carried by the op's body
 model (its arguments, and so what the shell does with them) or by a `Literal`
 subset of `LayoutOp` that a handler takes, as `WindowOp` is; never a set of op
-names. The shell dispatches on the body with an exhaustive `match` ending in
-`assert_never`, so an op added to `LayoutOp` and `OpBody` fails type checking
-until the shell handles it.
+names. `parse_op_body` picks an op's body model with an exhaustive `match` over
+`LayoutOp`, and the shell dispatches on the body with another, both ending in
+`assert_never`: an op added to `LayoutOp` fails type checking until it has a
+body, and a body added to `OpBody` until the shell handles it. The arguments
+models share their fields through private bases rather than subclassing one
+another, so one op's arguments never type-check as another's.
 
 ## The `workspace-layout` command
 
