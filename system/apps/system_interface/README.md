@@ -152,9 +152,11 @@ and the profile cache.
   announced as `desktops_updated` and `placements_updated`; `context` answers every
   client's recent activity, folded from the client-activity log and the live
   socket registrations, and `desktops` and `list` answer the inventory
-  document (`GET /api/inventory`'s `{desktops, apps, clients}`); only
-  `refresh` and `reload_system_interface` reach the browser as `layout_op`
-  messages.
+  document (`GET /api/inventory`'s `{desktops, apps, clients}`);
+  `refresh` and `reload_system_interface` reach the browser only as
+  `layout_op` messages, and `focus`, `show`, and an `open` that is not
+  minimized also send one telling the target client which window they put in
+  front.
 
 The backend is the `imbue/system_interface/shell/` subpackage (inventory and
 liveness, desktops, placements, wallpapers, clients, users and the request
