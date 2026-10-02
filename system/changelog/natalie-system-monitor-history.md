@@ -1,0 +1,1 @@
+The built-in manifests table and the desktop contract note that System Monitor's preview installs no memory recorder, and `docs/system/specs/system-monitor.md` describes the recorder, the history file and its rotation, and the memory-over-time chart.

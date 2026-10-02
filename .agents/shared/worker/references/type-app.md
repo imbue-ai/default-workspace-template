@@ -69,10 +69,10 @@ worktree, previewed it to the user, and handed you the branch at approval.
 What differs for you:
 
 - **Build every bundle at the npm workspace root** (`cd system && npm ci && npm
-  run build`), never one frontend alone: the shell's, the chat's, and the
-  Getting Started app's bundles are built from the shared
+  run build`), never one frontend alone: every app's bundle (the shell's, the
+  chat's, Getting Started's and System Monitor's) is built from the shared
   `system/libs/workspace_ui/` library, and the apply installs the bundles you
-  built only when it is given all three. Report each `static/` path in your
+  built only when it is given every one. Report each `static/` path in your
   `done` body, so the lead can pass them to the apply.
   The test gate selects its own checks from what changed; building every
   bundle is for the apply, whatever the gate ran.
