@@ -62,7 +62,7 @@ Built-in manifests:
 | `getting-started` | false | `getting-started` | `{launch = "open", mode = "focus"}`; also `launcher_rank = 5` | none; the shell synthesizes `open` at `/` | `getting-started --no-register --state-dir {scratch}/state` over `GETTING_STARTED_PORT = "{port:main}"` and `GETTING_STARTED_HOST = "{host}"` (unregistered: it neither re-points the live row nor opens the first-visit window), health `/api/health` |
 | `files` | false | `files` | `{launch = "new", mode = "new"}` | `new` ("New File Viewer" at `/home/user/workspace/`, param `path` optional) | the convention |
 | `browser` | false | `browser` | `{launch = "new", mode = "focus"}`; also `window_closed_path = "/api/window-closed"` | `new` ("New Browser" at `/new`, param `url` optional) | the convention |
-| `activity` | false | `activity` | none; also `stop_when_no_windows = true` and `launcher_rank = 50` | none; the shell synthesizes `open` at `/` | `activity-app --no-register` over `ACTIVITY_PORT = "{port:main}"` and `ACTIVITY_HOST = "{host}"` (unregistered: it neither re-points the live row nor installs the memory recorder), health `/api/health` |
+| `activity` | false | `activity` | none; also `stop_when_no_windows = true` and `launcher_rank = 50` | none; the shell synthesizes `open` at `/` | `activity-app --no-register` over `ACTIVITY_PORT = "{port:main}"`, `ACTIVITY_HOST = "{host}"` and `MINDS_APPS_FILE = "{registry}"` (unregistered: it neither re-points the live row nor installs the memory recorder), health `/api/health` |
 
 Every built-in except the shell and the terminal's pty points `icon` at an `icon.svg` beside its manifest; those two are `internal` and have none.
 

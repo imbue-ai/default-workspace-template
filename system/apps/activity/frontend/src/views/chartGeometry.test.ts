@@ -7,6 +7,7 @@ import {
   chartMaxKib,
   linePoints,
   nearestPeriod,
+  periodLabel,
   timeTicks,
   unbrokenRuns,
   xFor,
@@ -87,5 +88,17 @@ describe("time ticks", () => {
       HOUR_END_SECONDS,
     ]);
     expect(ticks.every((tick) => tick.label.length > 0)).toBe(true);
+  });
+});
+
+describe("period labels", () => {
+  it("name the time of a period in every range, and its weekday beyond an hour", () => {
+    const at = Date.parse("2026-10-01T09:30:00Z") / 1000;
+    const hourLabel = periodLabel("HOUR", at);
+    const weekLabel = periodLabel("WEEK", at);
+    const weekLater = periodLabel("WEEK", at + 30 * 60);
+    expect(hourLabel).toMatch(/\d/);
+    expect(weekLabel).not.toBe(weekLater);
+    expect(weekLabel.length).toBeGreaterThan(hourLabel.length);
   });
 });

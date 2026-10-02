@@ -54,6 +54,9 @@ STORAGE_PATH: Final[str] = "/api/storage"
 HISTORY_PATH_ROUTE: Final[str] = "/api/history"
 HTTP_BAD_REQUEST: Final[int] = 400
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
+# A preview (``--no-register``) shares the live workspace's chats and desktop, so it changes neither; the shell's
+# preview refuses in the same words.
+PREVIEW_REFUSAL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
 # The chat app's status for a chat in the middle of a turn: stopping it interrupts the turn.
 WORKING_CHAT_STATUS: Final[str] = "working"
 
@@ -86,6 +89,7 @@ def build_pages_blueprint(
     clock: Callable[[], float],
     history_path: Path,
     shed_ledger_path: Path,
+    is_preview: bool,
 ) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
     # One du at a time: it walks every file, and a second request while one runs would only double the work.
@@ -127,7 +131,9 @@ def build_pages_blueprint(
 
     @blueprint.get(SUMMARY_PATH)
     def summary() -> ResponseReturnValue:
-        inputs = collect_summary_inputs(sources=sources, client=client, read_process_info=read_process_info, now=now())
+        inputs = collect_summary_inputs(
+            sources=sources, client=client, read_process_info=read_process_info, now=now(), is_preview=is_preview
+        )
         response = jsonify(build_summary(inputs).model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -164,6 +170,8 @@ def build_pages_blueprint(
 
     @blueprint.post("/api/chats/<chat_id>/<action>")
     def chat_action(chat_id: str, action: str) -> ResponseReturnValue:
+        if is_preview:
+            return jsonify({"detail": PREVIEW_REFUSAL}), HTTP_FORBIDDEN
         try:
             chat_action_kind = ChatAction(action.upper())
         except ValueError:

@@ -19,6 +19,7 @@ from activity.processes import BROWSER_COMMAND_NAMES
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from oom_priority.bands import AGENT_SUBPROCESS
 from oom_priority.ledger import RECORD_TYPE_PROCESS_SHED
 
 
@@ -26,7 +27,9 @@ class ClosedKind(UpperCaseStrEnum):
     """What kind of thing was closed."""
 
     CHAT_AGENT = auto()
+    HELPER_AGENT = auto()
     BROWSER_TAB = auto()
+    SERVICE = auto()
     PROGRAM = auto()
 
 
@@ -59,7 +62,12 @@ def describe_closure(record: Mapping[str, Any]) -> ClosedProcess | None:
     agent_name = record.get("agent_name")
     freed = record.get("vm_rss_kib")
     freed_kib = int(freed) if isinstance(freed, int) else None
-    if isinstance(agent_name, str) and agent_name:
+    adj = record.get("oom_score_adj")
+    if isinstance(agent_name, str) and agent_name and record.get("is_worker") is True:
+        kind = ClosedKind.HELPER_AGENT
+        what = f'a helper agent ("{agent_name}")'
+        next_step = "The work it had in progress was lost; the chat that started it may start it again."
+    elif isinstance(agent_name, str) and agent_name:
         kind = ClosedKind.CHAT_AGENT
         what = f'the agent of "{agent_name}"'
         next_step = "Its conversation is kept; send it a message to carry on."
@@ -67,6 +75,11 @@ def describe_closure(record: Mapping[str, Any]) -> ClosedProcess | None:
         kind = ClosedKind.BROWSER_TAB
         what = "a browser tab"
         next_step = "An agent that was using it opens the page again when it needs it."
+    elif isinstance(adj, int) and adj < AGENT_SUBPROCESS:
+        # Below the agent-subprocess band sit the workspace's own services and apps, which supervisord restarts.
+        kind = ClosedKind.SERVICE
+        what = f"a background program ({command_name})"
+        next_step = "It starts again on its own, or when its app is next opened."
     else:
         kind = ClosedKind.PROGRAM
         what = f"a program an agent was running ({command_name})"

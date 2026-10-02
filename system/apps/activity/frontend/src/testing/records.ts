@@ -49,6 +49,7 @@ export function summary(
     likely_first_to_close:
       firstToCloseId === null ? null : { item_id: firstToCloseId, pid: 1, command_name: "claude" },
     notes: [],
+    is_preview: false,
   };
 }
 

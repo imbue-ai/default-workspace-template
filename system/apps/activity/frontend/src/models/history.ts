@@ -7,7 +7,7 @@ import m from "mithril";
 import { createPoller } from "./poller";
 
 export type HistoryRange = "HOUR" | "DAY" | "WEEK";
-export type ClosedKind = "CHAT_AGENT" | "BROWSER_TAB" | "PROGRAM";
+export type ClosedKind = "CHAT_AGENT" | "HELPER_AGENT" | "BROWSER_TAB" | "SERVICE" | "PROGRAM";
 
 export interface HistoryPeriod {
   readonly start_epoch_seconds: number;
