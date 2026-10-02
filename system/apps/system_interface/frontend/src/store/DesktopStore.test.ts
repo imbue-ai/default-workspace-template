@@ -1209,11 +1209,31 @@ describe("the avatar", () => {
       design: "jelly-cat",
       defaultDesign: "gummy-seal",
       status: { mood: "idle", is_stale: true },
+      switchedAt: null,
     });
     socket.deliver().onAvatarStatus({ mood: "working", is_stale: false });
     expect(store.getState().avatar.status).toEqual({ mood: "working", is_stale: false });
     socket.deliver().onAvatarSelectionChanged("gummy-seal");
     expect(store.getState().avatar.design).toBe("gummy-seal");
+  });
+
+  it("marks when a pushed selection switches the design, and only then", async () => {
+    const store = await startedStore();
+    // Reading the design at start is not a switch, even when it differs from the placeholder.
+    expect(store.getState().avatar.switchedAt).toBeNull();
+    const design = store.getState().avatar.design;
+    socket.deliver().onAvatarSelectionChanged(design);
+    expect(store.getState().avatar.switchedAt).toBeNull();
+
+    const before = performance.now();
+    socket.deliver().onAvatarSelectionChanged("imbue-character");
+    const switchedAt = store.getState().avatar.switchedAt;
+    expect(switchedAt).not.toBeNull();
+    expect(switchedAt).toBeGreaterThanOrEqual(before);
+
+    // The same design pushed again is a rebroadcast, not a second arrival.
+    socket.deliver().onAvatarSelectionChanged("imbue-character");
+    expect(store.getState().avatar.switchedAt).toBe(switchedAt);
   });
 
   it("a selection pushed while the catalog is read stands over the catalog's older answer", async () => {
