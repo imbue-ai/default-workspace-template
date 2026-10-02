@@ -1,0 +1,1 @@
+Takes back #790: the imbue character is listed as "Imbue character" again, and no longer jumps when it is chosen or shies from a hovering mouse. The jump's trigger is being redone more simply, and the whole change will come back with it.
