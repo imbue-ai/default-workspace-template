@@ -66,7 +66,10 @@ class AppRegisteredAnnouncement(EventEnvelope):
         description="The app's unguessable origin label; empty for a legacy row written before labels existed",
     )
     icon: str = Field(default="", description="The app's registered SVG icon markup, verbatim; empty when none")
-    shareable: bool = Field(description="Whether the minds Share tab offers the app as a share target of its own")
+    is_shareable: bool = Field(
+        serialization_alias="shareable",
+        description="Whether the minds Share tab offers the app as a share target of its own",
+    )
 
 
 class AppDeregisteredAnnouncement(EventEnvelope):
@@ -205,7 +208,7 @@ class AppAnnouncementWriter(MutableModel):
                 url=current[name].url,
                 label=current[name].label,
                 icon=current[name].icon,
-                shareable=current[name].is_shareable,
+                is_shareable=current[name].is_shareable,
             ).model_dump_json(by_alias=True)
             for name in diff.changed
         ] + [
