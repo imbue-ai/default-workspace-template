@@ -321,7 +321,9 @@ The shell inspects no payloads.
 
 ## 12. `workspace-layout` and the op route
 
-Subcommands: `list`, `inspect`, `where`, `context`, `views`, `load`, `open`, `focus`, `split`, `close`, `move`, `rename`, `delete`, `stop`, `start`, `maximize`, `restore`, `replace-url`, `refresh`, `shortcuts`, `shortcut set`, `shortcut remove`.
+Subcommands: `context`, `desktops`, `list`, `load`, `open`, `show`, `focus`, `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `refresh`, `shortcuts`, `shortcut set`, `shortcut move`, `shortcut remove`, `wallpaper`.
+
+The op route and the command are specified by `docs/system/blueprint/desktop-interface/contracts.md` section 8, which supersedes the rest of this section: what follows is the tabbed shell's account (views, addresses, and the verbs the command now refuses as retired), kept for reference.
 
 The script posts `{op, args, requester}` to `POST /api/layout/broadcast` on the shell (loopback only): `requester` is the caller's own chat as an address (`app:chat?instance=$MINDS_CHAT_ID`, the chat id the chat app sets on every agent it creates, with `$MNGR_AGENT_ID` standing in for an agent that is its own chat), which is what `self` names and how the shell attributes the op to a client; the shell itself names no app.
 The client's layout file is the truth of the arrangement, so the shell applies every arrangement op to that file itself and no browser needs to be connected for an op to land.
