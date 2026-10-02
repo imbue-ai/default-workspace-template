@@ -42,6 +42,7 @@ _AUTH_LABEL = "auth-x7k9q2w1"
 _APPS = [
     RegisteredApp("system_interface", "system_interface-shell111", "127.0.0.1", 8000, is_shareable=False),
     RegisteredApp("web", "web-web111111", "127.0.0.1", 5001, is_shareable=True),
+    RegisteredApp("files", "files-files111", "127.0.0.1", 5002, is_shareable=True),
     # Registered with ``shareable = false``, like the built-in terminal.
     RegisteredApp("terminal", "terminal-term1111", "127.0.0.1", 7681, is_shareable=False),
 ]
@@ -49,6 +50,7 @@ _LABELS = build_label_to_name(_APPS)
 _SHELL_HOST = f"system_interface-shell111.{_DOMAIN}"
 _WEB_HOST = f"web-web111111.{_DOMAIN}"
 _TERMINAL_HOST = f"terminal-term1111.{_DOMAIN}"
+_FILES_HOST = f"files-files111.{_DOMAIN}"
 _AUTH_ORIGIN = f"https://{_AUTH_LABEL}.{_DOMAIN}"
 _CHROME_ORIGIN = "https://minds.imbue.com"
 
@@ -232,7 +234,7 @@ def test_per_service_grant_scopes_to_that_service_only(tmp_path: Path) -> None:
 
     allowed = harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
     shell = harness.client.get("/_auth/verify", headers=_verify_headers())
-    sibling = harness.client.get("/_auth/verify", headers=_verify_headers(host=_TERMINAL_HOST))
+    sibling = harness.client.get("/_auth/verify", headers=_verify_headers(host=_FILES_HOST))
 
     assert allowed.status_code == 200
     assert shell.status_code == 403
