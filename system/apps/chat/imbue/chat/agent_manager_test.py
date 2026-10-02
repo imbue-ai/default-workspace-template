@@ -35,6 +35,7 @@ from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LE
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import SPARE_CHAT_MAX_AGE_SECONDS
+from imbue.chat.agent_manager import _RESERVED_SPARE_NOT_DESTROYED_ERROR
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
@@ -6270,6 +6271,37 @@ def test_an_awaiting_chats_first_send_on_another_account_destroys_its_spare_befo
         assert f"account={openai_account_id}" in own_create
         assert spare.chat_id not in [other.chat_id for other in manager._spares]
         assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [spare.chat_id]
+    finally:
+        manager.stop()
+
+
+def test_an_awaiting_chats_first_send_fails_without_a_create_when_its_spare_cannot_be_destroyed(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, _ = write_recording_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    pushes = broadcaster.register()
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        awaiting = manager.awaiting_chat_for_empty_list()
+        openai_account_id = _openai_account()
+        Path(mngr_binary).unlink()
+
+        manager.create_chat("", chat_id=awaiting.chat_id, account_id=openai_account_id, message="Hi 4471")
+
+        assert (spare.chat_id, False) in _await_provisional_completions(pushes)
+        assert manager.wait_for_chat_creation(awaiting.chat_id, timeout=15.0) == ChatCreationOutcome(
+            is_created=False, error=_RESERVED_SPARE_NOT_DESTROYED_ERROR
+        )
+        failed = manager.get_provisional_chat(awaiting.chat_id)
+        assert failed is not None and failed.phase is ProvisionalChatPhase.FAILED
+        assert [other.phase for other in manager._spares if other.chat_id == spare.chat_id] == [
+            SpareChatPhase.DISCARDING
+        ]
+        assert manager._spare_retry_not_before > time.monotonic()
+        with pytest.raises(AgentCreationError, match="still being cleaned up"):
+            manager.create_chat("", chat_id=awaiting.chat_id, account_id=openai_account_id)
     finally:
         manager.stop()
 
