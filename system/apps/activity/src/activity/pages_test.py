@@ -74,6 +74,8 @@ def _client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chat_app: FakeChatA
             client=chat_app.client(),
             read_process_info=lambda: [process_info("chat", "RUNNING", 544), process_info("files", "STOPPED", 0)],
             now=lambda: _NOW,
+            history_path=tmp_path / "memory-history.tsv",
+            shed_ledger_path=tmp_path / "shed.jsonl",
         )
     )
     return app.test_client()
@@ -224,3 +226,22 @@ def test_another_apps_page_cannot_stop_a_chat(tmp_path: Path, monkeypatch: pytes
         client.post("/api/chats/c1/stop", json={}, headers={"Origin": own_label_without_fetch_site}).status_code == 200
     )
     assert chat_app.actions == [("c1", "stop")]
+
+
+def test_the_history_holds_recorded_readings_and_the_memory_guards_closures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(tmp_path, monkeypatch, _chat_app("idle"))
+    end = int(_NOW.timestamp())
+    (tmp_path / "memory-history.tsv").write_text(f"{end - 120}\t1000\t8388608\n{end - 60}\t3000\t8388608\n")
+    (tmp_path / "shed.jsonl").write_text(
+        json.dumps({"timestamp": "2026-10-01T11:59:00.000000Z", "type": "process_shed", "pid": 7, "comm": "pytest"})
+        + "\n"
+    )
+    view = client.get("/api/history?range=hour").get_json()
+    assert view["range"] == "HOUR"
+    assert [period["max_kib"] for period in view["periods"]] == [1000, 3000]
+    assert view["limit_kib"] == 8 * 1024 * 1024
+    assert view["is_recording"] is True
+    assert [closure["what"] for closure in view["closures_in_range"]] == ["a program an agent was running (pytest)"]
+    assert client.get("/api/history?range=decade").status_code == 400

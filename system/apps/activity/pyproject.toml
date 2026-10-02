@@ -29,6 +29,7 @@ dev = [
 
 [project.scripts]
 activity-app = "activity.main:main"
+activity-record-memory = "activity.record_memory:main"
 
 [build-system]
 requires = ["hatchling"]

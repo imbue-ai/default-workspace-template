@@ -1,7 +1,7 @@
 /**
  * The Activity page's root: it connects to the shell that frames it and reads only while it is seen. The memory tab
- * re-reads every few seconds while its window is shown (``shell:shown`` / ``shell:hidden``) and the browser tab is
- * visible.
+ * re-reads every few seconds, and its history once a minute, while its window is shown (``shell:shown`` /
+ * ``shell:hidden``) and the browser tab is visible.
  */
 
 import m from "mithril";
@@ -10,6 +10,13 @@ import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
+import {
+  getHistoryState,
+  getSelectedRange,
+  selectRange,
+  startHistoryRefreshing,
+  stopHistoryRefreshing,
+} from "./models/history";
 import {
   getRefreshFailure,
   getSummaryState,
@@ -32,8 +39,10 @@ function bootstrap(): void {
   function syncRefreshing(): void {
     if (isWindowShown && document.visibilityState === "visible") {
       startRefreshing();
+      startHistoryRefreshing();
     } else {
       stopRefreshing();
+      stopHistoryRefreshing();
     }
   }
 
@@ -76,6 +85,7 @@ function bootstrap(): void {
               await refreshNow();
               return result;
             },
+            history: { state: getHistoryState(), range: getSelectedRange(), onRange: selectRange },
           }),
         ]),
       ]),

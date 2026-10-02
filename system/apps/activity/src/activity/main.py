@@ -1,3 +1,4 @@
+import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -10,6 +11,12 @@ from pydantic import Field
 
 from activity.config import Config
 from activity.config import load_config
+from activity.cron_entry import RECORDER_LOG_PATH
+from activity.cron_entry import SYSTEM_CRON_DIR
+from activity.cron_entry import WORKSPACE_ROOT
+from activity.cron_entry import cron_entry_text
+from activity.cron_entry import install_cron_entry
+from activity.history import HISTORY_PATH
 from activity.memory_reading import DEFAULT_MEMORY_SOURCES
 from activity.pages import APP_NAME
 from activity.pages import build_pages_blueprint
@@ -27,9 +34,13 @@ from app_manifest.registry import register_app
 from app_manifest.registry import registry_path
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
+from oom_priority.paths import shed_ledger_path
 
 # The app's fixed wiring, relative to the repo root every supervised program runs from.
 MANIFEST_PATH: Final[Path] = Path("system/apps/activity/app.toml")
+# The recorder's console script, as the image build installs the app's uv tool.
+RECORDER_COMMAND: Final[str] = "activity-record-memory"
+DEFAULT_RECORDER_PATH: Final[Path] = Path("/root/.local/bin/activity-record-memory")
 # The frontend's build output, inside the package.
 DEFAULT_STATIC_DIRECTORY: Final[Path] = Path(__file__).parent / "static"
 
@@ -57,9 +68,17 @@ def build_pages_app(arguments: ActivityArguments, client: httpx.Client) -> Flask
             client=client,
             read_process_info=socket_process_info_reader(supervisor_socket_path()),
             now=utc_now,
+            history_path=HISTORY_PATH,
+            shed_ledger_path=shed_ledger_path(),
         )
     )
     return app
+
+
+def install_memory_recorder() -> None:
+    """Install the once-a-minute recorder behind the memory-over-time chart (see ``cron_entry``)."""
+    recorder_path = Path(shutil.which(RECORDER_COMMAND) or DEFAULT_RECORDER_PATH)
+    install_cron_entry(cron_entry_text(recorder_path, WORKSPACE_ROOT, RECORDER_LOG_PATH), SYSTEM_CRON_DIR)
 
 
 def run_activity_app(arguments: ActivityArguments, wait_for_shutdown: Callable[[], int]) -> int:
@@ -69,6 +88,7 @@ def run_activity_app(arguments: ActivityArguments, wait_for_shutdown: Callable[[
             if arguments.is_registered:
                 with log_span("Registering {} at {}", APP_NAME, arguments.app_url):
                     register_app(arguments.manifest_path, arguments.app_url)
+                install_memory_recorder()
             return wait_for_shutdown()
 
 

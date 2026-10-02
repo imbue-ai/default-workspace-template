@@ -8,7 +8,7 @@ import { buttonNamed } from "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 
 import type { ChatActionResult } from "../models/summary";
-import { item, summary } from "../testing/records";
+import { LOADING_HISTORY, item, summary } from "../testing/records";
 import { ActivityPage } from "./ActivityPage";
 
 const WALLPAPER = item({ item_id: "chat:c1", name: "Wallpaper", chat_id: "c1", rss_kib: 330 * 1024 });
@@ -30,6 +30,7 @@ describe("the stop dialog", () => {
         refreshFailure: null,
         nowMs: Date.now(),
         onAskInChat: () => true,
+        history: LOADING_HISTORY,
         onChatAction: async (chatId, action, isInterruptConfirmed) => {
           calls.push([chatId, action, isInterruptConfirmed]);
           return answers.shift() ?? { kind: "failed", message: "unexpected" };
@@ -62,6 +63,7 @@ describe("the stop dialog", () => {
         refreshFailure: { since: Date.UTC(2026, 9, 1, 12, 0), message: "The page answered 500." },
         nowMs: Date.now(),
         onAskInChat: () => true,
+        history: LOADING_HISTORY,
         onChatAction: async (): Promise<ChatActionResult> => ({ kind: "done" }),
       }),
     );
@@ -76,6 +78,7 @@ describe("the stop dialog", () => {
         refreshFailure: null,
         nowMs: Date.now(),
         onAskInChat: () => true,
+        history: LOADING_HISTORY,
         onChatAction: async (): Promise<ChatActionResult> => ({ kind: "done" }),
       }),
     );
@@ -94,6 +97,7 @@ describe("the memory bar", () => {
         nowMs: Date.now(),
         onAskInChat: () => true,
         onChatAction: async (): Promise<ChatActionResult> => ({ kind: "done" }),
+        history: LOADING_HISTORY,
       }),
     );
     const segments = Array.from(root.querySelectorAll<HTMLElement>(".activity-memory-bar > div:not(.absolute)"));

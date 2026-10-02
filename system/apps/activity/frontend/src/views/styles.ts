@@ -100,6 +100,10 @@ export const CONTRAST_PAIRS: readonly ContrastPair[] = [
   { what: "chats row bars", foreground: "accent", background: "bg", kind: "mark" },
   { what: "apps row bars", foreground: "stop-button-hover", background: "bg", kind: "mark" },
   { what: "background row bars", foreground: "text-secondary", background: "bg", kind: "mark" },
+  { what: "history line", foreground: "accent", background: "bg", kind: "mark" },
+  { what: "history closing line and closure marks", foreground: "danger-hover", background: "bg", kind: "mark" },
+  { what: "history tooltip", foreground: "text-primary", background: "surface", kind: "text" },
+  { what: "history tooltip closure", foreground: "danger-hover", background: "surface", kind: "text" },
 ];
 
 /** A quiet button that opens or closes a detail, reporting which it is to assistive tech. */

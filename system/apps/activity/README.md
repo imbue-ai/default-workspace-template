@@ -10,6 +10,8 @@ it?") in their terms first, and keeps the raw readings one click away.
   An idle chat can be stopped from here through the chat app's own stop; it starts again on its next message.
 - The process each figure is made of, with its command line and shedding priority, and which process earlyoom would
   most likely shed first.
+- Memory over time (the last hour, day or week), with the point where closing starts, a mark wherever the memory
+  guard closed something, and a plain list of what it closed in the last week and what to do about each.
 
 It runs as the `activity` supervisord program (`system/supervisord.conf.d/activity.conf`) from its own uv tool
 environment (`system/scripts/build_workspace.sh`), serving on `http://127.0.0.1:8040`:
@@ -22,6 +24,11 @@ environment (`system/scripts/build_workspace.sh`), serving on `http://127.0.0.1:
   come from `/proc`, credited to chats through the agent-pid registry (`system/services/oom_priority`), to apps and
   services through supervisord's XML-RPC socket (`getAllProcessInfo`), and to the chat titles and harnesses the chat app's `GET /api/chats`
   reports. A source that cannot be read becomes a note, never an empty list.
+- `GET /api/history?range=hour|day|week` (default `day`): the memory-over-time chart. Readings grouped into periods
+  (a minute, five minutes, half an hour), each with its average, lowest and highest, so a spike survives grouping; a
+  period with no reading is left out, so a gap in recording stays a gap. Also the closures in range and the last
+  week's, read from earlyoom's shed ledger (`oom_priority.paths.shed_ledger_path()`) and described in plain words.
+  Closures the kernel makes at the container's own limit are not recorded anywhere and so are not shown.
 - `POST /api/chats/<chat_id>/stop` and `/start`: forwarded to the chat app's own routes.
 - `GET /_static/app_contract.js`: the shell's browser-side contract module, served from this origin as every app
   serves it.
@@ -33,13 +40,23 @@ The manifest declares `stop_when_no_windows`: the app holds nothing between requ
 after its last window closes and starts it on the next request. The page polls only while its window is shown
 (`shell:shown` / `shell:hidden`).
 
+The chart's readings come from `activity-record-memory`, a cron job rather than a resident program, so recording costs
+no memory between readings: once a minute it appends one line (`<epoch seconds>\t<used KiB>\t<limit KiB>`) to
+`data/.state/activity/memory-history.tsv` and exits, dropping readings older than a week once the file passes 512 KiB.
+The app installs its entry, `/etc/cron.d/activity-memory-history`, each time it starts (at every boot, since its program
+autostarts). It is code-owned, so it has no copy in the user-editable `data/.state/cron.d/`, and it skips
+`with_agent_env.sh` because the recorder needs no agent credentials. The recorder logs to
+`/var/log/supervisor/activity-record-memory.log`. A reading is the same one the headline uses, so the chart and the
+headline agree.
+
 ## Answering a question asked from this page
 
 The memory tab's questions open short answers in place; "Ask in chat" drafts, unsent, a message into the user's chat
 that starts with the user's question followed by "I'm looking at System Monitor" and quotes what the page shows. An agent answering it:
 
 - Reads the live figures rather than the quoted ones, which may be minutes old: `curl -s localhost:8040/api/summary`
-  (memory and what uses it). A request from inside the workspace
+  (memory and what uses it) and `curl -s 'localhost:8040/api/history?range=day'` (how it has gone, and what was
+  closed). A request from inside the workspace
   carries no identity header and counts as the owner. If the app was stopped, the shell answers the first request
   with a 503 "starting" page while it wakes the app; retry after a second or two.
 - Explains in the page's terms: chats, apps, background services. "Likely closed first" is the predicted next pick of

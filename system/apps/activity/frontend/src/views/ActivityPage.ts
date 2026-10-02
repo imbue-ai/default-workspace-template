@@ -1,6 +1,7 @@
 /**
  * The memory tab, top to bottom: a plain headline over the workspace's real limit; a bar of where the memory goes
- * (chats, apps, background) with the point where closing starts; ways to free memory when it is tight; then the chats, the apps, and the background services, each opening to the processes it is made of. Stopping a chat asks
+ * (chats, apps, background) with the point where closing starts; how memory has gone over time and what was closed;
+ * ways to free memory when it is tight; then the chats, the apps, and the background services, each opening to the processes it is made of. Stopping a chat asks
  * first and says what will happen. Every figure says where it came from in its details.
  */
 
@@ -21,6 +22,8 @@ import {
   isStopSuggested,
   programStateLine,
 } from "./format";
+import { HistoryChart } from "./HistoryChart";
+import type { HistoryChartAttrs } from "./HistoryChart";
 import { chatDraftFor, questionsFor, rowLabel } from "./questions";
 import {
   CHEVRON_SIZE,
@@ -48,6 +51,7 @@ export interface ActivityPageAttrs {
   ) => Promise<ChatActionResult>;
   /** Draft ``text``, unsent, into the user's chat; false when there is no desktop to draft into. */
   readonly onAskInChat: (text: string) => boolean;
+  readonly history: HistoryChartAttrs;
 }
 
 // How long the line saying a stop or start went through stays up.
@@ -593,6 +597,7 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
               ),
           breakdown(summary),
           measuredDetails(summary),
+          m(HistoryChart, attrs.history),
           questions(summary, attrs),
           actionMessage === null
             ? null

@@ -27,6 +27,8 @@ from activity.chats import chat_app_url
 from activity.chats import fetch_chats
 from activity.chats import request_chat_action
 from activity.errors import ChatAppUnavailableError
+from activity.history import HistoryRange
+from activity.history_view import collect_history_view
 from activity.readings import ReadingSources
 from activity.readings import collect_summary_inputs
 from activity.readings import read_app_rows
@@ -45,6 +47,7 @@ BLUEPRINT_NAME: Final[str] = "activity_pages"
 API_PREFIX: Final[str] = "/api/"
 HEALTH_PATH: Final[str] = "/api/health"
 SUMMARY_PATH: Final[str] = "/api/summary"
+HISTORY_PATH_ROUTE: Final[str] = "/api/history"
 HTTP_BAD_REQUEST: Final[int] = 400
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 # The chat app's status for a chat in the middle of a turn: stopping it interrupts the turn.
@@ -73,6 +76,8 @@ def build_pages_blueprint(
     client: httpx.Client,
     read_process_info: ReadProcessInfo,
     now: Callable[[], datetime],
+    history_path: Path,
+    shed_ledger_path: Path,
 ) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
 
@@ -114,6 +119,24 @@ def build_pages_blueprint(
     def summary() -> ResponseReturnValue:
         inputs = collect_summary_inputs(sources=sources, client=client, read_process_info=read_process_info, now=now())
         response = jsonify(build_summary(inputs).model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @blueprint.get(HISTORY_PATH_ROUTE)
+    def history() -> ResponseReturnValue:
+        try:
+            history_range = HistoryRange(request.args.get("range", HistoryRange.DAY.value).upper())
+        except ValueError:
+            return jsonify({"detail": "range must be hour, day or week"}), HTTP_BAD_REQUEST
+        view = collect_history_view(
+            history_range=history_range,
+            memory_sources=sources.memory,
+            proc_dir=sources.proc_dir,
+            history_path=history_path,
+            ledger_path=shed_ledger_path,
+            now=now(),
+        )
+        response = jsonify(view.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
         return response
 

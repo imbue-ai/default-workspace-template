@@ -3,6 +3,8 @@ import "@imbue/workspace-ui/src/testing/dom";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { historyView } from "../testing/records";
+
 type FetchReply = { readonly status: number; readonly body: unknown };
 
 /** Stub ``fetch`` with replies the test releases one at a time, in whatever order it likes. */
@@ -33,6 +35,22 @@ async function settle(): Promise<void> {
 
 beforeEach(() => vi.resetModules());
 afterEach(() => vi.unstubAllGlobals());
+
+describe("the history model", () => {
+  it("drops a slow reply for a range the user has already left", async () => {
+    const fetches = stubFetch();
+    const history = await import("./history");
+    history.selectRange("HOUR");
+    history.selectRange("WEEK");
+    expect(fetches.urls).toEqual(["/api/history?range=hour", "/api/history?range=week"]);
+    fetches.reply(1, { status: 200, body: historyView({ range: "WEEK" }) });
+    await settle();
+    fetches.reply(0, { status: 200, body: historyView({ range: "HOUR" }) });
+    await settle();
+    const state = history.getHistoryState();
+    expect(state.kind === "loaded" && state.view.range).toBe("WEEK");
+  });
+});
 
 describe("the summary model", () => {
   it("stays forbidden, and stops reading, once the page answers 403", async () => {
