@@ -89,7 +89,9 @@ refusal, and logs every denial (never the token) to the service's stderr:
   telling the visitor the owner must fix the workspace's sharing settings.
   `/_auth/verify` answers the same way for a non-owner mid-session; the owner
   is never grant-checked, so they still get in.
-- A verified account with no grant is **"Not shared with you"** (403).
+- A verified account with no grant is **"Not shared with you"** (403). So is
+  one whose only grants are per-service grants on apps that are not shareable
+  (see "Grants"), since those admit it nowhere.
 
 ## When the stack cannot come up
 
