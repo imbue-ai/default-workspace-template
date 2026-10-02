@@ -46,9 +46,9 @@ unbanded status quo:
   by memory and the daemon -- the larger one -- goes first, which is the outcome we
   want. To make that deterministic rather than lucky, give the daemon a
   more-expendable band than the TUI (one more argument here).
-- ``lookup_pid_by_agent_id`` returns the first live match, so the prioritizer's
-  engagement re-tag reaches only one of the two. Fix by returning every live match
-  and re-tagging each.
+- The chat prioritizer re-tags only the first live pid ``live_pids_by_agent_id``
+  holds for the agent, so its engagement re-tag reaches only one of the two. Fix by
+  re-tagging each.
 
 Separately, and outside this file: the shed NOTICE is claude-only
 (``claude_shed_notice_hook.py`` is a claude SessionStart hook), so a shed codex

@@ -3,3 +3,5 @@ New `SPARE_AGENT` band (1000, the ceiling) for a spare chat agent: one the chat 
 The browser band now tops out at 990 (`SHARED_BROWSER`, down from 1000; the floor stays 910), so renderers still sit at the top of their band but below a spare, which holds no one's work where a renderer costs a tab.
 
 `memory_candidates.py` leaves agents labelled `chat_spare=true` out of its idle chats, since no chat list shows a spare until a chat takes it.
+
+The registry no longer has `lookup_pid_by_agent_id`: the chat app, its only caller, now reads every live pid of an agent through `live_pids_by_agent_id`.
