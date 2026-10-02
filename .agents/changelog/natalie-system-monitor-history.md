@@ -1,0 +1,1 @@
+`manage-scheduled-tasks` lists System Monitor's built-in memory recorder (`/etc/cron.d/activity-memory-history`) beside the update-apply recovery guard, as a second built-in entry that skips the env wrapper, so agents reading the schedule meet no unexplained entry.
