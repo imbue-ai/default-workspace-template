@@ -31,6 +31,7 @@ from typing import Final
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from workspace_layout.errors import ShellAnswerMalformedError
 from workspace_layout.errors import ShellOpError
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.primitives import ClientId
@@ -244,6 +245,9 @@ class AutoOpenReactor(MutableModel):
             return
         try:
             client_ids = [client.id for client in self.shell.connected_clients()]
+        except ShellAnswerMalformedError as e:
+            logger.warning("The shell's client list is not one, so {} chat(s) stay held: {}", len(pending), e)
+            return
         except ShellOpError as e:
             # The shell may be restarting; the next wake asks again.
             logger.debug("Could not list the shell's clients, so {} chat(s) stay held: {}", len(pending), e)

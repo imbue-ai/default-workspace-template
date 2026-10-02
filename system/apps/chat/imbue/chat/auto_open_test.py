@@ -114,9 +114,12 @@ def test_a_show_the_shell_did_not_carry_out_keeps_the_chat_pending_and_the_next_
     assert reactor.ledger.is_delivered(ChatId("chat-1"))
 
 
-def test_a_client_list_the_shell_could_not_give_keeps_the_chat_held_without_ending_the_flush() -> None:
+def test_a_client_list_the_shell_could_not_give_keeps_the_chat_held_without_ending_the_flush(
+    loguru_records: list[str],
+) -> None:
     """The flush thread's own catch does not cover a failed listing, so it must be answered here: an escape would
-    end the thread and silently stop surfacing every window."""
+    end the thread and silently stop surfacing every window. A listing that is not one is a contract mismatch, not a
+    restarting shell, so it is a warning."""
     shell = FakeShell(
         clients=[connected_client("c1")], listing_error=ShellAnswerMalformedError("the shell answered []")
     )
@@ -126,6 +129,7 @@ def test_a_client_list_the_shell_could_not_give_keeps_the_chat_held_without_endi
     reactor.flush()
     assert shell.shows == []
     assert reactor.pending_chat_ids() == {ChatId("chat-1")}
+    assert any(record.startswith("WARNING ") and "the shell answered []" in record for record in loguru_records)
 
     shell.listing_error = None
     reactor.flush()
