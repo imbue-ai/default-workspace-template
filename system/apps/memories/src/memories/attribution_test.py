@@ -365,3 +365,27 @@ def test_lines_containing_reads_an_empty_file_as_no_lines(tmp_path: Path) -> Non
     empty.write_bytes(b"")
 
     assert lines_containing(empty, (b"data/memories",), 64) == []
+
+
+def test_a_transcript_time_without_an_offset_counts_as_unknown_and_does_not_break_ordering(tmp_path: Path) -> None:
+    def write(at: str) -> str:
+        return json.dumps(
+            {
+                "timestamp": at,
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "Write",
+                            "input": {"file_path": str(tmp_path / "memories" / "a.md")},
+                        }
+                    ]
+                },
+            }
+        )
+
+    naive = note_tool_uses(write("2026-10-01T10:00:00"), "s1", tmp_path / "memories")
+    aware = note_tool_uses(write("2026-10-01T10:00:00Z"), "s1", tmp_path / "memories")
+
+    assert naive[0].at is None
+    assert aware[0].at is not None

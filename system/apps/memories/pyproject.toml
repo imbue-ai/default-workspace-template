@@ -1,7 +1,7 @@
 [project]
 name = "memories"
 version = "0.1.0"
-description = "The memories app: what the workspace's Claude chats have written down about the user and their work, with who wrote each note and a way to correct or delete it"
+description = "The memories app: what the workspace's Claude and pi chats have written down about the user and their work, with who wrote each note and a way to correct or delete it"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

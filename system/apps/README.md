@@ -25,12 +25,13 @@ Built-in apps:
   first desktop for the first client that connects, and remembers having done
   so under `data/.state/getting-started/`. Served on port 8030 by the
   `getting-started` package.
-- `memories/` - Agent Memory: the notes Claude's built-in memory keeps in
+- `memories/` - Agent Memory: the notes Claude and pi chats share in
   `data/memories/`, grouped by what they are about, with which chat wrote each
-  one, the file as it is on disk, and Edit and Delete (Delete is permanent, and
-  the page says the workspace backups still hold a copy until they expire). It
-  reads everything on request and holds nothing, so it declares
-  `stop_when_no_windows`. Served on port 8050 by the `memories` package.
+  one, the file as it is on disk, Edit and Delete (Delete is permanent, and the
+  page says what still holds a copy), and settings that pause memory or turn it
+  off for Claude or pi chats. It reads everything on request and holds nothing,
+  so it declares `stop_when_no_windows`. Served on port 8050 by the `memories`
+  package.
 - `terminal/` - The terminal (ttyd over the web), including its named
   persistent sessions; a Python package with two entry points: `terminal-app`
   serves the wrapper pages (each frames one session's ttyd page) over the

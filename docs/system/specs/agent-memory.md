@@ -137,7 +137,7 @@ Claude keeps its native auto memory. Two hooks in `.claude/settings.json` close 
   - **How "new" is decided:** the hook reads the chat's transcript to find when the chat started and which notes it wrote itself. Those are skipped, with a 5 second tolerance for stamping. It keeps a small mark per chat in the agent's state directory (`$MNGR_AGENT_STATE_DIR/memory-hook-<session>.json`) and announces only what is newer than that mark.
   - **No repeats:** each change is announced once, because the chat keeps what an earlier message's hook added.
   - **Without a readable transcript**, it still announces the deletes and edits. A repeated notice costs less than a missed delete.
-- **PostToolUse on `Write|Edit|MultiEdit|Bash` runs `--sync-index`**, but only when the tool input mentions `data/memories`. A shell `case` filters before Python starts, so other tool calls cost about 1 ms. The measured cost of a Python start in the container is about 7 ms.
+- **PostToolUse on `Write|Edit|MultiEdit|Bash` runs `--sync-index`**, but only when the hook's input (the tool call and its result) mentions `data/memories`. A shell `case` filters before Python starts, so other tool calls cost about 1 ms. The measured cost of a Python start in the container is about 7 ms.
 
 ### 4.5 The index line follows the note
 
@@ -149,11 +149,12 @@ So every new chat started from the wrong fact.
 
 `sync_index` makes this an invariant held in code. Each note's line is `- [Title](file.md) — <its description>`:
 - a stale line is rewritten, a missing line is appended, and later duplicate lines for the same note are dropped;
-- everything else is kept: headings, prose, and lines for files that no longer exist (the app flags those);
+- a line for a note file that is gone is dropped, so a deleted fact never stays in what chats start from;
+- everything else is kept: headings, prose, and links to anything that is not a note in the folder;
 - a note with no description, or a block-scalar description, keeps its line;
 - the write is atomic, keeps the file's mode, and happens only when something changed.
 
-**Concurrency:** a chat appending between the read and the rename loses its line, and the next sync restores it, since lines are rebuilt from the notes.
+**Concurrency:** the sync reads the notes and the index and rewrites the index under an advisory `flock` on `data/memories/.MEMORY.md.lock`, which the app takes for its own index rewrites, so a delete in the app and a sync never write over each other (without it, a racing sync could write a deleted note's line back). A chat that edits `MEMORY.md` with its own file tools doesn't take the lock; if its line is lost to a concurrent rewrite, the next sync rebuilds it from the note.
 
 The app's own edit already wrote the description into the line, so the app and the sync agree. The protocol now asks pi for a description that reads well as that line, instead of asking it to maintain the line.
 
@@ -161,7 +162,7 @@ The app's own edit already wrote the description into the line, so the app and t
 
 An open chat still has a deleted note in its conversation. Before this change it wrote the note back the next time it saved.
 
-- **The record.** Every delete or edit made in the app appends one line to `data/.apps/memories/user-changes.jsonl`, holding the file name, `DELETED` or `EDITED`, and the time. It never holds content, so a delete still erases what the note said.
+- **The record.** Every delete or edit made in the app appends one line to `data/.apps/memories/user-changes.jsonl`, holding the file name, `DELETED` or `EDITED`, and the time. It never holds the note's text, though a file name such as `user-location.md` often summarises the fact.
 - **Retention.** Lines older than 30 days are dropped on the next write (`changes.py`).
 - **The notice.** The script turns the latest change per note into a notice. A delete says don't save that content again; an edit says read the note again before changing it. pi gets it in its memory section, and Claude through its hook.
 - **Strength.** This is an instruction, not a lock.
@@ -211,12 +212,14 @@ The app is a Flask backend on port 8050 with a Mithril frontend, built with the 
 **Writes** (`notes.py`):
 - **Versions.** A note's version is `mtime_ns-size`, taken before its text is read, so a chat writing between the two can only make a save fail.
 - **Conflicts.** A stale version gets a 409. The editor then shows the chat's version beside the draft and replaces it only on "Replace with my version".
-- **Atomic writes.** Writes go through a uniquely named temporary file and a rename.
-- **Delete is permanent.** It removes the note's file and its `MEMORY.md` line. The confirmation says what still holds the note: backups for this workspace's actual retention, read through `host_backup.config`; the conversations of open chats, which are told; and the transcript of the chat that wrote it.
+- **Atomic writes.** Writes go through a uniquely named temporary file and a rename, keeping the file's permissions.
+- **Order of a write.** The note is changed first, then the change is recorded (so open chats are told even if a later step fails), then its index line is updated under the index lock. An index failure is logged, not returned: the note change already happened, and the next sync, before any chat's next message, repairs the line.
+- **Any visible Markdown file is a note**, whatever a chat named it (spaces, accents, a leading underscore); names with a path, hidden files and `MEMORY.md`/`README.md` are refused. Block-scalar descriptions read as none, and a repeated key reads as its first value, the one an edit rewrites.
+- **Delete is permanent.** It removes the note's file and its `MEMORY.md` line. The confirmation says what still holds the note: backups for this workspace's actual retention, read through `host_backup.config`; open chats' conversations (they are told); and the transcripts of chats that read it.
 
 **Write guard** (`request_guard.py`): a write must be JSON, which a browser won't send cross-origin without a CORS preflight that is never approved, and must carry `Sec-Fetch-Site: same-origin`. A request with no `Sec-Fetch-Site` (curl, an agent's script) comes from inside the workspace and is allowed. Comparing Origin with Host fails behind the forwarding proxy.
 
-**Page** (`frontend/src/views/MemoriesPage.ts`, wording in `format.ts`):
+**Page** (`frontend/src/views/MemoriesPage.ts`; the computed wording, such as chips and counts, is in `format.ts`):
 - **Top.** One sentence and three facts: which chats use the notes, not shared with other workspaces, and how long backups keep deleted notes.
 - **"How memory works"** opens what gets saved, what chats use (including the load limit and how much of the user's index is loaded), where notes go (stored here and in backups, read by Claude and pi chats, sent to the chat's AI provider, not synced to GitHub) and the technical details.
 - **"Settings"** opens the switches.
@@ -241,7 +244,9 @@ The app is a Flask backend on port 8050 with a Mithril frontend, built with the 
 - Notes stay in the workspace's home directory and its backups. `data/` is gitignored, so they are never pushed to GitHub.
 - A chat sends the index with every request to its model provider, plus a note's text when it opens one. The page says so.
 
-**What is recorded about the user's actions:** the change record and the settings hold no note content.
+**What is recorded about the user's actions:** the settings hold no note content. The change record holds a deleted or edited note's file name for 30 days, which often summarises the fact.
+
+**What a delete leaves behind:** the transcripts of chats that read the note keep its text, and those of pi chats and of Claude chats told about it by the hook keep its summary line. Backups keep everything until they expire. The page says so in the delete dialog.
 
 **Rules for chats** (instruction-level):
 - never save secrets;
@@ -257,7 +262,7 @@ The app is a Flask backend on port 8050 with a Mithril frontend, built with the 
 - **An open Claude chat started while memory was off** picks memory back up only after a restart, because Claude Code reads its switch at chat start.
 - **pi chats started before the extension was deployed** don't load it until they restart. The same applies to any later change to `memory.ts`.
 - **Backups keep deleted notes** until their retention expires (24 months by default).
-- **Concurrent writers to `MEMORY.md`** can drop a line briefly; the next sync restores it. A shell command that writes notes without naming `data/memories` (for example `cd data/memories && ...` from another directory) is synced only at the next message.
+- **A chat editing `MEMORY.md` directly** doesn't take the index lock, so its line can be lost to a concurrent rewrite; the next sync restores it from the note. A shell command that writes notes without naming `data/memories` (for example `cd data/memories && ...` from another directory) is synced only at the next message.
 - **Unverified:** after Claude Code compacts a long conversation, the hook's earlier notices (for example a deletion) may not survive the summary.
 - **Transcript reading grows with history.** Measured on macOS (warm cache; not gVisor, where file-heavy work is several times slower):
   - **The page** reads every Claude and pi transcript on each load (when the window opens or regains focus). The live workspace has 11 transcripts, about 5MB, and a page request takes 10 to 25ms. A synthetic heavy history of 200 chats (350MB) takes 0.12s to scan, down from 0.21s before searching bytes instead of decoding every line (0.2s cold). About 0.075s of that is the byte search itself, which any approach that re-reads every transcript must pay, so a further cut needs the cache in section 10. The cost scales with total transcript bytes, not with the number of notes, and nothing runs while the app is closed.
@@ -273,10 +278,10 @@ The app is a Flask backend on port 8050 with a Mithril frontend, built with the 
 
 | Suite | Count | Covers |
 |---|---|---|
-| App, `cd system/apps/memories && uv run pytest` | 136 | Note parsing and rendering round-trips (quoting, missing frontmatter, unknown keys); version checks and refusals; atomic writes; delete and index maintenance; the index's load limit, including exactly 25KB and one byte over; attribution over fake Claude and pi transcript trees, and the byte-level transcript reader (lines split across chunks, a last line without a newline, bad UTF-8, empty files); backup retention; the write guard's header matrix; the switches and the Claude settings merge (other keys kept, a non-object file refused); routes end to end through Flask; the app's ratchets. |
-| Memory script, `system/scripts/agent_memory_context_test.py` | 46 | Rendering, truncation and stamping (CRLF, inline metadata, block scalars); the change notice; the Claude hook (notes since start, own writes skipped, once per chat, separate marks per session, no state dir, no transcript, off and back on); index sync (the Virginia case, adds, duplicates, untouched when in sync, permissions); the switches, including unreadable files as off; the PostToolUse command run exactly as `settings.json` has it; runs under `python3 -I` with a fake HOME. |
-| pi extension, `.pi/extensions/pi_extensions_test.py -k memory` | 10 | `memory.ts` executed under node: the two sections, stable between messages, the forced-prompt path, stamping, a shell command on the notes syncing the index, the off notice, and failing open with a log. |
-| Frontend, `npm test --workspace=apps/memories/frontend` | 31 | The delete confirmation and its backups wording, the conflict editor, collapsed cards and "Show more", index warnings, the condensed top section, the settings switches and what they save, and the wording helpers. |
+| App, `cd system/apps/memories && uv run pytest` | 157 | Note parsing and rendering round-trips (quoting, missing frontmatter, unknown keys); version checks and refusals; atomic writes; delete and index maintenance; the index's load limit, including exactly 25KB and one byte over; attribution over fake Claude and pi transcript trees, and the byte-level transcript reader (lines split across chunks, a last line without a newline, bad UTF-8, empty files); backup retention; the write guard's header matrix; the switches and the Claude settings merge (other keys kept, a non-object file refused), with the same settings table the script uses; odd note names, block scalars, repeated keys, kept permissions, the index lock; a delete recorded even when the index can't be rewritten; routes end to end through Flask; the app's ratchets. |
+| Memory script, `system/scripts/agent_memory_context_test.py` | 61 | Rendering, truncation and stamping (CRLF, inline metadata, block scalars); the change notice; the Claude hook (notes since start, own writes skipped, once per chat, separate marks per session, no state dir, no transcript, off and back on); index sync (the Virginia case, adds, duplicates, gone notes dropped, untouched when in sync, permissions, CRLF on disk, waiting on the app's lock); every delete announced however many, and a count of notes past the list; a delete notice dropped once the note is saved again; the switches, by the same table as the app, including unreadable files as off; the PostToolUse command run exactly as `settings.json` has it; runs under `python3 -I` with a fake HOME. |
+| pi extension, `.pi/extensions/pi_extensions_test.py -k memory` | 13 | `memory.ts` executed under node: the two sections, stable between messages, the forced-prompt path, stamping after `write` and `edit` through `~/`, relative and symlinked paths (and not outside the folder), a shell command on the notes syncing the index, the off notice, failing open with a log, including when `python3` is missing. |
+| Frontend, `npm test --workspace=apps/memories/frontend` | 45 | The delete confirmation and what it says stays behind, the conflict editor, one edit at a time, a draft kept when a chat deletes its note, Save only after a change, collapsed cards and "Show more", index warnings, the condensed top section, the settings switches, their accessible names and what they save, buttons disabled while saving, and the requests: conflict and error messages, a refresh after each write, out-of-order refreshes ignored. |
 | update-self | +1 | Every bundle's sources count as a frontend change, so the app's bundle is rebuilt on update. |
 
 The changelog gate (`system/scripts/check_changelog_entries.py`) and `uv run app-manifest select-tests --diff-base <base>` were run per branch. Locally on macOS, the full root suite's only failures were environmental (browser tests without a Playwright browser, `os.waitid`, no `tmux`, long socket paths), and none touch this work.
@@ -334,7 +339,7 @@ In rough priority order:
 | Path | What |
 |---|---|
 | `system/apps/memories/src/memories/` | Backend: `notes.py` (format, index, writes), `attribution.py`, `backups.py`, `changes.py`, `controls.py`, `request_guard.py`, `pages.py` (routes), `main.py`, `config.py` |
-| `system/apps/memories/frontend/src/` | Page: `views/MemoriesPage.ts`, `views/format.ts` (all wording), `models/notes.ts` (data and requests) |
+| `system/apps/memories/frontend/src/` | Page: `views/MemoriesPage.ts`, `views/format.ts` (computed wording), `models/notes.ts` (data and requests) |
 | `system/scripts/agent_memory_context.py` | What every chat is told; stamping; index sync; the switches |
 | `.pi/extensions/memory.ts` | pi wiring |
 | `.claude/settings.json` | Claude's UserPromptSubmit and PostToolUse hooks |

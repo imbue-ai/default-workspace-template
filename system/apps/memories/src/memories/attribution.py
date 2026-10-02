@@ -53,7 +53,7 @@ TRANSCRIPT_CHUNK_BYTES: Final[int] = 4 * 1024 * 1024
 class NoteToolUse(FrozenModel):
     """One tool call a session made on a note."""
 
-    session_id: str = Field(description="The Claude session that made it")
+    session_id: str = Field(description="The session that made it: a Claude session id, or ``pi:<agent id>``")
     file_name: str = Field(description="The note's file name")
     is_write: bool = Field(description="A write or edit, as opposed to a read")
     at: datetime | None = Field(description="When, from the transcript line's timestamp")
@@ -106,7 +106,6 @@ def default_transcript_sources(notes_dir: Path) -> TranscriptSources:
 
 
 @pure
-@pure
 def matching_lines(block: bytes, markers: Sequence[bytes]) -> list[str]:
     """The lines of ``block`` that contain any of ``markers``, in order, each once, decoded as UTF-8."""
     spans: set[tuple[int, int]] = set()
@@ -124,19 +123,21 @@ def matching_lines(block: bytes, markers: Sequence[bytes]) -> list[str]:
 def lines_containing(path: Path, markers: Sequence[bytes], chunk_bytes: int) -> list[str]:
     """The lines of the file at ``path`` that contain any of ``markers``.
 
-    Almost no transcript line names the notes folder, and decoding every line to text was most of the cost of a
-    page load, so the search runs over bytes and only matching lines are decoded. A line split across two chunks is
-    carried into the next one.
+    Almost no transcript line names the notes folder, and decoding every line to text costs far more than searching
+    bytes, so only matching lines are decoded. The file is read a chunk at a time; a line longer than a chunk (a
+    transcript can hold multi-MB lines, such as images) is collected in pieces and joined once, when it ends.
     """
     lines: list[str] = []
-    carry = b""
+    pieces: list[bytes] = []
     with path.open("rb") as handle:
         while chunk := handle.read(chunk_bytes):
-            block = carry + chunk
-            cut = block.rfind(b"\n") + 1
-            lines.extend(matching_lines(block[:cut], markers))
-            carry = block[cut:]
-    lines.extend(matching_lines(carry, markers))
+            cut = chunk.rfind(b"\n") + 1
+            if cut == 0:
+                pieces.append(chunk)
+                continue
+            lines.extend(matching_lines(b"".join([*pieces, chunk[:cut]]), markers))
+            pieces = [chunk[cut:]]
+    lines.extend(matching_lines(b"".join(pieces), markers))
     return lines
 
 
@@ -263,9 +264,11 @@ def _parse_timestamp(timestamp: object) -> datetime | None:
     if not isinstance(timestamp, str):
         return None
     try:
-        return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     except ValueError:
         return None
+    # A time with no offset can't be ordered against the others, so it counts as unknown.
+    return parsed if parsed.tzinfo is not None else None
 
 
 @pure

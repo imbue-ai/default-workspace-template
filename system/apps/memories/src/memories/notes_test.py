@@ -1,6 +1,7 @@
 """Tests for the notes: parsing Claude's note format, correcting a note and its index line, listing, and deleting a
 note so that its file and its index line both go while a note a chat changed meanwhile is kept."""
 
+import fcntl
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -14,21 +15,25 @@ from memories.errors import NoteWriteError
 from memories.notes import INDEX_FILENAME
 from memories.notes import INDEX_LOADED_MAX_BYTES
 from memories.notes import INDEX_LOADED_MAX_LINES
+from memories.notes import INDEX_LOCK_FILENAME
 from memories.notes import IndexEntry
 from memories.notes import NoteType
 from memories.notes import delete_note
 from memories.notes import file_version
+from memories.notes import index_lock
 from memories.notes import list_notes
 from memories.notes import loaded_line_count
 from memories.notes import parse_index
 from memories.notes import parse_note
 from memories.notes import read_index
-from memories.notes import read_note
+from memories.notes import relist_in_index
 from memories.notes import render_note
 from memories.notes import rewrite_index_hook
 from memories.notes import split_index_lines
 from memories.notes import summarize_index
+from memories.notes import unlist_from_index
 from memories.notes import update_note
+from memories.notes import validate_note_name
 from memories.notes import write_atomically
 
 _NOTE = """---
@@ -57,11 +62,17 @@ def test_delete_erases_the_note_and_its_index_line_and_keeps_the_others(tmp_path
     notes_dir = _notes_dir(tmp_path)
 
     delete_note(notes_dir, "units.md", file_version(notes_dir / "units.md"))
+    unlist_from_index(notes_dir, "units.md")
 
     assert not (notes_dir / "units.md").exists()
     assert (notes_dir / "role.md").is_file()
     assert (notes_dir / INDEX_FILENAME).read_text() == "- [Role](role.md) — Is a designer\n"
-    assert sorted(path.name for path in tmp_path.rglob("*")) == ["MEMORY.md", "memories", "role.md"]
+    assert sorted(path.name for path in tmp_path.rglob("*")) == [
+        INDEX_LOCK_FILENAME,
+        "MEMORY.md",
+        "memories",
+        "role.md",
+    ]
 
 
 def test_delete_works_when_the_note_has_no_index_line_or_there_is_no_index(tmp_path: Path) -> None:
@@ -69,6 +80,7 @@ def test_delete_works_when_the_note_has_no_index_line_or_there_is_no_index(tmp_p
     (notes_dir / INDEX_FILENAME).unlink()
 
     delete_note(notes_dir, "units.md", file_version(notes_dir / "units.md"))
+    unlist_from_index(notes_dir, "units.md")
 
     assert not (notes_dir / "units.md").exists()
     assert not (notes_dir / INDEX_FILENAME).exists()
@@ -172,6 +184,8 @@ def test_update_note_rewrites_the_note_and_its_index_line_and_returns_the_new_ve
     notes_dir = _notes_dir(tmp_path)
 
     note = update_note(notes_dir, "units.md", "Prefers metric", "Kilometres.", file_version(notes_dir / "units.md"))
+    assert "- [Units](units.md) — Prefers metric\n" not in read_index(notes_dir)
+    relist_in_index(notes_dir, note)
 
     assert note.description == "Prefers metric"
     assert note.body == "Kilometres.\n"
@@ -300,7 +314,9 @@ def test_editing_a_note_missing_from_the_index_adds_its_line_back(tmp_path: Path
     notes_dir = _notes_dir(tmp_path)
     (notes_dir / INDEX_FILENAME).write_text("- [Role](role.md) — Is a designer")
 
-    update_note(notes_dir, "units.md", "Prefers metric", "Km.", file_version(notes_dir / "units.md"))
+    relist_in_index(
+        notes_dir, update_note(notes_dir, "units.md", "Prefers metric", "Km.", file_version(notes_dir / "units.md"))
+    )
 
     assert read_index(notes_dir) == (
         "- [Role](role.md) — Is a designer\n- [Units preference](units.md) — Prefers metric\n"
@@ -311,7 +327,9 @@ def test_editing_a_note_creates_the_index_when_there_is_none(tmp_path: Path) -> 
     notes_dir = _notes_dir(tmp_path)
     (notes_dir / INDEX_FILENAME).unlink()
 
-    update_note(notes_dir, "units.md", "Prefers metric", "Km.", file_version(notes_dir / "units.md"))
+    relist_in_index(
+        notes_dir, update_note(notes_dir, "units.md", "Prefers metric", "Km.", file_version(notes_dir / "units.md"))
+    )
 
     assert read_index(notes_dir) == "- [Units preference](units.md) — Prefers metric\n"
 
@@ -342,11 +360,68 @@ def test_single_quoted_and_double_quoted_values_are_read_as_yaml_writes_them() -
     assert parsed.description == 'say "hi"'
 
 
-def test_a_note_s_version_is_read_before_its_text(tmp_path: Path) -> None:
-    """A chat writing between the two reads must make the version older than the text, so a save is refused."""
+def test_any_visible_markdown_file_is_a_note_and_is_not_called_missing(tmp_path: Path) -> None:
     notes_dir = _notes_dir(tmp_path)
-    version_before = file_version(notes_dir / "units.md")
+    for name in ("my note.md", "_draft.md", "café.md"):
+        (notes_dir / name).write_text("---\ndescription: odd name\n---\nx\n")
+    (notes_dir / ".hidden.md").write_text("---\ndescription: hidden\n---\nx\n")
+    index = read_index(notes_dir) + "- [Odd](my note.md) — odd name\n"
 
-    note = read_note(notes_dir / "units.md")
+    listed = {note.file_name for note in list_notes(notes_dir).notes}
 
-    assert note.version == version_before
+    assert listed == {"units.md", "role.md", "my note.md", "_draft.md", "café.md"}
+    assert summarize_index(index, listed).missing_files == ()
+
+
+@pytest.mark.parametrize(
+    "file_name", ["../outside.md", "a/b.md", ".hidden.md", "MEMORY.md", "README.md", ".md", "x.txt"]
+)
+def test_names_that_are_not_a_visible_markdown_file_in_the_folder_are_refused(file_name: str) -> None:
+    with pytest.raises(NoteNameError):
+        validate_note_name(file_name)
+
+
+def test_a_block_scalar_summary_reads_as_none_and_an_edit_replaces_all_its_lines() -> None:
+    text = "---\nname: units\ndescription: >\n  spans\n  lines\nmetadata:\n  type: feedback\n---\nbody\n"
+
+    parsed = parse_note(text)
+    rendered = render_note(parsed, "Prefers metric", "body")
+
+    assert parsed.description is None
+    assert parsed.note_type == NoteType.FEEDBACK
+    assert rendered == ('---\nname: units\ndescription: "Prefers metric"\nmetadata:\n  type: feedback\n---\n\nbody\n')
+
+
+def test_a_repeated_key_reads_as_its_first_value_the_one_an_edit_rewrites() -> None:
+    parsed = parse_note("---\ndescription: first\ndescription: second\n---\nx\n")
+
+    assert parsed.description == "first"
+    assert parse_note(render_note(parsed, "edited", "x")).description == "edited"
+
+
+def test_rewriting_a_file_keeps_its_permissions(tmp_path: Path) -> None:
+    path = tmp_path / "MEMORY.md"
+    path.write_text("old")
+    path.chmod(0o600)
+
+    write_atomically(path, "new")
+
+    assert (path.read_text(), path.stat().st_mode & 0o777) == ("new", 0o600)
+
+
+def test_an_index_with_a_bad_byte_still_reads_and_rewrites(tmp_path: Path) -> None:
+    notes_dir = _notes_dir(tmp_path)
+    (notes_dir / INDEX_FILENAME).write_bytes(b"# Memory \xff\n- [Units](units.md) \xe2\x80\x94 Prefers metric units\n")
+
+    unlist_from_index(notes_dir, "units.md")
+
+    assert read_index(notes_dir) == "# Memory �\n"
+
+
+def test_the_index_lock_is_exclusive_on_the_file_the_chats_lock_too(tmp_path: Path) -> None:
+    notes_dir = _notes_dir(tmp_path)
+
+    with index_lock(notes_dir):
+        with (notes_dir / ".MEMORY.md.lock").open("a") as other:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

@@ -74,12 +74,35 @@ def test_a_claude_settings_file_that_is_not_a_json_object_refuses_the_save(
     assert claude_path.read_text() == claude_settings
 
 
+# The same table is in system/scripts/agent_memory_context_test.py: the page and the chats must read a settings file
+# the same way, or the page would say memory is off while chats use it.
 @pytest.mark.parametrize(
-    "text", ["{", '{"is_paused": "maybe"}', '{"disabled_harnesses": ["CODEX"]}', '{"is_paused": false, "x": 1}']
+    ("text", "expected"),
+    [
+        ('{"is_paused": false, "disabled_harnesses": [], "added_later": 1}', MemoryControls()),
+        (
+            '{"is_paused": false, "disabled_harnesses": ["CODEX", "PI_CODING", 3]}',
+            MemoryControls(disabled_harnesses=(MemoryHarness.PI_CODING,)),
+        ),
+        ('{"is_paused": true}', MemoryControls(is_paused=True)),
+        ("{}", MemoryControls()),
+    ],
 )
-def test_settings_that_are_not_valid_raise_rather_than_reading_as_on(tmp_path: Path, text: str) -> None:
+def test_settings_ignore_keys_and_harnesses_this_version_does_not_know(
+    tmp_path: Path, text: str, expected: MemoryControls
+) -> None:
     controls_path = tmp_path / "settings.json"
     controls_path.write_text(text)
+
+    assert read_controls(controls_path) == expected
+
+
+@pytest.mark.parametrize(
+    "text", [b"{", b"[]", b'{"is_paused": "true"}', b'{"is_paused": 1}', b'{"disabled_harnesses": "CLAUDE"}', b"\xff"]
+)
+def test_settings_that_cannot_be_read_raise_rather_than_reading_as_on(tmp_path: Path, text: bytes) -> None:
+    controls_path = tmp_path / "settings.json"
+    controls_path.write_bytes(text)
 
     with pytest.raises(ControlsReadError):
         read_controls(controls_path)

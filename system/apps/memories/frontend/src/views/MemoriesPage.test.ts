@@ -123,7 +123,9 @@ describe("deleting a note", () => {
     expect(text).toContain('"Is a product designer"');
     expect(text).toContain("This can't be undone.");
     expect(text).toContain("A copy stays in your workspace's backups until they expire, up to 24 months from now.");
-    expect(text).toContain("They're told you deleted it and asked not to save it again");
+    expect(text).toContain(
+      "Chats that are open now, and the transcripts of chats that read it, still have it. Open chats are told you deleted it and asked not to save it again.",
+    );
     expect(deleted).toEqual([]);
   });
 
@@ -155,7 +157,7 @@ describe("deleting a note", () => {
   });
 
   it("shows the reason when the delete is refused", async () => {
-    const refusal = "A chat changed this note while you had it open. Its latest version is shown now.";
+    const refusal = "A chat changed this note while you had it open, so nothing was changed.";
     const { root } = render(BACKED_UP, refusal);
 
     click(root, "Delete");
@@ -258,6 +260,18 @@ describe("explaining what is remembered, used and shared", () => {
       "Each chat's AI provider (Anthropic, for Claude chats): the list of summaries with every chat, and a note's full text when a chat opens it.",
     );
   });
+
+  it("says in the technical details what a delete leaves behind, and that the change record keeps no text", () => {
+    const { root } = render();
+    click(root, "How memory works");
+    click(root, "Technical details");
+
+    expect(root.textContent).toContain(
+      "Deleting a note erases its file and its line in /home/user/workspace/data/memories/MEMORY.md. Chat transcripts that read or listed the note still hold its text or summary.",
+    );
+    expect(root.textContent).toContain("(the note's file name, what was done and when; never its text)");
+    expect(root.textContent).toContain("(the first 200 lines, or 25KB, whichever is less)");
+  });
 });
 
 describe("states of the list chats load", () => {
@@ -329,8 +343,12 @@ describe("memory settings", () => {
       "pi chats follow these from their next message. New Claude chats follow them right away",
     );
     expect(root.querySelector(".memories-settings")?.textContent).toContain(
-      "A chat still knows what you told it earlier in the same conversation.",
+      "Claude chats started while memory was off pick it back up only once restarted.",
     );
+    const hint = root.querySelector(`#${switchNamed(root, "memory-switch-all").getAttribute("aria-describedby")}`);
+    expect(hint?.textContent).toContain("A chat still knows what you told it earlier in the same conversation.");
+    expect(root.querySelector('label[for="memory-switch-all"]')?.textContent).toBe("Use memory");
+    expect(switchNamed(root, "memory-switch-claude").hasAttribute("aria-describedby")).toBe(false);
 
     switchNamed(root, "memory-switch-pi_coding").click();
     await settle();
@@ -358,13 +376,18 @@ describe("memory settings", () => {
     expect(switchNamed(paused, "memory-switch-claude").disabled).toBe(true);
   });
 
-  it("says when the settings can't be read, and that chats treat that as off", () => {
-    const { root } = render(BACKED_UP, null, withControls(null));
+  it("says when the settings can't be read, that chats treat that as off, and replaces them when turned on", async () => {
+    const { root, savedControls } = render(BACKED_UP, null, withControls(null));
 
     expect(root.querySelector(".memories-sharing")?.textContent).toBe("Memory off: settings unreadable");
     click(root, "Settings");
     expect(root.textContent).toContain("The memory settings couldn't be read, so chats treat memory as off.");
     expect(switchNamed(root, "memory-switch-all").getAttribute("aria-checked")).toBe("false");
+
+    switchNamed(root, "memory-switch-all").click();
+    await settle();
+
+    expect(savedControls).toEqual([{ is_paused: false, disabled_harnesses: [] }]);
   });
 });
 
@@ -376,7 +399,7 @@ interface SaveCall {
 }
 
 describe("editing a note", () => {
-  function renderEditable(saveAnswer: string | null = null): {
+  function renderEditable(answer: () => Promise<string | null> = async () => null): {
     root: HTMLElement;
     saves: SaveCall[];
     document: { current: NotesDocument };
@@ -388,7 +411,7 @@ describe("editing a note", () => {
         state: { kind: "loaded", document: document.current },
         onSave: async (fileName: string, description: string, body: string, version: string) => {
           saves.push({ fileName, description, body, version });
-          return saveAnswer;
+          return answer();
         },
         onDelete: async () => null,
         onSaveControls: async () => null,
@@ -451,7 +474,7 @@ describe("editing a note", () => {
 
   it("keeps the draft when the save is refused", async () => {
     const refusal = "A chat changed this note while you had it open, so nothing was changed.";
-    const { root } = renderEditable(refusal);
+    const { root } = renderEditable(async () => refusal);
 
     click(root, "Edit");
     typeSummary(root, "Is a senior product designer");
@@ -462,5 +485,91 @@ describe("editing a note", () => {
     expect(root.querySelector<HTMLInputElement>("input[id^='edit-description-']")?.value).toBe(
       "Is a senior product designer",
     );
+  });
+
+  it("opens the editor with the summary focused, and saves only once something changed", () => {
+    const { root } = renderEditable();
+
+    click(root, "Edit");
+    const input = root.querySelector<HTMLInputElement>("input[id^='edit-description-']");
+    expect(globalThis.document.activeElement).toBe(input);
+    expect(buttonLabelled(root, "Save").disabled).toBe(true);
+
+    typeSummary(root, "Is a senior product designer");
+    expect(buttonLabelled(root, "Save").disabled).toBe(false);
+    typeSummary(root, "Is a product designer");
+    expect(buttonLabelled(root, "Save").disabled).toBe(true);
+    typeSummary(root, " ");
+    expect(buttonLabelled(root, "Save").disabled).toBe(true);
+  });
+
+  it("offers to replace a chat's change even when the draft is unchanged", () => {
+    const { root, document } = renderEditable();
+
+    click(root, "Edit");
+    chatChangedRole(document);
+
+    expect(buttonLabelled(root, "Replace with my version").disabled).toBe(false);
+  });
+
+  it("lets only one note be edited at a time", () => {
+    const { root } = renderEditable();
+
+    click(root, "Edit");
+
+    expect(buttonLabelled(root, "Edit").disabled).toBe(true);
+    click(root, "Cancel");
+    expect(
+      Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+        .filter((button) => button.textContent?.trim() === "Edit")
+        .map((button) => button.disabled),
+    ).toEqual([false, false]);
+  });
+
+  it("keeps the unsaved text on screen when a chat deletes the note being edited, until dismissed", () => {
+    const { root, document } = renderEditable();
+
+    click(root, "Edit");
+    typeSummary(root, "Is a senior product designer");
+    document.current = {
+      ...document.current,
+      notes: document.current.notes.filter((current) => current.file_name !== "role.md"),
+    };
+    m.redraw.sync();
+
+    const panel = root.querySelector<HTMLElement>(".memories-orphaned-draft");
+    expect(panel?.textContent).toBe(
+      "A chat deleted the note you were editing. Your unsaved text is below; copy anything you want to keep.Is a senior product designerSome detail.Dismiss",
+    );
+    expect(root.querySelector("input[id^='edit-description-']")).toBeNull();
+    expect(root.querySelector(".memories-group")?.previousElementSibling).toBe(panel);
+    expect(buttonLabelled(root, "Edit").disabled).toBe(true);
+
+    click(root, "Dismiss");
+
+    expect(root.querySelector(".memories-orphaned-draft")).toBeNull();
+    expect(buttonLabelled(root, "Edit").disabled).toBe(false);
+  });
+
+  it("disables every action while a save is in flight, and announces the outcome", async () => {
+    let finish: (answer: string | null) => void = () => undefined;
+    const { root } = renderEditable(() => new Promise((resolve) => (finish = resolve)));
+    const status = (): HTMLElement | null => root.querySelector<HTMLElement>('[role="status"]');
+    const actions = (): boolean[] =>
+      Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+        .filter((button) => ["Save", "Cancel", "Edit", "Delete"].includes(button.textContent?.trim() ?? ""))
+        .map((button) => button.disabled);
+
+    expect(status()?.textContent).toBe("");
+    click(root, "Edit");
+    typeSummary(root, "Is a senior product designer");
+    click(root, "Save");
+
+    expect(actions()).toEqual([true, true, true, true]);
+    finish(null);
+    await settle();
+
+    expect(actions()).toEqual([false, false, false, false]);
+    expect(status()?.textContent).toBe("Saved. New chats will use this version.");
   });
 });

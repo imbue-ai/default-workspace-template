@@ -37,7 +37,7 @@ class MemoriesArguments(FrozenModel):
     manifest_path: Path = Field(description="The app.toml to register")
     app_url: AppUrl = Field(description="Where the page is served")
     static_directory: Path = Field(description="The frontend's built bundle")
-    notes_dir: Path = Field(description="The Claude memory notes folder")
+    notes_dir: Path = Field(description="The shared memory notes folder")
     backup_config_path: Path = Field(description="The backups' retention settings")
     restic_env_path: Path = Field(description="The backups' credentials, whose presence says backups are set up")
     changes_path: Path = Field(description="The record of notes the user deleted or edited, which chats read")

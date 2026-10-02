@@ -69,12 +69,14 @@ function savedBy(source: string | null, chatTitle: string | null = null): Note {
 
 describe("who saved a note", () => {
   it("names the Claude chat from its transcript, and other harnesses by name", () => {
-    expect(writerLine(savedBy("claude", "Plan the launch"))).toBe('Written by "Plan the launch" · not read since');
+    expect(writerLine(savedBy("claude", "Plan the launch"))).toBe(
+      'Written by "Plan the launch" · not opened by another chat yet',
+    );
     expect(writerLine(savedBy(null))).toBe("Who wrote this isn't recorded");
     expect(writerLine(savedBy("pi-coding"))).toBe("Saved by a pi chat");
     expect(writerLine(savedBy("codex"))).toBe("Saved by a Codex chat");
     expect(writerLine(savedBy("something-new"))).toBe("Saved by a something-new chat");
-    expect(writerLine(savedBy("pi-coding", "pi-test"))).toBe('Written by "pi-test" · not read since');
+    expect(writerLine(savedBy("pi-coding", "pi-test"))).toBe('Written by "pi-test" · not opened by another chat yet');
   });
 });
 
@@ -148,7 +150,7 @@ describe("who wrote a note", () => {
       'Written by "Plan the launch" · read by 2 chats',
     );
     expect(attributionLine({ authors: [author("NOT_A_CHAT")], reader_count: 0 })).toBe(
-      "Written by a chat that has since been deleted, or a background task · not read since",
+      "Written by a chat that has since been deleted, or a background task · not opened by another chat yet",
     );
     expect(attributionLine({ authors: [author("UNKNOWN"), author("CHAT", "Other")], reader_count: 1 })).toBe(
       "Written by a chat whose name couldn't be read and 1 other chat · read by 1 chat",

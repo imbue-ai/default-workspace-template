@@ -1,6 +1,6 @@
 """The app's routes on its own origin: the page, the health probe, the notes, correcting and deleting a note, the
-memory switches, and the contract module. Everything is read when asked; the app keeps nothing between requests but the record of the
-user's changes (``changes``), which chats read."""
+memory switches, and the contract module. Everything is read when asked; between requests the app keeps only files
+chats read: the record of the user's changes (``changes``) and the switches (``controls``)."""
 
 import threading
 from collections.abc import Callable
@@ -48,7 +48,9 @@ from memories.notes import delete_note
 from memories.notes import list_notes
 from memories.notes import parse_index
 from memories.notes import read_index
+from memories.notes import relist_in_index
 from memories.notes import summarize_index
+from memories.notes import unlist_from_index
 from memories.notes import update_note
 from memories.request_guard import is_write_allowed
 
@@ -242,6 +244,11 @@ def build_pages_blueprint(
             except MemoriesError as e:
                 return _error_response(e)
             unrecorded = record_or_explain(file_name, NoteChangeKind.EDITED)
+            try:
+                relist_in_index(notes_dir, note)
+            except MemoriesError as e:
+                # The next index sync, run before any chat's next message, writes the line from the note.
+                logger.opt(exception=e).error("Could not update the index line for {}", file_name)
         if unrecorded is not None:
             return unrecorded
         return jsonify(note.model_dump(mode="json"))
@@ -257,6 +264,11 @@ def build_pages_blueprint(
             except MemoriesError as e:
                 return _error_response(e)
             unrecorded = record_or_explain(file_name, NoteChangeKind.DELETED)
+            try:
+                unlist_from_index(notes_dir, file_name)
+            except MemoriesError as e:
+                # The next index sync, run before any chat's next message, drops lines for notes that are gone.
+                logger.opt(exception=e).error("Could not remove {} from the index", file_name)
         if unrecorded is not None:
             return unrecorded
         return jsonify({"file_name": file_name})

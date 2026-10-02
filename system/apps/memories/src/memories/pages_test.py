@@ -373,3 +373,27 @@ def test_unreadable_switches_are_named_on_the_page_and_a_broken_claude_file_refu
     assert any(message.startswith("The memory settings could not be read") for message in body["messages"])
     assert refused.status_code == 409
     assert "is not a JSON object" in refused.get_json()["detail"]
+
+
+def test_a_delete_is_recorded_even_when_the_index_cannot_be_rewritten(tmp_path: Path) -> None:
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        notes_dir = tmp_path / "memories"
+        version = client.get("/api/notes").get_json()["notes"][0]["version"]
+        (notes_dir / INDEX_FILENAME).unlink()
+        (notes_dir / INDEX_FILENAME).mkdir()
+        response = client.delete("/api/notes/units.md", json={"version": version})
+
+    assert response.status_code == 200
+    assert not (notes_dir / "units.md").exists()
+    assert [change.file_name for change in _changes(tmp_path)] == ["units.md"]
+
+
+def test_the_page_still_loads_when_the_index_has_a_bad_byte(tmp_path: Path) -> None:
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        (tmp_path / "memories" / INDEX_FILENAME).write_bytes(b"- [Units](units.md) \xff\n")
+        response = client.get("/api/notes")
+
+    assert response.status_code == 200
+    assert response.get_json()["notes"][0]["index_entry"] == {"is_loaded": True}

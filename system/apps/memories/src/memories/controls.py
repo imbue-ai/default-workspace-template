@@ -15,7 +15,7 @@ from typing import Final
 
 from pydantic import ConfigDict
 from pydantic import Field
-from pydantic import ValidationError
+from pydantic import StrictBool
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -35,11 +35,11 @@ class MemoryHarness(UpperCaseStrEnum):
 
 
 class MemoryControls(FrozenModel):
-    """The switches as saved: a missing file reads as the defaults, memory on for every chat."""
+    """The switches: what the page sends (strictly), and what a settings file reads as (see ``parse_controls``)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    is_paused: bool = Field(default=False, description="Whether memory is off for every chat")
+    is_paused: StrictBool = Field(default=False, description="Whether memory is off for every chat")
     disabled_harnesses: tuple[MemoryHarness, ...] = Field(
         default=(), description="The kinds of chat memory is off for while it is not paused"
     )
@@ -50,17 +50,38 @@ def is_memory_on_for(controls: MemoryControls, harness: MemoryHarness) -> bool:
     return not controls.is_paused and harness not in controls.disabled_harnesses
 
 
+def parse_controls(text: str) -> MemoryControls:
+    """A settings file's switches, read by the rule ``agent_memory_context.py`` applies before every chat message.
+
+    Keys and harness names this version does not know are ignored, so an older or newer writer never makes the page
+    and the chats disagree. A file that is not JSON, or whose ``is_paused`` is not a boolean or whose
+    ``disabled_harnesses`` is not a list, cannot be read; chats treat that as memory off.
+    """
+    try:
+        parsed = json.loads(text)
+    except ValueError as e:
+        raise ControlsReadError(f"the memory settings are not valid JSON: {e}") from e
+    if not isinstance(parsed, dict):
+        raise ControlsReadError("the memory settings are not a JSON object")
+    is_paused = parsed.get("is_paused", False)
+    disabled = parsed.get("disabled_harnesses", [])
+    if not isinstance(is_paused, bool) or not isinstance(disabled, list):
+        raise ControlsReadError("the memory settings' is_paused must be true or false, and disabled_harnesses a list")
+    known = {harness.value for harness in MemoryHarness}
+    return MemoryControls(
+        is_paused=is_paused,
+        disabled_harnesses=tuple(MemoryHarness(name) for name in disabled if isinstance(name, str) and name in known),
+    )
+
+
 def read_controls(controls_path: Path) -> MemoryControls:
     try:
         text = controls_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return MemoryControls()
-    except OSError as e:
+    except (OSError, ValueError) as e:
         raise ControlsReadError(f"could not read {controls_path}: {e}") from e
-    try:
-        return MemoryControls.model_validate_json(text)
-    except ValidationError as e:
-        raise ControlsReadError(f"{controls_path} is not valid memory settings: {e.errors()[0]['msg']}") from e
+    return parse_controls(text)
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -68,8 +89,8 @@ def _read_json_object(path: Path) -> dict[str, Any]:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
-    except OSError as e:
-        raise ControlsReadError(f"could not read {path}: {e}") from e
+    except (OSError, ValueError) as e:
+        raise ControlsReadError(f"could not read {path}, so Claude's memory switch was not changed: {e}") from e
     try:
         parsed = json.loads(text)
     except ValueError as e:
@@ -89,7 +110,8 @@ def with_claude_auto_memory(settings: dict[str, Any], is_on: bool) -> dict[str, 
 def save_controls(controls: MemoryControls, controls_path: Path, claude_settings_path: Path) -> None:
     """Save the switches, then point new Claude chats at them. The caller serializes calls.
 
-    Claude's settings file is read first, so one that cannot be changed refuses the save before anything is written.
+    Claude's settings file is read first, so one that cannot be read refuses the save before anything is written. A
+    failure writing it after the switches are saved is raised; the switches stay saved.
     """
     claude_settings = _read_json_object(claude_settings_path)
     updated = with_claude_auto_memory(claude_settings, is_memory_on_for(controls, MemoryHarness.CLAUDE))

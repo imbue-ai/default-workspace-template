@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -28,6 +30,8 @@ latest_changes = memory_context.latest_changes
 render_changes_notice = memory_context.render_changes_notice
 claude_hook_output = memory_context.claude_hook_output
 HookMark = memory_context.HookMark
+HOOK_MARK_SLACK = memory_context.HOOK_MARK_SLACK
+SAVED_SINCE_MAX_NOTES = memory_context.SAVED_SINCE_MAX_NOTES
 read_hook_mark = memory_context.read_hook_mark
 write_hook_mark = memory_context.write_hook_mark
 memory_off_reason = memory_context.memory_off_reason
@@ -40,10 +44,16 @@ _NOW = datetime(2026, 10, 1, 18, 7, 56, tzinfo=timezone.utc)
 
 
 def _notes_dir(tmp_path: Path, index: str | None) -> Path:
+    """A notes folder holding ``index``, and a note for each line in it whose description is that line's summary, so
+    the index sync every run makes leaves the index as written."""
     notes_dir = tmp_path / "memories"
     notes_dir.mkdir()
     if index is not None:
         (notes_dir / "MEMORY.md").write_text(index)
+        for file_name, summary in re.findall(r"\]\(([^)/]+\.md)\) — (.*)", index):
+            (notes_dir / file_name).write_text(
+                f"---\nname: {file_name[:-3]}\ndescription: {summary}\n---\n\nx\n"
+            )
     return notes_dir
 
 
@@ -178,6 +188,9 @@ def test_the_script_runs_under_a_plain_python3_with_the_home_folders_notes(
     notes_dir = tmp_path / "workspace" / "data" / "memories"
     notes_dir.mkdir(parents=True)
     (notes_dir / "MEMORY.md").write_text("- [Role](role.md) — Is a designer\n")
+    (notes_dir / "role.md").write_text(
+        "---\nname: role\ndescription: Is a designer\n---\nx\n"
+    )
 
     result = subprocess.run(
         [sys.executable, "-I", str(_SCRIPT), "--harness", "pi-coding"],
@@ -286,9 +299,9 @@ def _change(file_name: str, change: str, at: datetime) -> str:
     )
 
 
-def test_each_notes_latest_change_is_kept_oldest_first_and_stale_or_broken_lines_skipped() -> (
-    None
-):
+def test_each_notes_latest_change_is_kept_oldest_first_and_stale_or_broken_lines_skipped(
+    tmp_path: Path,
+) -> None:
     text = (
         _change("units.md", "EDITED", _NOW - timedelta(hours=2))
         + _change("profile.md", "DELETED", _NOW - timedelta(hours=1))
@@ -300,7 +313,7 @@ def test_each_notes_latest_change_is_kept_oldest_first_and_stale_or_broken_lines
         + '{"file_name": "naive.md", "change": "DELETED", "at": "2026-10-01T22:00:00"}\n'
     )
 
-    assert latest_changes(text, _NOW) == [
+    assert latest_changes(text, _NOW, tmp_path) == [
         ("profile.md", "deleted", _NOW - timedelta(hours=1)),
         ("units.md", "deleted", _NOW),
     ]
@@ -475,7 +488,7 @@ def test_the_claude_hook_announces_only_what_is_newer_than_its_last_run_for_the_
         "## Notes saved since this chat started"
     )
     assert read_hook_mark(state_dir, "session") == HookMark(
-        checked_at=_NOW, is_memory_off=False
+        checked_at=_NOW - HOOK_MARK_SLACK, is_memory_off=False
     )
 
 
@@ -567,7 +580,7 @@ def test_the_claude_hook_runs_from_stdin_under_a_plain_python3(tmp_path: Path) -
     notes_dir = tmp_path / "workspace" / "data" / "memories"
     notes_dir.mkdir(parents=True)
     now = datetime.now(timezone.utc)
-    _note(notes_dir, "job.md", "software engineer", now)
+    _note(notes_dir, "job.md", "software engineer", now - timedelta(minutes=1))
 
     hook_input = _hook_input(tmp_path, [_user(now - timedelta(minutes=10))])
     env = {"HOME": str(tmp_path), "MNGR_AGENT_STATE_DIR": str(tmp_path / "state")}
@@ -659,7 +672,7 @@ def test_sync_sets_a_stale_line_to_what_the_note_now_says(tmp_path: Path) -> Non
     assert (notes_dir / "MEMORY.md").stat().st_mode & 0o777 == 0o640
 
 
-def test_sync_adds_missing_lines_drops_repeats_and_keeps_everything_else(
+def test_sync_adds_missing_lines_drops_repeats_and_gone_notes_and_keeps_everything_else(
     tmp_path: Path,
 ) -> None:
     notes_dir = _notes_dir(
@@ -667,9 +680,11 @@ def test_sync_adds_missing_lines_drops_repeats_and_keeps_everything_else(
         "# Memory\n\nSome prose.\n"
         "- [Units](units.md) — metric\n"
         "- [Gone](gone.md) — a note whose file is gone\n"
+        "- [Guide](docs/guide.md) — not a note in this folder\n"
         "- [Folded](folded.md) — kept as written\n"
         "* [Units again](units.md) - repeated\n",
     )
+    (notes_dir / "gone.md").unlink()
     (notes_dir / "units.md").write_text(
         "---\nname: units\ndescription: Prefers metric units\n---\nx\n"
     )
@@ -687,7 +702,7 @@ def test_sync_adds_missing_lines_drops_repeats_and_keeps_everything_else(
     assert (notes_dir / "MEMORY.md").read_text() == (
         "# Memory\n\nSome prose.\n"
         "- [Units](units.md) — Prefers metric units\n"
-        "- [Gone](gone.md) — a note whose file is gone\n"
+        "- [Guide](docs/guide.md) — not a note in this folder\n"
         "- [Folded](folded.md) — kept as written\n"
         "- [Work style](work_style.md) — Likes it's short\n"
     )
@@ -934,3 +949,158 @@ def test_claudes_hook_says_memory_is_off_on_every_message_then_once_that_it_is_b
     assert back_on.startswith("## Workspace memory is on again")
     assert "- `job.md` — saved while it was off" in back_on
     assert after == ""
+
+
+def test_a_deleted_notes_line_does_not_come_back_once_its_file_is_gone(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _notes_dir(
+        tmp_path,
+        "- [User location](user-location.md) — lives in Virginia\n"
+        "- [Job](job.md) — software engineer\n",
+    )
+    (notes_dir / "user-location.md").unlink()
+
+    sync_index(notes_dir)
+    sync_index(notes_dir)
+
+    assert (
+        notes_dir / "MEMORY.md"
+    ).read_text() == "- [Job](job.md) — software engineer\n"
+
+
+def test_sync_keeps_crlf_line_endings_in_the_file_on_disk(tmp_path: Path) -> None:
+    notes_dir = _notes_dir(tmp_path, None)
+    (notes_dir / "MEMORY.md").write_bytes(
+        b"# Memory\r\n- [Units](units.md) \xe2\x80\x94 metric\r\n"
+    )
+    (notes_dir / "units.md").write_text(
+        "---\nname: units\ndescription: Prefers metric\n---\nx\n"
+    )
+
+    sync_index(notes_dir)
+
+    assert (notes_dir / "MEMORY.md").read_bytes() == (
+        "# Memory\r\n- [Units](units.md) — Prefers metric\r\n".encode()
+    )
+
+
+def test_stamping_keeps_crlf_line_endings_in_the_file_on_disk(tmp_path: Path) -> None:
+    notes_dir = _notes_dir(tmp_path, None)
+    note = notes_dir / "job.md"
+    note.write_bytes(b"---\r\nname: job\r\nmetadata:\r\n  type: user\r\n---\r\nx\r\n")
+
+    assert stamp_note(note, notes_dir, "pi-coding", _NOW) is True
+    assert b"  modified: 2026-10-01T18:07:56Z\r\n" in note.read_bytes()
+    assert b"\n" not in note.read_bytes().replace(b"\r\n", b"")
+
+
+def test_sync_waits_for_the_index_lock_the_app_takes(tmp_path: Path) -> None:
+    notes_dir = _notes_dir(tmp_path, "- [Job](job.md) — software engineer\n")
+    (notes_dir / "job.md").write_text("---\nname: job\ndescription: Engineer\n---\nx\n")
+    with (notes_dir / ".MEMORY.md.lock").open("a") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+        sync = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                str(_SCRIPT),
+                "--sync-index",
+                "--notes-dir",
+                str(notes_dir),
+            ]
+        )
+        with pytest.raises(subprocess.TimeoutExpired):
+            sync.wait(timeout=1)
+        assert "software engineer" in (notes_dir / "MEMORY.md").read_text()
+    assert sync.wait(timeout=30) == 0
+    assert (notes_dir / "MEMORY.md").read_text() == "- [Job](job.md) — Engineer\n"
+
+
+def test_the_claude_hook_tells_a_chat_about_every_delete_and_counts_notes_beyond_its_list(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _notes_dir(tmp_path, None)
+    started = _NOW - timedelta(hours=1)
+    changes = tmp_path / "user-changes.jsonl"
+    changes.write_text(
+        "".join(
+            _change(f"n{idx:02}.md", "DELETED", started + timedelta(minutes=idx + 1))
+            for idx in range(25)
+        )
+    )
+    for idx in range(SAVED_SINCE_MAX_NOTES + 3):
+        _note(
+            notes_dir,
+            f"s{idx:02}.md",
+            f"saved {idx}",
+            started + timedelta(seconds=idx + 1),
+        )
+
+    out = claude_hook_output(
+        _hook_input(tmp_path, [_user(started)]),
+        notes_dir,
+        changes,
+        tmp_path / "state",
+        None,
+        _NOW,
+    )
+
+    assert all(f"`n{idx:02}.md` was deleted" in out for idx in range(25))
+    assert out.count("— saved ") == SAVED_SINCE_MAX_NOTES
+    assert f"- and 3 more; read `{notes_dir / 'MEMORY.md'}` for the full list" in out
+
+
+def test_a_delete_is_no_longer_announced_once_the_note_is_saved_again(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _notes_dir(tmp_path, None)
+    text = _change("job.md", "DELETED", _NOW - timedelta(hours=1)) + _change(
+        "home.md", "DELETED", _NOW - timedelta(hours=1)
+    )
+    _note(notes_dir, "job.md", "saved again", _NOW - timedelta(minutes=5))
+    _note(notes_dir, "home.md", "older copy", _NOW - timedelta(hours=2))
+
+    assert [name for name, _, _ in latest_changes(text, _NOW, notes_dir)] == ["home.md"]
+
+
+def test_settings_with_a_bad_encoding_count_as_memory_off(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_bytes(b"\xff\xfe")
+
+    assert (
+        memory_off_reason(settings, "claude") == "the memory settings could not be read"
+    )
+
+
+# The same table is in system/apps/memories/src/memories/controls_test.py: the page and the chats must read a
+# settings file the same way, or the page would say memory is off while chats use it.
+@pytest.mark.parametrize(
+    ("text", "claude_off", "pi_off"),
+    [
+        (
+            '{"is_paused": false, "disabled_harnesses": [], "added_later": 1}',
+            False,
+            False,
+        ),
+        (
+            '{"is_paused": false, "disabled_harnesses": ["CODEX", "PI_CODING", 3]}',
+            False,
+            True,
+        ),
+        ('{"is_paused": true}', True, True),
+        ("{}", False, False),
+        ('{"is_paused": "true"}', True, True),
+        ('{"is_paused": 1}', True, True),
+        ('{"disabled_harnesses": "CLAUDE"}', True, True),
+        ("[]", True, True),
+    ],
+)
+def test_settings_are_read_by_the_rule_the_app_reads_them_by(
+    tmp_path: Path, text: str, claude_off: bool, pi_off: bool
+) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text(text)
+
+    assert (memory_off_reason(settings, "claude") is not None) is claude_off
+    assert (memory_off_reason(settings, "pi-coding") is not None) is pi_off

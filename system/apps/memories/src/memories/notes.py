@@ -1,23 +1,27 @@
-"""The Claude memory notes: reading them, correcting one, and deleting one.
+"""The memory notes Claude and pi chats share: reading them, correcting one, and deleting one.
 
-Claude's built-in memory keeps one Markdown file per note in the notes folder (``autoMemoryDirectory``,
-``data/memories/``), each with a small frontmatter block (``name``, ``description``, ``metadata.type``), plus
-``MEMORY.md``, an index of one ``- [Title](file.md) — summary`` line per note that every chat loads when it starts.
-So every change here keeps the index in step: a corrected summary is written into the note's index line, and a
-deleted note's line leaves with it.
+The notes folder (``data/memories/``, Claude's ``autoMemoryDirectory``) holds one Markdown file per note, each with a
+small frontmatter block (``name``, ``description``, ``metadata.type``), plus ``MEMORY.md``, an index of one
+``- [Title](file.md) — summary`` line per note that every chat starts from. So every change here keeps the index in
+step: a corrected summary is written into the note's index line, and a deleted note's line leaves with it.
 
-A delete erases the note: nothing in the workspace keeps a copy to restore. Snapshots the backups took before the
-delete still hold it until they expire (see ``backups``), which the page tells the user before they delete.
+A delete erases the note's file; there is no copy here to restore. Backups taken before the delete, and the
+conversations of chats that read it, still hold it (the page says so before the user deletes).
 
 Every write checks the note is still the version the page read (its mtime and size), since a chat may write to
-it at any time, and goes through a temporary file and a rename so a chat never reads a half-written note.
+it at any time, and goes through a temporary file and a rename so a chat never reads a half-written note. The
+index is rewritten under ``index_lock``, which ``system/scripts/agent_memory_context.py`` takes too, so the app and a
+chat's index sync never write over each other.
 """
 
+import fcntl
 import json
 import os
 import re
 import uuid
+from collections.abc import Iterator
 from collections.abc import Set as AbstractSet
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
 from enum import auto
@@ -37,7 +41,9 @@ from memories.errors import NoteWriteError
 
 INDEX_FILENAME: Final[str] = "MEMORY.md"
 NON_NOTE_FILENAMES: Final[frozenset[str]] = frozenset({INDEX_FILENAME, "README.md"})
-NOTE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
+NOTE_SUFFIX: Final[str] = ".md"
+# Held while MEMORY.md is read and rewritten; agent_memory_context.py takes the same lock file.
+INDEX_LOCK_FILENAME: Final[str] = ".MEMORY.md.lock"
 _FRONTMATTER_FENCE: Final[str] = "---"
 _INDEX_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^(\s*[-*]\s+\[(?P<title>[^\]]*)\]\((?P<file>[^)]+)\))(?P<hook>.*)$"
@@ -127,6 +133,15 @@ def _unquote(value: str) -> str:
 
 
 @pure
+def _scalar_text(value: str) -> str:
+    """A frontmatter value as one line of text; a block scalar (``|`` or ``>``) spans the lines below, which this
+    line-based reader does not follow, so it reads as empty and the note falls back to its file name."""
+    if value.strip()[:1] in ("|", ">"):
+        return ""
+    return _unquote(value)
+
+
+@pure
 def parse_note(text: str) -> ParsedNote:
     """Split a note into frontmatter fields and body; a file with no frontmatter is all body."""
     lines = text.split("\n")
@@ -150,10 +165,12 @@ def parse_note(text: str) -> ParsedNote:
         if not separator:
             continue
         if line[0] in " \t" and current_block is not None:
-            nested.setdefault(current_block, {})[key.strip()] = _unquote(value)
+            nested.setdefault(current_block, {}).setdefault(key.strip(), _scalar_text(value))
+            continue
+        if line[0] in " \t":
             continue
         current_block = key.strip() if not value.strip() else None
-        top_level[key.strip()] = _unquote(value)
+        top_level.setdefault(key.strip(), _scalar_text(value))
     metadata = nested.get("metadata", {})
     type_text = metadata.get("type") or top_level.get("type") or ""
     try:
@@ -184,7 +201,10 @@ def render_note(parsed: ParsedNote, description: str, body: str) -> str:
         None,
     )
     if description_idx is not None:
-        frontmatter[description_idx] = description_line
+        continuation_end = description_idx + 1
+        while continuation_end < len(frontmatter) and frontmatter[continuation_end][:1] in (" ", "\t"):
+            continuation_end += 1
+        frontmatter[description_idx:continuation_end] = [description_line]
     else:
         name_idx = next((idx for idx, line in enumerate(frontmatter) if line.startswith("name:")), -1)
         frontmatter.insert(name_idx + 1, description_line)
@@ -269,8 +289,22 @@ def summarize_index(index_text: str, note_file_names: AbstractSet[str]) -> Index
     )
 
 
+@pure
+def is_note_file_name(file_name: str) -> bool:
+    """Whether a name is a note's: any visible Markdown file directly in the folder, as chats may name it."""
+    return (
+        file_name.endswith(NOTE_SUFFIX)
+        and file_name != NOTE_SUFFIX
+        and not file_name.startswith(".")
+        and "/" not in file_name
+        and "\\" not in file_name
+        and "\x00" not in file_name
+        and file_name not in NON_NOTE_FILENAMES
+    )
+
+
 def validate_note_name(file_name: str) -> None:
-    if not NOTE_NAME_PATTERN.match(file_name) or file_name in NON_NOTE_FILENAMES:
+    if not is_note_file_name(file_name):
         raise NoteNameError(f"{file_name!r} is not a note file name")
 
 
@@ -283,7 +317,7 @@ def file_version(path: Path) -> str:
 
 
 def write_atomically(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` through a sibling temporary file and a rename.
+    """Write ``text`` to ``path`` through a sibling temporary file and a rename, keeping the file's permissions.
 
     The temporary name is unique per write: the server answers requests on several threads, and two writes of the
     index at once must not share one.
@@ -291,6 +325,8 @@ def write_atomically(path: Path, text: str) -> None:
     temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         temporary_path.write_text(text, encoding="utf-8")
+        if path.exists():
+            os.chmod(temporary_path, path.stat().st_mode)
         os.replace(temporary_path, path)
     except OSError as e:
         temporary_path.unlink(missing_ok=True)
@@ -323,7 +359,7 @@ def list_notes(notes_dir: Path) -> NoteListing:
     notes: list[Note] = []
     unreadable: list[str] = []
     for path in sorted(notes_dir.iterdir()):
-        if not path.is_file() or path.name in NON_NOTE_FILENAMES or not NOTE_NAME_PATTERN.match(path.name):
+        if not path.is_file() or not is_note_file_name(path.name):
             continue
         try:
             notes.append(read_note(path))
@@ -338,9 +374,28 @@ def list_notes(notes_dir: Path) -> NoteListing:
 
 def read_index(notes_dir: Path) -> str:
     try:
-        return (notes_dir / INDEX_FILENAME).read_text(encoding="utf-8")
+        return (notes_dir / INDEX_FILENAME).read_text(encoding="utf-8", errors="replace")
     except FileNotFoundError:
         return ""
+
+
+def _read_index_to_rewrite(notes_dir: Path) -> str:
+    try:
+        return read_index(notes_dir)
+    except OSError as e:
+        raise NoteWriteError(f"could not read {notes_dir / INDEX_FILENAME}: {e}") from e
+
+
+@contextmanager
+def index_lock(notes_dir: Path) -> Iterator[None]:
+    """Hold the index's lock (an advisory ``flock``) while reading and rewriting ``MEMORY.md``."""
+    try:
+        handle = (notes_dir / INDEX_LOCK_FILENAME).open("a")
+    except OSError as e:
+        raise NoteWriteError(f"could not lock {notes_dir / INDEX_FILENAME}: {e}") from e
+    with handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
 
 
 def _note_path_checked(notes_dir: Path, file_name: str, version: str) -> Path:
@@ -354,25 +409,37 @@ def _note_path_checked(notes_dir: Path, file_name: str, version: str) -> Path:
 
 
 def update_note(notes_dir: Path, file_name: str, description: str, body: str, version: str) -> Note:
-    """Rewrite a note's summary and body, and its index line to match (adding the line when the index lacks it)."""
+    """Rewrite a note's summary and body. Its index line is the caller's next step (``relist_in_index``), once the
+    change is recorded."""
     path = _note_path_checked(notes_dir, file_name, version)
     parsed = parse_note(path.read_text(encoding="utf-8", errors="replace"))
     write_atomically(path, render_note(parsed, description, body))
-    index_text = read_index(notes_dir)
-    write_atomically(
-        notes_dir / INDEX_FILENAME,
-        rewrite_index_hook(index_text, file_name, index_title(parsed.name, file_name), description),
-    )
     return read_note(path)
 
 
+def relist_in_index(notes_dir: Path, note: Note) -> None:
+    """Write a note's summary into its index line, adding the line when the index lacks it."""
+    with index_lock(notes_dir):
+        index_text = _read_index_to_rewrite(notes_dir)
+        write_atomically(
+            notes_dir / INDEX_FILENAME,
+            rewrite_index_hook(index_text, note.file_name, index_title(note.name, note.file_name), note.description),
+        )
+
+
 def delete_note(notes_dir: Path, file_name: str, version: str) -> None:
-    """Erase a note's file and drop its lines from the index, so no chat loads or finds it again."""
+    """Erase a note's file. Dropping its index lines is the caller's next step (``unlist_from_index``), once the
+    delete is recorded."""
     path = _note_path_checked(notes_dir, file_name, version)
     try:
         path.unlink()
     except OSError as e:
         raise NoteWriteError(f"could not delete {path}: {e}") from e
-    kept_index, removed_lines = split_index_lines(read_index(notes_dir), file_name)
-    if removed_lines:
-        write_atomically(notes_dir / INDEX_FILENAME, kept_index)
+
+
+def unlist_from_index(notes_dir: Path, file_name: str) -> None:
+    """Drop a note's lines from the index, so no chat starts from it again."""
+    with index_lock(notes_dir):
+        kept_index, removed_lines = split_index_lines(_read_index_to_rewrite(notes_dir), file_name)
+        if removed_lines:
+            write_atomically(notes_dir / INDEX_FILENAME, kept_index)
