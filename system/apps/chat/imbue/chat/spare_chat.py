@@ -14,8 +14,9 @@ A chat minted to await its first send (the one an empty chat list opens on, or a
 reserves a spare that fits, and is minted under that spare's id and name instead of fresh ones.
 The spare stays hidden and leaves the pool, which is topped up. The chat's first send takes it
 as a new chat would when the send's account and fast mode fit it; otherwise the spare is destroyed
-and the chat created under the id once the spare is gone. A discarded chat returns its spare to
-the pool.
+and the chat created under the id once the spare is gone. The session sweep destroys a reserved
+spare whose process died or that aged out, and the first send then creates the chat under the id
+too. A discarded chat returns its spare to the pool.
 
 A spare is created with the label ``chat_spare=true``, which is what every reader goes by: the
 chat listings (a secondary chat's included) hide an agent so labelled, the launch wrapper starts
@@ -50,15 +51,17 @@ class SpareChatPhase(UpperCaseStrEnum):
     # Its harness accepts input; waiting for a new chat to take it.
     READY = auto()
     # Given to a chat awaiting its first send, whose id and name it carries: out of the pool, and
-    # taken by that send, booted or not (``ready_at`` says which).
+    # taken by that send, booted or not (``ready_at`` says which). The session sweep destroys a
+    # booted one whose process died or that aged out.
     RESERVED = auto()
     # Taken by a new chat while still being created: it becomes that chat once its harness is up.
     CLAIMED = auto()
     # Reserved while still being created for a chat whose first send came on other terms: destroyed
     # as soon as its create ends, so that chat's own create can take the id.
     RELEASED = auto()
-    # No longer wanted (its terms went stale, its process died, its create failed, or an earlier
-    # run of the app left it); its ``mngr destroy`` is due or running.
+    # No longer wanted (its terms went stale, it aged out, its process died, its create failed, the
+    # chat it was reserved for launched on other terms, or an earlier run of the app left it); its
+    # ``mngr destroy`` is due or running.
     DISCARDING = auto()
 
 
