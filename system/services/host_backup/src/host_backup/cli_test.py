@@ -25,9 +25,7 @@ from host_backup.config import BACKUP_TOML_PATH
 from host_backup.events import (
     EVENTS_LOG_ROTATION_BYTES,
     BackupEventType,
-    make_event,
     rotate_events_log_if_over,
-    write_event,
 )
 from host_backup.testing import write_tick
 
@@ -236,8 +234,13 @@ def _write_aged_tick(
 ) -> None:
     # The nanosecond, Z-suffixed form `now_iso` stamps on every real event.
     timestamp = (datetime.now(timezone.utc) - age).strftime("%Y-%m-%dT%H:%M:%S.%f000Z")
-    for kind in (BackupEventType.BACKUP_STARTED, event_type):
-        write_event(events_dir, make_event(kind, tick_id=tick_id, timestamp=timestamp))
+    write_tick(
+        events_dir,
+        BackupEventType.BACKUP_STARTED,
+        event_type,
+        tick_id=tick_id,
+        timestamp=timestamp,
+    )
 
 
 @pytest.mark.parametrize(
