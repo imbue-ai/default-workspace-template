@@ -234,12 +234,10 @@ def test_the_inflight_wait_follows_a_tick_that_started_after_the_one_it_waited_f
 def _write_aged_tick(
     events_dir: Path, event_type: BackupEventType, tick_id: str, age: timedelta
 ) -> None:
-    at = datetime.now(timezone.utc) - age
+    # The nanosecond, Z-suffixed form `now_iso` stamps on every real event.
+    timestamp = (datetime.now(timezone.utc) - age).strftime("%Y-%m-%dT%H:%M:%S.%f000Z")
     for kind in (BackupEventType.BACKUP_STARTED, event_type):
-        write_event(
-            events_dir,
-            make_event(kind, tick_id=tick_id, timestamp=at.isoformat()),
-        )
+        write_event(events_dir, make_event(kind, tick_id=tick_id, timestamp=timestamp))
 
 
 @pytest.mark.parametrize(
