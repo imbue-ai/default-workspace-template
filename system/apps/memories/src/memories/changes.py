@@ -18,6 +18,7 @@ from enum import auto
 from pathlib import Path
 from typing import Final
 
+from loguru import logger
 from pydantic import Field
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
@@ -44,15 +45,17 @@ class NoteChange(FrozenModel):
     at: datetime = Field(description="When, in UTC")
 
 
-@pure
 def parse_changes(text: str) -> list[NoteChange]:
-    """The record's entries, skipping any line that is not one (a torn write, a hand edit)."""
+    """The record's entries, skipping (with a warning) any line that is not one: a torn write, a hand edit."""
     changes: list[NoteChange] = []
+    skipped = 0
     for line in text.splitlines():
         try:
             changes.append(NoteChange.model_validate(json.loads(line)))
         except ValueError:
-            continue
+            skipped += 1
+    if skipped:
+        logger.warning("Skipped {} unreadable line(s) in the record of the user's note changes", skipped)
     return changes
 
 
@@ -63,7 +66,7 @@ def render_changes(changes: Sequence[NoteChange]) -> str:
 
 def read_changes(log_path: Path) -> list[NoteChange]:
     try:
-        return parse_changes(log_path.read_text(encoding="utf-8"))
+        return parse_changes(log_path.read_text(encoding="utf-8", errors="replace"))
     except FileNotFoundError:
         return []
 

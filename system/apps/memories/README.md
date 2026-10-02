@@ -30,7 +30,7 @@ like things done, what you're working on, where things are), with:
   through `host_backup.config`), open chats until they restart, and the transcript of the chat that wrote it. The
   "Who can see these notes" panel states the backups' retention up front too.
 
-Every delete and edit is also recorded in `data/.state/memories/user-changes.jsonl` (the note's file name, what was
+Every delete and edit is also recorded in `data/.apps/memories/user-changes.jsonl` (the note's file name, what was
 done and when; never what it said; kept 30 days). `system/scripts/agent_memory_context.py` turns that record into a
 notice chats read -- Claude through a UserPromptSubmit hook in `.claude/settings.json`, pi through its memory
 extension -- because an open chat still has the note in its conversation and would otherwise write a deleted note

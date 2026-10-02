@@ -27,6 +27,8 @@ truncate_index = memory_context.truncate_index
 latest_changes = memory_context.latest_changes
 render_changes_notice = memory_context.render_changes_notice
 claude_hook_output = memory_context.claude_hook_output
+read_watermark = memory_context.read_watermark
+write_watermark = memory_context.write_watermark
 stamp_note_text = memory_context.stamp_note_text
 stamp_note = memory_context.stamp_note
 CHANGE_MAX_AGE = memory_context.CHANGE_MAX_AGE
@@ -323,29 +325,53 @@ def test_the_notice_tells_chats_not_to_restore_a_deleted_note_or_revert_an_edit(
     assert render_changes_notice([]) == ""
 
 
-def _hook_input(tmp_path: Path, session_id: str, started: datetime) -> str:
-    transcript = tmp_path / f"{session_id}.jsonl"
+def _stamp(at: datetime) -> str:
+    return at.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _hook_input(tmp_path: Path, records: list[dict[str, object]]) -> str:
+    """Claude's UserPromptSubmit input, over a transcript holding ``records`` in order."""
+    transcript = tmp_path / "session.jsonl"
     transcript.write_text(
         '{"type":"permission-mode"}\n'
-        + json.dumps(
-            {"type": "user", "timestamp": started.strftime("%Y-%m-%dT%H:%M:%S.000Z")}
-        )
-        + "\n"
+        + "".join(json.dumps(record) + "\n" for record in records)
     )
-    return json.dumps({"session_id": session_id, "transcript_path": str(transcript)})
+    return json.dumps({"session_id": "session", "transcript_path": str(transcript)})
 
 
-def _note(
-    notes_dir: Path, name: str, description: str, at: datetime, extra: str = ""
-) -> None:
+def _user(at: datetime, text: str = "hello") -> dict[str, object]:
+    return {
+        "type": "user",
+        "timestamp": _stamp(at),
+        "message": {"role": "user", "content": text},
+    }
+
+
+def _own_write(at: datetime, notes_dir: Path, name: str) -> dict[str, object]:
+    return {
+        "type": "assistant",
+        "timestamp": _stamp(at),
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "Write",
+                    "input": {"file_path": str(notes_dir / name)},
+                }
+            ]
+        },
+    }
+
+
+def _note(notes_dir: Path, name: str, description: str, at: datetime) -> None:
     path = notes_dir / name
     path.write_text(
-        f"---\nname: {name[:-3]}\ndescription: {description}\nmetadata:\n  type: user\n{extra}---\n\nx\n"
+        f"---\nname: {name[:-3]}\ndescription: {description}\nmetadata:\n  type: user\n---\n\nx\n"
     )
     os.utime(path, (at.timestamp(), at.timestamp()))
 
 
-def test_the_claude_hook_lists_notes_saved_since_the_chat_started_but_not_its_own(
+def test_the_claude_hook_lists_notes_others_saved_since_the_chat_started(
     tmp_path: Path,
 ) -> None:
     notes_dir = _notes_dir(
@@ -365,21 +391,19 @@ def test_the_claude_hook_lists_notes_saved_since_the_chat_started_but_not_its_ow
         "software engineer",
         started + timedelta(minutes=1),
     )
-    _note(
-        notes_dir,
-        "own.md",
-        "saved by this chat",
-        started + timedelta(minutes=2),
-        "  originSessionId: sess-1\n",
-    )
+    _note(notes_dir, "own.md", "saved by this chat", started + timedelta(minutes=2))
     _note(notes_dir, "unindexed.md", "Plays the cello", started + timedelta(minutes=3))
     (notes_dir / "README.md").write_text("readme")
+    hook_input = _hook_input(
+        tmp_path,
+        [
+            _user(started),
+            _own_write(started + timedelta(minutes=2), notes_dir, "own.md"),
+        ],
+    )
 
     out = claude_hook_output(
-        _hook_input(tmp_path, "sess-1", started),
-        notes_dir,
-        tmp_path / "none.jsonl",
-        _NOW,
+        hook_input, notes_dir, tmp_path / "none.jsonl", tmp_path / "state", _NOW
     )
 
     assert out == (
@@ -391,37 +415,128 @@ def test_the_claude_hook_lists_notes_saved_since_the_chat_started_but_not_its_ow
     )
 
 
-def test_the_claude_hook_puts_the_change_notice_first_and_says_nothing_when_nothing_is_new(
+def test_a_note_this_chat_created_but_another_chat_changed_later_is_announced(
     tmp_path: Path,
 ) -> None:
     notes_dir = _notes_dir(tmp_path, None)
     started = _NOW - timedelta(minutes=10)
-    changes = tmp_path / "user-changes.jsonl"
-
-    assert (
-        claude_hook_output(
-            _hook_input(tmp_path, "s", started), notes_dir, changes, _NOW
-        )
-        == ""
+    _note(notes_dir, "job.md", "changed by a pi chat", started + timedelta(minutes=5))
+    hook_input = _hook_input(
+        tmp_path,
+        [
+            _user(started),
+            _own_write(started + timedelta(minutes=1), notes_dir, "job.md"),
+        ],
     )
 
-    changes.write_text(
-        _change("user-profile.md", "DELETED", _NOW - timedelta(minutes=5))
-    )
-    _note(notes_dir, "job.md", "software engineer", started + timedelta(minutes=1))
     out = claude_hook_output(
-        _hook_input(tmp_path, "s", started), notes_dir, changes, _NOW
+        hook_input, notes_dir, tmp_path / "none.jsonl", tmp_path / "state", _NOW
     )
+
+    assert "- `job.md` — changed by a pi chat" in out
+
+
+def test_the_claude_hook_announces_only_what_is_newer_than_its_last_run_for_the_chat(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _notes_dir(tmp_path, None)
+    state_dir = tmp_path / "state"
+    started = _NOW - timedelta(minutes=30)
+    last_run = _NOW - timedelta(minutes=10)
+    write_watermark(state_dir, "session", last_run)
+    _note(
+        notes_dir,
+        "heard.md",
+        "announced on an earlier message",
+        last_run - timedelta(minutes=5),
+    )
+    _note(
+        notes_dir, "new.md", "saved since the last run", last_run + timedelta(minutes=5)
+    )
+    changes = tmp_path / "user-changes.jsonl"
+    changes.write_text(
+        _change("old.md", "DELETED", last_run - timedelta(minutes=5))
+        + _change("fresh.md", "DELETED", last_run + timedelta(minutes=5))
+    )
+    hook_input = _hook_input(tmp_path, [_user(started)])
+
+    out = claude_hook_output(hook_input, notes_dir, changes, state_dir, _NOW)
+
+    assert "`fresh.md` was deleted" in out
+    assert "old.md" not in out
+    assert "- `new.md` — saved since the last run" in out
+    assert "heard.md" not in out
     assert out.index("## Changes the user made") < out.index(
         "## Notes saved since this chat started"
     )
+    assert read_watermark(state_dir, "session") == _NOW
+
+
+def test_each_note_and_change_is_announced_once_per_chat(tmp_path: Path) -> None:
+    notes_dir = _notes_dir(tmp_path, None)
+    state_dir = tmp_path / "state"
+    started = _NOW - timedelta(minutes=30)
+    _note(notes_dir, "job.md", "software engineer", started + timedelta(minutes=1))
+    changes = tmp_path / "user-changes.jsonl"
+    changes.write_text(
+        _change("user-profile.md", "DELETED", started + timedelta(minutes=1))
+    )
+    hook_input = _hook_input(tmp_path, [_user(started)])
+    other_chat = json.dumps(
+        {"session_id": "other", "transcript_path": str(tmp_path / "session.jsonl")}
+    )
+
+    first = claude_hook_output(hook_input, notes_dir, changes, state_dir, _NOW)
+    second = claude_hook_output(
+        hook_input, notes_dir, changes, state_dir, _NOW + timedelta(minutes=1)
+    )
+    other = claude_hook_output(
+        other_chat, notes_dir, changes, state_dir, _NOW + timedelta(minutes=1)
+    )
+
+    assert (
+        "`user-profile.md` was deleted" in first
+        and "- `job.md` — software engineer" in first
+    )
+    assert second == ""
+    assert other == first
+
+
+def test_without_a_state_dir_the_hook_measures_from_the_chats_start(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _notes_dir(tmp_path, None)
+    started = _NOW - timedelta(minutes=30)
+    _note(notes_dir, "job.md", "software engineer", started + timedelta(minutes=1))
+    hook_input = _hook_input(tmp_path, [_user(started)])
+
+    for _ in range(2):
+        assert "- `job.md` — software engineer" in claude_hook_output(
+            hook_input, notes_dir, tmp_path / "none.jsonl", None, _NOW
+        )
+
+
+def test_an_unreadable_watermark_counts_as_none(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    write_watermark(state_dir, "../escape", _NOW)
+    (state_dir / "memory-hook-broken.json").write_text("not json")
+
+    assert read_watermark(state_dir, "../escape") == _NOW
+    assert [
+        path.name
+        for path in state_dir.iterdir()
+        if path.name.startswith("memory-hook-___")
+    ] == ["memory-hook-___escape.json"]
+    assert read_watermark(state_dir, "broken") is None
+    assert read_watermark(state_dir, "") is None
+    assert read_watermark(None, "session") is None
 
 
 @pytest.mark.parametrize(
     "hook_input",
     ["", "not json", '{"session_id": "s"}', '{"transcript_path": "/missing.jsonl"}'],
 )
-def test_the_claude_hook_without_a_readable_transcript_gives_only_the_change_notice(
+def test_without_a_readable_transcript_the_hook_still_gives_the_change_notice(
     tmp_path: Path, hook_input: str
 ) -> None:
     notes_dir = _notes_dir(tmp_path, None)
@@ -429,7 +544,7 @@ def test_the_claude_hook_without_a_readable_transcript_gives_only_the_change_not
     changes = tmp_path / "user-changes.jsonl"
     changes.write_text(_change("user-profile.md", "DELETED", _NOW))
 
-    out = claude_hook_output(hook_input, notes_dir, changes, _NOW)
+    out = claude_hook_output(hook_input, notes_dir, changes, tmp_path / "state", _NOW)
 
     assert out.startswith("## Changes the user made to saved memories")
     assert "Notes saved since" not in out
@@ -438,20 +553,45 @@ def test_the_claude_hook_without_a_readable_transcript_gives_only_the_change_not
 def test_the_claude_hook_runs_from_stdin_under_a_plain_python3(tmp_path: Path) -> None:
     notes_dir = tmp_path / "workspace" / "data" / "memories"
     notes_dir.mkdir(parents=True)
-    started = datetime.now(timezone.utc) - timedelta(minutes=10)
-    _note(notes_dir, "job.md", "software engineer", datetime.now(timezone.utc))
+    now = datetime.now(timezone.utc)
+    _note(notes_dir, "job.md", "software engineer", now)
 
-    result = subprocess.run(
-        [sys.executable, "-I", str(_SCRIPT), "--claude-hook"],
-        input=_hook_input(tmp_path, "s", started),
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env={"HOME": str(tmp_path)},
+    hook_input = _hook_input(tmp_path, [_user(now - timedelta(minutes=10))])
+    env = {"HOME": str(tmp_path), "MNGR_AGENT_STATE_DIR": str(tmp_path / "state")}
+
+    def run_hook() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-I", str(_SCRIPT), "--claude-hook"],
+            input=hook_input,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+    first = run_hook()
+    second = run_hook()
+
+    assert first.returncode == 0, first.stderr
+    assert first.stdout.endswith("- `job.md` — software engineer\n")
+    assert (second.returncode, second.stdout) == (0, "")
+
+
+def test_stamping_keeps_crlf_line_endings_and_leaves_inline_metadata_and_other_keys_alone() -> (
+    None
+):
+    crlf = "---\r\nname: job\r\nmetadata:\r\n  type: user\r\n---\r\nx\r\n"
+    inline = "---\nname: job\nmetadata: {type: user}\n---\nx\n"
+    block_scalar = "---\nname: job\nnotes: |\n  modified: part of the text\nmetadata:\n  type: user\n---\nx\n"
+
+    stamped_crlf = stamp_note_text(crlf, "pi-coding", _NOW)
+    assert stamped_crlf is not None
+    assert "\r\n  modified: 2026-10-01T18:07:56Z\r\n---\r\n" in stamped_crlf
+    assert "\n" not in stamped_crlf.replace("\r\n", "")
+    assert stamp_note_text(inline, "pi-coding", _NOW) is None
+    assert "  modified: part of the text\n" in (
+        stamp_note_text(block_scalar, "pi-coding", _NOW) or ""
     )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.endswith("- `job.md` — software engineer\n")
 
 
 def test_the_full_context_ends_with_the_notice(
