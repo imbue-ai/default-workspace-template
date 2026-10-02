@@ -6326,6 +6326,33 @@ def test_an_awaiting_chats_first_send_takes_its_ready_spare_without_a_create(
         manager.stop()
 
 
+def test_an_awaiting_chats_fast_mode_stays_in_memory_until_its_first_send_takes_its_spare(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A fast mode in the chat's folder tells a restart that its spare is a chat's, so a pick made before the
+    first send must not land there while the spare is only reserved."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    picked = ChatFastModeState(mode=FastModeMode.ON)
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        assert spare.terms.is_fast is picked.launches_fast
+        awaiting = manager.awaiting_chat_for_empty_list()
+
+        manager.set_fast_mode_state(awaiting.chat_id, picked)
+
+        assert read_fast_mode_state(tmp_path / "chats" / awaiting.chat_id) is None
+        assert manager.get_fast_mode_state(awaiting.chat_id) == picked
+        manager.create_chat("", chat_id=awaiting.chat_id, account_id=spare.terms.account_id)
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [awaiting.chat_id]
+        assert _mngr_verbs_naming(argv_log, spare.chat_id) == ["create"]
+        assert read_fast_mode_state(tmp_path / "chats" / awaiting.chat_id) == picked
+        assert manager._awaiting_fast_mode_by_chat == {}
+    finally:
+        manager.stop()
+
+
 def test_an_awaiting_chats_first_send_on_another_account_destroys_its_spare_before_creating_under_its_id(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -6443,10 +6470,13 @@ def test_discarding_an_awaiting_chat_returns_its_spare_to_the_pool(
         (spare,) = _wait_for_ready_spares(manager, 1)
         awaiting = manager.awaiting_chat_for_empty_list()
         assert awaiting.chat_id == spare.chat_id
+        manager.set_fast_mode_state(awaiting.chat_id, ChatFastModeState(mode=FastModeMode.OFF))
 
         assert manager.discard_provisional_chat(awaiting.chat_id) is True
 
         assert spare in manager._spares
+        # The pool's spare carries no pick of the chat it was reserved for.
+        assert manager.get_fast_mode_state(spare.chat_id).launches_fast is spare.terms.is_fast
         assert _reserved_spares(manager) == []
         assert manager.get_chat_snapshots() == []
         assert not manager.knows_chat(spare.chat_id)

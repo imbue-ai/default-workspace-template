@@ -891,6 +891,10 @@ class AgentManager:
     _chat_record_by_id: dict[ChatId, ChatRecord]
     # The workspace-wide chat settings (the fast mode a new chat starts in), read on every create.
     _chat_settings: ChatSettingsStore
+    # The fast mode picked in an unseeded chat awaiting its first send, held in memory like the chat
+    # itself until its launch writes it to the chat's folder: a fast mode there is what tells a restart
+    # that an agent still labelled a spare is a chat's (``_handle_spares_from_before_start``).
+    _awaiting_fast_mode_by_chat: dict[ChatId, ChatFastModeState]
     # Whether this manager keeps spare agents for new chats (``spare_chat.py``): the live chat
     # does; a secondary chat, and a test that does not ask for them, do not. Either way an agent
     # labelled a spare is hidden (``_is_spare_locked``).
@@ -1090,6 +1094,7 @@ class AgentManager:
         manager._provisional_chats = seeded_provisional_chats(manager._chat_record_by_id)
         manager._title_override_by_chat = {}
         manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
+        manager._awaiting_fast_mode_by_chat = {}
         manager._is_keeping_spares = is_keeping_spares and not is_secondary
         manager._spares = ()
         manager._spare_ids_awaiting_relabel = set()
@@ -3087,13 +3092,33 @@ class AgentManager:
 
     def get_fast_mode_state(self, chat_id: ChatId) -> ChatFastModeState:
         """The chat's fast mode (``chat_fast_mode.py``): what it chose, else the workspace's default for a new chat."""
+        with self._lock:
+            return self._fast_mode_state_locked(chat_id)
+
+    def _fast_mode_state_locked(self, chat_id: ChatId) -> ChatFastModeState:
+        """``get_fast_mode_state``, lock held: the chat's folder, else a pick made while it awaits its first send."""
         state = read_fast_mode_state(self._chat_files_root / chat_id)
+        if state is None:
+            state = self._awaiting_fast_mode_by_chat.get(chat_id)
         if state is not None:
             return state
         return ChatFastModeState(mode=self._chat_settings.read().fast_mode_default)
 
     def set_fast_mode_state(self, chat_id: ChatId, state: ChatFastModeState) -> None:
-        """Record the chat's fast mode; the page applies the speed itself through the model switch."""
+        """Record the chat's fast mode; the page applies the speed itself through the model switch.
+
+        An unseeded chat awaiting its first send keeps it in memory, as it keeps everything else, until its
+        launch writes it to the chat's folder (``_fast_mode_for_launch_locked``).
+        """
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            if (
+                provisional is not None
+                and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+                and not provisional.is_seeded
+            ):
+                self._awaiting_fast_mode_by_chat[chat_id] = state
+                return
         write_fast_mode_state(self._chat_files_root / chat_id, state)
 
     def knows_chat(self, chat_id: ChatId) -> bool:
@@ -3112,8 +3137,9 @@ class AgentManager:
         """The fast mode a launch starts the chat's agent in, written to the chat's folder the first time. Lock held."""
         state = read_fast_mode_state(self._chat_files_root / chat_id)
         if state is None:
-            state = ChatFastModeState(mode=self._chat_settings.read().fast_mode_default)
+            state = self._fast_mode_state_locked(chat_id)
             write_fast_mode_state(self._chat_files_root / chat_id, state)
+        self._awaiting_fast_mode_by_chat.pop(chat_id, None)
         return state
 
     def discard_provisional_chat(self, chat_id: str) -> bool:
@@ -3128,6 +3154,7 @@ class AgentManager:
             if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
                 return False
             del self._provisional_chats[parsed]
+            self._awaiting_fast_mode_by_chat.pop(parsed, None)
             self._spares = tuple(
                 spare.as_unreserved() if spare.chat_id == parsed and spare.phase is SpareChatPhase.RESERVED else spare
                 for spare in self._spares
@@ -3334,7 +3361,7 @@ class AgentManager:
             # Written once the spare is gone (``_run_creation_after_spare_destroy``): a chat folder holding a
             # fast mode tells a restart that an agent still labelled a spare is that chat's.
             fast_mode = (
-                self.get_fast_mode_state(launched_chat_id)
+                self._fast_mode_state_locked(launched_chat_id)
                 if is_spare_destroy_awaited
                 else self._fast_mode_for_launch_locked(launched_chat_id)
             )
@@ -3530,7 +3557,9 @@ class AgentManager:
                 or spare.phase is not SpareChatPhase.RESERVED
             ):
                 return None
-            terms = self._new_chat_terms_locked(account_id, provisional.project_id, self.get_fast_mode_state(chat_id))
+            terms = self._new_chat_terms_locked(
+                account_id, provisional.project_id, self._fast_mode_state_locked(chat_id)
+            )
             is_fitting = spare.terms == terms and (spare.ready_at is None or self._is_spare_fresh_locked(spare))
             if not is_fitting:
                 return None
@@ -3777,7 +3806,7 @@ class AgentManager:
                 and self._spare_locked(provisional.chat_id) is None
                 and str(provisional.chat_id) not in self._agents
                 and self._new_chat_terms_locked(
-                    terms.account_id, provisional.project_id, self.get_fast_mode_state(provisional.chat_id)
+                    terms.account_id, provisional.project_id, self._fast_mode_state_locked(provisional.chat_id)
                 )
                 == terms
             ),
