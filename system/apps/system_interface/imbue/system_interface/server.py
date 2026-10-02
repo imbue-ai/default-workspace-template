@@ -607,9 +607,8 @@ def _handle_client_state_message(
         _loguru_logger.warning("Ignored a malformed client_state report: {}", e.errors()[0]["msg"])
         return False
     shell.broadcaster.set_client_info(client_queue, str(report.client_id), str(report.active_desktop))
-    # A window that followed a push names what the record said when it was pushed, which a later move may already
-    # have replaced: recording it would move the client back and broadcast that, which every window would follow
-    # and re-report, round and round. So it only registers the connection.
+    # A window that followed a push may name a desktop a later move has already replaced: recording it would move the
+    # client back and set its windows following again. So it only registers the connection.
     if not report.is_following:
         # A state file the shell cannot write is a warning, not a dropped socket: the live
         # registration above is what the layout ops need, and the next report retries the write.

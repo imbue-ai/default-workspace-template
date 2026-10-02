@@ -957,9 +957,7 @@ export class DesktopStore {
 
   /** Follow the client's stored desktop when it moved, unless the news is stale: a revision no newer than one this
    *  window heard was overtaken by a later move on its way here, and the echo of a switch this window reported and
-   *  has replaced since with another is followed by the later one's own echo. Following an echo of a switch the
-   *  user has already moved past would move the window back, and its report would then move every other window of
-   *  the client back too. */
+   *  has replaced since with another is followed by the later one's own echo. */
   private takeActiveDesktopChanged(event: ActiveDesktopChangedEvent): void {
     if (event.clientId !== this.deps.clientId || !this.hearDesktopRevision(event.revision)) return;
     if (this.reportIds.isSuperseded(event.reportId) || event.desktopId === this.state.activeDesktopId) return;
