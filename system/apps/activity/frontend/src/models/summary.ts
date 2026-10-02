@@ -63,6 +63,7 @@ export interface ActivitySummary {
   readonly are_programs_known: boolean;
   readonly likely_first_to_close: LikelyFirstToClose | null;
   readonly notes: readonly string[];
+  readonly is_preview: boolean;
 }
 
 export type SummaryState =
@@ -94,9 +95,30 @@ export function getRefreshFailure(): RefreshFailure | null {
   return refreshFailure;
 }
 
-/** Keep the figures shown, but remember since when they could not be refreshed. */
+// A read that hangs (a stuck worker, a proxy holding the connection) must fail, or the poller, which waits for each
+// read before scheduling the next, would freeze on old figures with nothing saying so. The backend's own slowest
+// dependency answers within 5 s.
+export const SUMMARY_TIMEOUT_MS = 15_000;
+// A stop or start runs mngr in the chat app, which the backend allows 60 s.
+export const CHAT_ACTION_TIMEOUT_MS = 70_000;
+
+// The workspace's clock minus this browser's, from the latest summary: idle times are the workspace's own
+// timestamps, so they are measured against its clock, not a laptop's that may be minutes off.
+let serverClockOffsetMs = 0;
+
+export function serverNowMs(): number {
+  return Date.now() + serverClockOffsetMs;
+}
+
+function failureMessage(error: unknown): string {
+  return error instanceof DOMException && error.name === "TimeoutError"
+    ? "It took too long to answer."
+    : String(error);
+}
+
+/** Keep the figures shown, but remember since when they could not be refreshed, and the latest reason why. */
 function noteFailure(message: string): void {
-  if (state.kind === "loaded") refreshFailure = refreshFailure ?? { since: Date.now(), message };
+  if (state.kind === "loaded") refreshFailure = { since: refreshFailure?.since ?? Date.now(), message };
   else state = { kind: "failed", message };
 }
 
@@ -105,7 +127,7 @@ async function readSummary(): Promise<boolean> {
   latestReadNumber += 1;
   const readNumber = latestReadNumber;
   try {
-    const response = await fetch(SUMMARY_PATH, { cache: "no-store" });
+    const response = await fetch(SUMMARY_PATH, { cache: "no-store", signal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS) });
     if (readNumber !== latestReadNumber) return true;
     if (response.status === 403) {
       state = { kind: "forbidden" };
@@ -120,8 +142,9 @@ async function readSummary(): Promise<boolean> {
     if (readNumber !== latestReadNumber) return true;
     state = { kind: "loaded", summary };
     refreshFailure = null;
+    serverClockOffsetMs = Date.parse(summary.measured_at) - Date.now();
   } catch (error) {
-    if (readNumber === latestReadNumber) noteFailure(String(error));
+    if (readNumber === latestReadNumber) noteFailure(failureMessage(error));
   } finally {
     m.redraw();
   }
@@ -162,12 +185,17 @@ export async function requestChatAction(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_interrupt_confirmed: isInterruptConfirmed }),
+      signal: AbortSignal.timeout(CHAT_ACTION_TIMEOUT_MS),
     });
     if (response.ok) return { kind: "done" };
     const body = (await response.json().catch(() => ({}))) as { detail?: string; chat_status?: string };
     if (response.status === 409 && body.chat_status === "working") return { kind: "started_working" };
     return { kind: "failed", message: body.detail ?? `The chat app answered ${response.status}.` };
   } catch (error) {
-    return { kind: "failed", message: String(error) };
+    const isTimeout = error instanceof DOMException && error.name === "TimeoutError";
+    return {
+      kind: "failed",
+      message: isTimeout ? "It took too long to answer; it may still be under way." : String(error),
+    };
   }
 }

@@ -19,9 +19,10 @@ status has no RssAnon line, the fork counts the sum of the Anonymous lines in
 a built-in service (adj <= 80) shed while something at adj >= 900 remained,
 stops the drill at once and frees the hog's memory.
 
-Stdlib-only and self-contained, so it can be sent into a workspace inside the
-command (``mngr exec`` does not pass its stdin through):
-``mngr exec <agent> "echo $(base64 < oom_drill.py | tr -d '\\n') | base64 -d | python3 - --bands 1000,900,800,600,300"``.
+Stdlib-only: it needs only itself and ``oom_priority/badness.py`` beside it in
+the package layout (``bin/`` and ``src/oom_priority/``), so the pair can be
+sent into a workspace inside the command as a small tarball (``mngr exec``
+does not pass its stdin through); ``OOM_DRILL.md`` has the command.
 It must run as a process allowed to set -1000 (root under gVisor, or anywhere
 with ``CAP_SYS_RESOURCE``). Prints one JSON verdict on stdout and exits 0 only
 when the drill passed.

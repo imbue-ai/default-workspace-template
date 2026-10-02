@@ -157,6 +157,7 @@ def _inputs(chats: tuple[ChatInfo, ...] | None, programs: tuple[SupervisedProgra
             _row("files", "files", False, True),
         ),
         notes=(),
+        is_preview=False,
     )
 
 

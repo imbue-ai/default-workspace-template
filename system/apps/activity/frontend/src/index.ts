@@ -22,6 +22,7 @@ import {
   getSummaryState,
   refreshNow,
   requestChatAction,
+  serverNowMs,
   startRefreshing,
   stopRefreshing,
 } from "./models/summary";
@@ -74,7 +75,7 @@ function bootstrap(): void {
           m(ActivityPage, {
             state: getSummaryState(),
             refreshFailure: getRefreshFailure(),
-            nowMs: Date.now(),
+            nowMs: serverNowMs(),
             onAskInChat: (text) => {
               if (!connection.isFramed) return false;
               connection.draftText(text);

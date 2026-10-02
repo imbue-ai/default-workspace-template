@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 from flask import Flask
@@ -12,6 +13,7 @@ from flask.testing import FlaskClient
 from activity.memory_reading import MemorySources
 from activity.pages import build_pages_blueprint
 from activity.readings import ReadingSources
+from activity.supervised_programs import ReadProcessInfo
 from activity.testing import FakeChatApp
 from activity.testing import chat_snapshot
 from activity.testing import process_info
@@ -22,7 +24,13 @@ _NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
 _JSON = "application/json"
 
 
-def _client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chat_app: FakeChatApp) -> FlaskClient:
+def _client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    chat_app: FakeChatApp,
+    read_process_info: ReadProcessInfo | None = None,
+    is_preview: bool = False,
+) -> FlaskClient:
     proc_dir = tmp_path / "proc"
     write_fake_process(proc_dir, 415, "supervisord", 1, 31 * 1024, -1000, ["supervisord"])
     write_fake_process(proc_dir, 544, "chat-app", 415, 160 * 1024, 25, ["chat-app"])
@@ -72,10 +80,13 @@ def _client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chat_app: FakeChatA
                 registry_path=registry_path,
             ),
             client=chat_app.client(),
-            read_process_info=lambda: [process_info("chat", "RUNNING", 544), process_info("files", "STOPPED", 0)],
+            read_process_info=read_process_info
+            if read_process_info is not None
+            else lambda: [process_info("chat", "RUNNING", 544), process_info("files", "STOPPED", 0)],
             now=lambda: _NOW,
             history_path=tmp_path / "memory-history.tsv",
             shed_ledger_path=tmp_path / "shed.jsonl",
+            is_preview=is_preview,
         )
     )
     return app.test_client()
@@ -245,3 +256,61 @@ def test_the_history_holds_recorded_readings_and_the_memory_guards_closures(
     assert view["is_recording"] is True
     assert [closure["what"] for closure in view["closures_in_range"]] == ["a program an agent was running (pytest)"]
     assert client.get("/api/history?range=decade").status_code == 400
+def _every_process_is_drawn(summary: dict[str, Any]) -> bool:
+    drawn_kib = sum(item["rss_kib"] for group in ("chats", "apps", "services") for item in summary[group])
+    return drawn_kib == (31 + 160 + 330) * 1024
+
+
+def test_with_the_chat_app_down_chats_are_listed_by_their_agents_and_the_page_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    down = FakeChatApp([], list_status=503)
+    response = _client(tmp_path, monkeypatch, down).get("/api/summary")
+    summary = response.get_json()
+    assert response.status_code == 200
+    assert [(chat["name"], chat["kind"], chat["chat_id"]) for chat in summary["chats"]] == [
+        ("wallpaper", "AGENT", None)
+    ]
+    assert any("Chat names could not be read" in note for note in summary["notes"])
+    assert _every_process_is_drawn(summary)
+
+
+def test_with_supervisord_down_apps_read_unknown_and_their_memory_still_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse() -> list[dict[str, Any]]:
+        raise ConnectionRefusedError("no socket")
+
+    response = _client(tmp_path, monkeypatch, _chat_app("idle"), read_process_info=refuse).get("/api/summary")
+    summary = response.get_json()
+    assert response.status_code == 200
+    assert {app["state"] for app in summary["apps"]} == {"UNKNOWN"}
+    assert any("Apps and services could not be listed" in note for note in summary["notes"])
+    assert _every_process_is_drawn(summary)
+
+
+def test_an_unreadable_registry_or_no_memory_source_is_a_note_not_a_failed_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(tmp_path, monkeypatch, _chat_app("idle"))
+    (tmp_path / "apps.toml").write_text("this is not [[[ toml")
+    (tmp_path / "cgroup" / "memory.max").unlink()
+    response = client.get("/api/summary")
+    summary = response.get_json()
+    assert response.status_code == 200
+    assert summary["memory"] is None
+    assert any("app list could not be read" in note for note in summary["notes"])
+    assert any("No memory reading was available" in note for note in summary["notes"])
+
+
+def test_a_preview_reads_the_workspace_but_stops_nothing_in_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chat_app = _chat_app("idle")
+    client = _client(tmp_path, monkeypatch, chat_app, is_preview=True)
+    assert client.get("/api/summary").get_json()["is_preview"] is True
+    for action in ("stop", "start"):
+        refused = client.post(f"/api/chats/c1/{action}", json={"is_interrupt_confirmed": True})
+        assert refused.status_code == 403
+        assert "preview" in refused.get_json()["detail"]
+    assert chat_app.actions == []

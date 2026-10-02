@@ -34,7 +34,9 @@ environment (`system/scripts/build_workspace.sh`), serving on `http://127.0.0.1:
   serves it.
 
 Only the workspace's owner reaches the API (the `X-Imbue-Identity` header's `owner` flag; a request with no header comes
-from inside the workspace and counts as the owner), and a write must be JSON from the app's own origin.
+from inside the workspace and counts as the owner), and a write must be JSON from the app's own origin. A preview
+(`activity-app --no-register`, reading the registry copy `MINDS_APPS_FILE` names) shows the live workspace, so every
+write answers it `403` in the shell preview's words and the page offers no actions.
 
 The manifest declares `stop_when_no_windows`: the app holds nothing between requests, so the shell stops it a minute
 after its last window closes and starts it on the next request. The page polls only while its window is shown

@@ -70,6 +70,7 @@ def build_pages_app(arguments: ActivityArguments, client: httpx.Client) -> Flask
             now=utc_now,
             history_path=HISTORY_PATH,
             shed_ledger_path=shed_ledger_path(),
+            is_preview=not arguments.is_registered,
         )
     )
     return app

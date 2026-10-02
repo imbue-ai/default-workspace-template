@@ -13,7 +13,8 @@ const BYTES_PER_GIB = 1024 * 1024 * 1024;
 export const IDLE_SUGGESTION_SECONDS = 15 * 60;
 
 export function formatBytes(bytes: number): string {
-  if (bytes >= BYTES_PER_GIB) return `${(bytes / BYTES_PER_GIB).toFixed(1)} GB`;
+  // Compared after rounding, so 1023.7 MB reads as "1.0 GB" rather than "1024 MB".
+  if (Math.round(bytes / BYTES_PER_MIB) >= 1024) return `${(bytes / BYTES_PER_GIB).toFixed(1)} GB`;
   if (bytes > 0 && bytes < BYTES_PER_MIB) return "<1 MB";
   return `${Math.round(bytes / BYTES_PER_MIB)} MB`;
 }
@@ -31,8 +32,11 @@ export function formatShare(partKib: number, wholeKib: number): string {
 
 export function formatDuration(seconds: number): string {
   if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
-  if (seconds < 86400) return `${Math.round(seconds / 3600)} hr`;
+  // Each unit is used only while its rounded count stays below the next unit, so 59.5 minutes reads "1 hr", not "60 min".
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.round(seconds / 3600);
+  if (hours < 24) return `${hours} hr`;
   const days = Math.round(seconds / 86400);
   return days === 1 ? "1 day" : `${days} days`;
 }
