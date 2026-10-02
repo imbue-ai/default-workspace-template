@@ -1,6 +1,6 @@
 ---
 name: manage-desktop
-description: Use when you want to open, arrange, or close windows on the user's desktop (open an app or a page, focus, place, minimize, maximize, close, navigate, refresh), switch or read desktops, edit a desktop's shortcuts or wallpaper, or work out which screen a request came from.
+description: Use when you want to open, arrange, or close windows on the user's desktop (open an app or a page, show a page, focus, place, minimize, maximize, close, navigate, refresh), switch or read desktops, edit a desktop's shortcuts or wallpaper, or work out which screen a request came from.
 metadata:
   author: imbue
   crystallized: true
