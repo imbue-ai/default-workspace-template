@@ -28,7 +28,7 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
   `stop_browser` ends Chromium and its display while keeping the profile and the tab list; `close_and_forget` (`DELETE /browsers/<name>`, the fleet CLI's `close`) also deletes the profile.
   `POST /new` (the `new` launch path, body `{"url"?}`) creates a browser and answers `{"path": "/?session=<name>"}`, the page the shell opens.
   Chromium refuses two processes on one profile directory, so concurrent browsers cannot share a profile.
-- The **fleet CLI** (`agentic-browser-fleet new`) creates a browser and already opens a viewer window through `workspace-layout open browser --path /?session=<name>`, falling back to a printed hint when the shell cannot place it.
+- The **fleet CLI** (`agentic-browser-fleet new`) creates a browser and already opens a viewer window with the shell's `open` op of the browser's `/?session=<name>`, falling back to a printed hint when the shell cannot place it.
   The **lease** (`acquire`, `release`, `handoff`) says who is driving; it is not a lifetime.
 - The **op route**'s `open` writes the requesting client's placement on top, shown, and refuses with 412 when no client can be resolved (contracts section 8).
 - In the staging workspace before the cleanup fixes, every terminal window sat at `/new` (the wrapper could not load the contract module) and four tmux sessions backed two windows: reloads of a window still at its launch path re-ran it.
