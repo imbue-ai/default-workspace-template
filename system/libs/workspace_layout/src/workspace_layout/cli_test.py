@@ -368,7 +368,6 @@ def test_the_retired_zone_flag_names_the_state_flag(
     err = capsys.readouterr().err
     assert "--zone is retired" in err and "--state (snapped-left, snapped-right, maximized)" in err
     assert loopback_shell.posted == []
-    assert loopback_shell.posted == []
 
 
 def test_refresh_reaches_one_window_or_every_page_of_an_app(
