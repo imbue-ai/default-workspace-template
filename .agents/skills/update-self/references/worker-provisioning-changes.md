@@ -77,7 +77,8 @@ When a merge bumps a *global* dependency (a `setup_system.sh` or installer
 pin, or a `Dockerfile` toolchain pin), a provisioner pin goes live whoever
 consumes it: the apply re-runs the provisioner whenever a file it reads
 changed, with every pin taken from the merged tree, so no single pin can be
-held back. What you decide is what the report says about each **dependent**
+held back. A `Dockerfile` pin is rebuild-only whoever consumes it, like any
+image-level hunk; the verdicts below are for a provisioner pin. What you decide is what the report says about each **dependent**
 of the new version. Your worktree cannot validate the pair -- worktree
 isolation isolates the repo tree, not the host-global toolchain, so your env
 still has the old dep; do **not** globally install the new one to test, that
