@@ -1,3 +1,5 @@
+from typing import Any
+
 from app_manifest.primitives import AppName
 from imbue.mngr.utils.polling import wait_for
 from workspace_layout.answers import DesktopsListing
@@ -11,9 +13,9 @@ from terminal_app.testing import FakeTmux, make_terminal_record, make_tmux_sessi
 from terminal_app.window_sweep import WindowSweeper
 
 
-def _desktops_showing(*names: str) -> str:
+def _desktops_showing(*names: str) -> dict[str, Any]:
     windows = [fake_window(f"win-{index:016x}", "terminal", f"/?session={name}") for index, name in enumerate(names)]
-    return DesktopsListing(desktops=(fake_desktop("home", windows),)).model_dump_json()
+    return DesktopsListing(desktops=(fake_desktop("home", windows),)).model_dump(mode="json")
 
 
 def _sweeper(session_source: TmuxSessionSource, loopback_shell: LoopbackShell, interval_seconds: float) -> WindowSweeper:
