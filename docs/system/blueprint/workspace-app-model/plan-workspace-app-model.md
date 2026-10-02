@@ -152,7 +152,7 @@ An app with `instances = false` declares no actions; the shell synthesizes its o
 
 ### 4.2 Registry rows
 
-A registry row carries `name`, `url`, `label`, `icon`, `internal`, and `program` from the registration, and `display_name`, `instances`, `instances_url`, `actions`, `default_shortcut`, `critical`, and `priority`, all copied from the manifest at registration.
+A registry row carries `name`, `url`, `label`, `icon`, `internal`, and `program` from the registration, and `display_name`, `instances`, `instances_url`, `actions`, `default_shortcut`, `critical`, `shareable`, and `priority`, all copied from the manifest at registration.
 The `label` suffix has one job, an unguessable origin, and is never used as an identifier.
 Liveness (`is_running`) is derived from supervisord and is never stored.
 The shell's services event writer, which writes the `service_registered` and `service_deregistered` events minds reads, announces `name`, `url`, `label`, and `icon`, and `shareable` as `true` only when the row is shareable and not `internal`; it ignores the other manifest fields.
