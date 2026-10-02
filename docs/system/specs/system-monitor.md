@@ -167,6 +167,10 @@ Each reading is taken independently (`readings.py`). If the chat app does not an
 - There is a small window between the stop re-check and the stop itself in which a chat could start a turn; the chat app's stop is still safe, but the user is not warned in that window.
 - A request with no identity header counts as the owner (section 6). A page in the agents' browser inside the container that reached this port by DNS rebinding would pass both guards; the shell has the same exposure, and whether Chromium's Private Network Access blocks it is unverified.
 - A folder whose name contains a newline breaks `du`'s one-line-per-path output and is left out of the storage totals.
+- A process whose parent exited before any agent or program claimed it (a dev server an agent started and left running) is counted under workspace plumbing, not under the agent that started it.
+- Errors reach the page in their technical wording: a failed refresh shows the browser's or the backend's reason, and a refused stop or start shows the chat app's detail (as a `502`, whatever status the chat app gave).
+- The status lines (an action's result, stale figures, a drafted question) are created with their text, which screen readers announce unreliably.
+- The package, its data folder, its oom band and its cron entry are named `activity`, while users see "System Monitor"; renaming the package after it ships means migrating the registry row, the data folder and the cron entry (section 11).
 - `serving.py`, the supervisord socket client and the identity parsing are copies of code in other apps (Getting Started, the shell); see section 11.
 
 ## 11. Next steps
@@ -174,4 +178,9 @@ Each reading is taken independently (`readings.py`). If the chat app does not an
 - **Stop apps** (stacked change): stop a non-critical app through the shell's own Quit, never the browser or this app.
 - **Disk quota on cloud workspaces**: publish the VM's disk use into the container as `.host-meminfo` does for memory, so the storage tab can show used against the limit.
 - **Shared libraries**: move the background server, the supervisord socket client and the identity parsing into shared libraries (`app_manifest` or a new one), so the apps that copy them cannot drift.
+- **Decide the package name before the first merge**: keep `activity` with "System Monitor" as its display name, or rename the package to `system-monitor` while nothing persisted depends on it yet.
+- **Plain-language errors and announcements**: a plain sentence with the technical reason behind a details disclosure, chat-app refusals passed through with their own status, and one persistent `role="status"` region whose text changes.
+- **Credit orphaned processes**: attribute a process with no claimed ancestor through the `MNGR_AGENT_ID` in its environment, and show what remains as "Other processes" rather than plumbing.
+- **A Host check against DNS rebinding**: refuse `/api/*` unless `Host` names this app's loopback address, once what `Host` the share gateway forwards is confirmed.
+- **Smaller pieces**: split `summary.build_summary` (one long function with a many-argument item builder and string-prefixed ids) and the `ActivityPage` component into smaller units.
 - **Design-only ideas**: agent hooks that read the history before starting a memory-heavy command; automatic stopping of long-idle chats. The latter conflicts with "memory is the user's to spend" (`freeing-memory.md`) and needs the user's opt-in, so it stays a proposal.
