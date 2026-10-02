@@ -302,7 +302,7 @@ def build_gateway_app(
             if not grants.allows(
                 identity.user_id, identity.email, service_name, build_shareable_service_names(registered_apps)
             ):
-                _log_denied("session identity is not granted this service", host)
+                _log_denied("session identity has no grant admitting it to this service", host)
                 return _forbidden()
             _upgrade_invite(grants, identity)
 
@@ -350,7 +350,9 @@ def build_gateway_app(
         if not handoff.is_owner and not grants.allows_any(
             handoff.user_id, handoff.email, build_shareable_service_names(get_registered_apps())
         ):
-            _log_denied(f"signed-in account {handoff.user_id} has no grant on this workspace", auth_host)
+            _log_denied(
+                f"signed-in account {handoff.user_id} has no grant admitting it anywhere on this workspace", auth_host
+            )
             return _forbidden()
         _upgrade_invite(grants, handoff)
 
