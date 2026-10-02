@@ -43,10 +43,9 @@ is not where worker bugs get fixed.
    stopped on purpose (so nobody restarts it as a crash). A stopped failure
    is destroyed only when a later pass supersedes it
    (`.agents/shared/references/harden-contention.md`) or the user asks. When
-   the user overrides the failure, a calling skill with a resume path (such as
-   update-self's "Resuming after `stuck`") revives it with `mngr start
-   <worker> --restart`, blanks the label (`mngr label <worker> -l
-   archived_at=`), and continues the same task.
+   the user overrides the failure, `create_worker.py revive` brings it back
+   (`.agents/shared/references/lead-proxy.md`, "Resuming after the user
+   overrides a failure").
 4. **Update any outstanding tickets** (e.g. `tk` lifecycle tickets) with a
    note describing the failure; do not close them -- leave them open so the
    user can resume.

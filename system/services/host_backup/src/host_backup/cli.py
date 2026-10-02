@@ -13,9 +13,10 @@ outcome, and 2 when no outcome was observed at all (no terminal event before the
 timeout, or no events log to read in the first place). When the in-flight tick is
 still running at the timeout, it exits 2 without triggering a tick.
 
-With `--wait-only` it only waits for the in-flight tick, triggers nothing, and prints
-`{"inflight_tick_id": <id or null>, "finished": <bool>}`, exiting 0 once no tick is in
-flight and 2 when the tick it waited for was still running at the timeout.
+With `--check` it triggers nothing and waits for nothing: it reads the newest tick
+outcomes back from the log, prints them, and exits 0 when a `restic_backup_succeeded`
+is recent (within two backup intervals), 3 when the newest tick ended for missing
+secrets, and 1 otherwise (the service is down, or its ticks fail).
 """
 
 import json
@@ -24,19 +25,24 @@ import sys
 import time
 from collections.abc import Sequence
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Final
 
 import click
 from loguru import logger
 
-from host_backup.config import BACKUP_TOML_PATH, resolve_service_events_dir
+from host_backup.config import (
+    BACKUP_TOML_PATH,
+    load_backup_config,
+    resolve_service_events_dir,
+)
 from host_backup.events import (
     BACKUP_EVENT_SOURCE,
     EVENTS_FILENAME,
     TICK_TERMINAL_EVENT_TYPES,
     BackupEventType,
-    find_inflight_tick_id,
+    scan_recent_ticks,
 )
 
 DEFAULT_TIMEOUT_SECONDS = 1800.0  # 30 minutes
@@ -61,11 +67,11 @@ EXIT_BACKUPS_NOT_CONFIGURED: Final[int] = 3
     help="How long (seconds) to wait in all: for a tick already in flight, then for the triggered one",
 )
 @click.option(
-    "--wait-only",
+    "--check",
     is_flag=True,
-    help="Only wait for the backup tick in flight to finish, and trigger nothing",
+    help="Only report whether a recent backup succeeded; trigger and wait for nothing",
 )
-def backup_now_main(timeout_seconds: float, wait_only: bool) -> None:
+def backup_now_main(timeout_seconds: float, check: bool) -> None:
     """Trigger an immediate host_backup tick and wait for it to complete."""
     events_dir = resolve_service_events_dir()
     if events_dir is None:
@@ -75,20 +81,17 @@ def backup_now_main(timeout_seconds: float, wait_only: bool) -> None:
         )
         sys.exit(EXIT_NO_COMPLETION_OBSERVED)
     events_path = events_dir / EVENTS_FILENAME
+    if check:
+        sys.exit(_check_recent_backup(events_path))
 
     deadline = time.monotonic() + timeout_seconds
     # Opened before the scan, so a tick that ends between the scan and the first poll
     # is still seen ending.
     with closing(_EventsLogFollower(events_path)) as follower:
-        inflight_tick_id = find_inflight_tick_id(events_path)
+        inflight_tick_id = scan_recent_ticks(events_path).inflight_tick_id
         is_idle = inflight_tick_id is None or _wait_for_tick_to_end(
             follower, inflight_tick_id, deadline
         )
-    if wait_only:
-        click.echo(
-            json.dumps({"inflight_tick_id": inflight_tick_id, "finished": is_idle})
-        )
-        sys.exit(0 if is_idle else EXIT_NO_COMPLETION_OBSERVED)
     if not is_idle:
         logger.error(
             "Timed out waiting for the in-flight backup tick to finish; triggered nothing"
@@ -103,6 +106,57 @@ def backup_now_main(timeout_seconds: float, wait_only: bool) -> None:
         sys.exit(EXIT_NO_COMPLETION_OBSERVED)
     click.echo(json.dumps(completion, default=str))
     sys.exit(_exit_code_for_completion(completion))
+
+
+def _check_recent_backup(events_path: Path) -> int:
+    """Print the newest tick outcomes and map them to an exit code: 0 when the newest
+    `restic_backup_succeeded` is within two backup intervals, 3 when the newest tick
+    ended for missing secrets, 1 otherwise.
+
+    Two intervals: a healthy service starts the next tick one interval after the
+    previous one ended, so its newest success is at most one interval plus one run
+    old, and a run longer than the interval is the slow-backup notice's business.
+    """
+    recent = scan_recent_ticks(events_path)
+    max_age_seconds = 2 * load_backup_config().backup_interval_seconds
+    success_at = _event_time(recent.newest_success_event)
+    age_seconds = (
+        None
+        if success_at is None
+        else (datetime.now(timezone.utc) - success_at).total_seconds()
+    )
+    newest_outcome = (
+        None
+        if recent.newest_terminal_event is None
+        else recent.newest_terminal_event.get("type")
+    )
+    click.echo(
+        json.dumps(
+            {
+                "newest_outcome": newest_outcome,
+                "newest_success_at": None
+                if success_at is None
+                else success_at.isoformat(),
+                "age_seconds": age_seconds,
+                "max_age_seconds": max_age_seconds,
+                "inflight_tick_id": recent.inflight_tick_id,
+            }
+        )
+    )
+    if newest_outcome == BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value:
+        return EXIT_BACKUPS_NOT_CONFIGURED
+    if age_seconds is not None and age_seconds <= max_age_seconds:
+        return EXIT_BACKUP_SUCCEEDED
+    return EXIT_BACKUP_FAILED
+
+
+def _event_time(event: dict[str, object] | None) -> datetime | None:
+    if event is None or not isinstance(timestamp := event.get("timestamp"), str):
+        return None
+    try:
+        return datetime.fromisoformat(timestamp)
+    except ValueError:
+        return None
 
 
 def _exit_code_for_completion(completion: dict[str, object]) -> int:

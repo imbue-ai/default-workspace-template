@@ -224,10 +224,14 @@ services restart) and will never finish. The service records such a tick as
 `tick_abandoned` when it starts again, and the wait for a triggered tick skips that
 record and reports the restarted service's first tick instead, which backs up again.
 
-`uv run host-backup-now --wait-only` waits for the in-flight tick and triggers
-nothing. It prints `{"inflight_tick_id": <id or null>, "finished": <bool>}` and exits
-`0` once no tick is in flight, or `2` when the tick was still running at the timeout.
-With `--timeout 0` it only reports whether a tick is in flight.
+`uv run host-backup-now --check` triggers nothing and waits for nothing: it reads
+the newest tick outcomes back from the log, prints them as JSON (`newest_outcome`,
+`newest_success_at`, `age_seconds`, `max_age_seconds`, `inflight_tick_id`), and
+exits `0` when a `restic_backup_succeeded` is within two backup intervals (a healthy
+service's newest success is at most one interval plus one run old), `3` when the
+newest tick ended for missing secrets, and `1` otherwise (the service is down, or
+its ticks fail). The update-self skill runs it before an update, as the check that
+a restore point exists.
 
 The service writes its events under the *primary* agent's state dir (it
 inherits `MNGR_AGENT_STATE_DIR` from the bootstrap shell that started

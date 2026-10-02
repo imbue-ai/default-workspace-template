@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,9 @@ from host_backup.config import BACKUP_TOML_PATH
 from host_backup.events import (
     EVENTS_LOG_ROTATION_BYTES,
     BackupEventType,
+    make_event,
     rotate_events_log_if_over,
+    write_event,
 )
 from host_backup.testing import write_tick
 
@@ -228,37 +231,73 @@ def test_the_inflight_wait_follows_a_tick_that_started_after_the_one_it_waited_f
     )
 
 
+def _write_aged_tick(
+    events_dir: Path, event_type: BackupEventType, tick_id: str, age: timedelta
+) -> None:
+    at = datetime.now(timezone.utc) - age
+    for kind in (BackupEventType.BACKUP_STARTED, event_type):
+        write_event(
+            events_dir,
+            make_event(kind, tick_id=tick_id, timestamp=at.isoformat()),
+        )
+
+
 @pytest.mark.parametrize(
-    ("ticks", "expected_exit_code", "expected_report"),
+    ("ticks", "expected_exit_code", "expected_outcome"),
     [
         pytest.param(
-            (),
-            0,
-            {"inflight_tick_id": None, "finished": True},
-            id="nothing-in-flight",
+            ((BackupEventType.RESTIC_BACKUP_SUCCEEDED, timedelta(minutes=50)),),
+            EXIT_BACKUP_SUCCEEDED,
+            BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
+            id="recent-success",
+        ),
+        # The success is older than two of the default one-hour intervals: the
+        # service is not running, or every tick since has failed.
+        pytest.param(
+            ((BackupEventType.RESTIC_BACKUP_SUCCEEDED, timedelta(hours=3)),),
+            EXIT_BACKUP_FAILED,
+            BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
+            id="stale-success",
         ),
         pytest.param(
-            (("tick-busy", (BackupEventType.BACKUP_STARTED,)),),
-            EXIT_NO_COMPLETION_OBSERVED,
-            {"inflight_tick_id": "tick-busy", "finished": False},
-            id="still-running-at-the-timeout",
+            (
+                (BackupEventType.RESTIC_BACKUP_SUCCEEDED, timedelta(minutes=50)),
+                (BackupEventType.RESTIC_BACKUP_FAILED, timedelta(minutes=5)),
+            ),
+            EXIT_BACKUP_SUCCEEDED,
+            BackupEventType.RESTIC_BACKUP_FAILED.value,
+            id="one-failure-after-a-recent-success",
         ),
+        # Secrets removed since the last success: no restore point can be taken now.
+        pytest.param(
+            (
+                (BackupEventType.RESTIC_BACKUP_SUCCEEDED, timedelta(minutes=50)),
+                (
+                    BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS,
+                    timedelta(minutes=5),
+                ),
+            ),
+            EXIT_BACKUPS_NOT_CONFIGURED,
+            BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value,
+            id="not-configured",
+        ),
+        pytest.param((), EXIT_BACKUP_FAILED, None, id="never-ran"),
     ],
 )
-def test_wait_only_reports_the_inflight_tick_and_triggers_nothing(
+def test_check_reports_the_newest_outcomes_and_triggers_nothing(
     tmp_path: Path,
     backup_events_dir: Path,
-    ticks: tuple[tuple[str, tuple[BackupEventType, ...]], ...],
+    ticks: tuple[tuple[BackupEventType, timedelta], ...],
     expected_exit_code: int,
-    expected_report: dict[str, object],
+    expected_outcome: str | None,
 ) -> None:
-    for tick_id, types in ticks:
-        write_tick(backup_events_dir, *types, tick_id=tick_id)
+    for index, (event_type, age) in enumerate(ticks):
+        _write_aged_tick(backup_events_dir, event_type, f"tick-{index}", age)
 
-    result = CliRunner().invoke(backup_now_main, ["--wait-only", "--timeout", "0.2"])
+    result = CliRunner().invoke(backup_now_main, ["--check"])
 
     assert result.exit_code == expected_exit_code
-    assert json.loads(result.stdout) == expected_report
+    assert json.loads(result.stdout)["newest_outcome"] == expected_outcome
     assert not (tmp_path / BACKUP_TOML_PATH).exists()
 
 

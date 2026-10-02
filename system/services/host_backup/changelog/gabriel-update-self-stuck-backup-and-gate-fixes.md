@@ -1,7 +1,5 @@
-`host-backup-now` no longer waits on a backup tick that will never finish. A tick killed mid-run (an OOM shed, the update's services restart) leaves no terminal event, and the command used to treat it as in flight until it scrolled out of the last 200 events, about 25 ticks later, holding every call for its full 30-minute timeout. Only the newest tick to start can be in flight now, since the service runs one tick at a time.
+Only the newest tick to start counts as in flight: the service runs one tick at a time, so an earlier tick with no terminal event was killed mid-run and will never finish. `host-backup-now` no longer waits on such a tick, and the service records it as `TICK_ABANDONED` when it starts again, so the events log holds no tick that never ends. The wait for a triggered tick skips that record and reports the restarted service's first tick.
 
-When the in-flight tick is still running at the timeout, `host-backup-now` exits 2 without triggering a new tick, instead of starting one nobody was waiting for.
+When the in-flight tick is still running at the timeout, `host-backup-now` exits 2 without triggering a tick nobody waits for.
 
-New `host-backup-now --wait-only` waits for the in-flight tick and triggers nothing, printing `{"inflight_tick_id": ..., "finished": ...}` and exiting 0 once no tick is in flight or 2 when it was still running at the timeout. With `--timeout 0` it only reports; the update apply runs it that way before restarting the services, to note a tick the restart interrupts.
-
-The service now records a tick it was killed in as `TICK_ABANDONED` when it starts again, so the events log no longer holds a tick that never ends. The wait for a triggered tick skips that record and reports the restarted service's first tick, which backs up again, instead of waiting out its timeout.
+New `host-backup-now --check` triggers nothing and waits for nothing: it prints the newest tick outcomes and exits 0 when a `restic_backup_succeeded` is within two backup intervals, 3 when the newest tick ended for missing secrets, and 1 otherwise. update-self runs it before an update as its restore-point check.

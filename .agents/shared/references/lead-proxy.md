@@ -294,6 +294,24 @@ On `type: status`:
   Its branch, worktree, and transcript stay for inspection. A timeout is
   the same once the liveness diagnosis says the worker is dead or wedged.
 
+### Resuming after the user overrides a failure
+
+When the user answers a `stuck` report with a decision (apply it anyway, an
+answer to what blocked the worker), resume the same worker rather than
+finishing its task yourself. Re-take whatever preconditions the calling skill
+holds for a pass (a lease, a run record), then revive it:
+
+```bash
+uv run .agents/skills/launch-task/scripts/create_worker.py revive --name <WORKER_NAME>
+```
+
+`revive` is `stop`'s inverse: `mngr start` brings the agent back in its
+worktree with its conversation intact, and the `archived_at` label the stop
+set is blanked, so a later crash of it is restarted like any other
+(`.agents/skills/launch-task/references/dead-worker-recovery.md`). Then send
+the decision with `create_worker.py reply`, re-arm the `await` poll, and end
+your turn.
+
 - `name: no-update-needed` (or other skill-specific benign no-op terminals) --
   the worker decided there was nothing to do. Close any tracking ticket and
   destroy the worker exactly as on `done`, with nothing to merge; do not

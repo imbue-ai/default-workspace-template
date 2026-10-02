@@ -2667,6 +2667,36 @@ def test_stop_reports_a_failed_agent_and_still_stops_the_rest(
     assert f"create_worker: {grandchild}: NOT stopped" in capsys.readouterr().err
 
 
+def test_revive_starts_the_agent_then_blanks_the_label_its_stop_left() -> None:
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.main(["revive", "--name", "demo-worker"], runner=runner)
+
+    assert rc == 0
+    argvs = _mngr_argvs(runner, "start", "label")
+    assert argvs == [
+        ["mngr", "start", "demo-worker"],
+        ["mngr", "label", "demo-worker", "-l", "archived_at="],
+    ]
+    for argv in argvs:
+        assert_mngr_argv_valid(argv)
+
+
+def test_revive_leaves_the_label_when_the_start_fails(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A worker that did not come back stays marked as stopped on purpose, so
+    nobody restarts it as a crash."""
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "start"), _StubResult(returncode=1))
+
+    rc = create_worker_mod.revive("demo-worker", runner)
+
+    assert rc == 1
+    assert _mngr_argvs(runner, "label") == []
+    assert "create_worker: demo-worker: NOT started" in capsys.readouterr().err
+
+
 def test_main_destroy_and_stop_flags_reach_the_functions() -> None:
     runner = _RecordingRunner()
     assert (

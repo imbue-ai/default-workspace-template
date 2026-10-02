@@ -34,8 +34,6 @@ import update_probes
 import update_runtime
 import update_self
 import update_target
-from click.testing import CliRunner
-from host_backup.cli import backup_now_main
 
 _SCRIPTS_DIR = Path(__file__).parent
 # ``.agents/skills/update-self/scripts/`` -> the workspace root.
@@ -2012,21 +2010,7 @@ def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     runner.respond(("git", "log", "--topo-order"), _Result(stdout=""))
     runner.respond(("git", "rev-list"), _Result(stdout=_ROLLBACK))
     runner.respond(("git", "describe"), _Result(returncode=128))
-    runner.respond(("uv", "run", "host-backup-now"), _backup_wait_result(None, True))
     return runner
-
-
-def _backup_wait_result(
-    inflight_tick_id: str | None, is_finished: bool, returncode: int = 0
-) -> _Result:
-    """What ``host-backup-now --wait-only`` prints, as the apply reads it."""
-    return _Result(
-        returncode=returncode,
-        stdout=json.dumps(
-            {"inflight_tick_id": inflight_tick_id, "finished": is_finished}
-        )
-        + "\n",
-    )
 
 
 def _apply(
@@ -2042,7 +2026,6 @@ def _apply(
     is_pid_live: Callable[[int], bool] = lambda pid: False,
     expend: Callable[[Sequence[str]], list[str]] = _tagging_expend,
     sweep_homes: Sequence[Path] = (),
-    backup_wait_seconds: float = 0.0,
 ) -> int:
     return update_apply.apply_update(
         merge_ref,
@@ -2060,7 +2043,6 @@ def _apply(
         is_pid_live=is_pid_live,
         expend=expend,
         sweep_homes=sweep_homes,
-        backup_wait_seconds=backup_wait_seconds,
     )
 
 
@@ -7091,114 +7073,6 @@ def test_an_env_converge_that_cannot_be_spawned_is_a_warning_not_a_traceback(
     err = capsys.readouterr().err
     assert "env-converge upgrade` failed" in err
     assert "uv: not found" in err
-
-
-_BACKUP_CHECK = ("uv", "run", "host-backup-now", "--wait-only")
-
-
-def test_the_apply_notes_a_backup_tick_its_restart_interrupts(
-    apply_repo: Path, capsys
-) -> None:
-    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    runner.respond(
-        ("uv", "run", "host-backup-now"),
-        _backup_wait_result("tick-1", False, returncode=2),
-    )
-
-    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
-
-    assert code == 0
-    [check] = runner.argvs_starting(*_BACKUP_CHECK)
-    assert check[check.index("--timeout") + 1] == "0"
-    assert runner.calls.index(check) < runner.calls.index(list(_RESTART))
-    assert "interrupted an in-flight backup tick" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    ("response", "expected_line"),
-    [
-        pytest.param(
-            _Result(returncode=2, stderr="Error: No such option: --wait-only"),
-            "could not check for an in-flight backup tick",
-            id="host-backup-now-predates-wait-only",
-        ),
-        pytest.param(
-            FileNotFoundError("uv: not found"),
-            "could not check for an in-flight backup tick",
-            id="cannot-be-spawned",
-        ),
-    ],
-)
-def test_a_backup_check_that_cannot_run_is_a_note_not_a_rollback(
-    apply_repo: Path, capsys, response: object, expected_line: str
-) -> None:
-    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    runner.respond(("uv", "run", "host-backup-now"), response)
-
-    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
-
-    assert code == 0
-    assert runner.ran(*_RESTART)
-    assert expected_line in capsys.readouterr().err
-
-
-def test_the_apply_waits_for_a_backup_tick_only_when_asked(
-    apply_repo: Path, capsys
-) -> None:
-    """The lead asks for a wait when Step 1's backup did not report an outcome: its tick,
-    the update's restore point, may still be running, and the restart would kill it."""
-    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    runner.respond(
-        ("uv", "run", "host-backup-now"), _backup_wait_result("tick-1", True)
-    )
-
-    code = _apply(
-        runner,
-        _FakeHttp(_all_healthy),
-        _FakeSpawner(),
-        apply_repo,
-        backup_wait_seconds=900,
-    )
-
-    assert code == 0
-    [check] = runner.argvs_starting(*_BACKUP_CHECK)
-    assert check[check.index("--timeout") + 1] == "900"
-    assert "waited 1s for an in-flight backup tick" in capsys.readouterr().err
-
-
-def test_the_apply_says_nothing_of_backups_when_none_is_in_flight(
-    apply_repo: Path, capsys
-) -> None:
-    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-
-    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
-
-    assert code == 0
-    assert "backup tick" not in capsys.readouterr().err
-
-
-def test_the_apply_reads_what_host_backup_now_wait_only_prints(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The apply runs the merged tree's ``host-backup-now``: hold its printed report to
-    the apply's reading of it."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
-    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path / "state"))
-    events = tmp_path / "state" / "events" / "backup" / "events.jsonl"
-    events.parent.mkdir(parents=True)
-    events.write_text(
-        json.dumps(
-            {"source": "backup", "type": "BACKUP_STARTED", "tick_id": "tick-busy"}
-        )
-        + "\n"
-    )
-
-    result = CliRunner().invoke(backup_now_main, ["--wait-only", "--timeout", "0"])
-
-    assert update_apply.parse_backup_wait_report(
-        result.stdout
-    ) == update_apply.BackupWaitReport(inflight_tick_id="tick-busy", is_finished=False)
 
 
 # recover

@@ -1,8 +1,7 @@
 """``apply`` lands a prepared merge and makes the live workspace consistent with
 it, as one deterministic, idempotent, rollback-on-failure motion: merge,
 state snapshots, dependency refresh, provisioner run, frontend build (or the
-worker's already-built bundle), pre-flight, a check for an in-flight backup tick,
-restart, health probes, the
+worker's already-built bundle), pre-flight, restart, health probes, the
 version-history ledger entry, and the environment converge. On any failure it
 reverts the entire merge and restores the pre-apply snapshots -- a recovery
 path needing no network, no package manager, and no working ``mngr``.
@@ -20,7 +19,6 @@ from __future__ import annotations
 
 import datetime
 import fcntl
-import json
 import os
 import re
 import shutil
@@ -146,9 +144,6 @@ _FRONTEND_BUILD_TIMEOUT_SECONDS = 1200.0
 
 
 _RESTART_TIMEOUT_SECONDS = 600.0
-
-# What `host-backup-now`'s own startup may add to the backup wait the caller asked for.
-_BACKUP_CHECK_STARTUP_SECONDS = 60.0
 
 _ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
 
@@ -880,90 +875,6 @@ def _recover_running_state(
     )
 
 
-class BackupWaitReport(NamedTuple):
-    """What ``host-backup-now --wait-only`` printed: the tick it found in flight, if any,
-    and whether that tick had finished by the time it returned."""
-
-    inflight_tick_id: str | None
-    is_finished: bool
-
-
-def parse_backup_wait_report(stdout: str) -> BackupWaitReport | None:
-    """The report on the last line of ``stdout``, or None when there is none (a tree
-    whose ``host-backup-now`` predates ``--wait-only``, or one that could not run)."""
-    lines = stdout.strip().splitlines()
-    if not lines:
-        return None
-    try:
-        report = json.loads(lines[-1])
-    except ValueError:
-        return None
-    if not isinstance(report, dict):
-        return None
-    tick_id = report.get("inflight_tick_id")
-    is_finished = report.get("finished")
-    if not (tick_id is None or isinstance(tick_id, str)) or not isinstance(
-        is_finished, bool
-    ):
-        return None
-    return BackupWaitReport(inflight_tick_id=tick_id, is_finished=is_finished)
-
-
-def _note_inflight_backup_tick(
-    repo_root: Path, runner: Runner, wait_seconds: float, now: Callable[[], float]
-) -> None:
-    """Let a backup tick in flight finish for up to ``wait_seconds`` before the services
-    restart interrupts it, and say on stderr when it waited or interrupted one.
-
-    The default is no wait: the restarted backup service records the tick as abandoned
-    and backs up again as its first tick. The caller passes a wait when the tick may be
-    the update's own restore point, still running. Never fails the apply.
-    """
-    argv = [
-        "uv",
-        "run",
-        "host-backup-now",
-        "--wait-only",
-        "--timeout",
-        f"{wait_seconds:g}",
-    ]
-    started_at = now()
-    try:
-        result = runner.run(
-            argv,
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=wait_seconds + _BACKUP_CHECK_STARTUP_SECONDS,
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        sys.stderr.write(
-            f"note: could not check for an in-flight backup tick ({exc}).\n"
-        )
-        return
-    report = parse_backup_wait_report(getattr(result, "stdout", "") or "")
-    if report is None:
-        stderr = (getattr(result, "stderr", "") or "").strip()
-        sys.stderr.write(
-            "note: could not check for an in-flight backup tick (`host-backup-now "
-            f"--wait-only` exited {getattr(result, 'returncode', '?')}: {stderr}).\n"
-        )
-        return
-    if report.inflight_tick_id is None:
-        return
-    if report.is_finished:
-        sys.stderr.write(
-            f"note: waited {now() - started_at:.0f}s for an in-flight backup tick to "
-            "finish before restarting.\n"
-        )
-        return
-    sys.stderr.write(
-        "note: interrupted an in-flight backup tick: the services restart stops it, and "
-        "the backup service backs up again as it comes back.\n"
-    )
-
-
 def _phase_timing_line(marker: ApplyMarker) -> str:
     """One stderr line of per-phase durations, from the marker's timings.
 
@@ -1044,7 +955,6 @@ def apply_update(
     expend: ExpendWrapper = as_expendable,
     sweep_homes: Sequence[Path],
     keep_rollback_point: bool = False,
-    backup_wait_seconds: float = 0.0,
 ) -> int:
     """Land ``merge_ref`` and make the live workspace consistent with it, as one
     atomic, idempotent, rollback-on-failure motion. Returns the process exit
@@ -1057,9 +967,6 @@ def apply_update(
     (merge already landed -> skip; snapshot already taken -> reuse; ledger
     entry present -> skip), so re-running ``apply`` after any interruption is
     safe -- that re-run *is* the DRI agent's recovery path.
-
-    ``backup_wait_seconds`` is how long the restart waits for a backup tick in flight
-    (:func:`_note_inflight_backup_tick`).
 
     With ``keep_rollback_point`` a successful apply leaves its snapshots in
     place and writes the rollback-point record the shell raises its notice
@@ -1396,8 +1303,6 @@ def apply_update(
                 repo_root, expected_bundle_hashes, live_service_restarted=False
             )
             _advance(PHASE_BUILT)
-
-        _note_inflight_backup_tick(repo_root, runner, backup_wait_seconds, now)
 
         # Every apply restarts the services agent, whatever the diff: the
         # running chat app imports mngr in-process, the shell and

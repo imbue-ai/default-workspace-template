@@ -2011,6 +2011,27 @@ def stop(name: str, runner: Runner | None = None, recursive: bool = True) -> int
     return _print_outcomes(outcomes)
 
 
+def revive(name: str, runner: Runner | None = None) -> int:
+    """Bring back a worker ``stop`` stopped, for a lead resuming its task after the
+    user overrode the failure.
+
+    ``mngr start`` re-creates the agent's session in its existing worktree with its
+    conversation intact; the ``archived_at`` label the stop set is then blanked
+    (mngr cannot remove a label), so a later crash of the revived worker is
+    restarted like any other. Only the named agent: a sub-worker it stopped is
+    its own to revive.
+    """
+    runner = runner or Runner()
+    outcomes = [_mngr_lifecycle_call("start", name, [], "started", runner)]
+    if outcomes[0].succeeded:
+        outcomes.append(
+            _mngr_lifecycle_call(
+                "label", name, ["-l", "archived_at="], "unarchived", runner
+            )
+        )
+    return _print_outcomes(outcomes)
+
+
 # Exit code for a report that could not be delivered at all: the task file named
 # no lead work dir and ``mngr list`` could not supply one. Shares ``launch``'s
 # "unusable inputs" code -- from the caller's side both mean the command did
@@ -2420,6 +2441,10 @@ def _run_stop(args: argparse.Namespace, runner: Runner | None) -> int:
     return stop(args.name, runner, recursive=not args.no_recursive)
 
 
+def _run_revive(args: argparse.Namespace, runner: Runner | None) -> int:
+    return revive(args.name, runner)
+
+
 def _run_reply(args: argparse.Namespace, runner: Runner | None) -> int:
     return reply(
         task_file=args.task_file,
@@ -2645,6 +2670,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stop only this agent; warn about each descendant left running.",
     )
 
+    revive_parser = subparsers.add_parser(
+        "revive",
+        help="Start a worker agent `stop` stopped and blank its archived_at label, "
+        "for resuming its task after the user overrode the failure.",
+    )
+    revive_parser.add_argument("--name", required=True, help="Worker name to revive.")
+
     reply_parser = subparsers.add_parser(
         "reply",
         help="Send the lead's reply (a gate answer, a nudge) to the worker's chat, "
@@ -2683,6 +2715,8 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         return _run_destroy(args, runner)
     if args.command == "stop":
         return _run_stop(args, runner)
+    if args.command == "revive":
+        return _run_revive(args, runner)
     if args.command == "reply":
         return _run_reply(args, runner)
     return _run_await(args)

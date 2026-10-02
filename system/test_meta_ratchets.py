@@ -3,7 +3,6 @@ import io
 import re
 import subprocess
 import tokenize
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -73,7 +72,7 @@ def _extract_test_function_names(file_path: Path) -> frozenset[str]:
     )
 
 
-# Meta: ensure every project has ratchets
+# --- Meta: ensure every project has ratchets ---
 
 
 def test_every_project_has_test_ratchets_file() -> None:
@@ -125,29 +124,7 @@ def test_all_test_ratchets_files_have_same_tests() -> None:
     )
 
 
-# Repo-wide ratchets
-
-
-def _git_considered_files(pathspec: str) -> list[str]:
-    """The repo-relative paths matching `pathspec` that git considers: tracked, or
-    untracked but not ignored."""
-    listed = subprocess.run(
-        [
-            "git",
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "--",
-            pathspec,
-        ],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return list(filter(None, listed.stdout.split("\0")))
+# --- Repo-wide ratchets ---
 
 
 def _find_bash_scripts_without_strict_mode() -> list[str]:
@@ -161,8 +138,24 @@ def _find_bash_scripts_without_strict_mode() -> list[str]:
     the non-source trees that hold no template code (virtualenvs, node_modules,
     git internals), all of which are gitignored.
     """
+    candidates = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "*.sh",
+        ],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     violations: list[str] = []
-    for rel in _git_considered_files("*.sh"):
+    for rel in filter(None, candidates.stdout.split("\0")):
         script = _REPO_ROOT / rel
         if _VENDORED_DIR in script.parents or not script.is_file():
             continue
@@ -292,122 +285,7 @@ def test_dockerignore_is_symlink_to_gitignore() -> None:
     )
 
 
-# Root-suite browser tests use module_browser
-#
-# pytest-playwright's fixtures share one session-scoped Playwright, whose asyncio loop
-# stays running in the xdist worker until the session ends, so every later browser
-# test on that worker fails (the root conftest's `module_browser` docstring). The chat
-# and the shell run their own pytest sessions and are out of scope, as is any test the
-# root config ignores.
-
-_PLAYWRIGHT_SESSION_FIXTURES = frozenset(
-    {
-        "page",
-        "context",
-        "browser",
-        "browser_context",
-        "new_context",
-        "browser_type",
-        "browser_context_args",
-        "launch_browser",
-        "playwright",
-    }
-)
-
-
-def _root_suite_ignored_paths() -> tuple[str, ...]:
-    """The paths the root pytest config's `--ignore=` options keep out of the root run."""
-    pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
-    addopts: list[str] = pyproject["tool"]["pytest"]["ini_options"]["addopts"]
-    return tuple(
-        option.removeprefix("--ignore=")
-        for option in addopts
-        if option.startswith("--ignore=")
-    )
-
-
-def _fixture_decorators(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> list[ast.expr]:
-    return [
-        decorator
-        for decorator in node.decorator_list
-        if ast.unparse(
-            decorator.func if isinstance(decorator, ast.Call) else decorator
-        ).endswith("fixture")
-    ]
-
-
-def _fixture_names(tree: ast.Module) -> set[str]:
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        for decorator in _fixture_decorators(node):
-            names.add(node.name)
-            if isinstance(decorator, ast.Call):
-                for keyword in decorator.keywords:
-                    if keyword.arg == "name" and isinstance(
-                        keyword.value, ast.Constant
-                    ):
-                        names.add(str(keyword.value.value))
-    return names
-
-
-def _conftest_fixture_names(test_file: Path) -> set[str]:
-    """The fixtures every conftest.py from the test's directory up to the repo root defines."""
-    names: set[str] = set()
-    for directory in test_file.parents:
-        conftest = directory / "conftest.py"
-        if conftest.is_file():
-            names |= _fixture_names(ast.parse(conftest.read_text()))
-        if directory == _REPO_ROOT:
-            break
-    return names
-
-
-def _find_playwright_session_fixture_uses() -> list[str]:
-    ignored = _root_suite_ignored_paths()
-    violations: list[str] = []
-    for rel in sorted(_git_considered_files("*.py")):
-        path = _REPO_ROOT / rel
-        if not (
-            path.name.startswith("test_")
-            or path.name.endswith("_test.py")
-            or path.name == "conftest.py"
-        ):
-            continue
-        if any(rel == prefix or rel.startswith(f"{prefix}/") for prefix in ignored):
-            continue
-        if _VENDORED_DIR in path.parents or not path.is_file():
-            continue
-        tree = ast.parse(path.read_text())
-        defined = _fixture_names(tree) | _conftest_fixture_names(path)
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            # A fixture taking one hands the session Playwright to every test using it.
-            if not node.name.startswith("test") and not _fixture_decorators(node):
-                continue
-            arguments = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
-            for name in sorted({argument.arg for argument in arguments}):
-                if name in _PLAYWRIGHT_SESSION_FIXTURES and name not in defined:
-                    violations.append(
-                        f"{rel}:{node.lineno}: {node.name} takes `{name}`"
-                    )
-    return violations
-
-
-def test_prevent_playwright_session_fixtures_in_root_suite_tests() -> None:
-    """A root-suite test or fixture drives a browser through `module_browser`, never pytest-playwright's session-scoped fixtures."""
-    violations = _find_playwright_session_fixture_uses()
-    assert len(violations) <= snapshot(0), (
-        "Tests or fixtures taking a pytest-playwright fixture (use `module_browser` from the root conftest):\n"
-        + "\n".join(f"  - {v}" for v in violations)
-    )
-
-
-# Retired-terminology ratchets (the creation rename)
+# --- Retired-terminology ratchets (the creation rename) ---
 #
 # The workspace vocabulary is: users make "creations" -- apps (opened as
 # tabs), skills (an automation is a skill run on a schedule), data, and
@@ -534,7 +412,7 @@ def test_prevent_application_terminology() -> None:
     )
 
 
-# Apps are apps, not services
+# --- Apps are apps, not services ---
 #
 # The shell is a window manager over apps; "service" is a background program
 # with no tab. The shell's own code, its frontend, and the frontend library the

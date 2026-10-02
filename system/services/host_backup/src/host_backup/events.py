@@ -8,9 +8,10 @@ failures without rerunning anything, with each field capped at write time
 (see `_truncated_for_storage`). The runner rotates the file between ticks
 (see `rotate_events_log_if_over`).
 
-`find_inflight_tick_id` reads the log back for the tick still running, which
-`host-backup-now` waits on; at startup the runner records the tick its previous
-run was killed in as `TICK_ABANDONED` (see `record_abandoned_tick`).
+`scan_recent_ticks` reads the log back for the tick still running and the newest
+tick outcomes, which `host-backup-now` waits on and checks; at startup the runner
+records the tick its previous run was killed in as `TICK_ABANDONED` (see
+`record_abandoned_tick`).
 """
 
 import json
@@ -18,7 +19,7 @@ import os
 from datetime import datetime, timezone
 from enum import auto
 from pathlib import Path
-from typing import Final
+from typing import Final, NamedTuple
 from uuid import uuid4
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
@@ -481,14 +482,23 @@ def _read_tail_lines(events_path: Path, *, max_lines: int, max_bytes: int) -> li
     return lines[-max_lines:]
 
 
-def find_inflight_tick_id(
+class RecentTicks(NamedTuple):
+    """What the end of the events log says about the ticks: the one in flight, if any,
+    the newest event that ended a tick, and the newest `RESTIC_BACKUP_SUCCEEDED`."""
+
+    inflight_tick_id: str | None
+    newest_terminal_event: dict[str, object] | None
+    newest_success_event: dict[str, object] | None
+
+
+def scan_recent_ticks(
     events_path: Path,
     *,
     max_lines: int = _INFLIGHT_SCAN_MAX_LINES,
     max_bytes: int = _TAIL_READ_MAX_BYTES,
-) -> str | None:
-    """Return the tick_id of the tick in flight, judged from the last `max_lines` events
-    that fit in the final `max_bytes` of the log, or None when none is.
+) -> RecentTicks:
+    """Read the ticks back from the last `max_lines` events that fit in the final
+    `max_bytes` of the log.
 
     Only the newest tick to start can be in flight: the runner runs one tick at a time,
     so an earlier tick with no terminal event was killed mid-run (an OOM shed, a
@@ -496,9 +506,11 @@ def find_inflight_tick_id(
     newest such tick as `TICK_ABANDONED` (`record_abandoned_tick`).
     """
     if not events_path.exists():
-        return None
+        return RecentTicks(None, None, None)
     lines = _read_tail_lines(events_path, max_lines=max_lines, max_bytes=max_bytes)
     newest_started: str | None = None
+    newest_terminal: dict[str, object] | None = None
+    newest_success: dict[str, object] | None = None
     finished: set[str] = set()
     for raw in lines:
         try:
@@ -517,9 +529,16 @@ def find_inflight_tick_id(
             newest_started = tick_id
         elif event_type in TICK_TERMINAL_EVENT_TYPES:
             finished.add(tick_id)
-    if newest_started is None or newest_started in finished:
-        return None
-    return newest_started
+            newest_terminal = event
+            if event_type == BackupEventType.RESTIC_BACKUP_SUCCEEDED.value:
+                newest_success = event
+    inflight = None if newest_started in finished else newest_started
+    return RecentTicks(inflight, newest_terminal, newest_success)
+
+
+def find_inflight_tick_id(events_path: Path) -> str | None:
+    """The tick_id of the tick in flight, or None when none is (`scan_recent_ticks`)."""
+    return scan_recent_ticks(events_path).inflight_tick_id
 
 
 def record_abandoned_tick(events_dir: Path | None) -> None:

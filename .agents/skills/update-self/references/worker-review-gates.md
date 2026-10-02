@@ -46,8 +46,9 @@ lockfile) and more, so do not select again with another base. Never run
 ever changed, not what this update reconciled, and it repeats suites 4b already
 ran. What you commit after 4b's suites run (a customization re-fit, a gate
 fix) is tested by what it reaches: `select-tests --diff-base <the commit
-before the first of them>`, every line of it. That run is the whole test gate
-for those commits; re-running a suite it did not print is a widening (4b).
+before the first of them>`, every line of it. Those lines are the whole gate
+for those commits; a suite they did not print is a widening, and goes through
+the `question` gate like any other.
 
 The gate's scope is **every file whose merged content differs from the target
 release**: the conflicts you resolved with any hand-written content, your own
