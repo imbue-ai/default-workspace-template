@@ -65,7 +65,7 @@ export function attributionLine(attribution: NoteAttribution | null): string {
       : "";
   const readers =
     attribution.reader_count === 0
-      ? "not read since"
+      ? "not opened by another chat yet"
       : `read by ${countLabel(attribution.reader_count, "chat", "chats")}`;
   return `${writer}${others} · ${readers}`;
 }

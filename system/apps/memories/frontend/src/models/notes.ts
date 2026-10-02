@@ -58,25 +58,42 @@ export type NotesState =
   | { readonly kind: "loaded"; readonly document: NotesDocument }
   | { readonly kind: "failed"; readonly message: string };
 
-export const NOTES_PATH = "/api/notes";
+const NOTES_PATH = "/api/notes";
+
+const NOTE_CONFLICT = "A chat changed this note while you had it open, so nothing was changed.";
+const UNREACHABLE = "Couldn't reach Agent Memory. Try again in a moment.";
+// The shell answers 503 while it wakes the app.
+const STARTING = "Agent Memory is starting. Try again in a moment.";
 
 let state: NotesState = { kind: "loading" };
+// Reads can finish out of order (a focus refresh racing the one after a write); only the latest one started counts.
+let latestRefresh = 0;
 
 export function getNotesState(): NotesState {
   return state;
 }
 
+/** Why a request was refused: the server's own reason when it gives one. */
+async function refusal(response: Response): Promise<string> {
+  if (response.status === 409) return NOTE_CONFLICT;
+  const answer: unknown = await response.json().catch(() => null);
+  const detail = typeof answer === "object" && answer !== null ? (answer as { detail?: unknown }).detail : undefined;
+  if (typeof detail === "string") return detail;
+  return response.status === 503 ? STARTING : `The page answered ${response.status}.`;
+}
+
 export async function refreshNotes(): Promise<void> {
+  const refresh = ++latestRefresh;
   try {
     const response = await fetch(NOTES_PATH, { cache: "no-store" });
-    if (!response.ok) {
-      // A 503 is the shell's "starting" page while the app wakes up: keep what is shown.
-      if (state.kind !== "loaded") state = { kind: "failed", message: `The page answered ${response.status}.` };
-      return;
-    }
-    state = { kind: "loaded", document: (await response.json()) as NotesDocument };
-  } catch (error) {
-    if (state.kind !== "loaded") state = { kind: "failed", message: String(error) };
+    const next: NotesState = response.ok
+      ? { kind: "loaded", document: (await response.json()) as NotesDocument }
+      : { kind: "failed", message: await refusal(response) };
+    if (refresh !== latestRefresh) return;
+    // A failed read keeps the notes already shown.
+    if (next.kind === "loaded" || state.kind !== "loaded") state = next;
+  } catch {
+    if (refresh === latestRefresh && state.kind !== "loaded") state = { kind: "failed", message: UNREACHABLE };
   } finally {
     m.redraw();
   }
@@ -89,12 +106,9 @@ async function send(method: "PUT" | "DELETE", path: string, body: object): Promi
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (response.ok) return null;
-    if (response.status === 409) return "A chat changed this note while you had it open, so nothing was changed.";
-    const detail = ((await response.json().catch(() => ({}))) as { detail?: string }).detail;
-    return detail ?? `The page answered ${response.status}.`;
-  } catch (error) {
-    return String(error);
+    return response.ok ? null : await refusal(response);
+  } catch {
+    return UNREACHABLE;
   } finally {
     await refreshNotes();
   }
