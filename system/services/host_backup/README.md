@@ -230,8 +230,8 @@ the current one holds no success yet), prints them as JSON (`newest_outcome`,
 `newest_success_at`, `age_seconds`, `max_age_seconds`, `inflight_tick_id`), and
 exits `0` when a `restic_backup_succeeded` is within two backup intervals (a healthy
 service's newest success is at most one interval plus one run old), `3` when the
-newest tick ended for missing secrets, and `1` otherwise (the service is down, or
-its ticks fail). The update-self skill runs it before an update, as the check that
+newest tick ended for missing secrets, `1` otherwise (the service is down, or its
+ticks fail), and `2` when the events log cannot be located. The update-self skill runs it before an update, as the check that
 a restore point exists.
 
 The service writes its events under the *primary* agent's state dir (it

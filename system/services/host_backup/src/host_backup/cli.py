@@ -16,7 +16,8 @@ still running at the timeout, it exits 2 without triggering a tick.
 With `--check` it triggers nothing and waits for nothing: it reads the newest tick
 outcomes back from the log, prints them, and exits 0 when a `restic_backup_succeeded`
 is recent (within two backup intervals), 3 when the newest tick ended for missing
-secrets, and 1 otherwise (the service is down, or its ticks fail).
+secrets, 1 otherwise (the service is down, or its ticks fail), and 2 when the events
+log cannot be located.
 """
 
 import json
