@@ -135,26 +135,23 @@ export function indexSummaryLine(index: IndexSummary, noteCount: number): string
     : `${opening} ${limit}; yours is ${countLabel(index.line_count, "line", "lines")} long.`;
 }
 
-export type IndexStatusKind = "seen" | "not-listed" | "past-limit";
+type IndexStatusKind = "listed" | "not-listed" | "past-limit";
 
-export interface IndexStatus {
-  readonly kind: IndexStatusKind;
-  readonly text: string;
+function indexStatusKind(note: Note): IndexStatusKind {
+  if (note.index_entry === null) return "not-listed";
+  return note.index_entry.is_loaded ? "listed" : "past-limit";
 }
 
-/** Whether chats see a note at the start, and the line they see, without its link. */
-export function indexStatus(note: Note): IndexStatus {
-  const entry = note.index_entry;
-  if (entry === null) {
-    return {
-      kind: "not-listed",
-      text: "Not in the list chats start with, so chats are unlikely to use it. Edit it to add it back.",
-    };
+/** Why chats won't see a note at the start, or null when they will. */
+export function indexWarning(note: Note): string | null {
+  switch (indexStatusKind(note)) {
+    case "listed":
+      return null;
+    case "not-listed":
+      return "Not in the list chats start with, so chats are unlikely to use it. Edit it to add it back.";
+    case "past-limit":
+      return "Past what chats load from that list, so they don't see it";
   }
-  if (!entry.is_loaded)
-    return { kind: "past-limit", text: "Past what chats load from that list, so they don't see it" };
-  const seen = entry.hook === "" ? entry.title : entry.title === "" ? entry.hook : `${entry.title} — ${entry.hook}`;
-  return { kind: "seen", text: `Chats start with: “${seen}”` };
 }
 
 /** The backups fact shown at the top: deleted notes outlive their delete there, so it says so. */
@@ -167,8 +164,8 @@ export function backupsChip(backups: BackupRetention): { readonly text: string; 
 
 /** One line naming what in the list chats load is wrong, or null when nothing is. */
 export function attentionLine(notes: readonly Note[], missingFiles: readonly string[]): string | null {
-  const countByKind: Record<IndexStatusKind, number> = { seen: 0, "not-listed": 0, "past-limit": 0 };
-  for (const note of notes) countByKind[indexStatus(note).kind] += 1;
+  const countByKind: Record<IndexStatusKind, number> = { listed: 0, "not-listed": 0, "past-limit": 0 };
+  for (const note of notes) countByKind[indexStatusKind(note)] += 1;
   const notListed = countByKind["not-listed"];
   const pastLimit = countByKind["past-limit"];
   const parts = [

@@ -260,12 +260,12 @@ def test_a_note_says_which_harness_saved_it() -> None:
     assert parse_note("no frontmatter").source is None
 
 
-def test_parse_index_reads_each_notes_line_title_and_summary() -> None:
+def test_parse_index_finds_each_notes_first_line() -> None:
     index = "# Memory\n- [Units](units.md) — Prefers metric\n* [Role](role.md) - Is a designer\n- [Again](units.md) — dup\n"
 
     assert parse_index(index) == {
-        "units.md": IndexEntry(title="Units", hook="Prefers metric", is_loaded=True),
-        "role.md": IndexEntry(title="Role", hook="Is a designer", is_loaded=True),
+        "units.md": IndexEntry(is_loaded=True),
+        "role.md": IndexEntry(is_loaded=True),
     }
 
 

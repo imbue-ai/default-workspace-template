@@ -67,11 +67,7 @@ def test_the_notes_document_says_how_long_the_backups_keep_a_deleted_note(tmp_pa
         "settings_path": str(tmp_path / "backup.toml"),
     }
     assert [note["file_name"] for note in body["notes"]] == ["units.md"]
-    assert body["notes"][0]["index_entry"] == {
-        "title": "Units",
-        "hook": "Prefers metric units",
-        "is_loaded": True,
-    }
+    assert body["notes"][0]["index_entry"] == {"is_loaded": True}
     assert body["index"] == {
         "line_count": 1,
         "loaded_line_count": 1,

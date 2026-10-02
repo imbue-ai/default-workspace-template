@@ -9,7 +9,8 @@ notes: `.pi/extensions/memory.ts` gives every pi turn the protocol in `.agents/s
 (adapted from Claude Code's own memory prompt, so both write one format) and the index, through
 `system/scripts/agent_memory_context.py`. Codex, OpenCode and Antigravity do not use the folder yet, and other
 workspaces have their own. A note pi saves says so in `metadata.source: pi-coding`; Claude Code marks its own with
-`originSessionId`.
+`originSessionId`. The same script keeps each note's `MEMORY.md` line equal to the note's `description` after any
+chat writes to the folder, so the line a chat starts from never contradicts the note.
 
 The top of the page is short: a line on when chats save a note, three facts (shared with Claude and pi chats, not
 shared with other workspaces, how long backups keep deleted notes), and a line naming anything wrong with the index
@@ -19,7 +20,9 @@ the limit Claude Code applies), where the notes go (stored here and in backups, 
 chat's AI provider when used, not synced to GitHub), and the technical details. Below that, each note is grouped by
 its `type` (about you, how you like things done, what you're working on, where things are), with:
 
-- the line chats start with for it, from `MEMORY.md`, or that it has none or falls past the load limit;
+- the summary and who saved it, with the full text and the file behind "Show more", so the page reads as a list;
+- a warning when chats won't see it at the start: it has no line in `MEMORY.md`, or its line falls past the load
+  limit;
 - who wrote it and how many other chats have read it, from the chats' own transcripts: a `Write`/`Edit`/`Read` (or
   pi's `write`/`edit`/`read`) tool call on the note's file. Claude's transcripts are read from every project, since a
   worker runs in a worktree of its own, and mapped to an agent through `claude_session_id_history`; pi's sit in each

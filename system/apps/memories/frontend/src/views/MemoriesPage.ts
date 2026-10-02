@@ -23,11 +23,10 @@ import {
   attentionLine,
   backupsChip,
   formatDate,
-  indexStatus,
+  indexWarning,
   indexSummaryLine,
   writerLine,
 } from "./format";
-import type { IndexStatusKind } from "./format";
 
 const SECTION_HEADING_CLASS = "type-section text-secondary";
 const DETAILS_CLASS =
@@ -74,12 +73,6 @@ const GROUPS: readonly Group[] = [
   },
   { type: "OTHER", label: "Other notes", description: "Notes that don't say what kind they are.", example: null },
 ];
-
-const STATUS_CLASS: Readonly<Record<IndexStatusKind, string>> = {
-  seen: "type-helper text-secondary",
-  "not-listed": "type-helper text-warning",
-  "past-limit": "type-helper text-warning",
-};
 
 export interface MemoriesPageAttrs {
   readonly state: NotesState;
@@ -198,7 +191,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
               m(
                 "p",
                 { class: "m-0 mt-2" },
-                `${document.index_path} lists them all, one line each. Every Claude chat loads that list when it starts (the first ${document.index.max_lines} lines, or ${Math.round(document.index.max_bytes / 1024)}KB, whichever is less) and opens a note when its line looks relevant; a note saved later reaches an open Claude chat on its next message.`,
+                `${document.index_path} lists them all, one line each, and each line is kept in step with its note's summary whenever a chat changes a note. Every Claude chat loads that list when it starts (the first ${document.index.max_lines} lines, or ${Math.round(document.index.max_bytes / 1024)}KB, whichever is less) and opens a note when its line looks relevant; a note saved later reaches an open Claude chat on its next message.`,
               ),
               m(
                 "p",
@@ -309,39 +302,42 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
     );
   }
 
-  function indexStatusLine(note: Note): m.Vnode {
-    const status = indexStatus(note);
-    return m(
-      "p",
-      { class: `memories-index-status m-0 ${STATUS_CLASS[status.kind]}`, "data-status": status.kind },
-      status.text,
+  function noteText(note: Note): m.Vnode[] {
+    return bodyBlocks(note.body).map((block) =>
+      block.label === null
+        ? m("p", { class: "m-0 max-w-[65ch] type-body text-primary" }, block.text)
+        : m("p", { class: "m-0 max-w-[65ch] type-body text-primary" }, [
+            m("span", { class: "font-semibold" }, `${block.label}: `),
+            block.text,
+          ]),
     );
   }
 
+  /** A note's summary and who saved it; its full text, and the file behind it, only when asked for. */
   function noteCard(note: Note, attrs: MemoriesPageAttrs): m.Vnode {
     if (draft !== null && draft.fileName === note.file_name) return editor(note, attrs, draft);
+    const moreKey = `more:${note.file_name}`;
     const fileKey = `file:${note.file_name}`;
+    const isExpanded = openDetails.has(moreKey);
+    const warning = indexWarning(note);
     return m(
       "article",
       {
         key: note.file_name,
         class: "memories-note flex flex-col gap-2 rounded-lg border border-default bg-surface p-4",
+        "data-expanded": String(isExpanded),
       },
       [
         m("h4", { class: "m-0 type-body font-semibold text-primary text-pretty" }, note.description),
-        ...bodyBlocks(note.body).map((block) =>
-          block.label === null
-            ? m("p", { class: "m-0 max-w-[65ch] type-body text-primary" }, block.text)
-            : m("p", { class: "m-0 max-w-[65ch] type-body text-primary" }, [
-                m("span", { class: "font-semibold" }, `${block.label}: `),
-                block.text,
-              ]),
-        ),
-        indexStatusLine(note),
+        warning === null ? null : m("p", { class: "memories-index-warning m-0 type-helper text-warning" }, warning),
+        ...(isExpanded ? noteText(note) : []),
         m("div", { class: "flex flex-wrap items-center justify-between gap-2 pt-1" }, [
           m("span", { class: "flex flex-wrap items-center gap-x-1.5 type-helper text-secondary" }, [
             `${writerLine(note)} · updated ${formatDate(note.modified_at)} ·`,
-            disclose(fileKey, "Show file", "Hide file"),
+            disclose(moreKey, "Show more", "Show less"),
+            ...(isExpanded
+              ? [m("span", { "aria-hidden": "true" }, "·"), disclose(fileKey, "Show file", "Hide file")]
+              : []),
           ]),
           m("div", { class: "flex gap-2" }, [
             m(
@@ -372,7 +368,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
             ),
           ]),
         ]),
-        openDetails.has(fileKey)
+        isExpanded && openDetails.has(fileKey)
           ? m("div", { class: DETAILS_CLASS }, [
               m("div", { class: "pb-2 text-secondary" }, note.file_name),
               m("pre", { class: "m-0 whitespace-pre-wrap break-words" }, note.raw_text),

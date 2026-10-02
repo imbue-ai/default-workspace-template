@@ -25,8 +25,6 @@ export interface NoteAttribution {
 
 /** A note's line in MEMORY.md: what every chat starts with, before it opens the note itself. */
 export interface IndexEntry {
-  readonly title: string;
-  readonly hook: string;
   readonly is_loaded: boolean;
 }
 

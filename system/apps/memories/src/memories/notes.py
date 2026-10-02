@@ -90,8 +90,6 @@ class Note(FrozenModel):
 class IndexEntry(FrozenModel):
     """A note's line in ``MEMORY.md``: what every chat starts with, before it opens the note itself."""
 
-    title: str = Field(description="The link text")
-    hook: str = Field(description="The summary after the link, as chats see it")
     is_loaded: bool = Field(description="Whether it falls within what a chat loads (200 lines or 25KB)")
 
 
@@ -256,11 +254,7 @@ def parse_index(index_text: str) -> dict[str, IndexEntry]:
         match = _INDEX_LINE_PATTERN.match(line)
         if match is None or match.group("file") in entry_by_file_name:
             continue
-        entry_by_file_name[match.group("file")] = IndexEntry(
-            title=match.group("title").strip(),
-            hook=match.group("hook").strip().lstrip("—–-:").strip(),
-            is_loaded=line_idx < loaded,
-        )
+        entry_by_file_name[match.group("file")] = IndexEntry(is_loaded=line_idx < loaded)
     return entry_by_file_name
 
 

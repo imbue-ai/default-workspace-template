@@ -9,7 +9,7 @@ import {
   deleteBackupsWarning,
   deletedStatus,
   formatDate,
-  indexStatus,
+  indexWarning,
   indexSummaryLine,
   writerLine,
 } from "./format";
@@ -98,26 +98,17 @@ describe("what chats load of the notes", () => {
     expect(indexSummaryLine(INDEX, 0)).toBeNull();
   });
 
-  it("shows the line a chat starts with, or why it has none, and how to fix a missing one", () => {
-    const listed = (title: string, hook: string, isLoaded: boolean): Note => ({
+  it("warns only about a note chats won't see at the start, and says how to fix a missing one", () => {
+    const listed = (isLoaded: boolean): Note => ({
       ...savedBy("claude"),
-      index_entry: { title, hook, is_loaded: isLoaded },
+      index_entry: { is_loaded: isLoaded },
     });
 
-    expect(indexStatus(listed("Units", "Prefers metric", true))).toEqual({
-      kind: "seen",
-      text: "Chats start with: “Units — Prefers metric”",
-    });
-    expect(indexStatus(listed("Units", "", true)).text).toBe("Chats start with: “Units”");
-    expect(indexStatus(listed("", "Prefers metric", true)).text).toBe("Chats start with: “Prefers metric”");
-    expect(indexStatus(listed("Units", "Prefers metric", false))).toEqual({
-      kind: "past-limit",
-      text: "Past what chats load from that list, so they don't see it",
-    });
-    expect(indexStatus(savedBy("claude"))).toEqual({
-      kind: "not-listed",
-      text: "Not in the list chats start with, so chats are unlikely to use it. Edit it to add it back.",
-    });
+    expect(indexWarning(listed(true))).toBeNull();
+    expect(indexWarning(listed(false))).toBe("Past what chats load from that list, so they don't see it");
+    expect(indexWarning(savedBy("claude"))).toBe(
+      "Not in the list chats start with, so chats are unlikely to use it. Edit it to add it back.",
+    );
   });
 });
 
@@ -129,8 +120,8 @@ describe("the short facts and warnings at the top", () => {
   });
 
   it("names what is wrong with the list chats load, and says nothing when it's all fine", () => {
-    const seen = { ...savedBy("claude"), index_entry: { title: "A", hook: "a", is_loaded: true } };
-    const pastLimit = { ...seen, index_entry: { ...seen.index_entry, is_loaded: false } };
+    const seen = { ...savedBy("claude"), index_entry: { is_loaded: true } };
+    const pastLimit = { ...seen, index_entry: { is_loaded: false } };
     const notListed = savedBy("claude");
 
     expect(attentionLine([seen], [])).toBeNull();

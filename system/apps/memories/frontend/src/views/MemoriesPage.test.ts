@@ -34,7 +34,7 @@ function note(
     modified_at: "2026-10-01T10:00:00Z",
     version: `1-${fileName.length}`,
     attribution: null,
-    index_entry: { title: description, hook: description.toLowerCase(), is_loaded: true },
+    index_entry: { is_loaded: true },
   };
 }
 
@@ -215,15 +215,28 @@ describe("explaining what is remembered, used and shared", () => {
     expect(root.querySelector('[data-group="OTHER"]')).toBeNull();
   });
 
-  it("shows the line each note puts in front of every chat", () => {
+  it("shows each note as its summary, who saved it and its actions, with the full text only on Show more", () => {
     const { root } = render();
-    const statuses = Array.from(root.querySelectorAll<HTMLElement>(".memories-index-status"));
+    const card = (): HTMLElement => root.querySelectorAll<HTMLElement>(".memories-note")[0];
 
-    expect(statuses.map((status) => status.textContent)).toEqual([
-      "Chats start with: “Is a product designer — is a product designer”",
-      "Chats start with: “Prefers metric units — prefers metric units”",
-    ]);
+    expect(card().textContent).toContain("Is a product designer");
+    expect(card().textContent).toContain("Who wrote this isn't recorded");
+    expect(card().textContent).not.toContain("Some detail.");
+    expect(card().textContent).not.toContain("Show file");
+    expect(root.textContent).not.toContain("Chats start with");
+    expect(root.querySelector(".memories-index-warning")).toBeNull();
     expect(root.querySelector(".memories-attention")).toBeNull();
+
+    click(root, "Show more");
+    expect(card().getAttribute("data-expanded")).toBe("true");
+    expect(card().textContent).toContain("Some detail.");
+    click(root, "Show file");
+    expect(card().querySelector("pre")?.textContent).toContain("description: Is a product designer");
+    expect(root.querySelectorAll<HTMLElement>(".memories-note")[1].textContent).not.toContain("Some detail.");
+
+    click(root, "Show less");
+    expect(card().textContent).not.toContain("Some detail.");
+    expect(card().querySelector("pre")).toBeNull();
     click(root, "How memory works");
     expect(root.textContent).toContain("whichever is less; yours is 2 lines long.");
   });
@@ -264,12 +277,15 @@ describe("states of the list chats load", () => {
     const missing = { ...note("cello.md", "Plays the cello", "USER"), index_entry: null };
     const cut = {
       ...note("units.md", "Prefers metric units", "FEEDBACK"),
-      index_entry: { title: "Units", hook: "metric", is_loaded: false },
+      index_entry: { is_loaded: false },
     };
     const { root } = render(BACKED_UP, null, withNotes([missing, cut], { line_count: 250, loaded_line_count: 200 }));
 
-    const statuses = Array.from(root.querySelectorAll<HTMLElement>(".memories-index-status"));
-    expect(statuses.map((status) => status.getAttribute("data-status"))).toEqual(["not-listed", "past-limit"]);
+    const warnings = Array.from(root.querySelectorAll<HTMLElement>(".memories-index-warning"));
+    expect(warnings.map((warning) => warning.textContent)).toEqual([
+      "Not in the list chats start with, so chats are unlikely to use it. Edit it to add it back.",
+      "Past what chats load from that list, so they don't see it",
+    ]);
     expect(root.querySelector(".memories-attention")?.textContent).toBe(
       "1 note isn't in the list chats start with, so chats are unlikely to use it. Editing a note adds it back. 1 note is past what chats load from that list, so they don't see it.",
     );
