@@ -63,7 +63,9 @@ def _register_client(app: Flask, client_id: str, desktop_id: str = "home") -> "q
 def _record_client(app: Flask, client_id: str, desktop_id: str = "home") -> None:
     """A client the shell has a record of but that is not connected."""
     _shell(app).clients.record_report(
-        ClientStateReport(client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id)), TEST_NOW
+        ClientStateReport(client_id=ClientId(client_id), active_desktop=DesktopId(desktop_id)),
+        TEST_NOW,
+        is_redirected=False,
     )
 
 

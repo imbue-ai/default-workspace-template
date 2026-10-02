@@ -183,9 +183,7 @@ class ClientStore(MutableModel):
                 return record
         return None
 
-    def record_report(
-        self, report: ClientStateReport, now: datetime, is_redirected: bool = False
-    ) -> ClientReportOutcome:
+    def record_report(self, report: ClientStateReport, now: datetime, is_redirected: bool) -> ClientReportOutcome:
         """Record a ``client_state`` report: the client's last-seen stamp and the desktop it names; the user it last
         arrived as stays. A report the shell redirected off a deleted desktop (``is_redirected``) bumps the desktop
         revision even when the stored desktop stays, so the window that made it takes the news of where it landed."""
@@ -206,7 +204,11 @@ class ClientStore(MutableModel):
         """Move a recorded client onto a desktop (a ``load`` op, an op's ``--desktop``, or a deleted desktop's
         fallback); raises ClientNotFoundError."""
         stamped = now.astimezone(timezone.utc)
-        return self._store_client(client_id, lambda previous: _moved_client(client_id, previous, desktop_id, stamped))
+        return self._store_client(
+            client_id,
+            lambda previous: _moved_client(client_id, previous, desktop_id, stamped),
+            is_revised_regardless=False,
+        )
 
     def record_arrival(
         self, client_id: ClientId, user_id: UserId | None, desktop_id: DesktopId, now: datetime
@@ -222,13 +224,14 @@ class ClientStore(MutableModel):
                 entries=previous.entries if previous is not None else {},
                 shown_history=previous.shown_history if previous is not None else (),
             ),
+            is_revised_regardless=False,
         )
 
     def _store_client(
         self,
         client_id: ClientId,
         build: Callable[[_StoredClient | None], _StoredClient],
-        is_revised_regardless: bool = False,
+        is_revised_regardless: bool,
     ) -> ClientReportOutcome:
         """Replace one client's entry with what ``build`` makes of the previous one (None for a new client), and
         answer whether the stored desktop moved. A move (or any write when ``is_revised_regardless``) bumps the
