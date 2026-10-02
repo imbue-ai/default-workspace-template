@@ -5,7 +5,12 @@ from browser import manifest as _manifest
 from browser import runner as _runner
 from browser import session as _session
 from workspace_layout.shell_url import ENV_SHELL_URL
-from workspace_layout.testing import FAKE_WINDOW_ID, LoopbackShell, desktop_answer, fake_desktop
+from workspace_layout.testing import (
+    FAKE_WINDOW_ID,
+    LoopbackShell,
+    desktop_answer,
+    fake_desktop,
+)
 
 
 @pytest.fixture(scope="session", autouse=True)

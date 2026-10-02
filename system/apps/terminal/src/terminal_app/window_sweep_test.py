@@ -1,11 +1,8 @@
-
 from app_manifest.primitives import AppName
 from imbue.mngr.utils.polling import wait_for
-from workspace_layout.shell_url import DESKTOPS_ROUTE
-from workspace_layout.testing import LoopbackShell
-from workspace_layout.testing import fake_window
-from workspace_layout.testing import fake_desktop
 from workspace_layout.answers import DesktopsListing
+from workspace_layout.shell_url import DESKTOPS_ROUTE
+from workspace_layout.testing import LoopbackShell, fake_desktop, fake_window
 
 from terminal_app.primitives import TmuxSessionName
 from terminal_app.sessions import TmuxSessionSource

@@ -25,8 +25,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
-from workspace_layout.windows import parse_window_closed_hint
-from workspace_layout.windows import window_query_value
+from workspace_layout.windows import parse_window_closed_hint, window_query_value
 
 from terminal_app.errors import (
     InvalidTerminalValueError,
