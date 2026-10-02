@@ -1513,6 +1513,14 @@ def _record_desktop_traffic(page: Page) -> _DesktopTraffic:
     return traffic
 
 
+def _create_desktop_shown_on(server: E2EServer, pages: list[Page]) -> str:
+    """Create a second desktop and wait until every page offers a switch to it; answers its id."""
+    desktop_id = _post_json(f"{server.base_url}/api/desktops", {"name": "Other", "color": "#4477aa", "glyph": 0})["id"]
+    for page in pages:
+        expect(page.locator(f'[data-desktop-switch="{desktop_id}"]')).to_be_visible(timeout=15000)
+    return desktop_id
+
+
 def _switch_rapidly(page: Page, desktop_ids: list[str], traffics: list[_DesktopTraffic]) -> None:
     """Click the desktops in turn as fast as the pointer goes, waiting on nothing between clicks, then wait until
     every page has heard the move of each click."""
@@ -1558,8 +1566,7 @@ def test_rapid_desktop_switches_settle_on_the_last_one_chosen(e2e_server: E2ESer
     traffic = _record_desktop_traffic(page)
     _land(page, e2e_server)
     window_id = _open_via_shortcut(page, e2e_server)
-    other = _post_json(f"{e2e_server.base_url}/api/desktops", {"name": "Other", "color": "#4477aa", "glyph": 0})["id"]
-    expect(page.locator(f'[data-desktop-switch="{other}"]')).to_be_visible(timeout=15000)
+    other = _create_desktop_shown_on(e2e_server, [page])
 
     _switch_rapidly(page, [other, _HOME_DESKTOP_ID, other, _HOME_DESKTOP_ID], [traffic])
     _expect_settled_on(page, _HOME_DESKTOP_ID, window_id)
@@ -1576,9 +1583,7 @@ def test_two_windows_of_one_client_settle_together_after_rapid_switches(e2e_serv
     _land(page, e2e_server)
     window_id = _open_via_shortcut(page, e2e_server)
     _land(second, e2e_server)
-    other = _post_json(f"{e2e_server.base_url}/api/desktops", {"name": "Other", "color": "#4477aa", "glyph": 0})["id"]
-    for shown in (page, second):
-        expect(shown.locator(f'[data-desktop-switch="{other}"]')).to_be_visible(timeout=15000)
+    other = _create_desktop_shown_on(e2e_server, [page, second])
 
     _switch_rapidly(page, [other, _HOME_DESKTOP_ID, other, _HOME_DESKTOP_ID], traffics)
     for shown in (page, second):
