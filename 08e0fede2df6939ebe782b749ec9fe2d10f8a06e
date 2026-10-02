@@ -1,4 +1,7 @@
 {
+  "offload-modal-system-interface.toml": {
+    "image_id": "im-L3MTKdEBEFcPeTSILgEGrM"
+  },
   "offload-modal-chat.toml": {
     "image_id": "im-TOQCojCepYtyenLb0E9XtI"
   },
