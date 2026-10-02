@@ -40,7 +40,7 @@ class ShellLayoutInterface(MutableModel, ABC):
 
     @abstractmethod
     def place(self, args: PlaceArgs) -> DesktopOpAnswer:
-        """Set a window's frame for a client."""
+        """Set a window's state (snapped to a half, or maximized) or its frame for a client."""
 
     @abstractmethod
     def close(self, args: WindowArgs) -> DesktopOpAnswer:
