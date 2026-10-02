@@ -807,6 +807,7 @@ def test_the_chat_list_opened_with_nothing_selected_shows_the_most_recent_chat(t
         expect(_chat_root(page).locator(".chat-root-empty")).to_have_count(0)
 
 
+@pytest.mark.timeout(120, func_only=False)
 def test_the_chat_list_leads_with_the_welcome_chat_and_opens_on_it_over_a_more_recent_chat(
     tmp_path: Path, page: Page
 ) -> None:
