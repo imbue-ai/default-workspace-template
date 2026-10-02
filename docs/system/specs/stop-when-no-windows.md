@@ -203,7 +203,7 @@ On every pass of the lifecycle sweep, for each app that is stoppable, whose row 
 A stop is `stopProcess(program, wait=False)`, logged at info, followed by a liveness refresh; the next pass parks the port.
 The idle mark lives in the manager's memory: a shell restart starts the 60 seconds over, which is the safe direction.
 
-The per-app grants are read by the shell itself (`shell/share_grants.py`), once per pass and only when a pass finds a running app that declares the field and has no window: an app is granted when `data/.secrets/share.env` exists (the workspace is shared) and its `[services.<name>]` table in `data/.secrets/share_grants.toml` has a non-empty `users`, `emails`, or `email_domains`.
+The per-app grants are read by the shell itself (`shell/share_grants.py`), once per pass and only when a pass finds a running app that declares the field, is shareable, and has no window: an app is granted when `data/.secrets/share.env` exists (the workspace is shared) and its `[services.<name>]` table in `data/.secrets/share_grants.toml` has a non-empty `users`, `emails`, or `email_domains`.
 A missing document grants no app (the desktop writes it before the materials), and so does one the gateway would refuse (which then admits nobody), warned about once per version of the file.
 A granted app that is already parked when the grant is added is woken by the visitor's first request, as any parked app is.
 
