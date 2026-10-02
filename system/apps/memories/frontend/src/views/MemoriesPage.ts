@@ -28,11 +28,14 @@ import {
   writerLine,
 } from "./format";
 
-const SECTION_HEADING_CLASS = "type-section text-faint";
+const SECTION_HEADING_CLASS = "type-section text-secondary";
 const DETAILS_CLASS =
   "memories-details overflow-x-auto rounded-md bg-surface-secondary p-3 font-mono type-helper text-secondary";
 const DISCLOSE_CLASS = "memories-disclose self-start cursor-pointer type-helper text-accent hover:underline";
 const NoticeDialog = makeNoticeDialog();
+// The shared warning badge sets amber text on an amber fill (4.0:1, under WCAG AA's 4.5:1); the caution class in
+// style.css keeps the fill and darkens the text.
+const CAUTION_BADGE_CLASS = badgeClass("warning", { extra: "memories-caution" });
 
 interface Group {
   readonly type: NoteType;
@@ -124,18 +127,22 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
   function memoryFacts(document: NotesDocument): m.Vnode {
     const backups = backupsChip(document.backups);
     return m("div", { class: "memories-facts flex flex-wrap items-center gap-2" }, [
-      m("span", { class: badgeClass("success") }, "Shared with your Claude and pi chats"),
+      m("span", { class: badgeClass("accent") }, "Shared with your Claude and pi chats"),
       m("span", { class: badgeClass("neutral") }, "Stays in this workspace"),
-      m("span", { class: badgeClass(backups.isWarning ? "warning" : "neutral") }, backups.text),
+      m("span", { class: backups.isWarning ? CAUTION_BADGE_CLASS : badgeClass("neutral") }, backups.text),
       disclose("how", "How memory works", "Hide how memory works"),
     ]);
   }
 
   /** Everything behind "How memory works": what is saved, what chats use, where notes go, and how it's built. */
   function howMemoryWorks(document: NotesDocument): m.Vnode {
-    const row = (tone: "success" | "neutral" | "warning", label: string, text: string): m.Vnode =>
+    const row = (tone: "accent" | "neutral" | "caution", label: string, text: string): m.Vnode =>
       m("div", { class: "grid grid-cols-[96px_minmax(0,1fr)] items-baseline gap-3" }, [
-        m("span", { class: `justify-self-start ${badgeClass(tone)}` }, label),
+        m(
+          "span",
+          { class: `justify-self-start ${tone === "caution" ? CAUTION_BADGE_CLASS : badgeClass(tone)}` },
+          label,
+        ),
         m("span", { class: "type-body text-primary" }, text),
       ]);
     const heading = (text: string): m.Vnode => m("h3", { class: "m-0 type-label text-primary" }, text);
@@ -164,7 +171,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
           heading("Where your notes go"),
           row("neutral", "Stored", "In this workspace only. They aren't synced to GitHub."),
           row(
-            "success",
+            "accent",
             "Read by",
             "Every Claude and pi chat in this workspace, including new ones and the background tasks they start.",
           ),
@@ -175,7 +182,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
             "The AI provider of a chat that uses a note (Anthropic, for Claude chats), as part of that chat.",
           ),
           row("neutral", "Not shared", "Your other workspaces. Each has its own notes."),
-          row(document.backups.is_backed_up ? "warning" : "neutral", "Backups", backupsLine(document.backups)),
+          row(document.backups.is_backed_up ? "caution" : "neutral", "Backups", backupsLine(document.backups)),
         ]),
         disclose("tech", "Technical details", "Hide technical details"),
         openDetails.has("tech")
@@ -338,7 +345,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
         ]),
         openDetails.has(fileKey)
           ? m("div", { class: DETAILS_CLASS }, [
-              m("div", { class: "pb-2 text-faint" }, note.file_name),
+              m("div", { class: "pb-2 text-secondary" }, note.file_name),
               m("pre", { class: "m-0 whitespace-pre-wrap break-words" }, note.raw_text),
             ])
           : null,
@@ -419,7 +426,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
               notes.length === 0 && group.example !== null
                 ? m(
                     "p",
-                    { class: "m-0 type-helper text-faint" },
+                    { class: "m-0 type-helper text-secondary" },
                     `Nothing yet. Try telling a chat: “${group.example}”`,
                   )
                 : notes.map((note) => noteCard(note, attrs, document.index.max_lines)),

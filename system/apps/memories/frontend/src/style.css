@@ -1,8 +1,13 @@
 @import "tailwindcss" source(none);
 /* The design system: colour and type tokens, the typography roles and the base layer, shared with
-   every other frontend of the workspace (see system/libs/workspace_ui). This page needs nothing
-   the utilities cannot express. */
+   every other frontend of the workspace (see system/libs/workspace_ui). */
 @import "@imbue/workspace-ui/src/base.css";
+
+/* Dark text on the warning badge's amber fill. Unlayered, so it outranks the badge's layered
+   text-warning utility whatever order Tailwind emits them in. */
+.memories-caution {
+  color: var(--color-primary);
+}
 
 /* The utility classes live in the TS views' class strings; a class name assembled by string
    concatenation is NOT detected. */

@@ -7,3 +7,5 @@
 - "Who can see these notes" is now "Where your notes go": stored only in this workspace and not synced to GitHub, read by every Claude and pi chat and the background tasks they start, sent to a chat's AI provider when that chat uses a note, kept in backups, and not shared with other workspaces.
 
 - The app is now called Agent Memory, and its top section is short: the headline, one sentence, three facts (shared with your Claude and pi chats, stays in this workspace, backups keep deleted notes), and a "How memory works" link that opens the full explanation. A warning appears only when some notes aren't in the list chats load.
+
+- Text and chips meet WCAG AA contrast (4.5:1): headings and hints use the secondary gray instead of the faint one, the green chips use the accent color, and the amber backups chips use dark text.
