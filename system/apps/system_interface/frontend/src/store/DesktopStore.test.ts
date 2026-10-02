@@ -804,6 +804,23 @@ describe("desktop news", () => {
     expect(socket.reports.slice(-2)).toEqual([followingReport("home"), followingReport("work")]);
   });
 
+  it("ends on the desktop chosen last when the switches wait on a save", async () => {
+    const store = await startedStore();
+    store.minimizeWindow("win-1");
+    const answer = api.holdWrites();
+    const switches = ["work", "home", "work", "home"].map((desktopId) => store.switchDesktop(desktopId));
+    answer();
+    await Promise.all(switches);
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(socket.reports.slice(-4)).toEqual([
+      moveReport("work", "home"),
+      moveReport("home", "work"),
+      moveReport("work", "home"),
+      moveReport("home", "work"),
+    ]);
+  });
+
   it("re-asserts a switch made while the socket was down over a record no newer than it heard", async () => {
     const store = await startedStore();
     socket.deliver().onConnected();

@@ -1194,9 +1194,10 @@ export class DesktopStore {
    *  and fetch the incoming layout. The user's switch moves the client and names the desktop it left; the
    *  bootstrap's landing moves it naming none; a follow of the stored desktop moves nothing. */
   async switchDesktop(desktopId: string, cause: SwitchCause = "user"): Promise<void> {
+    // The desktop left is read after the save: an earlier switch waiting on the same save moves the window first.
+    await this.flushPendingSave();
     const previous = this.state.activeDesktopId;
     if (previous === desktopId) return;
-    await this.flushPendingSave();
     this.cancelGesture();
     this.dispatch({ type: "desktop_activated", desktopId });
     switch (cause) {
