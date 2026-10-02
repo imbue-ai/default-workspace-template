@@ -129,7 +129,7 @@ BUNDLED_DESIGNS: Final[tuple[BundledDesign, ...]] = (
 # preview, and the image route. It is generated from the rig itself (the frontend's `src/views/character/stillFrame.ts`
 # says how) so it cannot drift from the pose the character actually holds; do not hand-edit it.
 LIVE_DESIGN_ID: Final[DesignId] = DesignId("imbue-character")
-LIVE_DESIGN_LABEL: Final[str] = "Imbue character"
+LIVE_DESIGN_LABEL: Final[str] = "Imbue"
 _LIVE_DESIGN_FILENAME: Final[str] = "imbue-character.svg"
 
 DEFAULT_DESIGN_ID: Final[DesignId] = LIVE_DESIGN_ID

@@ -120,6 +120,95 @@ describe("the user arriving", () => {
   });
 });
 
+describe("being chosen", () => {
+  /** The highest the body got off its resting spot over `count` frames, in viewBox units. */
+  async function highestOver(root: HTMLElement, count: number): Promise<number> {
+    let highest = 0;
+    for (let i = 0; i < count; i++) {
+      await runFrames(1);
+      const transform = root.querySelector("[data-character-body]")?.getAttribute("transform") ?? "";
+      const y = Number(/translate\(-?[\d.]+ (-?[\d.]+)\)/.exec(transform)?.[1] ?? 0);
+      highest = Math.max(highest, -y);
+    }
+    return highest;
+  }
+
+  it("jumps as it appears when it has just been chosen", async () => {
+    const root = render({ isArriving: true });
+    expect(await highestOver(root, 45)).toBeGreaterThan(40);
+  });
+
+  it("stays on the floor when it appears any other way", async () => {
+    // A page load, or its entry drawn somewhere else: only the float moves it.
+    const root = render();
+    expect(await highestOver(root, 45)).toBeLessThan(5);
+  });
+
+  it("does not jump when motion is reduced", async () => {
+    setReducedMotion(true);
+    const root = render({ isArriving: true });
+    expect(await highestOver(root, 45)).toBeLessThan(5);
+  });
+});
+
+describe("a mouse resting on it", () => {
+  /** Where the body is drawn, in viewBox units. */
+  function placeOf(root: HTMLElement): { x: number; y: number } {
+    const transform = root.querySelector("[data-character-body]")?.getAttribute("transform") ?? "";
+    const match = /translate\((-?[\d.]+) (-?[\d.]+)\)/.exec(transform);
+    return { x: Number(match?.[1] ?? 0), y: Number(match?.[2] ?? 0) };
+  }
+
+  /** Mount it at 100px square, so a pixel is two viewBox units. */
+  function sized(): { root: HTMLElement; svg: SVGSVGElement } {
+    const root = render({ size: 100 });
+    const svg = root.querySelector("svg") as SVGSVGElement;
+    svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 100 }) as DOMRect;
+    return { root, svg };
+  }
+
+  function pointer(svg: SVGSVGElement, type: string, pointerType: string, x: number, y: number): void {
+    svg.dispatchEvent(new window.PointerEvent(type, { pointerId: 1, pointerType, clientX: x, clientY: y }));
+  }
+
+  it("nudges the body away from it, and lets go when it leaves", async () => {
+    const { root, svg } = sized();
+    await runFrames(2);
+    const rest = placeOf(root).x;
+    // In from the right edge: the body moves left by about 2px, 4 units.
+    pointer(svg, "pointerenter", "mouse", 100, 50);
+    await runFrames(60);
+    expect(placeOf(root).x - rest).toBeLessThan(-3);
+    expect(placeOf(root).x - rest).toBeGreaterThan(-5);
+
+    pointer(svg, "pointerleave", "mouse", 100, 50);
+    await runFrames(60);
+    expect(Math.abs(placeOf(root).x - rest)).toBeLessThan(0.5);
+  });
+
+  it("holds where the mouse came in, however it moves across", async () => {
+    const { root, svg } = sized();
+    await runFrames(2);
+    pointer(svg, "pointerenter", "mouse", 100, 50);
+    await runFrames(60);
+    const held = placeOf(root);
+    // Across to the left edge: still shied leftward from the right, where it came in.
+    pointer(svg, "pointermove", "mouse", 50, 50);
+    pointer(svg, "pointermove", "mouse", 0, 50);
+    await runFrames(60);
+    expect(placeOf(root).x).toBeCloseTo(held.x, 0);
+  });
+
+  it("is a mouse's alone: a finger does not hover", async () => {
+    const { root, svg } = sized();
+    await runFrames(2);
+    const rest = placeOf(root).x;
+    pointer(svg, "pointerenter", "touch", 100, 50);
+    await runFrames(60);
+    expect(Math.abs(placeOf(root).x - rest)).toBeLessThan(0.5);
+  });
+});
+
 describe("reduced motion", () => {
   it("draws the character but holds it still", async () => {
     setReducedMotion(true);
