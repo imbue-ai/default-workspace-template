@@ -72,8 +72,8 @@ def _error(detail: str, status_code: int) -> Response:
 
 def focus_chat_endpoint() -> Response:
     """``POST /api/focus-chat``: ask the shell to show the chat to the client. Answers the shell's ``shown`` and
-    window; 400 for a chat or client id of the wrong shape, 403 in a secondary chat (it opens no windows), and 502 when the
-    shell could not be reached, refused, or answered something that is not a show's answer."""
+    window; 400 for a chat or client id of the wrong shape, 403 in a secondary chat (it opens no windows), and 502
+    when the shell could not be reached, refused, or answered something that is not a show's answer."""
     focus_request = parse_request_body(FocusChatRequest)
     if not AGENT_ID_PATTERN.fullmatch(focus_request.chat_id):
         return _error(f"{focus_request.chat_id!r} is not a chat id", HTTP_BAD_REQUEST)
