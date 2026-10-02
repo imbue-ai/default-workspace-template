@@ -764,6 +764,8 @@ def _place(
         shell.edit_desktop_layout(
             target.desktop, target.client_id, lambda current: with_window_frame(current, window.id, frame)
         )
+    else:
+        raise LayoutOpError("place takes a state or a frame")
     return window.id
 
 
