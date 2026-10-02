@@ -969,6 +969,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
         "phase": "creating",
         "error": None,
         "is_seeded": False,
+        "is_default": False,
     }
     assert [proto.chat_id for proto in agent_manager.get_provisional_chats()] == ["failed-1"]
 
