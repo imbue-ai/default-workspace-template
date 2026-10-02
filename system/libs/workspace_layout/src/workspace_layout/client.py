@@ -246,7 +246,8 @@ class DisconnectedShell(ShellLayoutInterface):
         raise _no_shell_error(f"show {args.path} to client {args.client}")
 
     def open(self, args: OpenArgs) -> OpenAnswer:
-        raise _no_shell_error(f"open {args.path} of {args.app}")
+        page = args.path if args.path is not None else f"launch path {args.launch or 'default'}"
+        raise _no_shell_error(f"open {page} of {args.app}")
 
     def focus(self, args: WindowArgs) -> DesktopOpAnswer:
         raise _no_shell_error(f"focus window {args.window}")
