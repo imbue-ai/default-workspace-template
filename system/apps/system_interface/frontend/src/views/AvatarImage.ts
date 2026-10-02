@@ -25,30 +25,14 @@ export interface AvatarImageAttrs {
   /** Whether the user is at this entry's window. Only the character answers it, and only an entry
    *  knows: a caller that is drawing the avatar as an identifying icon leaves it out. */
   readonly isAttending?: boolean;
-  /** When a pushed selection last switched the design (`AvatarState.switchedAt`). */
-  readonly switchedAt?: number | null;
   readonly class: string;
 }
 
-/**
- * How soon after a switch a character that mounts counts as the one just chosen, in ms.
- *
- * The switch mounts it on the next redraw, so the slack is only for a busy page. The bound keeps the
- * jump to the switch: the character also mounts on every load and whenever its entry is drawn
- * somewhere else.
- */
-const ARRIVAL_WINDOW_MS = 1000;
-
 export const AvatarImage: m.Component<AvatarImageAttrs> = {
   view(vnode) {
-    const { design, defaultDesign, mood, switchedAt } = vnode.attrs;
+    const { design, defaultDesign, mood } = vnode.attrs;
     if (design === IMBUE_CHARACTER_DESIGN_ID) {
-      return m(ImbueCharacter, {
-        mood,
-        isAttending: vnode.attrs.isAttending === true,
-        isArriving: switchedAt != null && performance.now() - switchedAt < ARRIVAL_WINDOW_MS,
-        class: vnode.attrs.class,
-      });
+      return m(ImbueCharacter, { mood, isAttending: vnode.attrs.isAttending === true, class: vnode.attrs.class });
     }
     return m("img", {
       "data-avatar-image": design,
@@ -112,7 +96,6 @@ export function entryStyleParts(
           defaultDesign: avatar.defaultDesign,
           mood: avatar.status.mood,
           isAttending: isUserAtWindow(entry),
-          switchedAt: avatar.switchedAt,
           class: imageClass,
         })
       : m.trust(appGlyph(entry.app, glyphSize)),

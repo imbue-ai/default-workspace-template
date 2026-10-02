@@ -93,14 +93,12 @@ export const SHOWN_HISTORY_LIMIT = 20;
 
 export const INITIAL_PHONE_STATE: PhoneState = { shown: null, history: [], sheet: null };
 
-/** The avatar as this window draws it: the workspace's design, the design a failed load falls back to, the
- *  last status the shell pushed (stale and idle until one arrives), and when a pushed selection last switched
- *  the design (`performance.now()`; null until one does -- reading the design at start is not a switch). */
+/** The avatar as this window draws it: the workspace's design, the design a failed load falls back to, and
+ *  the last status the shell pushed (stale and idle until one arrives). */
 export interface AvatarState {
   readonly design: string;
   readonly defaultDesign: string;
   readonly status: AvatarStatus;
-  readonly switchedAt: number | null;
 }
 
 /** The design drawn until the shell says otherwise: the one the shell bundles as its default. */
@@ -110,7 +108,6 @@ export const INITIAL_AVATAR_STATE: AvatarState = {
   design: INITIAL_AVATAR_DESIGN,
   defaultDesign: INITIAL_AVATAR_DESIGN,
   status: { mood: "idle", is_stale: true },
-  switchedAt: null,
 };
 
 export function initialDesktopState(clientId: string, modes: RenderModes): DesktopState {
@@ -176,13 +173,7 @@ export type DesktopEvent =
   /** The ``avatar_status`` the shell pushed. */
   | { readonly type: "avatar_status_updated"; readonly status: AvatarStatus }
   /** The workspace's design, as the catalog or an ``avatar_selection_changed`` says. */
-  | {
-      readonly type: "avatar_selection_updated";
-      readonly design: string;
-      readonly defaultDesign: string | null;
-      /** When the shell pushed it; null for the read at start. */
-      readonly pushedAt: number | null;
-    }
+  | { readonly type: "avatar_selection_updated"; readonly design: string; readonly defaultDesign: string | null }
   /** The ``update_notice_changed`` the shell pushed (and its seed on connect); null once the record is cleared. */
   | { readonly type: "update_notice_changed"; readonly notice: UpdateNotice | null }
   | { readonly type: "workspace_name_updated"; readonly workspaceName: string }
@@ -365,8 +356,6 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
           ...state.avatar,
           design: event.design,
           defaultDesign: event.defaultDesign ?? state.avatar.defaultDesign,
-          switchedAt:
-            event.pushedAt !== null && event.design !== state.avatar.design ? event.pushedAt : state.avatar.switchedAt,
         },
       };
     case "update_notice_changed":

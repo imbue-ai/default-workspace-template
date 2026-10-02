@@ -59,7 +59,7 @@ export function characterStillSvg(color: string = CHARACTER_COLOR): string {
   const body = frame.transform === "" ? place : `${place} ${frame.transform}`;
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${DESIGN_SIZE} ${DESIGN_SIZE}">`,
-    `<title>Imbue</title>`,
+    `<title>Imbue character</title>`,
     `<g transform="${body}"><path d="${frame.d}" fill="${color}"/></g>`,
     `</svg>`,
   ].join("");

@@ -173,7 +173,6 @@ export function avatarStateRecord(overrides: Partial<AvatarState> = {}): AvatarS
     design: "gummy-seal",
     defaultDesign: "gummy-seal",
     status: { mood: "idle", is_stale: false },
-    switchedAt: null,
     ...overrides,
   };
 }

@@ -2,14 +2,11 @@
  * The blob rig: every way the character can move, as springs you poke.
  *
  * The rig is plain TypeScript with no framework in it -- construct one, call
- * `step(dt)` each frame, read `frame()`. The channels, each independent:
+ * `step(dt)` each frame, read `frame()`. Three independent channels:
  *
  *   surface   the modal wobble (see blobPath.ts) -- six springs that ring
  *   body      squash & stretch, one spring, area-preserving
- *   impact    a second, much faster squash, for blows and landings
  *   tilt      the lean, which is the whole of the character's posture
- *   hop       height off the floor, under gravity rather than a spring
- *   shy       a held dent and a held shift, for a pointer resting on it
  *
  * Every channel takes the same two kinds of input, which is the whole API:
  *
@@ -216,47 +213,6 @@ const BUSY_DENT_DEPTH = 0.09;
 const BUSY_DENT_HOLD = 0.5;
 const BUSY_DENT_GAP: readonly [number, number] = [0.12, 0.45];
 
-/**
- * Downward acceleration for a hop, in radii per second squared.
- *
- * Tuned against the channels that draw a jump rather than against realism: at
- * this strength a full-height one is airborne for about 0.47s. What sets the
- * floor is that launch, apex and landing stay three distinguishable shapes --
- * the airborne stretch is read straight off the velocity and so never lags, and
- * the landing runs on the impact channel, which answers in about a tenth of a
- * second.
- */
-const GRAVITY = 34;
-
-/**
- * The impact channel: a squash spring an order of magnitude stiffer than the
- * body one.
- *
- * The body spring is tuned for held poses and takes roughly 0.2s to reach a
- * target -- most of a jump. Anything sharp driven through it arrives late and
- * out of phase; a crouch would still be rebounding at the apex.
- */
-const IMPACT_STIFFNESS = 420;
-const IMPACT_RATIO = 0.35;
-/** Peak compression of a force-1 `pop`. */
-const IMPACT_DEPTH = 0.3;
-
-/** Launch speed of a one-radius jump; the yardstick for airborne stretch. */
-const HOP_REF_SPEED = Math.sqrt(2 * GRAVITY);
-/** Extra height at full launch speed... */
-const HOP_STRETCH = 0.3;
-/** ...and the small compression left at the apex, where the speed is zero. */
-const HOP_APEX_SQUASH = 0.07;
-
-/**
- * The shy channel's springs: the dent and the shift a hovering pointer holds.
- *
- * Damped well past the surface and tilt springs, since these follow a pointer
- * rather than answer a blow: a hover that rang would read as a flinch.
- */
-const SHY_STIFFNESS = 120;
-const SHY_RATIO = 0.8;
-
 /** Peak surface displacement, in radii, for a force-1 poke. */
 const POKE_DEPTH = 0.17;
 /** Hard stops on the squash spring, as a fraction of rest height. */
@@ -301,28 +257,8 @@ export function createBlobRig(overrides: Partial<BlobRigConfig> = {}) {
   /** Vertical scale. 1 is rest; below is squashed, above is stretched. */
   const body = makeSpring(1, config.bodyStiffness, config.bodyRatio);
   const tiltS = makeSpring(0, config.tiltStiffness, config.tiltRatio);
-  const impact = makeSpring(0, IMPACT_STIFFNESS, IMPACT_RATIO);
-  // The shy dent's depth, and where it is pressed in screen space -- the frame
-  // takes the tilt back off, so the dent stays under the pointer as the body
-  // leans. Not on the surface springs: those are the working dents' and the
-  // pokes', and a hover has to sit on top of both rather than replace them.
-  const shyDepth = makeSpring(0, SHY_STIFFNESS, SHY_RATIO);
-  let shyAngle = 0;
-  const shiftX = makeSpring(0, SHY_STIFFNESS, SHY_RATIO);
-  const shiftY = makeSpring(0, SHY_STIFFNESS, SHY_RATIO);
 
   let clock = 0;
-
-  // Height above the resting spot, and its velocity, in radii. Not a spring: a
-  // jump is under constant acceleration, so it has a sharp landing and a floaty
-  // apex, where a spring would ease symmetrically into both and then sink below
-  // the ground on the rebound.
-  let hopY = 0;
-  let hopV = 0;
-
-  // Timed follow-ups, on the simulation clock rather than setTimeout -- so a
-  // gesture pauses with the frame loop, and `settle` can cancel one mid-flight.
-  let cues: Array<{ at: number; run: () => void }> = [];
 
   // Whether a working dent is currently held, and when the next change is due.
   let denting = false;
@@ -385,50 +321,6 @@ export function createBlobRig(overrides: Partial<BlobRigConfig> = {}) {
     tiltS.target = radians;
   }
 
-  /**
-   * One-shot squash-and-rebound -- no hold, just the bounce.
-   *
-   * Runs on the impact channel, so it lands this frame instead of easing in,
-   * and leaves whatever pose the body spring is holding untouched.
-   */
-  function pop(force = 1): void {
-    kick(impact, -IMPACT_DEPTH * force);
-  }
-
-  /**
-   * Launch into the air to roughly `height` radii. Returns the airtime in
-   * seconds, so a gesture can line its landing up with the touchdown.
-   */
-  function hop(height: number): number {
-    hopV = Math.sqrt(2 * GRAVITY * Math.max(0, height));
-    return (2 * hopV) / GRAVITY;
-  }
-
-  /**
-   * Hold a dent `depth` radii deep at `angle` (radians, screen space, as
-   * `poke`), and the whole body `dx`, `dy` user units off its spot. Asking again
-   * moves both; `unshy` lets them go.
-   */
-  function shy(angle: number, depth: number, dx: number, dy: number): void {
-    shyAngle = angle;
-    shyDepth.target = depth;
-    shiftX.target = dx;
-    shiftY.target = dy;
-  }
-
-  /** Let the shy dent and shift go. */
-  function unshy(): void {
-    shyDepth.target = 0;
-    shiftX.target = 0;
-    shiftY.target = 0;
-  }
-
-  /** Run `cue` `seconds` from now on the rig's own clock. */
-  function after(seconds: number, cue: () => void): void {
-    cues.push({ at: clock + seconds, run: cue });
-    cues.sort((a, b) => a.at - b.at);
-  }
-
   /** Kill all motion and return to the rest pose immediately. */
   function settle(): void {
     for (const m of surface) {
@@ -437,13 +329,6 @@ export function createBlobRig(overrides: Partial<BlobRigConfig> = {}) {
     }
     settleSpring(body, 1);
     settleSpring(tiltS, 0);
-    settleSpring(impact, 0);
-    settleSpring(shyDepth, 0);
-    settleSpring(shiftX, 0);
-    settleSpring(shiftY, 0);
-    hopY = 0;
-    hopV = 0;
-    cues = [];
     denting = false;
     dentAt = clock + 2;
   }
@@ -477,24 +362,8 @@ export function createBlobRig(overrides: Partial<BlobRigConfig> = {}) {
         body.velocity = Math.min(0, body.velocity);
       }
       stepSpring(tiltS, SUBSTEP);
-      stepSpring(impact, SUBSTEP);
-      stepSpring(shyDepth, SUBSTEP);
-      stepSpring(shiftX, SUBSTEP);
-      stepSpring(shiftY, SUBSTEP);
-      if (hopV !== 0 || hopY > 0) {
-        hopV -= GRAVITY * SUBSTEP;
-        hopY += hopV * SUBSTEP;
-        if (hopY <= 0) {
-          hopY = 0;
-          hopV = 0;
-        }
-      }
       clock += SUBSTEP;
       carry -= SUBSTEP;
-    }
-
-    while (cues.length > 0 && cues[0].at <= clock) {
-      cues.shift()?.run();
     }
 
     // Holding perfectly still means perfectly still, and so does not being
@@ -541,26 +410,10 @@ export function createBlobRig(overrides: Partial<BlobRigConfig> = {}) {
       };
     });
     for (const m of surface) modes.push({ k: m.k, cos: m.cos.value, sin: m.sin.value });
-    if (shyDepth.value > 1e-4) {
-      // The same falloff across the modes as `dent`, in the body's own frame.
-      const a = shyAngle - tiltS.value;
-      for (const k of config.modeNumbers) {
-        const share = shyDepth.value / (k - 1);
-        modes.push({ k, cos: -share * Math.cos(k * a), sin: -share * Math.sin(k * a) });
-      }
-    }
 
     const breath = 1 + 0.018 * idle * Math.sin((clock * Math.PI * 2) / 3.4);
-    // Airborne shape comes from speed, not from scheduled cues: fastest at
-    // launch and at touchdown, zero at the apex, where the small residual
-    // squash is all that is left.
-    const airborne = hopY > 0 || hopV !== 0;
-    const hopShape = airborne ? HOP_STRETCH * Math.min(1, Math.abs(hopV) / HOP_REF_SPEED) - HOP_APEX_SQUASH : 0;
-    // The squash sources compose: the held pose, the arc, and any impact. The
-    // stops apply to the product, since it is the rendered shape that must not
-    // turn into a needle.
-    const stacked = body.value * (1 + hopShape) * (1 + impact.value);
-    const sy = Math.max(SQUASH_LIMIT[0], Math.min(SQUASH_LIMIT[1], stacked));
+    // `step` already holds the squash inside its stops.
+    const sy = body.value;
     const sx = sy ** -config.bulge;
     const rx = config.radius * breath * sx;
     const ry = config.radius * breath * sy;
@@ -568,17 +421,14 @@ export function createBlobRig(overrides: Partial<BlobRigConfig> = {}) {
     const anchors = blobAnchors({ rx, ry, points: config.points, modes, goo: config.goo });
 
     const float = 0.02 * config.radius * idle * Math.sin((clock * Math.PI * 2) / 4.7);
-    const tx = shiftX.value;
-    const ty = float - hopY * config.radius + shiftY.value;
     const deg = (tiltS.value * 180) / Math.PI;
-    // Height above the resting spot, in radii: the hop arc and the float, which
-    // is everything the floor cares about. A hover's shift is not: it nudges
-    // the body, it does not lift it.
-    const lift = hopY - float / config.radius;
+    // Height above the resting spot, in radii -- which is the float and nothing
+    // else, so the pool on the floor only ever breathes with it.
+    const lift = -float / config.radius;
 
     return {
       d: pathFromAnchors(anchors),
-      transform: `translate(${tx.toFixed(2)} ${ty.toFixed(2)}) rotate(${deg.toFixed(2)})`,
+      transform: `translate(0 ${float.toFixed(2)}) rotate(${deg.toFixed(2)})`,
       anchors,
       scale: [sx, sy],
       shadow: {
@@ -621,11 +471,6 @@ export function createBlobRig(overrides: Partial<BlobRigConfig> = {}) {
     squish,
     release,
     tilt,
-    pop,
-    hop,
-    after,
-    shy,
-    unshy,
     settle,
   };
 }
