@@ -51,6 +51,11 @@ describe("the storage tab", () => {
     expect(buttonNamed(root, "Measuring…").disabled).toBe(true);
   });
 
+  it("shows a note that makes the figures incomplete on the page itself, not only in the details", () => {
+    const root = mountPage({ kind: "loaded", summary: { ...SUMMARY, notes: ["Measuring took longer than 60 s"] } });
+    expect(root.querySelector('[role="status"]')?.textContent).toBe("Measuring took longer than 60 s");
+  });
+
   it("says when measuring failed and offers to try again", () => {
     let measured = 0;
     const root = mountPage({ kind: "failed", message: "du timed out" }, () => (measured += 1));

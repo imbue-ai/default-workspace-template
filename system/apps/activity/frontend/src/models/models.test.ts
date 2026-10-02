@@ -118,3 +118,29 @@ describe("the summary model", () => {
     expect(fetches.urls[2]).toBe("/api/chats/c%201/start");
   });
 });
+
+describe("the storage model", () => {
+  it("keeps the last measurement when another window is already measuring", async () => {
+    const fetches = stubFetch();
+    const storage = await import("./storage");
+    const first = storage.measureStorage();
+    fetches.reply(0, {
+      status: 200,
+      body: {
+        measured_at: "2026-10-01T12:00:00Z",
+        total_kib: 5,
+        categories: [],
+        largest: [],
+        command: "du",
+        notes: [],
+        measure_seconds: 1,
+      },
+    });
+    await first;
+    const second = storage.measureStorage();
+    fetches.reply(1, { status: 429, body: { detail: "already measuring" } });
+    await second;
+    const state = storage.getStorageState();
+    expect(state.kind === "loaded" && state.summary.total_kib).toBe(5);
+  });
+});

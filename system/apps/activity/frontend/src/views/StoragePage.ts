@@ -41,6 +41,15 @@ export function StoragePage(): m.Component<StoragePageAttrs> {
           ),
         ]),
       ]),
+      // A note means the figures are incomplete (a folder du could not read, or the minute ran out), so it shows here,
+      // not only in the details.
+      ...summary.notes.map((note) =>
+        m(
+          "p",
+          { class: "m-0 rounded-md bg-warning-surface px-3 py-2 type-helper text-primary", role: "status" },
+          note,
+        ),
+      ),
       m("section", { class: "flex flex-col" }, [
         m("div", { class: "flex items-baseline justify-between border-b border-default pb-1.5" }, [
           m("h3", { class: `m-0 ${SECTION_HEADING_CLASS}` }, "By kind"),

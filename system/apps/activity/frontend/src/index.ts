@@ -26,7 +26,6 @@ import {
   refreshNow,
   requestChatAction,
   serverNowMs,
-  serverNowMs,
   startRefreshing,
   stopRefreshing,
 } from "./models/summary";

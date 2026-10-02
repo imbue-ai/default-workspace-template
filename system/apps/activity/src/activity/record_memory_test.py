@@ -2,9 +2,9 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 
-from activity.memory_reading import MemorySource
 from activity.history import MemorySample
 from activity.history import read_history
+from activity.memory_reading import MemorySource
 from activity.memory_reading import MemorySources
 from activity.record_memory import record_once
 
