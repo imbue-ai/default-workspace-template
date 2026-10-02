@@ -91,9 +91,12 @@ async function settle(): Promise<void> {
 }
 
 describe("deleting a note", () => {
-  it("states up front that the backups keep notes, including deleted ones", () => {
+  it("states up front that the backups keep deleted notes, and spells it out under How memory works", () => {
     const { root } = render();
 
+    expect(root.querySelector(".memories-facts")?.textContent).toContain("Backups keep deleted notes up to 24 months");
+    expect(root.textContent).not.toContain("Your workspace's backups also hold these notes");
+    click(root, "How memory works");
     expect(root.textContent).toContain(
       "Your workspace's backups also hold these notes, including ones you delete, for up to 24 months.",
     );
@@ -154,7 +157,7 @@ describe("deleting a note", () => {
   it("says a delete is final in a workspace with no backups", async () => {
     const { root } = render({ ...BACKED_UP, is_backed_up: false });
 
-    expect(root.textContent).toContain("This workspace isn't backed up, so a note you delete is gone for good.");
+    expect(root.querySelector(".memories-facts")?.textContent).toContain("Not backed up");
     click(root, "Delete");
     expect(root.textContent).toContain("This workspace isn't backed up, so no other copy is kept.");
     click(root, "Delete for good");
@@ -167,6 +170,8 @@ describe("who keeps and saved the notes", () => {
   it("says Claude and pi chats share the notes and the other harnesses don't yet", () => {
     const { root } = render();
 
+    expect(root.querySelector(".memories-facts")?.textContent).toContain("Shared with your Claude and pi chats");
+    click(root, "How memory works");
     expect(root.textContent).toContain("Every Claude and pi chat in this workspace, including new ones");
     expect(root.textContent).toContain("Codex, OpenCode and Antigravity chats. They don't use these notes.");
   });
@@ -181,9 +186,14 @@ describe("who keeps and saved the notes", () => {
 });
 
 describe("explaining what is remembered, used and shared", () => {
-  it("says when a chat saves a note and what it never saves", () => {
+  it("says briefly when a chat saves a note, with the full rules under How memory works", () => {
     const { root } = render();
 
+    expect(root.textContent).toContain(
+      "Chats save a note when you ask them to remember something or correct how they work. Fix or delete anything that's wrong.",
+    );
+    expect(root.querySelector(".memories-how")).toBeNull();
+    click(root, "How memory works");
     expect(root.textContent).toContain(
       "A chat saves a note when you ask it to remember something, when you correct how it works, or when you mention something that will still matter later.",
     );
@@ -210,11 +220,14 @@ describe("explaining what is remembered, used and shared", () => {
       "Chats start with: “Is a product designer — is a product designer”",
       "Chats start with: “Prefers metric units — prefers metric units”",
     ]);
+    expect(root.querySelector(".memories-attention")).toBeNull();
+    click(root, "How memory works");
     expect(root.textContent).toContain("Chats load at most 200 lines of it; your list is 2 lines long.");
   });
 
   it("says where the notes go, including the AI provider and GitHub", () => {
     const { root } = render();
+    click(root, "How memory works");
 
     expect(root.textContent).toContain("Where your notes go");
     expect(root.textContent).toContain("In this workspace only. They aren't synced to GitHub.");

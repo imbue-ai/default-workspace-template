@@ -20,6 +20,8 @@ import {
   countLabel,
   deleteBackupsWarning,
   deletedStatus,
+  attentionLine,
+  backupsChip,
   formatDate,
   indexStatus,
   indexSummaryLine,
@@ -118,75 +120,106 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
     m.redraw();
   }
 
-  function whereNotesGo(document: NotesDocument): m.Vnode {
+  /** The few facts worth seeing every time, and the way into the rest. */
+  function memoryFacts(document: NotesDocument): m.Vnode {
+    const backups = backupsChip(document.backups);
+    return m("div", { class: "memories-facts flex flex-wrap items-center gap-2" }, [
+      m("span", { class: badgeClass("success") }, "Shared with your Claude and pi chats"),
+      m("span", { class: badgeClass("neutral") }, "Stays in this workspace"),
+      m("span", { class: badgeClass(backups.isWarning ? "warning" : "neutral") }, backups.text),
+      disclose("how", "How memory works", "Hide how memory works"),
+    ]);
+  }
+
+  /** Everything behind "How memory works": what is saved, what chats use, where notes go, and how it's built. */
+  function howMemoryWorks(document: NotesDocument): m.Vnode {
     const row = (tone: "success" | "neutral" | "warning", label: string, text: string): m.Vnode =>
       m("div", { class: "grid grid-cols-[96px_minmax(0,1fr)] items-baseline gap-3" }, [
         m("span", { class: `justify-self-start ${badgeClass(tone)}` }, label),
         m("span", { class: "type-body text-primary" }, text),
       ]);
-    return m("section", { class: "flex flex-col gap-2 rounded-lg border border-default bg-surface-secondary p-4" }, [
-      m("span", { class: "type-label text-primary" }, "Where your notes go"),
-      row("neutral", "Stored", "In this workspace only. They aren't synced to GitHub."),
-      row(
-        "success",
-        "Read by",
-        "Every Claude and pi chat in this workspace, including new ones and the background tasks they start.",
-      ),
-      row("neutral", "Not yet", "Codex, OpenCode and Antigravity chats. They don't use these notes."),
-      row(
-        "neutral",
-        "Sent to",
-        "The AI provider of a chat that uses a note (Anthropic, for Claude chats), as part of that chat.",
-      ),
-      row("neutral", "Not shared", "Your other workspaces. Each has its own notes."),
-      row(document.backups.is_backed_up ? "warning" : "neutral", "Backups", backupsLine(document.backups)),
-      m(
-        "p",
-        { class: "m-0 type-helper text-secondary" },
-        "What you say inside a chat stays in that chat unless it writes a note.",
-      ),
-      disclose("how", "How this works", "Hide how this works"),
-      openDetails.has("how")
-        ? m("div", { class: DETAILS_CLASS }, [
-            m(
-              "p",
-              { class: "m-0" },
-              `Notes live in ${document.notes_dir}/, one Markdown file each (autoMemoryDirectory in .claude/settings.json).`,
-            ),
-            m(
-              "p",
-              { class: "m-0 mt-2" },
-              `${document.index_path} lists them all, one line each. Every Claude chat loads that list when it starts (the first ${document.index.max_lines} lines, or ${Math.round(document.index.max_bytes / 1024)}KB, whichever is less) and opens a note when its line looks relevant; a note saved later reaches an open Claude chat on its next message.`,
-            ),
-            m(
-              "p",
-              { class: "m-0 mt-2" },
-              "pi chats get the same list, and how to keep it, with every message they answer (.pi/extensions/memory.ts runs system/scripts/agent_memory_context.py), so a change reaches them on their next message. Each note a pi chat saves says so in its source field.",
-            ),
-            m(
-              "p",
-              { class: "m-0 mt-2" },
-              "Which Claude chat wrote a note and who read it come from the chats' own transcripts: each Write, Edit or Read of a note's file.",
-            ),
-            m(
-              "p",
-              { class: "m-0 mt-2" },
-              `Deleting a note erases its file and removes its line from ${document.index_path}. Nothing in the workspace keeps a copy.`,
-            ),
-            m(
-              "p",
-              { class: "m-0 mt-2" },
-              "Each delete or edit made here is recorded (the note's file name and when, never what it said) in data/.state/memories/user-changes.jsonl for 30 days. Every chat reads that record before each message, so one that still remembers the note in its conversation doesn't save it again.",
-            ),
-            m("p", { class: "m-0 mt-2" }, backupsDetail(document.backups)),
-            m(
-              "p",
-              { class: "m-0 mt-2" },
-              "Every agent also follows the workspace's instructions (AGENTS.md, and CLAUDE.md for Claude) and its skills. Those aren't notes and aren't shown here.",
-            ),
-          ])
-        : null,
-    ]);
+    const heading = (text: string): m.Vnode => m("h3", { class: "m-0 type-label text-primary" }, text);
+    const summary = indexSummaryLine(document.index, document.notes.length);
+    return m(
+      "section",
+      { class: "memories-how flex flex-col gap-4 rounded-lg border border-default bg-surface-secondary p-4" },
+      [
+        m("div", { class: "flex flex-col gap-1" }, [
+          heading("What gets saved"),
+          m(
+            "p",
+            { class: "m-0 type-body text-secondary" },
+            "A chat saves a note when you ask it to remember something, when you correct how it works, or when you mention something that will still matter later. It never saves passwords or keys, sensitive personal details unless you ask, or what's already in your files.",
+          ),
+        ]),
+        m("div", { class: "flex flex-col gap-1" }, [
+          heading("What chats use"),
+          m(
+            "p",
+            { class: "m-0 type-body text-secondary" },
+            summary ?? "Nothing is saved yet, so chats start with an empty list.",
+          ),
+        ]),
+        m("div", { class: "flex flex-col gap-2" }, [
+          heading("Where your notes go"),
+          row("neutral", "Stored", "In this workspace only. They aren't synced to GitHub."),
+          row(
+            "success",
+            "Read by",
+            "Every Claude and pi chat in this workspace, including new ones and the background tasks they start.",
+          ),
+          row("neutral", "Not yet", "Codex, OpenCode and Antigravity chats. They don't use these notes."),
+          row(
+            "neutral",
+            "Sent to",
+            "The AI provider of a chat that uses a note (Anthropic, for Claude chats), as part of that chat.",
+          ),
+          row("neutral", "Not shared", "Your other workspaces. Each has its own notes."),
+          row(document.backups.is_backed_up ? "warning" : "neutral", "Backups", backupsLine(document.backups)),
+        ]),
+        disclose("tech", "Technical details", "Hide technical details"),
+        openDetails.has("tech")
+          ? m("div", { class: DETAILS_CLASS }, [
+              m(
+                "p",
+                { class: "m-0" },
+                `Notes live in ${document.notes_dir}/, one Markdown file each (autoMemoryDirectory in .claude/settings.json).`,
+              ),
+              m(
+                "p",
+                { class: "m-0 mt-2" },
+                `${document.index_path} lists them all, one line each. Every Claude chat loads that list when it starts (the first ${document.index.max_lines} lines, or ${Math.round(document.index.max_bytes / 1024)}KB, whichever is less) and opens a note when its line looks relevant; a note saved later reaches an open Claude chat on its next message.`,
+              ),
+              m(
+                "p",
+                { class: "m-0 mt-2" },
+                "pi chats get the same list, and how to keep it, from .pi/extensions/memory.ts (system/scripts/agent_memory_context.py), which also stamps each note a pi chat saves with its source and time; a change reaches them on their next message.",
+              ),
+              m(
+                "p",
+                { class: "m-0 mt-2" },
+                "Which chat wrote a note and who read it come from the chats' own transcripts, Claude's and pi's: each write, edit or read of a note's file.",
+              ),
+              m(
+                "p",
+                { class: "m-0 mt-2" },
+                `Deleting a note erases its file and removes its line from ${document.index_path}. Nothing in the workspace keeps a copy.`,
+              ),
+              m(
+                "p",
+                { class: "m-0 mt-2" },
+                "Each delete or edit made here is recorded (the note's file name and when, never what it said) in data/.state/memories/user-changes.jsonl for 30 days. Every chat reads that record before each message, so one that still remembers the note in its conversation doesn't save it again.",
+              ),
+              m("p", { class: "m-0 mt-2" }, backupsDetail(document.backups)),
+              m(
+                "p",
+                { class: "m-0 mt-2" },
+                "Every agent also follows the workspace's instructions (AGENTS.md, and CLAUDE.md for Claude) and its skills. Those aren't notes and aren't shown here.",
+              ),
+            ])
+          : null,
+      ],
+    );
   }
 
   function editor(note: Note, attrs: MemoriesPageAttrs, current: Draft): m.Vnode {
@@ -353,9 +386,9 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
         return m("p", { class: "m-0 type-body text-danger" }, `Couldn't read the notes. ${state.message}`);
       const document = state.document;
       const count = document.notes.length;
+      const attention = attentionLine(document.notes, document.index.max_lines);
       return m("div", { class: "flex flex-col gap-6" }, [
-        m("div", { class: "flex flex-col gap-2" }, [
-          m("span", { class: `self-start ${badgeClass("accent")}` }, "Claude and pi chats"),
+        m("div", { class: "flex flex-col gap-3" }, [
           m(
             "h2",
             { class: "m-0 type-heading-lg text-primary text-balance" },
@@ -366,13 +399,14 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
           m(
             "p",
             { class: "m-0 type-body text-secondary" },
-            "A chat saves a note when you ask it to remember something, when you correct how it works, or when you mention something that will still matter later. It never saves passwords or keys, sensitive personal details unless you ask, or what's already in your files. Fix anything that's wrong here, or delete it.",
+            "Chats save a note when you ask them to remember something or correct how they work. Fix or delete anything that's wrong.",
           ),
-          indexSummaryLine(document.index, count) === null
+          memoryFacts(document),
+          openDetails.has("how") ? howMemoryWorks(document) : null,
+          attention === null
             ? null
-            : m("p", { class: "m-0 type-body text-secondary" }, indexSummaryLine(document.index, count)),
+            : m("p", { class: "memories-attention m-0 type-body text-warning", role: "note" }, attention),
         ]),
-        whereNotesGo(document),
         statusMessage === null ? null : m("p", { class: "m-0 type-body text-primary", role: "status" }, statusMessage),
         GROUPS.map((group) => ({ group, notes: document.notes.filter((note) => note.note_type === group.type) }))
           .filter(({ group, notes }) => notes.length > 0 || group.example !== null)

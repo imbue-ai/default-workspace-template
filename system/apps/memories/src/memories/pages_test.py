@@ -147,7 +147,7 @@ def test_the_page_says_it_is_not_built_until_the_bundle_exists_and_then_serves_i
         unbuilt = client.get("/")
         unbuilt_health = client.get("/api/health").get_json()
         (tmp_path / "static" / "assets").mkdir(parents=True)
-        (tmp_path / "static" / "index.html").write_text("<!doctype html><title>What agents know</title>")
+        (tmp_path / "static" / "index.html").write_text("<!doctype html><title>Agent Memory</title>")
         (tmp_path / "static" / "assets" / "index.js").write_text("console.log(1)")
         built = client.get("/")
         built_health = client.get("/api/health").get_json()
@@ -157,7 +157,7 @@ def test_the_page_says_it_is_not_built_until_the_bundle_exists_and_then_serves_i
     assert b"not been built" in unbuilt.data
     assert unbuilt.headers["Cache-Control"] == "no-store"
     assert unbuilt_health == {"status": "ok", "is_frontend_built": False}
-    assert built.data == b"<!doctype html><title>What agents know</title>"
+    assert built.data == b"<!doctype html><title>Agent Memory</title>"
     assert built.headers["Cache-Control"] == "no-store"
     assert built_health == {"status": "ok", "is_frontend_built": True}
     assert asset.data == b"console.log(1)"

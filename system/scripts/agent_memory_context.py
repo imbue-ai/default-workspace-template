@@ -18,7 +18,7 @@ the same for another harness: right after it writes or edits a note, it sets the
 and adds ``metadata.source`` when the note names none. pi's memory extension runs it after every ``write`` or ``edit``
 of a note.
 
-It also prints the notes the user deleted or edited in the "What agents know" app, from the record that app keeps
+It also prints the notes the user deleted or edited in the "Agent Memory" app, from the record that app keeps
 (``data/.state/memories/user-changes.jsonl``: a file name, what was done and when, never the content). An open chat
 still has a note it saw in its conversation, and without this it writes a deleted note back, or reverts an edit,
 the next time it saves. Every harness needs that notice, Claude included.
@@ -201,7 +201,7 @@ def render_changes_notice(changes: list[tuple[str, str, datetime]]) -> str:
     lines = [
         "## Changes the user made to saved memories",
         "",
-        'The user deleted or edited these notes in the "What agents know" app. Their version is the one to keep, '
+        'The user deleted or edited these notes in the "Agent Memory" app. Their version is the one to keep, '
         "even where this conversation remembers something else:",
     ]
     for file_name, change, at in changes:

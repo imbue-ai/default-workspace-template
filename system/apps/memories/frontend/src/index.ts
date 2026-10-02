@@ -14,7 +14,7 @@ import { deleteNote, getNotesState, refreshNotes, saveNote } from "./models/note
 import { MemoriesPage } from "./views/MemoriesPage";
 
 export const PAGE_PATH = "/";
-export const PAGE_TITLE = "What agents know";
+export const PAGE_TITLE = "Agent Memory";
 
 function bootstrap(): void {
   let handshake: ShellHandshake | null = null;

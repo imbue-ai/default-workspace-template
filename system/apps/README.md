@@ -25,7 +25,7 @@ Built-in apps:
   first desktop for the first client that connects, and remembers having done
   so under `data/.state/getting-started/`. Served on port 8030 by the
   `getting-started` package.
-- `memories/` - What agents know: the notes Claude's built-in memory keeps in
+- `memories/` - Agent Memory: the notes Claude's built-in memory keeps in
   `data/memories/`, grouped by what they are about, with which chat wrote each
   one, the file as it is on disk, and Edit and Delete (Delete is permanent, and
   the page says the workspace backups still hold a copy until they expire). It

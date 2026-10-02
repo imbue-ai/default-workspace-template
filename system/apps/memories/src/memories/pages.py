@@ -58,7 +58,7 @@ HTTP_CONFLICT: Final[int] = 409
 HTTP_SERVER_ERROR: Final[int] = 500
 
 _NOT_BUILT_PAGE: Final[str] = (
-    '<!doctype html><html><head><meta charset="utf-8"><title>What agents know</title></head>'
+    '<!doctype html><html><head><meta charset="utf-8"><title>Agent Memory</title></head>'
     "<body><p>This page has not been built yet (run <code>npm run build</code> in <code>system/</code>).</p>"
     "</body></html>"
 )

@@ -3,7 +3,7 @@
 # read it, and a way to correct or delete a note. It reads everything when asked
 # and keeps nothing between requests, so the shell stops it once no window shows it.
 name = "memories"
-display_name = "What agents know"
+display_name = "Agent Memory"
 icon = "icon.svg"
 critical = false
 stop_when_no_windows = true

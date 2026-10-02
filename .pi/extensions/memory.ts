@@ -6,7 +6,7 @@
 //   * before_agent_start: on every prompt, ask system/scripts/agent_memory_context.py for how
 //     to keep a note (the protocol) and the MEMORY.md index as it is now, with any notice of
 //     notes the user deleted or edited. A note another chat saved, or one the user changed in the
-//     "What agents know" app, reaches pi on its next message.
+//     "Agent Memory" app, reaches pi on its next message.
 //   * tool_result: right after pi writes or edits a note, stamp its metadata.modified (and its
 //     metadata.source when it names none), as Claude Code does for Claude's notes, so the date is
 //     never the model's guess.

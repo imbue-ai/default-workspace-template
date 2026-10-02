@@ -38,7 +38,7 @@ GETTING_STARTED_DIR = "system/apps/getting_started"
 
 GETTING_STARTED_FRONTEND_DIR = f"{GETTING_STARTED_DIR}/frontend"
 
-# The memories app ("What agents know"): another frontend, built beside the others.
+# The memories app ("Agent Memory"): another frontend, built beside the others.
 MEMORIES_DIR = "system/apps/memories"
 
 MEMORIES_FRONTEND_DIR = f"{MEMORIES_DIR}/frontend"

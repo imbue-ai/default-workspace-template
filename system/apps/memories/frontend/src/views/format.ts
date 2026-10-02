@@ -139,3 +139,26 @@ export function indexStatus(note: Note, maxLines: number): IndexStatus {
   const seen = entry.hook === "" ? entry.title : entry.title === "" ? entry.hook : `${entry.title} — ${entry.hook}`;
   return { kind: "seen", text: `Chats start with: “${seen}”` };
 }
+
+/** The backups fact shown at the top: deleted notes outlive their delete there, so it says so. */
+export function backupsChip(backups: BackupRetention): { readonly text: string; readonly isWarning: boolean } {
+  const kept = keptFor(backups);
+  return kept === null
+    ? { text: "Not backed up", isWarning: false }
+    : { text: `Backups keep deleted notes up to ${kept}`, isWarning: true };
+}
+
+/** One line naming the notes chats can't see, or null when they see them all. */
+export function attentionLine(notes: readonly Note[], maxLines: number): string | null {
+  const notListed = notes.filter((note) => indexStatus(note, maxLines).kind === "not-listed").length;
+  const pastLimit = notes.filter((note) => indexStatus(note, maxLines).kind === "past-limit").length;
+  const parts = [
+    notListed === 0
+      ? null
+      : `${countLabel(notListed, "note isn't", "notes aren't")} in the list chats start with, so chats won't find ${notListed === 1 ? "it" : "them"}.`,
+    pastLimit === 0
+      ? null
+      : `${countLabel(pastLimit, "note is", "notes are")} past the list's ${maxLines}-line limit, so chats don't load ${pastLimit === 1 ? "it" : "them"}.`,
+  ].filter((part): part is string => part !== null);
+  return parts.length === 0 ? null : parts.join(" ");
+}

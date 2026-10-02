@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { BackupRetention, IndexSummary, Note } from "../models/notes";
 import {
+  attentionLine,
+  backupsChip,
   backupsDetail,
   backupsLine,
   deleteBackupsWarning,
@@ -113,5 +115,27 @@ describe("what chats load of the notes", () => {
       kind: "not-listed",
       text: "Not in the list chats start with, so they won't find it",
     });
+  });
+});
+
+describe("the short facts and warnings at the top", () => {
+  it("names how long backups keep deleted notes, or that there are none", () => {
+    expect(backupsChip(BACKED_UP)).toEqual({ text: "Backups keep deleted notes up to 24 months", isWarning: true });
+    expect(backupsChip(NOT_BACKED_UP)).toEqual({ text: "Not backed up", isWarning: false });
+    expect(backupsChip(KEEPS_NOTHING)).toEqual({ text: "Not backed up", isWarning: false });
+  });
+
+  it("names the notes chats can't see, and says nothing when they see them all", () => {
+    const seen = { ...savedBy("claude"), index_entry: { line_number: 1, title: "A", hook: "a", is_loaded: true } };
+    const pastLimit = { ...seen, index_entry: { ...seen.index_entry, is_loaded: false } };
+    const notListed = savedBy("claude");
+
+    expect(attentionLine([seen], 200)).toBeNull();
+    expect(attentionLine([seen, notListed], 200)).toBe(
+      "1 note isn't in the list chats start with, so chats won't find it.",
+    );
+    expect(attentionLine([notListed, notListed, pastLimit], 200)).toBe(
+      "2 notes aren't in the list chats start with, so chats won't find them. 1 note is past the list's 200-line limit, so chats don't load it.",
+    );
   });
 });

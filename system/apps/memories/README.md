@@ -1,6 +1,6 @@
 # memories
 
-The memories app ("What agents know" on the desktop): what the workspace's Claude chats have written down about the
+The memories app ("Agent Memory" on the desktop): what the workspace's Claude chats have written down about the
 user and their work, on one page a window of the desktop frames at the app's own origin.
 
 Claude's built-in memory keeps one Markdown note per thing it learned in `data/memories/` (`autoMemoryDirectory` in
