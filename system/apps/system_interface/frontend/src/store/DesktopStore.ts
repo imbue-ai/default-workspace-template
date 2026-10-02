@@ -134,8 +134,8 @@ import type {
 const SAVE_DEBOUNCE_MS = 300;
 
 /** Why a window switches desktops: the user chose one ("user"), the bootstrap lands it ("landing"), or it follows the
- *  client's stored desktop, pushed or re-read ("push"). The first two move the client; a follow moves nothing. */
-export type SwitchCause = "user" | "landing" | "push";
+ *  client's stored desktop, pushed or re-read ("follow"). The first two move the client; a follow moves nothing. */
+export type SwitchCause = "user" | "landing" | "follow";
 
 // How long a solo shell whose first layout does not say its window is out waits for the desktop's word before
 // writing the detach itself: the main window's shell writes it as the window leaves, and that save is on its
@@ -844,7 +844,7 @@ export class DesktopStore {
       return;
     }
     this.hasSocketConnected = true;
-    this.reportClientState("");
+    this.reportMove("");
   }
 
   /** The client record is the shell's word after a reconnect: another window of this client may have
@@ -879,10 +879,10 @@ export class DesktopStore {
     const isRecordedAdopted =
       this.soloWindowId === null && isRecordedKnown && isRecordedNewer && recorded !== this.state.activeDesktopId;
     if (recorded !== null && isRecordedAdopted) {
-      await this.switchDesktop(recorded, "push");
+      await this.switchDesktop(recorded, "follow");
       return;
     }
-    this.reportClientState("");
+    this.reportMove("");
     await this.refetchLayout();
   }
 
@@ -915,7 +915,7 @@ export class DesktopStore {
 
   /** Tell the shell this window moved the client onto the desktop it is on, leaving ``previousDesktop`` ("" when it
    *  left none). */
-  private reportClientState(previousDesktop: string): void {
+  private reportMove(previousDesktop: string): void {
     const active = this.reportedDesktopId();
     if (active === null) return;
     this.deps.socket.reportClientState({
@@ -961,7 +961,7 @@ export class DesktopStore {
       // The active desktop was deleted and the reducer landed on the fallback: the window reports that landing as
       // a move, as the page's own landing does, so the client's record names the desktop the user now sees.
       this.cancelGesture();
-      this.reportClientState("");
+      this.reportMove("");
       void this.refetchLayout();
     }
   }
@@ -981,7 +981,7 @@ export class DesktopStore {
     if (event.desktopId === this.state.activeDesktopId) return;
     // A solo shell stays on its window's desktop whatever the client's main window switches to.
     if (this.soloWindowId !== null) return;
-    void this.switchDesktop(event.desktopId, "push");
+    void this.switchDesktop(event.desktopId, "follow");
   }
 
   private takeClientEntriesChanged(event: ClientEntriesChangedEvent): void {
@@ -1202,12 +1202,12 @@ export class DesktopStore {
     this.dispatch({ type: "desktop_activated", desktopId });
     switch (cause) {
       case "user":
-        this.reportClientState(previous ?? "");
+        this.reportMove(previous ?? "");
         break;
       case "landing":
-        this.reportClientState("");
+        this.reportMove("");
         break;
-      case "push":
+      case "follow":
         this.reportFollowedDesktop();
         break;
     }
