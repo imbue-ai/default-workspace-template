@@ -5,8 +5,8 @@ saves that note it writes back what it remembers: the deleted note returns, or t
 and edit appends a line to this record, and ``system/scripts/agent_memory_context.py`` turns the record into a
 notice each chat reads before every message (Claude through a UserPromptSubmit hook, pi through its memory extension).
 
-A line holds only the note's file name, what was done and when -- never what the note said, so a delete still
-erases the content. Lines older than ``CHANGE_MAX_AGE`` are dropped on the next write: by then every chat that saw
+A line holds only the note's file name, what was done and when -- never the note's text, though a file name such
+as ``user-location.md`` often summarises it. Lines older than ``CHANGE_MAX_AGE`` are dropped on the next write: by then every chat that saw
 the note has long restarted or ended.
 """
 

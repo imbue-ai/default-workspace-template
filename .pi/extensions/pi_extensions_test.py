@@ -570,6 +570,9 @@ def _memory_output(
     home = tmp_path / "home"
     notes_dir = _memory_notes_dir(tmp_path)
     notes_dir.mkdir(parents=True, exist_ok=True)
+    (notes_dir / "units.md").write_text(
+        "---\nname: Units\ndescription: Prefers metric units\n---\nx\n"
+    )
     (notes_dir / "MEMORY.md").write_text(_MEMORY_INDEX_LINE + "\n")
     if changes is not None:
         record = (
@@ -653,6 +656,71 @@ def test_memory_stamps_a_note_pi_just_wrote(tmp_path: Path) -> None:
     assert "2025-06-18" not in stamped
     assert re.search(r"  modified: \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n", stamped)
     assert elsewhere.read_text() == "---\nname: other\n---\nx\n"
+
+
+_UNSTAMPED_NOTE = "---\nname: job\nmetadata:\n  type: user\n---\nx\n"
+
+
+def _memory_stamps(tmp_path: Path, tool_name: str, path: str) -> bool:
+    """Whether a successful ``tool_name`` call on ``path`` gets the note at
+    ``path`` stamped, which is written fresh before the call."""
+    target = (
+        tmp_path / "home" / path.removeprefix("~/")
+        if path.startswith("~/")
+        else Path(path)
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_UNSTAMPED_NOTE)
+    _memory_output(
+        tmp_path,
+        {"toolName": tool_name, "input": {"path": path}, "isError": False},
+        event="tool_result",
+    )
+    return "  source: pi-coding\n" in target.read_text()
+
+
+def test_memory_stamps_a_note_however_pi_names_its_path(tmp_path: Path) -> None:
+    notes_dir = _memory_notes_dir(tmp_path)
+    notes_dir.mkdir(parents=True)
+    linked = tmp_path / "linked-memories"
+    linked.symlink_to(notes_dir)
+
+    assert _memory_stamps(tmp_path, "edit", str(notes_dir / "edited.md"))
+    assert _memory_stamps(tmp_path, "write", "~/workspace/data/memories/home.md")
+    # pi resolves a relative path against its own working directory, which the
+    # driver inherits from this process.
+    assert _memory_stamps(
+        tmp_path, "write", os.path.relpath(notes_dir / "relative.md", Path.cwd())
+    )
+    assert _memory_stamps(tmp_path, "write", str(linked / "linked.md"))
+
+
+def test_memory_leaves_a_note_outside_the_notes_folder_alone(tmp_path: Path) -> None:
+    lookalike = tmp_path / "project" / "data" / "memories" / "job.md"
+
+    assert not _memory_stamps(tmp_path, "write", str(lookalike))
+    assert not _memory_stamps(
+        tmp_path, "edit", str(_memory_notes_dir(tmp_path) / "nested" / "job.md")
+    )
+
+
+def test_memory_logs_why_python_could_not_be_started(tmp_path: Path) -> None:
+    no_python = tmp_path / "bin"
+    no_python.mkdir()
+    payload = {"systemPrompt": "BASE", "systemPromptOptions": {"sections": {}}}
+
+    proc = _run_event(
+        tmp_path,
+        _MEMORY,
+        "before_agent_start",
+        payload,
+        work_dir=_REPO_ROOT,
+        env={"HOME": str(tmp_path / "home"), "PATH": str(no_python)},
+    )
+
+    assert _event_output(proc)["payload"]["systemPromptOptions"]["sections"] == {}
+    log = (tmp_path / "state" / "pi_workspace_memory.log").read_text()
+    assert "failed: spawnSync python3 ENOENT; running this turn without memory" in log
 
 
 def test_memory_syncs_the_index_after_a_shell_command_on_the_notes(

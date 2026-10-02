@@ -28,7 +28,8 @@
 // lands on pi's screen.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import type { SpawnSyncReturns } from "node:child_process";
+import { appendFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -58,6 +59,20 @@ function note(message: string): void {
   }
 }
 
+/** The path with symlinks resolved, or as given when it does not exist or cannot be read. */
+function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/** Why the script did not succeed: it could not be started (python3 missing), or how it exited. */
+function failure(result: SpawnSyncReturns<string>): string {
+  return result.error === undefined ? `exited ${result.status ?? result.signal}` : `failed: ${result.error.message}`;
+}
+
 /** The protocol and the index for this turn, or null when they cannot be had. Never throws. */
 function memorySections(): MemorySections | null {
   try {
@@ -66,7 +81,7 @@ function memorySections(): MemorySections | null {
       timeout: SCRIPT_TIMEOUT_MS,
     });
     if (result.status !== 0) {
-      note(`${CONTEXT_SCRIPT} exited ${result.status ?? result.signal}; running this turn without memory`);
+      note(`${CONTEXT_SCRIPT} ${failure(result)}; running this turn without memory`);
       return null;
     }
     if (typeof result.stdout !== "string" || result.stdout.trim() === "") {
@@ -92,7 +107,10 @@ function writtenNote(event: any): string | null {
   const raw = event?.input?.path;
   if (typeof raw !== "string" || !raw.endsWith(".md")) return null;
   const path = resolve(process.cwd(), raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw);
-  return dirname(path) === NOTES_DIR ? path : null;
+  const directory = dirname(path);
+  // Also compared with symlinks resolved, so a path through a link to the folder is stamped. The folder is resolved
+  // per call, not once: it may not exist yet when pi starts.
+  return directory === NOTES_DIR || realPath(directory) === realPath(NOTES_DIR) ? path : null;
 }
 
 /** Whether a successful shell command named the notes folder, so it may have changed a note or the index. */
@@ -106,7 +124,7 @@ function touchesNotesByShell(event: any): boolean {
 function runScript(args: readonly string[], what: string): void {
   try {
     const result = spawnSync("python3", [CONTEXT_SCRIPT, ...args], { encoding: "utf-8", timeout: SCRIPT_TIMEOUT_MS });
-    if (result.status !== 0) note(`${what} exited ${result.status ?? result.signal}; left as written`);
+    if (result.status !== 0) note(`${what} ${failure(result)}; left as written`);
   } catch (error) {
     note(`${what} failed: ${String(error)}; left as written`);
   }

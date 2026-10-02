@@ -16,6 +16,8 @@ from memories.attribution import TranscriptSources
 from memories.attribution import attribute_notes
 from memories.attribution import default_transcript_sources
 from memories.attribution import fetch_chat_title_by_agent_id
+from memories.attribution import lines_containing
+from memories.attribution import matching_lines
 from memories.attribution import note_tool_uses
 from memories.attribution import parse_session_history
 from memories.attribution import pi_note_tool_uses
@@ -331,3 +333,59 @@ def test_without_the_chat_app_every_writer_is_unknown_rather_than_a_deleted_chat
     (author,) = attribute_notes(uses, {"s1": "agent-1"}, None)["units.md"].authors
 
     assert author.kind == AuthorKind.UNKNOWN
+
+
+def test_matching_lines_returns_each_line_with_a_marker_once_in_order() -> None:
+    block = b'first data/memories x\nskip me\nboth data/memories and "type":"session"\nlast "type":"session"'
+
+    assert matching_lines(block, (b"data/memories", b'"type":"session"')) == [
+        "first data/memories x",
+        'both data/memories and "type":"session"',
+        'last "type":"session"',
+    ]
+    assert matching_lines(b"nothing here\n", (b"data/memories",)) == []
+    assert matching_lines(b"bad \xff byte data/memories\n", (b"data/memories",)) == ["bad \ufffd byte data/memories"]
+
+
+@pytest.mark.parametrize("chunk_bytes", [1, 7, 64, 4 * 1024 * 1024])
+def test_lines_containing_finds_lines_split_across_chunks_and_a_last_line_without_a_newline(
+    tmp_path: Path, chunk_bytes: int
+) -> None:
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_bytes(b"one\ntwo data/memories/a.md\nthree\nfour data/memories/b.md")
+
+    assert lines_containing(transcript, (b"data/memories",), chunk_bytes) == [
+        "two data/memories/a.md",
+        "four data/memories/b.md",
+    ]
+
+
+def test_lines_containing_reads_an_empty_file_as_no_lines(tmp_path: Path) -> None:
+    empty = tmp_path / "empty.jsonl"
+    empty.write_bytes(b"")
+
+    assert lines_containing(empty, (b"data/memories",), 64) == []
+
+
+def test_a_transcript_time_without_an_offset_counts_as_unknown(tmp_path: Path) -> None:
+    def write(at: str) -> str:
+        return json.dumps(
+            {
+                "timestamp": at,
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "Write",
+                            "input": {"file_path": str(tmp_path / "memories" / "a.md")},
+                        }
+                    ]
+                },
+            }
+        )
+
+    naive = note_tool_uses(write("2026-10-01T10:00:00"), "s1", tmp_path / "memories")
+    aware = note_tool_uses(write("2026-10-01T10:00:00Z"), "s1", tmp_path / "memories")
+
+    assert naive[0].at is None
+    assert aware[0].at is not None

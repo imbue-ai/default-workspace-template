@@ -1,8 +1,8 @@
 /**
  * The words the page shows for a note: who wrote it and who read it, dates, counts, the note's body split
  * into paragraphs and labeled lines (``**Why:** ...``), what chats load of the list, and what the backups still hold
- * after a delete. Pure, so
- * each is tested on its own; the body is returned as plain text pieces, never HTML, since an agent wrote it.
+ * after a delete. Pure, so each is tested on its own; the body is returned as plain text pieces, never HTML, since an
+ * agent wrote it.
  */
 
 import type { AuthorKind, BackupRetention, IndexSummary, Note, NoteAttribution } from "../models/notes";
@@ -37,6 +37,11 @@ export function countLabel(count: number, singular: string, plural: string): str
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+/** "25KB", for a size in bytes. */
+export function kilobytes(bytes: number): string {
+  return `${Math.round(bytes / 1024)}KB`;
+}
+
 /** "Oct 1" this year, "Oct 1, 2025" before it. */
 export function formatDate(iso: string, now: Date = new Date()): string {
   const date = new Date(iso);
@@ -66,7 +71,7 @@ export function attributionLine(attribution: NoteAttribution | null): string {
       : "";
   const readers =
     attribution.reader_count === 0
-      ? "not read since"
+      ? "not opened by another chat yet"
       : `read by ${countLabel(attribution.reader_count, "chat", "chats")}`;
   return `${writer}${others} · ${readers}`;
 }
@@ -128,7 +133,7 @@ export function indexSummaryLine(index: IndexSummary, noteCount: number): string
   if (noteCount === 0) return null;
   const opening =
     "Every chat starts with the one-line summaries below (the list in MEMORY.md), and opens a note's full text only when its summary looks relevant to what you're asking.";
-  const limit = `Chats load the first ${index.max_lines} lines or ${Math.round(index.max_bytes / 1024)}KB of that list, whichever is less`;
+  const limit = `Chats load the first ${index.max_lines} lines or ${kilobytes(index.max_bytes)} of that list, whichever is less`;
   const skipped = index.line_count - index.loaded_line_count;
   return skipped > 0
     ? `${opening} ${limit}; yours is ${countLabel(index.line_count, "line", "lines")} long, so the last ${countLabel(skipped, "line isn't", "lines aren't")} loaded.`

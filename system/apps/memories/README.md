@@ -35,14 +35,14 @@ its `type` (about you, how you like things done, what you're working on, where t
   and its `MEMORY.md` line's summary to match, adding the line when the index has none. The edit is made against the version of the note it started from: if
   a chat changes the note meanwhile, the editor shows the chat's version beside the draft, and only "Replace with my
   version" overwrites it;
-- Delete, which erases the note's file and drops its lines from `MEMORY.md`. Nothing in the workspace keeps a copy,
+- Delete, which erases the note's file and drops its lines from `MEMORY.md`. There is no copy here to restore,
   so it cannot be undone; it asks first, and says what still holds the note afterwards: the workspace's backups
   (restic snapshots of the whole home tree, kept for as long as `data/system/backup.toml`'s retention says, read
-  through `host_backup.config`), open chats' conversations (they are told of the delete; see below), and the
-  transcript of the chat that wrote it. The top of the page states the backups' retention up front too.
+  through `host_backup.config`), and the conversations and transcripts of chats that read it (open chats are told
+  of the delete; see below). The top of the page states the backups' retention up front too.
 
 Every delete and edit is also recorded in `data/.apps/memories/user-changes.jsonl` (the note's file name, what was
-done and when; never what it said; kept 30 days). `system/scripts/agent_memory_context.py` turns that record into a
+done and when; never its text, though the file name often summarises it; kept 30 days). `system/scripts/agent_memory_context.py` turns that record into a
 notice chats read -- Claude through a UserPromptSubmit hook in `.claude/settings.json`, pi through its memory
 extension -- because an open chat still has the note in its conversation and would otherwise write a deleted note
 back, or revert an edit, the next time it saves. The notice is an instruction, not a lock.
