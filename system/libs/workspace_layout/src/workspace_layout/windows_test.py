@@ -1,3 +1,7 @@
+import copy
+from typing import Any
+from typing import Final
+
 from app_manifest.primitives import AppName
 
 from workspace_layout.answers import DesktopsListing
@@ -10,6 +14,8 @@ from workspace_layout.windows import window_paths_of_app
 from workspace_layout.windows import window_query_value
 
 _TERMINAL = AppName("terminal")
+# Marks a window field ``_with_window_field`` drops rather than sets.
+_DROPPED: Final[object] = object()
 
 _DESKTOPS = DesktopsListing(
     desktops=(
@@ -73,21 +79,29 @@ def test_the_reader_answers_none_rather_than_no_windows_when_the_shell_cannot_be
     assert read_app_window_paths(url, _TERMINAL) is None
 
 
+def _with_window_field(desktop_index: int, window_index: int, field: str, value: Any) -> dict[str, Any]:
+    """The desktops document with one window's ``field`` set to ``value``, or dropped for ``_DROPPED``."""
+    document = copy.deepcopy(_DESKTOPS)
+    window = document["desktops"][desktop_index]["windows"][window_index]
+    if value is _DROPPED:
+        del window[field]
+    else:
+        window[field] = value
+    return document
+
+
 def test_a_document_of_the_wrong_shape_reads_as_none() -> None:
     assert window_paths_of_app([], _TERMINAL) is None
     assert window_paths_of_app({"desktops": {}}, _TERMINAL) is None
-    assert window_paths_of_app({"desktops": [{"windows": [{"app": "terminal"}]}]}, _TERMINAL) is None
-    assert (
-        window_paths_of_app({"desktops": [{"windows": [{"app": "t", "path": "/", "client_paths": []}]}]}, _TERMINAL)
-        is None
-    )
-    assert (
-        window_paths_of_app(
-            {"desktops": [{"windows": [{"app": "t", "path": "/", "client_paths": {"c": 1}}]}]}, _TERMINAL
-        )
-        is None
-    )
+    assert window_paths_of_app(_with_window_field(0, 0, "path", _DROPPED), _TERMINAL) is None
+    assert window_paths_of_app(_with_window_field(2, 0, "client_paths", ["/?session=terminal-7"]), _TERMINAL) is None
+    assert window_paths_of_app(_with_window_field(2, 0, "client_paths", {"c1": 1}), _TERMINAL) is None
     assert window_paths_of_app({"desktops": []}, _TERMINAL) == []
+
+
+def test_one_unreadable_window_of_another_app_makes_the_whole_read_unknown() -> None:
+    """A sweep must not act on a document it could only partly read, whichever app's window broke it."""
+    assert window_paths_of_app(_with_window_field(0, 1, "path", "no-leading-slash"), _TERMINAL) is None
 
 
 def test_the_query_value_of_a_window_path_names_its_resource() -> None:
