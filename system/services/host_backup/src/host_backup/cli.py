@@ -43,7 +43,7 @@ from host_backup.events import (
     EVENTS_FILENAME,
     TICK_TERMINAL_EVENT_TYPES,
     BackupEventType,
-    scan_recent_ticks,
+    find_inflight_tick_id,
     scan_recent_ticks_across_rotation,
 )
 
@@ -90,7 +90,7 @@ def backup_now_main(timeout_seconds: float, check: bool) -> None:
     # Opened before the scan, so a tick that ends between the scan and the first poll
     # is still seen ending.
     with closing(_EventsLogFollower(events_path)) as follower:
-        inflight_tick_id = scan_recent_ticks(events_path).inflight_tick_id
+        inflight_tick_id = find_inflight_tick_id(events_path)
         is_idle = inflight_tick_id is None or _wait_for_tick_to_end(
             follower, inflight_tick_id, deadline
         )
