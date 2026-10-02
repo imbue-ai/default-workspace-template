@@ -941,8 +941,8 @@ export class DesktopStore {
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
     if (this.state.activeDesktopId !== previous) {
-      // The active desktop was deleted and the reducer landed on the fallback: this client follows as it
-      // would a push, telling the shell and fetching the layout it now shows.
+      // The active desktop was deleted and the reducer landed on the fallback: the window reports that landing as
+      // a move, as the page's own landing does, so the client's record names the desktop the user now sees.
       this.cancelGesture();
       this.reportClientState("");
       void this.refetchLayout();
