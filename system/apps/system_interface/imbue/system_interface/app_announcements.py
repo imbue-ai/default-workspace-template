@@ -81,7 +81,7 @@ class AnnouncedRow(FrozenModel):
     url: str = Field(description="The registered URL")
     label: str = Field(description="The origin label")
     icon: str = Field(description="The icon markup, empty when none")
-    shareable: bool = Field(description="Whether the app is offered as a share target of its own")
+    is_shareable: bool = Field(description="Whether the app is offered as a share target of its own")
 
 
 class AnnouncementDiff(FrozenModel):
@@ -94,7 +94,7 @@ class AnnouncementDiff(FrozenModel):
 @pure
 def announced_row_of(row: RegistryRow) -> AnnouncedRow:
     return AnnouncedRow(
-        url=str(row.url), label=row.label, icon=row.icon or "", shareable=row.shareable and not row.internal
+        url=str(row.url), label=row.label, icon=row.icon or "", is_shareable=row.shareable and not row.internal
     )
 
 
@@ -205,7 +205,7 @@ class AppAnnouncementWriter(MutableModel):
                 url=current[name].url,
                 label=current[name].label,
                 icon=current[name].icon,
-                shareable=current[name].shareable,
+                shareable=current[name].is_shareable,
             ).model_dump_json(by_alias=True)
             for name in diff.changed
         ] + [
