@@ -1,0 +1,1 @@
+The README and the Chromium re-tagging sweep's docs now place renderers at the top of the browser band (990) rather than at the ceiling, which the chat app's spare agents now hold alone (`SPARE_AGENT`, 1000).
