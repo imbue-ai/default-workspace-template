@@ -160,8 +160,7 @@ uv run .agents/skills/launch-task/scripts/create_worker.py reply \
 file's frontmatter (`worker_agent_id`) and sends through the chat app
 (`system/scripts/message_chat.py`, which falls back to `mngr message` on its
 own when the chat app cannot take the message); never message a worker by its
-mngr name. A task file from before the stamp (an in-flight worker launched by an
-older template) takes `--name <WORKER_NAME>` as the fallback address.
+mngr name.
 
 To escalate, ask the user, wait for the user's reply, then forward it the same
 way.
