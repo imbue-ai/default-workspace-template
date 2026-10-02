@@ -104,8 +104,8 @@ is minimized or maximized) is one client's own *placement*. Every browser *clien
 active desktop.
 
 A window is named by its id (``win-<hex>``, from ``desktops`` or the ``open`` that made it), by
-``self`` (the caller's own chat window), or by an app name (that app's most recently focused
-window on the target client's active desktop).
+``self`` (the caller's own chat window), by ``pinned`` (the caller's app's pinned window), or
+by an app name (that app's most recently focused window on the target client's active desktop).
 
 Every op targets exactly one client: ``--client <id>`` (from ``context``), else the client
 that most recently messaged you while it is connected, else the one connected client (when
