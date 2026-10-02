@@ -4,7 +4,7 @@
  * each is tested on its own; the body is returned as plain text pieces, never HTML, since an agent wrote it.
  */
 
-import type { BackupRetention, NoteAttribution } from "../models/notes";
+import type { AuthorKind, BackupRetention, NoteAttribution } from "../models/notes";
 
 export interface BodyBlock {
   readonly label: string | null;
@@ -36,20 +36,29 @@ export function countLabel(count: number, singular: string, plural: string): str
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-export function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+/** "Oct 1" this year, "Oct 1, 2025" before it. */
+export function formatDate(iso: string, now: Date = new Date()): string {
+  const date = new Date(iso);
+  return date.toLocaleDateString(
+    undefined,
+    date.getFullYear() === now.getFullYear()
+      ? { month: "short", day: "numeric" }
+      : { month: "short", day: "numeric", year: "numeric" },
+  );
 }
+
+const WRITER_BY_KIND: Readonly<Record<AuthorKind, (chatTitle: string | null) => string>> = {
+  CHAT: (chatTitle) => `Written by "${chatTitle ?? ""}"`,
+  NOT_A_CHAT: () => "Written by a chat that has since been deleted, or a background task",
+  UNKNOWN: () => "Written by a chat whose name couldn't be read",
+};
 
 /** "Written by "Plan the launch" · read by 2 chats", in whatever part the transcripts can support. */
 export function attributionLine(attribution: NoteAttribution | null): string {
   if (attribution === null) return "Who wrote this isn't recorded";
   const latest = attribution.authors[0];
   const writer =
-    latest === undefined
-      ? "Who wrote this isn't recorded"
-      : latest.chat_title === null
-        ? "Written by a chat that has since been deleted"
-        : `Written by "${latest.chat_title}"`;
+    latest === undefined ? "Who wrote this isn't recorded" : WRITER_BY_KIND[latest.kind](latest.chat_title);
   const others =
     attribution.authors.length > 1
       ? ` and ${countLabel(attribution.authors.length - 1, "other chat", "other chats")}`

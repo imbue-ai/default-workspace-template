@@ -8,7 +8,8 @@ icon = "icon.svg"
 critical = false
 stop_when_no_windows = true
 priority = "memories"
-# After Activity (50): both are tools for understanding the workspace rather than ways into it.
+# After the ways into the workspace (chat, getting started, files, browser, terminal): this is a tool for
+# understanding it.
 launcher_rank = 55
 
 # A preview serves the page on a free port, unregistered, so it never re-points the live row. It

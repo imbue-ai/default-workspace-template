@@ -10,6 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Final
 
+from loguru import logger
 from pydantic import Field
 
 from host_backup.config import BackupConfigError
@@ -81,6 +82,7 @@ def read_backup_retention(backup_config_path: Path, restic_env_path: Path) -> Ba
     """
     try:
         is_backed_up = not missing_required_restic_keys(load_restic_env(restic_env_path))
-    except BackupConfigError:
+    except BackupConfigError as e:
+        logger.debug("Could not read the backup credentials; assuming backups are on: {}", e)
         is_backed_up = True
     return describe_retention(load_backup_config(backup_config_path).retention, is_backed_up, backup_config_path)

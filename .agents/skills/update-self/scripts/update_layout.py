@@ -73,11 +73,12 @@ FRONTEND_TOOLING_PATHS = frozenset(
     }
 )
 
-# Every directory whose change re-emits a bundle: the three frontends and the library they share.
+# Every directory whose change re-emits a bundle: each frontend and the library they share.
 FRONTEND_SOURCE_DIRS = (
     FRONTEND_DIR,
     CHAT_FRONTEND_DIR,
     GETTING_STARTED_FRONTEND_DIR,
+    MEMORIES_FRONTEND_DIR,
     FRONTEND_LIB_DIR,
 )
 

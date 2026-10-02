@@ -8,7 +8,12 @@ import m from "mithril";
 
 export type NoteType = "USER" | "FEEDBACK" | "PROJECT" | "REFERENCE" | "OTHER";
 
+/** CHAT: a live chat, by title. NOT_A_CHAT: an agent no live chat holds (a deleted chat or a background task).
+ *  UNKNOWN: the chat app could not be asked, or the session belongs to no agent mngr knows. */
+export type AuthorKind = "CHAT" | "NOT_A_CHAT" | "UNKNOWN";
+
 export interface NoteAuthor {
+  readonly kind: AuthorKind;
   readonly chat_title: string | null;
   readonly at: string | null;
 }
@@ -83,8 +88,7 @@ async function send(method: "PUT" | "DELETE", path: string, body: object): Promi
       body: JSON.stringify(body),
     });
     if (response.ok) return null;
-    if (response.status === 409)
-      return "A chat changed this note while you had it open. Its latest version is shown now.";
+    if (response.status === 409) return "A chat changed this note while you had it open, so nothing was changed.";
     const detail = ((await response.json().catch(() => ({}))) as { detail?: string }).detail;
     return detail ?? `The page answered ${response.status}.`;
   } catch (error) {
@@ -94,12 +98,14 @@ async function send(method: "PUT" | "DELETE", path: string, body: object): Promi
   }
 }
 
-export function saveNote(note: Note, description: string, body: string): Promise<string | null> {
-  return send("PUT", `${NOTES_PATH}/${encodeURIComponent(note.file_name)}`, {
-    description,
-    body,
-    version: note.version,
-  });
+/** Save a correction made to ``version`` of the note: the server refuses it if the note has changed since. */
+export function saveNote(
+  fileName: string,
+  description: string,
+  body: string,
+  version: string,
+): Promise<string | null> {
+  return send("PUT", `${NOTES_PATH}/${encodeURIComponent(fileName)}`, { description, body, version });
 }
 
 export function deleteNote(note: Note): Promise<string | null> {

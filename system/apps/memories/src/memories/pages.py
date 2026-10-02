@@ -1,9 +1,7 @@
 """The app's routes on its own origin: the page, the health probe, the notes, correcting and deleting a note, and
 the contract module. Everything is read when asked; the app keeps nothing between requests."""
 
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 from typing import Final
 
 import httpx
@@ -14,11 +12,17 @@ from flask import request
 from flask import send_file
 from flask import send_from_directory
 from flask.typing import ResponseReturnValue
+from loguru import logger
+from pydantic import ConfigDict
+from pydantic import Field
+from pydantic import ValidationError
 from werkzeug.exceptions import NotFound
 
 from app_manifest.errors import RegistryReadError
+from app_manifest.manifest import describe_validation_error
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import read_registry
+from imbue.imbue_common.frozen_model import FrozenModel
 from memories.attribution import DEFAULT_CHAT_APP_URL
 from memories.attribution import TranscriptSources
 from memories.attribution import read_attributions
@@ -52,10 +56,29 @@ _NOT_BUILT_PAGE: Final[str] = (
 )
 
 
+class NoteCorrection(FrozenModel):
+    """A PUT's body: the corrected summary and text, and the version of the note they correct."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    description: str = Field(description="The new one-line summary")
+    body: str = Field(description="The new text after the frontmatter")
+    version: str = Field(description="The note's version the correction was made to")
+
+
+class NoteDeletion(FrozenModel):
+    """A DELETE's body: the version of the note the user chose to delete."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    version: str = Field(description="The note's version the user saw")
+
+
 def _chat_app_url(registry_path: Path) -> str:
     try:
         rows = read_registry(registry_path)
-    except RegistryReadError:
+    except RegistryReadError as e:
+        logger.debug("Could not read the app registry for the chat app's URL; using the default: {}", e)
         return DEFAULT_CHAT_APP_URL
     return next((str(row.url).rstrip("/") for row in rows if row.name == CHAT_APP_NAME), DEFAULT_CHAT_APP_URL)
 
@@ -73,9 +96,15 @@ def _error_response(error: MemoriesError) -> ResponseReturnValue:
     return jsonify({"detail": str(error)}), status
 
 
-def _json_body() -> Mapping[str, Any]:
-    body = request.get_json(silent=True)
-    return body if isinstance(body, Mapping) else {}
+def _request_model[RequestModelT: FrozenModel](model: type[RequestModelT]) -> RequestModelT | ResponseReturnValue:
+    """The request's JSON body as ``model``, or a 400 naming what is wrong with it."""
+    try:
+        return model.model_validate(request.get_json(silent=True))
+    except ValidationError as e:
+        fields = ", ".join(model.model_fields)
+        return jsonify(
+            {"detail": f"expected a JSON object with {fields}: {describe_validation_error(e)}"}
+        ), HTTP_BAD_REQUEST
 
 
 def build_pages_blueprint(
@@ -119,6 +148,7 @@ def build_pages_blueprint(
     @blueprint.get(NOTES_PATH)
     def notes() -> ResponseReturnValue:
         attributions, messages = read_attributions(transcript_sources, client, _chat_app_url(registry_path))
+        listing = list_notes(notes_dir)
         payload = {
             "notes_dir": str(notes_dir),
             "index_path": str(notes_dir / INDEX_FILENAME),
@@ -130,9 +160,12 @@ def build_pages_blueprint(
                     if note.file_name in attributions
                     else None,
                 }
-                for note in list_notes(notes_dir)
+                for note in listing.notes
             ],
-            "messages": list(messages),
+            "messages": [
+                *messages,
+                *(f"{file_name} could not be read, so it isn't shown." for file_name in listing.unreadable_file_names),
+            ],
         }
         response = jsonify(payload)
         response.headers["Cache-Control"] = "no-store"
@@ -140,22 +173,25 @@ def build_pages_blueprint(
 
     @blueprint.put(f"{NOTES_PATH}/<file_name>")
     def correct(file_name: str) -> ResponseReturnValue:
-        body = _json_body()
-        description = str(body.get("description", "")).strip()
+        correction = _request_model(NoteCorrection)
+        if not isinstance(correction, NoteCorrection):
+            return correction
+        description = correction.description.strip()
         if not description:
             return jsonify({"detail": "a note needs a summary"}), HTTP_BAD_REQUEST
         try:
-            note = update_note(
-                notes_dir, file_name, description, str(body.get("body", "")), str(body.get("version", ""))
-            )
+            note = update_note(notes_dir, file_name, description, correction.body, correction.version)
         except MemoriesError as e:
             return _error_response(e)
         return jsonify(note.model_dump(mode="json"))
 
     @blueprint.delete(f"{NOTES_PATH}/<file_name>")
     def delete(file_name: str) -> ResponseReturnValue:
+        deletion = _request_model(NoteDeletion)
+        if not isinstance(deletion, NoteDeletion):
+            return deletion
         try:
-            delete_note(notes_dir, file_name, str(_json_body().get("version", "")))
+            delete_note(notes_dir, file_name, deletion.version)
         except MemoriesError as e:
             return _error_response(e)
         return jsonify({"file_name": file_name})

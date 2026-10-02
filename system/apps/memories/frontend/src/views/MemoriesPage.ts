@@ -38,12 +38,15 @@ const GROUPS: readonly { readonly type: NoteType; readonly label: string }[] = [
 
 export interface MemoriesPageAttrs {
   readonly state: NotesState;
-  readonly onSave: (note: Note, description: string, body: string) => Promise<string | null>;
+  readonly onSave: (fileName: string, description: string, body: string, version: string) => Promise<string | null>;
   readonly onDelete: (note: Note) => Promise<string | null>;
 }
 
+/** An edit in progress, and the version of the note it started from: the page re-reads the notes whenever its
+ *  window regains focus, so the note it renders may be newer than the one being edited. */
 interface Draft {
   readonly fileName: string;
+  readonly version: string;
   description: string;
   body: string;
 }
@@ -132,6 +135,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
 
   function editor(note: Note, attrs: MemoriesPageAttrs, current: Draft): m.Vnode {
     const descriptionId = `edit-description-${note.file_name}`;
+    const isConflicted = current.version !== note.version;
     const bodyId = `edit-body-${note.file_name}`;
     return m(
       "div",
@@ -158,6 +162,22 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
             oninput: (event: InputEvent) => (current.body = (event.target as HTMLTextAreaElement).value),
           }),
         ]),
+        isConflicted
+          ? m(
+              "div",
+              { class: "memories-conflict flex flex-col gap-1 rounded-md bg-surface-secondary p-3", role: "note" },
+              [
+                m(
+                  "p",
+                  { class: "m-0 type-body text-primary" },
+                  "A chat changed this note while you were editing it. Its version now reads:",
+                ),
+                m("p", { class: "m-0 type-body font-semibold text-primary" }, note.description),
+                m("p", { class: "m-0 whitespace-pre-wrap type-body text-primary" }, note.body),
+                m("p", { class: "m-0 type-helper text-secondary" }, "Replacing it keeps only your version."),
+              ],
+            )
+          : null,
         m("div", { class: "flex flex-wrap items-center justify-between gap-3" }, [
           m(
             "span",
@@ -174,12 +194,15 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
                 disabled: isBusy || current.description.trim() === "",
                 onclick: () =>
                   run(async () => {
-                    const error = await attrs.onSave(note, current.description, current.body);
+                    // A replace is the user's explicit choice after seeing the chat's version, so it is made against
+                    // that version; a plain save is made against the version the edit started from.
+                    const version = isConflicted ? note.version : current.version;
+                    const error = await attrs.onSave(note.file_name, current.description, current.body, version);
                     if (error === null) draft = null;
                     return error;
                   }, "Saved. New chats will use this version."),
               },
-              "Save",
+              isConflicted ? "Replace with my version" : "Save",
             ),
           ]),
         ]),
@@ -218,7 +241,13 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
                 variant: "secondary",
                 sm: true,
                 disabled: isBusy,
-                onclick: () => (draft = { fileName: note.file_name, description: note.description, body: note.body }),
+                onclick: () =>
+                  (draft = {
+                    fileName: note.file_name,
+                    version: note.version,
+                    description: note.description,
+                    body: note.body,
+                  }),
               },
               "Edit",
             ),

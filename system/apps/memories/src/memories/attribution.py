@@ -11,10 +11,12 @@ Transcripts are read when the page asks, line by line, parsing only the lines th
 
 import json
 import os
+import time
 from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
+from enum import auto
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -23,6 +25,7 @@ import httpx
 from loguru import logger
 from pydantic import Field
 
+from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 
@@ -32,6 +35,7 @@ SESSION_HISTORY_FILENAME: Final[str] = "claude_session_id_history"
 TRANSCRIPT_SUFFIX: Final[str] = ".jsonl"
 DEFAULT_CHAT_APP_URL: Final[str] = "http://127.0.0.1:8010"
 CHAT_LIST_TIMEOUT_SECONDS: Final[float] = 5.0
+CHAT_LIST_SLOW_SECONDS: Final[float] = 1.0
 
 
 class NoteToolUse(FrozenModel):
@@ -43,10 +47,22 @@ class NoteToolUse(FrozenModel):
     at: datetime | None = Field(description="When, from the transcript line's timestamp")
 
 
-class NoteAuthor(FrozenModel):
-    """A chat (or an agent no chat holds any more) that wrote a note."""
+class AuthorKind(UpperCaseStrEnum):
+    """What is known about whoever wrote a note."""
 
-    chat_title: str | None = Field(description="The chat's title, or None when no live chat holds the agent")
+    # A live chat, by its title.
+    CHAT = auto()
+    # An agent no live chat holds: a chat since deleted, or a background task a chat started.
+    NOT_A_CHAT = auto()
+    # Not knowable: the chat app could not be asked, or the session belongs to no agent mngr knows.
+    UNKNOWN = auto()
+
+
+class NoteAuthor(FrozenModel):
+    """Whoever wrote a note, as far as the transcripts and the chat app can tell."""
+
+    kind: AuthorKind = Field(description="What is known about the writer")
+    chat_title: str | None = Field(description="The chat's title, for a writer of kind CHAT")
     at: datetime | None = Field(description="When it last wrote the note")
 
 
@@ -61,25 +77,17 @@ class TranscriptSources(FrozenModel):
     """Where the records come from; injectable so tests read fake trees."""
 
     claude_config_dirs: tuple[Path, ...] = Field(description="Claude config dirs holding ``projects/`` transcripts")
-    project_dir_name: str = Field(description="The encoded workspace path naming its transcripts folder")
     mngr_agents_dir: Path = Field(description="The mngr host dir's ``agents/`` folder")
     notes_dir: Path = Field(description="The notes folder, absolute")
 
 
-@pure
-def encode_project_dir_name(work_dir: Path) -> str:
-    """Claude's name for a project's transcripts folder: the absolute path with ``/`` and ``.`` as ``-``."""
-    return str(work_dir).replace("/", "-").replace(".", "-")
-
-
-def default_transcript_sources(notes_dir: Path, work_dir: Path) -> TranscriptSources:
+def default_transcript_sources(notes_dir: Path) -> TranscriptSources:
     home = Path.home()
     accounts_dir = home / ".minds" / "accounts"
     account_dirs = sorted(path for path in accounts_dir.iterdir() if path.is_dir()) if accounts_dir.is_dir() else []
     host_dir = Path(os.environ.get("MNGR_HOST_DIR") or home / ".mngr")
     return TranscriptSources(
         claude_config_dirs=(*account_dirs, home / ".claude"),
-        project_dir_name=encode_project_dir_name(work_dir),
         mngr_agents_dir=host_dir / "agents",
         notes_dir=notes_dir.absolute(),
     )
@@ -120,13 +128,12 @@ def note_tool_uses(line: str, session_id: str, notes_dir: Path) -> list[NoteTool
 
 
 def read_note_tool_uses(sources: TranscriptSources) -> list[NoteToolUse]:
+    """Every Claude session's note tool calls, from every project's transcripts: a worker runs in a worktree of its
+    own, a project folder of its own, and still writes to the one notes folder."""
     notes_marker = str(sources.notes_dir.relative_to(sources.notes_dir.parent.parent))
     uses: list[NoteToolUse] = []
     for config_dir in sources.claude_config_dirs:
-        project_dir = config_dir / "projects" / sources.project_dir_name
-        if not project_dir.is_dir():
-            continue
-        for transcript in sorted(project_dir.glob(f"*{TRANSCRIPT_SUFFIX}")):
+        for transcript in sorted((config_dir / "projects").glob(f"*/*{TRANSCRIPT_SUFFIX}")):
             try:
                 with transcript.open(encoding="utf-8", errors="replace") as handle:
                     for line in handle:
@@ -150,7 +157,8 @@ def read_agent_id_by_session(mngr_agents_dir: Path) -> dict[str, str]:
     for agent_dir in mngr_agents_dir.iterdir():
         try:
             history = (agent_dir / SESSION_HISTORY_FILENAME).read_text(encoding="utf-8")
-        except OSError:
+        except OSError as e:
+            logger.trace("No Claude session history for agent {}: {}", agent_dir.name, e)
             continue
         for session_id in parse_session_history(history):
             agent_id_by_session[session_id] = agent_dir.name
@@ -159,6 +167,7 @@ def read_agent_id_by_session(mngr_agents_dir: Path) -> dict[str, str]:
 
 def fetch_chat_title_by_agent_id(client: httpx.Client, chat_app_url: str) -> dict[str, str] | None:
     """Every agent id a live chat has run on, mapped to the chat's title; None when the chat app cannot answer."""
+    started_at = time.monotonic()
     try:
         response = client.get(f"{chat_app_url}/api/chats", timeout=CHAT_LIST_TIMEOUT_SECONDS)
         response.raise_for_status()
@@ -166,6 +175,9 @@ def fetch_chat_title_by_agent_id(client: httpx.Client, chat_app_url: str) -> dic
     except (httpx.HTTPError, ValueError) as e:
         logger.debug("Could not list chats for note attribution: {}", e)
         return None
+    elapsed = time.monotonic() - started_at
+    if elapsed > CHAT_LIST_SLOW_SECONDS:
+        logger.warning("Listed chats for note attribution slowly, in {:.1f}s", elapsed)
     title_by_agent_id: dict[str, str] = {}
     for chat in body.get("chats", []) if isinstance(body, Mapping) else []:
         if not isinstance(chat, Mapping):
@@ -179,25 +191,32 @@ def fetch_chat_title_by_agent_id(client: httpx.Client, chat_app_url: str) -> dic
 def attribute_notes(
     uses: Iterable[NoteToolUse],
     agent_id_by_session: Mapping[str, str],
-    chat_title_by_agent_id: Mapping[str, str],
+    chat_title_by_agent_id: Mapping[str, str] | None,
 ) -> dict[str, NoteAttribution]:
-    """Each note's authors (latest write per chat) and reader count, keyed by file name."""
+    """Each note's authors (latest write per writer) and how many others read it, keyed by file name.
 
-    def who(session_id: str) -> str:
+    ``chat_title_by_agent_id`` is None when the chat app could not be asked: every writer is then UNKNOWN rather than
+    taken for a deleted chat. A writer also reads the note it edits, so writers are not counted as readers.
+    """
+
+    def who(session_id: str) -> tuple[AuthorKind, str, str | None]:
         agent_id = agent_id_by_session.get(session_id)
-        if agent_id is not None and agent_id in chat_title_by_agent_id:
-            return f"chat:{chat_title_by_agent_id[agent_id]}"
-        return f"unclaimed:{agent_id or session_id}"
+        if chat_title_by_agent_id is None or agent_id is None:
+            return AuthorKind.UNKNOWN, f"session:{agent_id or session_id}", None
+        title = chat_title_by_agent_id.get(agent_id)
+        if title is None:
+            return AuthorKind.NOT_A_CHAT, f"agent:{agent_id}", None
+        return AuthorKind.CHAT, f"chat:{title}", title
 
-    latest_write_by_note: dict[str, dict[str, datetime | None]] = {}
+    latest_write_by_note: dict[str, dict[str, tuple[AuthorKind, str | None, datetime | None]]] = {}
     readers_by_note: dict[str, set[str]] = {}
     for use in uses:
-        key = who(use.session_id)
+        kind, key, title = who(use.session_id)
         if use.is_write:
             writes = latest_write_by_note.setdefault(use.file_name, {})
             previous = writes.get(key)
-            if key not in writes or (use.at is not None and (previous is None or use.at > previous)):
-                writes[key] = use.at
+            if previous is None or (use.at is not None and (previous[2] is None or use.at > previous[2])):
+                writes[key] = (kind, title, use.at)
         else:
             readers_by_note.setdefault(use.file_name, set()).add(key)
 
@@ -205,16 +224,12 @@ def attribute_notes(
     for file_name in set(latest_write_by_note) | set(readers_by_note):
         writes = latest_write_by_note.get(file_name, {})
         authors = sorted(
-            (
-                NoteAuthor(chat_title=key.removeprefix("chat:") if key.startswith("chat:") else None, at=at)
-                for key, at in writes.items()
-            ),
+            (NoteAuthor(kind=kind, chat_title=title, at=at) for kind, title, at in writes.values()),
             key=lambda author: author.at.timestamp() if author.at is not None else 0.0,
             reverse=True,
         )
-        attributions[file_name] = NoteAttribution(
-            authors=tuple(authors), reader_count=len(readers_by_note.get(file_name, set()))
-        )
+        readers = readers_by_note.get(file_name, set()) - set(writes)
+        attributions[file_name] = NoteAttribution(authors=tuple(authors), reader_count=len(readers))
     return attributions
 
 
@@ -229,6 +244,6 @@ def read_attributions(
     attributions = attribute_notes(
         read_note_tool_uses(sources),
         read_agent_id_by_session(sources.mngr_agents_dir),
-        chat_title_by_agent_id or {},
+        chat_title_by_agent_id,
     )
     return attributions, notes

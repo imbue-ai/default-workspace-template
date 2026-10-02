@@ -1,1 +1,1 @@
-`update-self` knows the new memories app's ("What agents know") frontend: its `package.json` counts as an npm manifest, and its bundle is built, snapshotted and verified with the others.
+`update-self` knows the new memories app's frontend: its `package.json` counts as an npm manifest, a change under it counts as a frontend change, and its bundle is built, snapshotted and verified with the others. The skill's docs and `--worker-bundle` name its bundle too, and a test checks that every bundle's sources count as a frontend change.

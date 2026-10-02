@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { BackupRetention } from "../models/notes";
-import { backupsDetail, backupsLine, deleteBackupsWarning, deletedStatus } from "./format";
+import type { BackupRetention, NoteAuthor } from "../models/notes";
+import {
+  attributionLine,
+  backupsDetail,
+  backupsLine,
+  deleteBackupsWarning,
+  deletedStatus,
+  formatDate,
+} from "./format";
 
 const BACKED_UP: BackupRetention = {
   is_backed_up: true,
@@ -33,5 +40,35 @@ describe("what the page says the backups keep after a delete", () => {
     }
     expect(backupsDetail(NOT_BACKED_UP)).toBe("No backups are set up for this workspace.");
     expect(backupsDetail(KEEPS_NOTHING)).toBe("Backups are set up, but data/system/backup.toml keeps no snapshots.");
+  });
+});
+
+describe("who wrote a note", () => {
+  const author = (kind: NoteAuthor["kind"], chatTitle: string | null = null): NoteAuthor => ({
+    kind,
+    chat_title: chatTitle,
+    at: null,
+  });
+
+  it("names a live chat, and says honestly what is known about any other writer", () => {
+    expect(attributionLine({ authors: [author("CHAT", "Plan the launch")], reader_count: 2 })).toBe(
+      'Written by "Plan the launch" · read by 2 chats',
+    );
+    expect(attributionLine({ authors: [author("NOT_A_CHAT")], reader_count: 0 })).toBe(
+      "Written by a chat that has since been deleted, or a background task · not read since",
+    );
+    expect(attributionLine({ authors: [author("UNKNOWN"), author("CHAT", "Other")], reader_count: 1 })).toBe(
+      "Written by a chat whose name couldn't be read and 1 other chat · read by 1 chat",
+    );
+    expect(attributionLine(null)).toBe("Who wrote this isn't recorded");
+  });
+});
+
+describe("dates", () => {
+  it("shows the year only for a date before this year", () => {
+    const now = new Date("2026-10-01T12:00:00Z");
+
+    expect(formatDate("2026-03-04T12:00:00Z", now)).not.toMatch(/2026/);
+    expect(formatDate("2025-03-04T12:00:00Z", now)).toMatch(/2025/);
   });
 });

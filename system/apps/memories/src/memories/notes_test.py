@@ -18,6 +18,7 @@ from memories.notes import file_version
 from memories.notes import list_notes
 from memories.notes import parse_note
 from memories.notes import read_index
+from memories.notes import read_note
 from memories.notes import render_note
 from memories.notes import rewrite_index_hook
 from memories.notes import split_index_lines
@@ -142,7 +143,7 @@ def test_render_note_replaces_the_summary_and_body_and_keeps_every_other_frontma
     rendered = render_note(parse_note(_NOTE), "Prefers  metric\nunits always", "  Kilometres only.  ")
 
     assert rendered == (
-        "---\nname: units-preference\ndescription: Prefers metric units always\nmetadata:\n  type: feedback\n---\n\n"
+        '---\nname: units-preference\ndescription: "Prefers metric units always"\nmetadata:\n  type: feedback\n---\n\n'
         "Kilometres only.\n"
     )
 
@@ -150,7 +151,7 @@ def test_render_note_replaces_the_summary_and_body_and_keeps_every_other_frontma
 def test_render_note_adds_a_summary_after_the_name_when_there_was_none() -> None:
     rendered = render_note(parse_note("---\nname: role\nmetadata:\n  type: user\n---\nx\n"), "Is a designer", "x")
 
-    assert rendered.startswith("---\nname: role\ndescription: Is a designer\nmetadata:\n")
+    assert rendered.startswith('---\nname: role\ndescription: "Is a designer"\nmetadata:\n')
 
 
 def test_rewrite_index_hook_rewrites_only_that_notes_line() -> None:
@@ -193,11 +194,12 @@ def test_list_notes_lists_note_files_newest_first_and_skips_the_index_readme_and
     os.utime(notes_dir / "units.md", (1_000_000, 1_000_000))
     os.utime(notes_dir / "role.md", (2_000_000, 2_000_000))
 
-    notes = list_notes(notes_dir)
+    listing = list_notes(notes_dir)
 
-    assert [note.file_name for note in notes] == ["role.md", "units.md"]
-    assert notes[1].raw_text == _NOTE
-    assert list_notes(tmp_path / "no-such-folder") == []
+    assert [note.file_name for note in listing.notes] == ["role.md", "units.md"]
+    assert listing.notes[1].raw_text == _NOTE
+    assert listing.unreadable_file_names == ()
+    assert list_notes(tmp_path / "no-such-folder").notes == ()
 
 
 def test_a_note_with_no_summary_is_described_by_its_file_name(tmp_path: Path) -> None:
@@ -205,7 +207,7 @@ def test_a_note_with_no_summary_is_described_by_its_file_name(tmp_path: Path) ->
     notes_dir.mkdir()
     (notes_dir / "likes_dark-mode.md").write_text("Prefers dark mode.\n")
 
-    (note,) = list_notes(notes_dir)
+    (note,) = list_notes(notes_dir).notes
 
     assert note.description == "likes dark mode"
     assert note.note_type == NoteType.OTHER
@@ -237,3 +239,29 @@ def test_write_atomically_replaces_the_file_and_leaves_no_temporary_file_behind(
     with pytest.raises(NoteWriteError):
         write_atomically(tmp_path / "missing-folder" / "note.md", "x")
     assert [path.name for path in tmp_path.iterdir()] == ["note.md"]
+
+
+@pytest.mark.parametrize(
+    "summary", ["Uses: tabs", "- starts with a dash", "[bracketed]", 'says "hello"', "it's fine", "  spaced  "]
+)
+def test_a_summary_round_trips_through_the_frontmatter_whatever_it_contains(summary: str) -> None:
+    rendered = render_note(parse_note(_NOTE), summary, "Body.")
+
+    assert parse_note(rendered).description == " ".join(summary.split())
+
+
+def test_single_quoted_and_double_quoted_values_are_read_as_yaml_writes_them() -> None:
+    parsed = parse_note("---\nname: 'it''s'\ndescription: \"say \\\"hi\\\"\"\n---\nx\n")
+
+    assert parsed.name == "it's"
+    assert parsed.description == 'say "hi"'
+
+
+def test_a_note_s_version_is_read_before_its_text(tmp_path: Path) -> None:
+    """A chat writing between the two reads must make the version older than the text, so a save is refused."""
+    notes_dir = _notes_dir(tmp_path)
+    version_before = file_version(notes_dir / "units.md")
+
+    note = read_note(notes_dir / "units.md")
+
+    assert note.version == version_before
