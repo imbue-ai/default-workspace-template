@@ -58,6 +58,7 @@ _BUILTIN_SERVICE_ORDER = (
     "browser",
     "files",
     "getting-started",
+    "memories",
 )
 
 

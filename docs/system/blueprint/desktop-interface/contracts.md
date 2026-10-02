@@ -49,6 +49,7 @@ Built-in manifests:
 | `system_interface` | true | false | `system_interface` | | none | none; `internal = true` |
 | `chat` | true | false | `chat` | 10 | `{launch = "root", mode = "new"}` | `root` ("Chat", `/`, no params); `new` ("New Chat", POST `/api/chats/intake`, params `account_id` optional, `message` optional, presets `target = "new_chat"`, `text_param = "message"`); `send` ("Send to chat...", POST `/api/chats/intake`, param `message` optional, presets `target = "chat_selector"`, `text_param = "message"`); `draft` ("Draft into chat", POST `/api/chats/intake`, param `message` optional, presets `target = "current_chat"`, `is_draft = "true"`, `draft_param = "message"`) |
 | `getting-started` | false | true | `getting-started` | 15 | `{launch = "open", mode = "focus"}` | none; the shell synthesizes `open` ("Open Getting Started", `/`) |
+| `memories` | false | true | `memories` | 55 | none | none; the shell synthesizes `open` ("Open Agent Memory", `/`) |
 | `terminal` | true | false | `terminal` | 40 | `{launch = "new", mode = "new"}` | `new` ("Terminal", POST `/new`, params `workdir` optional) |
 | `terminal-pty` | true | false | `terminal` | | none | none; `internal = true`, `program = "terminal-pty"` |
 | `files` | false | true | `files` | 20 | `{launch = "new", mode = "new"}` | `new` ("File Viewer", `/home/user/workspace/`, params `path` optional) |
