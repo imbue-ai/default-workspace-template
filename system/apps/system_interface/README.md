@@ -226,9 +226,9 @@ the app without the shell: `shell/share_grants.py` reads
 `data/.secrets/share_grants.toml`), and while any stoppable app is stopped the
 shell holds its port (`shell/port_parking.py`), so the first request for the
 app starts it again and is answered with a loading page that reloads into the
-app. "Quit <app>" on the window menu
-(`frontend/src/views/WindowMenu.ts`) closes every window of the app and stops
-it at once; critical apps offer nothing there and are never stopped or parked.
+app. "Quit <app>" on the window menu (`frontend/src/views/WindowMenu.ts`)
+closes every window of the app and stops it at once; critical apps offer
+nothing there and are never stopped or parked.
 The stop and start routes remain for agents. A framed page reaches the shell only
 through the contract module (`shell:open`, `shell:focused`, `shell:location`,
 `shell:capabilities`, `shell:start-with-text`); a page that reports the path it is showing gets it
