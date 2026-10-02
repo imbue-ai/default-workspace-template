@@ -157,7 +157,8 @@ def _event_time(event: dict[str, object] | None) -> datetime | None:
         return None
     try:
         return datetime.fromisoformat(timestamp)
-    except ValueError:
+    except ValueError as e:
+        logger.warning("Ignoring a backup event with an unparseable timestamp: {}", e)
         return None
 
 
