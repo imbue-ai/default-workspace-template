@@ -86,7 +86,7 @@ def _sandbox(tmp_path: Path) -> Path:
     return sandbox
 
 
-def test_context_and_desktops_round_trip_through_script_and_endpoint(
+def test_context_and_desktops_round_trip_through_the_command_and_endpoint(
     layout_server: PipelineHarness, tmp_path: Path
 ) -> None:
     """``context --json`` is empty for a machine nobody has opened and lists a client as soon as it connects,
