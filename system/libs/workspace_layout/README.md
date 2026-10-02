@@ -74,7 +74,7 @@ answer shapes live in one place the shell and its callers share.
   that records every request and answers or refuses as a test sets it;
   `LoopbackShell`, a stand-in for the shell's routes over loopback that reads
   every op body as the shell does (`describe_op_body_problem`) and refuses one
-  it would refuse; and builders of the records and answers (`fake_window`,
+  it would refuse, serving inside a `with` block; and builders of the records and answers (`fake_window`,
   `fake_desktop`, `fake_app`, `connected_client`, `desktop_answer`).
 
 ## Ops by kind

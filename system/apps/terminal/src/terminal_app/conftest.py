@@ -78,9 +78,5 @@ def pages_client(session_source: TmuxSessionSource, tmp_path: Path, window_close
 @pytest.fixture
 def loopback_shell() -> Iterator[LoopbackShell]:
     """A loopback stand-in for the shell, answering what a test sets."""
-    shell = LoopbackShell()
-    shell.start()
-    try:
+    with LoopbackShell() as shell:
         yield shell
-    finally:
-        shell.close()

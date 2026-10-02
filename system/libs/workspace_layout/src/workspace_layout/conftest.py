@@ -42,12 +42,8 @@ def loguru_records() -> Iterator[list[str]]:
 
 @pytest.fixture
 def loopback_shell() -> Iterator[LoopbackShell]:
-    shell = LoopbackShell()
-    shell.start()
-    try:
+    with LoopbackShell() as shell:
         yield shell
-    finally:
-        shell.close()
 
 
 @pytest.fixture

@@ -7,8 +7,10 @@ from datetime import timezone
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 from typing import Final
+from typing import Self
 
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import LocationScope
@@ -269,7 +271,8 @@ def write_registry(path: Path, app_names: list[str]) -> Path:
 
 class LoopbackShell(MutableModel):
     """A stand-in for the shell over loopback: its op route, its client-activity route, and whatever GET routes a
-    test gives answers for, recording every body posted to it.
+    test gives answers for, recording every body posted to it. Used as a context manager, it serves inside the
+    ``with`` block and is closed on leaving it.
 
     Every op body is read as the shell reads one (``describe_op_body_problem``), so a caller that posts a body the
     shell would refuse is refused here too, with a 400 whose detail says why.
@@ -383,3 +386,15 @@ class LoopbackShell(MutableModel):
             self._thread.join(timeout=5)
         self._server = None
         self._thread = None
+
+    def __enter__(self) -> Self:
+        self.start()
+        return self
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()

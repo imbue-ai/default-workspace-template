@@ -15,11 +15,9 @@ from imbue.chat.shell_client import chat_show_request
 
 
 def test_a_show_is_asked_for_as_the_chat_app_of_one_of_its_pages() -> None:
-    shell = LoopbackShell(
+    with LoopbackShell(
         op_answer={**desktop_answer(fake_desktop("home"), "client-1", "win-0123456789abcdef"), "shown": "raised"}
-    )
-    shell.start()
-    try:
+    ) as shell:
         answer = build_chat_shell_client(shell.url).show(
             chat_show_request(
                 WindowPath("/?chat=agent-1"),
@@ -28,8 +26,6 @@ def test_a_show_is_asked_for_as_the_chat_app_of_one_of_its_pages() -> None:
                 client_id=ClientId("client-1"),
             )
         )
-    finally:
-        shell.close()
 
     assert answer.shown is ShowOutcome.RAISED
     assert shell.posted == [

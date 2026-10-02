@@ -72,12 +72,8 @@ def _isolate_browser_persistence(tmp_path, monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture
 def loopback_shell(monkeypatch: pytest.MonkeyPatch) -> Iterator[LoopbackShell]:
     """A stand-in for the workspace's shell over loopback, at the URL the fleet reaches the shell by."""
-    shell = LoopbackShell(
+    with LoopbackShell(
         op_answer=desktop_answer(fake_desktop("home"), "c1", FAKE_WINDOW_ID)
-    )
-    shell.start()
-    monkeypatch.setenv(ENV_SHELL_URL, shell.url)
-    try:
+    ) as shell:
+        monkeypatch.setenv(ENV_SHELL_URL, shell.url)
         yield shell
-    finally:
-        shell.close()
