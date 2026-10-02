@@ -3916,7 +3916,7 @@ class AgentManager:
     def _abandon_spare_left_starting(self, chat_id: ChatId) -> None:
         """Hand a spare still starting (``SpareChatAgent.is_starting``) to the sweep's destroy, failing and answering a
         chat that claimed it. A no-op once ``_create_spare`` has run to its end, which leaves the spare started or
-        gone. A chat it was reserved or released for waits on for its own launch, which waits for the destroy."""
+        gone. A chat it was reserved or released for is left as it is: its launch waits for the destroy."""
         with self._lock:
             spare = self._spare_locked(chat_id)
             if spare is None or not spare.is_starting():
