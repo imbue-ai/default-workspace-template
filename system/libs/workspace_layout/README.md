@@ -36,7 +36,8 @@ answer shapes live in one place the shell and its callers share.
   requester's client, else the one connected client, and the client's active
   desktop). A body refuses an argument its op does not take and any rule its
   arguments break (`place` takes a `state` of `PLACEABLE_STATES` or a `frame`;
-  an `open` names a path or a launch path); `context`, `desktops`, and `list`
+  an `open` names a path or a launch path; a `window` or `beside` spells a
+  window, and a `desktop` is not empty); `context`, `desktops`, and `list`
   read none and ignore what they are sent. `op_request_body` spells a body as
   the wire does (only the arguments the caller set) and `parse_op_body` reads
   one as the shell does, naming every argument it refuses. Also

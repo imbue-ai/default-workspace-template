@@ -849,8 +849,7 @@ def _beside_anchor(
 
     The pairing is the open's courtesy, not its point: an open whose ``beside`` names no window on this desktop --
     a chat the user closed, an op from nobody's chat -- still opens its window, where it would have landed. A
-    spelling that is no window at all is the caller's mistake, and refuses the op here, while there is still nothing
-    to leave behind.
+    spelling that is no window at all never gets here: the op's arguments refuse it.
     """
     if arguments.beside is None:
         return None

@@ -1,3 +1,4 @@
+from typing import Annotated
 from typing import Any
 from typing import Final
 from typing import Literal
@@ -8,6 +9,7 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from pydantic import AfterValidator
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
@@ -64,6 +66,15 @@ def parse_window_reference(raw: str) -> WindowReference:
         raise InvalidLayoutValueError(
             f"{raw!r} is not a window: give a window id (win-<hex>), 'self', 'pinned', or an app name"
         ) from e
+
+
+def _check_window_spelling(raw: str) -> str:
+    parse_window_reference(raw)
+    return raw
+
+
+# A window argument as the wire carries it, refused when it spells no window.
+WindowSpelling = Annotated[str, AfterValidator(_check_window_spelling)]
 
 
 class OpRequester(FrozenModel):
@@ -135,6 +146,7 @@ class OpTarget(FrozenModel):
     )
     desktop: str | None = Field(
         default=None,
+        min_length=1,
         description="The desktop, by name or id; None for the client's active one. Naming another edits that one and "
         "switches the client to it",
     )
@@ -153,7 +165,7 @@ class NoArgs(FrozenModel):
 class LoadArgs(OpTarget):
     """``load``: switch the target client to a desktop."""
 
-    desktop: str = Field(description="The desktop to switch the client to, by name or id")
+    desktop: str = Field(min_length=1, description="The desktop to switch the client to, by name or id")
 
 
 class ShowArgs(OpTarget):
@@ -189,7 +201,7 @@ class OpenArgs(OpTarget):
         description="Whether a window this open creates is placed minimized for the target client; a window it finds "
         "instead is left as placed",
     )
-    beside: str | None = Field(
+    beside: WindowSpelling | None = Field(
         default=None,
         description="A window to lay the opened one beside for the target client: that one snapped to the left half, "
         "the opened one to the right half and on top",
@@ -209,7 +221,7 @@ class OpenArgs(OpTarget):
 class _WindowTarget(OpTarget):
     """The keys of an op on one window: its target, and the window."""
 
-    window: str = Field(description="A window id, ``self``, ``pinned``, or an app name")
+    window: WindowSpelling = Field(description="A window id, ``self``, ``pinned``, or an app name")
 
 
 class WindowArgs(_WindowTarget):
