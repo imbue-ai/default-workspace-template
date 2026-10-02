@@ -1,11 +1,9 @@
-"What agents know" now explains what gets remembered, what chats actually use, and where the notes go.
+The memories app is now called Agent Memory, and it explains what gets remembered, what chats use, and where the notes go, briefly by default and in full on request.
 
-- The page says when a chat saves a note (asked to remember, corrected, or told something that will matter later) and what it never saves. Each kind of note has a one-line description, and an empty kind suggests something to tell a chat.
+- The top of the page is the headline, one sentence, and three facts: shared with your Claude and pi chats, not shared with other workspaces, and how long backups keep deleted notes. "How memory works" opens the rest: what chats are told to save and never to save; what chats use (the one-line summaries in `MEMORY.md`, of which chats load the first 200 lines or 25KB); and where notes go (stored in this workspace and its backups, not synced to GitHub, read by Claude and pi chats, sent to a chat's AI provider: the summaries with every chat, a note's full text when a chat opens it).
 
-- Each note shows the exact line every chat starts with (its line in the list chats load), or a warning when it isn't in that list or falls past the list's 200-line limit, so chats never see it. A summary says how long the list is against that limit.
+- Each kind of note says what belongs in it, and an empty kind suggests something to tell a chat.
 
-- "Who can see these notes" is now "Where your notes go": stored only in this workspace and not synced to GitHub, read by every Claude and pi chat and the background tasks they start, sent to a chat's AI provider when that chat uses a note, kept in backups, and not shared with other workspaces.
+- Each note shows the line chats start with, or says it isn't in that list (editing the note adds it back) or is past what chats load. A warning at the top appears only when something in the list is wrong, including lines that name notes which no longer exist.
 
-- The app is now called Agent Memory, and its top section is short: the headline, one sentence, three facts (shared with your Claude and pi chats, stays in this workspace, backups keep deleted notes), and a "How memory works" link that opens the full explanation. A warning appears only when some notes aren't in the list chats load.
-
-- Text and chips meet WCAG AA contrast (4.5:1): headings and hints use the secondary gray instead of the faint one, the green chips use the accent color, and the amber backups chips use dark text.
+- Text and chips meet WCAG AA contrast (4.5:1): headings and hints use the secondary gray, the green chips the accent color, and the amber backups chips dark text.

@@ -82,38 +82,38 @@ const INDEX: IndexSummary = {
 };
 
 describe("what chats load of the notes", () => {
-  it("says every chat starts with the summaries, how many lines load, and how many don't", () => {
+  it("says every chat starts with the summaries, the load limit, and how much of the list is cut", () => {
     expect(indexSummaryLine(INDEX, 3)).toBe(
-      "Every chat starts with the one-line summaries below (the list in MEMORY.md), and opens a note's full text only when its summary looks relevant to what you're asking. Chats load at most 200 lines of it; your list is 3 lines long.",
+      "Every chat starts with the one-line summaries below (the list in MEMORY.md), and opens a note's full text only when its summary looks relevant to what you're asking. Chats load the first 200 lines or 25KB of that list, whichever is less; yours is 3 lines long.",
     );
     expect(indexSummaryLine({ ...INDEX, line_count: 203, loaded_line_count: 200 }, 203)).toContain(
-      "Chats load at most 200 lines of that list; yours is 203 lines long, so the last 3 lines aren't loaded.",
+      "yours is 203 lines long, so the last 3 lines aren't loaded.",
     );
-    expect(indexSummaryLine({ ...INDEX, line_count: 201, loaded_line_count: 200 }, 201)).toContain(
+    expect(indexSummaryLine({ ...INDEX, line_count: 100, loaded_line_count: 99 }, 100)).toContain(
       "so the last 1 line isn't loaded.",
     );
     expect(indexSummaryLine(INDEX, 0)).toBeNull();
   });
 
-  it("shows the exact line a chat starts with, or why it has none", () => {
+  it("shows the line a chat starts with, or why it has none, and how to fix a missing one", () => {
     const listed = (title: string, hook: string, isLoaded: boolean): Note => ({
       ...savedBy("claude"),
-      index_entry: { line_number: 4, title, hook, is_loaded: isLoaded },
+      index_entry: { title, hook, is_loaded: isLoaded },
     });
 
-    expect(indexStatus(listed("Units", "Prefers metric", true), 200)).toEqual({
+    expect(indexStatus(listed("Units", "Prefers metric", true))).toEqual({
       kind: "seen",
       text: "Chats start with: “Units — Prefers metric”",
     });
-    expect(indexStatus(listed("Units", "", true), 200).text).toBe("Chats start with: “Units”");
-    expect(indexStatus(listed("", "Prefers metric", true), 200).text).toBe("Chats start with: “Prefers metric”");
-    expect(indexStatus(listed("Units", "Prefers metric", false), 200)).toEqual({
+    expect(indexStatus(listed("Units", "", true)).text).toBe("Chats start with: “Units”");
+    expect(indexStatus(listed("", "Prefers metric", true)).text).toBe("Chats start with: “Prefers metric”");
+    expect(indexStatus(listed("Units", "Prefers metric", false))).toEqual({
       kind: "past-limit",
-      text: "Past the 200-line limit of that list, so chats don't load it",
+      text: "Past what chats load from that list, so they don't see it",
     });
-    expect(indexStatus(savedBy("claude"), 200)).toEqual({
+    expect(indexStatus(savedBy("claude"))).toEqual({
       kind: "not-listed",
-      text: "Not in the list chats start with, so they won't find it",
+      text: "Not in the list chats start with, so chats are unlikely to use it. Edit it to add it back.",
     });
   });
 });
@@ -125,17 +125,17 @@ describe("the short facts and warnings at the top", () => {
     expect(backupsChip(KEEPS_NOTHING)).toEqual({ text: "Not backed up", isWarning: false });
   });
 
-  it("names the notes chats can't see, and says nothing when they see them all", () => {
-    const seen = { ...savedBy("claude"), index_entry: { line_number: 1, title: "A", hook: "a", is_loaded: true } };
+  it("names what is wrong with the list chats load, and says nothing when it's all fine", () => {
+    const seen = { ...savedBy("claude"), index_entry: { title: "A", hook: "a", is_loaded: true } };
     const pastLimit = { ...seen, index_entry: { ...seen.index_entry, is_loaded: false } };
     const notListed = savedBy("claude");
 
-    expect(attentionLine([seen], 200)).toBeNull();
-    expect(attentionLine([seen, notListed], 200)).toBe(
-      "1 note isn't in the list chats start with, so chats won't find it.",
+    expect(attentionLine([seen], [])).toBeNull();
+    expect(attentionLine([seen, notListed], [])).toBe(
+      "1 note isn't in the list chats start with, so chats are unlikely to use it. Editing a note adds it back.",
     );
-    expect(attentionLine([notListed, notListed, pastLimit], 200)).toBe(
-      "2 notes aren't in the list chats start with, so chats won't find them. 1 note is past the list's 200-line limit, so chats don't load it.",
+    expect(attentionLine([notListed, notListed, pastLimit], ["gone.md"])).toBe(
+      "2 notes aren't in the list chats start with, so chats are unlikely to use them. Editing a note adds it back. 1 note is past what chats load from that list, so they don't see it. The list chats start with still names 1 note that no longer exists.",
     );
   });
 });

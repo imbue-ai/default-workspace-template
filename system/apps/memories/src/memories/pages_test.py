@@ -68,7 +68,6 @@ def test_the_notes_document_says_how_long_the_backups_keep_a_deleted_note(tmp_pa
     }
     assert [note["file_name"] for note in body["notes"]] == ["units.md"]
     assert body["notes"][0]["index_entry"] == {
-        "line_number": 1,
         "title": "Units",
         "hook": "Prefers metric units",
         "is_loaded": True,

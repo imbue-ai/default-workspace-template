@@ -1,6 +1,7 @@
 /**
  * The words the page shows for a note: who wrote it and who read it, dates, counts, the note's body split
- * into paragraphs and labeled lines (``**Why:** ...``), and what the backups still hold after a delete. Pure, so
+ * into paragraphs and labeled lines (``**Why:** ...``), what chats load of the list, and what the backups still hold
+ * after a delete. Pure, so
  * each is tested on its own; the body is returned as plain text pieces, never HTML, since an agent wrote it.
  */
 
@@ -81,7 +82,7 @@ function keptFor(backups: BackupRetention): string | null {
   return backups.is_backed_up ? backups.longest_kept : null;
 }
 
-/** The standing line in "Who can see these notes": deleted notes stay in the backups. */
+/** The backups row under "Where your notes go": deleted notes stay in the backups. */
 export function backupsLine(backups: BackupRetention): string {
   const kept = keptFor(backups);
   return kept === null
@@ -118,24 +119,31 @@ export function indexSummaryLine(index: IndexSummary, noteCount: number): string
   if (noteCount === 0) return null;
   const opening =
     "Every chat starts with the one-line summaries below (the list in MEMORY.md), and opens a note's full text only when its summary looks relevant to what you're asking.";
+  const limit = `Chats load the first ${index.max_lines} lines or ${Math.round(index.max_bytes / 1024)}KB of that list, whichever is less`;
   const skipped = index.line_count - index.loaded_line_count;
   return skipped > 0
-    ? `${opening} Chats load at most ${index.max_lines} lines of that list; yours is ${index.line_count} lines long, so the last ${countLabel(skipped, "line isn't", "lines aren't")} loaded.`
-    : `${opening} Chats load at most ${index.max_lines} lines of it; your list is ${countLabel(index.line_count, "line", "lines")} long.`;
+    ? `${opening} ${limit}; yours is ${countLabel(index.line_count, "line", "lines")} long, so the last ${countLabel(skipped, "line isn't", "lines aren't")} loaded.`
+    : `${opening} ${limit}; yours is ${countLabel(index.line_count, "line", "lines")} long.`;
 }
 
-export type IndexStatus =
-  | { readonly kind: "seen"; readonly text: string }
-  | { readonly kind: "not-listed"; readonly text: string }
-  | { readonly kind: "past-limit"; readonly text: string };
+export type IndexStatusKind = "seen" | "not-listed" | "past-limit";
 
-/** Whether chats see a note at the start, and the exact line they see. */
-export function indexStatus(note: Note, maxLines: number): IndexStatus {
+export interface IndexStatus {
+  readonly kind: IndexStatusKind;
+  readonly text: string;
+}
+
+/** Whether chats see a note at the start, and the line they see, without its link. */
+export function indexStatus(note: Note): IndexStatus {
   const entry = note.index_entry;
-  if (entry === null) return { kind: "not-listed", text: "Not in the list chats start with, so they won't find it" };
-  if (!entry.is_loaded) {
-    return { kind: "past-limit", text: `Past the ${maxLines}-line limit of that list, so chats don't load it` };
+  if (entry === null) {
+    return {
+      kind: "not-listed",
+      text: "Not in the list chats start with, so chats are unlikely to use it. Edit it to add it back.",
+    };
   }
+  if (!entry.is_loaded)
+    return { kind: "past-limit", text: "Past what chats load from that list, so they don't see it" };
   const seen = entry.hook === "" ? entry.title : entry.title === "" ? entry.hook : `${entry.title} — ${entry.hook}`;
   return { kind: "seen", text: `Chats start with: “${seen}”` };
 }
@@ -148,17 +156,22 @@ export function backupsChip(backups: BackupRetention): { readonly text: string; 
     : { text: `Backups keep deleted notes up to ${kept}`, isWarning: true };
 }
 
-/** One line naming the notes chats can't see, or null when they see them all. */
-export function attentionLine(notes: readonly Note[], maxLines: number): string | null {
-  const notListed = notes.filter((note) => indexStatus(note, maxLines).kind === "not-listed").length;
-  const pastLimit = notes.filter((note) => indexStatus(note, maxLines).kind === "past-limit").length;
+/** One line naming what in the list chats load is wrong, or null when nothing is. */
+export function attentionLine(notes: readonly Note[], missingFiles: readonly string[]): string | null {
+  const countByKind: Record<IndexStatusKind, number> = { seen: 0, "not-listed": 0, "past-limit": 0 };
+  for (const note of notes) countByKind[indexStatus(note).kind] += 1;
+  const notListed = countByKind["not-listed"];
+  const pastLimit = countByKind["past-limit"];
   const parts = [
     notListed === 0
       ? null
-      : `${countLabel(notListed, "note isn't", "notes aren't")} in the list chats start with, so chats won't find ${notListed === 1 ? "it" : "them"}.`,
+      : `${countLabel(notListed, "note isn't", "notes aren't")} in the list chats start with, so chats are unlikely to use ${notListed === 1 ? "it" : "them"}. Editing a note adds it back.`,
     pastLimit === 0
       ? null
-      : `${countLabel(pastLimit, "note is", "notes are")} past the list's ${maxLines}-line limit, so chats don't load ${pastLimit === 1 ? "it" : "them"}.`,
+      : `${countLabel(pastLimit, "note is", "notes are")} past what chats load from that list, so they don't see ${pastLimit === 1 ? "it" : "them"}.`,
+    missingFiles.length === 0
+      ? null
+      : `The list chats start with still names ${countLabel(missingFiles.length, "note that no longer exists", "notes that no longer exist")}.`,
   ].filter((part): part is string => part !== null);
   return parts.length === 0 ? null : parts.join(" ");
 }

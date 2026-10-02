@@ -37,8 +37,9 @@ INDEX_FILENAME: Final[str] = "MEMORY.md"
 NON_NOTE_FILENAMES: Final[frozenset[str]] = frozenset({INDEX_FILENAME, "README.md"})
 NOTE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
 _FRONTMATTER_FENCE: Final[str] = "---"
-_INDEX_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(\s*[-*]\s+\[[^\]]*\]\((?P<file>[^)]+)\))(?P<hook>.*)$")
-_INDEX_TITLE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\s*[-*]\s+\[(?P<title>[^\]]*)\]")
+_INDEX_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^(\s*[-*]\s+\[(?P<title>[^\]]*)\]\((?P<file>[^)]+)\))(?P<hook>.*)$"
+)
 # How much of MEMORY.md a chat loads: Claude Code's limit, which agent_memory_context.py applies for pi too.
 INDEX_LOADED_MAX_LINES: Final[int] = 200
 INDEX_LOADED_MAX_BYTES: Final[int] = 25 * 1024
@@ -87,7 +88,6 @@ class Note(FrozenModel):
 class IndexEntry(FrozenModel):
     """A note's line in ``MEMORY.md``: what every chat starts with, before it opens the note itself."""
 
-    line_number: int = Field(description="Its line in MEMORY.md, counting from 1")
     title: str = Field(description="The link text")
     hook: str = Field(description="The summary after the link, as chats see it")
     is_loaded: bool = Field(description="Whether it falls within what a chat loads (200 lines or 25KB)")
@@ -176,17 +176,30 @@ def render_note(parsed: ParsedNote, description: str, body: str) -> str:
 
 
 @pure
-def rewrite_index_hook(index_text: str, file_name: str, description: str) -> str:
-    """The index with ``file_name``'s line summarized by ``description``; other lines untouched."""
+def index_title(note_name: str | None, file_name: str) -> str:
+    """The link text for a note's index line, in the style Claude writes it: "user-location" reads "User location"."""
+    words = (note_name or file_name.removesuffix(".md")).replace("-", " ").replace("_", " ").strip()
+    return words[:1].upper() + words[1:]
+
+
+@pure
+def rewrite_index_hook(index_text: str, file_name: str, title: str, description: str) -> str:
+    """The index with ``file_name``'s line summarized by ``description``, or with a line added for it when it has
+    none, so a note that fell out of the index is listed again; other lines untouched."""
     one_line_description = " ".join(description.split())
     out_lines: list[str] = []
+    is_listed = False
     for line in index_text.split("\n"):
         match = _INDEX_LINE_PATTERN.match(line)
         if match is not None and match.group("file") == file_name:
             out_lines.append(f"{match.group(1)}{_HOOK_SEPARATOR}{one_line_description}")
+            is_listed = True
         else:
             out_lines.append(line)
-    return "\n".join(out_lines)
+    if is_listed:
+        return "\n".join(out_lines)
+    base = index_text if index_text.endswith("\n") or not index_text else f"{index_text}\n"
+    return f"{base}- [{title}]({file_name}){_HOOK_SEPARATOR}{one_line_description}\n"
 
 
 @pure
@@ -220,19 +233,17 @@ def loaded_line_count(index_text: str) -> int:
 def parse_index(index_text: str) -> dict[str, IndexEntry]:
     """Each note's first line in the index, keyed by file name."""
     loaded = loaded_line_count(index_text)
-    entries: dict[str, IndexEntry] = {}
+    entry_by_file_name: dict[str, IndexEntry] = {}
     for line_idx, line in enumerate(index_text.splitlines()):
         match = _INDEX_LINE_PATTERN.match(line)
-        if match is None or match.group("file") in entries:
+        if match is None or match.group("file") in entry_by_file_name:
             continue
-        title_match = _INDEX_TITLE_PATTERN.match(line)
-        entries[match.group("file")] = IndexEntry(
-            line_number=line_idx + 1,
-            title=title_match.group("title").strip() if title_match is not None else "",
+        entry_by_file_name[match.group("file")] = IndexEntry(
+            title=match.group("title").strip(),
             hook=match.group("hook").strip().lstrip("—–-:").strip(),
             is_loaded=line_idx < loaded,
         )
-    return entries
+    return entry_by_file_name
 
 
 @pure
@@ -321,13 +332,15 @@ def _note_path_checked(notes_dir: Path, file_name: str, version: str) -> Path:
 
 
 def update_note(notes_dir: Path, file_name: str, description: str, body: str, version: str) -> Note:
-    """Rewrite a note's summary and body, and its index line's summary to match."""
+    """Rewrite a note's summary and body, and its index line to match (adding the line when the index lacks it)."""
     path = _note_path_checked(notes_dir, file_name, version)
     parsed = parse_note(path.read_text(encoding="utf-8"))
     write_atomically(path, render_note(parsed, description, body))
     index_text = read_index(notes_dir)
-    if index_text:
-        write_atomically(notes_dir / INDEX_FILENAME, rewrite_index_hook(index_text, file_name, description))
+    write_atomically(
+        notes_dir / INDEX_FILENAME,
+        rewrite_index_hook(index_text, file_name, index_title(parsed.name, file_name), description),
+    )
     return read_note(path)
 
 

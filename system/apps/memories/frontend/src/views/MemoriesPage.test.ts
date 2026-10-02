@@ -34,7 +34,7 @@ function note(
     modified_at: "2026-10-01T10:00:00Z",
     version: `1-${fileName.length}`,
     attribution: null,
-    index_entry: { line_number: 1, title: description, hook: description.toLowerCase(), is_loaded: true },
+    index_entry: { title: description, hook: description.toLowerCase(), is_loaded: true },
   };
 }
 
@@ -57,11 +57,15 @@ interface Rendered {
   readonly deleted: string[];
 }
 
-function render(backups: BackupRetention = BACKED_UP, deleteAnswer: string | null = null): Rendered {
+function render(
+  backups: BackupRetention = BACKED_UP,
+  deleteAnswer: string | null = null,
+  document: NotesDocument = documentWith(backups),
+): Rendered {
   const deleted: string[] = [];
   const root = mountView(() =>
     m(MemoriesPage, {
-      state: { kind: "loaded", document: documentWith(backups) },
+      state: { kind: "loaded", document },
       onSave: async () => null,
       onDelete: async (target: Note) => {
         deleted.push(target.file_name);
@@ -195,9 +199,8 @@ describe("explaining what is remembered, used and shared", () => {
     expect(root.querySelector(".memories-how")).toBeNull();
     click(root, "How memory works");
     expect(root.textContent).toContain(
-      "A chat saves a note when you ask it to remember something, when you correct how it works, or when you mention something that will still matter later.",
+      "Chats are told to save a note when you ask them to remember something, when you correct how they work, or when you mention something that will still matter later, and never to save passwords or keys",
     );
-    expect(root.textContent).toContain("It never saves passwords or keys, sensitive personal details unless you ask");
   });
 
   it("describes every kind of note, and suggests what to say for the empty ones", () => {
@@ -222,7 +225,7 @@ describe("explaining what is remembered, used and shared", () => {
     ]);
     expect(root.querySelector(".memories-attention")).toBeNull();
     click(root, "How memory works");
-    expect(root.textContent).toContain("Chats load at most 200 lines of it; your list is 2 lines long.");
+    expect(root.textContent).toContain("whichever is less; yours is 2 lines long.");
   });
 
   it("says where the notes go, including the AI provider and GitHub", () => {
@@ -230,9 +233,59 @@ describe("explaining what is remembered, used and shared", () => {
     click(root, "How memory works");
 
     expect(root.textContent).toContain("Where your notes go");
-    expect(root.textContent).toContain("In this workspace only. They aren't synced to GitHub.");
+    expect(root.textContent).toContain("In this workspace, and in its backups. They aren't synced to GitHub.");
     expect(root.textContent).toContain(
-      "The AI provider of a chat that uses a note (Anthropic, for Claude chats), as part of that chat.",
+      "Each chat's AI provider (Anthropic, for Claude chats): the list of summaries with every chat, and a note's full text when a chat opens it.",
     );
+  });
+});
+
+describe("states of the list chats load", () => {
+  const withNotes = (notes: readonly Note[], index: Partial<NotesDocument["index"]> = {}): NotesDocument => ({
+    ...documentWith(BACKED_UP),
+    notes,
+    index: { ...documentWith(BACKED_UP).index, ...index },
+  });
+
+  it("with no notes, says nothing is saved and suggests what to say for every kind", () => {
+    const { root } = render(BACKED_UP, null, withNotes([], { line_count: 0, loaded_line_count: 0 }));
+
+    expect(root.textContent).toContain("Your chats haven't written anything down yet.");
+    expect(root.querySelectorAll(".memories-note")).toHaveLength(0);
+    expect(Array.from(root.querySelectorAll("[data-group]")).map((group) => group.getAttribute("data-group"))).toEqual(
+      ["USER", "FEEDBACK", "PROJECT", "REFERENCE"],
+    );
+    expect(root.querySelector(".memories-attention")).toBeNull();
+    click(root, "How memory works");
+    expect(root.textContent).toContain("Nothing is saved yet, so chats start with an empty list.");
+  });
+
+  it("warns about a note that isn't in the list, and one past what chats load", () => {
+    const missing = { ...note("cello.md", "Plays the cello", "USER"), index_entry: null };
+    const cut = {
+      ...note("units.md", "Prefers metric units", "FEEDBACK"),
+      index_entry: { title: "Units", hook: "metric", is_loaded: false },
+    };
+    const { root } = render(BACKED_UP, null, withNotes([missing, cut], { line_count: 250, loaded_line_count: 200 }));
+
+    const statuses = Array.from(root.querySelectorAll<HTMLElement>(".memories-index-status"));
+    expect(statuses.map((status) => status.getAttribute("data-status"))).toEqual(["not-listed", "past-limit"]);
+    expect(root.querySelector(".memories-attention")?.textContent).toBe(
+      "1 note isn't in the list chats start with, so chats are unlikely to use it. Editing a note adds it back. 1 note is past what chats load from that list, so they don't see it.",
+    );
+  });
+
+  it("says when the list still names notes that no longer exist, even with nothing saved", () => {
+    const { root } = render(
+      BACKED_UP,
+      null,
+      withNotes([], { line_count: 1, loaded_line_count: 1, missing_files: ["gone.md"] }),
+    );
+
+    expect(root.querySelector(".memories-attention")?.textContent).toBe(
+      "The list chats start with still names 1 note that no longer exists.",
+    );
+    click(root, "How memory works");
+    expect(root.textContent).toContain("Nothing is saved, but the list chats start with still has 1 line.");
   });
 });

@@ -162,7 +162,7 @@ def test_render_note_adds_a_summary_after_the_name_when_there_was_none() -> None
 def test_rewrite_index_hook_rewrites_only_that_notes_line() -> None:
     index = "# Memory\n- [Units](units.md) — old summary\n- [Role](role.md) — Is a designer\n"
 
-    assert rewrite_index_hook(index, "units.md", "New\nsummary") == (
+    assert rewrite_index_hook(index, "units.md", "Units", "New\nsummary") == (
         "# Memory\n- [Units](units.md) — New summary\n- [Role](role.md) — Is a designer\n"
     )
 
@@ -262,8 +262,8 @@ def test_parse_index_reads_each_notes_line_title_and_summary() -> None:
     index = "# Memory\n- [Units](units.md) — Prefers metric\n* [Role](role.md) - Is a designer\n- [Again](units.md) — dup\n"
 
     assert parse_index(index) == {
-        "units.md": IndexEntry(line_number=2, title="Units", hook="Prefers metric", is_loaded=True),
-        "role.md": IndexEntry(line_number=3, title="Role", hook="Is a designer", is_loaded=True),
+        "units.md": IndexEntry(title="Units", hook="Prefers metric", is_loaded=True),
+        "role.md": IndexEntry(title="Role", hook="Is a designer", is_loaded=True),
     }
 
 
@@ -275,10 +275,43 @@ def test_lines_past_200_or_25kb_are_not_loaded() -> None:
     assert entries[f"n{INDEX_LOADED_MAX_LINES}.md"].is_loaded is False
     assert loaded_line_count(many) == INDEX_LOADED_MAX_LINES
 
-    long_line = "- [Long](long.md) — " + "x" * 5000
-    heavy = "\n".join(long_line.replace("long.md", f"l{idx}.md") for idx in range(10))
-    assert loaded_line_count(heavy) == INDEX_LOADED_MAX_BYTES // (len(long_line) + 3)
-    assert parse_index(heavy)["l9.md"].is_loaded is False
+    heavy = "\n".join(f"- [Long](l{idx}.md) — " + "x" * 5000 for idx in range(10))
+    assert loaded_line_count(heavy) == 5
+    assert parse_index(heavy)["l4.md"].is_loaded is True
+    assert parse_index(heavy)["l5.md"].is_loaded is False
+
+
+def test_a_line_ending_exactly_at_25kb_is_loaded_and_one_byte_more_is_not() -> None:
+    first = "- [A](a.md) — " + "x" * 100
+    filler_bytes = (
+        INDEX_LOADED_MAX_BYTES - (len(first.encode("utf-8")) + 1) - len("- [B](b.md) — ".encode("utf-8")) - 1
+    )
+    exactly = f"{first}\n- [B](b.md) — {'y' * filler_bytes}\n"
+    over = f"{first}\n- [B](b.md) — {'y' * (filler_bytes + 1)}\n"
+
+    assert len(exactly.encode("utf-8")) == INDEX_LOADED_MAX_BYTES
+    assert parse_index(exactly)["b.md"].is_loaded is True
+    assert parse_index(over)["b.md"].is_loaded is False
+
+
+def test_editing_a_note_missing_from_the_index_adds_its_line_back(tmp_path: Path) -> None:
+    notes_dir = _notes_dir(tmp_path)
+    (notes_dir / INDEX_FILENAME).write_text("- [Role](role.md) — Is a designer")
+
+    update_note(notes_dir, "units.md", "Prefers metric", "Km.", file_version(notes_dir / "units.md"))
+
+    assert read_index(notes_dir) == (
+        "- [Role](role.md) — Is a designer\n- [Units preference](units.md) — Prefers metric\n"
+    )
+
+
+def test_editing_a_note_creates_the_index_when_there_is_none(tmp_path: Path) -> None:
+    notes_dir = _notes_dir(tmp_path)
+    (notes_dir / INDEX_FILENAME).unlink()
+
+    update_note(notes_dir, "units.md", "Prefers metric", "Km.", file_version(notes_dir / "units.md"))
+
+    assert read_index(notes_dir) == "- [Units preference](units.md) — Prefers metric\n"
 
 
 def test_summarize_index_counts_lines_and_names_listed_notes_that_are_gone() -> None:

@@ -154,7 +154,7 @@ def build_pages_blueprint(
         attributions, messages = read_attributions(transcript_sources, client, _chat_app_url(registry_path))
         notes_on_disk = list_notes(notes_dir)
         index_text = read_index(notes_dir)
-        index_entries = parse_index(index_text)
+        index_entry_by_file_name = parse_index(index_text)
         payload = {
             "notes_dir": str(notes_dir),
             "index_path": str(notes_dir / INDEX_FILENAME),
@@ -166,8 +166,8 @@ def build_pages_blueprint(
                     "attribution": attributions[note.file_name].model_dump(mode="json")
                     if note.file_name in attributions
                     else None,
-                    "index_entry": index_entries[note.file_name].model_dump(mode="json")
-                    if note.file_name in index_entries
+                    "index_entry": index_entry_by_file_name[note.file_name].model_dump(mode="json")
+                    if note.file_name in index_entry_by_file_name
                     else None,
                 }
                 for note in notes_on_disk

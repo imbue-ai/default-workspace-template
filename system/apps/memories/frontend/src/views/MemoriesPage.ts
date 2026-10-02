@@ -1,10 +1,10 @@
 /**
- * The page, top to bottom: how many things the chats remember, when a chat saves a note and what it never saves,
- * and how much of the list every chat starts with it loads; where the notes go (stored here, read by every Claude
- * and pi chat, sent to a chat's AI provider when used, kept in backups, not shared with other workspaces); then the
- * notes grouped by what they are about, each group saying what belongs in it (and what to try when it is empty),
- * each note with the line chats start with, who wrote it, how many chats read it, the file as it is on disk, and
- * Edit and Delete. Delete asks first, saying what still holds a copy afterwards.
+ * The page, top to bottom: how many things the chats remember, in one sentence; three facts (shared with Claude and
+ * pi chats, not shared with other workspaces, what the backups keep) and "How memory works", which opens what gets
+ * saved, what chats use, where the notes go and the technical details; a warning only when something in the list chats
+ * load is wrong; then the notes grouped by what they are about, each group saying what belongs in it (and what to try
+ * when it is empty), each note with the line chats start with, who wrote it, the file as it is on disk, and Edit and
+ * Delete. Delete asks first, saying what still holds a copy afterwards.
  */
 
 import m from "mithril";
@@ -27,6 +27,7 @@ import {
   indexSummaryLine,
   writerLine,
 } from "./format";
+import type { IndexStatusKind } from "./format";
 
 const SECTION_HEADING_CLASS = "type-section text-secondary";
 const DETAILS_CLASS =
@@ -74,7 +75,7 @@ const GROUPS: readonly Group[] = [
   { type: "OTHER", label: "Other notes", description: "Notes that don't say what kind they are.", example: null },
 ];
 
-const STATUS_CLASS: Readonly<Record<"seen" | "not-listed" | "past-limit", string>> = {
+const STATUS_CLASS: Readonly<Record<IndexStatusKind, string>> = {
   seen: "type-helper text-secondary",
   "not-listed": "type-helper text-warning",
   "past-limit": "type-helper text-warning",
@@ -128,7 +129,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
     const backups = backupsChip(document.backups);
     return m("div", { class: "memories-facts flex flex-wrap items-center gap-2" }, [
       m("span", { class: badgeClass("accent") }, "Shared with your Claude and pi chats"),
-      m("span", { class: badgeClass("neutral") }, "Stays in this workspace"),
+      m("span", { class: badgeClass("neutral") }, "Not shared with other workspaces"),
       m("span", { class: backups.isWarning ? CAUTION_BADGE_CLASS : badgeClass("neutral") }, backups.text),
       disclose("how", "How memory works", "Hide how memory works"),
     ]);
@@ -156,7 +157,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
           m(
             "p",
             { class: "m-0 type-body text-secondary" },
-            "A chat saves a note when you ask it to remember something, when you correct how it works, or when you mention something that will still matter later. It never saves passwords or keys, sensitive personal details unless you ask, or what's already in your files.",
+            "Chats are told to save a note when you ask them to remember something, when you correct how they work, or when you mention something that will still matter later, and never to save passwords or keys, sensitive personal details unless you ask, or what's already in your files.",
           ),
         ]),
         m("div", { class: "flex flex-col gap-1" }, [
@@ -164,22 +165,21 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
           m(
             "p",
             { class: "m-0 type-body text-secondary" },
-            summary ?? "Nothing is saved yet, so chats start with an empty list.",
+            summary ??
+              (document.index.line_count === 0
+                ? "Nothing is saved yet, so chats start with an empty list."
+                : `Nothing is saved, but the list chats start with still has ${countLabel(document.index.line_count, "line", "lines")}.`),
           ),
         ]),
         m("div", { class: "flex flex-col gap-2" }, [
           heading("Where your notes go"),
-          row("neutral", "Stored", "In this workspace only. They aren't synced to GitHub."),
-          row(
-            "accent",
-            "Read by",
-            "Every Claude and pi chat in this workspace, including new ones and the background tasks they start.",
-          ),
+          row("neutral", "Stored", "In this workspace, and in its backups. They aren't synced to GitHub."),
+          row("accent", "Read by", "Every Claude and pi chat in this workspace, including new ones."),
           row("neutral", "Not yet", "Codex, OpenCode and Antigravity chats. They don't use these notes."),
           row(
             "neutral",
             "Sent to",
-            "The AI provider of a chat that uses a note (Anthropic, for Claude chats), as part of that chat.",
+            "Each chat's AI provider (Anthropic, for Claude chats): the list of summaries with every chat, and a note's full text when a chat opens it.",
           ),
           row("neutral", "Not shared", "Your other workspaces. Each has its own notes."),
           row(document.backups.is_backed_up ? "caution" : "neutral", "Backups", backupsLine(document.backups)),
@@ -286,8 +286,8 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
     );
   }
 
-  function indexStatusLine(note: Note, maxIndexLines: number): m.Vnode {
-    const status = indexStatus(note, maxIndexLines);
+  function indexStatusLine(note: Note): m.Vnode {
+    const status = indexStatus(note);
     return m(
       "p",
       { class: `memories-index-status m-0 ${STATUS_CLASS[status.kind]}`, "data-status": status.kind },
@@ -295,7 +295,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
     );
   }
 
-  function noteCard(note: Note, attrs: MemoriesPageAttrs, maxIndexLines: number): m.Vnode {
+  function noteCard(note: Note, attrs: MemoriesPageAttrs): m.Vnode {
     if (draft !== null && draft.fileName === note.file_name) return editor(note, attrs, draft);
     const fileKey = `file:${note.file_name}`;
     return m(
@@ -314,7 +314,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
                 block.text,
               ]),
         ),
-        indexStatusLine(note, maxIndexLines),
+        indexStatusLine(note),
         m("div", { class: "flex flex-wrap items-center justify-between gap-2 pt-1" }, [
           m("span", { class: "flex flex-wrap items-center gap-x-1.5 type-helper text-secondary" }, [
             `${writerLine(note)} · updated ${formatDate(note.modified_at)} ·`,
@@ -393,7 +393,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
         return m("p", { class: "m-0 type-body text-danger" }, `Couldn't read the notes. ${state.message}`);
       const document = state.document;
       const count = document.notes.length;
-      const attention = attentionLine(document.notes, document.index.max_lines);
+      const attention = attentionLine(document.notes, document.index.missing_files);
       return m("div", { class: "flex flex-col gap-6" }, [
         m("div", { class: "flex flex-col gap-3" }, [
           m(
@@ -429,7 +429,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
                     { class: "m-0 type-helper text-secondary" },
                     `Nothing yet. Try telling a chat: “${group.example}”`,
                   )
-                : notes.map((note) => noteCard(note, attrs, document.index.max_lines)),
+                : notes.map((note) => noteCard(note, attrs)),
             ]),
           ),
         pendingDelete === null ? null : deleteDialog(pendingDelete, document.backups, attrs),
