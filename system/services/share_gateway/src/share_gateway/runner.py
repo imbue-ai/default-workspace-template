@@ -46,7 +46,6 @@ from share_gateway import materials as materials_module
 from share_gateway.assignment import RelayAssignment
 from share_gateway.assignment import load_assignment
 from share_gateway.log import log as _log
-from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import read_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 from share_gateway.certs import CertProvisioningError
@@ -274,7 +273,7 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         jti_registry=SingleUseJtiRegistry(),
         pending_logins=PendingLoginRegistry(),
         auth_label=auth_label,
-        get_label_to_name=lambda: build_label_to_name(read_registered_apps(APPS_TOML_PATH)),
+        get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
     )
     stack.gateway_server = make_server("127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True)
     threading.Thread(target=stack.gateway_server.serve_forever, name="share-gateway-http", daemon=True).start()

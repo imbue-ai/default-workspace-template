@@ -1,1 +1,1 @@
-`forward_port.py` copies the new `shareable` manifest key onto the registry row. Both `contracts.md` files document the key and the services event's `shareable` field.
+`forward_port.py` copies the new `shareable` manifest key onto the registry row. Both `contracts.md` files and the workspace app model plan document the key and the services event's `shareable` field. The plan no longer describes per-app chat grants, which the share gateway now refuses.

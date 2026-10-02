@@ -354,7 +354,7 @@ Worker agents that chats spawn are listed as instances too; they are chats with 
 ### 8.1 Sharing
 
 The share gateway re-renders from the registry, so the chat origin is claimed like every app's.
-A workspace-level grant admits the chat origin directly, and a per-app grant (the grants file keys apps as `[services.<name>]`, so `[services.chat]`) can narrow a visitor to it.
+A workspace-level grant admits the chat origin directly; the chat declares `shareable = false`, so a per-app `[services.chat]` grant admits nobody.
 Read-only sharing of one chat is deferred (section 11).
 
 ### 8.2 Memory shedding
