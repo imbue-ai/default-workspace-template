@@ -200,10 +200,11 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
 
   async function runAppStop(attrs: ActivityPageAttrs, item: ActivityItem): Promise<void> {
     if (item.app_name === null) return;
-    // The dialog shows the row as it was when opened; a refresh since may have found the app already stopped.
+    // The dialog shows the row as it was when opened; a refresh since may have found the app already stopped. Any other
+    // state (unknown for a moment, starting, gone from the list) goes to the backend, which checks again.
     const current =
       attrs.state.kind === "loaded" ? attrs.state.summary.apps.find((app) => app.item_id === item.item_id) : undefined;
-    if (current === undefined || current.state !== "RUNNING") {
+    if (current !== undefined && ["STOPPED", "EXITED", "FATAL"].includes(current.state)) {
       pendingAppStop = null;
       actionMessage = `"${item.name}" has already stopped.`;
       clearActionMessageLater();
@@ -622,9 +623,9 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
     const item = pendingAppStop;
     return confirmStop(
       `Stop "${item.name}"?`,
-      `Its windows close on every desktop, including those of anyone you've shared it with (pinned windows stay), ` +
-        `and it stops using memory (about ${formatKib(item.rss_kib)}). It starts again the next time it's opened. ` +
-        "Anything it hadn't saved may be lost.",
+      `Its windows close on every desktop, including those of anyone you've shared it with, and it stops using memory ` +
+        `(about ${formatKib(item.rss_kib)}). It starts again the next time it's opened, so a pinned window of it, ` +
+        "which stays open, may start it again. Anything it hadn't saved may be lost.",
       "Stop app",
       () => runAppStop(attrs, item),
       () => (pendingAppStop = null),

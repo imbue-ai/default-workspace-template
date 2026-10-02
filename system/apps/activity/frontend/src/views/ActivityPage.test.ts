@@ -196,7 +196,8 @@ describe("stopping an app", () => {
     buttonNamed(filesRow, "Stop").click();
     m.redraw.sync();
     expect(document.body.textContent).toContain("including those of anyone you've shared it with");
-    expect(document.body.textContent).toContain("It starts again the next time it's opened.");
+    expect(document.body.textContent).toContain("It starts again the next time it's opened");
+    expect(document.body.textContent).toContain("a pinned window of it");
     expect(document.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe('Stop "File Viewer"?');
     buttonNamed(document.body, "Stop app").click();
     await settle();
@@ -258,6 +259,32 @@ describe("stopping an app", () => {
     await settle();
     expect(stopped).toEqual([]);
     expect(document.body.textContent).toContain('"File Viewer" has already stopped.');
+  });
+
+  it("still asks the desktop when a refresh could not read the app's state", async () => {
+    const stopped: string[] = [];
+    let files = FILES;
+    const root = mountView(() =>
+      m(ActivityPage, {
+        state: { kind: "loaded", summary: summary("COMFORTABLE", [files], null) },
+        refreshFailure: null,
+        nowMs: Date.now(),
+        onAskInChat: () => true,
+        onAppStop: async (appName): Promise<AppStopResult> => {
+          stopped.push(appName);
+          return { kind: "done" };
+        },
+        onChatAction: async (): Promise<ChatActionResult> => ({ kind: "done" }),
+        history: LOADING_HISTORY,
+      }),
+    );
+    buttonNamed(root.querySelector('[data-item-id="app:files"]') as HTMLElement, "Stop").click();
+    m.redraw.sync();
+    files = { ...FILES, state: "UNKNOWN" };
+    m.redraw.sync();
+    buttonNamed(document.body, "Stop app").click();
+    await settle();
+    expect(stopped).toEqual(["files"]);
   });
 
   it("offers no Stop for an app that is not running, nor for anything in a preview", () => {

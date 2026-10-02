@@ -86,6 +86,11 @@ describe("chat and app lines", () => {
       is_restarted_on_open: true,
     });
     expect(programStateLine(browser)).toBe("Not running · starts when you open it");
+    // A crashed app is not promised to come back, and one just woken is starting, not stopped.
+    const crashed = item({ item_id: "app:x", name: "X", kind: "APP", state: "FATAL", is_restarted_on_open: true });
+    expect(programStateLine(crashed)).toBe("Not running (fatal)");
+    const waking = item({ item_id: "app:y", name: "Y", kind: "APP", state: "STARTING", is_restarted_on_open: true });
+    expect(programStateLine(waking)).toBe("Starting…");
     const exited = item({ item_id: "app:old", name: "Old", kind: "APP", state: "EXITED" });
     expect(programStateLine(exited)).toBe("Not running (exited)");
   });

@@ -92,8 +92,11 @@ export function isStopSuggested(item: ActivityItem, nowMs: number): boolean {
 /** One plain line on an app or service's state. */
 export function programStateLine(item: ActivityItem): string {
   if (item.state === "UNKNOWN") return `${item.description} · state unknown right now`;
+  if (item.state === "STARTING") return "Starting…";
   if (item.state !== "RUNNING") {
-    return item.is_restarted_on_open
+    // Only a cleanly stopped app comes back on its next request; one that crashed (FATAL, BACKOFF) says so.
+    const isCleanlyStopped = item.state === "STOPPED" || item.state === "EXITED";
+    return item.is_restarted_on_open && isCleanlyStopped
       ? "Not running · starts when you open it"
       : `Not running (${item.state.toLowerCase()})`;
   }
