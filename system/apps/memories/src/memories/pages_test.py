@@ -1,6 +1,7 @@
 """Tests for the routes: the page and its assets, the contract module, the notes document (with the backups'
 retention and where chat names come from), correcting a note, and deleting one for good."""
 
+import os
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -43,7 +44,6 @@ def _client(tmp_path: Path, http_client: httpx.Client) -> FlaskClient:
             restic_env_path=tmp_path / "restic.env",
             transcript_sources=TranscriptSources(
                 claude_config_dirs=(),
-                project_dir_name="-home-user-workspace",
                 mngr_agents_dir=tmp_path / "agents",
                 notes_dir=notes_dir,
             ),
@@ -277,3 +277,40 @@ def test_a_delete_that_cannot_be_recorded_says_so_instead_of_claiming_success(tm
     assert response.status_code == 500
     assert "units.md was deleted, but open chats could not be told" in response.get_json()["detail"]
     assert not (tmp_path / "memories" / "units.md").exists()
+
+
+def test_a_correction_that_is_not_a_full_object_is_refused_and_the_note_kept(tmp_path: Path) -> None:
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        version = client.get("/api/notes").get_json()["notes"][0]["version"]
+        before = (tmp_path / "memories" / "units.md").read_text()
+
+        no_body = client.put("/api/notes/units.md", json={"description": "x", "version": version})
+        null_body = client.put("/api/notes/units.md", json={"description": "x", "body": None, "version": version})
+        extra = client.put(
+            "/api/notes/units.md", json={"description": "x", "body": "x", "version": version, "name": "y"}
+        )
+        malformed = client.put("/api/notes/units.md", data="{not json", content_type="application/json")
+        no_version = client.delete("/api/notes/units.md", json={})
+
+    for response in (no_body, null_body, extra, malformed, no_version):
+        assert response.status_code == 400
+        assert response.get_json()["detail"].startswith("expected a JSON object with")
+    assert "'body'" in no_body.get_json()["detail"]
+    assert (tmp_path / "memories" / "units.md").read_text() == before
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a file whatever its permissions")
+def test_a_note_that_cannot_be_read_is_named_on_the_page(tmp_path: Path) -> None:
+    with httpx.Client(transport=httpx.MockTransport(_chat_app)) as http_client:
+        client = _client(tmp_path, http_client)
+        unreadable = tmp_path / "memories" / "locked.md"
+        unreadable.write_text("---\nname: locked\n---\nx\n")
+        unreadable.chmod(0o000)
+        try:
+            body = client.get("/api/notes").get_json()
+        finally:
+            unreadable.chmod(0o644)
+
+    assert [note["file_name"] for note in body["notes"]] == ["units.md"]
+    assert "locked.md could not be read, so it isn't shown." in body["messages"]

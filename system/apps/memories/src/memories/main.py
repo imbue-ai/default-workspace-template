@@ -59,7 +59,7 @@ def build_pages_app(arguments: MemoriesArguments, client: httpx.Client) -> Flask
             restic_env_path=arguments.restic_env_path,
             changes_path=arguments.changes_path,
             now=utc_now,
-            transcript_sources=default_transcript_sources(notes_dir=arguments.notes_dir, work_dir=Path.cwd()),
+            transcript_sources=default_transcript_sources(notes_dir=arguments.notes_dir),
             registry_path=registry_path(),
             client=client,
         )

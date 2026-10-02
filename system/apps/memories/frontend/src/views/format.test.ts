@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { BackupRetention, Note } from "../models/notes";
-import { backupsDetail, backupsLine, deleteBackupsWarning, deletedStatus, writerLine } from "./format";
+import type { BackupRetention, Note, NoteAuthor } from "../models/notes";
+import {
+  attributionLine,
+  backupsDetail,
+  backupsLine,
+  deleteBackupsWarning,
+  deletedStatus,
+  formatDate,
+  writerLine,
+} from "./format";
 
 const BACKED_UP: BackupRetention = {
   is_backed_up: true,
@@ -47,7 +55,8 @@ function savedBy(source: string | null, chatTitle: string | null = null): Note {
     raw_text: "",
     modified_at: "2026-10-01T10:00:00Z",
     version: "1-1",
-    attribution: chatTitle === null ? null : { authors: [{ chat_title: chatTitle, at: null }], reader_count: 0 },
+    attribution:
+      chatTitle === null ? null : { authors: [{ kind: "CHAT", chat_title: chatTitle, at: null }], reader_count: 0 },
   };
 }
 
@@ -59,5 +68,35 @@ describe("who saved a note", () => {
     expect(writerLine(savedBy("codex"))).toBe("Saved by a Codex chat");
     expect(writerLine(savedBy("something-new"))).toBe("Saved by a something-new chat");
     expect(writerLine(savedBy("pi-coding", "pi-test"))).toBe('Written by "pi-test" · not read since');
+  });
+});
+
+describe("who wrote a note", () => {
+  const author = (kind: NoteAuthor["kind"], chatTitle: string | null = null): NoteAuthor => ({
+    kind,
+    chat_title: chatTitle,
+    at: null,
+  });
+
+  it("names a live chat, and says honestly what is known about any other writer", () => {
+    expect(attributionLine({ authors: [author("CHAT", "Plan the launch")], reader_count: 2 })).toBe(
+      'Written by "Plan the launch" · read by 2 chats',
+    );
+    expect(attributionLine({ authors: [author("NOT_A_CHAT")], reader_count: 0 })).toBe(
+      "Written by a chat that has since been deleted, or a background task · not read since",
+    );
+    expect(attributionLine({ authors: [author("UNKNOWN"), author("CHAT", "Other")], reader_count: 1 })).toBe(
+      "Written by a chat whose name couldn't be read and 1 other chat · read by 1 chat",
+    );
+    expect(attributionLine(null)).toBe("Who wrote this isn't recorded");
+  });
+});
+
+describe("dates", () => {
+  it("shows the year only for a date before this year", () => {
+    const now = new Date("2026-10-01T12:00:00Z");
+
+    expect(formatDate("2026-03-04T12:00:00Z", now)).not.toMatch(/2026/);
+    expect(formatDate("2025-03-04T12:00:00Z", now)).toMatch(/2025/);
   });
 });

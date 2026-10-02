@@ -177,3 +177,99 @@ describe("who keeps and saved the notes", () => {
     expect(cards[1].textContent).toContain("Saved by a pi chat");
   });
 });
+
+interface SaveCall {
+  readonly fileName: string;
+  readonly description: string;
+  readonly body: string;
+  readonly version: string;
+}
+
+describe("editing a note", () => {
+  function renderEditable(saveAnswer: string | null = null): {
+    root: HTMLElement;
+    saves: SaveCall[];
+    document: { current: NotesDocument };
+  } {
+    const saves: SaveCall[] = [];
+    const document = { current: documentWith(BACKED_UP) };
+    const root = mountView(() =>
+      m(MemoriesPage, {
+        state: { kind: "loaded", document: document.current },
+        onSave: async (fileName: string, description: string, body: string, version: string) => {
+          saves.push({ fileName, description, body, version });
+          return saveAnswer;
+        },
+        onDelete: async () => null,
+      }),
+    );
+    return { root, saves, document };
+  }
+
+  function typeSummary(root: HTMLElement, text: string): void {
+    const input = root.querySelector<HTMLInputElement>("input[id^='edit-description-']")!;
+    input.value = text;
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    m.redraw.sync();
+  }
+
+  /** What the page renders after it re-reads the notes and a chat has changed role.md meanwhile. */
+  function chatChangedRole(document: { current: NotesDocument }): void {
+    document.current = {
+      ...document.current,
+      notes: document.current.notes.map((current) =>
+        current.file_name === "role.md"
+          ? { ...current, version: "2-99", description: "Is a design lead", body: "Leads the design team." }
+          : current,
+      ),
+    };
+    m.redraw.sync();
+  }
+
+  it("saves against the version the edit started from", async () => {
+    const { root, saves } = renderEditable();
+
+    click(root, "Edit");
+    typeSummary(root, "Is a senior product designer");
+    click(root, "Save");
+    await settle();
+
+    expect(saves).toEqual([
+      { fileName: "role.md", description: "Is a senior product designer", body: "Some detail.", version: "1-7" },
+    ]);
+  });
+
+  it("shows a chat's change made during the edit, and replaces it only when asked", async () => {
+    const { root, saves, document } = renderEditable();
+
+    click(root, "Edit");
+    typeSummary(root, "Is a senior product designer");
+    chatChangedRole(document);
+
+    expect(root.querySelector(".memories-conflict")?.textContent).toContain(
+      "A chat changed this note while you were editing it. Its version now reads:Is a design leadLeads the design team.",
+    );
+    expect(() => buttonLabelled(root, "Save")).toThrow();
+    click(root, "Replace with my version");
+    await settle();
+
+    expect(saves).toEqual([
+      { fileName: "role.md", description: "Is a senior product designer", body: "Some detail.", version: "2-99" },
+    ]);
+  });
+
+  it("keeps the draft when the save is refused", async () => {
+    const refusal = "A chat changed this note while you had it open, so nothing was changed.";
+    const { root } = renderEditable(refusal);
+
+    click(root, "Edit");
+    typeSummary(root, "Is a senior product designer");
+    click(root, "Save");
+    await settle();
+
+    expect(root.querySelector('[role="status"]')?.textContent).toBe(refusal);
+    expect(root.querySelector<HTMLInputElement>("input[id^='edit-description-']")?.value).toBe(
+      "Is a senior product designer",
+    );
+  });
+});

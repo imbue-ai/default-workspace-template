@@ -13,6 +13,7 @@ Every write checks the note is still the version the page read (its mtime and si
 it at any time, and goes through a temporary file and a rename so a chat never reads a half-written note.
 """
 
+import json
 import os
 import re
 import uuid
@@ -22,6 +23,7 @@ from enum import auto
 from pathlib import Path
 from typing import Final
 
+from loguru import logger
 from pydantic import Field
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
@@ -79,11 +81,26 @@ class Note(FrozenModel):
     version: str = Field(description="The file's mtime and size, which a write must match")
 
 
+class NoteListing(FrozenModel):
+    """The notes in the folder, and the note files that could not be read."""
+
+    notes: tuple[Note, ...] = Field(description="Every readable note, most recently changed first")
+    unreadable_file_names: tuple[str, ...] = Field(description="Note files that could not be read")
+
+
 @pure
 def _unquote(value: str) -> str:
+    """A frontmatter scalar's text: a double-quoted one unescaped (YAML's escapes are JSON's for what notes hold), a
+    single-quoted one with its doubled quotes undone, anything else as written."""
     stripped = value.strip()
-    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in "\"'":
-        return stripped[1:-1]
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] == '"':
+        try:
+            decoded = json.loads(stripped)
+        except ValueError:
+            return stripped[1:-1]
+        return decoded if isinstance(decoded, str) else stripped[1:-1]
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] == "'":
+        return stripped[1:-1].replace("''", "'")
     return stripped
 
 
@@ -137,7 +154,8 @@ def parse_note(text: str) -> ParsedNote:
 def render_note(parsed: ParsedNote, description: str, body: str) -> str:
     """The note with a new summary and body, every other frontmatter line kept as it was."""
     one_line_description = " ".join(description.split())
-    description_line = f"description: {one_line_description}"
+    # Double-quoted, so a summary such as "Uses: tabs" or one starting with "-" or "[" is still one YAML string.
+    description_line = f"description: {json.dumps(one_line_description, ensure_ascii=False)}"
     frontmatter = list(parsed.frontmatter_lines)
     description_idx = next(
         (idx for idx, line in enumerate(frontmatter) if line.startswith("description:")),
@@ -184,9 +202,12 @@ def validate_note_name(file_name: str) -> None:
         raise NoteNameError(f"{file_name!r} is not a note file name")
 
 
-def file_version(path: Path) -> str:
-    stat = path.stat()
+def _stat_version(stat: os.stat_result) -> str:
     return f"{stat.st_mtime_ns}-{stat.st_size}"
+
+
+def file_version(path: Path) -> str:
+    return _stat_version(path.stat())
 
 
 def write_atomically(path: Path, text: str) -> None:
@@ -205,9 +226,11 @@ def write_atomically(path: Path, text: str) -> None:
 
 
 def read_note(path: Path) -> Note:
+    """A note as the page shows it. Its version is read before its text, so a chat writing in between makes the
+    version older than the text, and the next save is refused rather than overwriting the chat's change."""
+    stat = path.stat()
     raw_text = path.read_text(encoding="utf-8", errors="replace")
     parsed = parse_note(raw_text)
-    stat = path.stat()
     return Note(
         file_name=path.name,
         name=parsed.name,
@@ -217,23 +240,28 @@ def read_note(path: Path) -> Note:
         body=parsed.body,
         raw_text=raw_text,
         modified_at=datetime.fromtimestamp(stat.st_mtime, timezone.utc),
-        version=f"{stat.st_mtime_ns}-{stat.st_size}",
+        version=_stat_version(stat),
     )
 
 
-def list_notes(notes_dir: Path) -> list[Note]:
-    """Every note in the folder, most recently changed first."""
+def list_notes(notes_dir: Path) -> NoteListing:
+    """Every note in the folder, most recently changed first, and the note files that could not be read."""
     if not notes_dir.is_dir():
-        return []
+        return NoteListing(notes=(), unreadable_file_names=())
     notes: list[Note] = []
-    for path in notes_dir.iterdir():
+    unreadable: list[str] = []
+    for path in sorted(notes_dir.iterdir()):
         if not path.is_file() or path.name in NON_NOTE_FILENAMES or not NOTE_NAME_PATTERN.match(path.name):
             continue
         try:
             notes.append(read_note(path))
-        except OSError:
-            continue
-    return sorted(notes, key=lambda note: note.modified_at, reverse=True)
+        except OSError as e:
+            logger.warning("Could not read the note {}: {}", path, e)
+            unreadable.append(path.name)
+    return NoteListing(
+        notes=tuple(sorted(notes, key=lambda note: note.modified_at, reverse=True)),
+        unreadable_file_names=tuple(unreadable),
+    )
 
 
 def read_index(notes_dir: Path) -> str:
@@ -256,7 +284,7 @@ def _note_path_checked(notes_dir: Path, file_name: str, version: str) -> Path:
 def update_note(notes_dir: Path, file_name: str, description: str, body: str, version: str) -> Note:
     """Rewrite a note's summary and body, and its index line's summary to match."""
     path = _note_path_checked(notes_dir, file_name, version)
-    parsed = parse_note(path.read_text(encoding="utf-8"))
+    parsed = parse_note(path.read_text(encoding="utf-8", errors="replace"))
     write_atomically(path, render_note(parsed, description, body))
     index_text = read_index(notes_dir)
     if index_text:
