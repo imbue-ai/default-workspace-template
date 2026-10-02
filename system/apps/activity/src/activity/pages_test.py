@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 from flask import Flask
@@ -16,6 +17,7 @@ from activity.commands import RunCommand
 from activity.memory_reading import MemorySources
 from activity.pages import build_pages_blueprint
 from activity.readings import ReadingSources
+from activity.supervised_programs import ReadProcessInfo
 from activity.testing import FakeChatApp
 from activity.testing import FakeRunner
 from activity.testing import FakeShell
@@ -35,6 +37,7 @@ def _client(
     monkeypatch: pytest.MonkeyPatch,
     chat_app: FakeChatApp,
     du_runner: RunCommand | None = None,
+    read_process_info: ReadProcessInfo | None = None,
     shell: FakeShell | None = None,
     is_preview: bool = False,
 ) -> FlaskClient:
@@ -101,7 +104,9 @@ def _client(
                     "shell.test": (shell if shell is not None else FakeShell()).handle,
                 }
             ),
-            read_process_info=lambda: [process_info("chat", "RUNNING", 544), process_info("files", "STOPPED", 0)],
+            read_process_info=read_process_info
+            if read_process_info is not None
+            else lambda: [process_info("chat", "RUNNING", 544), process_info("files", "STOPPED", 0)],
             run_command=runner,
             now=lambda: _NOW,
             data_dir=tmp_path / "data",
@@ -375,3 +380,50 @@ def test_another_apps_page_cannot_stop_an_app(tmp_path: Path, monkeypatch: pytes
     )
     assert response.status_code == 403
     assert shell.quits == []
+
+
+def _every_process_is_drawn(summary: dict[str, Any]) -> bool:
+    drawn_kib = sum(item["rss_kib"] for group in ("chats", "apps", "services") for item in summary[group])
+    return drawn_kib == (31 + 160 + 330) * 1024
+
+
+def test_with_the_chat_app_down_chats_are_listed_by_their_agents_and_the_page_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    down = FakeChatApp([], list_status=503)
+    response = _client(tmp_path, monkeypatch, down).get("/api/summary")
+    summary = response.get_json()
+    assert response.status_code == 200
+    assert [(chat["name"], chat["kind"], chat["chat_id"]) for chat in summary["chats"]] == [
+        ("wallpaper", "AGENT", None)
+    ]
+    assert any("Chat names could not be read" in note for note in summary["notes"])
+    assert _every_process_is_drawn(summary)
+
+
+def test_with_supervisord_down_apps_read_unknown_and_their_memory_still_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse() -> list[dict[str, Any]]:
+        raise ConnectionRefusedError("no socket")
+
+    response = _client(tmp_path, monkeypatch, _chat_app("idle"), read_process_info=refuse).get("/api/summary")
+    summary = response.get_json()
+    assert response.status_code == 200
+    assert {app["state"] for app in summary["apps"]} == {"UNKNOWN"}
+    assert any("Apps and services could not be listed" in note for note in summary["notes"])
+    assert _every_process_is_drawn(summary)
+
+
+def test_an_unreadable_registry_or_no_memory_source_is_a_note_not_a_failed_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(tmp_path, monkeypatch, _chat_app("idle"))
+    (tmp_path / "apps.toml").write_text("this is not [[[ toml")
+    (tmp_path / "cgroup" / "memory.max").unlink()
+    response = client.get("/api/summary")
+    summary = response.get_json()
+    assert response.status_code == 200
+    assert summary["memory"] is None
+    assert any("app list could not be read" in note for note in summary["notes"])
+    assert any("No memory reading was available" in note for note in summary["notes"])

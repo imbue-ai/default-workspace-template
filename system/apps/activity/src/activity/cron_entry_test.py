@@ -11,9 +11,18 @@ def test_the_entry_runs_the_recorder_every_minute_from_the_workspace_root() -> N
     )
     schedule_line = text.splitlines()[-1]
     assert schedule_line == (
-        "* * * * * root cd /home/user/workspace && /root/.local/bin/activity-record-memory >> /var/log/r.log 2>&1"
+        "* * * * * root cd /home/user/workspace && flock -n /run/activity-memory-history.lock timeout 50 "
+        "/root/.local/bin/activity-record-memory >> /var/log/r.log 2>&1"
     )
     assert text.endswith("\n")
+
+
+def test_an_unchanged_entry_is_left_alone(tmp_path: Path) -> None:
+    install_cron_entry("* * * * * root true\n", tmp_path)
+    before = (tmp_path / CRON_ENTRY_NAME).stat()
+    install_cron_entry("* * * * * root true\n", tmp_path)
+    after = (tmp_path / CRON_ENTRY_NAME).stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
 
 
 def test_the_entry_is_written_only_where_cron_reads_it_and_rewritten_when_it_changes(tmp_path: Path) -> None:

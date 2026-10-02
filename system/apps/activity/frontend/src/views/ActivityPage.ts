@@ -166,12 +166,18 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
     action: "stop" | "start",
     isInterruptConfirmed: boolean,
   ): Promise<void> {
-    if (item.chat_id === null) return;
+    if (item.chat_id === null || isActionRunning) return;
     isActionRunning = true;
     actionMessage = null;
     m.redraw();
-    const result = await attrs.onChatAction(item.chat_id, action, isInterruptConfirmed);
-    isActionRunning = false;
+    let result: ChatActionResult;
+    try {
+      result = await attrs.onChatAction(item.chat_id, action, isInterruptConfirmed);
+    } catch (error) {
+      result = { kind: "failed", message: String(error) };
+    } finally {
+      isActionRunning = false;
+    }
     switch (result.kind) {
       case "done":
         pendingStop = null;
@@ -484,7 +490,7 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
   }
 
   function suggestions(summary: ActivitySummary, attrs: ActivityPageAttrs): m.Children {
-    if (summary.memory === null || summary.memory.status === "COMFORTABLE") return null;
+    if (summary.memory === null || summary.memory.status === "COMFORTABLE" || summary.is_preview) return null;
     const stoppable = summary.chats.filter((item) => isStopSuggested(item, attrs.nowMs));
     if (stoppable.length === 0) return null;
     return m("div", { class: "flex flex-col gap-2 rounded-lg border border-default bg-surface-secondary p-4" }, [
@@ -574,15 +580,15 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
         title,
         card: { role: "dialog", "aria-modal": "true", "aria-label": title },
         actions: [
-          m(Button, { variant: "secondary", disabled: isActionRunning, onclick: close }, "Keep running"),
           m(
             "span",
             { oncreate: (vnode: m.VnodeDOM) => vnode.dom.querySelector("button")?.focus() },
-            m(
-              Button,
-              { variant: "primary", disabled: isActionRunning, onclick: onConfirm },
-              isActionRunning ? "Stopping…" : confirmLabel,
-            ),
+            m(Button, { variant: "secondary", disabled: isActionRunning, onclick: close }, "Keep running"),
+          ),
+          m(
+            Button,
+            { variant: "primary", disabled: isActionRunning, onclick: onConfirm },
+            isActionRunning ? "Stopping…" : confirmLabel,
           ),
         ],
       },
@@ -640,6 +646,10 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
         );
       const summary = state.summary;
       const usedKib = shareBaseKib(summary);
+      // The likely first to close is flagged on its row, so a pick among the background services opens them.
+      const isServicesShown =
+        isServicesOpen || summary.services.some((item) => item.item_id === summary.likely_first_to_close?.item_id);
+      const servicesSize = formatKib(summary.services.reduce((sum, item) => sum + item.rss_kib, 0));
       const headline = summary.memory === null ? null : headlineFor(summary.memory);
       return [
         m("div", { class: "flex flex-col gap-6" }, [
@@ -705,13 +715,13 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
                   sm: true,
                   quiet: true,
                   extra: "activity-services-toggle tabular-nums",
-                  "aria-expanded": String(isServicesOpen),
-                  "aria-label": isServicesOpen ? "Hide background services" : "Show background services",
-                  onclick: () => (isServicesOpen = !isServicesOpen),
+                  "aria-expanded": String(isServicesShown),
+                  "aria-label": `${isServicesShown ? "Hide" : "Show"} background services, ${servicesSize}`,
+                  onclick: () => (isServicesOpen = !isServicesShown),
                 },
                 [
-                  formatKib(summary.services.reduce((sum, item) => sum + item.rss_kib, 0)),
-                  m.trust(icon(isServicesOpen ? "chevron-down" : "chevron-right", { size: CHEVRON_SIZE })),
+                  servicesSize,
+                  m.trust(icon(isServicesShown ? "chevron-down" : "chevron-right", { size: CHEVRON_SIZE })),
                 ],
               ),
             ]),
@@ -720,7 +730,7 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
               { class: "m-0 pt-2 type-helper text-secondary" },
               "These keep the workspace running: backups, sharing, the desktop itself. You can't stop them here.",
             ),
-            isServicesOpen ? summary.services.map((item) => itemRow(item, summary, usedKib, attrs)) : null,
+            isServicesShown ? summary.services.map((item) => itemRow(item, summary, usedKib, attrs)) : null,
           ]),
           summary.notes.length === 0
             ? null

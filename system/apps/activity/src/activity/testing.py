@@ -1,8 +1,10 @@
 """Fakes the tests share: a /proc tree, the chat app, supervisord's socket, and the command runner."""
 
 import json
+import shutil
 import socketserver
 import subprocess
+import tempfile
 import threading
 from collections.abc import Callable
 from collections.abc import Iterator
@@ -167,15 +169,21 @@ class _UnixXmlRpcServer(socketserver.UnixStreamServer, SimpleXMLRPCDispatcher):
 
 
 @contextmanager
-def fake_supervisor_socket(socket_path: Path, all_process_info: object) -> Iterator[None]:
-    """supervisord's XML-RPC socket at ``socket_path``, answering ``getAllProcessInfo`` with ``all_process_info``."""
+def fake_supervisor_socket(all_process_info: object) -> Iterator[Path]:
+    """supervisord's XML-RPC socket, answering ``getAllProcessInfo`` with ``all_process_info``; yields its path.
+
+    The socket lives in a short directory under /tmp: a unix socket's path is capped at about 104 bytes on macOS,
+    which pytest's ``tmp_path`` there exceeds."""
+    socket_dir = Path(tempfile.mkdtemp(prefix="activity-", dir="/tmp"))
+    socket_path = socket_dir / "s.sock"
     server = _UnixXmlRpcServer(socket_path)
     server.register_function(lambda: all_process_info, "supervisor.getAllProcessInfo")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield
+        yield socket_path
     finally:
         server.shutdown()
         server.server_close()
         thread.join()
+        shutil.rmtree(socket_dir, ignore_errors=True)

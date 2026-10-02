@@ -7,6 +7,7 @@ from activity.memory_reading import MemorySources
 from activity.memory_reading import closing_point
 from activity.memory_reading import parse_kib_fields
 from activity.memory_reading import parse_min_available_percent
+from activity.memory_reading import parse_min_free_swap_percent
 from activity.memory_reading import read_earlyoom_meminfo
 from activity.memory_reading import read_memory
 from activity.memory_reading import reading_from_cgroup
@@ -80,7 +81,14 @@ def _reading(source: MemorySource, limit_gib: int) -> MemoryReading:
 def test_earlyoom_threshold_is_read_from_its_own_argv() -> None:
     assert parse_min_available_percent(_EARLYOOM_ARGV) == 10
     assert parse_min_available_percent(("earlyoom", "-m15")) == 15
-    assert parse_min_available_percent(("earlyoom", "-r", "0")) is None
+    assert parse_min_available_percent(("earlyoom", "-m", "lots")) is None
+    assert parse_min_available_percent(("earlyoom", "-m")) is None
+
+
+def test_earlyoom_without_a_threshold_uses_its_default_of_ten_percent() -> None:
+    assert parse_min_available_percent(("earlyoom", "-r", "0")) == 10
+    assert parse_min_free_swap_percent(("earlyoom",)) == 10
+    assert parse_min_free_swap_percent(("earlyoom", "-s", "5,2")) == 5
 
 
 def test_on_a_cloud_workspace_earlyoom_closes_at_its_threshold_of_the_limit_it_reads() -> None:
@@ -90,6 +98,7 @@ def test_on_a_cloud_workspace_earlyoom_closes_at_its_threshold_of_the_limit_it_r
     assert point.used_bytes == (6656 // 1024) * _GIB * 90 // 100
     assert (point.min_available_percent, point.badness_total_kib) == (10, 6656 * 1024)
     assert "assumes nothing outside" not in point.detail
+    assert "swap" not in point.detail
 
 
 def test_under_runc_a_cap_below_earlyooms_point_means_the_kernel_closes_first_at_the_cap() -> None:
@@ -109,6 +118,8 @@ def test_under_runc_a_cap_above_earlyooms_point_leaves_earlyoom_closing_first() 
     assert point.used_bytes == 8 * _GIB * 90 // 100
     assert point.badness_total_kib == 9 * 1024 * 1024
     assert "assumes nothing outside the workspace is using it" in point.detail
+    # The machine has swap, and earlyoom waits for free swap to fall below its -s threshold too.
+    assert "waits until less than 10% of swap is free" in point.detail
 
 
 def test_with_no_earlyoom_running_only_the_kernel_closes_things() -> None:

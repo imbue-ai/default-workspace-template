@@ -4,6 +4,7 @@ from pathlib import Path
 
 from activity.history import MemorySample
 from activity.history import read_history
+from activity.memory_reading import MemorySource
 from activity.memory_reading import MemorySources
 from activity.record_memory import record_once
 
@@ -24,7 +25,12 @@ def test_one_reading_is_appended_as_the_page_would_read_it(tmp_path: Path) -> No
     history_path = tmp_path / "history.tsv"
     assert record_once(sources, history_path, _NOW) is True
     assert read_history(history_path) == [
-        MemorySample(at_epoch_seconds=int(_NOW.timestamp()), used_kib=4_718_592, limit_kib=6_815_744)
+        MemorySample(
+            at_epoch_seconds=int(_NOW.timestamp()),
+            used_kib=4_718_592,
+            limit_kib=6_815_744,
+            source=MemorySource.HOST_MEMINFO,
+        )
     ]
 
 

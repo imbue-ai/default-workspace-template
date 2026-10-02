@@ -1,4 +1,11 @@
+from pathlib import Path
+from typing import Final
+
 from pydantic_settings import BaseSettings
+
+# The workspace's root. Paths the app shares with other programs are absolute, so a preview, which runs from a worktree,
+# reads the live workspace's files.
+WORKSPACE_ROOT: Final[Path] = Path("/home/user/workspace")
 
 
 class Config(BaseSettings):

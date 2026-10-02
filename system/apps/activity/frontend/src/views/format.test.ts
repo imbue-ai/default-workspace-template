@@ -19,6 +19,8 @@ describe("sizes and durations", () => {
     expect(formatBytes(336 * MIB)).toBe("336 MB");
     expect(formatBytes(1000)).toBe("<1 MB");
     expect(formatBytes(0)).toBe("0 MB");
+    expect(formatBytes(1023.7 * MIB)).toBe("1.0 GB");
+    expect(formatBytes(1023.4 * MIB)).toBe("1023 MB");
   });
 
   it("rounds idle time to the unit a person would say", () => {
@@ -130,5 +132,15 @@ describe("headline", () => {
       closing_detail: "",
     });
     expect(headline.body).toContain("When memory is completely full, the system closes");
+  });
+});
+
+describe("durations at unit boundaries", () => {
+  it("moves to the next unit rather than reading 60 min or 24 hr", () => {
+    expect(formatDuration(59)).toBe("just now");
+    expect(formatDuration(3570)).toBe("1 hr");
+    expect(formatDuration(3500)).toBe("58 min");
+    expect(formatDuration(86000)).toBe("1 day");
+    expect(formatDuration(3 * 86400)).toBe("3 days");
   });
 });

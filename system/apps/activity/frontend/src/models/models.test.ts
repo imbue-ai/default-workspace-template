@@ -3,7 +3,7 @@ import "@imbue/workspace-ui/src/testing/dom";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { historyView } from "../testing/records";
+import { historyView, summary as summaryRecord } from "../testing/records";
 
 type FetchReply = { readonly status: number; readonly body: unknown };
 
@@ -54,14 +54,53 @@ describe("the history model", () => {
 
 describe("the summary model", () => {
   it("stays forbidden, and stops reading, once the page answers 403", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetches = stubFetch();
+      const summary = await import("./summary");
+      summary.startRefreshing();
+      fetches.reply(0, { status: 403, body: {} });
+      await vi.advanceTimersByTimeAsync(3 * summary.REFRESH_INTERVAL_MS);
+      expect(summary.getSummaryState().kind).toBe("forbidden");
+      expect(fetches.urls).toHaveLength(1);
+      summary.stopRefreshing();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the newest reading when an older read answers after it", async () => {
     const fetches = stubFetch();
     const summary = await import("./summary");
-    summary.startRefreshing();
-    fetches.reply(0, { status: 403, body: {} });
+    void summary.refreshNow();
+    void summary.refreshNow();
+    fetches.reply(1, { status: 200, body: summaryRecord("TIGHT", [], null) });
     await settle();
-    expect(summary.getSummaryState().kind).toBe("forbidden");
-    summary.stopRefreshing();
-    expect(fetches.urls).toHaveLength(1);
+    fetches.reply(0, { status: 200, body: summaryRecord("COMFORTABLE", [], null) });
+    await settle();
+    const state = summary.getSummaryState();
+    expect(state.kind === "loaded" && state.summary.memory?.status).toBe("TIGHT");
+  });
+
+  it("says a read that took too long, rather than the browser's error name", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new DOMException("signal timed out", "TimeoutError")));
+    const summary = await import("./summary");
+    await summary.refreshNow();
+    const state = summary.getSummaryState();
+    expect(state.kind === "failed" && state.message).toBe("It took too long to answer.");
+  });
+
+  it("measures idle times on the workspace's clock, not the browser's", async () => {
+    const fetches = stubFetch();
+    const summary = await import("./summary");
+    const workspaceNow = Date.now() + 15 * 60 * 1000;
+    const read = summary.refreshNow();
+    fetches.reply(0, {
+      status: 200,
+      body: { ...summaryRecord("COMFORTABLE", [], null), measured_at: new Date(workspaceNow).toISOString() },
+    });
+    await read;
+    expect(Math.abs(summary.serverNowMs() - workspaceNow)).toBeLessThan(1000);
   });
 
   it("tells a stop refused because the chat started working apart from any other refusal", async () => {
@@ -91,5 +130,31 @@ describe("stopping an app", () => {
     fetches.reply(1, { status: 400, body: { detail: "Chat is not stopped from System Monitor" } });
     expect(await refused).toEqual({ kind: "failed", message: "Chat is not stopped from System Monitor" });
     expect(fetches.urls).toEqual(["/api/apps/files/stop", "/api/apps/chat/stop"]);
+  });
+});
+
+describe("the storage model", () => {
+  it("keeps the last measurement when another window is already measuring", async () => {
+    const fetches = stubFetch();
+    const storage = await import("./storage");
+    const first = storage.measureStorage();
+    fetches.reply(0, {
+      status: 200,
+      body: {
+        measured_at: "2026-10-01T12:00:00Z",
+        total_kib: 5,
+        categories: [],
+        largest: [],
+        command: "du",
+        notes: [],
+        measure_seconds: 1,
+      },
+    });
+    await first;
+    const second = storage.measureStorage();
+    fetches.reply(1, { status: 429, body: { detail: "already measuring" } });
+    await second;
+    const state = storage.getStorageState();
+    expect(state.kind === "loaded" && state.summary.total_kib).toBe(5);
   });
 });

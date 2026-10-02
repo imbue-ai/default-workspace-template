@@ -4,6 +4,7 @@ from datetime import timezone
 from pathlib import Path
 
 from activity.storage import StorageCategory
+from activity.storage import WORKSPACE_CATEGORIES
 from activity.storage import measure_storage
 from activity.storage import parse_du_output
 from activity.storage import summarize_storage
@@ -69,7 +70,23 @@ def test_measuring_runs_one_du_over_existing_folders_and_a_timeout_becomes_a_not
     assert files.size_kib == 64
     assert summary.measure_seconds == 1.5
 
-    slow = FakeRunner({"du": subprocess.TimeoutExpired("du", 60)})
+    assert summary.command.startswith("du -sk -- ") and uploads in summary.command
+
+
+def test_a_timeout_keeps_the_folders_du_finished_and_says_the_total_is_incomplete(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    (data_dir / "uploads").mkdir(parents=True)
+    uploads = str((data_dir / "uploads").absolute())
+    slow = FakeRunner({"du": subprocess.TimeoutExpired("du", 60, output=f"64\t{uploads}\n".encode())})
     timed_out = measure_storage(data_dir=data_dir, run_command=slow, now=lambda: _NOW, clock=lambda: 0.0)
-    assert timed_out.total_kib == 0
-    assert "took too long" in timed_out.notes[0]
+    files = next(category for category in timed_out.categories if category.category_id == "files")
+    assert files.size_kib == 64
+    assert "total is incomplete" in timed_out.notes[0]
+
+
+def test_the_categories_never_overlap_so_nothing_is_counted_twice() -> None:
+    paths = [path for category in WORKSPACE_CATEGORIES for path in category.paths]
+    for path in paths:
+        for other in paths:
+            assert path == other or not other.is_relative_to(path), (path, other)
+    assert Path("/home/user/worktrees") in paths

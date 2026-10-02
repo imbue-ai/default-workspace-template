@@ -21,7 +21,9 @@ what could be freed and let them choose; you never stop anything on your own.
    the details. The user can see the same picture in System Monitor (the Activity app), which
    shows what each chat, app and service uses and which process would likely
    be closed first, and where they can stop an idle chat or an app themselves
-   (`curl -s localhost:8040/api/summary` reads its figures;
+   (`curl -s localhost:8040/api/summary` reads its figures; while the app is
+   stopped the first request wakes it and answers a 503 "starting" page, so
+   retry after a second or two;
    `system/apps/activity/README.md` says how to answer questions asked from it).
 
 2. **Offer them to the user.** In plain language, say that the workspace ran

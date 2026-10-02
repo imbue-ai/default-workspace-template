@@ -8,6 +8,7 @@ from activity.history import group_into_periods
 from activity.history import is_recording
 from activity.history import parse_history
 from activity.history import read_history
+from activity.memory_reading import MemorySource
 
 
 def _sample(at: int, used: int) -> MemorySample:
@@ -67,3 +68,24 @@ def test_recording_means_a_reading_within_the_last_few_minutes() -> None:
     assert is_recording([_sample(1_000, 1)], now_epoch_seconds=1_100) is True
     assert is_recording([_sample(1_000, 1)], now_epoch_seconds=1_500) is False
     assert is_recording([], now_epoch_seconds=1_000) is False
+
+
+def test_a_reading_keeps_its_source_and_lines_from_before_or_after_this_format_still_parse() -> None:
+    with_source = MemorySample(at_epoch_seconds=100, used_kib=5, limit_kib=9, source=MemorySource.CGROUP)
+    assert format_sample(with_source) == "100\t5\t9\tCGROUP\n"
+    text = (
+        format_sample(with_source)
+        + "160\t6\t9\n"
+        + "220\t7\t9\tHOST_MEMINFO\tsome-later-column\n"
+        + "280\t8\t9\tMARS\n"
+    )
+    assert [(sample.at_epoch_seconds, sample.source) for sample in parse_history(text)] == [
+        (100, MemorySource.CGROUP),
+        (160, None),
+        (220, MemorySource.HOST_MEMINFO),
+        (280, None),
+    ]
+
+
+def test_recording_is_judged_by_the_newest_reading_whatever_the_file_order() -> None:
+    assert is_recording([_sample(1_000, 1), _sample(400, 1)], now_epoch_seconds=1_100) is True

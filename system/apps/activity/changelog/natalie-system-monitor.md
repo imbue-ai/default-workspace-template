@@ -10,4 +10,4 @@ New built-in app, System Monitor (the `activity` package): shows what is using t
 
 - Each section and its rows share their slice of the bar's colour, and a legend entry jumps to its section. Each row's bar and percentage are its share of the memory in use. Text and bar colours meet WCAG AA contrast, checked by a test against the design tokens.
 
-- It runs only while a window shows it: the shell stops it a minute after its last window closes, and the page reads nothing while its window or browser tab is out of sight. The API is the workspace owner's only, and a write must come from the app's own page.
+- It runs only while a window shows it: the shell stops it a minute after its last window closes, and the page reads nothing while its window or browser tab is out of sight. The API is the workspace owner's only, and a write must come from the app's own page. A preview of a proposed change to the app shows the live workspace but refuses every write and offers no actions.
