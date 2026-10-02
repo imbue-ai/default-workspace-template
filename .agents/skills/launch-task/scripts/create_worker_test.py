@@ -4006,13 +4006,17 @@ def test_launch_sync_collects_the_terminal_report_despite_a_milestone(
 # --- reply ------------------------------------------------------------------
 
 
+def _stamped_task_file(tmp_path: Path) -> Path:
+    """A task file carrying the worker id ``launch`` stamps, which ``reply`` addresses."""
+    task = tmp_path / "task.md"
+    task.write_text(f"---\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n")
+    return task
+
+
 def test_reply_goes_through_the_chat_messenger_by_the_stamped_worker_id(
     tmp_path: Path,
 ) -> None:
-    task = tmp_path / "task.md"
-    task.write_text(
-        f"---\nlead_agent: agent-lead\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n"
-    )
+    task = _stamped_task_file(tmp_path)
     runner = _RecordingRunner()
     runner.respond(
         (sys.executable, str(_MESSAGE_CHAT_SCRIPT)), _StubResult(returncode=7)
@@ -4035,8 +4039,7 @@ def test_reply_goes_through_the_chat_messenger_by_the_stamped_worker_id(
 def test_reply_leaves_the_label_when_the_send_fails(tmp_path: Path) -> None:
     """A worker the reply did not reach stays marked as stopped on purpose, so
     nobody restarts it as a crash."""
-    task = tmp_path / "task.md"
-    task.write_text(f"---\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n")
+    task = _stamped_task_file(tmp_path)
     runner = _RecordingRunner()
     runner.respond(
         (sys.executable, str(_MESSAGE_CHAT_SCRIPT)), _StubResult(returncode=1)
@@ -4055,8 +4058,7 @@ def test_reply_still_succeeds_when_the_label_cannot_be_blanked(
 ) -> None:
     """The message already landed, so a failed label write must not read as a
     failed reply: the lead would send it again."""
-    task = tmp_path / "task.md"
-    task.write_text(f"---\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n")
+    task = _stamped_task_file(tmp_path)
     runner = _RecordingRunner()
     runner.respond(("mngr", "label"), _StubResult(returncode=1))
 
@@ -4069,8 +4071,7 @@ def test_reply_still_succeeds_when_the_label_cannot_be_blanked(
 
 
 def test_reply_takes_a_message_file(tmp_path: Path) -> None:
-    task = tmp_path / "task.md"
-    task.write_text(f"---\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n")
+    task = _stamped_task_file(tmp_path)
     answer = tmp_path / "answer.md"
     answer.write_text("yes, do that")
     runner = _RecordingRunner()
@@ -4103,8 +4104,7 @@ def test_reply_refuses_a_task_file_without_the_stamp(tmp_path: Path) -> None:
 
 
 def test_main_reply_requires_exactly_one_message_source(tmp_path: Path) -> None:
-    task = tmp_path / "task.md"
-    task.write_text(f"---\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n")
+    task = _stamped_task_file(tmp_path)
 
     with pytest.raises(SystemExit):
         create_worker_mod.main(
