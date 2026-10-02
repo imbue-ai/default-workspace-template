@@ -246,9 +246,9 @@ SPARE_CHAT_RETRY_BACKOFF_SECONDS: Final[float] = 300.0
 # (the date, the git state) when it started, and a long wait also leaves it on code older than the
 # workspace's.
 SPARE_CHAT_MAX_AGE_SECONDS: Final[float] = 6 * 3600.0
-# The reason a chat that claimed a spare is given when the spare's creation stopped on an unexpected
-# error (its traceback is in the log).
-_SPARE_CREATION_BROKE_OFF_ERROR: Final[str] = "Starting this chat's agent stopped on an unexpected error"
+# The reason a chat is given when starting its agent stopped on an unexpected error (its traceback is in
+# the log): the creation of a spare it claimed, or its launch once the spare reserved for it was destroyed.
+_CHAT_START_BROKE_OFF_ERROR: Final[str] = "Starting this chat's agent stopped on an unexpected error"
 # The reason a chat awaiting its first send fails when the spare reserved for it, which its launch could not
 # take, could not be destroyed, so the chat's own create cannot have the id yet.
 _RESERVED_SPARE_NOT_DESTROYED_ERROR: Final[str] = (
@@ -3931,14 +3931,14 @@ class AgentManager:
                 and provisional.phase is ProvisionalChatPhase.CREATING
             )
             if is_claim_waiting:
-                self._mark_creation_failed_locked(chat_id, _SPARE_CREATION_BROKE_OFF_ERROR)
+                self._mark_creation_failed_locked(chat_id, _CHAT_START_BROKE_OFF_ERROR)
             settled = self._creation_settled_by_chat.get(chat_id) if is_claim_waiting else None
         _loguru_logger.warning("Starting spare agent {} broke off; the sweep destroys it", chat_id)
         if is_claim_waiting:
             if settled is not None:
                 settled.set()
             self._broadcaster.broadcast_provisional_chat_completed(
-                chat_id=chat_id, success=False, error=_SPARE_CREATION_BROKE_OFF_ERROR
+                chat_id=chat_id, success=False, error=_CHAT_START_BROKE_OFF_ERROR
             )
 
     def _create_spare(self, spare: SpareChatAgent, harness: HarnessType, work_dir: Path) -> None:
@@ -4139,27 +4139,28 @@ class AgentManager:
     ) -> None:
         """The creation thread of a chat awaiting its first send whose launch released the spare reserved for it:
         ``_run_creation`` once that spare is destroyed, since a create under an id an agent still holds would
-        collide with it. The chat fails with the reason when the spare could not be destroyed."""
+        collide with it. The chat fails with the reason when the spare could not be destroyed, or when its launch
+        then stopped on an unexpected error."""
         with self._lock:
             settled = self._creation_settled_by_chat.get(chat_id)
+        failure = _RESERVED_SPARE_NOT_DESTROYED_ERROR
         is_launchable = False
         try:
             if self._await_spare_destroyed(chat_id):
+                failure = _CHAT_START_BROKE_OFF_ERROR
                 with self._lock:
-                    self._fast_mode_for_launch_locked(chat_id)
                     # The spare's removal forgot the chat's per-chat records, this create's settled event included.
                     if settled is not None:
                         self._creation_settled_by_chat[chat_id] = settled
+                    self._fast_mode_for_launch_locked(chat_id)
                 is_launchable = True
         finally:
             if not is_launchable:
                 with self._lock:
-                    self._mark_creation_failed_locked(chat_id, _RESERVED_SPARE_NOT_DESTROYED_ERROR)
+                    self._mark_creation_failed_locked(chat_id, failure)
                 if settled is not None:
                     settled.set()
-                self._broadcaster.broadcast_provisional_chat_completed(
-                    chat_id=chat_id, success=False, error=_RESERVED_SPARE_NOT_DESTROYED_ERROR
-                )
+                self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=False, error=failure)
         if is_launchable:
             self._run_creation(
                 chat_id,

@@ -6306,6 +6306,33 @@ def test_an_awaiting_chats_first_send_fails_without_a_create_when_its_spare_cann
         manager.stop()
 
 
+def test_an_awaiting_chats_first_send_whose_launch_breaks_off_after_its_spare_is_destroyed_is_told_why(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    pushes = broadcaster.register()
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        awaiting = manager.awaiting_chat_for_empty_list()
+        openai_account_id = _openai_account()
+        # A file where the chat's folder goes, so writing its fast mode fails once the spare is gone.
+        (tmp_path / "chats").mkdir(exist_ok=True)
+        (tmp_path / "chats" / awaiting.chat_id).write_text("")
+
+        manager.create_chat("", chat_id=awaiting.chat_id, account_id=openai_account_id, message="Hi 5182")
+
+        assert (spare.chat_id, False) in _await_provisional_completions(pushes)
+        assert manager.wait_for_chat_creation(awaiting.chat_id, timeout=15.0) == ChatCreationOutcome(
+            is_created=False, error="Starting this chat's agent stopped on an unexpected error"
+        )
+        assert _mngr_verbs_naming(argv_log, spare.chat_id) == ["create", "destroy"]
+        assert spare.chat_id not in [other.chat_id for other in manager._spares]
+    finally:
+        manager.stop()
+
+
 def test_discarding_an_awaiting_chat_returns_its_spare_to_the_pool(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
