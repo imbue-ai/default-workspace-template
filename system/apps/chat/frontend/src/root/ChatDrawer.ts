@@ -1,6 +1,8 @@
 /**
  * The chats' drawer in the chat root's phone layout: the list (``ChatRail``, rows unchanged)
- * on a panel that slides in from the left over the chat, with a scrim over the rest. A tap on
+ * on a panel that slides in from the left over the chat, with a scrim over the rest. On a
+ * touchscreen the panel takes most of the width; under a mouse it is as wide as the rail the
+ * list draws in a wider window. A tap on
  * the scrim, Escape, or dragging the panel back to the left dismisses it; while a modal is open
  * over the drawer, Escape is the modal's.
  */
@@ -121,9 +123,11 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
         m(
           "div",
           {
-            class:
-              "chat-drawer-panel absolute top-0 bottom-0 left-0 flex w-[86%] max-w-[340px] flex-col bg-surface " +
+            class: [
+              "chat-drawer-panel absolute top-0 bottom-0 left-0 flex flex-col bg-surface",
               "shadow-[8px_0_32px_rgb(0_0_0/0.18)] animate-[chat-drawer-in_160ms_ease-out] touch-pan-y",
+              attrs.rail.isTouch ? "w-[86%] max-w-[340px]" : "",
+            ].join(" "),
           },
           m(ChatRail, attrs.rail),
         ),

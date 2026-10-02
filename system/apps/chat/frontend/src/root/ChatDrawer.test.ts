@@ -3,7 +3,8 @@
  * The phone layout's drawer and the list it hosts: every row keeps its right-click verbs behind a
  * kebab, which opens them without picking the row; the drawer goes on a scrim tap, Escape (unless a
  * modal over it takes the key), or a drag far enough to the left, and a shorter drag springs back
- * without the release picking a row.
+ * without the release picking a row. Under a mouse the drawer holds the rail's own form of the list,
+ * at the width the rail was dragged to.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +19,7 @@ vi.mock("./verbs", () => verbs);
 import m from "mithril";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { ChatDrawer } from "./ChatDrawer";
+import { initRailWidth } from "./railWidth";
 import type { ChatRailAttrs } from "./ChatRail";
 import type { ChatRow } from "./rows";
 
@@ -32,11 +34,12 @@ let root: HTMLElement | null = null;
 let onPick = vi.fn<(chatId: string) => void>();
 let onDismiss = vi.fn<() => void>();
 
-function rail(): ChatRailAttrs {
+function rail(isTouch: boolean): ChatRailAttrs {
   return {
     rows: ROWS,
     selectedChatId: "agent-1",
-    isCompact: true,
+    isInDrawer: true,
+    isTouch,
     onPick,
     onNew: () => undefined,
     referenceScope: scopeOfHandshake(null),
@@ -45,10 +48,10 @@ function rail(): ChatRailAttrs {
   };
 }
 
-function mount(isCovered = false): HTMLElement {
+function mount(isCovered = false, isTouch = true): HTMLElement {
   root = document.createElement("div");
   document.body.appendChild(root);
-  m.mount(root, { view: () => m(ChatDrawer, { rail: rail(), isCovered, onDismiss }) });
+  m.mount(root, { view: () => m(ChatDrawer, { rail: rail(isTouch), isCovered, onDismiss }) });
   // jsdom lays nothing out: the panel is given the width a phone gives it.
   const panel = root.querySelector<HTMLElement>(".chat-drawer-panel");
   if (panel === null) throw new Error("no drawer panel");
@@ -76,6 +79,7 @@ beforeEach(() => {
   onPick = vi.fn();
   onDismiss = vi.fn();
   vi.clearAllMocks();
+  initRailWidth();
 });
 
 afterEach(() => {
@@ -85,6 +89,7 @@ afterEach(() => {
     root = null;
   }
   document.body.innerHTML = "";
+  window.localStorage.clear();
 });
 
 describe("ChatDrawer", () => {
@@ -137,5 +142,46 @@ describe("ChatDrawer", () => {
     expect(onDismiss).not.toHaveBeenCalled();
     expect(onPick).not.toHaveBeenCalled();
     expect(panel.style.transform).toBe("");
+  });
+});
+
+describe("ChatDrawer under a mouse", () => {
+  it("holds the rail's form of the list at the width the rail was dragged to", () => {
+    window.localStorage.setItem("chat-root-rail-width", "320");
+    initRailWidth();
+    const panel = mount(false, false);
+
+    expect(panel.className).not.toContain("w-[86%]");
+    expect(panel.querySelector<HTMLElement>(".chat-rail")?.style.width).toBe("320px");
+    // The rail's head and dense rows: "New chat" spelled out, a rename pencil rather than a kebab.
+    expect(panel.querySelector(".chat-rail-new")?.textContent).toBe("New chat");
+    expect(panel.querySelector(".chat-rail-row")?.className).not.toContain("min-h-11");
+    expect(panel.querySelector("[data-chat-row-menu]")).toBeNull();
+    expect(panel.querySelector(".chat-rail-rename")).not.toBeNull();
+  });
+
+  it("picks the chat on screen again when its row is clicked, which is what closes the drawer", () => {
+    const panel = mount(false, false);
+    panel.querySelector<HTMLElement>('.chat-rail-row[data-chat-id="agent-1"]')?.click();
+    expect(onPick).toHaveBeenCalledWith("agent-1");
+  });
+
+  it("resizes from the list's edge without the press dragging the drawer away", () => {
+    const panel = mount(false, false);
+    const handle = panel.querySelector<HTMLElement>(".chat-rail-resize");
+    if (handle === null) throw new Error("no resize handle");
+    handle.setPointerCapture = () => undefined;
+    const press = (type: string, clientX: number): void => {
+      handle.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 2, button: 0, clientX, clientY: 400 }));
+    };
+    press("pointerdown", 240);
+    press("pointermove", 120);
+    press("pointerup", 120);
+    pointer(window, "pointermove", 0);
+    pointer(window, "pointerup", 0);
+    m.redraw.sync();
+
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(panel.querySelector<HTMLElement>(".chat-rail")?.style.width).toBe("180px");
   });
 });

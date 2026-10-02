@@ -12,6 +12,10 @@ export const COMPACT_MAX_WIDTH_PX = 700;
 
 export const COMPACT_MEDIA_QUERY = `(max-width: ${COMPACT_MAX_WIDTH_PX}px)`;
 
+/** A touchscreen, whose finger wants the phone layout's larger targets; a narrow window under a mouse keeps the
+ *  desktop's. The shell decides the same way (system_interface ``TOUCH_MEDIA_QUERY``). */
+export const TOUCH_MEDIA_QUERY = "(pointer: coarse)";
+
 // What the framing root last said, or null for a page no root has told.
 let compactFromRoot: boolean | null = null;
 

@@ -52,13 +52,14 @@ import {
   whenAccountsReadyToChoose,
 } from "../models/Providers";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
-import { COMPACT_MEDIA_QUERY } from "../compactLayout";
+import { COMPACT_MEDIA_QUERY, TOUCH_MEDIA_QUERY } from "../compactLayout";
 import { ChatDrawer } from "./ChatDrawer";
 import { ChatHeader } from "./ChatHeader";
 import { ChatRail } from "./ChatRail";
 import type { ChatRailAttrs } from "./ChatRail";
 import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
+import { initRailWidth } from "./railWidth";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { groupedRows, rowsFromSnapshots } from "./rows";
@@ -87,6 +88,8 @@ const startedHere = new Set<string>();
 const awaitingListing = new Set<string>();
 // The phone layout (compactLayout.ts): a header over the chat, and the list in a drawer over it.
 const compactQuery = window.matchMedia(COMPACT_MEDIA_QUERY);
+// A touchscreen: the drawer takes the finger's form of the list rather than the rail's.
+const touchQuery = window.matchMedia(TOUCH_MEDIA_QUERY);
 // Whether the phone layout's drawer is open. It opens whenever nothing is selected, and closes when a chat is picked.
 let isDrawerOpen = false;
 
@@ -413,7 +416,8 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
   return {
     rows,
     selectedChatId,
-    isCompact,
+    isInDrawer: isCompact,
+    isTouch: isCompact && touchQuery.matches,
     onPick: (chatId: string) => select(chatId),
     onNew: () => void startNewChat(),
     referenceScope: scopeOfHandshake(handshake),
@@ -479,6 +483,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
 
 function bootstrap(): void {
   initChatUnread();
+  initRailWidth();
   initChats();
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
@@ -487,6 +492,7 @@ function bootstrap(): void {
     fillSlot();
     m.redraw();
   });
+  touchQuery.addEventListener("change", () => m.redraw());
   const shell = connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,

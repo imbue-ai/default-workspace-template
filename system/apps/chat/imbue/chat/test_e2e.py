@@ -1395,10 +1395,21 @@ _PHONE_VIEWPORT: ViewportSize = {"width": 393, "height": 852}
 
 
 def _open_phone_chat_root(page: Page, server: RunningWorkspace, path: str = _FIXTURE_ROOT_PATH) -> None:
-    """Open the chat root at a phone's width, at the chat app's own URL: its layout follows its own width whatever
-    frames it, so the shell's phone layout is not what is under test here."""
+    """Open the chat root at a phone's width on a touchscreen, at the chat app's own URL: its layout follows its own
+    width whatever frames it, so the shell's phone layout is not what is under test here. The touchscreen gives the
+    drawer its finger's form; under a mouse it holds the rail's (``_open_narrow_chat_root``)."""
+    page.context.new_cdp_session(page).send(
+        "Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1}
+    )
     page.set_viewport_size(_PHONE_VIEWPORT)
     page.goto(f"{server.chat_url}{path}")
+    expect(page.locator('.chat-root[data-compact="true"]')).to_be_visible(timeout=15000)
+
+
+def _open_narrow_chat_root(page: Page, server: RunningWorkspace) -> None:
+    """Open the chat root in a window as narrow as a phone, under a mouse."""
+    page.set_viewport_size(_PHONE_VIEWPORT)
+    page.goto(f"{server.chat_url}{_FIXTURE_ROOT_PATH}")
     expect(page.locator('.chat-root[data-compact="true"]')).to_be_visible(timeout=15000)
 
 
@@ -1453,6 +1464,37 @@ def test_the_phone_layout_keeps_the_chat_list_in_a_drawer_over_the_chat(
     page.mouse.move(panel["x"] + 40, y, steps=10)
     page.mouse.up()
     expect(drawer).to_have_count(0)
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_narrow_window_under_a_mouse_opens_the_rail_in_the_drawer_at_its_dragged_width(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """Dragging the rail's edge in a wide window widens it and keeps the width; narrowed to a phone's width under a
+    mouse, the list button opens the rail as it was, dense rows and "New chat" spelled out, at that width."""
+    page.set_viewport_size({"width": 1200, "height": 800})
+    page.goto(f"{e2e_server.chat_url}{_FIXTURE_ROOT_PATH}")
+    rail = page.locator(".chat-rail")
+    expect(rail).to_be_visible(timeout=15000)
+    handle = page.locator(".chat-rail-resize").bounding_box()
+    assert handle is not None
+    x, y = handle["x"] + handle["width"] / 2, handle["y"] + handle["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 60, y, steps=10)
+    page.mouse.up()
+    expect(rail).to_have_attribute("style", "width: 300px;")
+
+    _open_narrow_chat_root(page, e2e_server)
+    page.locator("[data-chat-header-list]").click()
+    drawer = page.locator("[data-chat-drawer]")
+    expect(drawer).to_be_visible()
+    expect(drawer.locator(".chat-rail-new")).to_have_text("New chat")
+    expect(drawer.locator("[data-chat-row-menu]")).to_have_count(0)
+    panel = page.locator(".chat-drawer-panel").bounding_box()
+    row = drawer.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]').bounding_box()
+    assert panel is not None and panel["width"] == 300, panel
+    assert row is not None and row["height"] < 44, row
 
 
 @pytest.mark.timeout(60, func_only=False)

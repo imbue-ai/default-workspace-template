@@ -70,7 +70,8 @@ describe("the chat header", () => {
     const rail = {
       rows: [RENAMED_CHAT],
       selectedChatId: RENAMED_CHAT.chatId,
-      isCompact: true,
+      isInDrawer: true,
+      isTouch: true,
       onPick: () => undefined,
       onNew: () => undefined,
       referenceScope: scopeOfHandshake(null),
