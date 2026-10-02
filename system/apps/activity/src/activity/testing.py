@@ -4,6 +4,7 @@ import json
 import socketserver
 import subprocess
 import threading
+from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -60,6 +61,10 @@ def chat_snapshot(
     }
 
 
+def _address(url: httpx.URL) -> str:
+    return f"{url.host}:{url.port}" if url.port else url.host
+
+
 class FakeChatApp:
     """The chat app's list, stop and start routes, recording every action it is asked for."""
 
@@ -70,7 +75,7 @@ class FakeChatApp:
         self.hosts: list[str] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
-        self.hosts.append(f"{request.url.host}:{request.url.port}" if request.url.port else request.url.host)
+        self.hosts.append(_address(request.url))
         path = request.url.path
         if request.method == "GET" and path == "/api/chats":
             return httpx.Response(self.list_status, json={"chats": self.chats})
@@ -84,6 +89,31 @@ class FakeChatApp:
 
     def client(self) -> httpx.Client:
         return httpx.Client(transport=httpx.MockTransport(self.handle))
+
+
+class FakeShell:
+    """The desktop shell's quit route, recording every app it is asked to quit."""
+
+    def __init__(self, quit_status: int = 200) -> None:
+        self.quit_status = quit_status
+        self.quits: list[str] = []
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        parts = request.url.path.strip("/").split("/")
+        if request.method == "POST" and len(parts) == 4 and parts[:2] == ["api", "apps"] and parts[3] == "quit":
+            if self.quit_status != 200:
+                return httpx.Response(self.quit_status, json={"detail": "the desktop is busy"})
+            self.quits.append(parts[2])
+            return httpx.Response(200, json={"name": parts[2], "is_running": False})
+        return httpx.Response(404, json={"detail": "no such route"})
+
+
+def routed_client(handler_by_address: Mapping[str, Callable[[httpx.Request], httpx.Response]]) -> httpx.Client:
+    """One client whose requests each fake answers by host (and port, when the URL names one), as the real apps
+    answer on their own ports."""
+    return httpx.Client(
+        transport=httpx.MockTransport(lambda request: handler_by_address[_address(request.url)](request))
+    )
 
 
 def process_info(name: str, statename: str, pid: int) -> dict[str, Any]:

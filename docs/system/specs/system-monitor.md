@@ -14,9 +14,9 @@ Goals:
 - **Plain first, technical on demand.** A headline anyone can read; below it, things the user recognizes; inside each, the processes, command lines, shedding priorities and the file or command each figure came from.
 - **Honest.** Every figure names its source. A source that cannot be read becomes a note on the page, never an empty list or a zero. Predictions are labelled as predictions.
 - **No idle cost.** The shell stops the app a minute after its last window closes (`stop_when_no_windows`), and nothing it adds stays resident.
-- **Safe actions only.** The user can stop what is safe to stop (a chat), told first what happens. Nothing is killed raw.
+- **Safe actions only.** The user can stop what is safe to stop (a chat, a non-critical app), told first what happens. Nothing is killed raw.
 
-Non-goals for this change: alerts while the app is closed, stopping arbitrary apps (a stacked change), a disk quota figure (not readable from inside the container, see section 4.6), and acting on the user's behalf.
+Non-goals for this change: alerts while the app is closed, a disk quota figure (not readable from inside the container, see section 4.6), and acting on the user's behalf.
 
 ## 2. What the user sees
 
@@ -27,7 +27,7 @@ Non-goals for this change: alerts while the app is closed, stopping arbitrary ap
 3. Memory over time for the last hour, 24 hours or 7 days, with the closing line, a mark wherever something was closed, a hover readout and a table view. Below it, "Recently closed" lists the 20 newest closures of the last week: what was closed, how much it freed, and what to do about it ("Its conversation is kept; send it a message to carry on").
 4. Questions a newcomer would ask (what happens if memory fills up, how do I free it, can I get more), answered in place and picked for what the page shows. "Ask in chat" drafts the question, with the page's numbers, into the user's current chat without sending it.
 5. When memory is getting tight, "Ways to free up memory" lists chats idle for 15 minutes or more, largest first, each with Stop.
-6. Every chat (all harnesses), app and background service, with its size and share of memory in use ("171 MB · 7%"). Every running chat offers Stop (a working one warns that stopping interrupts it) and a stopped chat offers Start; the process most likely closed first is flagged. Each row opens to its processes.
+6. Every chat (all harnesses), app and background service, with its size and share of memory in use ("171 MB · 7%"). Every running chat offers Stop (a working one warns that stopping interrupts it) and a stopped chat offers Start; a running non-critical app offers Stop; the process most likely closed first is flagged. Each row opens to its processes.
 
 **Storage tab**: what is taking up disk, grouped as your files, chats and agents, app data, installed tools, download caches and logs, with the total of the measured folders, each group's folders and the largest folders. It measures the first time the tab opens and then only when asked, never on a timer.
 
@@ -39,6 +39,7 @@ Non-goals for this change: alerts while the app is closed, stopping arbitrary ap
         |  GET /api/history   every 60 s, while shown       v
         |  GET /api/storage   on open / on request     activity-record-memory
         |  POST /api/chats/<id>/stop|start                  |  one reading, appended
+        |  POST /api/apps/<name>/stop                       |
         v                                                   v
   activity-app (Flask on 127.0.0.1:8040) ------------> data/.state/activity/memory-history.tsv
         |
@@ -49,6 +50,7 @@ Non-goals for this change: alerts while the app is closed, stopping arbitrary ap
         +-- supervisord XML-RPC socket (apps' and services' programs and pids)
         +-- data/.state/apps.toml (the app registry: names, criticality)
         +-- chat app GET /api/chats (titles, harness, status) and its stop/start
+        +-- the shell's POST /api/apps/<name>/quit (stopping an app)
         +-- oom_priority shed ledger (what earlyoom closed)
         +-- du -sk over category folders (storage, on request)
 ```
@@ -64,6 +66,7 @@ Code map (`system/apps/activity/src/activity/`):
 | `summary.py` | Crediting processes to chats, apps and services; the headline; the likely first to close (pure) |
 | `readings.py` | Taking each reading independently; a failed one becomes a note |
 | `chats.py` | The chat app's list and its stop/start, with lenient wire models |
+| `apps.py` | Which apps the page may stop, and the shell's Quit (section 4.8) |
 | `supervised_programs.py` | supervisord's `getAllProcessInfo` over its unix socket |
 | `history.py`, `record_memory.py`, `cron_entry.py`, `history_view.py` | Memory over time (section 4.5) |
 | `closures.py` | Shed-ledger records in plain words |
@@ -126,6 +129,17 @@ One `du -sk` (60 s timeout) over disjoint category folders, so nothing is counte
 
 The page's answers cover the common questions. When they are not enough, "Ask in chat" drafts the user's question, followed by "I'm looking at System Monitor" and the figures on screen, into the user's current chat through the shell contract's `draftText`, unsent, so it never starts a new chat. The app's README tells the answering agent to read the live figures (`curl localhost:8040/api/summary`, `/api/history`, `/api/storage`) rather than trust the quoted ones, and to follow `.agents/shared/references/freeing-memory.md`: list candidates, let the user choose, and stop nothing on their behalf.
 
+### 4.8 Stopping an app
+
+A running app's row offers Stop. After a confirmation, the backend forwards to the shell's own `POST /api/apps/<name>/quit` (`docs/system/specs/stop-when-no-windows.md`, Part E), reached at `app_manifest.shell_windows.shell_base_url()` as every app reaches the shell. Quit closes the app's windows on every desktop (pinned windows stay) and stops its program; the shell then holds the app's port and starts it again on the next request, so a stopped app comes back when it is next opened. The confirmation says exactly that, including that shared desktops lose their windows too.
+
+Which apps offer Stop is one pure rule, `apps.is_app_stoppable`: what the shell itself would quit (`is_quittable_by_shell`, mirroring the shell's `stoppable_program_of`: a supervised program, never a critical app or a row inside a critical app's program), less two exclusions this app makes:
+
+- the browser, because agents drive it and stopping it would pull it from under them; its row shows an "Always on" badge and reads "The browser your agents use · Running because agents use it";
+- System Monitor itself, because stopping it would close the window asking.
+
+The backend checks the rule again before forwarding (the page's view may be stale, and a request need not come from it), and refuses an unreadable registry rather than guessing. The page also re-checks the row when the user confirms, so a refresh that already found the app stopped does not report memory freed. A row's "starts when you open it" line follows the shell's rule rather than the page's offer, so a browser stopped from its own window menu reads correctly.
+
 ## 5. Cost
 
 | State | Memory |
@@ -140,12 +154,12 @@ A summary request takes about 100 ms (it walks `/proc` and asks the chat app and
 
 - **Owner only.** Every `/api/` route except the health probe requires the `X-Imbue-Identity` header's `owner` flag, parsed with the same lenient pydantic model as the shell (`{"owner": "false"}` is a visitor in both). As in the shell, a request with no header, a malformed one, or one without an `owner` key counts as the owner: no current proxy stamped it, so it came from inside the workspace, which is how agents read the figures. The page shows every chat's name and every command line and can stop chats, none of which a visitor the owner shared one app with should reach.
 - **Writes only from this app's page.** A write must be JSON (a browser cannot send it cross-origin without a CORS preflight the server never approves) and must come from the app's own page: `Sec-Fetch-Site: same-origin`, or for a browser that predates that header, an `Origin` whose first label is the app's unguessable origin label. `Host` cannot be used, because the desktop's forwarder drops it. A write with no `Origin` (curl, an agent's script) is inside the trust boundary.
-- **Previews.** A preview of a proposed change to this app (`activity-app --no-register`) registers nothing and installs no recorder.
-- **No raw kill.** The only action is the chat app's own stop.
+- **Previews.** A preview of a proposed change to this app (`activity-app --no-register`) registers nothing and installs no recorder. It reads the live workspace, so it must change nothing in it: every write (a chat's stop or start, an app's stop) answers it `403` in the shell preview's words, the summary says `is_preview`, and the page offers no Stop or Start and says why.
+- **No raw kill.** The only actions are the chat app's own stop and the shell's own Quit.
 
 ## 7. Failure handling
 
-Each reading is taken independently (`readings.py`). If the chat app does not answer, chats are listed by their agents' own names (with no Stop, since a chat id is unknown) and the page says so. If supervisord does not answer, apps read "state unknown", background services drop out of the list, and their memory is counted as plumbing, again with a note. Every outbound call has a hard timeout (chat list 5 s, supervisord 2 s, chat stop or start 60 s), so a hung dependency slows a refresh to its timeout rather than hanging the page. An unreadable registry, ledger or history file degrades to a note or an empty chart that explains itself ("Nothing recorded yet", "Recording has paused"), never to a failed page. Parsing of every other app's output is lenient (`extra="ignore"`), so a newer chat app or registry does not break an older System Monitor. The page keeps showing the last good figures when a refresh fails, and says since when they are stale.
+Each reading is taken independently (`readings.py`). If the chat app does not answer, chats are listed by their agents' own names (with no Stop, since a chat id is unknown) and the page says so. If supervisord does not answer, apps read "state unknown", background services drop out of the list, and their memory is counted as plumbing, again with a note. Every outbound call has a hard timeout (chat list 5 s, supervisord 2 s, chat stop or start 60 s, the shell's Quit 30 s), so a hung dependency slows a refresh to its timeout rather than hanging the page. An unreadable registry, ledger or history file degrades to a note or an empty chart that explains itself ("Nothing recorded yet", "Recording has paused"), never to a failed page. Parsing of every other app's output is lenient (`extra="ignore"`), so a newer chat app or registry does not break an older System Monitor. The page keeps showing the last good figures when a refresh fails, and says since when they are stale.
 
 ## 8. Wiring into the template
 
@@ -153,10 +167,10 @@ Each reading is taken independently (`readings.py`). If the chat app does not an
 
 ## 9. Testing
 
-- **Backend** (`cd system/apps/activity && uv run pytest`): 113 tests, 96% line coverage, covering each memory source and the closing point under cloud, runc and gVisor layouts; Linux and gVisor `/proc` (including non-UTF-8 `smaps`); crediting and the first-to-close prediction; the chat stop re-check; the owner and write guards (with a regression test for the dropped `Host`); storage grouping and the concurrent-measure lock; history append, rotation, grouping and corrupt bytes; closure descriptions, including malformed ledger records; the cron entry; and the supervisord reader against a real unix-socket XML-RPC server. The app's ratchets (`test_activity_ratchets.py`) pass, and `ty` and `ruff` are clean.
-- **Frontend** (`cd system && npm test --workspace=apps/activity/frontend`): 65 vitest tests: the poller's stop-and-start-while-a-read-is-in-flight behaviour, stale range replies, the forbidden state, chat-action results, the stop dialog's re-ask flow, the memory bar's scaling, the storage tab, chart geometry and rendering (gaps, closures, empty and paused states), copy, and WCAG AA contrast of every colour pair against `workspace_ui`'s tokens, with a scan that fails if a view uses a text colour no pair checks.
+- **Backend** (`cd system/apps/activity && uv run pytest`): 128 tests, 97% line coverage, covering each memory source and the closing point under cloud, runc and gVisor layouts; Linux and gVisor `/proc` (including non-UTF-8 `smaps`); crediting and the first-to-close prediction; the chat stop re-check; which apps may be stopped, the forwarded Quit, its refusals and previews; the owner and write guards (with a regression test for the dropped `Host`); storage grouping and the concurrent-measure lock; history append, rotation, grouping and corrupt bytes; closure descriptions, including malformed ledger records; the cron entry; and the supervisord reader against a real unix-socket XML-RPC server. The app's ratchets (`test_activity_ratchets.py`) pass, and `ty` and `ruff` are clean.
+- **Frontend** (`cd system && npm test --workspace=apps/activity/frontend`): 70 vitest tests: the app stop's confirmation, refusal, keep-running and stale-row paths and its absence in previews; the poller's stop-and-start-while-a-read-is-in-flight behaviour, stale range replies, the forbidden state, chat-action results, the stop dialog's re-ask flow, the memory bar's scaling, the storage tab, chart geometry and rendering (gaps, closures, empty and paused states), copy, and WCAG AA contrast of every colour pair against `workspace_ui`'s tokens, with a scan that fails if a view uses a text colour no pair checks.
 - **Template suites**, run as CI runs them in a workspace-image container on the whole stack: the root suite (3370 passed; 2 tests fail identically on unmodified `main`), and `system_interface` (687) and `chat` (2026) with `-m ''`. On each layer of the stack, the app's suites, every frontend check and the always-run checks pass.
-- **Manual**: the app against seeded history and a seeded shed ledger, checked at desktop and phone widths; the recorder run by hand; the memory and storage tabs, ask-in-chat and stopping a chat in a local Studio workspace.
+- **Manual**: the app against seeded history and a seeded shed ledger, checked at desktop and phone widths; the recorder run by hand; the memory and storage tabs, ask-in-chat, stopping a chat and stopping an app in a local Studio workspace.
 
 ## 10. Limitations
 
@@ -171,7 +185,6 @@ Each reading is taken independently (`readings.py`). If the chat app does not an
 
 ## 11. Next steps
 
-- **Stop apps** (stacked change): stop a non-critical app through the shell's own Quit, never the browser or this app.
 - **Disk quota on cloud workspaces**: publish the VM's disk use into the container as `.host-meminfo` does for memory, so the storage tab can show used against the limit.
 - **Shared libraries**: move the background server, the supervisord socket client and the identity parsing into shared libraries (`app_manifest` or a new one), so the apps that copy them cannot drift.
 - **Design-only ideas**: agent hooks that read the history before starting a memory-heavy command; automatic stopping of long-idle chats. The latter conflicts with "memory is the user's to spend" (`freeing-memory.md`) and needs the user's opt-in, so it stays a proposal.

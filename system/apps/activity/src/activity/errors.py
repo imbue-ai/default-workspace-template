@@ -12,3 +12,7 @@ class ChatAppUnavailableError(ActivityError, OSError):
 
 class SupervisorUnavailableError(ActivityError, OSError):
     """supervisord's socket could not be reached, or did not answer with a list of programs."""
+
+
+class ShellUnavailableError(ActivityError, OSError):
+    """The desktop shell could not be reached, or refused what it was asked."""

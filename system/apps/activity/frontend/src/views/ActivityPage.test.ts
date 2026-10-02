@@ -7,7 +7,7 @@ import m from "mithril";
 import { buttonNamed } from "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 
-import type { ChatActionResult } from "../models/summary";
+import type { AppStopResult, ChatActionResult } from "../models/summary";
 import { LOADING_HISTORY, item, summary } from "../testing/records";
 import { ActivityPage } from "./ActivityPage";
 
@@ -30,6 +30,7 @@ describe("the stop dialog", () => {
         refreshFailure: null,
         nowMs: Date.now(),
         onAskInChat: () => true,
+        onAppStop: async (): Promise<AppStopResult> => ({ kind: "done" }),
         history: LOADING_HISTORY,
         onChatAction: async (chatId, action, isInterruptConfirmed) => {
           calls.push([chatId, action, isInterruptConfirmed]);
@@ -63,6 +64,7 @@ describe("the stop dialog", () => {
         refreshFailure: { since: Date.UTC(2026, 9, 1, 12, 0), message: "The page answered 500." },
         nowMs: Date.now(),
         onAskInChat: () => true,
+        onAppStop: async (): Promise<AppStopResult> => ({ kind: "done" }),
         history: LOADING_HISTORY,
         onChatAction: async (): Promise<ChatActionResult> => ({ kind: "done" }),
       }),
@@ -78,6 +80,7 @@ describe("the stop dialog", () => {
         refreshFailure: null,
         nowMs: Date.now(),
         onAskInChat: () => true,
+        onAppStop: async (): Promise<AppStopResult> => ({ kind: "done" }),
         history: LOADING_HISTORY,
         onChatAction: async (): Promise<ChatActionResult> => ({ kind: "done" }),
       }),
@@ -96,6 +99,7 @@ describe("the memory bar", () => {
         refreshFailure: null,
         nowMs: Date.now(),
         onAskInChat: () => true,
+        onAppStop: async (): Promise<AppStopResult> => ({ kind: "done" }),
         onChatAction: async (): Promise<ChatActionResult> => ({ kind: "done" }),
         history: LOADING_HISTORY,
       }),
@@ -120,5 +124,156 @@ describe("the memory bar", () => {
       item({ item_id: "app:b", name: "B", kind: "APP", chat_id: null, rss_kib: 4 * GIB_KIB }),
     ]);
     expect(widths.reduce((sum, width) => sum + width, 0)).toBeCloseTo(42.5, 5);
+  });
+});
+
+describe("stopping an app", () => {
+  afterEach(unmountViews);
+
+  const FILES = item({
+    item_id: "app:files",
+    name: "File Viewer",
+    kind: "APP",
+    chat_id: null,
+    state: "RUNNING",
+    app_name: "files",
+    is_stoppable: true,
+    is_restarted_on_open: true,
+    rss_kib: 120 * 1024,
+  });
+  const BROWSER = item({
+    item_id: "app:browser",
+    name: "Browser",
+    kind: "APP",
+    chat_id: null,
+    state: "RUNNING",
+    app_name: "browser",
+    always_on_reason: "Running because agents use it",
+    is_restarted_on_open: true,
+    rss_kib: 900 * 1024,
+  });
+
+  function mountApps(
+    items: ReturnType<typeof item>[],
+    onAppStop: (appName: string) => Promise<AppStopResult>,
+    isPreview: boolean,
+  ): HTMLElement {
+    const loaded = { ...summary("COMFORTABLE", items, null), is_preview: isPreview };
+    return mountView(() =>
+      m(ActivityPage, {
+        state: { kind: "loaded", summary: loaded },
+        refreshFailure: null,
+        nowMs: Date.now(),
+        onAskInChat: () => true,
+        onAppStop,
+        onChatAction: async (): Promise<ChatActionResult> => ({ kind: "done" }),
+        history: LOADING_HISTORY,
+      }),
+    );
+  }
+
+  function rowButtons(root: ParentNode, itemId: string): string[] {
+    const row = root.querySelector(`[data-item-id="${itemId}"]`);
+    if (row === null) throw new Error(`no row ${itemId}`);
+    return Array.from(row.querySelectorAll("button")).map((button) => button.textContent?.trim() ?? "");
+  }
+
+  it("asks first, saying what closes and that it comes back, then quits it through the desktop", async () => {
+    const stopped: string[] = [];
+    const root = mountApps(
+      [FILES, BROWSER],
+      async (appName) => {
+        stopped.push(appName);
+        return { kind: "done" };
+      },
+      false,
+    );
+    expect(rowButtons(root, "app:browser")).not.toContain("Stop");
+    expect(root.querySelector('[data-item-id="app:browser"]')?.textContent).toContain("Always on");
+
+    expect(rowButtons(root, "app:files")).toContain("Stop");
+    const filesRow = root.querySelector('[data-item-id="app:files"]') as HTMLElement;
+    buttonNamed(filesRow, "Stop").click();
+    m.redraw.sync();
+    expect(document.body.textContent).toContain("including those of anyone you've shared it with");
+    expect(document.body.textContent).toContain("It starts again the next time it's opened.");
+    expect(document.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe('Stop "File Viewer"?');
+    buttonNamed(document.body, "Stop app").click();
+    await settle();
+
+    expect(stopped).toEqual(["files"]);
+    expect(document.body.textContent).toContain('Stopped "File Viewer". Freed about 120 MB.');
+  });
+
+  it("stops nothing when the user keeps it running, and says why when the desktop refuses", async () => {
+    const stopped: string[] = [];
+    const root = mountApps(
+      [FILES],
+      async (appName) => {
+        stopped.push(appName);
+        return { kind: "failed", message: "the desktop refused to stop the app: busy" };
+      },
+      false,
+    );
+    const filesRow = root.querySelector('[data-item-id="app:files"]') as HTMLElement;
+    buttonNamed(filesRow, "Stop").click();
+    m.redraw.sync();
+    buttonNamed(document.body, "Keep running").click();
+    m.redraw.sync();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(stopped).toEqual([]);
+
+    buttonNamed(filesRow, "Stop").click();
+    m.redraw.sync();
+    buttonNamed(document.body, "Stop app").click();
+    await settle();
+    expect(stopped).toEqual(["files"]);
+    expect(document.body.textContent).toContain(
+      'Couldn\'t stop "File Viewer": the desktop refused to stop the app: busy',
+    );
+  });
+
+  it("does not stop an app that a refresh found already stopped while the dialog was open", async () => {
+    const stopped: string[] = [];
+    let files = FILES;
+    const root = mountView(() =>
+      m(ActivityPage, {
+        state: { kind: "loaded", summary: summary("COMFORTABLE", [files], null) },
+        refreshFailure: null,
+        nowMs: Date.now(),
+        onAskInChat: () => true,
+        onAppStop: async (appName): Promise<AppStopResult> => {
+          stopped.push(appName);
+          return { kind: "done" };
+        },
+        onChatAction: async (): Promise<ChatActionResult> => ({ kind: "done" }),
+        history: LOADING_HISTORY,
+      }),
+    );
+    buttonNamed(root.querySelector('[data-item-id="app:files"]') as HTMLElement, "Stop").click();
+    m.redraw.sync();
+    files = { ...FILES, state: "STOPPED" };
+    m.redraw.sync();
+    buttonNamed(document.body, "Stop app").click();
+    await settle();
+    expect(stopped).toEqual([]);
+    expect(document.body.textContent).toContain('"File Viewer" has already stopped.');
+  });
+
+  it("offers no Stop for an app that is not running, nor for anything in a preview", () => {
+    const stoppedFiles = { ...FILES, state: "STOPPED" };
+    const root = mountApps([stoppedFiles], async () => ({ kind: "done" }), false);
+    expect(rowButtons(root, "app:files")).not.toContain("Stop");
+    unmountViews();
+
+    const preview = mountApps(
+      [FILES, BROWSER, item({ item_id: "chat:c1", name: "Wallpaper", chat_id: "c1" })],
+      async () => ({ kind: "done" }),
+      true,
+    );
+    expect(rowButtons(preview, "app:files")).not.toContain("Stop");
+    expect(rowButtons(preview, "chat:c1")).not.toContain("Stop");
+    expect(preview.textContent).toContain("can't stop anything in it");
+    expect(preview.querySelector('[data-item-id="app:browser"]')?.textContent).toContain("Always on");
   });
 });

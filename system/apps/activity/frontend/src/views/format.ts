@@ -89,7 +89,9 @@ export function isStopSuggested(item: ActivityItem, nowMs: number): boolean {
 export function programStateLine(item: ActivityItem): string {
   if (item.state === "UNKNOWN") return `${item.description} · state unknown right now`;
   if (item.state !== "RUNNING") {
-    return item.is_on_demand ? "Not running · starts when you open it" : `Not running (${item.state.toLowerCase()})`;
+    return item.is_restarted_on_open
+      ? "Not running · starts when you open it"
+      : `Not running (${item.state.toLowerCase()})`;
   }
   if (item.kind === "APP" && item.is_on_demand) return "Stops by itself a minute after its last window closes";
   if (item.kind === "APP" && item.always_on_reason !== null) return `${item.description} · ${item.always_on_reason}`;

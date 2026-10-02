@@ -7,7 +7,9 @@ it?") in their terms first, and keeps the raw readings one click away.
 - A headline: memory in use against the workspace's limit, with a plain status (room to spare, getting tight, about
   to start closing things) and where the closing starts.
 - What is using it, grouped as the user knows it: chats (every harness), the desktop's apps, and background services.
-  An idle chat can be stopped from here through the chat app's own stop; it starts again on its next message.
+  An idle chat can be stopped from here through the chat app's own stop; it starts again on its next message. An app
+  can be stopped through the desktop's own Quit (its windows close, and it starts again when next opened), except a
+  critical one, the browser (agents drive it) and System Monitor itself.
 - The process each figure is made of, with its command line and shedding priority, and which process earlyoom would
   most likely shed first.
 - Memory over time (the last hour, day or week), with the point where closing starts, a mark wherever the memory
@@ -33,6 +35,13 @@ environment (`system/scripts/build_workspace.sh`), serving on `http://127.0.0.1:
   week's, read from earlyoom's shed ledger (`oom_priority.paths.shed_ledger_path()`) and described in plain words.
   Closures the kernel makes at the container's own limit are not recorded anywhere and so are not shown.
 - `POST /api/chats/<chat_id>/stop` and `/start`: forwarded to the chat app's own routes.
+- `POST /api/apps/<name>/stop`: forwarded to the shell's `POST /api/apps/<name>/quit` (at `shell_base_url()`, as
+  every app reaches the shell) once the app is checked against the same rule the page offers Stop by
+  (`activity.apps.is_app_stoppable`: the shell's own refusals, plus the browser and this app), since the page's view
+  may be stale and a request need not come from it.
+
+A preview (`activity-app --no-register`) reads the live workspace, so both stops answer it `403` in the shell
+preview's words and the page offers neither.
 - `GET /_static/app_contract.js`: the shell's browser-side contract module, served from this origin as every app
   serves it.
 

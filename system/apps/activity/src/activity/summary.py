@@ -21,6 +21,9 @@ from typing import Final
 
 from pydantic import Field
 
+from activity.apps import BROWSER_APP_NAME
+from activity.apps import is_app_stoppable
+from activity.apps import is_quittable_by_shell
 from activity.chats import ChatInfo
 from activity.memory_reading import ClosingPoint
 from activity.memory_reading import MemoryCloser
@@ -41,7 +44,6 @@ from oom_priority.badness import predict_ranking
 TIGHT_FROM_CLOSING_FRACTION: Final[float] = 0.83
 CRITICAL_FROM_CLOSING_FRACTION: Final[float] = 0.98
 
-BROWSER_APP_NAME: Final[str] = "browser"
 PLUMBING_ITEM_ID: Final[str] = "plumbing"
 UNKNOWN_PROGRAM_STATE: Final[str] = "UNKNOWN"
 RUNNING_AGENT_STATE: Final[str] = "running"
@@ -62,6 +64,7 @@ APP_DESCRIPTIONS: Final[dict[str, str]] = {
 ALWAYS_ON_REASONS: Final[dict[str, str]] = {
     "chat": "Needed to talk to your agents",
     "terminal": "Kept ready in case something needs fixing",
+    "browser": "Running because agents use it",
 }
 UNKNOWN_ALWAYS_ON_REASON: Final[str] = "Its app asks to stay running"
 SERVICE_NAMES: Final[dict[str, tuple[str, str]]] = {
@@ -135,7 +138,12 @@ class ActivityItem(FrozenModel):
     last_messaged_at: float | None = Field(description="Epoch seconds of a chat's latest message")
     is_critical: bool = Field(description="Whether the workspace keeps it running (an app the shell never stops)")
     is_on_demand: bool = Field(description="Whether it stops by itself once no window shows it")
-    always_on_reason: str | None = Field(description="Why an always-on app stays running; None otherwise")
+    always_on_reason: str | None = Field(
+        description="Why an app the page offers no Stop for keeps running; None otherwise"
+    )
+    app_name: str | None = Field(description="An app's registry name, for stopping it; None otherwise")
+    is_stoppable: bool = Field(description="Whether the page offers to stop the app through the desktop's Quit")
+    is_restarted_on_open: bool = Field(description="Whether the desktop starts the app again on its next request")
     rss_kib: int = Field(description="The summed memory of its processes, in KiB")
     processes: tuple[ProcessView, ...] = Field(description="Its processes, largest first")
 
@@ -174,6 +182,7 @@ class ActivitySummary(FrozenModel):
     are_programs_known: bool = Field(description="Whether supervisord answered, so apps and services carry states")
     likely_first_to_close: LikelyFirstToClose | None = Field(description="The closer's likely next pick, if any")
     notes: tuple[str, ...] = Field(description="What could not be read, in words for the page's details")
+    is_preview: bool = Field(description="Whether this is a preview of a proposed change, which stops nothing")
 
 
 class SummaryInputs(FrozenModel):
@@ -189,6 +198,7 @@ class SummaryInputs(FrozenModel):
     agents: tuple[RegisteredAgent, ...] = Field(description="Agents with live registered processes")
     app_rows: tuple[RegistryRow, ...] = Field(description="The app registry's rows")
     notes: tuple[str, ...] = Field(description="What could not be read")
+    is_preview: bool = Field(description="Whether this is a preview of a proposed change, which stops nothing")
 
 
 @pure
@@ -337,6 +347,9 @@ def build_summary(inputs: SummaryInputs) -> ActivitySummary:
         is_critical: bool,
         is_on_demand: bool,
         always_on_reason: str | None,
+        app_name: str | None,
+        is_stoppable: bool,
+        is_restarted_on_open: bool,
     ) -> ActivityItem:
         credited = processes_by_item.get(item_id, [])
         return ActivityItem(
@@ -351,6 +364,9 @@ def build_summary(inputs: SummaryInputs) -> ActivitySummary:
             is_critical=is_critical,
             is_on_demand=is_on_demand,
             always_on_reason=always_on_reason,
+            app_name=app_name,
+            is_stoppable=is_stoppable,
+            is_restarted_on_open=is_restarted_on_open,
             rss_kib=sum(process.rss_kib for process in credited),
             processes=_process_views(credited),
         )
@@ -368,6 +384,9 @@ def build_summary(inputs: SummaryInputs) -> ActivitySummary:
             is_critical=False,
             is_on_demand=False,
             always_on_reason=None,
+            app_name=None,
+            is_stoppable=False,
+            is_restarted_on_open=False,
         )
         for chat in inputs.chats or ()
     ]
@@ -385,6 +404,9 @@ def build_summary(inputs: SummaryInputs) -> ActivitySummary:
             is_critical=False,
             is_on_demand=False,
             always_on_reason=None,
+            app_name=None,
+            is_stoppable=False,
+            is_restarted_on_open=False,
         )
         for agent in unchatted_agents
     ]
@@ -401,7 +423,12 @@ def build_summary(inputs: SummaryInputs) -> ActivitySummary:
             last_messaged_at=None,
             is_critical=row.critical,
             is_on_demand=row.stop_when_no_windows,
-            always_on_reason=ALWAYS_ON_REASONS.get(row.name, UNKNOWN_ALWAYS_ON_REASON) if row.critical else None,
+            always_on_reason=ALWAYS_ON_REASONS.get(row.name, UNKNOWN_ALWAYS_ON_REASON)
+            if row.critical
+            else ALWAYS_ON_REASONS.get(row.name),
+            app_name=str(row.name),
+            is_stoppable=is_app_stoppable(row, inputs.app_rows),
+            is_restarted_on_open=is_quittable_by_shell(row, inputs.app_rows),
         )
         for row in visible_apps
     )
@@ -419,6 +446,9 @@ def build_summary(inputs: SummaryInputs) -> ActivitySummary:
             is_critical=True,
             is_on_demand=False,
             always_on_reason=None,
+            app_name=None,
+            is_stoppable=False,
+            is_restarted_on_open=False,
         )
         for program in programs
         if program.pid is not None and app_for_program(program.name, inputs.app_rows) is None
@@ -435,6 +465,9 @@ def build_summary(inputs: SummaryInputs) -> ActivitySummary:
         is_critical=True,
         is_on_demand=False,
         always_on_reason=None,
+        app_name=None,
+        is_stoppable=False,
+        is_restarted_on_open=False,
     )
     services = tuple(sorted(service_items, key=lambda service: -service.rss_kib)) + (plumbing,)
 
@@ -464,4 +497,5 @@ def build_summary(inputs: SummaryInputs) -> ActivitySummary:
         are_programs_known=inputs.programs is not None,
         likely_first_to_close=first_to_close,
         notes=inputs.notes,
+        is_preview=inputs.is_preview,
     )

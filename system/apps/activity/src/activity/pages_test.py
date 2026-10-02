@@ -18,9 +18,11 @@ from activity.pages import build_pages_blueprint
 from activity.readings import ReadingSources
 from activity.testing import FakeChatApp
 from activity.testing import FakeRunner
+from activity.testing import FakeShell
 from activity.testing import chat_snapshot
 from activity.testing import completed
 from activity.testing import process_info
+from activity.testing import routed_client
 from activity.testing import write_fake_process
 from activity.testing import write_registry
 
@@ -29,7 +31,12 @@ _JSON = "application/json"
 
 
 def _client(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chat_app: FakeChatApp, du_runner: RunCommand | None = None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    chat_app: FakeChatApp,
+    du_runner: RunCommand | None = None,
+    shell: FakeShell | None = None,
+    is_preview: bool = False,
 ) -> FlaskClient:
     proc_dir = tmp_path / "proc"
     write_fake_process(proc_dir, 415, "supervisord", 1, 31 * 1024, -1000, ["supervisord"])
@@ -55,7 +62,9 @@ def _client(
                 "url": "http://localhost:8040",
                 "label": "activity-as27k3mv",
                 "display_name": "Activity",
+                "program": "activity",
             },
+            {"name": "browser", "url": "http://localhost:8081", "display_name": "Browser", "program": "browser"},
             {
                 "name": "files",
                 "url": "http://localhost:8300",
@@ -85,7 +94,13 @@ def _client(
                 proc_dir=proc_dir,
                 registry_path=registry_path,
             ),
-            client=chat_app.client(),
+            client=routed_client(
+                {
+                    "chat.test": chat_app.handle,
+                    "127.0.0.1:8010": chat_app.handle,
+                    "shell.test": (shell if shell is not None else FakeShell()).handle,
+                }
+            ),
             read_process_info=lambda: [process_info("chat", "RUNNING", 544), process_info("files", "STOPPED", 0)],
             run_command=runner,
             now=lambda: _NOW,
@@ -93,6 +108,8 @@ def _client(
             clock=lambda: 0.0,
             history_path=tmp_path / "memory-history.tsv",
             shed_ledger_path=tmp_path / "shed.jsonl",
+            shell_url="http://shell.test",
+            is_preview=is_preview,
         )
     )
     return app.test_client()
@@ -124,7 +141,12 @@ def test_the_summary_credits_the_chat_and_reads_the_cgroup_limit(
     assert [(chat["name"], chat["rss_kib"] // 1024, chat["harness"]) for chat in summary["chats"]] == [
         ("Wallpaper", 330, "claude")
     ]
-    assert {app["name"]: app["state"] for app in summary["apps"]} == {"Chat": "RUNNING", "File Viewer": "STOPPED"}
+    assert {app["name"]: app["state"] for app in summary["apps"]} == {
+        "Chat": "RUNNING",
+        "File Viewer": "STOPPED",
+        "Activity": "UNKNOWN",
+        "Browser": "UNKNOWN",
+    }
     assert summary["notes"] == []
 
 
@@ -289,3 +311,67 @@ def test_the_history_holds_recorded_readings_and_the_memory_guards_closures(
     assert view["is_recording"] is True
     assert [closure["what"] for closure in view["closures_in_range"]] == ["a program an agent was running (pytest)"]
     assert client.get("/api/history?range=decade").status_code == 400
+
+
+def test_stopping_an_app_asks_the_desktop_to_quit_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    shell = FakeShell()
+    response = _client(tmp_path, monkeypatch, _chat_app("idle"), shell=shell).post("/api/apps/files/stop", json={})
+    assert response.status_code == 200
+    assert shell.quits == ["files"]
+
+
+def test_an_app_the_page_never_stops_is_refused_without_asking_the_desktop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell = FakeShell()
+    client = _client(tmp_path, monkeypatch, _chat_app("idle"), shell=shell)
+    assert client.post("/api/apps/chat/stop", json={}).status_code == 400
+    assert client.post("/api/apps/activity/stop", json={}).status_code == 400
+    assert client.post("/api/apps/browser/stop", json={}).status_code == 400
+    assert client.post("/api/apps/nonesuch/stop", json={}).status_code == 404
+    assert shell.quits == []
+
+
+def test_an_app_stop_with_the_registry_unreadable_is_refused_rather_than_guessed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell = FakeShell()
+    client = _client(tmp_path, monkeypatch, _chat_app("idle"), shell=shell)
+    (tmp_path / "apps.toml").write_text("this is not [[[ toml")
+    assert client.post("/api/apps/files/stop", json={}).status_code == 502
+    assert shell.quits == []
+
+
+def test_a_preview_reads_the_live_workspace_but_stops_nothing_in_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chat_app = _chat_app("idle")
+    shell = FakeShell()
+    client = _client(tmp_path, monkeypatch, chat_app, shell=shell, is_preview=True)
+    assert client.get("/api/summary").get_json()["is_preview"] is True
+    chat_stop = client.post("/api/chats/c1/stop", json={"is_interrupt_confirmed": True})
+    app_stop = client.post("/api/apps/files/stop", json={})
+    assert (chat_stop.status_code, app_stop.status_code) == (403, 403)
+    assert "preview" in app_stop.get_json()["detail"]
+    assert (chat_app.actions, shell.quits) == ([], [])
+
+
+def test_a_desktop_that_refuses_the_quit_is_reported_with_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = _client(tmp_path, monkeypatch, _chat_app("idle"), shell=FakeShell(quit_status=400)).post(
+        "/api/apps/files/stop", json={}
+    )
+    assert response.status_code == 502
+    assert "the desktop is busy" in response.get_json()["detail"]
+
+
+def test_another_apps_page_cannot_stop_an_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    shell = FakeShell()
+    response = _client(tmp_path, monkeypatch, _chat_app("idle"), shell=shell).post(
+        "/api/apps/files/stop",
+        json={},
+        headers={"Origin": "https://files-x1.agent-1.localhost:8421", "Sec-Fetch-Site": "same-site"},
+    )
+    assert response.status_code == 403
+    assert shell.quits == []

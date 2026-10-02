@@ -11,7 +11,14 @@ import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
 import { Modal, MODAL_MESSAGE_CLASS } from "@imbue/workspace-ui/src/components/Modal";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { REFRESH_INTERVAL_MS } from "../models/summary";
-import type { ActivityItem, ActivitySummary, ChatActionResult, RefreshFailure, SummaryState } from "../models/summary";
+import type {
+  ActivityItem,
+  ActivitySummary,
+  AppStopResult,
+  ChatActionResult,
+  RefreshFailure,
+  SummaryState,
+} from "../models/summary";
 import {
   chatStateLine,
   formatBytes,
@@ -49,6 +56,8 @@ export interface ActivityPageAttrs {
     action: "stop" | "start",
     isInterruptConfirmed: boolean,
   ) => Promise<ChatActionResult>;
+  /** Quit an app through the desktop: its windows close, and it starts again when next opened. */
+  readonly onAppStop: (appName: string) => Promise<AppStopResult>;
   /** Draft ``text``, unsent, into the user's chat; false when there is no desktop to draft into. */
   readonly onAskInChat: (text: string) => boolean;
   readonly history: HistoryChartAttrs;
@@ -73,6 +82,7 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
   const openDetails = new Set<string>();
   let isServicesOpen = false;
   let pendingStop: PendingStop | null = null;
+  let pendingAppStop: ActivityItem | null = null;
   let isActionRunning = false;
   let actionMessage: string | null = null;
   let openQuestionId: string | null = null;
@@ -178,6 +188,36 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
         actionMessage = `Couldn't ${action} "${item.name}": ${result.message}`;
         break;
     }
+    clearActionMessageLater();
+    m.redraw();
+  }
+
+  async function runAppStop(attrs: ActivityPageAttrs, item: ActivityItem): Promise<void> {
+    if (item.app_name === null) return;
+    // The dialog shows the row as it was when opened; a refresh since may have found the app already stopped.
+    const current =
+      attrs.state.kind === "loaded" ? attrs.state.summary.apps.find((app) => app.item_id === item.item_id) : undefined;
+    if (current === undefined || current.state !== "RUNNING") {
+      pendingAppStop = null;
+      actionMessage = `"${item.name}" has already stopped.`;
+      clearActionMessageLater();
+      return;
+    }
+    isActionRunning = true;
+    actionMessage = null;
+    m.redraw();
+    const result = await attrs.onAppStop(item.app_name);
+    isActionRunning = false;
+    pendingAppStop = null;
+    actionMessage =
+      result.kind === "done"
+        ? `Stopped "${item.name}". Freed about ${formatKib(item.rss_kib)}.`
+        : `Couldn't stop "${item.name}": ${result.message}`;
+    clearActionMessageLater();
+    m.redraw();
+  }
+
+  function clearActionMessageLater(): void {
     const shownMessage = actionMessage;
     setTimeout(() => {
       if (actionMessage === shownMessage) {
@@ -185,7 +225,6 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
         m.redraw();
       }
     }, ACTION_MESSAGE_MS);
-    m.redraw();
   }
 
   function processTable(item: ActivityItem): m.Vnode {
@@ -220,6 +259,31 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
     );
   }
 
+  /** A row's action: Stop or Start where the page offers one (never in a preview, which changes nothing), else why
+   * a running app the page offers no Stop for keeps running. */
+  function rowAction(
+    item: ActivityItem,
+    isChat: boolean,
+    isStopped: boolean,
+    isPreview: boolean,
+    attrs: ActivityPageAttrs,
+  ): m.Children {
+    const button = (variant: "ghost" | "secondary", label: string, onclick: () => void): m.Vnode =>
+      m(Button, { variant, sm: true, disabled: isActionRunning, onclick }, label);
+    if (!isPreview && isChat) {
+      return isStopped
+        ? button("ghost", "Start", () => runAction(attrs, item, "start", false))
+        : button("secondary", "Stop", () => (pendingStop = stopFor(item)));
+    }
+    if (!isPreview && item.is_stoppable && item.state === "RUNNING") {
+      return button("secondary", "Stop", () => (pendingAppStop = item));
+    }
+    if (item.always_on_reason !== null && item.state === "RUNNING") {
+      return m("span", { class: badgeClass("neutral"), title: item.always_on_reason }, "Always on");
+    }
+    return null;
+  }
+
   function itemRow(item: ActivityItem, summary: ActivitySummary, usedKib: number, attrs: ActivityPageAttrs): m.Vnode {
     const isFirstToClose = summary.likely_first_to_close?.item_id === item.item_id;
     const harness = harnessName(item.harness);
@@ -227,31 +291,7 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
     const isAgent = isChat || item.kind === "HELPER_AGENT" || item.kind === "AGENT";
     const isStopped = isAgent ? item.state === "stopped" : item.state !== "RUNNING" && item.state !== "UNKNOWN";
     const subLine = isAgent ? chatStateLine(item, attrs.nowMs) : programStateLine(item);
-    const action: m.Children = isChat
-      ? isStopped
-        ? m(
-            Button,
-            {
-              variant: "ghost",
-              sm: true,
-              disabled: isActionRunning,
-              onclick: () => runAction(attrs, item, "start", false),
-            },
-            "Start",
-          )
-        : m(
-            Button,
-            {
-              variant: "secondary",
-              sm: true,
-              disabled: isActionRunning,
-              onclick: () => (pendingStop = stopFor(item)),
-            },
-            "Stop",
-          )
-      : item.always_on_reason !== null
-        ? m("span", { class: badgeClass("neutral"), title: item.always_on_reason }, "Always on")
-        : null;
+    const action = rowAction(item, isChat, isStopped, summary.is_preview, attrs);
     const sharePercent = usedKib > 0 ? Math.min(100, (100 * item.rss_kib) / usedKib) : 0;
     const share = formatShare(item.rss_kib, usedKib);
     return m(
@@ -514,51 +554,74 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
     ]);
   }
 
-  function stopDialog(attrs: ActivityPageAttrs): m.Children {
-    if (pendingStop === null) return null;
-    const { item, isWorking, hasStartedWorking } = pendingStop;
-    const hasHelpers =
-      attrs.state.kind === "loaded" && attrs.state.summary.chats.some((other) => other.kind === "HELPER_AGENT");
+  /** The confirmation both stops share: what will happen, "Keep running", and the stop itself, focused so Enter
+   * confirms it. Neither closes while the stop runs. */
+  function confirmStop(
+    title: string,
+    message: string,
+    confirmLabel: string,
+    onConfirm: () => void,
+    onClose: () => void,
+  ): m.Children {
     const close = (): void => {
-      if (!isActionRunning) pendingStop = null;
+      if (!isActionRunning) onClose();
     };
     return m(
       Modal,
       {
         onDismiss: close,
         onEscape: close,
-        title: `Stop "${item.name}"?`,
-        card: { role: "dialog", "aria-modal": "true", "aria-label": `Stop "${item.name}"?` },
+        title,
+        card: { role: "dialog", "aria-modal": "true", "aria-label": title },
         actions: [
           m(Button, { variant: "secondary", disabled: isActionRunning, onclick: close }, "Keep running"),
-          // Focus lands on the action the dialog is for, so Enter confirms it.
           m(
             "span",
             { oncreate: (vnode: m.VnodeDOM) => vnode.dom.querySelector("button")?.focus() },
             m(
               Button,
-              {
-                variant: "primary",
-                disabled: isActionRunning,
-                onclick: () => runAction(attrs, item, "stop", isWorking),
-              },
-              isActionRunning ? "Stopping…" : "Stop chat",
+              { variant: "primary", disabled: isActionRunning, onclick: onConfirm },
+              isActionRunning ? "Stopping…" : confirmLabel,
             ),
           ),
         ],
       },
-      m(
-        "p",
-        { class: MODAL_MESSAGE_CLASS },
-        (hasStartedWorking
-          ? "It started working since you opened this. Stopping now interrupts what it's doing. "
-          : isWorking
-            ? "It's working right now. Stopping interrupts what it's doing. "
-            : "") +
-          `It stops using memory (about ${formatKib(item.rss_kib)}). The conversation is kept, and the chat picks ` +
-          "up where it left off when you message it." +
-          (hasHelpers ? " Helper agents listed separately keep running; stopping a chat doesn't stop them." : ""),
-      ),
+      m("p", { class: MODAL_MESSAGE_CLASS }, message),
+    );
+  }
+
+  function stopDialog(attrs: ActivityPageAttrs): m.Children {
+    if (pendingStop === null) return null;
+    const { item, isWorking, hasStartedWorking } = pendingStop;
+    const hasHelpers =
+      attrs.state.kind === "loaded" && attrs.state.summary.chats.some((other) => other.kind === "HELPER_AGENT");
+    return confirmStop(
+      `Stop "${item.name}"?`,
+      (hasStartedWorking
+        ? "It started working since you opened this. Stopping now interrupts what it's doing. "
+        : isWorking
+          ? "It's working right now. Stopping interrupts what it's doing. "
+          : "") +
+        `It stops using memory (about ${formatKib(item.rss_kib)}). The conversation is kept, and the chat picks ` +
+        "up where it left off when you message it." +
+        (hasHelpers ? " Helper agents listed separately keep running; stopping a chat doesn't stop them." : ""),
+      "Stop chat",
+      () => runAction(attrs, item, "stop", isWorking),
+      () => (pendingStop = null),
+    );
+  }
+
+  function appStopDialog(attrs: ActivityPageAttrs): m.Children {
+    if (pendingAppStop === null) return null;
+    const item = pendingAppStop;
+    return confirmStop(
+      `Stop "${item.name}"?`,
+      `Its windows close on every desktop, including those of anyone you've shared it with (pinned windows stay), ` +
+        `and it stops using memory (about ${formatKib(item.rss_kib)}). It starts again the next time it's opened. ` +
+        "Anything it hadn't saved may be lost.",
+      "Stop app",
+      () => runAppStop(attrs, item),
+      () => (pendingAppStop = null),
     );
   }
 
@@ -587,6 +650,13 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
                 m("h2", { class: "m-0 type-heading-lg text-primary text-balance" }, headline.title),
                 m("p", { class: "m-0 type-body text-secondary" }, headline.body),
               ]),
+          summary.is_preview
+            ? m(
+                "p",
+                { class: "m-0 rounded-md bg-warning-surface px-3 py-2 type-helper text-primary", role: "status" },
+                "This is a preview of a proposed change to System Monitor. It shows the live workspace but can't stop anything in it.",
+              )
+            : null,
           attrs.refreshFailure === null
             ? null
             : m(
@@ -666,6 +736,7 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
           ),
         ]),
         stopDialog(attrs),
+        appStopDialog(attrs),
       ];
     },
   };

@@ -157,6 +157,7 @@ def _inputs(chats: tuple[ChatInfo, ...] | None, programs: tuple[SupervisedProgra
             _row("files", "files", False, True),
         ),
         notes=(),
+        is_preview=False,
     )
 
 
@@ -202,6 +203,16 @@ def test_apps_services_and_plumbing_carry_their_own_processes_and_reasons() -> N
     assert apps["Terminal"].rss_kib // 1024 == 65
     assert apps["Terminal"].always_on_reason == ALWAYS_ON_REASONS["terminal"]
     assert (apps["Files"].state, apps["Files"].rss_kib, apps["Files"].always_on_reason) == ("STOPPED", 0, None)
+    assert [
+        (name, apps[name].app_name, apps[name].is_stoppable, apps[name].is_restarted_on_open)
+        for name in ("Chat", "Terminal", "Files")
+    ] == [
+        ("Chat", "chat", False, False),
+        ("Terminal", "terminal", False, False),
+        ("Files", "files", True, True),
+    ]
+    assert summary.is_preview is False
+    assert all(item.app_name is None and not item.is_stoppable for item in (*summary.chats, *summary.services))
     services = {item.item_id: item for item in summary.services}
     assert services["service:agent-observer"].name == "Chat activity tracker"
     assert services[PLUMBING_ITEM_ID].rss_kib // 1024 == 31

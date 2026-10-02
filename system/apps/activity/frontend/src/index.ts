@@ -24,6 +24,7 @@ import {
   getRefreshFailure,
   getSummaryState,
   refreshNow,
+  requestAppStop,
   requestChatAction,
   startRefreshing,
   stopRefreshing,
@@ -145,6 +146,11 @@ function bootstrap(): void {
                   },
                   onChatAction: async (chatId, action, isInterruptConfirmed) => {
                     const result = await requestChatAction(chatId, action, isInterruptConfirmed);
+                    await refreshNow();
+                    return result;
+                  },
+                  onAppStop: async (appName) => {
+                    const result = await requestAppStop(appName);
                     await refreshNow();
                     return result;
                   },

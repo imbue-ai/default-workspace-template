@@ -10,6 +10,7 @@ import httpx
 from flask import Flask
 from pydantic import Field
 
+from activity.apps import SELF_APP_NAME
 from activity.commands import run_subprocess
 from activity.config import Config
 from activity.config import load_config
@@ -20,7 +21,6 @@ from activity.cron_entry import cron_entry_text
 from activity.cron_entry import install_cron_entry
 from activity.history import HISTORY_PATH
 from activity.memory_reading import DEFAULT_MEMORY_SOURCES
-from activity.pages import APP_NAME
 from activity.pages import build_pages_blueprint
 from activity.pages import utc_now
 from activity.processes import PROC_DIR
@@ -35,6 +35,7 @@ from app_manifest.primitives import AppUrl
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import register_app
 from app_manifest.registry import registry_path
+from app_manifest.shell_windows import shell_base_url
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
 from oom_priority.paths import shed_ledger_path
@@ -76,6 +77,8 @@ def build_pages_app(arguments: ActivityArguments, client: httpx.Client) -> Flask
             clock=time.monotonic,
             history_path=HISTORY_PATH,
             shed_ledger_path=shed_ledger_path(),
+            shell_url=shell_base_url(),
+            is_preview=not arguments.is_registered,
         )
     )
     return app
@@ -92,7 +95,7 @@ def run_activity_app(arguments: ActivityArguments, wait_for_shutdown: Callable[[
     with httpx.Client() as client:
         with serve_in_background(arguments.host, app_url_port(arguments.app_url), build_pages_app(arguments, client)):
             if arguments.is_registered:
-                with log_span("Registering {} at {}", APP_NAME, arguments.app_url):
+                with log_span("Registering {} at {}", SELF_APP_NAME, arguments.app_url):
                     register_app(arguments.manifest_path, arguments.app_url)
                 install_memory_recorder()
             return wait_for_shutdown()

@@ -5,7 +5,6 @@ consistent (it refuses the primary services agent and a chat mid-handoff), so th
 ``mngr`` itself. A chat id only ever reaches the chat app for a chat its own list holds, path-quoted.
 """
 
-import json
 import urllib.parse
 from collections.abc import Sequence
 from enum import auto
@@ -18,6 +17,7 @@ from pydantic import Field
 from pydantic import ValidationError
 
 from activity.errors import ChatAppUnavailableError
+from activity.replies import refusal_reason
 from app_manifest.primitives import AppName
 from app_manifest.registry import RegistryRow
 from imbue.imbue_common.enums import UpperCaseStrEnum
@@ -122,17 +122,6 @@ def fetch_chats(client: httpx.Client, base_url: str) -> list[ChatInfo]:
 @pure
 def chat_action_route(chat_id: str, action: ChatAction) -> str:
     return f"{CHAT_LIST_ROUTE}/{urllib.parse.quote(chat_id, safe='')}/{action.value.lower()}"
-
-
-@pure
-def refusal_reason(response_text: str) -> str:
-    """The chat app's ``detail`` from an error body, else the body itself."""
-    try:
-        body = json.loads(response_text)
-    except ValueError:
-        return response_text
-    detail = body.get("detail") if isinstance(body, dict) else None
-    return str(detail) if detail is not None else response_text
 
 
 def request_chat_action(client: httpx.Client, base_url: str, chat_id: str, action: ChatAction) -> None:

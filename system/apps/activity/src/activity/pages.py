@@ -23,12 +23,16 @@ from flask import send_from_directory
 from flask.typing import ResponseReturnValue
 from werkzeug.exceptions import NotFound
 
+from activity.apps import SELF_APP_NAME
+from activity.apps import is_app_stoppable
+from activity.apps import request_app_quit
 from activity.chats import ChatAction
 from activity.chats import chat_app_url
 from activity.chats import fetch_chats
 from activity.chats import request_chat_action
 from activity.commands import RunCommand
 from activity.errors import ChatAppUnavailableError
+from activity.errors import ShellUnavailableError
 from activity.history import HistoryRange
 from activity.history_view import collect_history_view
 from activity.readings import ReadingSources
@@ -41,11 +45,9 @@ from activity.request_guard import is_write_allowed
 from activity.storage import measure_storage
 from activity.summary import build_summary
 from activity.supervised_programs import ReadProcessInfo
-from app_manifest.primitives import AppName
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import read_origin_label
 
-APP_NAME: Final[AppName] = AppName("activity")
 BLUEPRINT_NAME: Final[str] = "activity_pages"
 API_PREFIX: Final[str] = "/api/"
 HEALTH_PATH: Final[str] = "/api/health"
@@ -54,6 +56,9 @@ STORAGE_PATH: Final[str] = "/api/storage"
 HISTORY_PATH_ROUTE: Final[str] = "/api/history"
 HTTP_BAD_REQUEST: Final[int] = 400
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
+# A preview (``--no-register``) shares the live workspace's chats and desktop, so it changes neither; the shell's
+# preview refuses in the same words.
+PREVIEW_REFUSAL: Final[str] = "This is a preview of a proposed change; it cannot change the live workspace."
 # The chat app's status for a chat in the middle of a turn: stopping it interrupts the turn.
 WORKING_CHAT_STATUS: Final[str] = "working"
 
@@ -86,6 +91,8 @@ def build_pages_blueprint(
     clock: Callable[[], float],
     history_path: Path,
     shed_ledger_path: Path,
+    shell_url: str,
+    is_preview: bool,
 ) -> Blueprint:
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
     # One du at a time: it walks every file, and a second request while one runs would only double the work.
@@ -100,7 +107,7 @@ def build_pages_blueprint(
         origin = request.headers.get("Origin")
         # Only a browser too old to send Sec-Fetch-Site needs the app's origin label, so read it only then.
         needs_label = request.method not in SAFE_METHODS and origin is not None and fetch_site is None
-        app_origin_label = (read_origin_label(sources.registry_path, APP_NAME) or None) if needs_label else None
+        app_origin_label = (read_origin_label(sources.registry_path, SELF_APP_NAME) or None) if needs_label else None
         if not is_write_allowed(request.method, origin, fetch_site, request.content_type, app_origin_label):
             return jsonify({"detail": "writes must be JSON and come from this app's own page"}), HTTP_FORBIDDEN
         return None
@@ -127,7 +134,9 @@ def build_pages_blueprint(
 
     @blueprint.get(SUMMARY_PATH)
     def summary() -> ResponseReturnValue:
-        inputs = collect_summary_inputs(sources=sources, client=client, read_process_info=read_process_info, now=now())
+        inputs = collect_summary_inputs(
+            sources=sources, client=client, read_process_info=read_process_info, now=now(), is_preview=is_preview
+        )
         response = jsonify(build_summary(inputs).model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -164,6 +173,8 @@ def build_pages_blueprint(
 
     @blueprint.post("/api/chats/<chat_id>/<action>")
     def chat_action(chat_id: str, action: str) -> ResponseReturnValue:
+        if is_preview:
+            return jsonify({"detail": PREVIEW_REFUSAL}), HTTP_FORBIDDEN
         try:
             chat_action_kind = ChatAction(action.upper())
         except ValueError:
@@ -192,6 +203,27 @@ def build_pages_blueprint(
                 )
             request_chat_action(client, base_url, chat.chat_id, chat_action_kind)
         except ChatAppUnavailableError as e:
+            return jsonify({"detail": str(e)}), HTTP_BAD_GATEWAY
+        return jsonify({"status": "ok"})
+
+    @blueprint.post("/api/apps/<name>/stop")
+    def app_stop(name: str) -> ResponseReturnValue:
+        if is_preview:
+            return jsonify({"detail": PREVIEW_REFUSAL}), HTTP_FORBIDDEN
+        rows, registry_note = read_app_rows(sources.registry_path)
+        if registry_note is not None:
+            return jsonify({"detail": registry_note}), HTTP_BAD_GATEWAY
+        row = next((row for row in rows if row.name == name), None)
+        if row is None:
+            return jsonify({"detail": f"no app {name}"}), HTTP_NOT_FOUND
+        # Checked here as well as on the page: the page's view may be stale, and a request need not come from it.
+        if not is_app_stoppable(row, rows):
+            return jsonify(
+                {"detail": f"{row.display_name or name} is not stopped from System Monitor"}
+            ), HTTP_BAD_REQUEST
+        try:
+            request_app_quit(client, shell_url, str(row.name))
+        except ShellUnavailableError as e:
             return jsonify({"detail": str(e)}), HTTP_BAD_GATEWAY
         return jsonify({"status": "ok"})
 

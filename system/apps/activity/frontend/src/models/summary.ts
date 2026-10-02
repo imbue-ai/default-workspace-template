@@ -31,6 +31,9 @@ export interface ActivityItem {
   readonly is_critical: boolean;
   readonly is_on_demand: boolean;
   readonly always_on_reason: string | null;
+  readonly app_name: string | null;
+  readonly is_stoppable: boolean;
+  readonly is_restarted_on_open: boolean;
   readonly rss_kib: number;
   readonly processes: readonly ProcessView[];
 }
@@ -63,6 +66,7 @@ export interface ActivitySummary {
   readonly are_programs_known: boolean;
   readonly likely_first_to_close: LikelyFirstToClose | null;
   readonly notes: readonly string[];
+  readonly is_preview: boolean;
 }
 
 export type SummaryState =
@@ -167,6 +171,24 @@ export async function requestChatAction(
     const body = (await response.json().catch(() => ({}))) as { detail?: string; chat_status?: string };
     if (response.status === 409 && body.chat_status === "working") return { kind: "started_working" };
     return { kind: "failed", message: body.detail ?? `The chat app answered ${response.status}.` };
+  } catch (error) {
+    return { kind: "failed", message: String(error) };
+  }
+}
+
+export type AppStopResult = { readonly kind: "done" } | { readonly kind: "failed"; readonly message: string };
+
+/** Ask the desktop, through this app, to quit an app: its windows close, and it starts again when next opened. */
+export async function requestAppStop(appName: string): Promise<AppStopResult> {
+  try {
+    const response = await fetch(`/api/apps/${encodeURIComponent(appName)}/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (response.ok) return { kind: "done" };
+    const body = (await response.json().catch(() => ({}))) as { detail?: string };
+    return { kind: "failed", message: body.detail ?? `The page answered ${response.status}.` };
   } catch (error) {
     return { kind: "failed", message: String(error) };
   }

@@ -64,10 +64,28 @@ describe("chat and app lines", () => {
       always_on_reason: "Kept ready in case something needs fixing",
     });
     expect(programStateLine(terminal)).toBe("Command line · Kept ready in case something needs fixing");
-    const files = item({ item_id: "app:files", name: "Files", kind: "APP", state: "STOPPED", is_on_demand: true });
+    const files = item({
+      item_id: "app:files",
+      name: "Files",
+      kind: "APP",
+      state: "STOPPED",
+      is_on_demand: true,
+      is_restarted_on_open: true,
+    });
     expect(programStateLine(files)).toBe("Not running · starts when you open it");
     const unknown = item({ item_id: "app:chat", name: "Chat", kind: "APP", state: "UNKNOWN", description: "Chats" });
     expect(programStateLine(unknown)).toBe("Chats · state unknown right now");
+    // The browser is never offered Stop, but the desktop still starts it again after a Quit from its window menu.
+    const browser = item({
+      item_id: "app:browser",
+      name: "Browser",
+      kind: "APP",
+      state: "STOPPED",
+      is_restarted_on_open: true,
+    });
+    expect(programStateLine(browser)).toBe("Not running · starts when you open it");
+    const exited = item({ item_id: "app:old", name: "Old", kind: "APP", state: "EXITED" });
+    expect(programStateLine(exited)).toBe("Not running (exited)");
   });
 
   it("says an agent outside any chat is running, with what it is", () => {

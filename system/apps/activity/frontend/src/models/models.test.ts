@@ -79,3 +79,17 @@ describe("the summary model", () => {
     expect(fetches.urls[2]).toBe("/api/chats/c%201/start");
   });
 });
+
+describe("stopping an app", () => {
+  it("posts to this app's own route and carries the refusal's reason", async () => {
+    const fetches = stubFetch();
+    const summary = await import("./summary");
+    const done = summary.requestAppStop("files");
+    fetches.reply(0, { status: 200, body: { status: "ok" } });
+    expect(await done).toEqual({ kind: "done" });
+    const refused = summary.requestAppStop("chat");
+    fetches.reply(1, { status: 400, body: { detail: "Chat is not stopped from System Monitor" } });
+    expect(await refused).toEqual({ kind: "failed", message: "Chat is not stopped from System Monitor" });
+    expect(fetches.urls).toEqual(["/api/apps/files/stop", "/api/apps/chat/stop"]);
+  });
+});

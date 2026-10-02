@@ -17,6 +17,9 @@ export function item(overrides: Partial<ActivityItem> & Pick<ActivityItem, "item
     is_critical: false,
     is_on_demand: false,
     always_on_reason: null,
+    app_name: null,
+    is_stoppable: false,
+    is_restarted_on_open: false,
     rss_kib: 0,
     processes: [],
     ...overrides,
@@ -49,6 +52,7 @@ export function summary(
     likely_first_to_close:
       firstToCloseId === null ? null : { item_id: firstToCloseId, pid: 1, command_name: "claude" },
     notes: [],
+    is_preview: false,
   };
 }
 
