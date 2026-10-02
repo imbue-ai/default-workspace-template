@@ -965,9 +965,12 @@ def launch(
     whatever ``branch`` names -- so uncommitted changes never reach
     it (and ``mngr create`` refuses a dirty tree anyway) -- launch stops with an
     actionable "commit first" message rather than letting that surface as an
-    opaque ``mngr create`` failure. Malformed task-file frontmatter instead
-    raises ``ValueError`` (full traceback) -- that's a bug in how the task file
-    was composed, not a bad CLI argument.
+    opaque ``mngr create`` failure. A failed ``mngr create`` returns 2 as well,
+    and so does one that reports no agent id: the task cannot be addressed to
+    that worker, so it is not sent, and the worker is left behind with no task
+    for the caller to destroy before launching again. Malformed task-file
+    frontmatter instead raises ``ValueError`` (full traceback) -- that's a bug
+    in how the task file was composed, not a bad CLI argument.
 
     ``state_dir`` is the lead's ``MNGR_AGENT_STATE_DIR``; when set, the
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
