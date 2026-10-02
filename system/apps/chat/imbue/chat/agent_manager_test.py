@@ -6174,6 +6174,45 @@ def test_an_awaiting_chats_reserved_spare_is_not_replaced_when_its_terms_go_stal
         manager.stop()
 
 
+@pytest.mark.parametrize("is_dead", [False, True], ids=["aged out", "process died"])
+def test_an_awaiting_chats_reserved_spare_that_aged_out_or_died_is_destroyed_and_the_first_send_creates_the_chat(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, is_dead: bool
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        awaiting = manager.awaiting_chat_for_empty_list()
+        (refill,) = _wait_for_ready_spares(manager, 1)
+        if is_dead:
+            seed_agent_state(manager, spare.chat_id, name="Chat-1", state="STOPPED")
+        else:
+            with manager._lock:
+                aged_out_at = time.monotonic() - SPARE_CHAT_MAX_AGE_SECONDS
+                manager._spares = tuple(
+                    other.model_copy_update(to_update(other.field_ref().ready_at, aged_out_at))
+                    if other.chat_id == spare.chat_id
+                    else other
+                    for other in manager._spares
+                )
+
+        manager.ensure_spare_chat()
+
+        wait_until_true(
+            lambda: spare.chat_id not in [other.chat_id for other in manager._spares],
+            timeout_seconds=15.0,
+            what="the reserved spare being destroyed",
+        )
+        assert _mngr_verbs_naming(argv_log, spare.chat_id) == ["create", "destroy"]
+        assert [other.chat_id for other in manager._spares] == [refill.chat_id]
+        manager.create_chat("", chat_id=awaiting.chat_id, account_id=spare.terms.account_id, message="Hi 8814")
+        assert manager.wait_for_chat_creation(awaiting.chat_id, timeout=15.0) == ChatCreationOutcome(is_created=True)
+        assert _mngr_verbs_naming(argv_log, spare.chat_id) == ["create", "destroy", "create"]
+    finally:
+        manager.stop()
+
+
 def test_an_awaiting_chats_first_send_takes_its_ready_spare_without_a_create(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

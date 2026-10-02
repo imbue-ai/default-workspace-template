@@ -234,8 +234,9 @@ through the send path. A chat minted to await its first send (the one an empty
 chat list opens on, or an intake's) reserves a spare that fits its account (the
 intake's, else the default one) and takes that spare's id and name: the spare
 stays hidden, leaves the pool (which is topped up), and is not replaced while
-reserved, even when its terms go stale. The first send then takes it as a
-create with no chat id would, at once when it is up, else by claiming it; a
+reserved, even when its terms go stale; the session sweep destroys it only once
+its process dies or it has been up for six hours. The first send then takes it
+as a create with no chat id would, at once when it is up, else by claiming it; a
 first send on another account or fast mode, or to a spare that died, aged out,
 or failed, has the spare destroyed and then creates the chat under its id.
 Discarding the chat returns the spare to the pool, and a restart, which drops

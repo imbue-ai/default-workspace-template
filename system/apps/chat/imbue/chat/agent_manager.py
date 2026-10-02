@@ -3642,7 +3642,7 @@ class AgentManager:
 
         A ready spare whose terms went stale (the default account, the project, or the fast mode a
         new chat starts in changed), that has waited ``SPARE_CHAT_MAX_AGE_SECONDS``, or whose
-        process died is destroyed, and a spare is started
+        process died is destroyed (one reserved for a chat only for the last two), and a spare is started
         while the pool holds fewer than its size, one at a time (mngr's host lock runs creates one
         at a time anyway). Nothing happens in a manager that keeps no spares (a secondary chat),
         once the app is stopping, before the agent list is known, or during the backoff that
@@ -3689,11 +3689,17 @@ class AgentManager:
             )
 
     def _retire_stale_spares_locked(self, terms: SpareChatTerms | None, now: float) -> None:
-        """Mark every ready spare that cannot be handed to a new chat on ``terms`` as due a destroy. Lock held."""
+        """Mark every ready spare that cannot be handed to a new chat on ``terms``, and every booted one reserved
+        for a chat whose process died or that reached the maximum age, as due a destroy. Lock held."""
         stale_spares = [
             spare
             for spare in self._spares
-            if spare.phase is SpareChatPhase.READY and not self._is_spare_usable_locked(spare, terms)
+            if (spare.phase is SpareChatPhase.READY and not self._is_spare_usable_locked(spare, terms))
+            or (
+                spare.phase is SpareChatPhase.RESERVED
+                and spare.ready_at is not None
+                and not self._is_spare_fresh_locked(spare)
+            )
         ]
         for stale in stale_spares:
             self._set_spare_phase_locked(stale.chat_id, SpareChatPhase.DISCARDING)
