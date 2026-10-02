@@ -404,7 +404,9 @@ def build_gateway_app(
         if not url.startswith("https://"):
             return False
         next_host = url.removeprefix("https://").split("/", 1)[0]
-        is_ours, _service = service_for_host(next_host, workspace_domain, build_label_to_name(get_registered_apps()), auth_label)
+        is_ours, _service = service_for_host(
+            next_host, workspace_domain, build_label_to_name(get_registered_apps()), auth_label
+        )
         return is_ours
 
     def _upgrade_invite(grants: Grants, identity: RequesterIdentity) -> None:

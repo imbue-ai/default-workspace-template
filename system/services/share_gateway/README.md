@@ -168,9 +168,10 @@ admits the chat origin directly; the chat declares `shareable = false`, so a
 `[services.chat]` grant admits nobody. A visitor holding only a per-app grant
 reaches that app's origin and nothing else -- not the shell, so not the tabs
 the shell arranges; the origin's own pages (the file viewer's listing) are
-what they see, and a `[services.files]` grant admits only the file viewer. Nothing here is configured per app: caddy re-renders its routes
-from the registry, so the chat origin (like every app's) is claimed and routed
-as soon as the app registers.
+what they see, and a `[services.files]` grant admits only the file viewer.
+Nothing here is configured per app: caddy re-renders its routes from the
+registry, so the chat origin (like every app's) is claimed and routed as soon
+as the app registers.
 
 ## Request identity (what a service sees)
 
