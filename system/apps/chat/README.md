@@ -230,9 +230,19 @@ in the background (the session sweep retries one that fails; a preview shows
 the chat once it lands). With none ready it claims one still starting, and is
 provisional until that one is up, which is sooner than a create of its own that
 would queue behind it on mngr's host lock. Its message and model pick follow
-through the send path. The pool is topped up one spare at a time; with a pool
-larger than one, while another spare is still ready, 30 seconds after a
-hand-over, so the next boot does not compete with the new chat's first turn. A
+through the send path. A chat minted to await its first send (the one an empty
+chat list opens on, or an intake's) reserves a spare that fits its account (the
+intake's, else the default one) and takes that spare's id and name: the spare
+stays hidden, leaves the pool (which is topped up), and is not replaced while
+reserved, even when its terms go stale. The first send then takes it as a
+create with no chat id would, at once when it is up, else by claiming it; a
+first send on another account or fast mode, or to a spare that died, aged out,
+or failed, has the spare destroyed and then creates the chat under its id.
+Discarding the chat returns the spare to the pool, and a restart, which drops
+the chat, destroys the spare, since a reservation writes nothing to disk. The
+pool is topped up one spare at a time; with a pool larger than one, while
+another spare is still ready, 30 seconds after a hand-over, so the next boot
+does not compete with the new chat's first turn. A
 sign-in starts the spares at once, and the session sweep keeps them current: one
 whose terms went stale, that has been ready for six hours
 (`SPARE_CHAT_MAX_AGE_SECONDS`, since it carries the date and git state its
