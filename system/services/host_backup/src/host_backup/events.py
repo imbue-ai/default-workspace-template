@@ -460,14 +460,14 @@ def _read_tail_lines(events_path: Path, *, max_lines: int, max_bytes: int) -> li
 
     Reads `max_bytes` at most, however large the file is. A log written before the
     runner rotated it and capped each event's fields runs to gigabytes on an old
-    workspace, one line to hundreds of kilobytes -- reading it whole is what got this
-    command killed by the OOM watchdog before it did anything at all.
+    workspace, one line to hundreds of kilobytes -- reading it whole is what got
+    `host-backup-now` killed by the OOM watchdog before it did anything at all.
 
     The byte ceiling binds first on such a workspace, yielding fewer than `max_lines`
-    events. That is the right trade for the one question asked of this: only a tick
-    whose BACKUP_STARTED has no completion after it matters, and the events a tick
-    emits before it completes are the small ones (the large ones all report a finished
-    restic command), so an in-flight tick is always inside the window.
+    events. The reads `scan_recent_ticks` makes still land inside the window: the
+    events a tick emits before it completes are the small ones (the large ones all
+    report a finished restic command), so an in-flight tick is always there, and the
+    newest outcomes are the last lines written.
     """
     try:
         with events_path.open("rb") as fh:
