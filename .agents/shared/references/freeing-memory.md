@@ -18,7 +18,10 @@ what could be freed and let them choose; you never stop anything on your own.
    and the browsers no window is showing. It only reads; it stops nothing. A
    section it could not read says so: that means "unknown", not "nothing to
    stop". `system/services/oom_priority/README.md` ("Memory candidates") has
-   the details.
+   the details. The user can see the same picture in System Monitor (the Activity app), which
+   shows what each chat, app and service uses and which process would likely
+   be closed first (`curl -s localhost:8040/api/summary` reads its figures;
+   `system/apps/activity/README.md` says how to answer questions asked from it).
 
 2. **Offer them to the user.** In plain language, say that the workspace ran
    low on memory and something was paused, how much memory is free, and each

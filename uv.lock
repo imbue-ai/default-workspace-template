@@ -24,6 +24,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "activity",
     "app-manifest",
     "automations",
     "bootstrap",
@@ -43,6 +44,57 @@ members = [
     "system-interface",
     "terminal-app",
     "tk-command-parsing",
+]
+
+[[package]]
+name = "activity"
+version = "0.1.0"
+source = { editable = "system/apps/activity" }
+dependencies = [
+    { name = "app-manifest" },
+    { name = "click" },
+    { name = "flask" },
+    { name = "httpx" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "oom-priority" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "werkzeug" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "coverage" },
+    { name = "inline-snapshot" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "click", specifier = ">=8.1" },
+    { name = "flask", specifier = ">=3.0" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=4ab942041ef15db8d006bd39b18bee68262b6592" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "oom-priority", editable = "system/services/oom_priority" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic-settings", specifier = ">=2.13.1" },
+    { name = "werkzeug", specifier = ">=3.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "coverage" },
+    { name = "inline-snapshot", specifier = ">=0.13" },
+    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.0" },
+    { name = "ruff", specifier = "~=0.12.8" },
 ]
 
 [[package]]
