@@ -57,6 +57,7 @@ from workspace_layout.records import GridCell
 from workspace_layout.records import ShortcutTarget
 from workspace_layout.records import Wallpaper
 from workspace_layout.records import Window
+from workspace_layout.shell_url import DESKTOPS_ROUTE
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -401,8 +402,8 @@ def inventory_document(shell: ShellState) -> InventoryDocument:
 
 def register_desktop_routes(application: Flask) -> None:
     """Register the desktop interface's routes on ``application`` (the error handlers are the shell's)."""
-    application.add_url_rule("/api/desktops", view_func=list_desktops, methods=["GET"], endpoint="list_desktops")
-    application.add_url_rule("/api/desktops", view_func=create_desktop, methods=["POST"], endpoint="create_desktop")
+    application.add_url_rule(DESKTOPS_ROUTE, view_func=list_desktops, methods=["GET"], endpoint="list_desktops")
+    application.add_url_rule(DESKTOPS_ROUTE, view_func=create_desktop, methods=["POST"], endpoint="create_desktop")
     application.add_url_rule(
         "/api/desktops/<desktop_id>/settings",
         view_func=update_desktop_settings,

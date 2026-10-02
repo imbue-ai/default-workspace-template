@@ -20,6 +20,10 @@ from workspace_layout.ops import parse_op_body
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
 from workspace_layout.records import EntryPresentation
+from workspace_layout.shell_url import CLIENTS_ROUTE
+from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
+from workspace_layout.shell_url import INVENTORY_ROUTE
+from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.shell.clients import client_view
@@ -366,7 +370,7 @@ def register_shell_routes(application: Flask) -> None:
     application.register_error_handler(InvalidLayoutValueError, _answer_layout_value_error)
     register_desktop_routes(application)
     application.add_url_rule(
-        "/api/client-activity",
+        CLIENT_ACTIVITY_ROUTE,
         view_func=client_activity_route,
         methods=["POST"],
         endpoint="client_activity_route",
@@ -407,7 +411,7 @@ def register_shell_routes(application: Flask) -> None:
         methods=["POST"],
         endpoint="quit_app",
     )
-    application.add_url_rule("/api/clients", view_func=list_clients, methods=["GET"], endpoint="list_clients")
+    application.add_url_rule(CLIENTS_ROUTE, view_func=list_clients, methods=["GET"], endpoint="list_clients")
     application.add_url_rule(
         "/api/clients/<client_id>/entries/<app>",
         view_func=set_client_entry,
@@ -421,7 +425,7 @@ def register_shell_routes(application: Flask) -> None:
         endpoint="record_client_shown",
     )
     application.add_url_rule(
-        "/api/inventory",
+        INVENTORY_ROUTE,
         view_func=inventory_route,
         methods=["GET"],
         endpoint="inventory_document",
@@ -433,7 +437,7 @@ def register_shell_routes(application: Flask) -> None:
         endpoint="relay_embedder_message",
     )
     application.add_url_rule(
-        "/api/layout/broadcast",
+        LAYOUT_OP_ROUTE,
         view_func=layout_broadcast,
         methods=["POST"],
         endpoint="layout_broadcast",
