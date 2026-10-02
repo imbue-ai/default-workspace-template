@@ -34,10 +34,10 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
     outcome = store.record_report(_report("c1", "research"), TEST_NOW + timedelta(minutes=2))
     recorded = outcome.record
     assert outcome.is_active_desktop_changed is True
-    assert (
-        store.record_report(_report("c1", "research"), TEST_NOW + timedelta(minutes=3)).is_active_desktop_changed
-        is False
-    )
+    unmoved = store.record_report(_report("c1", "research"), TEST_NOW + timedelta(minutes=3))
+    assert unmoved.is_active_desktop_changed is False
+    # Each move bumps the desktop revision; a report naming the desktop already stored does not.
+    assert (recorded.desktop_revision, unmoved.record.desktop_revision) == (2, 2)
     assert [str(client.id) for client in store.list_clients()] == ["c1", "c2"]
     assert recorded.active_desktop == "research"
     assert store.get_client("missing") is None
@@ -49,6 +49,7 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
         "user_id": None,
         "entries": {},
         "shown_history": [],
+        "desktop_revision": 2,
     }
     assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 2
 
@@ -125,7 +126,14 @@ def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_a
     written = json.loads((tmp_path / CLIENTS_FILENAME).read_text())
     assert written["version"] == 2
     assert set(written["clients"]) == {"viewer", "desktopper", "c3"}
-    assert set(written["clients"]["viewer"]) == {"active_desktop", "last_seen", "user_id", "entries", "shown_history"}
+    assert set(written["clients"]["viewer"]) == {
+        "active_desktop",
+        "last_seen",
+        "user_id",
+        "entries",
+        "shown_history",
+        "desktop_revision",
+    }
 
 
 def test_a_file_of_an_unknown_version_or_shape_is_treated_as_empty(tmp_path: Path) -> None:

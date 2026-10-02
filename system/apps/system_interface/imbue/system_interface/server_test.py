@@ -868,3 +868,48 @@ def test_a_report_of_a_deleted_desktop_lands_the_client_on_the_first_one_and_say
         assert drain_messages(client_queue) == []
     finally:
         shell.broadcaster.unregister(client_queue)
+
+
+def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_moves_nothing(app: Flask) -> None:
+    """A window's move is broadcast naming the report that made it and the revision it was written at. A window
+    that followed a push reports the desktop it followed, which a later move may have replaced: that report
+    registers its connection there and neither moves the client back nor broadcasts."""
+    shell = state_of(app).shell
+    shell.inventory.reload_registry()
+    shell.list_desktops()
+    work = shell.create_desktop("Work", "#123456", 1)
+    client_queue = shell.broadcaster.register()
+    try:
+        first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
+        assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
+        drain_messages(client_queue)
+        move = json.dumps(
+            {
+                "type": "client_state",
+                "client_id": "c1",
+                "active_desktop": str(work.id),
+                "previous_desktop": "home",
+                "report_id": "report-0123456789abcdef",
+            }
+        )
+        assert _handle_client_state_message(move, client_queue, shell, is_first_report=False) is True
+        assert drain_messages(client_queue) == [
+            {
+                "type": "active_desktop_changed",
+                "client_id": "c1",
+                "desktop_id": str(work.id),
+                "revision": 2,
+                "report_id": "report-0123456789abcdef",
+            }
+        ]
+
+        following = json.dumps(
+            {"type": "client_state", "client_id": "c1", "active_desktop": "home", "is_following": True}
+        )
+        assert _handle_client_state_message(following, client_queue, shell, is_first_report=False) is True
+        recorded = shell.clients.get_client("c1")
+        assert recorded is not None and (recorded.active_desktop, recorded.desktop_revision) == (work.id, 2)
+        assert drain_messages(client_queue) == []
+        assert [info.active_desktop for info in shell.broadcaster.get_connected_client_infos()] == ["home"]
+    finally:
+        shell.broadcaster.unregister(client_queue)

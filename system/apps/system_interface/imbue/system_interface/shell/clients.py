@@ -63,6 +63,7 @@ class _StoredClient(FrozenModel):
     shown_history: tuple[str, ...] = Field(
         default=(), description="What the client has shown on the phone layout, most recent last"
     )
+    desktop_revision: int = Field(default=0, description="How many times the stored active desktop has moved")
 
 
 class ClientsDocument(FrozenModel):
@@ -89,6 +90,7 @@ def client_wire_json(record: ClientRecord, is_connected: bool) -> dict[str, Any]
         "user_id": str(record.user_id) if record.user_id is not None else None,
         "entries": entries_wire_json(record.entries),
         "shown_history": list(record.shown_history),
+        "desktop_revision": record.desktop_revision,
     }
 
 
@@ -101,6 +103,7 @@ def _record_of(client_id: ClientId, stored: _StoredClient) -> ClientRecord:
         user_id=stored.user_id,
         entries=stored.entries,
         shown_history=stored.shown_history,
+        desktop_revision=stored.desktop_revision,
     )
 
 
@@ -221,17 +224,21 @@ class ClientStore(MutableModel):
         self, client_id: ClientId, build: Callable[[_StoredClient | None], _StoredClient]
     ) -> ClientReportOutcome:
         """Replace one client's entry with what ``build`` makes of the previous one (None for a new client), and
-        answer whether the stored desktop moved."""
+        answer whether the stored desktop moved. A move bumps the desktop revision under the same lock as the write,
+        so the revisions order the moves as they were written, whatever order their broadcasts go out in."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
             previous = document.clients.get(str(client_id))
-            stored = build(previous)
+            built = build(previous)
+            previous_desktop = previous.active_desktop if previous is not None else None
+            previous_revision = previous.desktop_revision if previous is not None else 0
+            is_moved = previous_desktop != built.active_desktop
+            stored = built.model_copy_update(
+                to_update(built.field_ref().desktop_revision, previous_revision + 1 if is_moved else previous_revision)
+            )
             clients = {**document.clients, str(client_id): stored}
             self._write_unlocked(document.model_copy_update(to_update(document.field_ref().clients, clients)))
-        previous_desktop = previous.active_desktop if previous is not None else None
-        return ClientReportOutcome(
-            record=_record_of(client_id, stored), is_active_desktop_changed=previous_desktop != stored.active_desktop
-        )
+        return ClientReportOutcome(record=_record_of(client_id, stored), is_active_desktop_changed=is_moved)
 
     def _update_recorded_client(
         self, client_id: ClientId, update: Callable[[_StoredClient], _StoredClient]

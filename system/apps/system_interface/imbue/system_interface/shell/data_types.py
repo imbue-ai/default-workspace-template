@@ -75,6 +75,9 @@ class ClientRecord(FrozenModel):
         description="What the client has shown on the phone layout, most recent last: window ids and 'home', "
         "each at most once",
     )
+    desktop_revision: int = Field(
+        default=0, description="How many times the stored active desktop has moved: orders the client's desktop news"
+    )
 
 
 class ClientShownRequest(FrozenModel):
@@ -173,6 +176,14 @@ class ClientStateReport(FrozenModel):
     client_id: ClientId = Field(description="The reporting client")
     active_desktop: DesktopId = Field(description="The desktop the client is on now")
     previous_desktop: str = Field(default="", description="The desktop it was on before, empty on connect")
+    report_id: str = Field(
+        default="", description="The window's id for this report, echoed on the broadcast it causes; empty for none"
+    )
+    is_following: bool = Field(
+        default=False,
+        description="Whether the window only followed the client's stored desktop (a push): the connection is "
+        "registered on it and the record is not moved",
+    )
 
 
 class PopOutStateReport(FrozenModel):

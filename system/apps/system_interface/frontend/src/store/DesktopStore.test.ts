@@ -19,12 +19,28 @@ import {
 import type { GridCell } from "../model/records";
 import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
 import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
+import type { ClientStateReport } from "./socket";
 
 const METRICS = themeMetricsRecord();
 const MODES = { isPhone: false, isTouch: false };
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
 const PLAIN_BAR = { mode: "bar", style: "plain", position: null } as const;
+
+/** A report that moves the client, as the store sends one: with an id minted for it. */
+function moveReport(activeDesktop: string, previousDesktop: string): ClientStateReport {
+  return {
+    activeDesktop,
+    previousDesktop,
+    reportId: expect.stringMatching(/^report-[0-9a-f]{16}$/),
+    isFollowing: false,
+  };
+}
+
+/** The report of a window that followed the client's stored desktop, which moves nothing. */
+function followingReport(activeDesktop: string): ClientStateReport {
+  return { activeDesktop, previousDesktop: "", reportId: "", isFollowing: true };
+}
 
 function last<T>(items: readonly T[]): T | undefined {
   return items[items.length - 1];
@@ -98,7 +114,7 @@ describe("bootstrap", () => {
     expect(api.calls.filter((call) => call === "fetchInventory")).toHaveLength(1);
     expect(api.calls).not.toContain("fetchClients");
     expect(store.getState().activeDesktopId).toBe("work");
-    expect(socket.reports).toEqual([{ activeDesktop: "work", previousDesktop: "" }]);
+    expect(socket.reports).toEqual([moveReport("work", "")]);
     expect(store.getState().isLayoutLoaded).toBe(true);
     expect(store.getReplacedDesktop()).toBeNull();
   });
@@ -209,12 +225,12 @@ describe("bootstrap", () => {
     const store = await startedStore();
     socket.deliver().onConnected();
     // Another window of this client switched to work meanwhile; the push never reached this one.
-    api.clients = [clientRecord(CLIENT, { active_desktop: "work" })];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "work", desktop_revision: 1 })];
     api.writeLayout("work", CLIENT, { updated_at: null, placements: [] });
     socket.deliver().onConnected();
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
-    expect(last(socket.reports)).toEqual({ activeDesktop: "work", previousDesktop: "" });
+    expect(last(socket.reports)).toEqual(followingReport("work"));
     expect(api.calls).toContain("fetchPlacements:work");
     expect(store.getState().isLayoutLoaded).toBe(true);
   });
@@ -312,7 +328,7 @@ describe("saving", () => {
     store.minimizeWindow("win-1");
     await store.switchDesktop("work");
     expect(api.layoutOf("home", CLIENT).placements[0].is_minimized).toBe(true);
-    expect(last(socket.reports)).toEqual({ activeDesktop: "work", previousDesktop: "home" });
+    expect(last(socket.reports)).toEqual(moveReport("work", "home"));
     expect(store.getState().activeDesktopId).toBe("work");
   });
 });
@@ -392,7 +408,7 @@ describe("a deleted active desktop", () => {
     socket.deliver().onDesktopsUpdated([store.getState().desktops[1]]);
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
-    expect(last(socket.reports)).toEqual({ activeDesktop: "work", previousDesktop: "" });
+    expect(last(socket.reports)).toEqual(moveReport("work", ""));
     expect(store.getState().isLayoutLoaded).toBe(true);
   });
 });
@@ -741,13 +757,65 @@ describe("windows", () => {
 
   it("follows a pushed desktop switch without re-reporting a previous desktop", async () => {
     const store = await startedStore();
-    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work" });
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 1, reportId: "" });
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
-    expect(last(socket.reports)).toEqual({ activeDesktop: "work", previousDesktop: "" });
-    socket.deliver().onActiveDesktopChanged({ clientId: "other", desktopId: "home" });
+    expect(last(socket.reports)).toEqual(followingReport("work"));
+    socket.deliver().onActiveDesktopChanged({ clientId: "other", desktopId: "home", revision: 2, reportId: "" });
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
+  });
+});
+
+describe("desktop news", () => {
+  /** The id the store minted for the ``index``-th report it sent. */
+  function reportIdOf(index: number): string {
+    return socket.reports[index].reportId;
+  }
+
+  it("takes no echo of a switch the user has since replaced, nor news older than any it heard", async () => {
+    const store = await startedStore();
+    await store.switchDesktop("work");
+    await store.switchDesktop("home");
+    const reportsSent = socket.reports.length;
+    const [toWork, toHome] = [reportIdOf(reportsSent - 2), reportIdOf(reportsSent - 1)];
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 1, reportId: toWork });
+    await settle();
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home", revision: 2, reportId: toHome });
+    await settle();
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 2, reportId: "" });
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(socket.reports).toHaveLength(reportsSent);
+    expect(api.calls.filter((call) => call === "fetchPlacements:work")).toHaveLength(1);
+  });
+
+  it("ends on its latest switch when a move written before it reaches the window after it", async () => {
+    const store = await startedStore();
+    await store.switchDesktop("work");
+    const toWork = reportIdOf(socket.reports.length - 1);
+    // An agent op moved the client home just before the switch was written, and its news arrives late.
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home", revision: 1, reportId: "" });
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("home");
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 2, reportId: toWork });
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(socket.reports.slice(-2)).toEqual([followingReport("home"), followingReport("work")]);
+  });
+
+  it("re-asserts a switch made while the socket was down over a record no newer than it heard", async () => {
+    const store = await startedStore();
+    socket.deliver().onConnected();
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 3, reportId: "" });
+    await settle();
+    // The user goes home while the socket is down, and that report is lost with it.
+    await store.switchDesktop("home");
+    api.clients = [clientRecord(CLIENT, { active_desktop: "work", desktop_revision: 3 })];
+    socket.deliver().onConnected();
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(last(socket.reports)).toEqual(moveReport("home", ""));
   });
 });
 
@@ -1772,7 +1840,7 @@ describe("pulled-out windows", () => {
     await store.closeFocusedWindow();
     expect(api.calls.filter((call) => call.startsWith("closeWindow"))).toEqual([]);
     // A push moving the client to another desktop is the main window's business.
-    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home" });
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home", revision: 1, reportId: "" });
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
     // Another window's pull-out verbs are the main window's too: a return named for one on another desktop
@@ -1806,8 +1874,9 @@ describe("pulled-out windows", () => {
     // The socket is registered as a pop-out's, under the client: the ops aimed at the client reach this window.
     expect(socket.popOutReports).toBe(1);
     expect(api.calls.filter((call) => call === "fetchPlacements:work")).toHaveLength(1);
-    // The socket comes back with the client still recorded on home: this window's desktop is not the client's,
+    // The socket comes back with the client moved on home meanwhile: this window's desktop is not the client's,
     // and adopting the record would report win-5 as back, which closes its own desktop window.
+    api.clients = [clientRecord(CLIENT, { active_desktop: "home", desktop_revision: 1 })];
     socket.deliver().onConnected();
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
@@ -1892,7 +1961,7 @@ describe("pulled-out windows", () => {
     await startedStore();
     socket.deliver().onConnected();
     expect(socket.popOutReports).toBe(0);
-    expect(last(socket.reports)).toEqual({ activeDesktop: "home", previousDesktop: "" });
+    expect(last(socket.reports)).toEqual(moveReport("home", ""));
   });
 
   it("a solo shell reports its window's return only once the return is in the file", async () => {
@@ -2157,7 +2226,7 @@ describe("the phone layout", () => {
     store.onVisibilityChange(true);
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
-    expect(socket.reports).toEqual([{ activeDesktop: "work", previousDesktop: "" }]);
+    expect(socket.reports).toEqual([moveReport("work", "")]);
     expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-3" });
   });
 

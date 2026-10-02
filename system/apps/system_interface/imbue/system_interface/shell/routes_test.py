@@ -364,7 +364,16 @@ def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_
 
     assert answer.status_code == 200
     record = answer.get_json()
-    assert set(record) == {"id", "active_desktop", "last_seen", "is_connected", "user_id", "entries", "shown_history"}
+    assert set(record) == {
+        "id",
+        "active_desktop",
+        "last_seen",
+        "is_connected",
+        "user_id",
+        "entries",
+        "shown_history",
+        "desktop_revision",
+    }
     assert (record["id"], record["is_connected"], record["shown_history"]) == ("c1", True, [first, "home", second])
     document = client.get("/api/inventory").get_json()
     assert document["workspace_name"] == "Workspace"

@@ -1,0 +1,1 @@
+The desktop interface contracts (`docs/system/blueprint/desktop-interface/contracts.md`) describe the new desktop-switch protocol: `client_state` reports carry a `report_id` and an `is_following` flag, client records carry a `desktop_revision`, and `active_desktop_changed` carries the `revision` and `report_id` of the move it announces.

@@ -2,7 +2,8 @@
  * The shell's WebSocket (desktop-interface contracts.md section 6), the one socket this window
  * holds. On connect the server sends ``apps_updated``, ``desktops_updated``, ``avatar_status``,
  * ``update_notice_changed``, and ``presence_updated``; the window answers with its ``client_state``
- * (which client it is, on which desktop) and re-sends it on every switch; a pulled-out window's page answers
+ * (which client it is, on which desktop) and re-sends it on every switch, as a move of the client or, when
+ * it only followed a push, as a following report that moves nothing; a pulled-out window's page answers
  * with a pop-out's ``client_state`` instead, naming its client and no desktop. ``placements_updated``,
  * ``active_desktop_changed``, ``client_entries_changed``, and the transient ``layout_op`` are how this
  * client's other windows, the shell's own edits, and an agent's ops reach this one; ``avatar_status`` and
@@ -52,6 +53,22 @@ export interface PlacementsUpdatedEvent {
 export interface ActiveDesktopChangedEvent {
   readonly clientId: string;
   readonly desktopId: string;
+  /** The client's desktop revision the move was written at: a window takes only a revision newer than any it heard. */
+  readonly revision: number;
+  /** The id of the window report that made the move, "" when something else did. */
+  readonly reportId: string;
+}
+
+/** What a window tells the shell about the desktop it is on. */
+export interface ClientStateReport {
+  readonly activeDesktop: string;
+  /** The desktop the window left, "" on connect and when following. */
+  readonly previousDesktop: string;
+  /** The window's id for a move (``REPORT_ID_PREFIX``), echoed on the broadcast it causes; "" when following. */
+  readonly reportId: string;
+  /** Whether the window only followed the client's stored desktop (a push): the shell registers the connection
+   *  on it and moves nothing, since the record may already have moved on. */
+  readonly isFollowing: boolean;
 }
 
 export interface ClientEntriesChangedEvent {
@@ -79,8 +96,8 @@ export interface SocketHandlers {
 /** What the store asks of its socket, so a test can stand one in. */
 export interface DesktopSocket {
   connect(handlers: SocketHandlers): void;
-  /** Report this client's active desktop; ``previousDesktop`` is "" on connect. */
-  reportClientState(activeDesktop: string, previousDesktop: string): void;
+  /** Report the desktop this window is on. */
+  reportClientState(report: ClientStateReport): void;
   /** Register this socket as a pulled-out window's, under this client and naming no desktop: the ops aimed at
    *  the client reach it, and the client's active desktop stays its main window's. */
   reportPopOut(): void;
@@ -99,6 +116,8 @@ interface RawSocketEvent {
   client_id?: unknown;
   save_id?: unknown;
   entries?: unknown;
+  revision?: unknown;
+  report_id?: unknown;
 }
 
 const LAYOUT_OP_NAMES: readonly string[] = ["refresh", "reload_system_interface", "show", "open", "focus"];
@@ -116,14 +135,16 @@ export class ShellSocket implements DesktopSocket {
     this.open();
   }
 
-  reportClientState(activeDesktop: string, previousDesktop: string): void {
+  reportClientState(report: ClientStateReport): void {
     if (this.ws === null || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(
       JSON.stringify({
         type: "client_state",
         client_id: this.clientId,
-        active_desktop: activeDesktop,
-        previous_desktop: previousDesktop,
+        active_desktop: report.activeDesktop,
+        previous_desktop: report.previousDesktop,
+        report_id: report.reportId,
+        is_following: report.isFollowing,
       }),
     );
   }
@@ -195,6 +216,8 @@ export class ShellSocket implements DesktopSocket {
         handlers.onActiveDesktopChanged({
           clientId: String(event.client_id ?? ""),
           desktopId: String(event.desktop_id ?? ""),
+          revision: typeof event.revision === "number" ? event.revision : 0,
+          reportId: String(event.report_id ?? ""),
         });
         return;
       case "client_entries_changed":

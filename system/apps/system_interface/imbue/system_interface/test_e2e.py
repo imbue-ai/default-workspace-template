@@ -1459,6 +1459,134 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
     expect(_window(page, home_window)).to_be_visible(timeout=15000)
 
 
+# Rapid desktop switches (desktop contracts.md section 6)
+
+# How long a window that has settled after rapid switches is watched: the shell reads a socket's reports once a
+# second at most, so a client whose windows and shell were still answering each other's desktop news would send
+# reports and redraw its windows several times in this.
+_SETTLED_WATCH_MS = 3000
+# How many tenths of a second the pages get to hear the move of every switch.
+_HEARD_EVERY_SWITCH_POLLS = 150
+
+# Records, in the page, every change of whether a window is drawn and how its taskbar entry reads.
+_WINDOW_STATE_RECORDER = """(id) => {
+  window.__windowStates = [];
+  const record = () => {
+    const drawn = document.querySelector(`[data-window-id="${id}"]`) !== null;
+    const entry = document.querySelector(`[data-taskbar-entry="${id}"]`);
+    const state = `${drawn ? "drawn" : "gone"}/${entry === null ? "no-entry" : entry.getAttribute("data-minimized")}`;
+    const last = window.__windowStates[window.__windowStates.length - 1];
+    if (last !== state) window.__windowStates.push(state);
+  };
+  new MutationObserver(record).observe(document.body, { subtree: true, childList: true, attributes: true });
+  record();
+}"""
+
+
+class _DesktopTraffic(FrozenModel):
+    """What one page said and heard about its client's desktop over the socket, appended as it happens."""
+
+    reports: list[dict[str, Any]] = Field(description="Every ``client_state`` the page sent")
+    moves: list[dict[str, Any]] = Field(description="Every ``active_desktop_changed`` the page received")
+
+
+def _record_desktop_traffic(page: Page) -> _DesktopTraffic:
+    """Record the page's desktop traffic from here on; call before the page loads."""
+    traffic = _DesktopTraffic(reports=[], moves=[])
+
+    def _watch(websocket: Any) -> None:
+        def _on_sent(payload: str | bytes) -> None:
+            message = json.loads(payload)
+            if message.get("type") == "client_state":
+                traffic.reports.append(message)
+
+        def _on_received(payload: str | bytes) -> None:
+            message = json.loads(payload)
+            if message.get("type") == "active_desktop_changed":
+                traffic.moves.append(message)
+
+        websocket.on("framesent", _on_sent)
+        websocket.on("framereceived", _on_received)
+
+    page.on("websocket", _watch)
+    return traffic
+
+
+def _switch_rapidly(page: Page, desktop_ids: list[str], traffics: list[_DesktopTraffic]) -> None:
+    """Click the desktops in turn as fast as the pointer goes, waiting on nothing between clicks, then wait until
+    every page has heard the move of each click."""
+    heard_before = [len(traffic.moves) for traffic in traffics]
+    for desktop_id in desktop_ids:
+        page.locator(f'[data-desktop-switch="{desktop_id}"]').click()
+    # The sync API hands the pages' socket events over only while it is called, so the wait goes through it.
+    for _ in range(_HEARD_EVERY_SWITCH_POLLS):
+        if all(
+            len(traffic.moves) >= before + len(desktop_ids)
+            for traffic, before in zip(traffics, heard_before, strict=True)
+        ):
+            return
+        page.wait_for_timeout(100)
+    raise AssertionError("a page never heard every switch")
+
+
+def _expect_settled_on(page: Page, desktop_id: str, window_id: str) -> None:
+    expect(page.locator(f'[data-desktop-switch="{desktop_id}"]')).to_have_attribute("data-active", "true")
+    expect(_window(page, window_id)).to_be_visible(timeout=15000)
+    expect(_taskbar_entry(page, window_id)).to_have_attribute("data-minimized", "false")
+
+
+def _watch_settled(pages: list[Page], window_id: str, traffics: list[_DesktopTraffic]) -> None:
+    """Watch settled pages for ``_SETTLED_WATCH_MS``: none of them sends a report or hears another move, and the
+    window stays drawn and shown on each the whole time."""
+    for page in pages:
+        page.evaluate(_WINDOW_STATE_RECORDER, window_id)
+    before = [(len(traffic.reports), len(traffic.moves)) for traffic in traffics]
+    pages[0].wait_for_timeout(_SETTLED_WATCH_MS)
+    assert [(len(traffic.reports), len(traffic.moves)) for traffic in traffics] == before, (
+        "the client's windows and the shell kept answering each other's desktop moves"
+    )
+    for page in pages:
+        assert page.evaluate("() => window.__windowStates") == ["drawn/false"]
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_rapid_desktop_switches_settle_on_the_last_one_chosen(e2e_server: E2EServer, page: Page) -> None:
+    """Switching back and forth faster than the shell answers puts several moves in flight at once, whose echoes
+    reach the window after it has moved on. The window ends on the desktop chosen last and stays there: it neither
+    follows those echoes back nor sends anything more, and its windows are never taken down."""
+    traffic = _record_desktop_traffic(page)
+    _land(page, e2e_server)
+    window_id = _open_via_shortcut(page, e2e_server)
+    other = _post_json(f"{e2e_server.base_url}/api/desktops", {"name": "Other", "color": "#4477aa", "glyph": 0})["id"]
+    expect(page.locator(f'[data-desktop-switch="{other}"]')).to_be_visible(timeout=15000)
+
+    _switch_rapidly(page, [other, _HOME_DESKTOP_ID, other, _HOME_DESKTOP_ID], [traffic])
+    _expect_settled_on(page, _HOME_DESKTOP_ID, window_id)
+    _watch_settled([page], window_id, [traffic])
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_two_windows_of_one_client_settle_together_after_rapid_switches(e2e_server: E2EServer, page: Page) -> None:
+    """Two windows of one browser are one client: the other window follows every move of the one switching. A
+    window that only follows moves nothing, so the two never answer each other's news back and forth, and both
+    end on the desktop chosen last."""
+    second = page.context.new_page()
+    traffics = [_record_desktop_traffic(page), _record_desktop_traffic(second)]
+    _land(page, e2e_server)
+    window_id = _open_via_shortcut(page, e2e_server)
+    _land(second, e2e_server)
+    other = _post_json(f"{e2e_server.base_url}/api/desktops", {"name": "Other", "color": "#4477aa", "glyph": 0})["id"]
+    for shown in (page, second):
+        expect(shown.locator(f'[data-desktop-switch="{other}"]')).to_be_visible(timeout=15000)
+
+    _switch_rapidly(page, [other, _HOME_DESKTOP_ID, other, _HOME_DESKTOP_ID], traffics)
+    for shown in (page, second):
+        _expect_settled_on(shown, _HOME_DESKTOP_ID, window_id)
+    _watch_settled([page, second], window_id, traffics)
+    clients = _get_json(f"{e2e_server.base_url}/api/clients")["clients"]
+    assert [client["active_desktop"] for client in clients] == [_HOME_DESKTOP_ID]
+
+
 # Pinned windows (pinned-taskbar-entries plan sections 3.2, 4.1, 4.3, 4.4)
 
 
@@ -1605,8 +1733,10 @@ def test_an_independent_pinned_window_keeps_a_path_per_client_and_an_agent_navig
             frame.evaluate("() => window.__navigateTo('/?doc=1')")
             other_frame.evaluate("() => window.__navigateTo('/?doc=2')")
             wait_for(
-                lambda: _own_window_path(server.base_url, client_id, pinned["id"]) == "/?doc=1"
-                and _own_window_path(server.base_url, other_client_id, pinned["id"]) == "/?doc=2",
+                lambda: (
+                    _own_window_path(server.base_url, client_id, pinned["id"]) == "/?doc=1"
+                    and _own_window_path(server.base_url, other_client_id, pinned["id"]) == "/?doc=2"
+                ),
                 timeout=15.0,
                 poll_interval=0.1,
                 error_message="the two clients' own paths never reached their window path files",
@@ -1803,8 +1933,10 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             )
             assert _get_json(f"{server.base_url}/api/avatars")["selected"] == "jelly-cat"
             wait_for(
-                lambda: _avatar_image_source(entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
-                and _avatar_image_source(other_entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle"),
+                lambda: (
+                    _avatar_image_source(entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
+                    and _avatar_image_source(other_entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
+                ),
                 timeout=10.0,
                 poll_interval=0.1,
                 error_message="the windows never drew the chosen design",

@@ -276,6 +276,7 @@ describe("the small helpers", () => {
       is_connected: true,
       entries: {},
       shown_history: [],
+      desktop_revision: 0,
     });
     expect(
       parseClientRecord({
