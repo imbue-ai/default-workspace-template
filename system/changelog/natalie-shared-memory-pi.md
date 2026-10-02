@@ -11,3 +11,9 @@ pi chats now keep the workspace's shared memory (`data/memories/`) alongside Cla
 - `AGENTS.md` and `data/memories/README.md` describe the folder as shared by Claude and pi chats.
 
 - Each note's line in `MEMORY.md`, the summary every chat starts from, is now kept in code to match the note's `description`: `agent_memory_context.py` rewrites a stale line, adds a missing one and drops repeats. It runs after any Claude or pi tool call that writes to the notes folder (a new PostToolUse hook in `.claude/settings.json`, and the pi extension's `tool_result`), and before each message. Before this, a chat that changed a note but not its line left every new chat starting from the old fact, for example a pi chat that moved the user's location back to California while the line still said Virginia.
+
+- The index sync takes a lock the Agent Memory app also takes, and drops lines for note files that are gone, so a sync racing a delete can't put a deleted fact back into what chats start from. It keeps the file's line endings.
+
+- Claude's hook tells a chat about every delete and edit (it used to stop at 20), says how many saved notes it left off its list, and keeps its mark five seconds behind its clock so a change recorded at the same moment isn't missed. A delete notice stops once the note is saved again.
+
+- The pi extension stamps notes written through a symlinked path and logs why the script could not start.

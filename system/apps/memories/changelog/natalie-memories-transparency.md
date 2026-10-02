@@ -7,3 +7,5 @@ The memories app is now called Agent Memory, and it explains what gets remembere
 - Each note is a short card: its summary, who saved it and when, and Edit/Delete. "Show more" opens the full text (the Why and How lines), and the file behind it. A card warns only when chats won't see the note at the start: it isn't in the list chats load (editing the note adds it back) or is past what they load. A warning at the top appears only when something in that list is wrong, including lines that name notes which no longer exist.
 
 - Text and chips meet WCAG AA contrast (4.5:1): headings and hints use the secondary gray, the green chips the accent color, and the amber backups chips dark text.
+
+- The technical details say what a delete leaves behind (the transcripts of chats that read or listed the note) and that the change record keeps a note's file name, never its text.
