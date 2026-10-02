@@ -3644,13 +3644,14 @@ class AgentManager:
 
         A ready spare whose terms went stale (the default account, the project, or the fast mode a
         new chat starts in changed), that has waited ``SPARE_CHAT_MAX_AGE_SECONDS``, or whose
-        process died is destroyed (one reserved for a chat only for the last two), and a spare is started
-        for a chat awaiting its first send that holds none, else while the pool holds fewer than its
-        size, one at a time (mngr's host lock runs creates one at a time anyway). Nothing happens in a manager that keeps no spares (a secondary chat),
-        once the app is stopping, before the agent list is known, or during the backoff that
-        follows a spare's failed create or destroy or its process dying (most likely shed for
-        memory); with no account to start one on, the ready spares are destroyed and none is
-        started. The mngr commands run on threads of their own.
+        process died is destroyed (one reserved for a chat only for the last two), and a spare is
+        started for a chat awaiting its first send that holds none, else while the pool holds fewer
+        than its size, one at a time (mngr's host lock runs creates one at a time anyway). Nothing
+        happens in a manager that keeps no spares (a secondary chat), once the app is stopping,
+        before the agent list is known, or during the backoff that follows a spare's failed create
+        or destroy or its process dying (most likely shed for memory); with no account to start one
+        on, the ready spares are destroyed and none is started. The mngr commands run on threads of
+        their own.
         """
         if not self._is_keeping_spares or self._shutdown_event.is_set():
             return
