@@ -315,7 +315,7 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `navigate` | `window`, `path` | set the window's path as if its page had reported it; the client's page follows |
 | `refresh` | `window` or `app` | transient: reload the page(s) |
 | `reload_system_interface` | | transient: reload every window of the shell |
-| `shortcuts`, `shortcut set`, `shortcut move`, `shortcut remove` | as section 5.2, `cell` a grid cell record (`{"column", "row"}`) | edit the desktop's shortcuts |
+| `shortcuts`, `shortcut_set`, `shortcut_move`, `shortcut_remove` | as section 5.2, `cell` a grid cell record (`{"column", "row"}`) | edit the desktop's shortcuts |
 | `wallpaper` | `wallpaper` | set the desktop's wallpaper |
 
 `window` is a window id, `self`, `pinned`, or an app name (that app's most recently focused window on the target client's active desktop).
