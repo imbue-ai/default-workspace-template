@@ -330,7 +330,7 @@ describe("the memory pressure banner", () => {
   it("warns, as a status, while memory stays tight", () => {
     const banner = mountWithPressure(true).querySelector(".activity-pressure");
     expect(banner?.getAttribute("role")).toBe("status");
-    expect(banner?.textContent).toContain("Memory has stayed tight for 18 min");
+    expect(banner?.textContent).toContain("Memory has stayed tight for 19 min");
   });
 
   it("mentions an eased stretch quietly, not as a warning", () => {

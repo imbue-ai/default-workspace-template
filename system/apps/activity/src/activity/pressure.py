@@ -18,8 +18,13 @@ from activity.history import RECORDING_FRESH_SECONDS
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 
-# Five readings a minute apart span four minutes: a stretch that long is pressure, not a passing spike.
+# Five readings a minute apart (four minutes from first to last, each standing for its own minute): five minutes
+# of pressure, not a passing spike.
 SUSTAINED_SECONDS: Final[int] = 4 * 60
+# A cron minute can start a few seconds late; a longer gap means a reading was missed, which ends a stretch.
+MAX_READING_GAP_SECONDS: Final[int] = 90
+# Readings older than this are not read for the warning; a stretch longer than it reads as starting this long ago.
+PRESSURE_LOOKBACK_SECONDS: Final[int] = 2 * 24 * 3600
 # How long after a stretch ends the page still mentions it.
 RECENT_SECONDS: Final[int] = 60 * 60
 
@@ -46,7 +51,7 @@ def latest_pressure(
             is_stretch_open = False
             continue
         previous = stretches[-1][-1] if stretches and is_stretch_open else None
-        if previous is not None and sample.at_epoch_seconds - previous.at_epoch_seconds <= RECORDING_FRESH_SECONDS:
+        if previous is not None and sample.at_epoch_seconds - previous.at_epoch_seconds <= MAX_READING_GAP_SECONDS:
             stretches[-1].append(sample)
         else:
             stretches.append([sample])
@@ -62,6 +67,10 @@ def latest_pressure(
     last_at = stretch[-1].at_epoch_seconds
     is_ongoing = stretch[-1] is ordered[-1] and now_epoch_seconds - last_at <= RECORDING_FRESH_SECONDS
     if not is_ongoing and now_epoch_seconds - last_at > RECENT_SECONDS:
+        return None
+    # An eased stretch is not mentioned while the latest reading is tight again: that is a new stretch, too short yet
+    # to warn about, and "it was tight earlier" beside a tight headline would contradict it.
+    if not is_ongoing and ordered[-1].used_kib >= tight_from_kib:
         return None
     return PressureStretch(
         started_at=datetime.fromtimestamp(stretch[0].at_epoch_seconds, tz=timezone.utc),

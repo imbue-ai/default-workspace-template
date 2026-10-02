@@ -458,8 +458,8 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
   }
 
   /** Memory that has stayed tight says so, with since when; one that eased is mentioned quietly for an hour. */
-  function pressureBanner(summary: ActivitySummary, nowMs: number): m.Children {
-    const notice = pressureNotice(summary.pressure, nowMs);
+  function pressureBanner(summary: ActivitySummary): m.Children {
+    const notice = pressureNotice(summary.pressure);
     if (notice === null) return null;
     return notice.isOngoing
       ? m(
@@ -683,7 +683,7 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
                 m("h2", { class: "m-0 type-heading-lg text-primary text-balance" }, headline.title),
                 m("p", { class: "m-0 type-body text-secondary" }, headline.body),
               ]),
-          pressureBanner(summary, attrs.nowMs),
+          pressureBanner(summary),
           summary.is_preview
             ? m(
                 "p",

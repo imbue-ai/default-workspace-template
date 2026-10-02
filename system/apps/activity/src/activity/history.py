@@ -110,6 +110,25 @@ def read_history(path: Path) -> list[MemorySample]:
     return parse_history(text)
 
 
+def read_history_since(path: Path, since_epoch_seconds: int) -> list[MemorySample]:
+    """The readings at or after ``since``, skipping older lines before they are parsed, so a caller that needs only the
+    recent past (the summary, every few seconds) does not build a week of readings each time."""
+    try:
+        text = path.read_text(errors="replace")
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        logger.warning("Could not read the memory history at {}: {}", path, e)
+        return []
+    recent = [line for line in text.splitlines() if _line_epoch(line) >= since_epoch_seconds]
+    return parse_history("\n".join(recent))
+
+
+def _line_epoch(line: str) -> int:
+    first = line.split("\t", 1)[0]
+    return int(first) if first.isascii() and first.isdigit() else -1
+
+
 def append_sample(path: Path, sample: MemorySample, retention_seconds: int) -> None:
     """Add a reading; once the file has grown past a week's worth, rewrite it without the readings that aged out."""
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -8,6 +8,7 @@ from activity.history import group_into_periods
 from activity.history import is_recording
 from activity.history import parse_history
 from activity.history import read_history
+from activity.history import read_history_since
 from activity.memory_reading import MemorySource
 
 
@@ -89,3 +90,12 @@ def test_a_reading_keeps_its_source_and_lines_from_before_or_after_this_format_s
 
 def test_recording_is_judged_by_the_newest_reading_whatever_the_file_order() -> None:
     assert is_recording([_sample(1_000, 1), _sample(400, 1)], now_epoch_seconds=1_100) is True
+
+
+def test_reading_since_a_moment_skips_older_lines_and_garbage(tmp_path: Path) -> None:
+    path = tmp_path / "memory-history.tsv"
+    path.write_text(
+        format_sample(_sample(100, 1)) + "garbage\n" + format_sample(_sample(200, 2)) + format_sample(_sample(300, 3))
+    )
+    assert read_history_since(path, since_epoch_seconds=200) == [_sample(200, 2), _sample(300, 3)]
+    assert read_history_since(tmp_path / "missing.tsv", since_epoch_seconds=0) == []

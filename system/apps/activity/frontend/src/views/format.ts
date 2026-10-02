@@ -154,28 +154,37 @@ export interface PressureNotice {
   readonly body: string;
 }
 
-function clockTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+// A start more than this before the stretch's last reading names its weekday too, so "since 10:12 AM" is not ambiguous.
+const NAME_THE_DAY_AFTER_MS = 12 * 3600 * 1000;
+
+function clockTime(iso: string, isLongAgo: boolean): string {
+  return new Date(iso).toLocaleString(
+    undefined,
+    isLongAgo ? { weekday: "short", hour: "numeric", minute: "2-digit" } : { hour: "numeric", minute: "2-digit" },
+  );
 }
 
-/** The warning for memory that has stayed tight, or the quieter note that it was tight earlier; null when neither. */
-export function pressureNotice(pressure: PressureStretch | null, nowMs: number): PressureNotice | null {
+/** The warning for memory that has stayed tight, or the quieter note that it was tight earlier; null when neither.
+ * Durations come from the workspace's own timestamps, so a browser clock that is off does not change them, and each
+ * reading stands for the minute it was taken in, so five readings are five minutes, ongoing or eased. */
+export function pressureNotice(pressure: PressureStretch | null): PressureNotice | null {
   if (pressure === null) return null;
   const startedMs = Date.parse(pressure.started_at);
+  const lastMs = Date.parse(pressure.last_tight_at);
+  const lasted = formatDuration((lastMs - startedMs) / 1000 + 60);
+  const since = clockTime(pressure.started_at, lastMs - startedMs > NAME_THE_DAY_AFTER_MS);
   if (pressure.is_ongoing) {
     return {
       isOngoing: true,
-      title: `Memory has stayed tight for ${formatDuration((nowMs - startedMs) / 1000)}`,
+      title: `Memory has stayed tight for ${lasted}`,
       body:
-        `Since ${clockTime(pressure.started_at)} it has stayed close to the point where things start being closed. ` +
-        "Stopping a chat or app you aren't using makes room.",
+        `Since ${since} it has stayed close to the point where things start being closed, peaking at ` +
+        `${formatKib(pressure.peak_kib)}. Stopping a chat or app you aren't using makes room.`,
     };
   }
-  // Each reading stands for the minute it was taken in, so a stretch lasts a minute past its last reading.
-  const lastedSeconds = (Date.parse(pressure.last_tight_at) - startedMs) / 1000 + 60;
   return {
     isOngoing: false,
-    title: `Memory was tight for ${formatDuration(lastedSeconds)} earlier`,
-    body: `It stayed close to the point where things start being closed until ${clockTime(pressure.last_tight_at)}.`,
+    title: `Memory was tight for ${lasted} earlier`,
+    body: `It stayed close to the point where things start being closed until ${clockTime(pressure.last_tight_at, false)}.`,
   };
 }

@@ -46,9 +46,27 @@ def test_a_stretch_that_ended_is_still_mentioned_for_an_hour_then_dropped() -> N
 
 
 def test_a_stretch_whose_recording_stopped_is_not_called_ongoing() -> None:
-    stale = _readings(_NOW - 60 * 15, [5_500] * 6)
+    stale = _readings(_NOW - 60 * 15, [5_500] * 6) + _readings(_NOW, [4_000])
     pressure = latest_pressure(stale, _TIGHT, _NOW)
     assert pressure is not None and pressure.is_ongoing is False
+
+
+def test_a_missed_reading_ends_a_stretch_though_the_next_one_is_tight_too() -> None:
+    # Two minutes between readings means one was missed: three readings, a gap, three readings is not five minutes.
+    gapped = _readings(_NOW - 60 * 6, [5_500, 5_500, 5_500]) + _readings(_NOW - 60 * 2, [5_500, 5_500, 5_500])
+    assert latest_pressure(gapped, _TIGHT, _NOW) is None
+
+
+def test_five_readings_in_a_row_warn_and_four_do_not() -> None:
+    assert latest_pressure(_readings(_NOW - 60 * 4, [5_500] * 5), _TIGHT, _NOW) is not None
+    assert latest_pressure(_readings(_NOW - 60 * 3, [5_500] * 4), _TIGHT, _NOW) is None
+    exactly_at_the_line = _readings(_NOW - 60 * 4, [_TIGHT] * 5)
+    assert latest_pressure(exactly_at_the_line, _TIGHT, _NOW) is not None
+
+
+def test_an_eased_stretch_is_not_mentioned_while_memory_is_tight_again() -> None:
+    eased_then_tight = _readings(_NOW - 60 * 20, [5_500] * 6 + [4_000] * 12 + [5_500] * 3)
+    assert latest_pressure(eased_then_tight, _TIGHT, _NOW) is None
 
 
 def test_no_readings_is_no_pressure_and_order_does_not_matter() -> None:

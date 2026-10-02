@@ -142,26 +142,40 @@ describe("headline", () => {
 });
 
 describe("the memory pressure notice", () => {
-  const NOW = Date.parse("2026-10-02T10:30:00Z");
-
-  it("says for how long memory has stayed tight while it lasts", () => {
-    const notice = pressureNotice(
-      { started_at: "2026-10-02T10:12:00Z", last_tight_at: "2026-10-02T10:30:00Z", peak_kib: 1, is_ongoing: true },
-      NOW,
-    );
+  it("says for how long memory has stayed tight, from the workspace's own timestamps, and its peak", () => {
+    const notice = pressureNotice({
+      started_at: "2026-10-02T10:12:00Z",
+      last_tight_at: "2026-10-02T10:30:00Z",
+      peak_kib: 5 * 1024 * 1024,
+      is_ongoing: true,
+    });
     expect(notice?.isOngoing).toBe(true);
-    expect(notice?.title).toBe("Memory has stayed tight for 18 min");
+    expect(notice?.title).toBe("Memory has stayed tight for 19 min");
+    expect(notice?.body).toContain("peaking at 5.0 GB");
     expect(notice?.body).toContain("Stopping a chat or app you aren't using makes room.");
   });
 
-  it("counts an eased stretch to the end of its last minute, and says nothing when there was none", () => {
-    const notice = pressureNotice(
-      { started_at: "2026-10-02T09:00:00Z", last_tight_at: "2026-10-02T09:24:00Z", peak_kib: 1, is_ongoing: false },
-      NOW,
-    );
-    expect(notice?.isOngoing).toBe(false);
-    expect(notice?.title).toBe("Memory was tight for 25 min earlier");
-    expect(pressureNotice(null, NOW)).toBeNull();
+  it("counts five readings as five minutes, ongoing or eased, and says nothing when there was none", () => {
+    const fiveReadings = { started_at: "2026-10-02T09:00:00Z", last_tight_at: "2026-10-02T09:04:00Z", peak_kib: 1 };
+    expect(pressureNotice({ ...fiveReadings, is_ongoing: true })?.title).toBe("Memory has stayed tight for 5 min");
+    expect(pressureNotice({ ...fiveReadings, is_ongoing: false })?.title).toBe("Memory was tight for 5 min earlier");
+    expect(pressureNotice(null)).toBeNull();
+  });
+
+  it("names the weekday of a start long before the latest tight reading", () => {
+    const long = pressureNotice({
+      started_at: "2026-09-30T22:00:00Z",
+      last_tight_at: "2026-10-02T10:30:00Z",
+      peak_kib: 1,
+      is_ongoing: true,
+    });
+    const short = pressureNotice({
+      started_at: "2026-10-02T10:00:00Z",
+      last_tight_at: "2026-10-02T10:30:00Z",
+      peak_kib: 1,
+      is_ongoing: true,
+    });
+    expect(long?.body.length).toBeGreaterThan(short?.body.length ?? 0);
   });
 });
 

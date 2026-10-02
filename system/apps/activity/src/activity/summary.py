@@ -492,7 +492,9 @@ def build_summary(inputs: SummaryInputs) -> ActivitySummary:
             used_kib=inputs.memory.used_bytes // 1024,
             limit_kib=inputs.memory.limit_bytes // 1024,
         )
-        pressure = latest_pressure((*inputs.history, live), tight_from_kib, live.at_epoch_seconds)
+        # Readings stamped at or after the live one (the clock stepped back) would sort after it; they are left out.
+        earlier = tuple(sample for sample in inputs.history if sample.at_epoch_seconds < live.at_epoch_seconds)
+        pressure = latest_pressure((*earlier, live), tight_from_kib, live.at_epoch_seconds)
         memory = MemorySummary(
             limit_bytes=inputs.memory.limit_bytes,
             used_bytes=inputs.memory.used_bytes,

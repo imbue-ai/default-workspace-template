@@ -12,11 +12,13 @@ from activity.chats import chat_app_url
 from activity.chats import fetch_chats
 from activity.errors import ChatAppUnavailableError
 from activity.errors import SupervisorUnavailableError
-from activity.history import read_history
+from activity.history import epoch_seconds
+from activity.history import read_history_since
 from activity.memory_reading import MemorySources
 from activity.memory_reading import closing_point
 from activity.memory_reading import read_earlyoom_meminfo
 from activity.memory_reading import read_memory
+from activity.pressure import PRESSURE_LOOKBACK_SECONDS
 from activity.processes import read_process_table
 from activity.summary import RegisteredAgent
 from activity.summary import SummaryInputs
@@ -112,6 +114,6 @@ def collect_summary_inputs(
         agents=tuple(read_registered_agents(sources.proc_dir)),
         app_rows=tuple(app_rows),
         notes=tuple(notes),
-        history=tuple(read_history(history_path)),
+        history=tuple(read_history_since(history_path, epoch_seconds(now) - PRESSURE_LOOKBACK_SECONDS)),
         is_preview=is_preview,
     )
