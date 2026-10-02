@@ -92,8 +92,8 @@ worker side:
     chat, through the chat app (``system/scripts/message_chat.py``), addressed
     by the ``worker_agent_id`` that ``launch`` stamped into the task file. The
     send revives a worker that is not running: one ``stop`` stopped, one that
-    crashed, and one the OOM daemon shed. Once the message is delivered, the
-    worker's ``archived_at`` label is blanked, so a later crash of a worker
+    crashed, and one the OOM daemon shed. Once the message is delivered, an
+    ``archived_at`` label ``stop`` set is blanked, so a later crash of a worker
     ``stop`` had stopped is restarted like any other.
 
 ``destroy``
@@ -1201,8 +1201,8 @@ def reply(
 
     Addressed by the ``worker_agent_id`` ``launch`` stamped into the task file,
     through the chat app, whose send revives a worker that is not running. Once
-    the message is delivered the worker's ``archived_at`` label is blanked, so a
-    worker ``stop`` stopped is no longer marked as stopped on purpose; a failed
+    the message is delivered an ``archived_at`` label ``stop`` set is blanked, so
+    a worker ``stop`` stopped is no longer marked as stopped on purpose; a failed
     blank is a warning, not a failure, since the message already landed. The
     messenger's exit status (``mngr message``'s codes) is passed through.
     """
@@ -1234,7 +1234,9 @@ def reply(
         return 2
     result = runner.run([*_message_chat_argv(worker_agent_id), *source], check=False)
     returncode = int(getattr(result, "returncode", 0) or 0)
-    if returncode in _MESSENGER_DELIVERED_RCS:
+    if returncode in _MESSENGER_DELIVERED_RCS and _may_be_archived(
+        worker_agent_id, runner
+    ):
         unarchived = _mngr_lifecycle_call(
             "label", worker_agent_id, ["-l", "archived_at="], "unarchived", runner
         )
@@ -1246,6 +1248,18 @@ def reply(
                 file=sys.stderr,
             )
     return returncode
+
+
+def _may_be_archived(agent_id: str, runner: Runner) -> bool:
+    """Whether the agent may carry a non-empty ``archived_at`` label.
+
+    mngr cannot remove a label, and its ``--archived`` / ``--active`` filters
+    test only for the label's presence, so blanking it on an agent that never
+    had one would mark that agent archived. A listing that does not show the
+    agent is no evidence either way, and reads as "may be".
+    """
+    record = _record_with_id(_agent_records(runner), agent_id)
+    return record is None or _record_label(record, "archived_at") is not None
 
 
 def _oom_priority_src() -> Path:
@@ -2657,7 +2671,8 @@ def build_parser() -> argparse.ArgumentParser:
         "reply",
         help="Send the lead's reply (a gate answer, a nudge) to the worker's chat, "
         "through the chat app, addressed by the id launch stamped into the task file. "
-        "Revives a worker that is not running and blanks its archived_at label.",
+        "Revives a worker that is not running and blanks an archived_at label "
+        "stop set.",
     )
     reply_parser.add_argument(
         "--task-file",

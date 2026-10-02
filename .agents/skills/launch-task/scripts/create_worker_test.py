@@ -4013,6 +4013,13 @@ def _stamped_task_file(tmp_path: Path) -> Path:
     return task
 
 
+def _worker_listing(state: str, archived: bool) -> _StubResult:
+    """``mngr list`` showing the stamped worker, with or without the label ``stop`` sets."""
+    return _listing(
+        {**_agent_record("demo-worker", state, archived=archived), "id": _WORKER_ID}
+    )
+
+
 def test_reply_goes_through_the_chat_messenger_by_the_stamped_worker_id(
     tmp_path: Path,
 ) -> None:
@@ -4021,6 +4028,7 @@ def test_reply_goes_through_the_chat_messenger_by_the_stamped_worker_id(
     runner.respond(
         (sys.executable, str(_MESSAGE_CHAT_SCRIPT)), _StubResult(returncode=7)
     )
+    runner.respond(("mngr", "list"), _worker_listing("STOPPED", archived=True))
 
     rc = create_worker_mod.reply(
         task_file=task, message="-continue", message_file=None, runner=runner
@@ -4029,11 +4037,28 @@ def test_reply_goes_through_the_chat_messenger_by_the_stamped_worker_id(
     # The messenger's exit status (mngr message's codes) is passed through, and
     # "delivered but blocked" still counts as delivered for the label.
     assert rc == 7
-    assert [c.argv for c in runner.calls] == [
+    assert [c.argv for c in runner.calls if c.argv[:2] != ["mngr", "list"]] == [
         [sys.executable, str(_MESSAGE_CHAT_SCRIPT), _WORKER_ID, "--message=-continue"],
         _UNARCHIVE_ARGV,
     ]
     assert_mngr_argv_valid(_UNARCHIVE_ARGV)
+
+
+def test_reply_writes_no_label_on_a_worker_that_was_never_archived(
+    tmp_path: Path,
+) -> None:
+    """mngr reads a present ``archived_at`` as archived even when it is empty, so
+    a gate answer to a live worker must not add one."""
+    task = _stamped_task_file(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _worker_listing("WAITING", archived=False))
+
+    rc = create_worker_mod.reply(
+        task_file=task, message="yes", message_file=None, runner=runner
+    )
+
+    assert rc == 0
+    assert _mngr_argvs(runner, "label") == []
 
 
 def test_reply_leaves_the_label_when_the_send_fails(tmp_path: Path) -> None:
@@ -4060,6 +4085,7 @@ def test_reply_still_succeeds_when_the_label_cannot_be_blanked(
     failed reply: the lead would send it again."""
     task = _stamped_task_file(tmp_path)
     runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _worker_listing("STOPPED", archived=True))
     runner.respond(("mngr", "label"), _StubResult(returncode=1))
 
     rc = create_worker_mod.reply(
