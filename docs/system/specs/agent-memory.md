@@ -206,7 +206,7 @@ The app is a Flask backend on port 8050 with a Mithril frontend, built with the 
 - **Session to agent to chat.** A Claude session maps to an agent through `claude_session_id_history`, and an agent to a chat through the chat app's `GET /api/chats`.
 - **Writer kinds.** A writer is a live chat (shown by its title), an agent no live chat holds (a deleted chat or a background task), or unknown (for example when the chat app can't be reached).
 - **Fallback.** A note no transcript explains falls back to its `source` field ("Saved by a pi chat").
-- **Cost.** Transcripts are read per request, parsing only lines that name the notes folder. The request to the chat app for chat names logs a warning when it takes over a second.
+- **Cost.** Transcripts are read per request. Each is searched as bytes in 4MB chunks, and only lines that name the notes folder are decoded and parsed (`lines_containing`). The request to the chat app for chat names logs a warning when it takes over a second. Section 7 has the measured cost.
 
 **Writes** (`notes.py`):
 - **Versions.** A note's version is `mtime_ns-size`, taken before its text is read, so a chat writing between the two can only make a save fail.
@@ -259,7 +259,9 @@ The app is a Flask backend on port 8050 with a Mithril frontend, built with the 
 - **Backups keep deleted notes** until their retention expires (24 months by default).
 - **Concurrent writers to `MEMORY.md`** can drop a line briefly; the next sync restores it. A shell command that writes notes without naming `data/memories` (for example `cd data/memories && ...` from another directory) is synced only at the next message.
 - **Unverified:** after Claude Code compacts a long conversation, the hook's earlier notices (for example a deletion) may not survive the summary.
-- **Attribution scans every transcript** on each page load. That's fine at today's sizes, but it grows with history and has no cache.
+- **Transcript reading grows with history.** Measured on macOS (warm cache; not gVisor, where file-heavy work is several times slower):
+  - **The page** reads every Claude and pi transcript on each load (when the window opens or regains focus). The live workspace has 11 transcripts, about 5MB, and a page request takes 10 to 25ms. A synthetic heavy history of 200 chats (350MB) takes 0.12s to scan, down from 0.21s before searching bytes instead of decoding every line (0.2s cold). About 0.075s of that is the byte search itself, which any approach that re-reads every transcript must pay, so a further cut needs the cache in section 10. The cost scales with total transcript bytes, not with the number of notes, and nothing runs while the app is closed.
+  - **Claude's hook** re-reads its own chat's transcript before every message: 13ms for a 20MB conversation, which is long. That's small next to a model turn, so it was left as is; section 10 has the fix if very long chats make it matter.
 - **Only Claude and pi** use the notes. The page says Codex, OpenCode and Antigravity don't yet.
 - **Known debt:**
   - The shared `Badge` warning and success tones fall below WCAG AA contrast; the app overrides its amber chip locally (`style.css`), and the shared fix is a design-system call.
@@ -271,7 +273,7 @@ The app is a Flask backend on port 8050 with a Mithril frontend, built with the 
 
 | Suite | Count | Covers |
 |---|---|---|
-| App, `cd system/apps/memories && uv run pytest` | 130 | Note parsing and rendering round-trips (quoting, missing frontmatter, unknown keys); version checks and refusals; atomic writes; delete and index maintenance; the index's load limit, including exactly 25KB and one byte over; attribution over fake Claude and pi transcript trees; backup retention; the write guard's header matrix; the switches and the Claude settings merge (other keys kept, a non-object file refused); routes end to end through Flask; the app's ratchets. |
+| App, `cd system/apps/memories && uv run pytest` | 136 | Note parsing and rendering round-trips (quoting, missing frontmatter, unknown keys); version checks and refusals; atomic writes; delete and index maintenance; the index's load limit, including exactly 25KB and one byte over; attribution over fake Claude and pi transcript trees, and the byte-level transcript reader (lines split across chunks, a last line without a newline, bad UTF-8, empty files); backup retention; the write guard's header matrix; the switches and the Claude settings merge (other keys kept, a non-object file refused); routes end to end through Flask; the app's ratchets. |
 | Memory script, `system/scripts/agent_memory_context_test.py` | 46 | Rendering, truncation and stamping (CRLF, inline metadata, block scalars); the change notice; the Claude hook (notes since start, own writes skipped, once per chat, separate marks per session, no state dir, no transcript, off and back on); index sync (the Virginia case, adds, duplicates, untouched when in sync, permissions); the switches, including unreadable files as off; the PostToolUse command run exactly as `settings.json` has it; runs under `python3 -I` with a fake HOME. |
 | pi extension, `.pi/extensions/pi_extensions_test.py -k memory` | 10 | `memory.ts` executed under node: the two sections, stable between messages, the forced-prompt path, stamping, a shell command on the notes syncing the index, the off notice, and failing open with a log. |
 | Frontend, `npm test --workspace=apps/memories/frontend` | 31 | The delete confirmation and its backups wording, the conflict editor, collapsed cards and "Show more", index warnings, the condensed top section, the settings switches and what they save, and the wording helpers. |
@@ -321,7 +323,9 @@ In rough priority order:
    - **Marker.** The chat header shows a persistent "Private" marker.
    - **Size.** This touches chat creation, so it is a separate PR.
 4. **"Saved after you said..."** Show the user message that led a chat to save each note, from the same transcript scan.
-5. **Attribution cache** keyed by transcript size and mtime, so page loads stay flat as history grows.
+5. **Incremental transcript reading**, if workspaces with very large histories show slow page loads (measure under gVisor first):
+   - **The page:** keep each transcript's results keyed by path, size and mtime, and on the next load read only what was appended. Transcripts are append-only JSONL, so read from the last complete line. A shrunk or replaced file is read in full. The app stops a minute after its window closes, so an in-memory cache helps repeated loads while the window is open; making the first load fast too means persisting it under `data/.apps/memories/`, with a format version.
+   - **Claude's hook:** store the byte offset already read, the start time and the chat's own writes in the per-chat mark file it already keeps, and read only the new part.
 6. **Deleting from backups.** An option to remove deleted notes from backups (restic `rewrite`), or to exclude `data/memories/` from backups. This is a product decision.
 7. **Shared contrast fix and cleanup.** Fix the shared Badge contrast tones, fold `serving.py` into a shared helper, and run pi's memory behaviour through the nightly evals before wider rollout.
 

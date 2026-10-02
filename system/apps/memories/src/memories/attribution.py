@@ -8,7 +8,8 @@ directly, and its ``write``/``edit``/``read`` tool calls count the same way. An 
 ``agent_ids`` hold it (the chat app's ``GET /api/chats``). A session no agent claims, or an agent no live chat holds
 (a deleted chat), is still counted, just without a chat's name.
 
-Transcripts are read when the page asks, line by line, parsing only the lines that name the notes folder.
+Transcripts are read when the page asks, decoding and parsing only the lines that name the notes folder (see
+``lines_containing``).
 """
 
 import json
@@ -40,9 +41,13 @@ PI_SESSIONS_SUBPATH: Final[str] = "plugin/pi_coding/sessions"
 PI_SESSION_PREFIX: Final[str] = "pi:"
 SESSION_HISTORY_FILENAME: Final[str] = "claude_session_id_history"
 TRANSCRIPT_SUFFIX: Final[str] = ".jsonl"
+# A pi session's header line, which says the directory relative paths in its tool calls are relative to.
+_PI_LINE_MARKERS: Final[tuple[bytes, ...]] = (b'"type":"session"', b'"type": "session"')
 DEFAULT_CHAT_APP_URL: Final[str] = "http://127.0.0.1:8010"
 CHAT_LIST_TIMEOUT_SECONDS: Final[float] = 5.0
 CHAT_LIST_SLOW_SECONDS: Final[float] = 1.0
+# Transcripts are read in chunks this size, so memory stays bounded whatever a transcript's length.
+TRANSCRIPT_CHUNK_BYTES: Final[int] = 4 * 1024 * 1024
 
 
 class NoteToolUse(FrozenModel):
@@ -101,6 +106,40 @@ def default_transcript_sources(notes_dir: Path) -> TranscriptSources:
 
 
 @pure
+@pure
+def matching_lines(block: bytes, markers: Sequence[bytes]) -> list[str]:
+    """The lines of ``block`` that contain any of ``markers``, in order, each once, decoded as UTF-8."""
+    spans: set[tuple[int, int]] = set()
+    for marker in markers:
+        found = block.find(marker)
+        while found != -1:
+            start = block.rfind(b"\n", 0, found) + 1
+            newline = block.find(b"\n", found)
+            end = len(block) if newline == -1 else newline
+            spans.add((start, end))
+            found = block.find(marker, end)
+    return [block[start:end].decode("utf-8", errors="replace") for start, end in sorted(spans)]
+
+
+def lines_containing(path: Path, markers: Sequence[bytes], chunk_bytes: int) -> list[str]:
+    """The lines of the file at ``path`` that contain any of ``markers``.
+
+    Almost no transcript line names the notes folder, and decoding every line to text was most of the cost of a
+    page load, so the search runs over bytes and only matching lines are decoded. A line split across two chunks is
+    carried into the next one.
+    """
+    lines: list[str] = []
+    carry = b""
+    with path.open("rb") as handle:
+        while chunk := handle.read(chunk_bytes):
+            block = carry + chunk
+            cut = block.rfind(b"\n") + 1
+            lines.extend(matching_lines(block[:cut], markers))
+            carry = block[cut:]
+    lines.extend(matching_lines(carry, markers))
+    return lines
+
+
 def note_tool_uses(line: str, session_id: str, notes_dir: Path) -> list[NoteToolUse]:
     """The note tool calls in one transcript line (none for most lines)."""
     try:
@@ -136,12 +175,13 @@ def read_note_tool_uses(sources: TranscriptSources) -> list[NoteToolUse]:
     for config_dir in sources.claude_config_dirs:
         for transcript in sorted((config_dir / "projects").glob(f"*/*{TRANSCRIPT_SUFFIX}")):
             try:
-                with transcript.open(encoding="utf-8", errors="replace") as handle:
-                    for line in handle:
-                        if notes_marker in line and '"tool_use"' in line:
-                            uses.extend(note_tool_uses(line, transcript.stem, sources.notes_dir))
+                lines = lines_containing(transcript, (notes_marker.encode(),), TRANSCRIPT_CHUNK_BYTES)
             except OSError as e:
                 logger.debug("Skipped transcript {}: {}", transcript, e)
+                continue
+            for line in lines:
+                if '"tool_use"' in line:
+                    uses.extend(note_tool_uses(line, transcript.stem, sources.notes_dir))
     return uses
 
 
@@ -194,14 +234,17 @@ def read_pi_note_tool_uses(mngr_agents_dir: Path, notes_dir: Path) -> tuple[list
         for transcript in sorted(sessions_dir.glob(f"*/*{TRANSCRIPT_SUFFIX}")):
             cwd = notes_dir
             try:
-                with transcript.open(encoding="utf-8", errors="replace") as handle:
-                    for line in handle:
-                        if '"type":"session"' in line.replace(" ", ""):
-                            cwd = _session_cwd(line, cwd)
-                        elif '"toolCall"' in line and notes_dir.name in line:
-                            uses.extend(pi_note_tool_uses(line, session_key, notes_dir, cwd))
+                lines = lines_containing(
+                    transcript, _PI_LINE_MARKERS + (notes_dir.name.encode(),), TRANSCRIPT_CHUNK_BYTES
+                )
             except OSError as e:
                 logger.debug("Skipped pi transcript {}: {}", transcript, e)
+                continue
+            for line in lines:
+                if '"type":"session"' in line.replace(" ", ""):
+                    cwd = _session_cwd(line, cwd)
+                elif '"toolCall"' in line and notes_dir.name in line:
+                    uses.extend(pi_note_tool_uses(line, session_key, notes_dir, cwd))
     return uses, agent_id_by_session
 
 

@@ -124,7 +124,7 @@ def arguments_from_config(
     help="Skip the registration: a throwaway boot, such as a preview, that must not re-point the live row",
 )
 def main(manifest_path: Path, static_directory: Path, is_unregistered: bool) -> None:
-    """Run the memories app: what the workspace's Claude chats have written down, and a way to correct or delete it."""
+    """Run the memories app: what the workspace's Claude and pi chats have written down, and a way to correct or delete it."""
     arguments = arguments_from_config(
         config=load_config(),
         manifest_path=manifest_path,

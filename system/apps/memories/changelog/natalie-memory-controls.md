@@ -5,3 +5,5 @@ Agent Memory has memory settings, modelled on the Claude apps': "Use memory" pau
 - The settings say when a change reaches each chat: pi chats from their next message, new Claude chats right away, and open Claude chats are told on their next message (they pick memory back up once restarted).
 
 - The switches are kept in `data/.apps/memories/settings.json`. Turning Claude's memory off also sets `autoMemoryEnabled: false` in `.claude/settings.local.json` (keeping the file's other settings), which stops a new Claude chat from loading or saving memory. A settings file that can't be read is shown on the page and treated as off.
+
+- The page loads faster with a long chat history: it searches transcripts as bytes and decodes only the lines that name the notes folder, about 1.7x faster on 350MB of transcripts, with memory bounded to one 4MB chunk at a time.
