@@ -38,14 +38,23 @@ from collections import deque
 from pathlib import Path
 from typing import Final, NamedTuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from oom_priority.badness import (
+    UNKILLABLE_ADJ,
+    ProcessSample,
+    RankedProcess,
+    find_earlyoom_argv,
+    parse_avoid_regex,
+    predict_ranking,
+    snapshot_processes,
+)
+
 PROC: Final[Path] = Path("/proc")
 DEFAULT_LEDGER: Final[Path] = Path(
     "/home/user/workspace/data/.state/oom_priority/events/shed.jsonl"
 )
 DEFAULT_EARLYOOM_LOG: Final[Path] = Path("/var/log/supervisor/earlyoom-stderr.log")
-# What --avoid is worth, in oom_score_adj points.
-AVOID_ADJ: Final[int] = -300
-UNKILLABLE_ADJ: Final[int] = -1000
 # A built-in service, the primary agent or never-kill infrastructure.
 PROTECTED_MAX_ADJ: Final[int] = 80
 # Agent subprocesses and Chromium.
@@ -89,37 +98,6 @@ for line in sys.stdin:
 
 
 # NamedTuples rather than pydantic models: the drill runs under a bare python3.
-class ProcessSample(NamedTuple):
-    pid: int
-    comm: str
-    oom_score_adj: int
-    # The resident memory the fork's badness counts (see StatusMemory), or None
-    # for a process without an mm.
-    rss_kib: int | None
-    vm_swap_kib: int
-    vm_pte_kib: int
-
-
-class StatusMemory(NamedTuple):
-    # None for a process without an mm, as the fork reads it: no VmRSS line
-    # (Linux: a kernel thread or a zombie), or a VmSize of 0 (gVisor: a zombie
-    # or an exiting task). A gVisor zombie leader whose threads still run reads
-    # 0, since gVisor cannot list its task directory to reach their memory.
-    vm_rss_kib: int | None
-    vm_swap_kib: int
-    vm_pte_kib: int
-    # Linux prints RssAnon; gVisor does not, and its VmRSS counts whole mapped
-    # ranges, so there the fork counts the smaps Anonymous total instead.
-    has_rss_anon: bool
-
-
-class RankedProcess(NamedTuple):
-    pid: int
-    comm: str
-    oom_score_adj: int
-    badness_kib: int
-
-
 class KillJudgement(NamedTuple):
     # "right": the victim was the top predicted badness (within the
     # tolerance); "wrong": something else was; "unpredicted": the victim was
@@ -128,39 +106,6 @@ class KillJudgement(NamedTuple):
     victim_badness_kib: int | None
     top: RankedProcess | None
     is_protected_shed_before_expendable: bool
-
-
-def predict_ranking(
-    samples: list[ProcessSample],
-    total_kib: int,
-    avoid_regex: re.Pattern[str] | None,
-    excluded_pids: set[int],
-) -> list[RankedProcess]:
-    """The processes earlyoom could pick, highest predicted badness first."""
-    ranked: list[RankedProcess] = []
-    for sample in samples:
-        if sample.pid == 1 or sample.pid in excluded_pids:
-            continue
-        if sample.rss_kib is None or sample.oom_score_adj == UNKILLABLE_ADJ:
-            continue
-        adj = sample.oom_score_adj
-        if avoid_regex is not None and avoid_regex.search(sample.comm):
-            adj += AVOID_ADJ
-        badness = (
-            sample.rss_kib
-            + sample.vm_swap_kib
-            + sample.vm_pte_kib
-            + adj * total_kib // 1000
-        )
-        ranked.append(
-            RankedProcess(
-                pid=sample.pid,
-                comm=sample.comm,
-                oom_score_adj=sample.oom_score_adj,
-                badness_kib=badness,
-            )
-        )
-    return sorted(ranked, key=lambda process: process.badness_kib, reverse=True)
 
 
 class Snapshot(NamedTuple):
@@ -246,46 +191,6 @@ def judge_kill(
     )
 
 
-def parse_status_memory(text: str) -> StatusMemory:
-    """The memory counters of a /proc/<pid>/status body, in KiB; a missing
-    VmSwap/VmPTE (gVisor serves neither) reads as 0."""
-    values: dict[str, int] = {}
-    for line in text.splitlines():
-        name, _, rest = line.partition(":")
-        if name in ("VmRSS", "VmSwap", "VmPTE", "VmSize", "Threads", "RssAnon"):
-            fields = rest.split()
-            if fields and fields[0].isdigit():
-                values[name] = int(fields[0])
-    rss = values.get("VmRSS")
-    if rss is not None and values.get("VmSize") == 0:
-        rss = 0 if values.get("Threads", 1) > 1 else None
-    return StatusMemory(
-        vm_rss_kib=rss,
-        vm_swap_kib=values.get("VmSwap", 0),
-        vm_pte_kib=values.get("VmPTE", 0),
-        has_rss_anon="RssAnon" in values,
-    )
-
-
-def parse_smaps_anonymous(text: str) -> int:
-    """The sum of a /proc/<pid>/smaps body's Anonymous lines, in KiB."""
-    return sum(
-        int(line.split()[1])
-        for line in text.splitlines()
-        if line.startswith("Anonymous:")
-    )
-
-
-def parse_avoid_regex(cmdline: list[str]) -> re.Pattern[str] | None:
-    """The ``--avoid`` regex from earlyoom's argv, or None."""
-    for index, argument in enumerate(cmdline):
-        if argument == "--avoid" and index + 1 < len(cmdline):
-            return re.compile(cmdline[index + 1])
-        if argument.startswith("--avoid="):
-            return re.compile(argument.split("=", 1)[1])
-    return None
-
-
 def read_meminfo() -> dict[str, int]:
     values: dict[str, int] = {}
     for line in (PROC / "meminfo").read_text().splitlines():
@@ -296,41 +201,11 @@ def read_meminfo() -> dict[str, int]:
     return values
 
 
-def snapshot_processes(proc: Path) -> list[ProcessSample]:
-    samples: list[ProcessSample] = []
-    for entry in proc.iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            comm = (entry / "comm").read_text().rstrip("\n")
-            adj = int((entry / "oom_score_adj").read_text())
-            memory = parse_status_memory((entry / "status").read_text())
-            rss = memory.vm_rss_kib
-            if rss and not memory.has_rss_anon:
-                rss = parse_smaps_anonymous((entry / "smaps").read_text())
-        except (OSError, ValueError):
-            continue
-        samples.append(
-            ProcessSample(
-                int(entry.name), comm, adj, rss, memory.vm_swap_kib, memory.vm_pte_kib
-            )
-        )
-    return samples
-
-
 def find_earlyoom() -> tuple[int, list[str]]:
-    for entry in PROC.iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            if (entry / "comm").read_text().strip() == "earlyoom":
-                argv = (entry / "cmdline").read_bytes().split(b"\0")
-                return int(entry.name), [
-                    argument.decode() for argument in argv if argument
-                ]
-        except OSError:
-            continue
-    raise SystemExit("oom_drill: earlyoom is not running")
+    found = find_earlyoom_argv(PROC)
+    if found is None:
+        raise SystemExit("oom_drill: earlyoom is not running")
+    return found
 
 
 def set_own_adj(adj: int) -> None:

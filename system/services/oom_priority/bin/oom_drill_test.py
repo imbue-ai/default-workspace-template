@@ -11,7 +11,8 @@ from collections import deque
 from pathlib import Path
 
 import oom_drill
-from oom_drill import ProcessSample
+from oom_priority import badness
+from oom_priority.badness import ProcessSample
 
 # One oom_score_adj point is worth (MemTotal + SwapTotal) / 1000 KiB: 1000 KiB here.
 _TOTAL_KIB = 1_000_000
@@ -46,7 +47,7 @@ _WORKSPACE = [
 
 
 def test_prediction_follows_the_bands_and_skips_what_earlyoom_cannot_pick() -> None:
-    ranking = oom_drill.predict_ranking(
+    ranking = badness.predict_ranking(
         _WORKSPACE, _TOTAL_KIB, _AVOID, excluded_pids={20}
     )
 
@@ -59,7 +60,7 @@ def test_prediction_follows_the_bands_and_skips_what_earlyoom_cannot_pick() -> N
 
 
 def test_swap_and_page_tables_count_like_rss() -> None:
-    ranking = oom_drill.predict_ranking(
+    ranking = badness.predict_ranking(
         [_sample(100, "a", 100, 1000), _sample(101, "b", 100, 1000, swap=500, pte=10)],
         _TOTAL_KIB,
         None,
@@ -72,7 +73,7 @@ def test_swap_and_page_tables_count_like_rss() -> None:
 
 
 def test_the_top_predicted_victim_is_right_and_anything_below_it_is_wrong() -> None:
-    ranking = oom_drill.predict_ranking(
+    ranking = badness.predict_ranking(
         _WORKSPACE, _TOTAL_KIB, _AVOID, excluded_pids={20}
     )
 
@@ -88,7 +89,7 @@ def test_the_top_predicted_victim_is_right_and_anything_below_it_is_wrong() -> N
 
 
 def test_a_near_tie_within_the_tolerance_is_not_a_wrong_victim() -> None:
-    ranking = oom_drill.predict_ranking(
+    ranking = badness.predict_ranking(
         [_sample(100, "a", 25, 30_000), _sample(101, "b", 24, 30_500)],
         _TOTAL_KIB,
         None,
@@ -103,7 +104,7 @@ def test_a_service_shed_while_something_at_900_remains_is_flagged() -> None:
     # The service is the top pick (a huge RSS outweighs the band gap), so the
     # prediction calls it right, but a pytest at 900 is still there.
     samples = [_sample(30, "python3", 20, 950_000), _sample(50, "pytest", 900, 20_000)]
-    ranking = oom_drill.predict_ranking(samples, _TOTAL_KIB, None, excluded_pids=set())
+    ranking = badness.predict_ranking(samples, _TOTAL_KIB, None, excluded_pids=set())
 
     judgement = oom_drill.judge_kill(30, ranking, tolerance_kib=1024)
 
@@ -112,7 +113,7 @@ def test_a_service_shed_while_something_at_900_remains_is_flagged() -> None:
 
 
 def test_a_victim_that_started_after_the_snapshot_is_unpredicted() -> None:
-    ranking = oom_drill.predict_ranking(
+    ranking = badness.predict_ranking(
         _WORKSPACE, _TOTAL_KIB, _AVOID, excluded_pids=set()
     )
     assert (
@@ -159,7 +160,7 @@ def test_a_kill_is_judged_against_the_snapshots_from_before_earlyoom_chose_it() 
         60, snapshots, tolerance_kib=1024, chosen_at=2.0
     )
     assert snapshot is at_choice
-    ranking = oom_drill.predict_ranking(
+    ranking = badness.predict_ranking(
         snapshot.samples, _TOTAL_KIB, _AVOID, excluded_pids=set()
     )
     assert oom_drill.judge_kill(60, ranking, tolerance_kib=1024).verdict == "right"
@@ -183,7 +184,7 @@ def test_a_victim_first_listed_after_earlyoom_chose_it_is_unpredicted() -> None:
     assert oom_drill.last_snapshot_with(62, snapshots, 1024, chosen_at=2.0) is None
     judged = oom_drill.newest_snapshot_before(snapshots, chosen_at=2.0)
     assert judged is before_choice
-    ranking = oom_drill.predict_ranking(
+    ranking = badness.predict_ranking(
         judged.samples, _TOTAL_KIB, _AVOID, excluded_pids=set()
     )
     assert oom_drill.judge_kill(62, ranking, tolerance_kib=1024).verdict == (
@@ -219,14 +220,14 @@ def test_earlyoom_kill_lines_are_read_whole_and_new(tmp_path: Path) -> None:
 
 
 def test_status_memory_reads_gvisor_and_kernel_threads() -> None:
-    assert oom_drill.parse_status_memory(
+    assert badness.parse_status_memory(
         "Name:\tx\nVmSize:\t9000 kB\nVmRSS:\t  812 kB\nRssAnon:\t 700 kB\nVmPTE:\t 64 kB\nVmSwap:\t 3 kB\n"
     ) == (812, 3, 64, True)
     # gVisor serves no VmSwap, VmPTE or RssAnon.
-    assert oom_drill.parse_status_memory(
+    assert badness.parse_status_memory(
         "Name:\tx\nVmSize:\t9000 kB\nVmRSS:\t812 kB\n"
     ) == (812, 0, 0, False)
-    assert oom_drill.parse_status_memory("Name:\tkthreadd\nThreads:\t1\n") == (
+    assert badness.parse_status_memory("Name:\tkthreadd\nThreads:\t1\n") == (
         None,
         0,
         0,
@@ -237,9 +238,9 @@ def test_status_memory_reads_gvisor_and_kernel_threads() -> None:
 def test_status_memory_reads_a_gvisor_task_without_an_mm_as_the_fork_does() -> None:
     # gVisor prints every Vm* line as 0 for a zombie or an exiting task.
     zombie = "Name:\tpulseaudio\nState:\tZ (zombie)\nVmSize:\t0 kB\nVmRSS:\t0 kB\n"
-    assert oom_drill.parse_status_memory(zombie + "Threads:\t1\n").vm_rss_kib is None
+    assert badness.parse_status_memory(zombie + "Threads:\t1\n").vm_rss_kib is None
     # A zombie leader whose threads still run competes on its adj alone.
-    assert oom_drill.parse_status_memory(zombie + "Threads:\t3\n").vm_rss_kib == 0
+    assert badness.parse_status_memory(zombie + "Threads:\t3\n").vm_rss_kib == 0
 
 
 def test_smaps_anonymous_sums_every_mapping_and_skips_file_pages() -> None:
@@ -251,7 +252,7 @@ def test_smaps_anonymous_sums_every_mapping_and_skips_file_pages() -> None:
         "7f3a00000000-7f3a00200000 rw-p 00000000 00:00 0\n"
         "Rss:\t2048 kB\nAnonymous:\t2048 kB\n"
     )
-    assert oom_drill.parse_smaps_anonymous(smaps) == 6144
+    assert badness.parse_smaps_anonymous(smaps) == 6144
 
 
 def test_snapshot_counts_smaps_anonymous_only_where_status_has_no_rss_anon(
@@ -281,7 +282,7 @@ def test_snapshot_counts_smaps_anonymous_only_where_status_has_no_rss_anon(
     add(13, "VmSize:\t0 kB\nVmRSS:\t0 kB\nThreads:\t3\n", None)
     (tmp_path / "self").mkdir()
 
-    samples = oom_drill.snapshot_processes(tmp_path)
+    samples = badness.snapshot_processes(tmp_path)
 
     rss_by_pid = {sample.pid: sample.rss_kib for sample in samples}
     assert rss_by_pid == {10: 30000, 11: 255000, 12: None, 13: 0}
@@ -289,13 +290,13 @@ def test_snapshot_counts_smaps_anonymous_only_where_status_has_no_rss_anon(
 
 def test_avoid_regex_is_read_from_earlyoom_argv() -> None:
     argv = ["/usr/local/bin/earlyoom", "-m", "10,5", "--avoid", "^(sshd|tini)$|^tmux"]
-    avoid = oom_drill.parse_avoid_regex(argv)
+    avoid = badness.parse_avoid_regex(argv)
     assert (
         avoid is not None
         and avoid.search("tmux: server")
         and not avoid.search("python3")
     )
-    assert oom_drill.parse_avoid_regex(["earlyoom", "-r", "0"]) is None
+    assert badness.parse_avoid_regex(["earlyoom", "-r", "0"]) is None
 
 
 def test_ledger_reads_only_whole_new_lines(tmp_path: Path) -> None:
