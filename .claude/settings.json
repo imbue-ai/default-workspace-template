@@ -74,6 +74,17 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "case \"$(cat)\" in *data/memories*) python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/agent_memory_context.py --sync-index >/dev/null 2>&1 ;; esac; true"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

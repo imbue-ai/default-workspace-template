@@ -655,6 +655,36 @@ def test_memory_stamps_a_note_pi_just_wrote(tmp_path: Path) -> None:
     assert elsewhere.read_text() == "---\nname: other\n---\nx\n"
 
 
+def test_memory_syncs_the_index_after_a_shell_command_on_the_notes(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _memory_notes_dir(tmp_path)
+    notes_dir.mkdir(parents=True)
+    (notes_dir / "user-location.md").write_text(
+        "---\nname: user-location\ndescription: User lives in California\n---\nx\n"
+    )
+    synced = (
+        _MEMORY_INDEX_LINE
+        + "\n- [User location](user-location.md) — User lives in California\n"
+    )
+
+    for command, is_error, expected in (
+        ("ls system", False, _MEMORY_INDEX_LINE + "\n"),
+        (
+            "cat > ~/workspace/data/memories/user-location.md",
+            True,
+            _MEMORY_INDEX_LINE + "\n",
+        ),
+        ("cat > ~/workspace/data/memories/user-location.md", False, synced),
+    ):
+        _memory_output(
+            tmp_path,
+            {"toolName": "bash", "input": {"command": command}, "isError": is_error},
+            event="tool_result",
+        )
+        assert (notes_dir / "MEMORY.md").read_text() == expected, command
+
+
 def test_memory_leaves_a_failed_write_and_other_tools_alone(tmp_path: Path) -> None:
     notes_dir = _memory_notes_dir(tmp_path)
     notes_dir.mkdir(parents=True)
