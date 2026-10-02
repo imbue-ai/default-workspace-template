@@ -592,7 +592,7 @@ Then compose the results message per `references/results-message.md`.
 When the user overrides a `stuck` verdict, resume the same pass with the same
 worker as `.agents/shared/references/lead-proxy.md` ("Resuming after the user
 overrides a failure") says. This flow's preconditions, re-taken before the
-`revive`, each `tk` call as its own command:
+`reply`, each `tk` call as its own command:
 
 1. The `updating workspace` lease, exactly as Step 1 takes it.
 2. The run record, and the target the task file carries:

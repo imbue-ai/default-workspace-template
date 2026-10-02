@@ -76,12 +76,11 @@ next poll.
 
 If await exits with code 75, the worker's own agent was **shed by the OOM
 daemon** to relieve memory pressure: it will not report until revived. This is
-not a worker bug -- revive it with `mngr start <WORKER_NAME> --restart` (a plain
-message or `mngr start` does not relaunch a shed agent), then nudge it to
-continue with `create_worker.py reply --task-file <TASK_FILE> -m continue`. You
-do not need to resend the task: it survives in the worker's conversation
-history, and a SessionStart hook already tells the revived worker it was paused,
-so it re-checks state before continuing. Before reviving it, and whenever a
+not a worker bug -- revive it by nudging it to continue with
+`create_worker.py reply --task-file <TASK_FILE> -m continue`, whose send
+relaunches a shed agent. You do not need to resend the task: it survives in
+the worker's conversation history, and a SessionStart hook already tells the
+revived worker it was paused, so it re-checks state before continuing. Before reviving it, and whenever a
 worker's `question` gate reports that a test command was shed, free memory
 with the user per `.agents/shared/references/freeing-memory.md`: a revival or
 rerun into the same pressure is shed again.
@@ -299,18 +298,18 @@ On `type: status`:
 When the user answers a `stuck` report with a decision (apply it anyway, an
 answer to what blocked the worker), resume the same worker rather than
 finishing its task yourself. Re-take whatever preconditions the calling skill
-holds for a pass (a lease, a run record), then revive it:
+holds for a pass (a lease, a run record), then send it the decision:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py revive --name <WORKER_NAME>
+uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+    --task-file <TASK_FILE> -m "<the user's decision>"
 ```
 
-`revive` is `stop`'s inverse: `mngr start` brings the agent back in its
-worktree with its conversation intact, and the `archived_at` label the stop
-set is blanked, so a later crash of it is restarted like any other
-(`.agents/skills/launch-task/references/dead-worker-recovery.md`). Then send
-the decision with `create_worker.py reply`, re-arm the `await` poll, and end
-your turn.
+The send brings the stopped worker back in its worktree with its conversation
+intact, and `reply` blanks the `archived_at` label the stop set, so a later
+crash of it is restarted like any other
+(`.agents/skills/launch-task/references/dead-worker-recovery.md`). Then re-arm
+the `await` poll and end your turn.
 
 - `name: no-update-needed` (or other skill-specific benign no-op terminals) --
   the worker decided there was nothing to do. Close any tracking ticket and

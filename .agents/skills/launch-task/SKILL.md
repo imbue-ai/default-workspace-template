@@ -196,9 +196,9 @@ Flow-specific substitutions when reading `lead-proxy.md`:
   the worker is dead), see `references/worker-failure.md` -- do not
   silently retry.
 - If a worker is `STOPPED` with uncommitted work and its `archived_at` label
-  is absent or empty, default to `mngr start <worker>` and message it to
-  continue with `create_worker.py reply` -- the worktree is preserved across
-  restart. One whose `archived_at` is set was stopped on purpose by its lead
+  is absent or empty, message it to continue with `create_worker.py reply`,
+  which restarts it -- the worktree is preserved across the restart. One
+  whose `archived_at` is set was stopped on purpose by its lead
   after a failure; leave it. See `references/dead-worker-recovery.md` for the manual
   salvage fallback when restart isn't viable.
 - If `launch` refuses a taken name, destroy that worker
