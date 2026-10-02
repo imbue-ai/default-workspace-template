@@ -3058,11 +3058,16 @@ class AgentManager:
 
         With a spare on ``spare_account_id`` and the terms a new chat there gets (a ready one, else
         one still being created), the chat takes the spare's id and name, and the spare is reserved
-        for it (``spare_chat.py``); otherwise both are minted fresh, and the next spare started is
-        reserved for the chat when it fits (``_record_new_spare_locked``).
+        for it (``spare_chat.py``), unless awaiting chats already hold as many spares as the pool keeps;
+        otherwise both are minted fresh, and the next spare started is reserved for the chat when it
+        fits (``_record_new_spare_locked``).
         """
         terms = None if spare_account_id is None else self._new_chat_terms_locked(spare_account_id, "")
-        spare = None if terms is None else self._spare_for_new_chat_locked(terms)
+        spare = (
+            None
+            if terms is None or not self._may_reserve_another_spare_locked()
+            else self._spare_for_new_chat_locked(terms)
+        )
         if spare is None:
             chat_id = ChatId(str(AgentId()))
             name = self._mint_display_name_locked("")
@@ -3465,6 +3470,12 @@ class AgentManager:
         agent = self._agents.get(spare.chat_id)
         return agent is not None and not is_lifecycle_dead(agent.state)
 
+    def _may_reserve_another_spare_locked(self) -> bool:
+        """Whether chats awaiting their first send hold fewer reserved spares than the pool keeps, so idle
+        spares stay bounded however many drafts wait unsent. Lock held."""
+        reserved_count = sum(1 for spare in self._spares if spare.phase is SpareChatPhase.RESERVED)
+        return reserved_count < self._spare_chat_pool_size
+
     def _spare_for_new_chat_locked(self, terms: SpareChatTerms) -> SpareChatAgent | None:
         """The spare a new chat on ``terms`` takes: a ready one, else one still being created on them. Lock held."""
         ready = next((spare for spare in self._spares if self._is_spare_usable_locked(spare, terms)), None)
@@ -3716,8 +3727,8 @@ class AgentManager:
 
         A chat awaiting its first send that holds no spare and would fit one on ``terms`` (minted before
         any account was signed in, say, or after its reserved spare was destroyed) comes first: the spare
-        is started under its id and name, reserved for it. Otherwise one is started for the pool when the
-        pool is short and may grow now. Nothing is started while a spare for either is still being created.
+        is started under its id and name, reserved for it, while awaiting chats hold fewer spares than the
+        pool keeps. Otherwise one is started for the pool when the pool is short and may grow now. Nothing is started while a spare for either is still being created.
         """
         pooled = pooled_spares(self._spares)
         if (
@@ -3730,7 +3741,9 @@ class AgentManager:
             )
         ):
             return None
-        awaiting = self._awaiting_chat_without_spare_locked(terms)
+        awaiting = (
+            self._awaiting_chat_without_spare_locked(terms) if self._may_reserve_another_spare_locked() else None
+        )
         if awaiting is not None:
             new_spare = SpareChatAgent(
                 chat_id=awaiting.chat_id, display_name=awaiting.name, terms=terms, phase=SpareChatPhase.RESERVED

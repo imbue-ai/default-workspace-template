@@ -238,9 +238,11 @@ reserved, even when its terms go stale; the session sweep destroys it only once
 its process dies or it has been up for six hours. Such a chat that holds no
 spare (minted before any sign-in, or after its spare was destroyed) has the
 next spare the app starts on its account's terms started under its own id and
-name, reserved for it, ahead of the pool's. The first send then takes it
-as a create with no chat id would, at once when it is up, else by claiming it; a
-first send on another account or fast mode, or to a spare that died, aged out,
+name, reserved for it, ahead of the pool's. Awaiting chats hold at most as
+many reserved spares as the pool keeps, so unsent drafts never keep more idle
+agents than that; a chat past the limit launches on a create of its own. The
+first send then takes a reserved spare as a create with no chat id would, at
+once when it is up, else by claiming it; a first send on another account or fast mode, or to a spare that died, aged out,
 or failed, has the spare destroyed and then creates the chat under its id.
 Discarding the chat returns the spare to the pool, and a restart, which drops
 the chat, destroys the spare, since a reservation writes nothing to disk. The

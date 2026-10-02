@@ -6187,6 +6187,29 @@ def test_an_awaiting_chat_minted_with_no_spare_has_the_next_spare_started_under_
         manager.stop()
 
 
+def test_awaiting_chats_hold_no_more_reserved_spares_than_the_pool_keeps(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        first_draft = manager.mint_awaiting_chat("")
+        assert first_draft.chat_id == spare.chat_id
+        (pooled,) = _wait_for_ready_spares(manager, 1)
+
+        second_draft = manager.mint_awaiting_chat("")
+        manager.ensure_spare_chat()
+
+        assert second_draft.chat_id != pooled.chat_id
+        assert [reserved.chat_id for reserved in _reserved_spares(manager)] == [first_draft.chat_id]
+        assert _ready_spares(manager) == [pooled]
+        assert _mngr_verbs_naming(argv_log, second_draft.chat_id) == []
+    finally:
+        manager.stop()
+
+
 def test_the_pool_is_not_topped_up_while_an_awaiting_chats_spare_is_still_booting(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
