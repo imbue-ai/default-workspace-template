@@ -31,6 +31,7 @@ read_watermark = memory_context.read_watermark
 write_watermark = memory_context.write_watermark
 stamp_note_text = memory_context.stamp_note_text
 stamp_note = memory_context.stamp_note
+sync_index = memory_context.sync_index
 CHANGE_MAX_AGE = memory_context.CHANGE_MAX_AGE
 
 _NOW = datetime(2026, 10, 1, 18, 7, 56, tzinfo=timezone.utc)
@@ -573,7 +574,7 @@ def test_the_claude_hook_runs_from_stdin_under_a_plain_python3(tmp_path: Path) -
     second = run_hook()
 
     assert first.returncode == 0, first.stderr
-    assert first.stdout.endswith("- `job.md` — software engineer\n")
+    assert first.stdout.endswith("- [Job](job.md) — software engineer\n")
     assert (second.returncode, second.stdout) == (0, "")
 
 
@@ -621,3 +622,185 @@ def test_the_full_context_ends_with_the_notice(
         "## Changes the user made to saved memories"
     )
     assert "`profile.md` was deleted" in out
+
+
+_CALIFORNIA = (
+    "---\nname: user-location\n"
+    'description: "User lives in California (US \\"Pacific\\" time)"\n'
+    "metadata:\n  type: user\n---\n\nThe user lives in California.\n"
+)
+
+
+def test_sync_sets_a_stale_line_to_what_the_note_now_says(tmp_path: Path) -> None:
+    notes_dir = _notes_dir(
+        tmp_path,
+        "- [User location](user-location.md) — lives in Virginia\n",
+    )
+    (notes_dir / "user-location.md").write_text(_CALIFORNIA)
+
+    (notes_dir / "MEMORY.md").chmod(0o640)
+
+    assert sync_index(notes_dir) is True
+    assert (notes_dir / "MEMORY.md").read_text() == (
+        '- [User location](user-location.md) — User lives in California (US "Pacific" time)\n'
+    )
+    assert (notes_dir / "MEMORY.md").stat().st_mode & 0o777 == 0o640
+
+
+def test_sync_adds_missing_lines_drops_repeats_and_keeps_everything_else(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _notes_dir(
+        tmp_path,
+        "# Memory\n\nSome prose.\n"
+        "- [Units](units.md) — metric\n"
+        "- [Gone](gone.md) — a note whose file is gone\n"
+        "- [Folded](folded.md) — kept as written\n"
+        "* [Units again](units.md) - repeated\n",
+    )
+    (notes_dir / "units.md").write_text(
+        "---\nname: units\ndescription: Prefers metric units\n---\nx\n"
+    )
+    (notes_dir / "work_style.md").write_text(
+        "---\nname: work_style\ndescription: 'Likes it''s short'\n---\nx\n"
+    )
+    (notes_dir / "no-summary.md").write_text("no frontmatter at all\n")
+    (notes_dir / "folded.md").write_text(
+        "---\nname: folded\ndescription: >-\n  spans lines\n---\nx\n"
+    )
+    (notes_dir / "README.md").write_text("---\ndescription: not a note\n---\n")
+
+    sync_index(notes_dir)
+
+    assert (notes_dir / "MEMORY.md").read_text() == (
+        "# Memory\n\nSome prose.\n"
+        "- [Units](units.md) — Prefers metric units\n"
+        "- [Gone](gone.md) — a note whose file is gone\n"
+        "- [Folded](folded.md) — kept as written\n"
+        "- [Work style](work_style.md) — Likes it's short\n"
+    )
+
+
+def test_sync_leaves_an_index_that_already_matches_alone(tmp_path: Path) -> None:
+    index = "- [Units](units.md) — Prefers metric units\r\n"
+    notes_dir = _notes_dir(tmp_path, index)
+    (notes_dir / "units.md").write_text(
+        "---\nname: units\ndescription: Prefers metric units\n---\nx\n"
+    )
+    os.utime(notes_dir / "MEMORY.md", (1, 1))
+
+    assert sync_index(notes_dir) is False
+    assert (notes_dir / "MEMORY.md").read_bytes() == index.encode()
+    assert (notes_dir / "MEMORY.md").stat().st_mtime == 1
+
+
+def test_sync_writes_the_index_when_there_is_none_and_nothing_when_there_are_no_notes(
+    tmp_path: Path,
+) -> None:
+    empty = _notes_dir(tmp_path, None)
+    assert sync_index(empty) is False
+    assert not (empty / "MEMORY.md").exists()
+
+    (empty / "user-location.md").write_text(_CALIFORNIA)
+    assert sync_index(empty) is True
+    assert (
+        (empty / "MEMORY.md")
+        .read_text()
+        .startswith("- [User location](user-location.md) — User lives in California")
+    )
+
+
+def test_stamping_a_note_pi_rewrote_also_corrects_its_index_line(
+    tmp_path: Path,
+) -> None:
+    notes_dir = _notes_dir(
+        tmp_path, "- [User location](user-location.md) — lives in Virginia\n"
+    )
+    (notes_dir / "user-location.md").write_text(_CALIFORNIA)
+
+    assert (
+        main(
+            [
+                "--stamp",
+                str(notes_dir / "user-location.md"),
+                "--harness",
+                "pi-coding",
+                "--notes-dir",
+                str(notes_dir),
+            ]
+        )
+        == 0
+    )
+
+    assert "lives in California" in (notes_dir / "MEMORY.md").read_text()
+    assert "Virginia" not in (notes_dir / "MEMORY.md").read_text()
+
+
+def test_the_index_a_pi_turn_gets_is_synced_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    notes_dir = _notes_dir(
+        tmp_path, "- [User location](user-location.md) — lives in Virginia\n"
+    )
+    (notes_dir / "user-location.md").write_text(_CALIFORNIA)
+
+    main(
+        [
+            "--json",
+            "--harness",
+            "pi-coding",
+            "--notes-dir",
+            str(notes_dir),
+            "--changes",
+            str(tmp_path / "user-changes.jsonl"),
+        ]
+    )
+
+    memory = json.loads(capsys.readouterr().out)["memory"]
+    assert "User lives in California" in memory
+    assert "Virginia" not in memory
+
+
+def _claude_post_tool_use_command() -> str:
+    settings = json.loads(
+        (_SCRIPT.parents[2] / ".claude" / "settings.json").read_text()
+    )
+    (entry,) = settings["hooks"]["PostToolUse"]
+    assert set(entry["matcher"].split("|")) == {"Write", "Edit", "MultiEdit", "Bash"}
+    (hook,) = entry["hooks"]
+    return hook["command"]
+
+
+@pytest.mark.parametrize(
+    ("tool_input", "is_synced"),
+    [
+        ({"file_path": "/home/user/workspace/data/memories/user-location.md"}, True),
+        ({"command": "sed -i 's/x/y/' ~/workspace/data/memories/MEMORY.md"}, True),
+        ({"command": "ls system/apps"}, False),
+    ],
+)
+def test_claudes_post_tool_use_hook_syncs_the_index_only_after_touching_the_notes(
+    tmp_path: Path, tool_input: dict[str, str], is_synced: bool
+) -> None:
+    notes_dir = tmp_path / "workspace" / "data" / "memories"
+    notes_dir.mkdir(parents=True)
+    (notes_dir / "MEMORY.md").write_text(
+        "- [User location](user-location.md) — lives in Virginia\n"
+    )
+    (notes_dir / "user-location.md").write_text(_CALIFORNIA)
+
+    result = subprocess.run(
+        ["sh", "-c", _claude_post_tool_use_command()],
+        input=json.dumps({"tool_name": "Write", "tool_input": tool_input}),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": os.environ["PATH"],
+            "MNGR_AGENT_WORK_DIR": str(_SCRIPT.parents[2]),
+        },
+    )
+
+    assert (result.returncode, result.stdout) == (0, "")
+    assert ("California" in (notes_dir / "MEMORY.md").read_text()) is is_synced

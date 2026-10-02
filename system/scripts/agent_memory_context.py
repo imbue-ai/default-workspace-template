@@ -205,6 +205,123 @@ def read_index(notes_dir: Path) -> str | None:
         return None
 
 
+_INDEX_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^(?P<link>\s*[-*]\s+\[[^\]]*\]\((?P<file>[^)]+)\))(?P<hook>.*)$"
+)
+
+
+def _unquote(value: str) -> str:
+    """A frontmatter scalar as YAML reads it: JSON-style double quotes, ``''`` inside single quotes, else as is."""
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] == '"':
+        try:
+            decoded = json.loads(stripped)
+        except ValueError:
+            return stripped[1:-1]
+        return decoded if isinstance(decoded, str) else stripped
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] == "'":
+        return stripped[1:-1].replace("''", "'")
+    return stripped
+
+
+def _frontmatter_value(note_text: str, key: str) -> str:
+    lines = note_text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return ""
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        found_key, _, value = line.partition(":")
+        if found_key == key:
+            # A block scalar (``|`` or ``>``) spans the lines below, which a line-based read cannot follow.
+            if value.strip()[:1] in ("|", ">"):
+                return ""
+            return " ".join(_unquote(value).split())
+    return ""
+
+
+def _index_title(note_name: str, file_name: str) -> str:
+    words = " ".join(
+        (note_name or file_name.removesuffix(".md"))
+        .replace("-", " ")
+        .replace("_", " ")
+        .split()
+    )
+    return words[:1].upper() + words[1:]
+
+
+def sync_index_text(
+    index_text: str, description_by_file: dict[str, str], name_by_file: dict[str, str]
+) -> str:
+    """``MEMORY.md`` with each note's line summarizing it as its own ``description`` says.
+
+    A chat that changes a note does not always change its line, and every chat starts from these lines, so the line
+    is the note's description, kept in step here rather than left to each model. A note's first line is rewritten,
+    later lines for it are dropped, and a note with no line gets one appended. Everything else (headings, prose,
+    lines for files that are gone) is left as it is.
+    """
+    newline = "\r\n" if "\r\n" in index_text else "\n"
+    kept: list[str] = []
+    seen: set[str] = set()
+    for line in index_text.splitlines():
+        match = _INDEX_LINE_PATTERN.match(line)
+        file_name = match.group("file") if match is not None else None
+        if match is None or file_name not in description_by_file:
+            kept.append(line)
+            continue
+        if file_name in seen:
+            continue
+        seen.add(file_name)
+        kept.append(f"{match.group('link')} — {description_by_file[file_name]}")
+    for file_name in sorted(set(description_by_file) - seen):
+        title = _index_title(name_by_file.get(file_name, ""), file_name)
+        kept.append(f"- [{title}]({file_name}) — {description_by_file[file_name]}")
+    return newline.join(kept) + newline if kept else ""
+
+
+def sync_index(notes_dir: Path) -> bool:
+    """Bring ``MEMORY.md`` in line with the notes (see ``sync_index_text``); True when it was rewritten.
+
+    A note that cannot be read, or has no description, keeps whatever line it has. Writes go through a temporary
+    file and a rename, and only when something changed. A chat appending a line between the read and the rename
+    loses it, and the next sync puts it back, since the line is rebuilt from the note.
+    """
+    description_by_file: dict[str, str] = {}
+    name_by_file: dict[str, str] = {}
+    try:
+        paths = sorted(notes_dir.glob("*.md"))
+    except OSError:
+        return False
+    for path in paths:
+        if path.name in NON_NOTE_FILENAMES:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        description = _frontmatter_value(text, "description")
+        if description:
+            description_by_file[path.name] = description
+            name_by_file[path.name] = _frontmatter_value(text, "name")
+    index_path = notes_dir / INDEX_FILENAME
+    index_text = read_index(notes_dir)
+    if index_text is None and index_path.exists():
+        return False
+    synced = sync_index_text(index_text or "", description_by_file, name_by_file)
+    if synced == (index_text or ""):
+        return False
+    temporary = index_path.with_name(f".{INDEX_FILENAME}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(synced, encoding="utf-8")
+        if index_text is not None:
+            os.chmod(temporary, index_path.stat().st_mode)
+        os.replace(temporary, index_path)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        return False
+    return True
+
+
 def latest_changes(changes_text: str, now: datetime) -> list[tuple[str, str, datetime]]:
     """Each note's latest delete or edit within ``CHANGE_MAX_AGE`` as (file name, change, when), oldest first."""
     latest: dict[str, tuple[str, datetime]] = {}
@@ -371,16 +488,6 @@ def _written_note_names(line: str, notes_dir: Path) -> list[str]:
     return names
 
 
-def _note_description(note_text: str) -> str:
-    for line in note_text.splitlines()[1:]:
-        if line.strip() == "---":
-            break
-        key, _, value = line.partition(":")
-        if key == "description":
-            return value.strip().strip("\"'")
-    return ""
-
-
 def notes_saved_since(
     notes_dir: Path,
     since: datetime,
@@ -416,7 +523,7 @@ def notes_saved_since(
             continue
         line = next(
             (candidate for candidate in index_lines if f"]({path.name})" in candidate),
-            f"- `{path.name}` — {_note_description(text)}",
+            f"- `{path.name}` — {_frontmatter_value(text, 'description')}",
         )
         found.append((modified, line))
     found.sort()
@@ -524,15 +631,25 @@ def main(argv: list[str]) -> int:
         help='Print {"protocol": ..., "memory": ...}: the fixed protocol apart from the index and notices',
     )
     parser.add_argument(
+        "--sync-index",
+        action="store_true",
+        help="Set each note's MEMORY.md line to its description (adding missing lines, dropping repeats), then exit",
+    )
+    parser.add_argument(
         "--stamp",
         type=Path,
-        help="Stamp metadata.modified (and metadata.source when missing) on this just-written note, then exit",
+        help="Stamp metadata.modified (and metadata.source when missing) on this just-written note, sync the index, then exit",
     )
     arguments = parser.parse_args(argv)
     now = datetime.now(timezone.utc)
     if arguments.stamp is not None:
         stamp_note(arguments.stamp, arguments.notes_dir, arguments.harness, now)
+        sync_index(arguments.notes_dir)
         return 0
+    if arguments.sync_index:
+        sync_index(arguments.notes_dir)
+        return 0
+    sync_index(arguments.notes_dir)
     if arguments.claude_hook:
         sys.stdout.write(
             claude_hook_output(

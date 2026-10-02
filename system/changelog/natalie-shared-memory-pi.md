@@ -9,3 +9,5 @@ pi chats now keep the workspace's shared memory (`data/memories/`) alongside Cla
 - `CLAUDE.md` tells Claude chats never to save secrets, not to save sensitive personal details (health, race or ethnicity, religious beliefs, political views, sexual orientation or gender identity) unless asked, and that the user's deletes and edits win.
 
 - `AGENTS.md` and `data/memories/README.md` describe the folder as shared by Claude and pi chats.
+
+- Each note's line in `MEMORY.md`, the summary every chat starts from, is now kept in code to match the note's `description`: `agent_memory_context.py` rewrites a stale line, adds a missing one and drops repeats. It runs after any Claude or pi tool call that writes to the notes folder (a new PostToolUse hook in `.claude/settings.json`, and the pi extension's `tool_result`), and before each message. Before this, a chat that changed a note but not its line left every new chat starting from the old fact, for example a pi chat that moved the user's location back to California while the line still said Virginia.

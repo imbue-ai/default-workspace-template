@@ -9,7 +9,9 @@
 //     "Agent Memory" app, reaches pi on its next message.
 //   * tool_result: right after pi writes or edits a note, stamp its metadata.modified (and its
 //     metadata.source when it names none), as Claude Code does for Claude's notes, so the date is
-//     never the model's guess.
+//     never the model's guess. Then, and after any shell command that names the notes folder, set
+//     each note's MEMORY.md line to the note's description, so the line every chat starts from
+//     never contradicts the note.
 //
 // The protocol and the index go in as two system prompt sections. pi records the prompt once and
 // appends a section's full text again only when it changes, so the fixed protocol is recorded
@@ -38,6 +40,8 @@ const HARNESS = "pi-coding";
 const PROTOCOL_SECTION = "workspace_memory_protocol";
 const MEMORY_SECTION = "workspace_memory";
 const NOTE_WRITING_TOOLS = new Set(["write", "edit"]);
+// How a shell command names the folder, whether as data/memories or ~/workspace/data/memories.
+const NOTES_DIR_IN_COMMANDS = "data/memories";
 const SCRIPT_TIMEOUT_MS = 5000;
 const LOG_PATH = join(process.env.MNGR_AGENT_STATE_DIR || "/tmp", "pi_workspace_memory.log");
 
@@ -91,6 +95,23 @@ function writtenNote(event: any): string | null {
   return dirname(path) === NOTES_DIR ? path : null;
 }
 
+/** Whether a successful shell command named the notes folder, so it may have changed a note or the index. */
+function touchesNotesByShell(event: any): boolean {
+  if (event?.isError === true || event?.toolName !== "bash") return false;
+  const command = event?.input?.command;
+  return typeof command === "string" && command.includes(NOTES_DIR_IN_COMMANDS);
+}
+
+/** Runs the context script for a side effect on the notes; a failure is logged and the note left as it is. */
+function runScript(args: readonly string[], what: string): void {
+  try {
+    const result = spawnSync("python3", [CONTEXT_SCRIPT, ...args], { encoding: "utf-8", timeout: SCRIPT_TIMEOUT_MS });
+    if (result.status !== 0) note(`${what} exited ${result.status ?? result.signal}; left as written`);
+  } catch (error) {
+    note(`${what} failed: ${String(error)}; left as written`);
+  }
+}
+
 export default function workspaceMemory(pi: any): void {
   pi.on("before_agent_start", (event: any) => {
     const sections = memorySections();
@@ -109,17 +130,12 @@ export default function workspaceMemory(pi: any): void {
   });
 
   pi.on("tool_result", (event: any) => {
-    const path = writtenNote(event);
-    if (path === null) return undefined;
-    try {
-      const result = spawnSync("python3", [CONTEXT_SCRIPT, "--stamp", path, "--harness", HARNESS], {
-        encoding: "utf-8",
-        timeout: SCRIPT_TIMEOUT_MS,
-      });
-      if (result.status !== 0) note(`stamping ${path} exited ${result.status ?? result.signal}; left as written`);
-    } catch (error) {
-      note(`stamping ${path} failed: ${String(error)}; left as written`);
+    if (touchesNotesByShell(event)) {
+      runScript(["--sync-index"], "syncing the memory index");
+      return undefined;
     }
+    const path = writtenNote(event);
+    if (path !== null) runScript(["--stamp", path, "--harness", HARNESS], `stamping ${path}`);
     return undefined;
   });
 }
