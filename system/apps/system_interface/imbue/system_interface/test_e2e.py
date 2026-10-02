@@ -42,6 +42,7 @@ from playwright.sync_api import expect
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
@@ -1483,7 +1484,7 @@ _WINDOW_STATE_RECORDER = """(id) => {
 }"""
 
 
-class _DesktopTraffic(FrozenModel):
+class _DesktopTraffic(MutableModel):
     """What one page said and heard about its client's desktop over the socket, appended as it happens."""
 
     reports: list[dict[str, Any]] = Field(description="Every ``client_state`` the page sent")
