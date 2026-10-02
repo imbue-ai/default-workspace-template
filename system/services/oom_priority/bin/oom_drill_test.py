@@ -7,6 +7,9 @@ staging rehearsal and the AWS release test.
 
 import json
 import re
+import shutil
+import subprocess
+import sys
 from collections import deque
 from pathlib import Path
 
@@ -317,3 +320,26 @@ def test_ledger_reads_only_whole_new_lines(tmp_path: Path) -> None:
         handle.write('ed", "pid": 3}\n')
     records, _offset = oom_drill.read_new_ledger_kills(ledger, offset)
     assert [record["pid"] for record in records] == [3]
+
+
+def test_the_drill_runs_from_the_two_files_oom_drill_md_sends_in_with_nothing_else(
+    tmp_path: Path,
+) -> None:
+    package_root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "bin/oom_drill.py",
+        "src/oom_priority/__init__.py",
+        "src/oom_priority/badness.py",
+    ):
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(package_root / relative, tmp_path / relative)
+    # -S and -E: no site packages and no PYTHONPATH, as a bare python3 in a workspace of any template version.
+    result = subprocess.run(
+        [sys.executable, "-S", "-E", str(tmp_path / "bin/oom_drill.py"), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--bands" in result.stdout
