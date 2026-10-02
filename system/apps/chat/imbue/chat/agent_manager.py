@@ -3058,7 +3058,8 @@ class AgentManager:
 
         With a spare on ``spare_account_id`` and the terms a new chat there gets (a ready one, else
         one still being created), the chat takes the spare's id and name, and the spare is reserved
-        for it (``spare_chat.py``); otherwise both are minted fresh.
+        for it (``spare_chat.py``); otherwise both are minted fresh, and the next spare started is
+        reserved for the chat when it fits (``_record_new_spare_locked``).
         """
         terms = None if spare_account_id is None else self._new_chat_terms_locked(spare_account_id, "")
         spare = None if terms is None else self._spare_for_new_chat_locked(terms)
@@ -3643,8 +3644,8 @@ class AgentManager:
         A ready spare whose terms went stale (the default account, the project, or the fast mode a
         new chat starts in changed), that has waited ``SPARE_CHAT_MAX_AGE_SECONDS``, or whose
         process died is destroyed (one reserved for a chat only for the last two), and a spare is started
-        while the pool holds fewer than its size, one at a time (mngr's host lock runs creates one
-        at a time anyway). Nothing happens in a manager that keeps no spares (a secondary chat),
+        for a chat awaiting its first send that holds none, else while the pool holds fewer than its
+        size, one at a time (mngr's host lock runs creates one at a time anyway). Nothing happens in a manager that keeps no spares (a secondary chat),
         once the app is stopping, before the agent list is known, or during the backoff that
         follows a spare's failed create or destroy or its process dying (most likely shed for
         memory); with no account to start one on, the ready spares are destroyed and none is
@@ -3709,27 +3710,58 @@ class AgentManager:
             self._spare_retry_not_before = now + SPARE_CHAT_RETRY_BACKOFF_SECONDS
 
     def _record_new_spare_locked(self, terms: SpareChatTerms | None, now: float) -> SpareChatAgent | None:
-        """Record the next spare on ``terms`` when the pool is short and may grow now, and return it for
-        its create; None when no spare is due. Lock held."""
+        """Record the next spare on ``terms``, and return it for its create; None when no spare is due. Lock held.
+
+        A chat awaiting its first send that holds no spare and would fit one on ``terms`` (minted before
+        any account was signed in, say, or after its reserved spare was destroyed) comes first: the spare
+        is started under its id and name, reserved for it. Otherwise one is started for the pool when the
+        pool is short and may grow now.
+        """
         pooled = pooled_spares(self._spares)
-        is_one_being_created = any(spare.phase is SpareChatPhase.CREATING for spare in pooled)
-        is_one_ready = any(spare.phase is SpareChatPhase.READY for spare in pooled)
         if (
             terms is None
             or now < self._spare_retry_not_before
-            or is_one_being_created
-            or len(pooled) >= self._spare_chat_pool_size
-            or (is_one_ready and now < self._spare_replenish_not_before)
+            or any(spare.phase is SpareChatPhase.CREATING for spare in pooled)
         ):
             return None
-        new_spare = SpareChatAgent(
-            chat_id=ChatId(str(AgentId())),
-            display_name=self._mint_display_name_locked(""),
-            terms=terms,
-            phase=SpareChatPhase.CREATING,
-        )
+        awaiting = self._awaiting_chat_without_spare_locked(terms)
+        if awaiting is not None:
+            new_spare = SpareChatAgent(
+                chat_id=awaiting.chat_id, display_name=awaiting.name, terms=terms, phase=SpareChatPhase.RESERVED
+            )
+        elif len(pooled) >= self._spare_chat_pool_size or (
+            any(spare.phase is SpareChatPhase.READY for spare in pooled) and now < self._spare_replenish_not_before
+        ):
+            return None
+        else:
+            new_spare = SpareChatAgent(
+                chat_id=ChatId(str(AgentId())),
+                display_name=self._mint_display_name_locked(""),
+                terms=terms,
+                phase=SpareChatPhase.CREATING,
+            )
         self._spares = (*self._spares, new_spare)
         return new_spare
+
+    def _awaiting_chat_without_spare_locked(self, terms: SpareChatTerms) -> ProvisionalChat | None:
+        """An unseeded chat awaiting its first send that holds no spare, and whose account, project, and fast
+        mode a spare on ``terms`` fits; None when there is none. Lock held."""
+        return next(
+            (
+                provisional
+                for provisional in self._provisional_chats.values()
+                if provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+                and not provisional.is_seeded
+                and provisional.account_id in ("", terms.account_id)
+                and self._spare_locked(provisional.chat_id) is None
+                and str(provisional.chat_id) not in self._agents
+                and self._new_chat_terms_locked(
+                    terms.account_id, provisional.project_id, self.get_fast_mode_state(provisional.chat_id)
+                )
+                == terms
+            ),
+            None,
+        )
 
     def _move_handed_spare_into_chat_band(self, chat_id: ChatId) -> None:
         """Move a spare a chat just took out of the ``SPARE_AGENT`` band, as a chat just started.

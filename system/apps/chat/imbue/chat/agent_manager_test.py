@@ -6156,6 +6156,37 @@ def test_the_empty_list_chat_takes_the_ready_spares_id_and_name_and_the_pool_is_
         manager.stop()
 
 
+def test_an_awaiting_chat_minted_with_no_spare_has_the_next_spare_started_under_its_id_and_takes_it(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        awaiting = manager.awaiting_chat_for_empty_list()
+        assert manager._spares == ()
+
+        manager.ensure_spare_chat()
+
+        wait_until_true(
+            lambda: [spare.ready_at is not None for spare in _reserved_spares(manager)] == [True],
+            timeout_seconds=15.0,
+            what="the awaiting chat's spare coming up",
+        )
+        (reserved,) = _reserved_spares(manager)
+        assert (reserved.chat_id, reserved.display_name) == (awaiting.chat_id, awaiting.name)
+        (pooled,) = _wait_for_ready_spares(manager, 1)
+        assert pooled.chat_id != awaiting.chat_id
+        assert manager.get_chat_snapshots() == []
+
+        launched = manager.create_chat("", chat_id=awaiting.chat_id, account_id=reserved.terms.account_id)
+
+        assert launched.chat_id == awaiting.chat_id
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [awaiting.chat_id]
+        assert _mngr_verbs_naming(argv_log, awaiting.chat_id) == ["create"]
+    finally:
+        manager.stop()
+
+
 def test_an_awaiting_chats_reserved_spare_is_not_replaced_when_its_terms_go_stale(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
