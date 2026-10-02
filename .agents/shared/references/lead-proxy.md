@@ -80,10 +80,11 @@ not a worker bug -- revive it by nudging it to continue with
 `create_worker.py reply --task-file <TASK_FILE> -m continue`, whose send
 relaunches a shed agent. You do not need to resend the task: it survives in
 the worker's conversation history, and a SessionStart hook already tells the
-revived worker it was paused, so it re-checks state before continuing. Before reviving it, and whenever a
-worker's `question` gate reports that a test command was shed, free memory
-with the user per `.agents/shared/references/freeing-memory.md`: a revival or
-rerun into the same pressure is shed again.
+revived worker it was paused, so it re-checks state before continuing. Before
+reviving it, and whenever a worker's `question` gate reports that a test
+command was shed, free memory with the user per
+`.agents/shared/references/freeing-memory.md`: a revival or rerun into the
+same pressure is shed again.
 
 ## Diagnose worker liveness before invoking failure flow
 
