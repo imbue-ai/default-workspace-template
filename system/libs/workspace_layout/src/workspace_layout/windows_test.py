@@ -63,8 +63,12 @@ def test_the_reader_answers_an_empty_list_for_an_app_with_no_windows(loopback_sh
 
 
 def test_the_reader_answers_none_rather_than_no_windows_when_the_shell_cannot_be_read(
-    loopback_shell: LoopbackShell,
+    loopback_shell: LoopbackShell, cut_off_shell_url: str
 ) -> None:
+    # A shell that stops mid-answer (a restart) is as unreadable as one that is down, so the sweep skips rather
+    # than its thread dying on the error.
+    assert read_app_window_paths(cut_off_shell_url, _TERMINAL) is None
+
     loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, "not json")
     assert read_app_window_paths(loopback_shell.url, _TERMINAL) is None
 

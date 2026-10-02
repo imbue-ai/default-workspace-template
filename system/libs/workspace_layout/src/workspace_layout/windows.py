@@ -1,7 +1,4 @@
-import json
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any
 from typing import Final
 
@@ -13,6 +10,9 @@ from pydantic import Field
 from pydantic import ValidationError
 
 from workspace_layout.answers import DesktopsListing
+from workspace_layout.answers import quote_answer
+from workspace_layout.client import request_shell
+from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPath
@@ -32,17 +32,17 @@ def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
     """
     url = f"{shell_url}{DESKTOPS_ROUTE}"
     try:
-        with urllib.request.urlopen(url, timeout=WINDOW_READ_TIMEOUT_SECONDS) as response:
-            raw = response.read()
-    except (urllib.error.URLError, OSError) as e:
+        response = request_shell("GET", url, None, WINDOW_READ_TIMEOUT_SECONDS)
+    except ShellUnreachableError as e:
         logger.debug("Could not read the shell's desktops at {}: {}", url, e)
         return None
-    try:
-        document = json.loads(raw)
-    except ValueError as e:
-        logger.warning("The shell's desktops at {} are not JSON: {}", url, e)
+    if not response.is_success:
+        logger.debug("The shell answered its desktops at {} with {}", url, response.status_code)
         return None
-    paths = window_paths_of_app(document, app)
+    if isinstance(response.body, str):
+        logger.warning("The shell's desktops at {} are not a JSON object: {}", url, quote_answer(response.body))
+        return None
+    paths = window_paths_of_app(response.body, app)
     if paths is None:
         logger.warning("The shell's desktops at {} are not shaped as {{desktops: [{{windows: [...]}}]}}", url)
     return paths
