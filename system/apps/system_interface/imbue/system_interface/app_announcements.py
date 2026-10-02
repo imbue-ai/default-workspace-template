@@ -5,8 +5,8 @@ The stream keeps mngr's wire vocabulary (``events/services/events.jsonl``, ``ser
 
 Every read of the app registry is announced to ``$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`` as one
 ``service_registered`` event per app whose registered fields (URL, label, icon, shareability) differ from the last
-announced, and one ``service_deregistered`` per app that left. Only changed rows are announced: ``forward_port.py`` rewrites
-the whole registry whenever any app registers, so a write says nothing about which apps moved, and an app
+announced, and one ``service_deregistered`` per app that left. Only changed rows are announced: ``forward_port.py``
+rewrites the whole registry whenever any app registers, so a write says nothing about which apps moved, and an app
 restarting in a loop would otherwise re-announce every app in the file on every restart. The first read after
 the shell starts remembers nothing and announces every app, which is what a consumer reading the stream from its
 start needs. A stream over the archive threshold at that first read is moved aside before it and gzipped off-thread
