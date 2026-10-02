@@ -6304,6 +6304,29 @@ def test_an_awaiting_chats_first_send_on_another_account_destroys_its_spare_befo
         manager.stop()
 
 
+def test_an_awaiting_chats_launch_with_role_templates_of_its_own_creates_the_chat_with_them_under_its_id(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    pushes = broadcaster.register()
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        awaiting = manager.awaiting_chat_for_empty_list()
+
+        manager.create_chat(
+            "", chat_id=awaiting.chat_id, account_id=spare.terms.account_id, extra_role_templates=("reviewer",)
+        )
+
+        assert (spare.chat_id, True) in _await_provisional_completions(pushes)
+        assert _mngr_verbs_naming(argv_log, spare.chat_id) == ["create", "destroy", "create"]
+        own_create = [create for create in _mngr_calls(argv_log, "create") if create[3] == spare.chat_id][-1]
+        assert own_create[own_create.index("reviewer") - 1] == "--template"
+    finally:
+        manager.stop()
+
+
 def test_an_awaiting_chats_first_send_fails_without_a_create_when_its_spare_cannot_be_destroyed(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

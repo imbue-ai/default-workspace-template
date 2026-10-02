@@ -3219,7 +3219,8 @@ class AgentManager:
             raise AgentCreationError(f"The chat app sets {', '.join(owned_keys)} itself; a create cannot restate them")
 
         # A name, labels, templates, or an installation-check waiver of the caller's own need an
-        # agent created with them, and a chat minted earlier keeps its own id, which no spare's is.
+        # agent created with them. A chat minted earlier keeps its own id, so only the spare reserved
+        # under that id can become it.
         if (
             not chat_id
             and not explicit_name
@@ -3230,7 +3231,7 @@ class AgentManager:
             created_from_spare = self._create_chat_from_spare(account.id, project_id, message, model_pick)
             if created_from_spare is not None:
                 return created_from_spare
-        if chat_id:
+        if chat_id and not extra_role_templates:
             launched_on_spare = self._launch_awaiting_chat_on_its_spare(
                 ChatId(chat_id), account.id, message, model_pick
             )
