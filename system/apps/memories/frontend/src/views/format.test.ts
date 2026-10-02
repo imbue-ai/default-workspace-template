@@ -55,7 +55,7 @@ describe("who wrote a note", () => {
       'Written by "Plan the launch" · read by 2 chats',
     );
     expect(attributionLine({ authors: [author("NOT_A_CHAT")], reader_count: 0 })).toBe(
-      "Written by a chat that has since been deleted, or a background task · not read since",
+      "Written by a chat that has since been deleted, or a background task · not opened by another chat yet",
     );
     expect(attributionLine({ authors: [author("UNKNOWN"), author("CHAT", "Other")], reader_count: 1 })).toBe(
       "Written by a chat whose name couldn't be read and 1 other chat · read by 1 chat",

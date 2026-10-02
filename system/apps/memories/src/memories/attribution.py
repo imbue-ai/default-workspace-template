@@ -6,7 +6,8 @@ read; a session belongs to the agent whose ``claude_session_id_history`` lists i
 agent belongs to the chat whose ``agent_ids`` hold it (the chat app's ``GET /api/chats``). A session no agent
 claims, or an agent no live chat holds (a deleted chat), is still counted, just without a chat's name.
 
-Transcripts are read when the page asks, line by line, parsing only the lines that name the notes folder.
+Transcripts are read when the page asks, decoding and parsing only the lines that name the notes folder (see
+``lines_containing``).
 """
 
 import json
@@ -36,6 +37,8 @@ TRANSCRIPT_SUFFIX: Final[str] = ".jsonl"
 DEFAULT_CHAT_APP_URL: Final[str] = "http://127.0.0.1:8010"
 CHAT_LIST_TIMEOUT_SECONDS: Final[float] = 5.0
 CHAT_LIST_SLOW_SECONDS: Final[float] = 1.0
+# Transcripts are read in chunks this size, so memory stays bounded whatever a transcript's length.
+TRANSCRIPT_CHUNK_BYTES: Final[int] = 4 * 1024 * 1024
 
 
 class NoteToolUse(FrozenModel):
@@ -94,6 +97,42 @@ def default_transcript_sources(notes_dir: Path) -> TranscriptSources:
 
 
 @pure
+def matching_lines(block: bytes, markers: Sequence[bytes]) -> list[str]:
+    """The lines of ``block`` that contain any of ``markers``, in order, each once, decoded as UTF-8."""
+    spans: set[tuple[int, int]] = set()
+    for marker in markers:
+        found = block.find(marker)
+        while found != -1:
+            start = block.rfind(b"\n", 0, found) + 1
+            newline = block.find(b"\n", found)
+            end = len(block) if newline == -1 else newline
+            spans.add((start, end))
+            found = block.find(marker, end)
+    return [block[start:end].decode("utf-8", errors="replace") for start, end in sorted(spans)]
+
+
+def lines_containing(path: Path, markers: Sequence[bytes], chunk_bytes: int) -> list[str]:
+    """The lines of the file at ``path`` that contain any of ``markers``.
+
+    Almost no transcript line names the notes folder, and decoding every line to text costs far more than searching
+    bytes, so only matching lines are decoded. The file is read a chunk at a time; a line longer than a chunk (a
+    transcript can hold multi-MB lines, such as images) is collected in pieces and joined once, when it ends.
+    """
+    lines: list[str] = []
+    pieces: list[bytes] = []
+    with path.open("rb") as handle:
+        while chunk := handle.read(chunk_bytes):
+            cut = chunk.rfind(b"\n") + 1
+            if cut == 0:
+                pieces.append(chunk)
+                continue
+            lines.extend(matching_lines(b"".join([*pieces, chunk[:cut]]), markers))
+            pieces = [chunk[cut:]]
+    lines.extend(matching_lines(b"".join(pieces), markers))
+    return lines
+
+
+@pure
 def note_tool_uses(line: str, session_id: str, notes_dir: Path) -> list[NoteToolUse]:
     """The note tool calls in one transcript line (none for most lines)."""
     try:
@@ -104,13 +143,7 @@ def note_tool_uses(line: str, session_id: str, notes_dir: Path) -> list[NoteTool
     content = message.get("content") if isinstance(message, Mapping) else None
     if not isinstance(content, list):
         return []
-    at: datetime | None = None
-    timestamp = record.get("timestamp")
-    if isinstance(timestamp, str):
-        try:
-            at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        except ValueError:
-            at = None
+    at = _parse_timestamp(record.get("timestamp"))
     uses: list[NoteToolUse] = []
     for item in content:
         if not isinstance(item, Mapping) or item.get("type") != "tool_use":
@@ -135,13 +168,26 @@ def read_note_tool_uses(sources: TranscriptSources) -> list[NoteToolUse]:
     for config_dir in sources.claude_config_dirs:
         for transcript in sorted((config_dir / "projects").glob(f"*/*{TRANSCRIPT_SUFFIX}")):
             try:
-                with transcript.open(encoding="utf-8", errors="replace") as handle:
-                    for line in handle:
-                        if notes_marker in line and '"tool_use"' in line:
-                            uses.extend(note_tool_uses(line, transcript.stem, sources.notes_dir))
+                lines = lines_containing(transcript, (notes_marker.encode(),), TRANSCRIPT_CHUNK_BYTES)
             except OSError as e:
                 logger.debug("Skipped transcript {}: {}", transcript, e)
+                continue
+            for line in lines:
+                if '"tool_use"' in line:
+                    uses.extend(note_tool_uses(line, transcript.stem, sources.notes_dir))
     return uses
+
+
+@pure
+def _parse_timestamp(timestamp: object) -> datetime | None:
+    if not isinstance(timestamp, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    # A time with no offset can't be ordered against the others, so it counts as unknown.
+    return parsed if parsed.tzinfo is not None else None
 
 
 @pure

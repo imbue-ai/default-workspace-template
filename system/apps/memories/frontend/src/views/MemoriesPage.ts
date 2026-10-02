@@ -47,6 +47,8 @@ export interface MemoriesPageAttrs {
 interface Draft {
   readonly fileName: string;
   readonly version: string;
+  readonly startDescription: string;
+  readonly startBody: string;
   description: string;
   body: string;
 }
@@ -136,6 +138,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
   function editor(note: Note, attrs: MemoriesPageAttrs, current: Draft): m.Vnode {
     const descriptionId = `edit-description-${note.file_name}`;
     const isConflicted = current.version !== note.version;
+    const isChanged = current.description !== current.startDescription || current.body !== current.startBody;
     const bodyId = `edit-body-${note.file_name}`;
     return m(
       "div",
@@ -150,6 +153,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
             id: descriptionId,
             class: inputClass(),
             value: current.description,
+            oncreate: ({ dom }: m.VnodeDOM) => (dom as HTMLInputElement).focus(),
             oninput: (event: InputEvent) => (current.description = (event.target as HTMLInputElement).value),
           }),
         ]),
@@ -191,7 +195,8 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
               {
                 variant: "primary",
                 sm: true,
-                disabled: isBusy || current.description.trim() === "",
+                // A replace is allowed unchanged: keeping the text the user started from over the chat's is a change.
+                disabled: isBusy || current.description.trim() === "" || (!isChanged && !isConflicted),
                 onclick: () =>
                   run(async () => {
                     // A replace is the user's explicit choice after seeing the chat's version, so it is made against
@@ -240,11 +245,14 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
               {
                 variant: "secondary",
                 sm: true,
-                disabled: isBusy,
+                // One edit at a time, so opening another can't silently drop unsaved text.
+                disabled: isBusy || draft !== null,
                 onclick: () =>
                   (draft = {
                     fileName: note.file_name,
                     version: note.version,
+                    startDescription: note.description,
+                    startBody: note.body,
                     description: note.description,
                     body: note.body,
                   }),
@@ -273,6 +281,29 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
     );
   }
 
+  /** The draft, when a chat deleted the note it edits: kept on screen so the user can copy what they wrote. */
+  function orphanedDraft(document: NotesDocument): m.Vnode | null {
+    const current = draft;
+    if (current === null || document.notes.some((note) => note.file_name === current.fileName)) return null;
+    return m(
+      "div",
+      {
+        class: "memories-orphaned-draft flex flex-col gap-2 rounded-lg border border-strong bg-surface p-4",
+        role: "note",
+      },
+      [
+        m(
+          "p",
+          { class: "m-0 type-body text-primary" },
+          "A chat deleted the note you were editing. Your unsaved text is below; copy anything you want to keep.",
+        ),
+        m("p", { class: "m-0 type-body font-semibold text-primary" }, current.description),
+        m("p", { class: "m-0 whitespace-pre-wrap type-body text-primary" }, current.body),
+        m(Button, { variant: "secondary", sm: true, extra: "self-start", onclick: () => (draft = null) }, "Dismiss"),
+      ],
+    );
+  }
+
   function deleteDialog(note: Note, backups: BackupRetention, attrs: MemoriesPageAttrs): m.Children {
     const close = (): void => {
       pendingDelete = null;
@@ -283,7 +314,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
         `"${note.description}"`,
         "It's erased from this workspace, and new chats won't see it. This can't be undone.",
         deleteBackupsWarning(backups),
-        "Chats that are open now may still remember it until they restart, and the chat that wrote it still shows it in its history.",
+        "Chats that are open now, and the transcripts of chats that read it, still have it until those chats end.",
       ],
       dismissLabel: "Cancel",
       isDismissable: !isBusy,
@@ -310,7 +341,7 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
       const { state } = attrs;
       if (state.kind === "loading") return m("p", { class: "m-0 type-body text-secondary" }, "Reading the notes…");
       if (state.kind === "failed")
-        return m("p", { class: "m-0 type-body text-danger" }, `Couldn't read the notes. ${state.message}`);
+        return m("p", { class: "m-0 type-body text-primary" }, `Couldn't read the notes. ${state.message}`);
       const document = state.document;
       const count = document.notes.length;
       return m("div", { class: "flex flex-col gap-6" }, [
@@ -332,7 +363,13 @@ export function MemoriesPage(): m.Component<MemoriesPageAttrs> {
           ),
         ]),
         whoCanSee(document),
-        statusMessage === null ? null : m("p", { class: "m-0 type-body text-primary", role: "status" }, statusMessage),
+        // Always rendered, so a screen reader announces each new message.
+        m(
+          "p",
+          { class: statusMessage === null ? "sr-only" : "m-0 type-body text-primary", role: "status" },
+          statusMessage,
+        ),
+        orphanedDraft(document),
         GROUPS.map((group) => ({ group, notes: document.notes.filter((note) => note.note_type === group.type) }))
           .filter(({ notes }) => notes.length > 0)
           .map(({ group, notes }) =>

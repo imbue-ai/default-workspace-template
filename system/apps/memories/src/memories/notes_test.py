@@ -18,11 +18,11 @@ from memories.notes import file_version
 from memories.notes import list_notes
 from memories.notes import parse_note
 from memories.notes import read_index
-from memories.notes import read_note
 from memories.notes import render_note
 from memories.notes import rewrite_index_hook
 from memories.notes import split_index_lines
 from memories.notes import update_note
+from memories.notes import validate_note_name
 from memories.notes import write_atomically
 
 _NOTE = """---
@@ -257,11 +257,57 @@ def test_single_quoted_and_double_quoted_values_are_read_as_yaml_writes_them() -
     assert parsed.description == 'say "hi"'
 
 
-def test_a_note_s_version_is_read_before_its_text(tmp_path: Path) -> None:
-    """A chat writing between the two reads must make the version older than the text, so a save is refused."""
+def test_any_visible_markdown_file_is_a_note(tmp_path: Path) -> None:
     notes_dir = _notes_dir(tmp_path)
-    version_before = file_version(notes_dir / "units.md")
+    for name in ("my note.md", "_draft.md", "café.md"):
+        (notes_dir / name).write_text("---\ndescription: odd name\n---\nx\n")
+    (notes_dir / ".hidden.md").write_text("---\ndescription: hidden\n---\nx\n")
 
-    note = read_note(notes_dir / "units.md")
+    listed = {note.file_name for note in list_notes(notes_dir).notes}
 
-    assert note.version == version_before
+    assert listed == {"units.md", "role.md", "my note.md", "_draft.md", "café.md"}
+
+
+@pytest.mark.parametrize(
+    "file_name", ["../outside.md", "a/b.md", ".hidden.md", "MEMORY.md", "README.md", ".md", "x.txt"]
+)
+def test_names_that_are_not_a_visible_markdown_file_in_the_folder_are_refused(file_name: str) -> None:
+    with pytest.raises(NoteNameError):
+        validate_note_name(file_name)
+
+
+def test_a_block_scalar_summary_reads_as_none_and_an_edit_replaces_all_its_lines() -> None:
+    text = "---\nname: units\ndescription: >\n  spans\n  lines\nmetadata:\n  type: feedback\n---\nbody\n"
+
+    parsed = parse_note(text)
+    rendered = render_note(parsed, "Prefers metric", "body")
+
+    assert parsed.description is None
+    assert parsed.note_type == NoteType.FEEDBACK
+    assert rendered == ('---\nname: units\ndescription: "Prefers metric"\nmetadata:\n  type: feedback\n---\n\nbody\n')
+
+
+def test_a_repeated_key_reads_as_its_first_value_the_one_an_edit_rewrites() -> None:
+    parsed = parse_note("---\ndescription: first\ndescription: second\n---\nx\n")
+
+    assert parsed.description == "first"
+    assert parse_note(render_note(parsed, "edited", "x")).description == "edited"
+
+
+def test_rewriting_a_file_keeps_its_permissions(tmp_path: Path) -> None:
+    path = tmp_path / "MEMORY.md"
+    path.write_text("old")
+    path.chmod(0o600)
+
+    write_atomically(path, "new")
+
+    assert (path.read_text(), path.stat().st_mode & 0o777) == ("new", 0o600)
+
+
+def test_an_index_with_a_bad_byte_still_reads_and_rewrites(tmp_path: Path) -> None:
+    notes_dir = _notes_dir(tmp_path)
+    (notes_dir / INDEX_FILENAME).write_bytes(b"# Memory \xff\n- [Units](units.md) \xe2\x80\x94 Prefers metric units\n")
+
+    delete_note(notes_dir, "units.md", file_version(notes_dir / "units.md"))
+
+    assert read_index(notes_dir) == "# Memory \ufffd\n"

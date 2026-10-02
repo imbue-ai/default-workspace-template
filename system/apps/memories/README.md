@@ -19,11 +19,11 @@ like things done, what you're working on, where things are), with:
   and its `MEMORY.md` line's summary to match. The edit is made against the version of the note it started from: if
   a chat changes the note meanwhile, the editor shows the chat's version beside the draft, and only "Replace with my
   version" overwrites it;
-- Delete, which erases the note's file and drops its lines from `MEMORY.md`. Nothing in the workspace keeps a copy,
+- Delete, which erases the note's file and drops its lines from `MEMORY.md`. There is no copy here to restore,
   so it cannot be undone; it asks first, and says what still holds the note afterwards: the workspace's backups
   (restic snapshots of the whole home tree, kept for as long as `data/system/backup.toml`'s retention says, read
-  through `host_backup.config`), open chats until they restart, and the transcript of the chat that wrote it. The
-  "Who can see these notes" panel states the backups' retention up front too.
+  through `host_backup.config`), and the conversations and transcripts of chats that read it. The "Who can see these
+  notes" panel states the backups' retention up front too.
 
 Every write checks that the note is still the version given and refuses (409) if a chat changed it meanwhile (a
 note's version is read before its text, so a write between the two can only make a save fail), and goes through a

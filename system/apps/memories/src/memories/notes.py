@@ -6,8 +6,8 @@ Claude's built-in memory keeps one Markdown file per note in the notes folder (`
 So every change here keeps the index in step: a corrected summary is written into the note's index line, and a
 deleted note's line leaves with it.
 
-A delete erases the note: nothing in the workspace keeps a copy to restore. Snapshots the backups took before the
-delete still hold it until they expire (see ``backups``), which the page tells the user before they delete.
+A delete erases the note's file; there is no copy here to restore. Backups taken before the delete, and the
+conversations of chats that read it, still hold it (the page says so before the user deletes).
 
 Every write checks the note is still the version the page read (its mtime and size), since a chat may write to
 it at any time, and goes through a temporary file and a rename so a chat never reads a half-written note.
@@ -36,7 +36,7 @@ from memories.errors import NoteWriteError
 
 INDEX_FILENAME: Final[str] = "MEMORY.md"
 NON_NOTE_FILENAMES: Final[frozenset[str]] = frozenset({INDEX_FILENAME, "README.md"})
-NOTE_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
+NOTE_SUFFIX: Final[str] = ".md"
 _FRONTMATTER_FENCE: Final[str] = "---"
 _INDEX_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(\s*[-*]\s+\[[^\]]*\]\((?P<file>[^)]+)\))(?P<hook>.*)$")
 _HOOK_SEPARATOR: Final[str] = " — "
@@ -99,6 +99,15 @@ def _unquote(value: str) -> str:
 
 
 @pure
+def _scalar_text(value: str) -> str:
+    """A frontmatter value as one line of text; a block scalar (``|`` or ``>``) spans the lines below, which this
+    line-based reader does not follow, so it reads as empty and the note falls back to its file name."""
+    if value.strip()[:1] in ("|", ">"):
+        return ""
+    return _unquote(value)
+
+
+@pure
 def parse_note(text: str) -> ParsedNote:
     """Split a note into frontmatter fields and body; a file with no frontmatter is all body."""
     lines = text.split("\n")
@@ -118,10 +127,12 @@ def parse_note(text: str) -> ParsedNote:
         if not separator:
             continue
         if line[0] in " \t" and current_block is not None:
-            nested.setdefault(current_block, {})[key.strip()] = _unquote(value)
+            nested.setdefault(current_block, {}).setdefault(key.strip(), _scalar_text(value))
+            continue
+        if line[0] in " \t":
             continue
         current_block = key.strip() if not value.strip() else None
-        top_level[key.strip()] = _unquote(value)
+        top_level.setdefault(key.strip(), _scalar_text(value))
     type_text = nested.get("metadata", {}).get("type") or top_level.get("type") or ""
     try:
         note_type = NoteType(type_text.strip().upper())
@@ -148,7 +159,10 @@ def render_note(parsed: ParsedNote, description: str, body: str) -> str:
         None,
     )
     if description_idx is not None:
-        frontmatter[description_idx] = description_line
+        continuation_end = description_idx + 1
+        while continuation_end < len(frontmatter) and frontmatter[continuation_end][:1] in (" ", "\t"):
+            continuation_end += 1
+        frontmatter[description_idx:continuation_end] = [description_line]
     else:
         name_idx = next((idx for idx, line in enumerate(frontmatter) if line.startswith("name:")), -1)
         frontmatter.insert(name_idx + 1, description_line)
@@ -183,8 +197,22 @@ def split_index_lines(index_text: str, file_name: str) -> tuple[str, tuple[str, 
     return "\n".join(kept), tuple(removed)
 
 
+@pure
+def is_note_file_name(file_name: str) -> bool:
+    """Whether a name is a note's: any visible Markdown file directly in the folder, as chats may name it."""
+    return (
+        file_name.endswith(NOTE_SUFFIX)
+        and file_name != NOTE_SUFFIX
+        and not file_name.startswith(".")
+        and "/" not in file_name
+        and "\\" not in file_name
+        and "\x00" not in file_name
+        and file_name not in NON_NOTE_FILENAMES
+    )
+
+
 def validate_note_name(file_name: str) -> None:
-    if not NOTE_NAME_PATTERN.match(file_name) or file_name in NON_NOTE_FILENAMES:
+    if not is_note_file_name(file_name):
         raise NoteNameError(f"{file_name!r} is not a note file name")
 
 
@@ -197,7 +225,7 @@ def file_version(path: Path) -> str:
 
 
 def write_atomically(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` through a sibling temporary file and a rename.
+    """Write ``text`` to ``path`` through a sibling temporary file and a rename, keeping the file's permissions.
 
     The temporary name is unique per write: the server answers requests on several threads, and two writes of the
     index at once must not share one.
@@ -205,6 +233,8 @@ def write_atomically(path: Path, text: str) -> None:
     temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         temporary_path.write_text(text, encoding="utf-8")
+        if path.exists():
+            os.chmod(temporary_path, path.stat().st_mode)
         os.replace(temporary_path, path)
     except OSError as e:
         temporary_path.unlink(missing_ok=True)
@@ -236,7 +266,7 @@ def list_notes(notes_dir: Path) -> NoteListing:
     notes: list[Note] = []
     unreadable: list[str] = []
     for path in sorted(notes_dir.iterdir()):
-        if not path.is_file() or path.name in NON_NOTE_FILENAMES or not NOTE_NAME_PATTERN.match(path.name):
+        if not path.is_file() or not is_note_file_name(path.name):
             continue
         try:
             notes.append(read_note(path))
@@ -251,7 +281,7 @@ def list_notes(notes_dir: Path) -> NoteListing:
 
 def read_index(notes_dir: Path) -> str:
     try:
-        return (notes_dir / INDEX_FILENAME).read_text(encoding="utf-8")
+        return (notes_dir / INDEX_FILENAME).read_text(encoding="utf-8", errors="replace")
     except FileNotFoundError:
         return ""
 
