@@ -129,7 +129,7 @@ A `desktops.json` written by the previous release carries `is_settling` on each 
 The receiving chat resolves in this order:
 
 - `chat`: the chat `chat_id` names among the chats the app lists (an agent, a recorded chat, or a provisional one); `404` otherwise.
-- `current_chat`: the chat `window_path` selects (`/?chat=<id>`, `/<id>`, or a subagent view `/<id>.<agent>.<session>` of it) when the app lists it; else the chat most recently messaged; else the rules of `new_chat`.
+- `current_chat`: the chat `window_path` selects (`/?chat=<id>`, `/<id>`, or a subagent view `/<id>.<agent>.<session>` of it) when the app lists it; else the default chat (the seeded welcome chat); else the chat most recently messaged; else the rules of `new_chat`.
 - `chat_selector`: the chats that are agents (a provisional chat cannot take a message).
   With none, the rules of `new_chat`; with one, that chat; with more, the choice is the user's, and the intake is held (section 3.6).
 - `new_chat`: the account is `account_id`, else the workspace's default (the pinned default, else the most recently used).
@@ -215,7 +215,7 @@ On a stock machine the chat's `new` is posted with the text as `message`, the ch
 
 "Design your own..." looks for a pinned app on the active desktop declaring a launch path with a `draft_param`, and is disabled with its tooltip when none does.
 It launches that path with the prompt as the draft param and the pinned window as the target.
-On a stock machine the chat's `draft` posts `target = current_chat`, `is_draft = "true"`, the prompt, and the pinned window's path; the chat resolves the chat on screen (else the most recent, else a new provisional one), holds the draft, and answers `/?chat=<id>&intake=<token>`; the pinned window moves there for this client, and the root applies the intake into that chat's composer and reports `/?chat=<id>`.
+On a stock machine the chat's `draft` posts `target = current_chat`, `is_draft = "true"`, the prompt, and the pinned window's path; the chat resolves the chat on screen (else the default chat, else the most recent, else a new provisional one), holds the draft, and answers `/?chat=<id>&intake=<token>`; the pinned window moves there for this client, and the root applies the intake into that chat's composer and reports `/?chat=<id>`.
 
 ### 4.4 An agent's open
 
@@ -324,7 +324,7 @@ The op route's `open` uses the same resolution (`_open_target` returns the answe
 ## 10. Errors and edge cases
 
 - A launch whose app is stopped: the POST fails to connect and the shell answers `502 <app> could not be reached`; the user is told through the store's notification.
-- An intake for `current_chat` whose `window_path` names a chat that has since been destroyed falls through to the most recently messaged chat.
+- An intake for `current_chat` whose `window_path` names a chat that has since been destroyed falls through to the default chat, else the most recently messaged chat.
 - A `chat_selector` with several chats and `is_draft` true: the picker shows the text and picking drafts it into the chosen chat.
 - An empty `message` with `target = new_chat`: the create runs with no message, as the New chat button's does.
 - An empty `message` with any other target: the intake answers the path of the resolved chat and sends nothing.

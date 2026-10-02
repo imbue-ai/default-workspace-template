@@ -136,7 +136,7 @@ A row that fails at run time (the clipboard refused) reports the failure to the 
 | The Getting Started page | `shell:draft-text` |
 | An agent-built app | `shell:draft-text` |
 
-`shell:draft-text` is the new contract message (section 5); the shell answers it with `DesktopStore.draftText`, which runs the pinned app's draft launch path (the chat's `draft`, `target = current_chat`, `is_draft = "true"`) into this client's view of the pinned window, so the draft lands in the chat that window shows, else the most recently messaged chat, else a new provisional one, exactly as "Design your own..." lands.
+`shell:draft-text` is the new contract message (section 5); the shell answers it with `DesktopStore.draftText`, which runs the pinned app's draft launch path (the chat's `draft`, `target = current_chat`, `is_draft = "true"`) into this client's view of the pinned window, so the draft lands in the chat that window shows, else the default chat, else the most recently messaged chat, else a new provisional one, exactly as "Design your own..." lands.
 
 Every draft is prepended above whatever the composer already holds, separated by a blank line (`prependToComposer`), so a message the user was typing survives and the prompt line sits on top; the reference block in it is attached first (section 7.2), so only the prompt is text.
 Two references drafted before a send are two chips and two prompt lines, each naming its own.
