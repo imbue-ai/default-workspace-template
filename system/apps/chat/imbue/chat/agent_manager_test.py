@@ -6433,6 +6433,32 @@ def test_an_awaiting_chats_first_send_fails_without_a_create_when_its_spare_cann
         manager.stop()
 
 
+def test_a_fast_mode_picked_while_a_released_spare_still_holds_the_chats_id_stays_out_of_its_folder(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The spare an awaiting chat's first send released keeps its ``chat_spare=true`` label until its destroy lands,
+    so a pick made meanwhile must not land where a restart would take it for a chat's."""
+    mngr_binary, _ = write_recording_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    pushes = broadcaster.register()
+    picked = ChatFastModeState(mode=FastModeMode.OFF)
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        awaiting = manager.awaiting_chat_for_empty_list()
+        Path(mngr_binary).unlink()
+        manager.create_chat("", chat_id=awaiting.chat_id, account_id=_openai_account(), message="Hi 5821")
+        assert (spare.chat_id, False) in _await_provisional_completions(pushes)
+
+        manager.set_fast_mode_state(awaiting.chat_id, picked)
+
+        assert manager._spare_locked(spare.chat_id) is not None
+        assert read_fast_mode_state(tmp_path / "chats" / awaiting.chat_id) is None
+        assert manager.get_fast_mode_state(awaiting.chat_id) == picked
+    finally:
+        manager.stop()
+
+
 def test_an_awaiting_chats_first_send_whose_launch_breaks_off_after_its_spare_is_destroyed_is_told_why(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

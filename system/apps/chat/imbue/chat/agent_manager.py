@@ -891,9 +891,10 @@ class AgentManager:
     _chat_record_by_id: dict[ChatId, ChatRecord]
     # The workspace-wide chat settings (the fast mode a new chat starts in), read on every create.
     _chat_settings: ChatSettingsStore
-    # The fast mode picked in an unseeded chat awaiting its first send, held in memory like the chat
-    # itself until its launch writes it to the chat's folder: a fast mode there is what tells a restart
-    # that an agent still labelled a spare is a chat's (``_handle_spares_from_before_start``).
+    # The fast mode picked in an unseeded chat whose launch has not written its folder yet (one awaiting
+    # its first send, or one whose create waits on the destroy of the spare it released), held in memory
+    # until that launch writes it: a fast mode in the folder is what tells a restart that an agent still
+    # labelled a spare is a chat's (``_handle_spares_from_before_start``).
     _awaiting_fast_mode_by_chat: dict[ChatId, ChatFastModeState]
     # Whether this manager keeps spare agents for new chats (``spare_chat.py``): the live chat
     # does; a secondary chat, and a test that does not ask for them, do not. Either way an agent
@@ -3096,7 +3097,7 @@ class AgentManager:
             return self._fast_mode_state_locked(chat_id)
 
     def _fast_mode_state_locked(self, chat_id: ChatId) -> ChatFastModeState:
-        """``get_fast_mode_state``, lock held: the chat's folder, else a pick made while it awaits its first send."""
+        """``get_fast_mode_state``, lock held: the chat's folder, else a pick made before its launch wrote it."""
         state = read_fast_mode_state(self._chat_files_root / chat_id)
         if state is None:
             state = self._awaiting_fast_mode_by_chat.get(chat_id)
@@ -3107,15 +3108,16 @@ class AgentManager:
     def set_fast_mode_state(self, chat_id: ChatId, state: ChatFastModeState) -> None:
         """Record the chat's fast mode; the page applies the speed itself through the model switch.
 
-        An unseeded chat awaiting its first send keeps it in memory, as it keeps everything else, until its
-        launch writes it to the chat's folder (``_fast_mode_for_launch_locked``).
+        An unseeded chat whose launch has not written its folder yet keeps it in memory until that launch
+        writes it (``_fast_mode_for_launch_locked``): one awaiting its first send, as it keeps everything else,
+        and one whose create waits on the destroy of the spare that still holds its id.
         """
         with self._lock:
             provisional = self._provisional_chats.get(chat_id)
             if (
                 provisional is not None
-                and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
                 and not provisional.is_seeded
+                and read_fast_mode_state(self._chat_files_root / chat_id) is None
             ):
                 self._awaiting_fast_mode_by_chat[chat_id] = state
                 return
