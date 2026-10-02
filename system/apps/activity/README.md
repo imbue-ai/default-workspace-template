@@ -50,17 +50,20 @@ preview's words and the page offers neither.
   serves it.
 
 Only the workspace's owner reaches the API (the `X-Imbue-Identity` header's `owner` flag; a request with no header comes
-from inside the workspace and counts as the owner), and a write must be JSON from the app's own origin.
+from inside the workspace and counts as the owner), and a write must be JSON from the app's own origin. A preview
+(`activity-app --no-register`, reading the registry copy `MINDS_APPS_FILE` names) shows the live workspace, so every
+write answers it `403` in the shell preview's words and the page offers no actions.
 
 The manifest declares `stop_when_no_windows`: the app holds nothing between requests, so the shell stops it a minute
 after its last window closes and starts it on the next request. The page polls only while its window is shown
 (`shell:shown` / `shell:hidden`).
 
 The chart's readings come from `activity-record-memory`, a cron job rather than a resident program, so recording costs
-no memory between readings: once a minute it appends one line (`<epoch seconds>\t<used KiB>\t<limit KiB>`) to
+no memory between readings: once a minute it appends one line (`<epoch seconds>\t<used KiB>\t<limit KiB>\t<source>`;
+readers ignore columns they do not know, and read a line without a source as one from an unknown source) to
 `data/.state/activity/memory-history.tsv` and exits, dropping readings older than a week once the file passes 512 KiB.
 The app installs its entry, `/etc/cron.d/activity-memory-history`, each time it starts (at every boot, since its program
-autostarts). It is code-owned, so it has no copy in the user-editable `data/.state/cron.d/`, and it skips
+autostarts), under `flock -n` and `timeout 50`, so a stalled read never stacks up a recorder a minute. It is code-owned, so it has no copy in the user-editable `data/.state/cron.d/`, and it skips
 `with_agent_env.sh` because the recorder needs no agent credentials. The recorder logs to
 `/var/log/supervisor/activity-record-memory.log`. A reading is the same one the headline uses, so the chart and the
 headline agree.

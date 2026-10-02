@@ -14,7 +14,7 @@ import {
   chartMaxKib,
   linePoints,
   nearestPeriod,
-  timeLabel,
+  periodLabel,
   timeTicks,
   unbrokenRuns,
   xFor,
@@ -90,7 +90,7 @@ export function HistoryChart(): m.Component<HistoryChartAttrs> {
       return m(
         "p",
         { class: "m-0 type-helper text-secondary" },
-        `Recording since ${timeLabel(view.range, view.first_sample_epoch_seconds)}.`,
+        `Recording since ${periodLabel(view.range, view.first_sample_epoch_seconds)}.`,
       );
     }
     return null;
@@ -267,7 +267,7 @@ export function HistoryChart(): m.Component<HistoryChartAttrs> {
                 style: { left: `${hoveredX}px` },
               },
               [
-                m("span", { class: "text-secondary" }, timeLabel(view.range, hovered.start_epoch_seconds)),
+                m("span", { class: "text-secondary" }, periodLabel(view.range, hovered.start_epoch_seconds)),
                 m("span", `Typical ${formatKib(hovered.average_kib)}`),
                 m("span", `Lowest ${formatKib(hovered.min_kib)} · highest ${formatKib(hovered.max_kib)}`),
                 ...hoveredClosures.map((closure) =>
@@ -319,7 +319,7 @@ export function HistoryChart(): m.Component<HistoryChartAttrs> {
                 .reverse()
                 .map((period) =>
                   m("tr", { key: period.start_epoch_seconds }, [
-                    m("td", { class: "pr-3" }, timeLabel(view.range, period.start_epoch_seconds)),
+                    m("td", { class: "pr-3" }, periodLabel(view.range, period.start_epoch_seconds)),
                     m("td", { class: "pr-3 text-right" }, formatKib(period.average_kib)),
                     m("td", { class: "pr-3 text-right" }, formatKib(period.min_kib)),
                     m("td", { class: "pr-3 text-right" }, formatKib(period.max_kib)),

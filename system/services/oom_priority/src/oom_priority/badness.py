@@ -7,8 +7,8 @@ points lower rather than skipped, and an ``oom_score_adj`` of -1000 is never kil
 kernel thread or zombie: no ``VmRSS`` line, or gVisor's ``VmSize`` of 0) is not a candidate, except a zombie leader
 whose threads still run, which counts as 0.
 
-The drill (``bin/oom_drill.py``) checks real kills against this prediction, and the Activity app shows its top pick,
-so both read the same model. Stdlib-only (see ``paths``): the drill runs under a plain ``python3``.
+The drill (``bin/oom_drill.py``) checks real kills against this prediction, and other callers predict from it, so all
+read the same model. Stdlib-only (see ``paths``): the drill runs under a plain ``python3``.
 """
 
 import re
@@ -136,7 +136,8 @@ def snapshot_processes(proc: Path) -> list[ProcessSample]:
             memory = parse_status_memory((entry / "status").read_text())
             rss = memory.vm_rss_kib
             if rss and not memory.has_rss_anon:
-                rss = parse_smaps_anonymous((entry / "smaps").read_text())
+                # smaps lists mapped files' paths, which need not be UTF-8.
+                rss = parse_smaps_anonymous((entry / "smaps").read_text(errors="replace"))
         except (OSError, ValueError):
             continue
         samples.append(
@@ -158,5 +159,5 @@ def find_earlyoom_argv(proc: Path) -> tuple[int, list[str]] | None:
             argv = (entry / "cmdline").read_bytes().split(b"\0")
         except OSError:
             continue
-        return int(entry.name), [argument.decode() for argument in argv if argument]
+        return int(entry.name), [argument.decode(errors="replace") for argument in argv if argument]
     return None

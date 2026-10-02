@@ -17,11 +17,13 @@ from typing import Final
 from loguru import logger
 from pydantic import Field
 
+from activity.config import WORKSPACE_ROOT
+from activity.memory_reading import MemorySource
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 
-HISTORY_PATH: Final[Path] = Path("data/.state/activity/memory-history.tsv")
+HISTORY_PATH: Final[Path] = WORKSPACE_ROOT / "data/.state/activity/memory-history.tsv"
 RETENTION_SECONDS: Final[int] = 7 * 24 * 3600
 # Rewriting the file to drop old readings is only worth it once it has grown well past a week's worth (about
 # 300 KB); until then a reading is a single append.
@@ -52,6 +54,9 @@ class MemorySample(FrozenModel):
     at_epoch_seconds: int = Field(description="When it was taken")
     used_kib: int = Field(description="Memory in use, in KiB")
     limit_kib: int = Field(description="The limit at the time, in KiB")
+    source: MemorySource | None = Field(
+        default=None, description="Where the reading came from; None for a line written before the column existed"
+    )
 
 
 class HistoryPeriod(FrozenModel):
@@ -66,19 +71,30 @@ class HistoryPeriod(FrozenModel):
 
 @pure
 def format_sample(sample: MemorySample) -> str:
-    return f"{sample.at_epoch_seconds}\t{sample.used_kib}\t{sample.limit_kib}\n"
+    source = f"\t{sample.source.value}" if sample.source is not None else ""
+    return f"{sample.at_epoch_seconds}\t{sample.used_kib}\t{sample.limit_kib}{source}\n"
 
 
 @pure
 def parse_history(text: str) -> list[MemorySample]:
-    """Every well-formed line, in file order; a malformed or half-written line is skipped."""
+    """Every well-formed line, in file order; a malformed or half-written line is skipped.
+
+    A line is ``<epoch seconds>\t<used KiB>\t<limit KiB>[\t<source>]``; columns past the ones known here are
+    ignored, so a later version can add one without an older reader dropping every line."""
     samples: list[MemorySample] = []
     for line in text.splitlines():
         fields = line.split("\t")
-        if len(fields) == 3 and all(field.isascii() and field.isdigit() for field in fields):
-            samples.append(
-                MemorySample(at_epoch_seconds=int(fields[0]), used_kib=int(fields[1]), limit_kib=int(fields[2]))
+        if len(fields) < 3 or not all(field.isascii() and field.isdigit() for field in fields[:3]):
+            continue
+        source = fields[3] if len(fields) > 3 else None
+        samples.append(
+            MemorySample(
+                at_epoch_seconds=int(fields[0]),
+                used_kib=int(fields[1]),
+                limit_kib=int(fields[2]),
+                source=MemorySource(source) if source in MemorySource.__members__ else None,
             )
+        )
     return samples
 
 
@@ -103,9 +119,14 @@ def append_sample(path: Path, sample: MemorySample, retention_seconds: int) -> N
         return
     cutoff = sample.at_epoch_seconds - retention_seconds
     kept = [kept_sample for kept_sample in read_history(path) if kept_sample.at_epoch_seconds >= cutoff]
-    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary_path.write_text("".join(format_sample(kept_sample) for kept_sample in kept))
-    os.replace(temporary_path, path)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    try:
+        temporary_path.write_text("".join(format_sample(kept_sample) for kept_sample in kept))
+        os.replace(temporary_path, path)
+    except OSError:
+        # A full disk, say: the reading is appended already, and the next run tries the rewrite again.
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 @pure
@@ -134,7 +155,10 @@ def group_into_periods(
 
 @pure
 def is_recording(samples: Sequence[MemorySample], now_epoch_seconds: int) -> bool:
-    return bool(samples) and now_epoch_seconds - samples[-1].at_epoch_seconds <= RECORDING_FRESH_SECONDS
+    return (
+        bool(samples)
+        and now_epoch_seconds - max(sample.at_epoch_seconds for sample in samples) <= RECORDING_FRESH_SECONDS
+    )
 
 
 def epoch_seconds(moment: datetime) -> int:

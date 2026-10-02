@@ -37,6 +37,7 @@ def record_once(sources: MemorySources, history_path: Path, now: datetime) -> bo
             at_epoch_seconds=epoch_seconds(now),
             used_kib=reading.used_bytes // BYTES_PER_KIB,
             limit_kib=reading.limit_bytes // BYTES_PER_KIB,
+            source=reading.source,
         ),
         retention_seconds=RETENTION_SECONDS,
     )

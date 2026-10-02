@@ -20,6 +20,8 @@ describe("sizes and durations", () => {
     expect(formatBytes(336 * MIB)).toBe("336 MB");
     expect(formatBytes(1000)).toBe("<1 MB");
     expect(formatBytes(0)).toBe("0 MB");
+    expect(formatBytes(1023.7 * MIB)).toBe("1.0 GB");
+    expect(formatBytes(1023.4 * MIB)).toBe("1023 MB");
   });
 
   it("rounds idle time to the unit a person would say", () => {
@@ -85,6 +87,11 @@ describe("chat and app lines", () => {
       is_restarted_on_open: true,
     });
     expect(programStateLine(browser)).toBe("Not running · starts when you open it");
+    // A crashed app is not promised to come back, and one just woken is starting, not stopped.
+    const crashed = item({ item_id: "app:x", name: "X", kind: "APP", state: "FATAL", is_restarted_on_open: true });
+    expect(programStateLine(crashed)).toBe("Not running (fatal)");
+    const waking = item({ item_id: "app:y", name: "Y", kind: "APP", state: "STARTING", is_restarted_on_open: true });
+    expect(programStateLine(waking)).toBe("Starting…");
     const exited = item({ item_id: "app:old", name: "Old", kind: "APP", state: "EXITED" });
     expect(programStateLine(exited)).toBe("Not running (exited)");
   });
@@ -155,5 +162,15 @@ describe("the memory pressure notice", () => {
     expect(notice?.isOngoing).toBe(false);
     expect(notice?.title).toBe("Memory was tight for 25 min earlier");
     expect(pressureNotice(null, NOW)).toBeNull();
+  });
+});
+
+describe("durations at unit boundaries", () => {
+  it("moves to the next unit rather than reading 60 min or 24 hr", () => {
+    expect(formatDuration(59)).toBe("just now");
+    expect(formatDuration(3570)).toBe("1 hr");
+    expect(formatDuration(3500)).toBe("58 min");
+    expect(formatDuration(86000)).toBe("1 day");
+    expect(formatDuration(3 * 86400)).toBe("3 days");
   });
 });

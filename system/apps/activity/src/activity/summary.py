@@ -85,7 +85,9 @@ SERVICE_NAMES: Final[dict[str, tuple[str, str]]] = {
 UNKNOWN_SERVICE_DESCRIPTION: Final[str] = "A background service"
 UNKNOWN_APP_DESCRIPTION: Final[str] = "An app"
 PLUMBING_NAME: Final[str] = "Workspace plumbing"
-PLUMBING_DESCRIPTION: Final[str] = "The service manager, terminal sessions and remote access. Always needed."
+PLUMBING_DESCRIPTION: Final[str] = (
+    "The service manager, terminal sessions, remote access, and any process nothing above accounts for"
+)
 HELPER_AGENT_DESCRIPTION: Final[str] = "A helper agent a chat started for a task"
 OTHER_AGENT_DESCRIPTION: Final[str] = "An agent the workspace runs that isn't one of your chats"
 UNNAMED_CHAT_DESCRIPTION: Final[str] = "An agent running now; its chat's name couldn't be read"

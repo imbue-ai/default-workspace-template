@@ -38,6 +38,8 @@ _MEMINFO_TOTAL_FIELD: Final[str] = "MemTotal"
 _MEMINFO_AVAILABLE_FIELD: Final[str] = "MemAvailable"
 _CGROUP_UNLIMITED: Final[str] = "max"
 _CGROUP_RECLAIMABLE_FIELD: Final[str] = "inactive_file"
+# earlyoom's threshold for -m and -s when its command line gives none.
+EARLYOOM_DEFAULT_PERCENT: Final[int] = 10
 
 
 class MemorySource(UpperCaseStrEnum):
@@ -144,16 +146,29 @@ def reading_from_cgroup(max_text: str, current_text: str, stat_text: str, cgroup
 
 
 @pure
-def parse_min_available_percent(earlyoom_argv: Sequence[str]) -> int | None:
-    """earlyoom's ``-m PERCENT[,KILL_PERCENT]`` threshold, or None when its argv gives none."""
+def _percent_flag(earlyoom_argv: Sequence[str], flag: str) -> int | None:
+    """earlyoom's ``FLAG PERCENT[,KILL_PERCENT]`` (or ``FLAGPERCENT``) threshold: its default of 10 when the flag is
+    absent, and None when the flag's value cannot be read."""
     for index, argument in enumerate(earlyoom_argv):
-        value = earlyoom_argv[index + 1] if argument == "-m" and index + 1 < len(earlyoom_argv) else None
-        if value is None and argument.startswith("-m") and len(argument) > 2:
-            value = argument[2:]
-        if value is not None:
-            percent = value.split(",")[0].strip()
+        value = earlyoom_argv[index + 1] if argument == flag and index + 1 < len(earlyoom_argv) else None
+        if value is None and argument.startswith(flag) and len(argument) > len(flag):
+            value = argument[len(flag) :]
+        if argument == flag or value is not None:
+            percent = (value or "").split(",")[0].strip()
             return int(percent) if percent.isdigit() else None
-    return None
+    return EARLYOOM_DEFAULT_PERCENT
+
+
+@pure
+def parse_min_available_percent(earlyoom_argv: Sequence[str]) -> int | None:
+    """earlyoom's ``-m`` threshold: how little available memory makes it act."""
+    return _percent_flag(earlyoom_argv, "-m")
+
+
+@pure
+def parse_min_free_swap_percent(earlyoom_argv: Sequence[str]) -> int | None:
+    """earlyoom's ``-s`` threshold: it acts only once free swap is below it too (a machine without swap always is)."""
+    return _percent_flag(earlyoom_argv, "-s")
 
 
 @pure
@@ -163,6 +178,7 @@ def closing_point(
     """Where closing starts, from the reading, the meminfo earlyoom reads, and earlyoom's own argv."""
     limit_kib = reading.limit_bytes // BYTES_PER_KIB
     min_available_percent = parse_min_available_percent(earlyoom_argv) if earlyoom_argv is not None else None
+    min_free_swap_percent = parse_min_free_swap_percent(earlyoom_argv) if earlyoom_argv is not None else None
     guard_values_kib = parse_kib_fields(earlyoom_meminfo_text or "")
     guard_total_kib = guard_values_kib.get(_MEMINFO_TOTAL_FIELD)
     kernel = ClosingPoint(
@@ -189,6 +205,12 @@ def closing_point(
         min_available_percent=min_available_percent,
         badness_total_kib=guard_badness_total_kib,
         detail=f"earlyoom acts once less than {min_available_percent}% of the memory it reads is available"
+        + (
+            f"; it also waits until less than {min_free_swap_percent}% of swap is free, so while swap has room it can "
+            "act later than this"
+            if guard_values_kib.get("SwapTotal", 0) > 0 and min_free_swap_percent is not None
+            else ""
+        )
         + (
             "; it reads the whole machine's memory, so this point assumes nothing outside the workspace is using it"
             if reading.source is MemorySource.CGROUP

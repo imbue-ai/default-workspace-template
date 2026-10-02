@@ -42,15 +42,13 @@ def test_the_socket_reader_reports_a_missing_socket_as_unavailable(tmp_path: Pat
         read_supervised_programs(socket_process_info_reader(tmp_path / "no-such.sock"))
 
 
-def test_the_socket_reader_asks_supervisord_over_its_unix_socket(tmp_path: Path) -> None:
-    socket_path = tmp_path / "s.sock"
-    with fake_supervisor_socket(socket_path, [process_info("chat", "RUNNING", 544)]):
+def test_the_socket_reader_asks_supervisord_over_its_unix_socket() -> None:
+    with fake_supervisor_socket([process_info("chat", "RUNNING", 544)]) as socket_path:
         programs = read_supervised_programs(socket_process_info_reader(socket_path))
     assert [(program.name, program.pid) for program in programs] == [("chat", 544)]
 
 
-def test_a_socket_answer_that_is_not_a_list_of_programs_is_unavailable(tmp_path: Path) -> None:
-    socket_path = tmp_path / "s.sock"
-    with fake_supervisor_socket(socket_path, "busy"):
+def test_a_socket_answer_that_is_not_a_list_of_programs_is_unavailable() -> None:
+    with fake_supervisor_socket("busy") as socket_path:
         with pytest.raises(SupervisorUnavailableError, match="getAllProcessInfo answered something other than a list"):
             read_supervised_programs(socket_process_info_reader(socket_path))

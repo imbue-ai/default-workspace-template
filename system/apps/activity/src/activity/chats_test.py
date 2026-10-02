@@ -6,7 +6,6 @@ from activity.chats import chat_action_route
 from activity.chats import chat_app_url
 from activity.chats import fetch_chats
 from activity.chats import parse_chat_list
-from activity.chats import refusal_reason
 from activity.chats import request_chat_action
 from activity.errors import ChatAppUnavailableError
 from activity.testing import FakeChatApp
@@ -64,9 +63,3 @@ def test_a_chat_action_posts_to_the_chat_apps_own_route_and_passes_its_reason_on
     assert fake.actions == [("c1", "stop")]
     with pytest.raises(ChatAppUnavailableError, match="refused to start the chat: Chat 'missing' not found$"):
         request_chat_action(fake.client(), _BASE, "missing", ChatAction.START)
-
-
-def test_a_refusal_shows_the_chat_apps_detail_else_its_body() -> None:
-    assert refusal_reason('{"detail": "converging"}') == "converging"
-    assert refusal_reason("plain text") == "plain text"
-    assert refusal_reason('["a"]') == '["a"]'

@@ -196,7 +196,8 @@ describe("stopping an app", () => {
     buttonNamed(filesRow, "Stop").click();
     m.redraw.sync();
     expect(document.body.textContent).toContain("including those of anyone you've shared it with");
-    expect(document.body.textContent).toContain("It starts again the next time it's opened.");
+    expect(document.body.textContent).toContain("It starts again the next time it's opened");
+    expect(document.body.textContent).toContain("a pinned window of it");
     expect(document.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe('Stop "File Viewer"?');
     buttonNamed(document.body, "Stop app").click();
     await settle();
@@ -260,6 +261,32 @@ describe("stopping an app", () => {
     expect(document.body.textContent).toContain('"File Viewer" has already stopped.');
   });
 
+  it("still asks the desktop when a refresh could not read the app's state", async () => {
+    const stopped: string[] = [];
+    let files = FILES;
+    const root = mountView(() =>
+      m(ActivityPage, {
+        state: { kind: "loaded", summary: summary("COMFORTABLE", [files], null) },
+        refreshFailure: null,
+        nowMs: Date.now(),
+        onAskInChat: () => true,
+        onAppStop: async (appName): Promise<AppStopResult> => {
+          stopped.push(appName);
+          return { kind: "done" };
+        },
+        onChatAction: async (): Promise<ChatActionResult> => ({ kind: "done" }),
+        history: LOADING_HISTORY,
+      }),
+    );
+    buttonNamed(root.querySelector('[data-item-id="app:files"]') as HTMLElement, "Stop").click();
+    m.redraw.sync();
+    files = { ...FILES, state: "UNKNOWN" };
+    m.redraw.sync();
+    buttonNamed(document.body, "Stop app").click();
+    await settle();
+    expect(stopped).toEqual(["files"]);
+  });
+
   it("offers no Stop for an app that is not running, nor for anything in a preview", () => {
     const stoppedFiles = { ...FILES, state: "STOPPED" };
     const root = mountApps([stoppedFiles], async () => ({ kind: "done" }), false);
@@ -310,5 +337,74 @@ describe("the memory pressure banner", () => {
     const note = mountWithPressure(false).querySelector(".activity-pressure");
     expect(note?.getAttribute("role")).toBeNull();
     expect(note?.textContent).toContain("Memory was tight for");
+  });
+});
+
+describe("acting safely", () => {
+  afterEach(unmountViews);
+
+  function mountPage(
+    loaded: ReturnType<typeof summary>,
+    onChatAction: (
+      chatId: string,
+      action: "stop" | "start",
+      isInterruptConfirmed: boolean,
+    ) => Promise<ChatActionResult>,
+  ): HTMLElement {
+    return mountView(() =>
+      m(ActivityPage, {
+        state: { kind: "loaded", summary: loaded },
+        refreshFailure: null,
+        nowMs: Date.now(),
+        onAskInChat: () => true,
+        onAppStop: async (): Promise<AppStopResult> => ({ kind: "done" }),
+        onChatAction,
+        history: LOADING_HISTORY,
+      }),
+    );
+  }
+
+  it("focuses Keep running, so a second Enter on the row's Stop cannot stop the chat", async () => {
+    const root = mountPage(summary("COMFORTABLE", [WALLPAPER], null), async () => ({ kind: "done" }));
+    buttonNamed(root, "Stop").click();
+    m.redraw.sync();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(document.activeElement?.textContent?.trim()).toBe("Keep running");
+  });
+
+  it("frees its buttons and says so when the stop itself throws", async () => {
+    const root = mountPage(summary("COMFORTABLE", [WALLPAPER], null), async () => {
+      throw new Error("network down");
+    });
+    buttonNamed(root, "Stop").click();
+    m.redraw.sync();
+    buttonNamed(document.body, "Stop chat").click();
+    await settle();
+    expect(document.body.textContent).toContain('Couldn\'t stop "Wallpaper": Error: network down');
+    expect(buttonNamed(root, "Stop").disabled).toBe(false);
+  });
+
+  it("offers no Stop or Start in a preview, and says why", () => {
+    const stopped = item({ item_id: "chat:c2", name: "Logo", chat_id: "c2", state: "stopped" });
+    const root = mountPage({ ...summary("TIGHT", [WALLPAPER, stopped], null), is_preview: true }, async () => ({
+      kind: "done",
+    }));
+    const labels = Array.from(root.querySelectorAll("button")).map((button) => button.textContent?.trim());
+    expect(labels).not.toContain("Stop");
+    expect(labels).not.toContain("Start");
+    expect(root.textContent).toContain("can't stop anything in it");
+  });
+
+  it("opens the background services when the likely first to close is one of them", () => {
+    const backup = item({
+      item_id: "service:host-backup",
+      name: "Backups",
+      kind: "SERVICE",
+      chat_id: null,
+      rss_kib: 900 * 1024,
+    });
+    const root = mountPage(summary("CRITICAL", [backup], "service:host-backup"), async () => ({ kind: "done" }));
+    const row = root.querySelector('[data-item-id="service:host-backup"]');
+    expect(row?.textContent).toContain("Likely closed first");
   });
 });

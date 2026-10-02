@@ -7,6 +7,7 @@ once when the tab opens and again only when the user asks; one ``du`` process me
 timeout.
 """
 
+import shlex
 import subprocess
 from collections.abc import Callable
 from collections.abc import Mapping
@@ -18,12 +19,13 @@ from typing import Final
 from pydantic import Field
 
 from activity.commands import RunCommand
+from activity.config import WORKSPACE_ROOT
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 
 DU_TIMEOUT_SECONDS: Final[float] = 60.0
 LARGEST_FOLDER_COUNT: Final[int] = 6
-DATA_DIR: Final[Path] = Path("data")
+DATA_DIR: Final[Path] = WORKSPACE_ROOT / "data"
 
 
 class StorageCategory(FrozenModel):
@@ -41,8 +43,9 @@ WORKSPACE_CATEGORIES: Final[tuple[StorageCategory, ...]] = (
     StorageCategory(
         category_id="agents",
         name="Chats and agents",
-        description="Conversations, what each agent did, and their saved state.",
-        paths=(Path("/home/user/.mngr"), Path("/home/user/.minds")),
+        description="Conversations, what each agent did, their saved state, and the copies of the workspace helper "
+        "agents work in.",
+        paths=(Path("/home/user/.mngr"), Path("/home/user/.minds"), Path("/home/user/worktrees")),
     ),
     StorageCategory(
         category_id="app_data",
@@ -60,7 +63,13 @@ WORKSPACE_CATEGORIES: Final[tuple[StorageCategory, ...]] = (
         category_id="tools",
         name="Apps and tools",
         description="Installed with your workspace. Removing these would break things.",
-        paths=(Path("system"), Path(".venv"), Path("/root/.local")),
+        paths=(WORKSPACE_ROOT / "system", WORKSPACE_ROOT / ".venv", Path("/root/.local")),
+    ),
+    StorageCategory(
+        category_id="versions",
+        name="Saved versions",
+        description="Every saved version of the workspace's code, which is what lets a change be undone.",
+        paths=(WORKSPACE_ROOT / ".git",),
     ),
     StorageCategory(
         category_id="caches",
@@ -206,22 +215,32 @@ def measure_storage(
         )
     )
     existing_paths = [str(path) for category in categories for path in category.paths if path.exists()]
+    # With no operands du would measure the current directory, so nothing to measure runs nothing.
     argv = ("du", "-sk", "--", *existing_paths)
     notes: list[str] = []
     started = clock()
-    try:
-        result = run_command(argv, DU_TIMEOUT_SECONDS)
-        sizes = parse_du_output(result.stdout)
-        if result.returncode != 0 and result.stderr.strip():
-            notes.append(f"du could not read everything: {result.stderr.strip().splitlines()[0]}")
-    except (OSError, subprocess.TimeoutExpired) as e:
-        sizes = {}
-        notes.append(f"Measuring took too long or failed: {e}")
+    sizes: dict[str, int] = {}
+    if existing_paths:
+        try:
+            result = run_command(argv, DU_TIMEOUT_SECONDS)
+            sizes = parse_du_output(result.stdout)
+            if result.returncode != 0 and result.stderr.strip():
+                notes.append(f"Some folders could not be read: {result.stderr.strip().splitlines()[0]}")
+        except subprocess.TimeoutExpired as e:
+            # du prints each folder once it has finished it, so the folders it reached in time are kept.
+            partial = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+            sizes = parse_du_output(partial)
+            notes.append(
+                f"Measuring took longer than {DU_TIMEOUT_SECONDS:.0f} s, so folders it had not reached yet show as 0 "
+                "and the total is incomplete."
+            )
+        except OSError as e:
+            notes.append(f"Measuring failed: {e}")
     return summarize_storage(
         categories=categories,
         size_kib_by_path=sizes,
         measured_at=now(),
         measure_seconds=clock() - started,
-        command="du -sk -- <each folder listed>",
+        command=shlex.join(argv),
         notes=notes,
     )

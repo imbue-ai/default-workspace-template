@@ -116,6 +116,15 @@ export function timeLabel(range: HistoryRange, epochSeconds: number): string {
   }
 }
 
+/** A moment as the tooltip, the table and the recording note name it: always with its time, and with its weekday
+ * once the range spans more than an hour, so the 48 half-hour periods of a day in the week view are told apart. */
+export function periodLabel(range: HistoryRange, epochSeconds: number): string {
+  const date = new Date(epochSeconds * 1000);
+  return range === "HOUR"
+    ? date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : date.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+}
+
 /** The period whose middle is nearest the pointer's x, or null when there are none. */
 export function nearestPeriod(
   box: ChartBox,

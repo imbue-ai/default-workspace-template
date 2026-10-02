@@ -47,3 +47,20 @@ def test_closures_since_a_moment_come_newest_first() -> None:
     ]
     since = datetime(2026, 9, 24, tzinfo=timezone.utc)
     assert [closure.command_name for closure in closures_since(records, since)] == ["claude", "chromium"]
+
+
+def test_a_shed_helper_agent_and_a_shed_service_are_not_described_as_a_chat_or_an_agents_program() -> None:
+    worker = {**_shed("2026-10-01T12:00:00.000000Z", "claude", "test-runner"), "is_worker": True}
+    service = {**_shed("2026-10-01T12:00:00.000000Z", "host-backup", None), "oom_score_adj": 50}
+    helper = describe_closure(worker)
+    background = describe_closure(service)
+    assert helper is not None and (helper.kind, helper.what) == (
+        ClosedKind.HELPER_AGENT,
+        'a helper agent ("test-runner")',
+    )
+    assert "send it a message" not in helper.next_step
+    assert background is not None and (background.kind, background.what) == (
+        ClosedKind.SERVICE,
+        "a background program (host-backup)",
+    )
+    assert "starts again on its own" in background.next_step
