@@ -1733,10 +1733,8 @@ def test_an_independent_pinned_window_keeps_a_path_per_client_and_an_agent_navig
             frame.evaluate("() => window.__navigateTo('/?doc=1')")
             other_frame.evaluate("() => window.__navigateTo('/?doc=2')")
             wait_for(
-                lambda: (
-                    _own_window_path(server.base_url, client_id, pinned["id"]) == "/?doc=1"
-                    and _own_window_path(server.base_url, other_client_id, pinned["id"]) == "/?doc=2"
-                ),
+                lambda: _own_window_path(server.base_url, client_id, pinned["id"]) == "/?doc=1"
+                and _own_window_path(server.base_url, other_client_id, pinned["id"]) == "/?doc=2",
                 timeout=15.0,
                 poll_interval=0.1,
                 error_message="the two clients' own paths never reached their window path files",
@@ -1933,10 +1931,8 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             )
             assert _get_json(f"{server.base_url}/api/avatars")["selected"] == "jelly-cat"
             wait_for(
-                lambda: (
-                    _avatar_image_source(entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
-                    and _avatar_image_source(other_entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
-                ),
+                lambda: _avatar_image_source(entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
+                and _avatar_image_source(other_entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle"),
                 timeout=10.0,
                 poll_interval=0.1,
                 error_message="the windows never drew the chosen design",
