@@ -978,7 +978,8 @@ export class DesktopStore {
   private takeActiveDesktopChanged(event: ActiveDesktopChangedEvent): void {
     if (event.clientId !== this.deps.clientId || !this.hearDesktopRevision(event.revision)) return;
     if (event.reportId !== null && this.reportIds.isSuperseded(event.reportId)) return;
-    if (event.desktopId === this.state.activeDesktopId) return;
+    // News naming the desktop shown still goes to switchDesktop: an earlier follow waiting on a save has yet to move
+    // the window, and switchDesktop compares against the desktop only once that save is done.
     // A solo shell stays on its window's desktop whatever the client's main window switches to.
     if (this.soloWindowId !== null) return;
     void this.switchDesktop(event.desktopId, "follow");

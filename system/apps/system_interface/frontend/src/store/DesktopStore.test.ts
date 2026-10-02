@@ -821,6 +821,19 @@ describe("desktop news", () => {
     ]);
   });
 
+  it("ends on the latest news when following waits on a save", async () => {
+    const store = await startedStore();
+    store.minimizeWindow("win-1");
+    const reportsBefore = socket.reports.length;
+    const answer = api.holdWrites();
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "work", revision: 1, reportId: null });
+    socket.deliver().onActiveDesktopChanged({ clientId: CLIENT, desktopId: "home", revision: 2, reportId: null });
+    answer();
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(socket.reports.slice(reportsBefore)).toEqual([followingReport("work"), followingReport("home")]);
+  });
+
   it("re-asserts a switch made while the socket was down over a record no newer than it heard", async () => {
     const store = await startedStore();
     socket.deliver().onConnected();
