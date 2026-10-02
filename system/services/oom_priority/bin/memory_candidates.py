@@ -402,7 +402,7 @@ def browser_names_shown_by_windows(desktops: Any) -> set[str] | None:
     """The browsers some desktop window shows, from the shell's desktops document, or None when the
     document is not shaped as one (which, like an unreachable shell, means "unknown", never "none").
 
-    Mirrors ``workspace_layout.windows.window_paths_of_app``: a window's own path and each
+    Mirrors ``workspace_layout.windows.read_app_window_paths``: a window's own path and each
     client's path of it all count.
     """
     if not isinstance(desktops, dict) or not isinstance(desktops.get("desktops"), list):

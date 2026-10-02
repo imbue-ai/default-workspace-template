@@ -52,16 +52,6 @@ def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
 
 
 @pure
-def window_paths_of_app(document: Any, app: AppName) -> list[str] | None:
-    """The paths of ``app``'s windows in a desktops document, or None when the document is not one."""
-    try:
-        listing = DesktopsListing.model_validate(document, extra="ignore")
-    except ValidationError:
-        return None
-    return _paths_of_app(listing, app)
-
-
-@pure
 def _paths_of_app(listing: DesktopsListing, app: AppName) -> list[str]:
     paths: list[str] = []
     for desktop in listing.desktops:

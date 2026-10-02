@@ -67,7 +67,7 @@ answer shapes live in one place the shell and its callers share.
   against (`docs/system/specs/window-bound-resources.md` sections 4.2 and 4.6):
   `read_app_window_paths(shell_url, app)` (every window path of the app, or
   None when the shell could not be read, never "no windows"),
-  `window_paths_of_app`, `window_query_value`, and the `WindowClosedHint` the
+  `window_query_value`, and the `WindowClosedHint` the
   shell posts when a window closes, with `parse_window_closed_hint`.
 - `workspace_layout.cli`: the `workspace-layout` console script (below).
 - `workspace_layout.testing`: `FakeShell`, an in-memory `ShellLayoutInterface`

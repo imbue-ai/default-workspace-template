@@ -2,6 +2,7 @@ import copy
 from typing import Any
 from typing import Final
 
+import pytest
 from app_manifest.primitives import AppName
 
 from workspace_layout.answers import DesktopsListing
@@ -10,7 +11,6 @@ from workspace_layout.testing import LoopbackShell
 from workspace_layout.testing import fake_desktop
 from workspace_layout.testing import fake_window
 from workspace_layout.windows import read_app_window_paths
-from workspace_layout.windows import window_paths_of_app
 from workspace_layout.windows import window_query_value
 
 _TERMINAL = AppName("terminal")
@@ -58,7 +58,9 @@ def test_the_reader_answers_the_apps_window_paths_across_every_desktop(loopback_
 
 def test_the_reader_answers_an_empty_list_for_an_app_with_no_windows(loopback_shell: LoopbackShell) -> None:
     loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, {"desktops": [fake_desktop("home").model_dump(mode="json")]})
+    assert read_app_window_paths(loopback_shell.url, _TERMINAL) == []
 
+    loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, {"desktops": []})
     assert read_app_window_paths(loopback_shell.url, _TERMINAL) == []
 
 
@@ -94,18 +96,30 @@ def _with_window_field(desktop_index: int, window_index: int, field: str, value:
     return document
 
 
-def test_a_document_of_the_wrong_shape_reads_as_none() -> None:
-    assert window_paths_of_app([], _TERMINAL) is None
-    assert window_paths_of_app({"desktops": {}}, _TERMINAL) is None
-    assert window_paths_of_app(_with_window_field(0, 0, "path", _DROPPED), _TERMINAL) is None
-    assert window_paths_of_app(_with_window_field(2, 0, "client_paths", ["/?session=terminal-7"]), _TERMINAL) is None
-    assert window_paths_of_app(_with_window_field(2, 0, "client_paths", {"c1": 1}), _TERMINAL) is None
-    assert window_paths_of_app({"desktops": []}, _TERMINAL) == []
+@pytest.mark.parametrize(
+    "document",
+    [
+        [],
+        {"desktops": {}},
+        _with_window_field(0, 0, "path", _DROPPED),
+        _with_window_field(2, 0, "client_paths", ["/?session=terminal-7"]),
+        _with_window_field(2, 0, "client_paths", {"c1": 1}),
+        # A sweep must not act on a document it could only partly read, whichever app's window broke it.
+        _with_window_field(0, 1, "path", "no-leading-slash"),
+    ],
+    ids=[
+        "a-list",
+        "desktops-a-map",
+        "no-path",
+        "client-paths-a-list",
+        "a-client-path-not-a-path",
+        "another-apps-window",
+    ],
+)
+def test_a_document_of_the_wrong_shape_reads_as_unknown(loopback_shell: LoopbackShell, document: Any) -> None:
+    loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, document)
 
-
-def test_one_unreadable_window_of_another_app_makes_the_whole_read_unknown() -> None:
-    """A sweep must not act on a document it could only partly read, whichever app's window broke it."""
-    assert window_paths_of_app(_with_window_field(0, 1, "path", "no-leading-slash"), _TERMINAL) is None
+    assert read_app_window_paths(loopback_shell.url, _TERMINAL) is None
 
 
 def test_the_reader_warns_naming_the_field_that_made_the_desktops_unreadable(
