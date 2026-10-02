@@ -198,6 +198,8 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
     assert missing.returncode == 1 and window_id in missing.stderr
 
 
+# Starts the command once per show and read, and every start pays for the interpreter and its imports.
+@pytest.mark.timeout(30)
 def test_show_raises_a_window_already_showing_the_page_and_moves_only_what_repoint_names(
     layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
 ) -> None:
