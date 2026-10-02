@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from imbue.mngr.cli.output_helpers import write_human_line, write_stderr_line
+from loguru import logger
 from workspace_layout.client import ShellLayoutClient, requester_from_environment
 from workspace_layout.errors import ShellOpError
 from workspace_layout.ops import OpenRequest
@@ -560,6 +561,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    # The CLI reports everything it has to say itself; the layout client's own logs would add lines to stderr
+    # that no agent reading this command's output expects.
+    logger.remove()
     args = _build_parser().parse_args()
     raise SystemExit(args.func(args))
 
