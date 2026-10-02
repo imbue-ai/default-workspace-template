@@ -83,7 +83,7 @@ def build_history_view(
         closures_in_range=tuple(closure for closure in closures if closure.at >= range_start),
         recent_closures=tuple(closures[:RECENT_CLOSURE_LIMIT]),
         is_recording=is_recording(samples, end),
-        first_sample_epoch_seconds=samples[0].at_epoch_seconds if samples else None,
+        first_sample_epoch_seconds=min(sample.at_epoch_seconds for sample in samples) if samples else None,
         history_path=str(history_path),
         ledger_path=str(ledger_path),
     )

@@ -10,10 +10,10 @@ from flask import Flask
 from pydantic import Field
 
 from activity.config import Config
+from activity.config import WORKSPACE_ROOT
 from activity.config import load_config
 from activity.cron_entry import RECORDER_LOG_PATH
 from activity.cron_entry import SYSTEM_CRON_DIR
-from activity.cron_entry import WORKSPACE_ROOT
 from activity.cron_entry import cron_entry_text
 from activity.cron_entry import install_cron_entry
 from activity.history import HISTORY_PATH
@@ -87,9 +87,10 @@ def run_activity_app(arguments: ActivityArguments, wait_for_shutdown: Callable[[
     with httpx.Client() as client:
         with serve_in_background(arguments.host, app_url_port(arguments.app_url), build_pages_app(arguments, client)):
             if arguments.is_registered:
+                # First, since the recorder does not depend on the registration, which can fail and restart the app.
+                install_memory_recorder()
                 with log_span("Registering {} at {}", APP_NAME, arguments.app_url):
                     register_app(arguments.manifest_path, arguments.app_url)
-                install_memory_recorder()
             return wait_for_shutdown()
 
 

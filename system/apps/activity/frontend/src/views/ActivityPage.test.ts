@@ -141,6 +141,7 @@ describe("acting safely", () => {
         nowMs: Date.now(),
         onAskInChat: () => true,
         onChatAction,
+        history: LOADING_HISTORY,
       }),
     );
   }

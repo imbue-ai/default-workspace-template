@@ -256,6 +256,8 @@ def test_the_history_holds_recorded_readings_and_the_memory_guards_closures(
     assert view["is_recording"] is True
     assert [closure["what"] for closure in view["closures_in_range"]] == ["a program an agent was running (pytest)"]
     assert client.get("/api/history?range=decade").status_code == 400
+
+
 def _every_process_is_drawn(summary: dict[str, Any]) -> bool:
     drawn_kib = sum(item["rss_kib"] for group in ("chats", "apps", "services") for item in summary[group])
     return drawn_kib == (31 + 160 + 330) * 1024

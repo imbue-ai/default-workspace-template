@@ -43,10 +43,11 @@ after its last window closes and starts it on the next request. The page polls o
 (`shell:shown` / `shell:hidden`).
 
 The chart's readings come from `activity-record-memory`, a cron job rather than a resident program, so recording costs
-no memory between readings: once a minute it appends one line (`<epoch seconds>\t<used KiB>\t<limit KiB>`) to
+no memory between readings: once a minute it appends one line (`<epoch seconds>\t<used KiB>\t<limit KiB>\t<source>`;
+readers ignore columns they do not know, and read a line without a source as one from an unknown source) to
 `data/.state/activity/memory-history.tsv` and exits, dropping readings older than a week once the file passes 512 KiB.
 The app installs its entry, `/etc/cron.d/activity-memory-history`, each time it starts (at every boot, since its program
-autostarts). It is code-owned, so it has no copy in the user-editable `data/.state/cron.d/`, and it skips
+autostarts), under `flock -n` and `timeout 50`, so a stalled read never stacks up a recorder a minute. It is code-owned, so it has no copy in the user-editable `data/.state/cron.d/`, and it skips
 `with_agent_env.sh` because the recorder needs no agent credentials. The recorder logs to
 `/var/log/supervisor/activity-record-memory.log`. A reading is the same one the headline uses, so the chart and the
 headline agree.
