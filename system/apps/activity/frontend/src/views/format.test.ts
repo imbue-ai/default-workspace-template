@@ -7,6 +7,7 @@ import {
   harnessName,
   headlineFor,
   isStopSuggested,
+  pressureNotice,
   programStateLine,
 } from "./format";
 
@@ -130,5 +131,29 @@ describe("headline", () => {
       closing_detail: "",
     });
     expect(headline.body).toContain("When memory is completely full, the system closes");
+  });
+});
+
+describe("the memory pressure notice", () => {
+  const NOW = Date.parse("2026-10-02T10:30:00Z");
+
+  it("says for how long memory has stayed tight while it lasts", () => {
+    const notice = pressureNotice(
+      { started_at: "2026-10-02T10:12:00Z", last_tight_at: "2026-10-02T10:30:00Z", peak_kib: 1, is_ongoing: true },
+      NOW,
+    );
+    expect(notice?.isOngoing).toBe(true);
+    expect(notice?.title).toBe("Memory has stayed tight for 18 min");
+    expect(notice?.body).toContain("Stopping a chat or app you aren't using makes room.");
+  });
+
+  it("counts an eased stretch to the end of its last minute, and says nothing when there was none", () => {
+    const notice = pressureNotice(
+      { started_at: "2026-10-02T09:00:00Z", last_tight_at: "2026-10-02T09:24:00Z", peak_kib: 1, is_ongoing: false },
+      NOW,
+    );
+    expect(notice?.isOngoing).toBe(false);
+    expect(notice?.title).toBe("Memory was tight for 25 min earlier");
+    expect(pressureNotice(null, NOW)).toBeNull();
   });
 });

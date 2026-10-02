@@ -2,6 +2,7 @@ from datetime import datetime
 from datetime import timezone
 
 from activity.chats import ChatInfo
+from activity.history import MemorySample
 from activity.memory_reading import ClosingPoint
 from activity.memory_reading import MemoryCloser
 from activity.memory_reading import MemoryReading
@@ -25,6 +26,7 @@ from activity.summary import likely_first_to_close
 from activity.summary import memory_status
 from activity.supervised_programs import SupervisedProgram
 from app_manifest.registry import RegistryRow
+from imbue.imbue_common.model_update import to_update
 
 _MIB = 1024 * 1024
 _NOW = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
@@ -157,6 +159,7 @@ def _inputs(chats: tuple[ChatInfo, ...] | None, programs: tuple[SupervisedProgra
             _row("files", "files", False, True),
         ),
         notes=(),
+        history=(),
         is_preview=False,
     )
 
@@ -240,3 +243,26 @@ def test_without_supervisord_apps_say_their_state_is_unknown_rather_than_not_run
     summary = build_summary(_inputs(_CHATS, None))
     assert summary.are_programs_known is False
     assert {item.state for item in summary.apps} == {UNKNOWN_PROGRAM_STATE}
+
+
+def test_memory_that_stayed_tight_for_minutes_is_reported_until_the_live_reading_eases() -> None:
+    now_seconds = int(_NOW.timestamp())
+    history = tuple(
+        MemorySample(at_epoch_seconds=now_seconds - 60 * minute, used_kib=7_000 * 1024, limit_kib=8192 * 1024)
+        for minute in range(6, 0, -1)
+    )
+    inputs = _inputs(_CHATS, _PROGRAMS)
+    with_history = inputs.model_copy_update(to_update(inputs.field_ref().history, history))
+    assert inputs.memory is not None
+    tight_now = with_history.model_copy_update(
+        to_update(
+            with_history.field_ref().memory,
+            inputs.memory.model_copy_update(to_update(inputs.memory.field_ref().used_bytes, 7_000 * _MIB)),
+        )
+    )
+    ongoing = build_summary(tight_now).pressure
+    assert ongoing is not None and ongoing.is_ongoing is True
+    assert ongoing.started_at == datetime.fromtimestamp(now_seconds - 360, tz=timezone.utc)
+    eased = build_summary(with_history).pressure
+    assert eased is not None and eased.is_ongoing is False
+    assert build_summary(inputs).pressure is None

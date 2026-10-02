@@ -56,6 +56,14 @@ export interface LikelyFirstToClose {
   readonly command_name: string;
 }
 
+/** The latest stretch memory stayed tight long enough to warn about (``activity.pressure``). */
+export interface PressureStretch {
+  readonly started_at: string;
+  readonly last_tight_at: string;
+  readonly peak_kib: number;
+  readonly is_ongoing: boolean;
+}
+
 export interface ActivitySummary {
   readonly measured_at: string;
   readonly memory: MemorySummary | null;
@@ -66,6 +74,7 @@ export interface ActivitySummary {
   readonly are_programs_known: boolean;
   readonly likely_first_to_close: LikelyFirstToClose | null;
   readonly notes: readonly string[];
+  readonly pressure: PressureStretch | null;
   readonly is_preview: boolean;
 }
 

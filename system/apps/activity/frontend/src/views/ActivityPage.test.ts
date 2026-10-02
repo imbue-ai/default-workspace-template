@@ -277,3 +277,38 @@ describe("stopping an app", () => {
     expect(preview.querySelector('[data-item-id="app:browser"]')?.textContent).toContain("Always on");
   });
 });
+
+describe("the memory pressure banner", () => {
+  afterEach(unmountViews);
+
+  function mountWithPressure(isOngoing: boolean): HTMLElement {
+    const startedAt = new Date(Date.now() - 18 * 60 * 1000).toISOString();
+    const loaded = {
+      ...summary("TIGHT", [WALLPAPER], null),
+      pressure: { started_at: startedAt, last_tight_at: new Date().toISOString(), peak_kib: 1, is_ongoing: isOngoing },
+    };
+    return mountView(() =>
+      m(ActivityPage, {
+        state: { kind: "loaded", summary: loaded },
+        refreshFailure: null,
+        nowMs: Date.now(),
+        onAskInChat: () => true,
+        onAppStop: async (): Promise<AppStopResult> => ({ kind: "done" }),
+        onChatAction: async (): Promise<ChatActionResult> => ({ kind: "done" }),
+        history: LOADING_HISTORY,
+      }),
+    );
+  }
+
+  it("warns, as a status, while memory stays tight", () => {
+    const banner = mountWithPressure(true).querySelector(".activity-pressure");
+    expect(banner?.getAttribute("role")).toBe("status");
+    expect(banner?.textContent).toContain("Memory has stayed tight for 18 min");
+  });
+
+  it("mentions an eased stretch quietly, not as a warning", () => {
+    const note = mountWithPressure(false).querySelector(".activity-pressure");
+    expect(note?.getAttribute("role")).toBeNull();
+    expect(note?.textContent).toContain("Memory was tight for");
+  });
+});

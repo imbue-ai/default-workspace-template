@@ -135,7 +135,12 @@ def build_pages_blueprint(
     @blueprint.get(SUMMARY_PATH)
     def summary() -> ResponseReturnValue:
         inputs = collect_summary_inputs(
-            sources=sources, client=client, read_process_info=read_process_info, now=now(), is_preview=is_preview
+            sources=sources,
+            client=client,
+            read_process_info=read_process_info,
+            now=now(),
+            history_path=history_path,
+            is_preview=is_preview,
         )
         response = jsonify(build_summary(inputs).model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"

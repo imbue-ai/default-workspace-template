@@ -25,10 +25,14 @@ from activity.apps import BROWSER_APP_NAME
 from activity.apps import is_app_stoppable
 from activity.apps import is_quittable_by_shell
 from activity.chats import ChatInfo
+from activity.history import MemorySample
+from activity.history import epoch_seconds
 from activity.memory_reading import ClosingPoint
 from activity.memory_reading import MemoryCloser
 from activity.memory_reading import MemoryReading
 from activity.memory_reading import MemorySource
+from activity.pressure import PressureStretch
+from activity.pressure import latest_pressure
 from activity.processes import BROWSER_COMMAND_NAMES
 from activity.processes import ProcessReading
 from activity.processes import as_badness_sample
@@ -182,6 +186,9 @@ class ActivitySummary(FrozenModel):
     are_programs_known: bool = Field(description="Whether supervisord answered, so apps and services carry states")
     likely_first_to_close: LikelyFirstToClose | None = Field(description="The closer's likely next pick, if any")
     notes: tuple[str, ...] = Field(description="What could not be read, in words for the page's details")
+    pressure: PressureStretch | None = Field(
+        description="The latest stretch memory stayed tight long enough to warn about, while it lasts and for an hour after"
+    )
     is_preview: bool = Field(description="Whether this is a preview of a proposed change, which stops nothing")
 
 
@@ -198,6 +205,7 @@ class SummaryInputs(FrozenModel):
     agents: tuple[RegisteredAgent, ...] = Field(description="Agents with live registered processes")
     app_rows: tuple[RegistryRow, ...] = Field(description="The app registry's rows")
     notes: tuple[str, ...] = Field(description="What could not be read")
+    history: tuple[MemorySample, ...] = Field(description="The recorder's readings, oldest first")
     is_preview: bool = Field(description="Whether this is a preview of a proposed change, which stops nothing")
 
 
@@ -473,7 +481,16 @@ def build_summary(inputs: SummaryInputs) -> ActivitySummary:
 
     memory: MemorySummary | None = None
     first_to_close: LikelyFirstToClose | None = None
+    pressure: PressureStretch | None = None
     if inputs.memory is not None and inputs.closing is not None:
+        tight_from_kib = int(inputs.closing.used_bytes * TIGHT_FROM_CLOSING_FRACTION) // 1024
+        # The live reading is the newest point, so the warning never outlasts the headline by the recorder's minute.
+        live = MemorySample(
+            at_epoch_seconds=epoch_seconds(inputs.measured_at),
+            used_kib=inputs.memory.used_bytes // 1024,
+            limit_kib=inputs.memory.limit_bytes // 1024,
+        )
+        pressure = latest_pressure((*inputs.history, live), tight_from_kib, live.at_epoch_seconds)
         memory = MemorySummary(
             limit_bytes=inputs.memory.limit_bytes,
             used_bytes=inputs.memory.used_bytes,
@@ -497,5 +514,6 @@ def build_summary(inputs: SummaryInputs) -> ActivitySummary:
         are_programs_known=inputs.programs is not None,
         likely_first_to_close=first_to_close,
         notes=inputs.notes,
+        pressure=pressure,
         is_preview=inputs.is_preview,
     )

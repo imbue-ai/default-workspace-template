@@ -12,6 +12,7 @@ from activity.chats import chat_app_url
 from activity.chats import fetch_chats
 from activity.errors import ChatAppUnavailableError
 from activity.errors import SupervisorUnavailableError
+from activity.history import read_history
 from activity.memory_reading import MemorySources
 from activity.memory_reading import closing_point
 from activity.memory_reading import read_earlyoom_meminfo
@@ -65,7 +66,12 @@ def read_app_rows(registry_path: Path) -> tuple[list[RegistryRow], str | None]:
 
 
 def collect_summary_inputs(
-    sources: ReadingSources, client: httpx.Client, read_process_info: ReadProcessInfo, now: datetime, is_preview: bool
+    sources: ReadingSources,
+    client: httpx.Client,
+    read_process_info: ReadProcessInfo,
+    now: datetime,
+    history_path: Path,
+    is_preview: bool,
 ) -> SummaryInputs:
     notes: list[str] = []
     app_rows, registry_note = read_app_rows(sources.registry_path)
@@ -106,5 +112,6 @@ def collect_summary_inputs(
         agents=tuple(read_registered_agents(sources.proc_dir)),
         app_rows=tuple(app_rows),
         notes=tuple(notes),
+        history=tuple(read_history(history_path)),
         is_preview=is_preview,
     )

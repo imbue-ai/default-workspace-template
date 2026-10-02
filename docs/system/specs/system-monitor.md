@@ -16,7 +16,7 @@ Goals:
 - **No idle cost.** The shell stops the app a minute after its last window closes (`stop_when_no_windows`), and nothing it adds stays resident.
 - **Safe actions only.** The user can stop what is safe to stop (a chat, a non-critical app), told first what happens. Nothing is killed raw.
 
-Non-goals for this change: alerts while the app is closed, a disk quota figure (not readable from inside the container, see section 4.6), and acting on the user's behalf.
+Non-goals for this change: notifications while the app is closed (section 4.9 says why), a disk quota figure (not readable from inside the container, see section 4.6), and acting on the user's behalf.
 
 ## 2. What the user sees
 
@@ -26,8 +26,9 @@ Non-goals for this change: alerts while the app is closed, a disk quota figure (
 2. A bar of where memory goes: chats, apps and background services, with a mark where closing starts. Each section's colour carries through to its heading and its rows' bars, and each legend entry jumps to its section.
 3. Memory over time for the last hour, 24 hours or 7 days, with the closing line, a mark wherever something was closed, a hover readout and a table view. Below it, "Recently closed" lists the 20 newest closures of the last week: what was closed, how much it freed, and what to do about it ("Its conversation is kept; send it a message to carry on").
 4. Questions a newcomer would ask (what happens if memory fills up, how do I free it, can I get more), answered in place and picked for what the page shows. "Ask in chat" drafts the question, with the page's numbers, into the user's current chat without sending it.
-5. When memory is getting tight, "Ways to free up memory" lists chats idle for 15 minutes or more, largest first, each with Stop.
-6. Every chat (all harnesses), app and background service, with its size and share of memory in use ("171 MB · 7%"). Every running chat offers Stop (a working one warns that stopping interrupts it) and a stopped chat offers Start; a running non-critical app offers Stop; the process most likely closed first is flagged. Each row opens to its processes.
+5. While memory has stayed tight for five minutes or more, a warning under the headline says for how long and since when (section 4.9).
+6. When memory is getting tight, "Ways to free up memory" lists chats idle for 15 minutes or more, largest first, each with Stop.
+7. Every chat (all harnesses), app and background service, with its size and share of memory in use ("171 MB · 7%"). Every running chat offers Stop (a working one warns that stopping interrupts it) and a stopped chat offers Start; a running non-critical app offers Stop; the process most likely closed first is flagged. Each row opens to its processes.
 
 **Storage tab**: what is taking up disk, grouped as your files, chats and agents, app data, installed tools, download caches and logs, with the total of the measured folders, each group's folders and the largest folders. It measures the first time the tab opens and then only when asked, never on a timer.
 
@@ -140,6 +141,20 @@ Which apps offer Stop is one pure rule, `apps.is_app_stoppable`: what the shell 
 
 The backend checks the rule again before forwarding (the page's view may be stale, and a request need not come from it), and refuses an unreadable registry rather than guessing. The page also re-checks the row when the user confirms, so a refresh that already found the app stopped does not report memory freed. A row's "starts when you open it" line follows the shell's rule rather than the page's offer, so a browser stopped from its own window menu reads correctly.
 
+### 4.9 Warnings while memory stays tight
+
+When memory has stayed at or above "getting tight" for five readings in a row (four minutes), the memory tab shows a warning under the headline: for how long, since when, and that stopping something unused makes room. For an hour after it eases, a quieter line says it was tight earlier and until when.
+
+The rule is one pure function, `pressure.latest_pressure`, over the recorder's history plus the live reading as the newest point, evaluated whenever the page reads the summary. There is no alert state: nothing to go stale, nothing to clear. A gap in recording or a single reading below the line ends a stretch, so a warning always describes memory that was tight minute after minute, and the live point means the warning never outlasts the headline by the recorder's minute.
+
+The warning is seen only while System Monitor is open. A notification while it is closed was investigated and left out:
+
+- The chat notification route (`.agents/skills/notify-user/`) is for chat agents only. Called from a background job through the services agent's environment, it would appear as a message from "system-services", and clicking it would open something that is not a chat. The feed also does no deduplication.
+- The desktop shell has no notice route an app or job can post to; its toasts exist only in the browser.
+- No background service in the template notifies the user directly today; the memory guard's own notice goes to the agent it revived.
+
+A proper notification needs a paired mngr change: a workspace system-event route on the minds API, a feed card whose click opens System Monitor, and server-side deduplication. The recorder would then apply the same rule each minute and post once per stretch (section 11).
+
 ## 5. Cost
 
 | State | Memory |
@@ -167,8 +182,8 @@ Each reading is taken independently (`readings.py`). If the chat app does not an
 
 ## 9. Testing
 
-- **Backend** (`cd system/apps/activity && uv run pytest`): 128 tests, 97% line coverage, covering each memory source and the closing point under cloud, runc and gVisor layouts; Linux and gVisor `/proc` (including non-UTF-8 `smaps`); crediting and the first-to-close prediction; the chat stop re-check; which apps may be stopped, the forwarded Quit, its refusals and previews; the owner and write guards (with a regression test for the dropped `Host`); storage grouping and the concurrent-measure lock; history append, rotation, grouping and corrupt bytes; closure descriptions, including malformed ledger records; the cron entry; and the supervisord reader against a real unix-socket XML-RPC server. The app's ratchets (`test_activity_ratchets.py`) pass, and `ty` and `ruff` are clean.
-- **Frontend** (`cd system && npm test --workspace=apps/activity/frontend`): 70 vitest tests: the app stop's confirmation, refusal, keep-running and stale-row paths and its absence in previews; the poller's stop-and-start-while-a-read-is-in-flight behaviour, stale range replies, the forbidden state, chat-action results, the stop dialog's re-ask flow, the memory bar's scaling, the storage tab, chart geometry and rendering (gaps, closures, empty and paused states), copy, and WCAG AA contrast of every colour pair against `workspace_ui`'s tokens, with a scan that fails if a view uses a text colour no pair checks.
+- **Backend** (`cd system/apps/activity && uv run pytest`): 136 tests, 97% line coverage, covering each memory source and the closing point under cloud, runc and gVisor layouts; Linux and gVisor `/proc` (including non-UTF-8 `smaps`); crediting and the first-to-close prediction; the chat stop re-check; the pressure rule (sustained stretches, spikes, dips, gaps, eased and stale stretches, the live point); which apps may be stopped, the forwarded Quit, its refusals and previews; the owner and write guards (with a regression test for the dropped `Host`); storage grouping and the concurrent-measure lock; history append, rotation, grouping and corrupt bytes; closure descriptions, including malformed ledger records; the cron entry; and the supervisord reader against a real unix-socket XML-RPC server. The app's ratchets (`test_activity_ratchets.py`) pass, and `ty` and `ruff` are clean.
+- **Frontend** (`cd system && npm test --workspace=apps/activity/frontend`): 74 vitest tests: the pressure warning and its quieter eased form; the app stop's confirmation, refusal, keep-running and stale-row paths and its absence in previews; the poller's stop-and-start-while-a-read-is-in-flight behaviour, stale range replies, the forbidden state, chat-action results, the stop dialog's re-ask flow, the memory bar's scaling, the storage tab, chart geometry and rendering (gaps, closures, empty and paused states), copy, and WCAG AA contrast of every colour pair against `workspace_ui`'s tokens, with a scan that fails if a view uses a text colour no pair checks.
 - **Template suites**, run as CI runs them in a workspace-image container on the whole stack: the root suite (3370 passed; 2 tests fail identically on unmodified `main`), and `system_interface` (687) and `chat` (2026) with `-m ''`. On each layer of the stack, the app's suites, every frontend check and the always-run checks pass.
 - **Manual**: the app against seeded history and a seeded shed ledger, checked at desktop and phone widths; the recorder run by hand; the memory and storage tabs, ask-in-chat, stopping a chat and stopping an app in a local Studio workspace.
 
@@ -185,6 +200,8 @@ Each reading is taken independently (`readings.py`). If the chat app does not an
 
 ## 11. Next steps
 
+- **Notifications while the app is closed**: the mngr-side system-event route and feed card (section 4.9), with the recorder posting once per stretch.
+- **A desktop-wide banner**: the shell could show the same warning on every desktop; it needs a shell contract addition and the critical-app flow.
 - **Disk quota on cloud workspaces**: publish the VM's disk use into the container as `.host-meminfo` does for memory, so the storage tab can show used against the limit.
 - **Shared libraries**: move the background server, the supervisord socket client and the identity parsing into shared libraries (`app_manifest` or a new one), so the apps that copy them cannot drift.
 - **Design-only ideas**: agent hooks that read the history before starting a memory-heavy command; automatic stopping of long-idle chats. The latter conflicts with "memory is the user's to spend" (`freeing-memory.md`) and needs the user's opt-in, so it stays a proposal.

@@ -375,3 +375,14 @@ def test_another_apps_page_cannot_stop_an_app(tmp_path: Path, monkeypatch: pytes
     )
     assert response.status_code == 403
     assert shell.quits == []
+
+
+def test_the_summary_warns_of_memory_that_has_stayed_tight(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client(tmp_path, monkeypatch, _chat_app("idle"))
+    now_seconds = int(_NOW.timestamp())
+    lines = [f"{now_seconds - 60 * minute}\t{7 * 1024 * 1024}\t{8 * 1024 * 1024}\n" for minute in range(6, -1, -1)]
+    (tmp_path / "memory-history.tsv").write_text("".join(lines))
+    (tmp_path / "cgroup" / "memory.current").write_text(str(7 * 1024**3))
+    pressure = client.get("/api/summary").get_json()["pressure"]
+    assert pressure["is_ongoing"] is True
+    assert pressure["peak_kib"] == 7 * 1024 * 1024

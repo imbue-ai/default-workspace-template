@@ -3,7 +3,7 @@
  * headline for each memory status. Pure, so each is tested on its own.
  */
 
-import type { ActivityItem, MemoryStatus, MemorySummary } from "../models/summary";
+import type { ActivityItem, MemoryStatus, MemorySummary, PressureStretch } from "../models/summary";
 
 const BYTES_PER_KIB = 1024;
 const BYTES_PER_MIB = 1024 * 1024;
@@ -139,4 +139,36 @@ export function headlineFor(memory: MemorySummary): Headline {
         body: `${amounts} ${closingSentence(memory)} Free some memory now to choose for yourself.`,
       };
   }
+}
+
+export interface PressureNotice {
+  readonly isOngoing: boolean;
+  readonly title: string;
+  readonly body: string;
+}
+
+function clockTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+/** The warning for memory that has stayed tight, or the quieter note that it was tight earlier; null when neither. */
+export function pressureNotice(pressure: PressureStretch | null, nowMs: number): PressureNotice | null {
+  if (pressure === null) return null;
+  const startedMs = Date.parse(pressure.started_at);
+  if (pressure.is_ongoing) {
+    return {
+      isOngoing: true,
+      title: `Memory has stayed tight for ${formatDuration((nowMs - startedMs) / 1000)}`,
+      body:
+        `Since ${clockTime(pressure.started_at)} it has stayed close to the point where things start being closed. ` +
+        "Stopping a chat or app you aren't using makes room.",
+    };
+  }
+  // Each reading stands for the minute it was taken in, so a stretch lasts a minute past its last reading.
+  const lastedSeconds = (Date.parse(pressure.last_tight_at) - startedMs) / 1000 + 60;
+  return {
+    isOngoing: false,
+    title: `Memory was tight for ${formatDuration(lastedSeconds)} earlier`,
+    body: `It stayed close to the point where things start being closed until ${clockTime(pressure.last_tight_at)}.`,
+  };
 }

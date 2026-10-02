@@ -27,6 +27,7 @@ import {
   harnessName,
   headlineFor,
   isStopSuggested,
+  pressureNotice,
   programStateLine,
 } from "./format";
 import { HistoryChart } from "./HistoryChart";
@@ -449,6 +450,22 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
     );
   }
 
+  /** Memory that has stayed tight says so, with since when; one that eased is mentioned quietly for an hour. */
+  function pressureBanner(summary: ActivitySummary, nowMs: number): m.Children {
+    const notice = pressureNotice(summary.pressure, nowMs);
+    if (notice === null) return null;
+    return notice.isOngoing
+      ? m(
+          "div",
+          { class: "activity-pressure flex flex-col gap-1 rounded-md bg-warning-surface px-3 py-2", role: "status" },
+          [
+            m("span", { class: "type-label text-primary" }, notice.title),
+            m("span", { class: "type-helper text-primary" }, notice.body),
+          ],
+        )
+      : m("p", { class: "activity-pressure m-0 type-helper text-secondary" }, `${notice.title}. ${notice.body}`);
+  }
+
   function measuredDetails(summary: ActivitySummary): m.Children {
     const memory = summary.memory;
     if (memory === null) return null;
@@ -473,6 +490,11 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
             m(
               "div",
               "shares     a row's or section's bar and percentage are its share of the memory in use, not of the limit",
+            ),
+            m(
+              "div",
+              "warnings   five readings in a row, a minute apart, at or above the getting-tight line, from the " +
+                "history the chart draws (data/.state/activity/memory-history.tsv)",
             ),
             m(
               "div",
@@ -650,6 +672,7 @@ export function ActivityPage(): m.Component<ActivityPageAttrs> {
                 m("h2", { class: "m-0 type-heading-lg text-primary text-balance" }, headline.title),
                 m("p", { class: "m-0 type-body text-secondary" }, headline.body),
               ]),
+          pressureBanner(summary, attrs.nowMs),
           summary.is_preview
             ? m(
                 "p",

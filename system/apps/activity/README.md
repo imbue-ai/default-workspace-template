@@ -14,6 +14,10 @@ it?") in their terms first, and keeps the raw readings one click away.
   most likely shed first.
 - Memory over time (the last hour, day or week), with the point where closing starts, a mark wherever the memory
   guard closed something, and a plain list of what it closed in the last week and what to do about each.
+- A warning while memory has stayed tight for five minutes or more (with since when), and a quieter note for an hour
+  after it eases. It is worked out from the recorder's history plus the live reading whenever the page reads the
+  summary (`activity.pressure`), so it is seen when System Monitor is open; nothing notifies the user while it is
+  closed.
 
 It runs as the `activity` supervisord program (`system/supervisord.conf.d/activity.conf`) from its own uv tool
 environment (`system/scripts/build_workspace.sh`), serving on `http://127.0.0.1:8040`:
