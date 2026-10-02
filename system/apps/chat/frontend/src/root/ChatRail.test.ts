@@ -14,21 +14,8 @@ vi.mock("./verbs", () => ({
 import m from "mithril";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { ChatRail } from "./ChatRail";
+import { chatRowFixture } from "./chatRowFixture";
 import type { ChatRow } from "./rows";
-
-function row(chatId: string, overrides: Partial<ChatRow> = {}): ChatRow {
-  return {
-    chatId,
-    title: chatId,
-    status: "idle",
-    labels: {},
-    agentIds: [chatId],
-    lastActiveMs: null,
-    isProvisional: false,
-    isDefault: false,
-    ...overrides,
-  };
-}
 
 let root: HTMLElement | null = null;
 
@@ -66,8 +53,8 @@ afterEach(() => {
 
 describe("ChatRail", () => {
   it("sets the default chat and its helpers apart from the rest, and marks the default row", () => {
-    const helper = row("agent-helper", { labels: { agent_created: "true", lead_agent: "agent-welcome" } });
-    const rail = mount([row("agent-welcome", { isDefault: true }), helper, row("agent-other")]);
+    const helper = chatRowFixture("agent-helper", { labels: { agent_created: "true", lead_agent: "agent-welcome" } });
+    const rail = mount([chatRowFixture("agent-welcome", { isDefault: true }), helper, chatRowFixture("agent-other")]);
 
     const group = rail.querySelector(".chat-rail-default-group");
     expect(group).not.toBeNull();
@@ -78,7 +65,7 @@ describe("ChatRail", () => {
   });
 
   it("draws no default group when no chat is the default", () => {
-    const rail = mount([row("agent-a"), row("agent-b")]);
+    const rail = mount([chatRowFixture("agent-a"), chatRowFixture("agent-b")]);
 
     expect(rail.querySelector(".chat-rail-default-group")).toBeNull();
     expect(chatIdsIn(rail)).toEqual(["agent-a", "agent-b"]);

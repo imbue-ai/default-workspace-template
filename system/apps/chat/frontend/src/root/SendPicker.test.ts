@@ -1,20 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
+import { chatRowFixture } from "./chatRowFixture";
 import type { ChatRow } from "./rows";
 import { SendPicker, pickableRows } from "./SendPicker";
 
 function row(chatId: string, title: string, isProvisional = false): ChatRow {
-  return {
-    chatId,
-    title,
-    status: "idle",
-    labels: {},
-    agentIds: [chatId],
-    lastActiveMs: null,
-    isProvisional,
-    isDefault: false,
-  };
+  return chatRowFixture(chatId, { title, isProvisional });
 }
 
 const ROWS = [row("agent-1", "Plan the launch"), row("agent-2", "Fix the tests"), row("agent-3", "New chat", true)];
