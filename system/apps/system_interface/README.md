@@ -221,8 +221,9 @@ The shell also owns each stoppable app's process (`shell/app_lifecycle.py`,
 the stop-when-no-windows spec): an app whose manifest declares
 `stop_when_no_windows` is stopped once no window on any desktop has shown it
 for a minute (only once someone has visited the workspace, and never while a
-per-app share grant names it, since such a visitor reaches the app without the
-shell: `shell/share_grants.py` reads `data/.secrets/share_grants.toml`), and while any
+per-app share grant names a shareable app, since such a visitor reaches the app
+without the shell: `shell/share_grants.py` reads
+`data/.secrets/share_grants.toml`), and while any
 stoppable app is stopped the shell holds its port (`shell/port_parking.py`), so
 the first request for the app starts it again and is answered with a loading
 page that reloads into the app. "Quit <app>" on the window menu
