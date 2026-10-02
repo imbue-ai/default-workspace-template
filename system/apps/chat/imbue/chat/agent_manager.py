@@ -4101,7 +4101,7 @@ class AgentManager:
     def _await_spare_destroyed(self, chat_id: ChatId) -> bool:
         """Wait until the spare holding ``chat_id`` is destroyed, running the destroy here when no other thread
         has it; whether the spare is gone (False once the app is stopping, or when the destroy failed)."""
-        while True:
+        while not self._shutdown_event.is_set():
             with self._lock:
                 spare = self._spare_locked(chat_id)
                 if spare is None:
@@ -4115,8 +4115,8 @@ class AgentManager:
                 self._discard_spare(chat_id)
                 with self._lock:
                     return self._spare_locked(chat_id) is None
-            if self._shutdown_event.wait(timeout=SPARE_CHAT_BOOT_POLL_SECONDS):
-                return False
+            self._shutdown_event.wait(timeout=SPARE_CHAT_BOOT_POLL_SECONDS)
+        return False
 
     def _run_creation_after_spare_destroy(
         self,
