@@ -108,6 +108,18 @@ def test_one_unreadable_window_of_another_app_makes_the_whole_read_unknown() -> 
     assert window_paths_of_app(_with_window_field(0, 1, "path", "no-leading-slash"), _TERMINAL) is None
 
 
+def test_the_reader_warns_naming_the_field_that_made_the_desktops_unreadable(
+    loopback_shell: LoopbackShell, loguru_records: list[str]
+) -> None:
+    loopback_shell.get_answers[DESKTOPS_ROUTE] = (200, _with_window_field(0, 1, "path", "no-leading-slash"))
+
+    assert read_app_window_paths(loopback_shell.url, _TERMINAL) is None
+    assert any(
+        record.startswith("WARNING") and "not a desktops listing" in record and "'desktops.0.windows.1.path'" in record
+        for record in loguru_records
+    ), loguru_records
+
+
 def test_the_query_value_of_a_window_path_names_its_resource() -> None:
     assert window_query_value("/?session=terminal-3", "session") == "terminal-3"
     assert window_query_value("/?session=a&session=b", "session") == "a"

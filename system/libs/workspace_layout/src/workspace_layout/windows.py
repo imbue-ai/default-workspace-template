@@ -2,6 +2,7 @@ import urllib.parse
 from typing import Any
 from typing import Final
 
+from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
@@ -42,10 +43,12 @@ def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
     if isinstance(response.body, str):
         logger.warning("The shell's desktops at {} are not a JSON object: {}", url, quote_answer(response.body))
         return None
-    paths = window_paths_of_app(response.body, app)
-    if paths is None:
-        logger.warning("The shell's desktops at {} are not shaped as {{desktops: [{{windows: [...]}}]}}", url)
-    return paths
+    try:
+        listing = DesktopsListing.model_validate(response.body, extra="ignore")
+    except ValidationError as e:
+        logger.warning("The shell's desktops at {} are not a desktops listing: {}", url, describe_validation_error(e))
+        return None
+    return _paths_of_app(listing, app)
 
 
 @pure
@@ -55,6 +58,11 @@ def window_paths_of_app(document: Any, app: AppName) -> list[str] | None:
         listing = DesktopsListing.model_validate(document, extra="ignore")
     except ValidationError:
         return None
+    return _paths_of_app(listing, app)
+
+
+@pure
+def _paths_of_app(listing: DesktopsListing, app: AppName) -> list[str]:
     paths: list[str] = []
     for desktop in listing.desktops:
         for window in desktop.windows:
