@@ -1,9 +1,7 @@
 """Tests for the agent-facing ``workspace-layout`` command.
 
-They cover what an agent depends on: how apps and windows are named (the retired spellings
-and verbs are refused with the replacement), the bodies the ops post and what they print from
-the shell's answer, the read commands over the inventory, and the exit codes. The shell they post
-to reads every op body as the real one does, so a body the shell would refuse fails here too.
+The shell they post to reads every op body as the real one does, so a body the shell would
+refuse fails here too.
 """
 
 import json

@@ -141,13 +141,13 @@ class OpTarget(FrozenModel):
 
 
 class UnreadArgs(FrozenModel):
-    """The arguments of an op the shell answers whatever it carries (``context``, ``desktops``, ``list``)."""
+    """The arguments of an op the shell answers whatever it carries."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")
 
 
 class NoArgs(FrozenModel):
-    """The arguments of an op that takes none (``reload_system_interface``)."""
+    """The arguments of an op that takes none."""
 
 
 class LoadArgs(OpTarget):
@@ -213,7 +213,7 @@ class _WindowTarget(OpTarget):
 
 
 class WindowArgs(_WindowTarget):
-    """An op on one window that takes nothing else: ``focus``, ``minimize``, ``restore``, ``maximize``, ``close``."""
+    """An op on one window that takes nothing else."""
 
 
 class PlaceArgs(_WindowTarget):

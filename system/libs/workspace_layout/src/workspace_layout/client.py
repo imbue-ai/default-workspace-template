@@ -240,8 +240,7 @@ def _no_shell_error(described: str) -> ShellUnreachableError:
 
 
 class DisconnectedShell(ShellLayoutInterface):
-    """A shell with nobody connected and nothing to show on: the stand-in where no shell is wired (a test, a
-    secondary chat)."""
+    """A shell with nobody connected and nothing to show on: the stand-in where no shell is wired."""
 
     def show(self, args: ShowArgs) -> ShowAnswer:
         raise _no_shell_error(f"show {args.path} to client {args.client}")

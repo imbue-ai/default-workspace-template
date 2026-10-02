@@ -244,9 +244,9 @@ _Parsed = TypeVar("_Parsed")
 READ_TIMEOUT_SECONDS: Final[float] = 10.0
 OP_TIMEOUT_SECONDS: Final[float] = 30.0
 
-# Exit codes: 0 / 1 / 3. Agents branch on "did it work"; the one distinct code worth its own
-# slot is a shell or app that cannot act right now (a 409 or a 503), where retry-with-backoff
-# is the right response. Slot 2 is left to argparse's usage exit.
+# Agents branch on "did it work"; the one distinct code worth its own slot is a shell or app
+# that cannot act right now (a 409 or a 503), where retry-with-backoff is the right response.
+# Slot 2 is left to argparse's usage exit.
 EXIT_OK: Final[int] = 0
 EXIT_ERROR: Final[int] = 1
 EXIT_CONFLICT: Final[int] = 3
@@ -419,7 +419,6 @@ def _report_refusal(op: LayoutOp, status: int, detail: str) -> int:
         _write_stderr(f"error: '{op}' has no client to apply it to (HTTP 412): {detail}\n")
         return EXIT_ERROR
     if status in (409, 503):
-        # The shell or the app cannot do it right now (a save in flight, an app still starting up): retry later.
         _write_stderr(f"error: '{op}' rejected (HTTP {status}): {detail}\n")
         return EXIT_CONFLICT
     if status == 404:

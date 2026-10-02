@@ -84,10 +84,6 @@ def parse_window_closed_hint(body: Any) -> WindowClosedHint | None:
 
 @pure
 def window_query_value(path: str, name: str) -> str | None:
-    """The first value of the query parameter ``name`` in a window path, or None when it carries none.
-
-    A window path without the parameter (an app's root, or a page of another kind) names no resource, so the
-    callers that sweep resources by window treat None as a window showing nothing.
-    """
+    """The first value of the query parameter ``name`` in a window path, or None when it carries none."""
     values = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query).get(name)
     return values[0] if values else None

@@ -15,8 +15,7 @@ from workspace_layout.errors import InvalidLayoutValueError
 
 # A desktop id is the slugified desktop name (desktop contracts.md section 1).
 _DESKTOP_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
-# A value that names a file on disk (a client id its layout files, a user id the user's presence file, a wallpaper
-# name its image file) is held to one filename-safe alphabet.
+# A value that names a file on disk is held to one filename-safe alphabet.
 FILENAME_SAFE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _WINDOW_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^win-[0-9a-f]{16}$")
 # A window's path and title (desktop contracts.md section 1).
