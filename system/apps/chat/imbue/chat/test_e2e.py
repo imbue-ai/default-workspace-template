@@ -836,6 +836,61 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
         expect(_chat_root(page).locator(".chat-root")).to_be_visible(timeout=15000)
 
 
+# Installed in every frame before its scripts run: sets ``window.__signedOutNoticeSeen`` once the composer's
+# signed-out notice is drawn, however briefly.
+_RECORD_SIGNED_OUT_NOTICE_SCRIPT = """
+(() => {
+  window.__signedOutNoticeSeen = false;
+  new MutationObserver(() => {
+    if (document.querySelector(".message-input-signed-out")) window.__signedOutNoticeSeen = true;
+  }).observe(document, { childList: true, subtree: true });
+})();
+"""
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_chat_launched_by_a_sign_in_on_the_chat_list_keeps_its_composer(tmp_path: Path, page: Page) -> None:
+    """The chat list's chooser signs in and launches the chat waiting under it, whose own page read the account list
+    before that account existed: the chat comes up on the new account with its composer, and never shows the notice
+    for a chat whose account was signed out, not even for a frame."""
+    page.add_init_script(_RECORD_SIGNED_OUT_NOTICE_SCRIPT)
+    # A `pi` that lists a model, so the pasted key is accepted. The workspace puts this directory first on PATH.
+    fake_bin_dir = tmp_path / "fake-bin"
+    fake_bin_dir.mkdir()
+    fake_pi = fake_bin_dir / "pi"
+    fake_pi.write_text("#!/bin/sh\nprintf 'provider  model\\nopencode-go  kimi-k2\\n'\n")
+    fake_pi.chmod(0o755)
+    with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
+        chat = _start_new_chat(page, server)
+        chooser = _chat_root(page).locator('[data-e2e="provider-chooser"]')
+        expect(chooser).to_be_visible(timeout=15000)
+        # The chat's page has read the account list, which names no account yet.
+        expect(chat.locator(".model-selector-not-connected")).to_have_text("Not connected", timeout=15000)
+        manager = server.chat_state.agent_manager
+        (awaiting,) = manager.get_provisional_chats()
+
+        chooser.locator('[data-e2e="lane-opencode-go"]').click()
+        chooser.locator('[data-e2e="api-key-input"]').fill("e2e-opencode-go-key-71946")
+        chooser.locator('[data-e2e="save-key"]').click()
+
+        def _is_launched_on_an_account() -> bool:
+            snapshot = manager.get_chat_snapshot(awaiting.chat_id)
+            return snapshot is not None and snapshot.active_agent.account_id is not None
+
+        wait_for(
+            _is_launched_on_an_account,
+            timeout=30.0,
+            poll_interval=0.1,
+            error_message="the sign-in never launched the awaiting chat on its account",
+        )
+        # The page has the chat's agent, and the composer is there to type into.
+        expect(chat.locator(".message-list-empty")).to_have_count(1, timeout=15000)
+        expect(chat.locator(".message-input-textbox")).to_be_editable()
+        # The agent's own menu names the account, which this page's first read of the list did not have.
+        expect(chat.locator(".model-selector-trigger")).to_be_visible(timeout=15000)
+        assert _chat_frame(page, str(awaiting.chat_id)).evaluate("window.__signedOutNoticeSeen") is False
+
+
 # Installed in every frame before its scripts run: records each placeholder screen or text the chat page ever
 # draws, however briefly, into ``window.__placeholdersSeen``.
 _RECORD_PLACEHOLDERS_SEEN_SCRIPT = """

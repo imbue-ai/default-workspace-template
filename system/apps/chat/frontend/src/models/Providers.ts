@@ -95,6 +95,10 @@ let markAccountsLoaded: () => void = () => {};
 const firstAccountsLoad = new Promise<void>((resolve) => {
   markAccountsLoaded = resolve;
 });
+// The accounts a chat here is bound to that a read of the list made after this page saw the binding did not name.
+const signedOutAccountIds = new Set<string>();
+// The accounts a fresh read of the list is in flight for.
+const accountIdsBeingChecked = new Set<string>();
 
 export function getLanes(): Lane[] {
   return lanes;
@@ -114,13 +118,31 @@ export function accountForAgent(accountId: string | undefined): ProviderAccount 
   return accounts.find((candidate) => candidate.id === accountId) ?? null;
 }
 
-/** Whether a chat's `account` label names an account that is no longer signed in (it was signed out).
- *
- * False for a chat from before accounts (no label) and until the account list has loaded, when
- * no account reads as signed in, which says nothing about whether this one is gone.
- */
+/** Whether a chat's `account` label names an account that was signed out: one this page removed, or one a
+ *  read of the list made after this page saw the chat's binding still lacks. A read from before then also
+ *  lacks every account signed in on another page since (the chat list, another chat). */
 export function isAccountSignedOut(accountId: string | null | undefined): boolean {
-  return !!accountId && areAccountsLoaded() && accountForAgent(accountId) === null;
+  return !!accountId && signedOutAccountIds.has(accountId) && accountForAgent(accountId) === null;
+}
+
+/** Read the account list again, and hold `accountId` signed out when the fresh list does not name it. */
+export async function rereadAccountsFor(accountId: string): Promise<void> {
+  await loadAccounts();
+  if (accountForAgent(accountId) === null) signedOutAccountIds.add(accountId);
+}
+
+/** Read the account list again when it lacks the account a chat here is bound to, holding the account signed
+ *  out if the fresh list lacks it too. */
+export function checkChatAccount(accountId: string | null | undefined): void {
+  if (!accountId || !areAccountsLoaded() || accountForAgent(accountId) !== null) return;
+  if (signedOutAccountIds.has(accountId) || accountIdsBeingChecked.has(accountId)) return;
+  accountIdsBeingChecked.add(accountId);
+  void rereadAccountsFor(accountId)
+    .catch((error: unknown) => console.error(`Could not read the account list again for ${accountId}`, error))
+    .finally(() => {
+      accountIdsBeingChecked.delete(accountId);
+      m.redraw();
+    });
 }
 
 export function getMruAccountId(): string | null {
@@ -206,6 +228,7 @@ export async function renameAccount(accountId: string, name: string): Promise<vo
 
 export async function deleteAccount(accountId: string): Promise<void> {
   await m.request({ method: "DELETE", url: apiUrl(`/api/accounts/${accountId}`) });
+  signedOutAccountIds.add(accountId);
   await loadAccounts();
 }
 
