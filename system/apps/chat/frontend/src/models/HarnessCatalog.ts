@@ -22,11 +22,20 @@ export interface CatalogModelOption {
   id: string;
   label: string;
   efforts: EffortChoice[];
+  // The effort the model runs at when none has been picked (codex), or null when the harness does
+  // not report one. A live choice whose effort is null is running at this level.
+  default_effort: string | null;
   supports_fast: boolean;
   in_picker: boolean;
   // The raw model id the harness reports in its live state file (or null = same as `id`).
   // Matched on the backend; the frontend reconciles against the matched option, not this.
   harness_reported_model_id: string | null;
+}
+
+/** The effort an agent is running at: the one it recorded, else its model's default. A harness that
+ *  records no effort until one is picked (codex) runs at the default meanwhile. */
+export function effortInEffect(recordedEffort: string | null, option: CatalogModelOption | null): string | null {
+  return recordedEffort ?? option?.default_effort ?? null;
 }
 
 // A popup the harness declared for the chat UI (see HarnessSpec.popups on the

@@ -106,6 +106,7 @@ const ASTRA = {
   supports_fast: true,
   in_picker: true,
   harness_reported_model_id: null,
+  default_effort: null,
 };
 const WELCOME = { type: "user_message", event_id: "u-w", content: "/welcome", display: "hidden", timestamp: "t1" };
 const TYPED = { type: "user_message", event_id: "u-1", content: "hello", timestamp: "t2" };
@@ -400,6 +401,32 @@ describe("the switch dialog", () => {
     // The live identity carries the raw id claude reports; a new chat is started on the catalog id it matched.
     expect(state.started).toEqual([
       ["acct-anthropic-2", "a fresh start", { model_id: "opus[1m]", effort: "high", fast: false }],
+    ]);
+  });
+
+  it("starts a rebind's new chat on the default effort this chat runs at when it never picked one", async () => {
+    // codex records no effort until one is picked, and a pick for a model with efforts must name one.
+    const otherCodex = { ...CODEX, id: "acct-openai-2", label: "OpenAI 2 (Codex)" };
+    state.accounts = [CODEX, otherCodex];
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: {
+        harness: "codex",
+        account_id: CODEX.id,
+        model_choice: {
+          identity: { model_id: "gpt-6-astra", effort: null, fast: false },
+          matched: { ...ASTRA, default_effort: "high" },
+        },
+      },
+    });
+    state.draft = "a fresh start";
+    openSwitchDialog("agent-1", otherCodex as ProviderAccount);
+    render();
+    await flush();
+    render();
+    pressButton("Start a new chat");
+    await flush();
+    expect(state.started).toEqual([
+      ["acct-openai-2", "a fresh start", { model_id: "gpt-6-astra", effort: "high", fast: false }],
     ]);
   });
 
