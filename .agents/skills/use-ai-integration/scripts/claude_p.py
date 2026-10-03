@@ -275,8 +275,12 @@ def _build_argv(
     ``tools`` is checked against ``None`` (not falsiness): the empty string is the
     meaningful "disable every tool" value, distinct from "leave the flag off and
     inherit the default tool set".
+
+    The prompt goes last, after ``--``: ``-p`` is a boolean flag, so the prompt is a
+    positional argument, and without the terminator a prompt starting with ``-``
+    (markdown frontmatter, a leading rule) is rejected as an unknown option.
     """
-    argv = ["claude", "-p", prompt, "--output-format", "json"]
+    argv = ["claude", "-p", "--output-format", "json"]
     if model:
         argv += ["--model", model]
     if system is not None:
@@ -289,7 +293,7 @@ def _build_argv(
         argv += ["--permission-mode", permission_mode]
     if not is_session_persisted:
         argv.append("--no-session-persistence")
-    return argv
+    return argv + ["--", prompt]
 
 
 def _completion_argv(prompt: str, *, system: str, model: str) -> list[str]:
