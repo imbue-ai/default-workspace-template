@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 
 from imbue.chat.harnesses.codex.session_parser import THINKING_SOURCE_MARKER_TYPE
+from imbue.chat.harnesses.codex.session_parser import TOKEN_USAGE_MARKER_TYPE
 from imbue.chat.harnesses.codex.session_parser import _labelled_tool_call
 from imbue.chat.harnesses.codex.session_parser import codex_user_turn_event_id
 from imbue.chat.harnesses.codex.session_parser import parse_line_detail
@@ -655,3 +656,48 @@ def test_context_compaction_synthetic_id_when_no_turn_or_item_id() -> None:
     event = events[0]
     assert event["event_id"].startswith("codex-context_compacted-2026-09-21T19:30:50.404Z-")
 
+
+def test_token_count_maps_the_response_usage_onto_the_chat_usage_shape() -> None:
+    """Codex's input count includes its cached and cache-written subsets; the chat's usage shape
+    (the claude and pi parsers') keeps them apart, so they come back out of ``input_tokens``."""
+    last = {
+        "input_tokens": 11885,
+        "cached_input_tokens": 11426,
+        "cache_write_input_tokens": 456,
+        "output_tokens": 23,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 11908,
+    }
+    total = {**last, "input_tokens": 23314, "total_tokens": 23749}
+    line = {
+        "timestamp": "t",
+        "type": "event_msg",
+        "payload": {"type": "token_count", "info": {"total_token_usage": total, "last_token_usage": last}},
+    }
+    assert parse_lines(line, {}) == [
+        {
+            "type": TOKEN_USAGE_MARKER_TYPE,
+            "usage": {"input_tokens": 3, "output_tokens": 23, "cache_read_tokens": 11426, "cache_write_tokens": 456},
+            "total_usage": total,
+        }
+    ]
+
+
+def test_token_count_without_usage_carries_none() -> None:
+    """A token_count with no ``info`` (a rate-limits-only update) measures nothing, and one
+    from a codex without the cache-write bucket leaves that bucket unknown rather than zero."""
+    no_info = {"timestamp": "t", "type": "event_msg", "payload": {"type": "token_count", "info": None}}
+    assert parse_lines(no_info, {}) == [{"type": TOKEN_USAGE_MARKER_TYPE, "usage": None, "total_usage": None}]
+
+    older = {"input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 7}
+    line = {
+        "timestamp": "t",
+        "type": "event_msg",
+        "payload": {"type": "token_count", "info": {"total_token_usage": older, "last_token_usage": older}},
+    }
+    assert parse_lines(line, {})[0]["usage"] == {
+        "input_tokens": 60,
+        "output_tokens": 7,
+        "cache_read_tokens": 40,
+        "cache_write_tokens": None,
+    }
