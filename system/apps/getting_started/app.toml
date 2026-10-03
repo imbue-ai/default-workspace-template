@@ -13,6 +13,9 @@ priority = "getting-started"
 # Between the chat (10) and the file viewer (20): this rank orders the desktop's seeded shortcuts as
 # well as the launcher's apps, and the chat leads both.
 launcher_rank = 15
+# Part of the workspace itself rather than an app built on it, so it is shared only as part of the whole
+# machine.
+shareable = false
 
 [default_shortcut]
 launch = "open"

@@ -52,9 +52,10 @@ Facts this design builds on, as of `main` at `02eb68c02` (2026-09-28).
 9. A close hint (window-bound-resources section 4.6) is posted only to an app that is running: posting it to a stopped app's port would wake the app to tell it a window closed.
 10. The shell announces registrations to the services event file itself, from the registry read it already does; the `app-watcher` program, package, and band go away.
 11. The service-start `uv sync` stays for now (bootstrap already runs one; dropping the per-service sync is a later cleanup).
-12. An app with a per-app share grant (a `[services.<name>]` table of `data/.secrets/share_grants.toml` that names anyone, while the workspace is shared) is exempt from the automatic stop.
+12. A shareable app with a per-app share grant (a `[services.<name>]` table of `data/.secrets/share_grants.toml` that names anyone, while the workspace is shared) is exempt from the automatic stop.
     A visitor holding only such a grant reaches the app's origin through the share gateway and never loads the shell, so no window of theirs exists to count; without the exemption the app would stop a minute after each of their requests and, past the wake budget, answer them the failure page.
     A workspace-level grant needs no exemption: its visitors load the shell and get a desktop of their own, whose windows count.
+    Nor does a grant on an app that is `internal` or declares `shareable = false`: the gateway admits nobody through it.
 
 ## 3. Part A: no resident `uv run`
 
@@ -196,13 +197,13 @@ The visitor's next request wakes the app through the parker exactly as the owner
 On every pass of the lifecycle sweep, for each app that is stoppable, whose row carries `stop_when_no_windows = true`, and whose program is `RUNNING` or `STARTING`:
 
 - count the windows of the app across every desktop (the owner's and every visitor's; minimized, detached, pinned, linked, and independent alike);
-- with at least one window, or with a per-app share grant (decision 12), clear the app's idle mark;
+- with at least one window, or shareable with a per-app share grant (decision 12), clear the app's idle mark;
 - with none, and once a client has arrived at the shell since it started (decision 5), set the idle mark to now when it is unset, and stop the program when the mark is at least 60 seconds old.
 
 A stop is `stopProcess(program, wait=False)`, logged at info, followed by a liveness refresh; the next pass parks the port.
 The idle mark lives in the manager's memory: a shell restart starts the 60 seconds over, which is the safe direction.
 
-The per-app grants are read by the shell itself (`shell/share_grants.py`), once per pass and only when a pass finds a running app that declares the field and has no window: an app is granted when `data/.secrets/share.env` exists (the workspace is shared) and its `[services.<name>]` table in `data/.secrets/share_grants.toml` has a non-empty `users`, `emails`, or `email_domains`.
+The per-app grants are read by the shell itself (`shell/share_grants.py`), once per pass and only when a pass finds a running app that declares the field, is shareable, and has no window: an app is granted when `data/.secrets/share.env` exists (the workspace is shared) and its `[services.<name>]` table in `data/.secrets/share_grants.toml` has a non-empty `users`, `emails`, or `email_domains`.
 A missing document grants no app (the desktop writes it before the materials), and so does one the gateway would refuse (which then admits nobody), warned about once per version of the file.
 A granted app that is already parked when the grant is added is woken by the visitor's first request, as any parked app is.
 
@@ -262,7 +263,7 @@ The shell still imports nothing from mngr and runs no `mngr` binary: the writer 
 
 - `app_manifest`: `manifest_test.py` for the field, its default, and the critical refusal; `registry_test.py` for the key; `forward_port_test.py` for the copied key and its clearing.
 - The shell, `port_parking_test.py`: a parked port accepts a connection, answers 503 with the loading body and `Connection: close`, releases the port, and reports the wake; a bind on a port something listens on parks nothing.
-- The shell, `app_lifecycle_test.py`, over the fake supervisor: a stopped parkable app is parked on a pass and released when its state turns `RUNNING`; a wake starts the program; a `FATAL` after a wake re-parks with the failure page; the wake budget refuses a fourth attempt, and a wake after which the app runs spends none of it; the no-window rule stops a `stop_when_no_windows` app only after the grace period, only once a client has arrived, and not while any desktop holds a window of it or a per-app share grant names it (and the clock starts once the grant goes); an app without the field is never stopped; a critical app is never parked or stopped.
+- The shell, `app_lifecycle_test.py`, over the fake supervisor: a stopped parkable app is parked on a pass and released when its state turns `RUNNING`; a wake starts the program; a `FATAL` after a wake re-parks with the failure page; the wake budget refuses a fourth attempt, and a wake after which the app runs spends none of it; the no-window rule stops a `stop_when_no_windows` app only after the grace period, only once a client has arrived, and not while any desktop holds a window of it or a per-app share grant names it while it is shareable (and the clock starts once the grant goes; a grant on an unshareable app keeps nothing running); an app without the field is never stopped; a critical app is never parked or stopped.
   `share_grants_test.py`: the per-app tables that name anyone, and nothing for a workspace-level grant alone, an empty table, an unshared workspace, a missing document, or one the gateway would refuse; `state_test.py`: the manager reads the grants under the workspace root.
 - The shell, `routes_test.py`: the quit route closes every window across desktops and stops the program, refuses a critical app and a preview, and answers `is_running` false.
 - The shell, `state_test.py`: the close hint is not posted to a stopped app.

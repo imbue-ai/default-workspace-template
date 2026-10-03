@@ -4,9 +4,9 @@ The stream keeps mngr's wire vocabulary (``events/services/events.jsonl``, ``ser
 ``service_deregistered``, a ``service`` field); in the shell's own code an app is an app.
 
 Every read of the app registry is announced to ``$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`` as one
-``service_registered`` event per app whose registered fields (URL, label, icon) differ from the last announced,
-and one ``service_deregistered`` per app that left. Only changed rows are announced: ``forward_port.py`` rewrites
-the whole registry whenever any app registers, so a write says nothing about which apps moved, and an app
+``service_registered`` event per app whose registered fields (URL, label, icon, shareability) differ from the last
+announced, and one ``service_deregistered`` per app that left. Only changed rows are announced: ``forward_port.py``
+rewrites the whole registry whenever any app registers, so a write says nothing about which apps moved, and an app
 restarting in a loop would otherwise re-announce every app in the file on every restart. The first read after
 the shell starts remembers nothing and announces every app, which is what a consumer reading the stream from its
 start needs. A stream over the archive threshold at that first read is moved aside before it and gzipped off-thread
@@ -66,6 +66,10 @@ class AppRegisteredAnnouncement(EventEnvelope):
         description="The app's unguessable origin label; empty for a legacy row written before labels existed",
     )
     icon: str = Field(default="", description="The app's registered SVG icon markup, verbatim; empty when none")
+    is_shareable: bool = Field(
+        serialization_alias="shareable",
+        description="Whether the minds Share tab offers the app as a share target of its own",
+    )
 
 
 class AppDeregisteredAnnouncement(EventEnvelope):
@@ -80,6 +84,7 @@ class AnnouncedRow(FrozenModel):
     url: str = Field(description="The registered URL")
     label: str = Field(description="The origin label")
     icon: str = Field(description="The icon markup, empty when none")
+    is_shareable: bool = Field(description="Whether the app is offered as a share target of its own")
 
 
 class AnnouncementDiff(FrozenModel):
@@ -91,7 +96,7 @@ class AnnouncementDiff(FrozenModel):
 
 @pure
 def announced_row_of(row: RegistryRow) -> AnnouncedRow:
-    return AnnouncedRow(url=str(row.url), label=row.label, icon=row.icon or "")
+    return AnnouncedRow(url=str(row.url), label=row.label, icon=row.icon or "", is_shareable=row.is_share_target)
 
 
 @pure
@@ -201,6 +206,7 @@ class AppAnnouncementWriter(MutableModel):
                 url=current[name].url,
                 label=current[name].label,
                 icon=current[name].icon,
+                is_shareable=current[name].is_shareable,
             ).model_dump_json(by_alias=True)
             for name in diff.changed
         ] + [

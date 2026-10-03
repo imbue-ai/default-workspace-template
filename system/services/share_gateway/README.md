@@ -89,7 +89,9 @@ refusal, and logs every denial (never the token) to the service's stderr:
   telling the visitor the owner must fix the workspace's sharing settings.
   `/_auth/verify` answers the same way for a non-owner mid-session; the owner
   is never grant-checked, so they still get in.
-- A verified account with no grant is **"Not shared with you"** (403).
+- A verified account with no grant is **"Not shared with you"** (403). So is
+  one whose only grants are per-service grants on apps that are not shareable
+  (see "Grants"), since those admit it nowhere.
 
 ## When the stack cannot come up
 
@@ -125,18 +127,23 @@ users = []
 emails = ["reviewer@example.com"]
 email_domains = []
 
-[services.chat]
+[services.files]
 users = []
 emails = ["pair@example.com"]
 email_domains = []
 ```
 
 Workspace-level grants admit every service; per-service grants admit exactly
-that service's origin (the shell and siblings stay 403). Within a scope the
-visitor's `user_id` is matched against `users` first, then their verified
-email against `emails` (case-insensitive), then its domain against
-`email_domains`. A document written before `users` existed reads as having
-none.
+that service's origin (the shell and siblings stay 403), and only for an app
+the registry marks shareable. An app that is `internal` or whose manifest
+declares `shareable = false` (the chat, terminal, browser, and Getting
+Started) is reached only through a workspace-level grant: a per-service grant
+on it admits nobody, and a visitor whose only grants are on such apps is
+refused at login. The gateway reads this from `data/.state/apps.toml` on every
+request, beside the label map. Within a scope the visitor's `user_id` is
+matched against `users` first, then their verified email against `emails`
+(case-insensitive), then its domain against `email_domains`. A document
+written before `users` existed reads as having none.
 
 A `users` entry is an account's user id, the durable identity. An `emails`
 entry is an invitation: once a visitor with that verified email is admitted
@@ -156,16 +163,16 @@ email back without the user id; the visitor keeps access through the email,
 and the next visit upgrades it again.
 
 The `[services.<name>]` key is the app's registered name (the `name` in its
-`app.toml`). The chat app is one of them: its pages are served at
-their own registered origin (`chat-<rand>.<domain>`), framed by the shell, so a
-workspace-level grant admits the chat origin directly and a `[services.chat]`
-grant narrows a visitor to it. A visitor holding only a per-app grant reaches
-that app's origin and nothing else -- not the shell, so not the tabs the shell
-arranges; the origin's own pages (a chat at `/<agent-id>`, the file viewer's
-listing) are what they see, and a `[services.files]` grant admits only the
-file viewer. Nothing here is configured per app: caddy re-renders its routes
-from the registry, so the chat origin (like every app's) is claimed and routed
-as soon as the app registers.
+`app.toml`). The chat app's pages are served at their own registered origin
+(`chat-<rand>.<domain>`), framed by the shell, so a workspace-level grant
+admits the chat origin directly; the chat declares `shareable = false`, so a
+`[services.chat]` grant admits nobody. A visitor holding only a per-app grant
+reaches that app's origin and nothing else -- not the shell, so not the tabs
+the shell arranges; the origin's own pages (the file viewer's listing) are
+what they see, and a `[services.files]` grant admits only the file viewer.
+Nothing here is configured per app: caddy re-renders its routes from the
+registry, so the chat origin (like every app's) is claimed and routed as soon
+as the app registers.
 
 ## Request identity (what a service sees)
 

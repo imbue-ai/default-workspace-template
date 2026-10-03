@@ -2,8 +2,9 @@
 
 The grants document is a TOML file the workspace owner edits through Imbue
 Studio. Workspace-level grants admit a user to every service; per-service grants
-admit it to exactly that service's origin. A malformed grants file fails
-closed: nobody is admitted until it parses again.
+admit it to exactly that service's origin, and only for an app the registry
+marks shareable (not internal, no ``shareable = false``). A malformed grants
+file fails closed: nobody is admitted until it parses again.
 
     [workspace]
     users = ["3f1c..."]
@@ -28,6 +29,7 @@ import fcntl
 import os
 import tomllib
 from collections.abc import Iterator
+from collections.abc import Set as AbstractSet
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -65,26 +67,35 @@ class Grants:
         self.workspace = workspace
         self.services = services
 
-    def allows(self, user_id: str, email: str, service_name: str | None) -> bool:
+    def allows(
+        self, user_id: str, email: str, service_name: str | None, shareable_service_names: AbstractSet[str]
+    ) -> bool:
         """Whether the requester may visit ``service_name`` (None = the workspace shell).
 
         A workspace-level grant implies every service. A per-service grant
         admits only that service's origin -- the shell and sibling services
-        stay forbidden. Within a scope the user id is matched before the
-        email, and the email before its domain.
+        stay forbidden -- and only when the service is in
+        ``shareable_service_names``: an app that is internal or declares
+        ``shareable = false`` is reachable only through a workspace-level
+        grant. Within a scope the user id is matched before the email, and the
+        email before its domain.
         """
         if self.workspace.allows(user_id, email):
             return True
-        if service_name is None:
+        if service_name is None or service_name not in shareable_service_names:
             return False
         service_grants = self.services.get(service_name)
         return service_grants is not None and service_grants.allows(user_id, email)
 
-    def allows_any(self, user_id: str, email: str) -> bool:
-        """Whether the requester has any grant at all (used at login callback time)."""
+    def allows_any(self, user_id: str, email: str, shareable_service_names: AbstractSet[str]) -> bool:
+        """Whether the requester has any grant that admits them anywhere (used at login callback time)."""
         if self.workspace.allows(user_id, email):
             return True
-        return any(service_grants.allows(user_id, email) for service_grants in self.services.values())
+        return any(
+            service_grants.allows(user_id, email)
+            for service_name, service_grants in self.services.items()
+            if service_name in shareable_service_names
+        )
 
     def has_email_invite(self, email: str) -> bool:
         """Whether ``email`` appears as an exact ``emails`` entry in any scope (a domain match is not an invite)."""

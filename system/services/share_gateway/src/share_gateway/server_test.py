@@ -12,6 +12,8 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
+from share_gateway.caddyfile import RegisteredApp
+from share_gateway.caddyfile import build_label_to_name
 from share_gateway.grants import load_grants
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
@@ -37,14 +39,18 @@ _BROKER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 # Every origin is an unguessable ``<name>-<rand>`` label; grants stay keyed by
 # name, and the gateway maps label -> name via this registry.
 _AUTH_LABEL = "auth-x7k9q2w1"
-_LABELS = {
-    "system_interface-shell111": "system_interface",
-    "web-web111111": "web",
-    "terminal-term1111": "terminal",
-}
+_APPS = [
+    RegisteredApp("system_interface", "system_interface-shell111", "127.0.0.1", 8000, is_shareable=False),
+    RegisteredApp("web", "web-web111111", "127.0.0.1", 5001, is_shareable=True),
+    RegisteredApp("files", "files-files111", "127.0.0.1", 5002, is_shareable=True),
+    # Registered with ``shareable = false``, like the built-in terminal.
+    RegisteredApp("terminal", "terminal-term1111", "127.0.0.1", 7681, is_shareable=False),
+]
+_LABELS = build_label_to_name(_APPS)
 _SHELL_HOST = f"system_interface-shell111.{_DOMAIN}"
 _WEB_HOST = f"web-web111111.{_DOMAIN}"
 _TERMINAL_HOST = f"terminal-term1111.{_DOMAIN}"
+_FILES_HOST = f"files-files111.{_DOMAIN}"
 _AUTH_ORIGIN = f"https://{_AUTH_LABEL}.{_DOMAIN}"
 _CHROME_ORIGIN = "https://minds.imbue.com"
 
@@ -94,7 +100,7 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str
         jti_registry=SingleUseJtiRegistry(),
         pending_logins=pending_logins,
         auth_label=_AUTH_LABEL,
-        get_label_to_name=lambda: _LABELS,
+        get_registered_apps=lambda: _APPS,
     )
     return _GatewayHarness(app, app.test_client(), grants_path, pending_logins)
 
@@ -228,11 +234,46 @@ def test_per_service_grant_scopes_to_that_service_only(tmp_path: Path) -> None:
 
     allowed = harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
     shell = harness.client.get("/_auth/verify", headers=_verify_headers())
-    sibling = harness.client.get("/_auth/verify", headers=_verify_headers(host=_TERMINAL_HOST))
+    sibling = harness.client.get("/_auth/verify", headers=_verify_headers(host=_FILES_HOST))
 
     assert allowed.status_code == 200
     assert shell.status_code == 403
     assert sibling.status_code == 403
+
+
+def test_a_per_service_grant_on_an_unshareable_app_admits_only_through_the_workspace(tmp_path: Path) -> None:
+    grants_text = _GRANTS + '\n[services.terminal]\nemails = ["dan@example.com"]\nemail_domains = []\n'
+    harness = _make_harness(tmp_path, grants_text=grants_text)
+
+    _install_session(harness.client, "dan@example.com")
+    per_app_visitor = harness.client.get("/_auth/verify", headers=_verify_headers(host=_TERMINAL_HOST))
+    _install_session(harness.client, "bob@example.com")
+    workspace_visitor = harness.client.get("/_auth/verify", headers=_verify_headers(host=_TERMINAL_HOST))
+
+    assert per_app_visitor.status_code == 403
+    assert workspace_visitor.status_code == 200
+
+
+def test_callback_refuses_a_visitor_whose_only_grant_is_on_an_unshareable_app(tmp_path: Path) -> None:
+    grants_text = (
+        "[workspace]\nemails = []\nemail_domains = []\n\n"
+        '[services.terminal]\nemails = ["dan@example.com"]\nemail_domains = []\n\n'
+        '[services.web]\nemails = ["erin@example.com"]\nemail_domains = []\n'
+    )
+    harness = _make_harness(tmp_path, grants_text=grants_text)
+
+    terminal_nonce = harness.pending_logins.mint(is_retry=False)
+    terminal_only = harness.client.get(
+        f"/_auth/callback?token={_mint_handoff(terminal_nonce, email='dan@example.com', jti='jti-dan')}"
+        f"&state={terminal_nonce}"
+    )
+    web_nonce = harness.pending_logins.mint(is_retry=False)
+    web_only = harness.client.get(
+        f"/_auth/callback?token={_mint_handoff(web_nonce, email='erin@example.com', jti='jti-erin')}&state={web_nonce}"
+    )
+
+    assert terminal_only.status_code == 403
+    assert web_only.status_code == 302
 
 
 def test_revocation_is_instant_via_grants_file(tmp_path: Path) -> None:

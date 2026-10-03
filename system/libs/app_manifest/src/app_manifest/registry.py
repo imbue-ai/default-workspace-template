@@ -99,6 +99,11 @@ class RegistryRow(FrozenModel):
     label: str = Field(default="", description="The unguessable origin label; never an identifier")
     icon: str | None = Field(default=None, description="The registered SVG markup, verbatim")
     internal: bool = Field(default=False, description="Hidden from every open surface")
+    shareable: bool = Field(
+        default=True,
+        description="Whether the app is a share target of its own: offered by the minds Share tab, and admitted to by "
+        "a per-app share grant; an internal app never is",
+    )
     program: str | None = Field(default=None, description="The supervisord program that runs the app, when supervised")
     display_name: DisplayName | None = Field(default=None, description="What users see; absent on manifest-less rows")
     critical: bool = Field(
@@ -124,6 +129,11 @@ class RegistryRow(FrozenModel):
     message_handlers: tuple[MessageHandler, ...] = Field(
         default=(), description="The messages the app takes and where the shell posts each; absent means none"
     )
+
+    @property
+    def is_share_target(self) -> bool:
+        """Whether the app is a share target of its own: shareable and not internal."""
+        return self.shareable and not self.internal
 
 
 def registry_path() -> Path:
