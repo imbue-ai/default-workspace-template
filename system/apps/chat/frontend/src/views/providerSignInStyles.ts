@@ -124,6 +124,8 @@ export const FIELD_ROW = "flex items-center gap-2";
 /** One right-aligned action under the body. */
 export const FOOTER = "px-4 pb-3 pt-3";
 export const FOOTER_ROW = "flex justify-end";
+/** The browser wait's two ways forward, side by side. */
+export const RELAY_ACTIONS = "mt-4 flex flex-wrap gap-2";
 
 /** Secondary prose under a field or step. */
 export const HINT = "mt-1.5 type-helper leading-snug text-faint";
