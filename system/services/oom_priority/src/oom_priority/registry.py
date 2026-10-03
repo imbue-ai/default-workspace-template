@@ -16,8 +16,7 @@ has been reused or is simply gone) are pruned best-effort by writers.
 
 One agent can register more than one pid: codex runs both a visible ``--remote`` TUI
 and an ``app-server`` daemon from the same launch command, so both are recorded under
-its id. ``lookup_pid_by_agent_id`` returns the first live match;
-``live_pids_by_agent_id`` returns them all.
+its id. ``live_pids_by_agent_id`` returns every live one of each agent.
 
 Stdlib-only (see ``paths``): imported by the launch wrapper and the kill hook
 under a plain ``python3``.
@@ -45,9 +44,9 @@ def record_agent_pid(pid: int, agent_name: str, is_worker: bool, agent_id: str |
     """Register ``pid`` as the main process of ``agent_name``.
 
     ``agent_id`` (mngr's stable per-agent id) is recorded alongside the name so a
-    consumer that knows only the id -- e.g. the system_interface OOM prioritizer,
-    which re-tags a chat by id -- can resolve the live pid via
-    ``lookup_pid_by_agent_id``. It is optional so older callers/tests that pass
+    consumer that knows only the id -- e.g. the chat app's OOM prioritizer,
+    which re-tags a chat by id -- can resolve the live pids via
+    ``live_pids_by_agent_id``. It is optional so older callers/tests that pass
     only a name still work.
 
     Overwrites any prior entry for the same pid (a reused pid), and prunes
@@ -104,18 +103,6 @@ def live_pids_by_agent_id(is_alive: Callable[[int], bool] = is_process_alive) ->
         if isinstance(agent_id, str) and agent_id and is_alive(pid):
             pids_by_agent_id.setdefault(agent_id, []).append(pid)
     return pids_by_agent_id
-
-
-def lookup_pid_by_agent_id(agent_id: str, is_alive: Callable[[int], bool] = is_process_alive) -> int | None:
-    """Return the live main-process pid recorded for ``agent_id``, or None.
-
-    So a consumer holding only the id (the OOM prioritizer) can re-tag that
-    agent's ``oom_score_adj``. Returns None when no live entry matches -- e.g. a
-    dormant chat with no running process, an id recorded before ``agent_id`` was
-    captured, or a stale entry whose pid has exited.
-    """
-    pids = live_pids_by_agent_id(is_alive).get(agent_id)
-    return pids[0] if pids else None
 
 
 def prune_dead_pids(is_alive: Callable[[int], bool] = is_process_alive) -> None:

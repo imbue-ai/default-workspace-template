@@ -213,6 +213,61 @@ alike: the catalog for a static harness, for codex the options an agent of the
 account was last offered, and nothing for antigravity, whose model is changed
 from the agent's terminal.
 
+A new chat starts on an agent that is already running (`spare_chat.py`). The
+chat app keeps a pool of spare agents (one by default, `SPARE_CHAT_POOL_SIZE` in
+`agent_manager.py`) started on the terms the next new chat would get (the
+default account, the primary agent's project, and the fast mode a new chat
+starts in), each created silent under the id and "Chat N" name of the chat it
+will become, with the label `chat_spare=true`. Every chat listing, send, and
+route hides an agent so labelled, so a secondary chat (a preview), which keeps
+no spares of its own, hides the live chat's too. A spare is ready once its
+harness says it accepts input, not when `mngr create` returns. A create that
+fits those terms and names no chat id, name, labels, templates, or
+installation-check waiver of its own is handed a ready spare instead of running
+`mngr create`: the chat is listed at once, running, so its first message never
+waits on "Connecting...", and `mngr label <id> --label chat_spare=false` runs
+in the background (the session sweep retries one that fails; a preview shows
+the chat once it lands). With none ready it claims one still starting, and is
+provisional until that one is up, which is sooner than a create of its own that
+would queue behind it on mngr's host lock. Its message and model pick follow
+through the send path. A chat minted to await its first send (the one an empty
+chat list opens on, or an intake's) reserves a spare that fits its account (the
+intake's, else the default one) and takes that spare's id and name: the spare
+stays hidden, leaves the pool (which is topped up), and is not replaced while
+reserved, even when its terms go stale; the session sweep destroys it only once
+its process dies or it has been up for six hours. Such a chat that holds no
+spare (minted before any sign-in, or after its spare was destroyed) has the
+next spare the app starts on its account's terms started under its own id and
+name, reserved for it, ahead of the pool's. Awaiting chats hold at most as
+many reserved spares as the pool keeps, so unsent drafts never keep more idle
+agents than that; a chat past the limit holds none until a reservation frees,
+and its first send before then creates the chat. The first send then takes a
+reserved spare as a create with no chat id would, at once when it is up, else
+by claiming it; a first send on another account or fast mode, or to a spare
+that died, aged out, or failed, has the spare destroyed and then creates the
+chat under its id.
+Discarding the chat returns the spare to the pool, and a restart, which drops
+the chat, destroys the spare, since a reservation writes nothing to disk. The
+pool is topped up one spare at a time; with a pool larger than one, while
+another spare is still ready, 30 seconds after a hand-over, so the next boot
+does not compete with the new chat's first turn. A
+sign-in starts the spares at once, and the session sweep keeps them current: one
+whose terms went stale, that has been ready for six hours
+(`SPARE_CHAT_MAX_AGE_SECONDS`, since it carries the date and git state its
+harness loaded at start, and may predate a code update), or whose process died
+is destroyed and replaced, and after a failed create or destroy the spares wait
+five minutes. Nothing about the spares is kept on disk but the label: on its
+first agent list after a restart, the app relabels an agent still labelled a
+spare whose chat folder holds its fast mode (a chat took it, and its relabel
+never landed) and destroys every other one. `GET /api/agents`, the plain mngr
+listing, does list the spares. The label also starts a spare and every process
+it spawns in `oom_priority`'s ceiling band (`SPARE_AGENT`, 1000, above the
+browser's renderers at 990), so memory pressure sheds it before anything else;
+one that dies is replaced after the same backoff. A hand-over moves its
+processes down to the chat band, and the chat that takes it sits at the engaged
+chat floor for its first minute (`CHAT_JUST_STARTED_GRACE_SECONDS`), then is
+prioritized like any chat.
+
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
 wake-ups, a lead's replies to a worker, the automation runner, and the
@@ -306,7 +361,8 @@ the record does; discarding the chat before its first send drops both.
 
 A chat that starts with no message sends nothing and waits for the user's
 first one. Fast mode is a per-chat setting with three modes
-(`chat_fast_mode.py`, kept in the chat's folder as `fast_mode.json`,
+(`chat_fast_mode.py`, kept in the chat's folder as `fast_mode.json`, or in
+memory until its launch writes it for an unseeded chat not launched yet,
 `GET`/`PUT /api/chats/<chat-id>/fast-mode`):
 **off** (standard speed throughout), **auto** (fast for the first
 `fast_mode_turn_limit` of the user's turns, then standard speed) and **on**
@@ -443,7 +499,8 @@ real, but a switch to another account is refused, since it would write the chat'
 record into the scratch copy only, and so is an answer to a secret card, since the
 answer belongs to the live chat. Point `CHAT_DATA_DIR` at a scratch copy of
 `data/.apps/chat/` so its writes (the message stamps, settings, chat records, and
-secret requests) never land in the live chat's data.
+secret requests) never land in the live chat's data. It starts, hands over,
+relabels, and destroys no spare agent; it hides the live chat's by their label.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm

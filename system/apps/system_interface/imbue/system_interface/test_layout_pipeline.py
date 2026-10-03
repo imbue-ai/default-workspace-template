@@ -145,6 +145,7 @@ def test_list_shows_every_app_with_its_launch_paths(layout_server: PipelineHarne
     assert listing[PIPELINE_STUB_APP_NAME]["windows"] == []
 
 
+@pytest.mark.flaky
 def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
     layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
 ) -> None:

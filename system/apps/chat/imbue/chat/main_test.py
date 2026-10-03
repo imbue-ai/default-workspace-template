@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_settings import FastModeMode
 from imbue.chat.chat_settings import SETTINGS_FILENAME
@@ -75,5 +77,15 @@ def test_chat_writes_land_in_the_configured_data_dir(tmp_path: Path) -> None:
         assert (tmp_path / "scratch" / STAMPS_FILENAME).exists()
         assert (tmp_path / "scratch" / SETTINGS_FILENAME).exists()
         assert (tmp_path / "scratch" / SECRET_REQUESTS_DIRNAME / f"{filed.request.request_id}.json").exists()
+    finally:
+        state.shutdown()
+
+
+@pytest.mark.parametrize("is_secondary", [False, True], ids=["live", "secondary"])
+def test_only_the_live_chat_keeps_spare_agents(tmp_path: Path, is_secondary: bool) -> None:
+    """A secondary hides the live chat's spares by their label and never starts, hands over, or destroys one."""
+    state = build_production_state(Config(chat_data_dir=tmp_path / "scratch"), is_secondary=is_secondary)
+    try:
+        assert state.agent_manager._is_keeping_spares is not is_secondary
     finally:
         state.shutdown()

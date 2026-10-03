@@ -95,8 +95,9 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
             "Boot as a second chat beside the live one (a preview): follows the same agent "
             "observer and reads the live accounts, but reconciles no accounts, writes no memory "
             "scores, runs no automatic compaction, starts or resumes no switch, opens no windows, "
-            "reports no client activity to the shell, and registers nothing; point CHAT_DATA_DIR "
-            "at a scratch copy so its writes never land in the live data"
+            "reports no client activity to the shell, keeps no spare agents (it hides the live "
+            "chat's, by their label), and registers nothing; point CHAT_DATA_DIR at a scratch copy "
+            "so its writes never land in the live data"
         ),
     )
     return parser.parse_args(argv)
@@ -118,8 +119,9 @@ def build_production_state(
     what is under test is this wiring itself (where the chat's data directory lands).
 
     Everything the chat keeps on disk lands under ``config.chat_data_dir``, so a secondary
-    chat pointed at a scratch copy never writes the live chat's data. A secondary also
-    opens no windows: the auto-open ledger and the shell it would drive belong to the live chat.
+    chat pointed at a scratch copy never writes the live chat's data. A secondary also opens
+    no windows (the auto-open ledger and the shell it would drive belong to the live chat) and
+    keeps no spare agents, which are the live chat's to start, hand over, and destroy.
     """
     broadcaster = WebSocketBroadcaster()
     data_dir = config.chat_data_dir
@@ -140,6 +142,7 @@ def build_production_state(
         chat_files_root=chat_records_root,
         chat_settings=chat_settings,
         is_secondary=is_secondary,
+        is_keeping_spares=not is_secondary,
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
@@ -170,7 +173,10 @@ def build_production_state(
         # One long-lived service per app: it holds the in-flight sign-in PTY between the
         # start call and the polls that advance it. A successful re-auth restarts the agents
         # bound to that account -- they do not pick up a swapped credential on their own.
-        auth_flows=AuthFlowService.create(restart_bound_agents=agent_manager.restart_agents_on_account_in_background),
+        auth_flows=AuthFlowService.create(
+            restart_bound_agents=agent_manager.restart_agents_on_account_in_background,
+            on_account_committed=lambda _account_id: agent_manager.ensure_spare_chat_in_background(),
+        ),
         # Read-only: it reports claude's auth state and writes and restarts nothing, so it
         # needs no collaborators.
         claude_auth_service=ClaudeAuthService(),

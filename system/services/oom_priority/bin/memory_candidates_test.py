@@ -244,6 +244,29 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
     assert "Browsers no window shows (running):\n  none" in table
 
 
+def test_leaves_out_the_chat_apps_spare_agents_by_their_label(tmp_path: Path, runtime_dir: Path) -> None:
+    proc = tmp_path / "proc"
+    _write_meminfo(proc, {"MemTotal": 4 * 1024 * 1024, "MemAvailable": 100 * 1024})
+    old = _NOW - timedelta(days=2)
+    chat = _agent_record("chat-a", "WAITING", {"user_created": "true", "display_name": "Trip plan"}, old, 10)
+    spare = _agent_record(
+        "chat-7", "WAITING", {"user_created": "true", "chat_spare": "true", "display_name": "Chat 7"}, old, 11
+    )
+    # A spare a chat took is relabelled, and is a chat like any other.
+    taken = _agent_record(
+        "chat-8", "WAITING", {"user_created": "true", "chat_spare": "false", "display_name": "Chat 8"}, old, 12
+    )
+    for pid in (10, 11, 12):
+        _fake_process(proc, pid, 100)
+    http = _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()})
+
+    report = memory_candidates.collect_report(_sources(proc, _FakeMngr([chat, spare, taken]), http))
+
+    assert report.agents.candidates is not None
+    assert sorted(a.name for a in report.agents.candidates) == ["chat-8", "chat-a"]
+    assert report.agents.notes == ()
+
+
 def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(tmp_path: Path, runtime_dir: Path) -> None:
     proc = tmp_path / "proc"
     # browser-1's Chromium (a renderer beneath it); browser-10 is shown, so its match must not leak into browser-1.

@@ -103,8 +103,8 @@ def test_unrecognized_supervisord_program_falls_back_to_the_user_service_band() 
 
 def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
     # Program names that double as service keys resolve to their service band;
-    # the OOM machinery itself stays protected; the browser stays the single
-    # most-expendable thing, above even an agent's subprocesses.
+    # the OOM machinery itself stays protected; the browser sits above even an
+    # agent's subprocesses.
     for key in _BUILTIN_SERVICE_ORDER:
         assert bands.supervisord_program_band(key, {}) == bands.SERVICE_BANDS[key]
     assert bands.supervisord_program_band("earlyoom", {}) == bands.PROTECTED
@@ -113,6 +113,34 @@ def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
     # The `browser` program is the coordinator, not Chromium: it resolves to its
     # service band, never to the shared-browser band its children occupy.
     assert bands.supervisord_program_band("browser", {}) == bands.SERVICE_BANDS["browser"]
+
+
+def test_a_spare_chat_agent_is_shed_before_everything_else() -> None:
+    # A spare holds no one's work, so it goes before any chat, worker, an agent's
+    # subprocess, or a browser renderer (which costs a tab) -- alone at the ceiling,
+    # since the kernel rejects an oom_score_adj above 1000.
+    assert bands.SPARE_AGENT > bands.AGENT_SUBPROCESS
+    assert bands.SPARE_AGENT > bands.CHAT_AGENT_STALE_CEILING
+    assert bands.SPARE_AGENT > bands.WORKER_AGENT
+    assert bands.SPARE_AGENT > bands.SHARED_BROWSER
+    assert bands.SPARE_AGENT == 1000
+
+
+def test_a_chat_just_started_on_a_spare_sits_at_the_floor_until_its_grace_ends() -> None:
+    # However abandoned its other signals make it look, the user opened it this moment.
+    def started(seconds_since_started: float) -> int:
+        return bands.chat_agent_oom_score_adj(
+            is_open=False,
+            is_visible=False,
+            recency_rank=None,
+            idle_seconds=48 * _HOUR,
+            is_mid_turn=False,
+            seconds_since_started=seconds_since_started,
+        )
+
+    assert started(0.0) == bands.CHAT_AGENT_FLOOR
+    assert started(bands.CHAT_JUST_STARTED_GRACE_SECONDS - 1) == bands.CHAT_AGENT_FLOOR
+    assert started(bands.CHAT_JUST_STARTED_GRACE_SECONDS) == _aged(48 * _HOUR)
 
 
 def test_primary_agent_is_pinned_to_the_never_shed_band() -> None:
@@ -183,14 +211,15 @@ def test_browser_remap_lands_inside_the_band_and_preserves_chromes_order() -> No
 
 def test_renderers_land_at_the_very_top_of_the_browser_band() -> None:
     # A renderer holds most of a browser's memory and costs a single tab to shed,
-    # so it must be the most expendable process in the workspace -- not merely
-    # somewhere inside the band. Scaling Chrome's gradation against 0..1000
-    # rather than its real 0..300 range put renderers at 937, leaving the top of
-    # the band to processes that had only *inherited* a high value and held
-    # almost no memory.
+    # so it must be the most expendable thing the browser runs -- not merely
+    # somewhere inside the band. Only a spare chat agent sits above it. Scaling
+    # Chrome's gradation against 0..1000 rather than its real 0..300 range would
+    # put renderers at 934, leaving the top of the band to processes that had
+    # only *inherited* a high value and held almost no memory.
     assert (
         bands.shared_browser_oom_score_adj(bands.CHROMIUM_SELF_ASSIGNED_MAX)
         == bands.SHARED_BROWSER
+        == 990
     )
     assert bands.shared_browser_oom_score_adj(0) == bands.SHARED_BROWSER_FLOOR
 

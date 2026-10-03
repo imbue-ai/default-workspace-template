@@ -389,8 +389,8 @@ resolves here** (the binary/script exists and runs) before reporting the job as
 scheduled. A rewritten path can still name a script that was never migrated.
 
 **Agents.** Stage the session JSONLs off the source, then recreate every agent
-except the source's primary -- dormant, under its old name, with its original
-creation label:
+except the source's primary and its chat app's unused spare agents -- dormant,
+under its old name, with its original creation label:
 
 ```bash
 uv run .agents/skills/migrate-workspace/scripts/migrate_workspace.py recreate-agents \

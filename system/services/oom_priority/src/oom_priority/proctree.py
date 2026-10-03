@@ -1,9 +1,9 @@
 """Walking the live process tree under a pid, via ``/proc``.
 
-Used by the tagging backstops that must find the processes a service has
-already spawned: the supervisord event listener (``system/services/oom_priority/bin/oom_tag_backstop.py``)
-and the browser service's Chromium re-tagging sweep. Stdlib-only (see ``paths``):
-the backstop listener imports it under a plain ``python3``.
+Used by the taggers that must find the processes something has already
+spawned. Stdlib-only (see ``paths``): the supervisord backstop listener
+(``system/services/oom_priority/bin/oom_tag_backstop.py``) imports it under a
+plain ``python3``.
 """
 
 from pathlib import Path

@@ -169,5 +169,8 @@ background services, which this workspace's own primary already does. It usually
 has no common transcript to migrate either.
 
 `is_excluded_agent` matches it by label *and* by name, because a hand-made or
-half-written `data.json` can be missing the label. Anything else -- chats, worktree
+half-written `data.json` can be missing the label. It also skips a spare agent of
+the source's chat app (`chat_spare=true`): one started ahead of the next new chat
+that no one has used, which this workspace's chat app keeps its own of. Anything
+else -- chats (a spare a chat took is relabelled `chat_spare=false`), worktree
 agents, `launch-task` workers, schedule agents -- comes over.

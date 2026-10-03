@@ -46,16 +46,17 @@ unbanded status quo:
   by memory and the daemon -- the larger one -- goes first, which is the outcome we
   want. To make that deterministic rather than lucky, give the daemon a
   more-expendable band than the TUI (one more argument here).
-- ``lookup_pid_by_agent_id`` returns the first live match, so the prioritizer's
-  engagement re-tag reaches only one of the two. Fix by returning every live match
-  and re-tagging each.
+- The chat prioritizer re-tags only the first live pid ``live_pids_by_agent_id``
+  holds for the agent, so its engagement re-tag reaches only one of the two. Fix by
+  re-tagging each.
 
 Separately, and outside this file: the shed NOTICE is claude-only
 (``claude_shed_notice_hook.py`` is a claude SessionStart hook), so a shed codex
 agent gets a ledger record but no in-session explanation on its next message.
 
 The band comes from the agent's label, resolved from ``MNGR_AGENT_NAME`` + the
-host records (see ``agent_identity``): a chat starts maximally expendable and is
+host records (see ``agent_identity``): a spare chat agent starts in the spare
+band, the most expendable of all; a chat starts maximally expendable and is
 protected later by live UI engagement; a worker or an unidentifiable agent starts
 at the least-protected agent tier.
 
@@ -78,7 +79,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority import bands
-from oom_priority.agent_identity import is_chat_agent, is_primary_agent, is_worker_agent
+from oom_priority.agent_identity import (
+    is_chat_agent,
+    is_primary_agent,
+    is_spare_agent,
+    is_worker_agent,
+)
 from oom_priority.registry import record_agent_pid
 
 _logger = logging.getLogger(__name__)
@@ -89,6 +95,10 @@ def _band_for(agent_name: str) -> int:
 
     - The primary (services) agent is pinned to the never-shed ``PRIMARY_AGENT``
       band (defensive; the primary never actually runs this wrapper).
+    - A spare chat agent (``chat_spare``, which also carries ``user_created``)
+      starts at ``SPARE_AGENT``, the most expendable band: no one uses it yet. So
+      does every process it spawns, and it starts there again after a restart
+      until the chat app relabels it when a chat takes it.
     - A chat (``user_created``) starts at ``CHAT_AGENT_BASE``, the middle of the
       chat range. The system_interface prioritizer moves it either way from
       there -- down toward the protected floor as the user engages with it, up
@@ -100,6 +110,8 @@ def _band_for(agent_name: str) -> int:
       agent we cannot identify must not be shielded by our ignorance."""
     if is_primary_agent(agent_name):
         return bands.PRIMARY_AGENT
+    if is_spare_agent(agent_name):
+        return bands.SPARE_AGENT
     if is_chat_agent(agent_name):
         return bands.CHAT_AGENT_BASE
     return bands.WORKER_AGENT

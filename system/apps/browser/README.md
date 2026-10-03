@@ -135,5 +135,5 @@ background agent, which is its own chat -- or the human).
   fleet event that can spawn a Chromium process (launch, new page -- from any
   origin, including a human in the viewer -- and navigation) triggers a short
   burst of sweeps on a daemon thread that remaps those values across the browser
-  band, renderers at the ceiling. See "The Chromium exception" in
-  `system/services/oom_priority/README.md`.
+  band, renderers at its top (990, below only the chat app's spare agents). See
+  "The Chromium exception" in `system/services/oom_priority/README.md`.

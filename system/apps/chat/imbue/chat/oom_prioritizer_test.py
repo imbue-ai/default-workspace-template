@@ -266,6 +266,32 @@ def test_an_untouched_long_running_process_ages_out() -> None:
     assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_STALE_CEILING
 
 
+def test_a_chat_started_on_a_long_running_agent_begins_fully_engaged_then_is_scored_like_any_chat() -> None:
+    # A spare the chat app handed a new chat started long before the chat did: the chat
+    # must not inherit that age, nor rank as recently messaged.
+    h = _Harness(chat_ids=["a", "b"], pids={"a": 10, "b": 20})
+    h.process_started_at[ChatId("a")] = h.now - 3 * 24 * _HOUR
+    h.prioritizer.record_message(ChatId("b"))
+    assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_STALE_CEILING
+
+    h.prioritizer.record_chat_started(ChatId("a"))
+
+    assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_FLOOR
+    assert h.latest_adj_by_pid()[20] == _fresh(is_open=False, is_visible=False, recency_rank=0)
+
+    h.advance(bands.CHAT_JUST_STARTED_GRACE_SECONDS + 1)
+    h.prioritizer.reapply()
+
+    # Past the grace it is scored like any chat, from the engagement its start stamped.
+    assert h.latest_adj_by_pid()[10] == bands.chat_agent_oom_score_adj(
+        is_open=False,
+        is_visible=False,
+        recency_rank=None,
+        idle_seconds=bands.CHAT_JUST_STARTED_GRACE_SECONDS + 1,
+        is_mid_turn=False,
+    )
+
+
 def test_seeded_message_times_restore_recency_across_a_restart() -> None:
     # Rebuilt-from-scratch prioritizer (a system-interface restart): seeding from
     # the durable client-activity log must rank the chats as it did before, rather

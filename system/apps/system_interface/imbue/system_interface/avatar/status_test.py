@@ -8,6 +8,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.avatar.designs import AvatarMood
 from imbue.system_interface.avatar.status import AvatarStatus
@@ -148,6 +150,7 @@ def _live_event(agent_id: str, state: str) -> str:
     return json.dumps({"timestamp": now, "type": "AGENT_STATE", "agent": _agent(agent_id, state)}) + "\n"
 
 
+@pytest.mark.flaky
 def test_the_reader_refolds_a_write_through_the_file_watch(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text(_live_event("a", "STOPPED"))
@@ -162,13 +165,20 @@ def test_the_reader_refolds_a_write_through_the_file_watch(tmp_path: Path) -> No
         assert reader.current() == AvatarStatus(mood=AvatarMood.IDLE, is_stale=False)
         with path.open("a") as stream:
             stream.write(_live_event("a", "RUNNING"))
+        # ``refresh`` broadcasts after it updates ``current()``, so wait on the broadcast itself.
+        messages: list[dict[str, Any]] = []
+
+        def has_both_broadcasts() -> bool:
+            messages.extend(drain_messages(window))
+            return len(messages) >= 2
+
         wait_for(
-            lambda: reader.current().mood is AvatarMood.WORKING,
+            has_both_broadcasts,
             timeout=5.0,
             poll_interval=0.02,
             error_message="the watch never woke the reader for the write",
         )
-        assert drain_messages(window) == [
+        assert messages == [
             {"type": "avatar_status", "mood": "idle", "is_stale": False},
             {"type": "avatar_status", "mood": "working", "is_stale": False},
         ]

@@ -498,6 +498,10 @@ def classify_branches(
 # (``is_primary=true``), and a second primary makes this workspace ambiguous to
 # discovery. Its background services are provided here by our own primary.
 EXCLUDED_AGENT_NAME = "system-services"
+# The label the chat app gives a spare agent it started ahead of the next new
+# chat, until a chat takes it. A spare holds no one's work, and this workspace's
+# chat app keeps its own.
+_CHAT_SPARE_LABEL = "chat_spare"
 
 # The labels that survive recreation. The creation labels drive the OOM shedding
 # bands, so a migrated chat must keep the one it had; ``project`` ties the agent
@@ -522,9 +526,10 @@ class SourceAgent(NamedTuple):
 def is_excluded_agent(name: str, labels: Mapping[str, str]) -> str:
     """Return why an agent must not be recreated here, or ``""`` to bring it over.
 
-    Only the source's primary agent is excluded, matched by its
-    ``is_primary=true`` label and by name (a hand-made or partially-written
-    ``data.json`` can be missing the label).
+    The source's primary agent is excluded, matched by its ``is_primary=true``
+    label and by name (a hand-made or partially-written ``data.json`` can be
+    missing the label), and so is a spare agent of the source's chat app
+    (``chat_spare=true``), which no one has used.
     """
     if labels.get("is_primary") == "true":
         return (
@@ -532,6 +537,8 @@ def is_excluded_agent(name: str, labels: Mapping[str, str]) -> str:
         )
     if name == EXCLUDED_AGENT_NAME:
         return f"named {EXCLUDED_AGENT_NAME}: the source's primary services agent"
+    if labels.get(_CHAT_SPARE_LABEL) == "true":
+        return "a spare agent the source's chat app kept for its next new chat; no one has used it"
     return ""
 
 

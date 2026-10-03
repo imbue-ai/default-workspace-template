@@ -11,7 +11,8 @@ It joins three sources, each read independently so one failing leaves the others
 - agents, from ``mngr list --provider local`` rendered through a ``--format`` template: a chat
   (``user_created``) or worker (``agent_created``) whose state is ``WAITING`` and whose latest
   activity is at least ``IDLE_AFTER_SECONDS`` old. Its memory is the summed RSS of its process trees, rooted at the pid
-  mngr reports plus every live pid the agent-pid registry holds for it;
+  mngr reports plus every live pid the agent-pid registry holds for it. The chat app's spare agents
+  (labelled ``chat_spare=true``) are left out: a spare is no chat until a chat takes it;
 - browsers, from the browser service's ``GET /browsers``: a ``running`` browser that no desktop
   window shows, per the shell's ``GET /api/desktops``. Its memory is the summed RSS of every
   Chromium process on its profile.
@@ -45,6 +46,7 @@ from oom_priority import app_registry
 from oom_priority.agent_identity import (
     CHAT_LABEL,
     PRIMARY_LABEL,
+    SPARE_LABEL,
     WORKER_LABEL,
     is_label_true,
 )
@@ -72,6 +74,7 @@ MNGR_LIST_FIELDS: Final[tuple[str, ...]] = (
     f"labels.{PRIMARY_LABEL}",
     f"labels.{CHAT_LABEL}",
     f"labels.{WORKER_LABEL}",
+    f"labels.{SPARE_LABEL}",
     "labels.display_name",
 )
 MNGR_LIST_FIELD_SEPARATOR: Final[str] = "|"
@@ -322,8 +325,9 @@ def run_mngr_list(run_command: RunCommand) -> tuple[list[ListedAgent] | None, li
 
 def agent_kind(labels: Mapping[str, str]) -> str | None:
     """``chat`` or ``worker`` by the agent's labels, in the launch wrapper's order; None for the
-    primary services agent and for anything carrying neither label (never a candidate)."""
-    if is_label_true(labels, PRIMARY_LABEL):
+    primary services agent, for one of the chat app's spare agents (no chat until a chat takes it),
+    and for anything carrying neither label (never a candidate)."""
+    if is_label_true(labels, PRIMARY_LABEL) or is_label_true(labels, SPARE_LABEL):
         return None
     if is_label_true(labels, CHAT_LABEL):
         return CHAT_KIND

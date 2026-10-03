@@ -16,8 +16,10 @@ from typing import Self
 from uuid import uuid4
 
 from loguru import logger as _loguru_logger
+from oom_priority.bands import CHAT_AGENT_BASE
 from oom_priority.bands import set_oom_score_adj
-from oom_priority.registry import lookup_pid_by_agent_id
+from oom_priority.proctree import list_descendant_pids
+from oom_priority.registry import live_pids_by_agent_id
 from pydantic import Field
 
 from imbue.chat.accounts import Account
@@ -149,6 +151,11 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.shell_client import DisconnectedShell
+from imbue.chat.spare_chat import CHAT_SPARE_LABEL
+from imbue.chat.spare_chat import SpareChatAgent
+from imbue.chat.spare_chat import SpareChatPhase
+from imbue.chat.spare_chat import SpareChatTerms
+from imbue.chat.spare_chat import pooled_spares
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ConcurrencyGroupError
@@ -179,10 +186,11 @@ CHAT_ROLE_TEMPLATE: Final[str] = "chat"
 # it, so ``message_chat.py --create`` asks for it on every chat it makes from outside.
 SKIP_CLAUDE_INSTALLATION_CHECK_SETTING: Final[str] = "agent_types.claude.check_installation=false"
 
-# The labels a chat create sets from what it knows (``_build_chat_create_command`` and the
-# handoff's successor labels); a caller's extra labels may not restate them.
+# The labels a chat create sets from what it knows (``_build_chat_create_command``, the
+# handoff's successor labels, and a spare's ``chat_spare``); a caller's extra labels may not
+# restate them.
 APP_OWNED_LABEL_KEYS: Final[frozenset[str]] = frozenset(
-    {"user_created", "display_name", "account", "project", "chat_id", "chat_seq"}
+    {"user_created", "display_name", "account", "project", "chat_id", "chat_seq", CHAT_SPARE_LABEL}
 )
 
 # How long a create the caller waits on may run before the wait answers on its own. A
@@ -218,6 +226,34 @@ DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
 # is let go. A create lands seconds before the stream reports it, so one snapshot can legitimately
 # predate the agent; two say it is not there at all (it died before the stream ever saw it).
 FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO: Final[int] = 2
+
+
+# How many idle spare agents (``spare_chat.py``) are kept started for new chats: the default for
+# ``AgentManager.build``. Each costs one idle harness process.
+# Raise it so a burst of new chats each finds one already up.
+SPARE_CHAT_POOL_SIZE: Final[int] = 1
+# How long after a hand-over the pool is left short when another spare is still ready: long enough
+# for the chat that took one to get through its first turn before the next spare's boot competes
+# with it for the host's CPUs.
+SPARE_CHAT_REPLENISH_DELAY_SECONDS: Final[float] = 30.0
+# How long a created spare's harness may take to say it accepts input.
+SPARE_CHAT_BOOT_TIMEOUT_SECONDS: Final[float] = 180.0
+SPARE_CHAT_BOOT_POLL_SECONDS: Final[float] = 0.5
+# How long the spares are left alone after a create or a destroy failed, so a workspace where mngr
+# keeps refusing does not run a create every sweep.
+SPARE_CHAT_RETRY_BACKOFF_SECONDS: Final[float] = 300.0
+# How long a ready spare may wait for a chat before it is replaced: its harness loaded its context
+# (the date, the git state) when it started, and a long wait also leaves it on code older than the
+# workspace's.
+SPARE_CHAT_MAX_AGE_SECONDS: Final[float] = 6 * 3600.0
+# The reason a chat is given when starting its agent stopped on an unexpected error (its traceback is in
+# the log): the creation of a spare it claimed, or its launch once the spare reserved for it was destroyed.
+_CHAT_START_BROKE_OFF_ERROR: Final[str] = "Starting this chat's agent stopped on an unexpected error"
+# The reason a chat awaiting its first send fails when the spare reserved for it, which its launch could not
+# take, could not be destroyed, so the chat's own create cannot have the id yet.
+_RESERVED_SPARE_NOT_DESTROYED_ERROR: Final[str] = (
+    "This chat's last agent is still being cleaned up; try again in a few minutes"
+)
 
 
 # The create template a chat's launch stacks on ``chat`` (``.mngr/settings.toml``) when the chat's
@@ -280,6 +316,22 @@ def _chat_project_label(primary_labels: dict[str, str], project_id: str) -> str:
     if project_id:
         return project_id
     return primary_labels.get("project", "")
+
+
+def live_registered_pids_of_agent(agent_id: str) -> list[int]:
+    """Every live pid mngr's launch wrapper registered for an agent id: one for most harnesses, two for codex
+    (its TUI and its app-server daemon). The first is the one the chat prioritizer re-tags."""
+    return live_pids_by_agent_id().get(agent_id, [])
+
+
+@pure
+def _chat_agent_labels(display_name: str, account_id: str, project_label: str) -> dict[str, str]:
+    """The labels ``_build_chat_create_command`` gives a chat's agent, for the tracked copy made before observe
+    reports it."""
+    labels = {"user_created": "true", "display_name": display_name, "account": account_id}
+    if project_label:
+        labels["project"] = project_label
+    return labels
 
 
 def _build_chat_create_command(
@@ -468,6 +520,11 @@ def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str
         "--label",
         f"display_name={name}",
     ]
+
+
+def _build_spare_relabel_command(mngr_binary: str, agent_id: str) -> list[str]:
+    """Build the ``mngr label`` argv that marks a spare a chat took as no longer a spare. Pure (see above)."""
+    return [mngr_binary, "label", agent_id, "--label", f"{CHAT_SPARE_LABEL}=false"]
 
 
 def _queued_message_state(entry: Mapping[str, Any]) -> QueuedMessageState:
@@ -744,6 +801,13 @@ class _CreatedAgentAwaitingObserve(FrozenModel):
         return self.model_copy_update(to_update(self.field_ref().snapshots_without_it, self.snapshots_without_it + 1))
 
 
+class _SpareClaim(FrozenModel):
+    """What a new chat that claimed a spare still being created brings to it once it is up."""
+
+    message: str = Field(frozen=True, description="The chat's first message; empty for none")
+    model_pick: ModelPick | None = Field(frozen=True, description="The model the chat runs on; None for the default")
+
+
 class HandoffCapabilities(FrozenModel):
     """What a handoff needs from the app state and the routes, bound by the composition root."""
 
@@ -827,6 +891,42 @@ class AgentManager:
     _chat_record_by_id: dict[ChatId, ChatRecord]
     # The workspace-wide chat settings (the fast mode a new chat starts in), read on every create.
     _chat_settings: ChatSettingsStore
+    # The fast mode picked in an unseeded chat whose launch has not written its folder yet (one awaiting
+    # its first send, or one whose create waits on the destroy of the spare it released), held in memory
+    # until that launch writes it: a fast mode in the folder is what tells a restart that an agent still
+    # labelled a spare is a chat's (``_handle_spares_from_before_start``).
+    _awaiting_fast_mode_by_chat: dict[ChatId, ChatFastModeState]
+    # Whether this manager keeps spare agents for new chats (``spare_chat.py``): the live chat
+    # does; a secondary chat, and a test that does not ask for them, do not. Either way an agent
+    # labelled a spare is hidden (``_is_spare_locked``).
+    _is_keeping_spares: bool
+    # The spare agents this manager keeps: the pool (being created or waiting to be taken), any a
+    # new chat claimed while it was created, and any being destroyed. Every one is hidden from the
+    # chat listings.
+    _spares: tuple[SpareChatAgent, ...]
+    # Spares handed to a chat whose ``chat_spare=false`` the observe stream has not reported yet:
+    # listed as chats although the label they were created with still says spare.
+    _spare_ids_awaiting_relabel: set[ChatId]
+    # The ones among them whose relabel failed, for the session sweep to run again.
+    _spare_ids_due_relabel: set[ChatId]
+    # Whether the agents labelled a spare before this app started have been dealt with
+    # (``_handle_spares_from_before_start``), which happens once, on the first known agent list.
+    _are_earlier_spares_handled: bool
+    # What each chat that claimed a spare still being created brings to it, by the spare's id.
+    _spare_claim_by_chat: dict[ChatId, _SpareClaim]
+    # ``time.monotonic()`` before which the pool is not topped up while a spare is ready (a hand-over).
+    _spare_replenish_not_before: float
+    _spare_chat_pool_size: int
+    # Writes a pid's ``oom_score_adj`` (the spares' shedding band, and the chat prioritizer's);
+    # None in a secondary chat, whose writes would be the live chat's.
+    _oom_score_adj_writer: Callable[[int, int], bool] | None
+    # Every live pid mngr's launch wrapper registered for an agent id (``live_registered_pids_of_agent``).
+    _resolve_agent_pids: Callable[[str], list[int]]
+    _list_descendant_pids: Callable[[int], list[int]]
+    # The spares whose ``mngr destroy`` is running, so a sweep does not start a second one.
+    _spare_ids_being_discarded: set[ChatId]
+    # ``time.monotonic()`` before which no spare is created or destroyed, set when one failed.
+    _spare_retry_not_before: float
     # Where a chat's handoff files live (its summaries and prompts), beside its record.
     _chat_files_root: Path
     _prompt_template_path: Path
@@ -947,6 +1047,11 @@ class AgentManager:
         chat_settings: ChatSettingsStore | None = None,
         autocompactor: ChatAutoCompactor | None = None,
         is_secondary: bool = False,
+        is_keeping_spares: bool = False,
+        spare_chat_pool_size: int = SPARE_CHAT_POOL_SIZE,
+        oom_score_adj_writer: Callable[[int, int], bool] = set_oom_score_adj,
+        agent_pids_resolver: Callable[[str], list[int]] = live_registered_pids_of_agent,
+        descendant_pid_lister: Callable[[int], list[int]] = list_descendant_pids,
     ) -> Self:
         """Build an AgentManager with the given broadcaster.
 
@@ -969,6 +1074,11 @@ class AgentManager:
         withholds the chat memory scores, the automatic context compaction, and the
         resumption of unfinished switches, all of which belong to the live chat alone, and
         refuses every switch (a handoff or a rebind), since its chat records are a scratch copy.
+        ``is_keeping_spares`` keeps a pool of spare agents a new chat is handed (``spare_chat.py``),
+        never in a secondary; ``spare_chat_pool_size`` is how many idle spares it keeps.
+        ``oom_score_adj_writer``, ``agent_pids_resolver``, and ``descendant_pid_lister`` are how
+        the agents' memory-shedding bands are written: the real ``/proc`` writer, pid registry,
+        and process-tree walk unless a test passes its own.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -985,6 +1095,20 @@ class AgentManager:
         manager._provisional_chats = seeded_provisional_chats(manager._chat_record_by_id)
         manager._title_override_by_chat = {}
         manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
+        manager._awaiting_fast_mode_by_chat = {}
+        manager._is_keeping_spares = is_keeping_spares and not is_secondary
+        manager._spares = ()
+        manager._spare_ids_awaiting_relabel = set()
+        manager._spare_ids_due_relabel = set()
+        manager._are_earlier_spares_handled = False
+        manager._spare_ids_being_discarded = set()
+        manager._spare_retry_not_before = 0.0
+        manager._spare_claim_by_chat = {}
+        manager._spare_replenish_not_before = 0.0
+        manager._spare_chat_pool_size = spare_chat_pool_size
+        manager._oom_score_adj_writer = None if is_secondary else oom_score_adj_writer
+        manager._resolve_agent_pids = agent_pids_resolver
+        manager._list_descendant_pids = descendant_pid_lister
         manager._chat_files_root = chat_files_root
         manager._prompt_template_path = prompt_template_path
         manager._handoff_capabilities = None
@@ -1034,7 +1158,7 @@ class AgentManager:
             resolve_pid=lambda chat_id: manager._resolve_active_pid(chat_id),
             # A secondary's presence is its own windows', not the workspace's, and the scores it
             # would write are the live chat's, so it keeps an inert prioritizer.
-            set_adj=None if is_secondary else set_oom_score_adj,
+            set_adj=manager._oom_score_adj_writer,
             resolve_process_started_at=lambda chat_id: manager._read_agent_process_started_at(
                 manager._active_agent_id_of_chat(chat_id)
             ),
@@ -1052,7 +1176,8 @@ class AgentManager:
     def _resolve_active_pid(self, chat_id: ChatId) -> int | None:
         """The pid of the process a chat runs on, for the OOM prioritizer; None for a chat with no active agent."""
         active_agent_id = self._active_agent_id_of_chat(chat_id)
-        return None if active_agent_id is None else lookup_pid_by_agent_id(active_agent_id)
+        pids = [] if active_agent_id is None else self._resolve_agent_pids(active_agent_id)
+        return pids[0] if pids else None
 
     def _active_agent_id_of_chat(self, chat_id: ChatId) -> str | None:
         """The agent a chat runs on, from its record, else the chat's own id under the own-chat rule.
@@ -1141,6 +1266,7 @@ class AgentManager:
         """Mark the agent list as read; the discovery paths call this, and a test that seeds ``_agents`` directly."""
         with self._lock:
             self._is_agent_list_known = True
+        self._handle_spares_from_before_start()
 
     def _broadcast_chats_updated(self) -> None:
         """Push every chat's snapshot to every WebSocket client."""
@@ -1236,8 +1362,9 @@ class AgentManager:
         """A chat id's members and active agent, or None for an id that names no chat.
 
         A record answers for its chat; an id naming an agent some record holds as a member
-        is that chat's, not a chat of its own, so it resolves to nothing here; any other id
-        is an agent that is its own chat (the own-chat rule), whether or not it is tracked.
+        is that chat's, not a chat of its own, so it resolves to nothing here, and so does a
+        spare agent's, which is no chat until one is handed it; any other id is an agent that
+        is its own chat (the own-chat rule), whether or not it is tracked.
         """
         record = self._chat_record_by_id.get(chat_id)
         if record is not None:
@@ -1247,7 +1374,7 @@ class AgentManager:
                 active_agent_id=_stand_in_active_agent_id(record),
                 record=record,
             )
-        if self._chat_id_of_agent_locked(str(chat_id)) != chat_id:
+        if self._chat_id_of_agent_locked(str(chat_id)) != chat_id or self._is_spare_locked(str(chat_id)):
             return None
         return _ResolvedChat(
             chat_id=chat_id, member_agent_ids=(str(chat_id),), active_agent_id=str(chat_id), record=None
@@ -1256,8 +1383,8 @@ class AgentManager:
     def _listed_chats_locked(self) -> list[tuple[AgentStateItem, _ResolvedChat]]:
         """Every chat the pages list, as its active agent and its resolution. Lock held.
 
-        One entry per non-primary agent that is not an archived member: an agent a record
-        names as anything but its active agent is excluded because the record names it,
+        One entry per non-primary agent that is not an archived member or a spare: an agent a
+        record names as anything but its active agent is excluded because the record names it,
         never because of an ``archived_at`` label (a bare ``mngr list`` hides no such agent).
         A record whose active agent is not tracked lists nothing.
         """
@@ -1418,8 +1545,10 @@ class AgentManager:
         Excludes workers (``agent_created=true``), the primary services agent
         (``is_primary=true``), and archived members of a chat; those keep their launch
         bands -- workers maximally expendable, the primary pinned -- so no UI activity
-        moves their score. Remote agents are left in (they have no local pid, so the
-        prioritizer's pid lookup skips them harmlessly).
+        moves their score. Spare agents are excluded too: they keep the ``SPARE_AGENT``
+        band their label launches them in until a chat takes one. Remote agents
+        are left in (they have no local pid, so the prioritizer's pid lookup skips them
+        harmlessly).
         """
         with self._lock:
             return [
@@ -1514,7 +1643,7 @@ class AgentManager:
         """Names of chat agents that currently have a running agent process.
 
         Excludes workers (``agent_created=true``), the primary services agent
-        (``is_primary=true``), and dead/stopped agent processes.
+        (``is_primary=true``), spare agents, and dead/stopped agent processes.
         """
         with self._lock:
             return [
@@ -1522,6 +1651,7 @@ class AgentManager:
                 for agent in self._agents.values()
                 if agent.labels.get("agent_created") != "true"
                 and agent.labels.get("is_primary") != "true"
+                and not self._is_spare_locked(agent.id)
                 and not is_lifecycle_dead(agent.state)
             ]
 
@@ -2537,6 +2667,7 @@ class AgentManager:
             self._created_unobserved_by_id.pop(agent_id, None)
             self._match_by_agent_id.pop(agent_id, None)
             self._pending_permission_ids_by_agent.pop(agent_id, None)
+            self._forget_spare_relabel_locked(agent_id)
             is_own_chat = not self._is_recorded_member_locked(agent_id)
         if is_own_chat:
             self._forget_chat(ChatId(agent_id))
@@ -2585,7 +2716,9 @@ class AgentManager:
                     (
                         agent
                         for agent in self._agents.values()
-                        if agent.name == chat_ref and not self._is_archived_member_locked(agent.id)
+                        if agent.name == chat_ref
+                        and not self._is_archived_member_locked(agent.id)
+                        and not self._is_spare_locked(agent.id)
                     ),
                     None,
                 )
@@ -2702,7 +2835,8 @@ class AgentManager:
         return True
 
     def _start_session_sweep(self) -> None:
-        """Start the background sweep that connects tracked agents' live backends once they come up."""
+        """Start the background sweep that connects tracked agents' live backends once they come up, retries
+        a handed-over spare's failed relabel, and keeps the spare agents for new chats (``ensure_spare_chat``)."""
         thread = threading.Thread(target=self._run_session_sweep, daemon=True, name="agent-session-sweep")
         self._session_sweep_thread = thread
         thread.start()
@@ -2710,6 +2844,8 @@ class AgentManager:
     def _run_session_sweep(self) -> None:
         while not self._session_sweep_stop.is_set():
             self._reconnect_pending_sessions()
+            self._retry_due_spare_relabels()
+            self.ensure_spare_chat()
             self._session_sweep_stop.wait(timeout=_SESSION_SWEEP_INTERVAL_SECONDS)
 
     def _reconnect_pending_sessions(self) -> None:
@@ -2787,7 +2923,7 @@ class AgentManager:
         """Every name in use on the machine's agents. Must be called with lock held.
 
         Both halves of each agent's name pair count (the ``display_name`` label
-        and the true name), plus every in-flight create's name, so a fresh
+        and the true name), plus every in-flight create's name and every spare's, so a fresh
         allocation or a rename can collide with neither. ``exclude_agent_id``
         leaves one agent out, which is how a rename avoids colliding with the
         agent being renamed.
@@ -2806,6 +2942,10 @@ class AgentManager:
                 continue
             if provisional.name:
                 taken.append(provisional.name)
+        # A spare's create is in flight before the agent is tracked, and its name is the chat's it becomes.
+        for spare in self._spares:
+            if str(spare.chat_id) != exclude_agent_id:
+                taken.append(spare.display_name)
         return taken
 
     def _mint_display_name_locked(self, explicit_name: str) -> str:
@@ -2877,47 +3017,110 @@ class AgentManager:
         ``awaiting_first_send`` phase under a minted "Chat N" name, with the account the intake
         resolved (or none), and its page shows an empty conversation with the composer; the first
         send launches it through ``create_chat`` by ``chat_id``. It has no record, so a restart of
-        this app drops it.
+        this app drops it. It reserves a spare that fits (``_mint_awaiting_chat_locked``).
         """
+        spare_account_id = self._spare_account_for_awaiting_chat(account_id)
         with self._lock:
-            provisional = self._mint_awaiting_chat_locked(account_id)
+            provisional, is_spare_reserved = self._mint_awaiting_chat_locked(account_id, spare_account_id)
         self._broadcast_provisional(provisional)
+        if is_spare_reserved:
+            self.ensure_spare_chat_in_background()
         return provisional
 
     def awaiting_chat_for_empty_list(self) -> ProvisionalChat:
         """A chat for a chat list that has none to show: one already waiting for its first send, else a new one.
 
         The chat list is never left open empty; it shows this chat, which launches on the first message sent in it.
-        Handing back a waiting chat keeps two lists that open empty at once from minting two.
+        Handing back a waiting chat keeps two lists that open empty at once from minting two. A new one reserves a
+        spare that fits (``_mint_awaiting_chat_locked``).
         """
+        spare_account_id = self._spare_account_for_awaiting_chat("")
         with self._lock:
             for provisional in self._provisional_chats.values():
                 if provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND and not provisional.is_seeded:
                     return provisional
-            minted = self._mint_awaiting_chat_locked("")
+            minted, is_spare_reserved = self._mint_awaiting_chat_locked("", spare_account_id)
         self._broadcast_provisional(minted)
+        if is_spare_reserved:
+            self.ensure_spare_chat_in_background()
         return minted
 
-    def _mint_awaiting_chat_locked(self, account_id: str) -> ProvisionalChat:
-        chat_id = ChatId(str(AgentId()))
+    def _spare_account_for_awaiting_chat(self, account_id: str) -> str | None:
+        """The account whose spare a chat minted to await its first send reserves: the one it was minted for,
+        else the default one. None in a manager that keeps no spares, or with no account signed in."""
+        if not self._is_keeping_spares:
+            return None
+        if account_id:
+            return account_id
+        try:
+            return resolve_binding().id
+        except (AccountError, BindingError) as e:
+            _loguru_logger.trace("No account whose spare an awaiting chat could reserve: {}", e)
+            return None
+
+    def _mint_awaiting_chat_locked(
+        self, account_id: str, spare_account_id: str | None
+    ) -> tuple[ProvisionalChat, bool]:
+        """Mint a chat awaiting its first send, and say whether it reserved a spare. Lock held.
+
+        With a spare on ``spare_account_id`` and the terms a new chat there gets (a ready one, else
+        one still being created), the chat takes the spare's id and name, and the spare is reserved
+        for it (``spare_chat.py``), unless awaiting chats already hold as many spares as the pool keeps;
+        otherwise both are minted fresh, and the next spare started is reserved for the chat when it
+        fits (``_record_new_spare_locked``).
+        """
+        terms = None if spare_account_id is None else self._new_chat_terms_locked(spare_account_id, "")
+        spare = (
+            None
+            if terms is None or not self._may_reserve_another_spare_locked()
+            else self._spare_for_new_chat_locked(terms)
+        )
+        if spare is None:
+            chat_id = ChatId(str(AgentId()))
+            name = self._mint_display_name_locked("")
+        else:
+            self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.RESERVED)
+            chat_id = spare.chat_id
+            name = spare.display_name
         provisional = ProvisionalChat(
             chat_id=chat_id,
-            name=self._mint_display_name_locked(""),
+            name=name,
             account_id=account_id,
             phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
         )
         self._provisional_chats[chat_id] = provisional
-        return provisional
+        return provisional, spare is not None
 
     def get_fast_mode_state(self, chat_id: ChatId) -> ChatFastModeState:
         """The chat's fast mode (``chat_fast_mode.py``): what it chose, else the workspace's default for a new chat."""
+        with self._lock:
+            return self._fast_mode_state_locked(chat_id)
+
+    def _fast_mode_state_locked(self, chat_id: ChatId) -> ChatFastModeState:
+        """``get_fast_mode_state``, lock held: the chat's folder, else a pick made before its launch wrote it."""
         state = read_fast_mode_state(self._chat_files_root / chat_id)
+        if state is None:
+            state = self._awaiting_fast_mode_by_chat.get(chat_id)
         if state is not None:
             return state
         return ChatFastModeState(mode=self._chat_settings.read().fast_mode_default)
 
     def set_fast_mode_state(self, chat_id: ChatId, state: ChatFastModeState) -> None:
-        """Record the chat's fast mode; the page applies the speed itself through the model switch."""
+        """Record the chat's fast mode; the page applies the speed itself through the model switch.
+
+        An unseeded chat whose launch has not written its folder yet keeps it in memory until that launch
+        writes it (``_fast_mode_for_launch_locked``): one awaiting its first send, as it keeps everything else,
+        and one whose create waits on the destroy of the spare that still holds its id.
+        """
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            if (
+                provisional is not None
+                and not provisional.is_seeded
+                and read_fast_mode_state(self._chat_files_root / chat_id) is None
+            ):
+                self._awaiting_fast_mode_by_chat[chat_id] = state
+                return
         write_fast_mode_state(self._chat_files_root / chat_id, state)
 
     def knows_chat(self, chat_id: ChatId) -> bool:
@@ -2925,21 +3128,26 @@ class AgentManager:
         with self._lock:
             if chat_id in self._provisional_chats or chat_id in self._chat_record_by_id:
                 return True
-            # A tracked agent is a chat of its own unless a record holds it as a member.
-            return str(chat_id) in self._agents and self._chat_id_of_agent_locked(str(chat_id)) == chat_id
+            # A tracked agent is a chat of its own unless a record holds it as a member or it is a spare.
+            return (
+                str(chat_id) in self._agents
+                and self._chat_id_of_agent_locked(str(chat_id)) == chat_id
+                and not self._is_spare_locked(str(chat_id))
+            )
 
     def _fast_mode_for_launch_locked(self, chat_id: ChatId) -> ChatFastModeState:
         """The fast mode a launch starts the chat's agent in, written to the chat's folder the first time. Lock held."""
         state = read_fast_mode_state(self._chat_files_root / chat_id)
         if state is None:
-            state = ChatFastModeState(mode=self._chat_settings.read().fast_mode_default)
+            state = self._fast_mode_state_locked(chat_id)
             write_fast_mode_state(self._chat_files_root / chat_id, state)
+        self._awaiting_fast_mode_by_chat.pop(chat_id, None)
         return state
 
     def discard_provisional_chat(self, chat_id: str) -> bool:
         """Drop a provisional chat that is not being created: one awaiting its first send (its seed
         goes with it), or one whose create failed. Returns whether anything was dropped; a create in
-        flight cannot be taken back and is left alone."""
+        flight cannot be taken back and is left alone. A spare reserved for the chat goes back to the pool."""
         parsed = parse_chat_ref(chat_id)
         if parsed is None:
             return False
@@ -2948,6 +3156,11 @@ class AgentManager:
             if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
                 return False
             del self._provisional_chats[parsed]
+            self._awaiting_fast_mode_by_chat.pop(parsed, None)
+            self._spares = tuple(
+                spare.as_unreserved() if spare.chat_id == parsed and spare.phase is SpareChatPhase.RESERVED else spare
+                for spare in self._spares
+            )
             self._creation_settled_by_chat.pop(parsed, None)
             record = self._chat_record_by_id.get(parsed)
             # A failed create has already written the chat's fast mode into its folder.
@@ -3017,6 +3230,10 @@ class AgentManager:
         with a pick the create is silent and the message is delivered afterwards through the
         send path, the way a handoff's successor gets its prompt; a pick the agent refuses is
         logged and the chat runs on its harness's default.
+
+        A new chat whose terms the spare agents were started on (``spare_chat.py``) is handed a
+        spare instead of a create: a ready one is listed at once, already running, and one still
+        starting settles the chat when it is up; the message and pick follow through the send path.
         """
         extra_labels = dict(labels or {})
         try:
@@ -3036,6 +3253,26 @@ class AgentManager:
         if owned_keys:
             raise AgentCreationError(f"The chat app sets {', '.join(owned_keys)} itself; a create cannot restate them")
 
+        # A name, labels, templates, or an installation-check waiver of the caller's own need an
+        # agent created with them. A chat minted earlier keeps its own id, so only the spare reserved
+        # under that id can become it.
+        if (
+            not chat_id
+            and not explicit_name
+            and not extra_labels
+            and not extra_role_templates
+            and not is_installation_check_skipped
+        ):
+            created_from_spare = self._create_chat_from_spare(account.id, project_id, message, model_pick)
+            if created_from_spare is not None:
+                return created_from_spare
+        if chat_id and not extra_role_templates:
+            launched_on_spare = self._launch_awaiting_chat_on_its_spare(
+                ChatId(chat_id), account.id, message, model_pick
+            )
+            if launched_on_spare is not None:
+                return launched_on_spare
+
         # Name resolution and the provisional record's registration happen under one lock
         # hold, so a concurrent create sees this one's name as taken (and vice versa).
         with self._lock:
@@ -3046,8 +3283,24 @@ class AgentManager:
             primary_labels = dict(primary.labels) if primary else {}
 
             seed_record: ChatRecord | None = None
+            is_spare_destroy_awaited = False
             if chat_id:
                 provisional = self._provisional_chats.get(ChatId(chat_id))
+                # A chat awaiting its first send whose launch could not take the spare reserved for it
+                # is created on its creation thread once that spare is destroyed.
+                is_spare_destroy_awaited = (
+                    provisional is not None
+                    and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+                    and not provisional.is_seeded
+                    and self._release_reserved_spare_locked(provisional.chat_id)
+                )
+                # A chat whose claimed spare failed keeps the spare's id, and the spare's agent under
+                # it is destroyed first: a create under that id before then would be hidden as the
+                # spare, and destroyed with it.
+                if self._is_spare_locked(chat_id) and not is_spare_destroy_awaited:
+                    raise AgentCreationError(
+                        f"Chat {chat_id}'s last agent is still being cleaned up; try again in a few minutes"
+                    )
                 if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
                     raise AgentCreationError(f"Chat {chat_id} is not waiting to be launched")
                 if provisional.is_seeded:
@@ -3107,7 +3360,13 @@ class AgentManager:
                 is_seeded=seed_record is not None,
             )
             self._provisional_chats[launched_chat_id] = provisional
-            fast_mode = self._fast_mode_for_launch_locked(launched_chat_id)
+            # Written once the spare is gone (``_run_creation_after_spare_destroy``): a chat folder holding a
+            # fast mode tells a restart that an agent still labelled a spare is that chat's.
+            fast_mode = (
+                self._fast_mode_state_locked(launched_chat_id)
+                if is_spare_destroy_awaited
+                else self._fast_mode_for_launch_locked(launched_chat_id)
+            )
         agent_id = str(launched_chat_id) if record_entry is None else record_entry.agent_id
         membership_labels = (
             () if record_entry is None else (f"chat_id={launched_chat_id}", f"chat_seq={record_entry.seq}")
@@ -3158,11 +3417,10 @@ class AgentManager:
         # Mirror the labels the created mngr agent will carry (see
         # ``_build_chat_create_command``), so the pre-observe AgentStateItem below
         # renders exactly like the observed agent will.
-        labels: dict[str, str] = {"user_created": "true", "display_name": display_name, **extra_labels}
-        project_label = _chat_project_label(primary_labels, project_id)
-        if project_label:
-            labels["project"] = project_label
-        labels["account"] = account.id
+        labels = {
+            **_chat_agent_labels(display_name, account.id, _chat_project_label(primary_labels, project_id)),
+            **extra_labels,
+        }
         for label in membership_labels:
             key, _separator, value = label.partition("=")
             labels[key] = value
@@ -3180,9 +3438,827 @@ class AgentManager:
             record_entry,
             model_pick,
             deferred_message,
+            is_spare_destroy_awaited,
         )
 
         return CreatedChat(chat_id=launched_chat_id, name=canonical_name, display_name=display_name)
+
+    # Chat-level: the spare agents a new chat is handed (``spare_chat.py``).
+
+    def _is_spare_locked(self, agent_id: str) -> bool:
+        """Whether an agent is a spare, which no chat listing, lookup, or route shows: one this manager keeps,
+        or one labelled ``chat_spare=true`` that is not a hand-over awaiting its relabel. Lock held."""
+        if any(spare.chat_id == agent_id for spare in self._spares):
+            return True
+        if agent_id in self._spare_ids_awaiting_relabel:
+            return False
+        agent = self._agents.get(agent_id)
+        return agent is not None and agent.labels.get(CHAT_SPARE_LABEL) == "true"
+
+    def _spare_locked(self, chat_id: ChatId) -> SpareChatAgent | None:
+        return next((spare for spare in self._spares if spare.chat_id == chat_id), None)
+
+    def _set_spare_phase_locked(self, chat_id: ChatId, phase: SpareChatPhase) -> None:
+        self._spares = tuple(spare.with_phase(phase) if spare.chat_id == chat_id else spare for spare in self._spares)
+
+    def _drop_spare_locked(self, chat_id: ChatId) -> None:
+        self._spares = tuple(spare for spare in self._spares if spare.chat_id != chat_id)
+
+    def _hand_over_spare_locked(self, chat_id: ChatId) -> None:
+        """Make a spare its chat's agent: out of the spares, and listed until its relabel lands. Lock held."""
+        self._drop_spare_locked(chat_id)
+        self._spare_ids_awaiting_relabel.add(chat_id)
+
+    def _new_chat_terms_locked(
+        self, account_id: str, project_id: str, fast_mode: ChatFastModeState | None = None
+    ) -> SpareChatTerms:
+        """The terms a new chat on ``account_id`` would be started on, in ``fast_mode`` (by default, the one a
+        new chat starts in). Lock held."""
+        primary = self._agents.get(self._own_agent_id)
+        primary_labels = dict(primary.labels) if primary else {}
+        launch_fast_mode = (
+            ChatFastModeState(mode=self._chat_settings.read().fast_mode_default) if fast_mode is None else fast_mode
+        )
+        return SpareChatTerms(
+            account_id=account_id,
+            project_label=_chat_project_label(primary_labels, project_id),
+            is_fast=launch_fast_mode.launches_fast,
+        )
+
+    def _is_spare_usable_locked(self, spare: SpareChatAgent, terms: SpareChatTerms | None) -> bool:
+        """Whether a ready spare can be handed to a new chat on ``terms``: started on them, ready for less than
+        the maximum age, and still running. Lock held."""
+        return spare.phase is SpareChatPhase.READY and spare.terms == terms and self._is_spare_fresh_locked(spare)
+
+    def _is_spare_fresh_locked(self, spare: SpareChatAgent) -> bool:
+        """Whether a spare's harness is up, has been for less than the maximum age, and still runs. Lock held."""
+        if spare.ready_at is None or time.monotonic() - spare.ready_at >= SPARE_CHAT_MAX_AGE_SECONDS:
+            return False
+        return self._is_spare_process_alive_locked(spare)
+
+    def _is_spare_process_alive_locked(self, spare: SpareChatAgent) -> bool:
+        agent = self._agents.get(spare.chat_id)
+        return agent is not None and not is_lifecycle_dead(agent.state)
+
+    def _may_reserve_another_spare_locked(self) -> bool:
+        """Whether chats awaiting their first send hold fewer reserved spares than the pool keeps, so idle
+        spares stay bounded however many drafts wait unsent. Lock held."""
+        reserved_count = sum(1 for spare in self._spares if spare.phase is SpareChatPhase.RESERVED)
+        return reserved_count < self._spare_chat_pool_size
+
+    def _spare_for_new_chat_locked(self, terms: SpareChatTerms) -> SpareChatAgent | None:
+        """The spare a new chat on ``terms`` takes: a ready one, else one still being created on them. Lock held."""
+        ready = next((spare for spare in self._spares if self._is_spare_usable_locked(spare, terms)), None)
+        if ready is not None:
+            return ready
+        return next(
+            (spare for spare in self._spares if spare.phase is SpareChatPhase.CREATING and spare.terms == terms),
+            None,
+        )
+
+    def _create_chat_from_spare(
+        self, account_id: str, project_id: str, message: str, model_pick: ModelPick | None
+    ) -> CreatedChat | None:
+        """Hand a spare to a new chat when one was started on the chat's terms; None when none was.
+
+        A ready spare becomes the chat as it stands: nothing is renamed, so no mngr command runs
+        before the chat is listed, and its ``chat_spare`` label, the pick, and the first message
+        follow on threads of their own. With none ready, a spare still being created is claimed: the chat
+        is provisional, as for a create of its own, and becomes that spare once its harness is
+        up (``_run_spare_creation``), which is sooner than a create started now, queued behind
+        the spare's on mngr's host lock, would be. The pool is topped up after either, on a
+        thread of its own.
+        """
+        if not self._is_keeping_spares:
+            return None
+        with self._lock:
+            terms = self._new_chat_terms_locked(account_id, project_id)
+            spare = self._spare_for_new_chat_locked(terms)
+            if spare is None:
+                return None
+            provisional = self._take_spare_locked(spare, terms, account_id, project_id, message, model_pick)
+        return self._finish_spare_take(spare, provisional, account_id, message, model_pick, is_awaiting_chat=False)
+
+    def _launch_awaiting_chat_on_its_spare(
+        self, chat_id: ChatId, account_id: str, message: str, model_pick: ModelPick | None
+    ) -> CreatedChat | None:
+        """Launch a chat awaiting its first send on the spare reserved for it, as ``_create_chat_from_spare``
+        hands a new chat one; None when the chat has no reserved spare, or its launch does not fit the spare:
+        another account or fast mode, or a spare that has stopped, aged out, or failed.
+        ``create_chat`` then creates the chat once that spare is destroyed."""
+        if not self._is_keeping_spares:
+            return None
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            spare = self._spare_locked(chat_id)
+            if (
+                provisional is None
+                or provisional.phase is not ProvisionalChatPhase.AWAITING_FIRST_SEND
+                or provisional.is_seeded
+                or spare is None
+                or spare.phase is not SpareChatPhase.RESERVED
+            ):
+                return None
+            terms = self._new_chat_terms_locked(
+                account_id, provisional.project_id, self._fast_mode_state_locked(chat_id)
+            )
+            is_fitting = spare.terms == terms and (spare.ready_at is None or self._is_spare_fresh_locked(spare))
+            if not is_fitting:
+                return None
+            taken = self._take_spare_locked(spare, terms, account_id, provisional.project_id, message, model_pick)
+        return self._finish_spare_take(spare, taken, account_id, message, model_pick, is_awaiting_chat=True)
+
+    def _finish_spare_take(
+        self,
+        spare: SpareChatAgent,
+        provisional: ProvisionalChat | None,
+        account_id: str,
+        message: str,
+        model_pick: ModelPick | None,
+        is_awaiting_chat: bool,
+    ) -> CreatedChat:
+        """What follows a spare's take (``_take_spare_locked``) outside the lock: a ready one is listed and
+        relabelled, and its pick and message follow on a thread of its own; one still starting has its
+        provisional record pushed. ``is_awaiting_chat`` says the spare was reserved for a chat awaiting its
+        first send, whose provisional record the clients drop once the ready spare is listed."""
+        _record_mru(account_id)
+        if provisional is None:
+            _loguru_logger.info("Handed spare agent {} to a new chat", spare.chat_id)
+            self._move_handed_spare_into_chat_band(spare.chat_id)
+            self._broadcast_chats_updated()
+            if is_awaiting_chat:
+                self._broadcaster.broadcast_provisional_chat_completed(chat_id=spare.chat_id, success=True, error=None)
+            self._relabel_handed_spare_in_background(spare.chat_id)
+            if model_pick is not None or message:
+                self._creation_cg.start_new_thread(
+                    target=self._settle_handed_spare,
+                    args=(spare.chat_id, model_pick, message),
+                    name=f"settle-{str(spare.chat_id)[:8]}",
+                    is_checked=False,
+                )
+        else:
+            _loguru_logger.info("Claimed spare agent {} for a new chat while it starts", spare.chat_id)
+            # The chat it boots for is the user's from now on, so memory pressure must not shed it
+            # first; it reaches the engaged floor once it is up (``_settle_claimed_spare``).
+            self._move_spare_tree_into_chat_launch_band(spare.chat_id, is_main_process_moved=True)
+            self._broadcast_provisional(provisional)
+        self.ensure_spare_chat_in_background()
+        return CreatedChat(
+            chat_id=spare.chat_id, name=canonical_agent_name(spare.display_name), display_name=spare.display_name
+        )
+
+    def _take_spare_locked(
+        self,
+        spare: SpareChatAgent,
+        terms: SpareChatTerms,
+        account_id: str,
+        project_id: str,
+        message: str,
+        model_pick: ModelPick | None,
+    ) -> ProvisionalChat | None:
+        """Take a spare for the chat it becomes, on ``terms``. Lock held.
+
+        A booted one is handed over, which drops a provisional record the chat had (one awaiting its
+        first send), and None is returned. One still being created is claimed, and the chat's
+        provisional record is returned.
+        """
+        is_ready = spare.ready_at is not None
+        # Written before anything else changes, so a write that fails leaves the spare as it was. It
+        # is also what marks the agent a chat to a restart that finds it still labelled a spare.
+        self._fast_mode_for_launch_locked(spare.chat_id)
+        provisional: ProvisionalChat | None = None
+        settled = threading.Event()
+        if is_ready:
+            self._hand_over_spare_locked(spare.chat_id)
+            self._provisional_chats.pop(spare.chat_id, None)
+            # ``should_wait`` waits on this. The agent is already up, so it is settled now unless a
+            # pick or a first message is still to be handed to it (``_settle_handed_spare``).
+            if model_pick is None and not message:
+                settled.set()
+        else:
+            self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.CLAIMED)
+            self._spare_claim_by_chat[spare.chat_id] = _SpareClaim(message=message, model_pick=model_pick)
+            provisional = ProvisionalChat(
+                chat_id=spare.chat_id,
+                name=spare.display_name,
+                project_id=project_id,
+                account_id=account_id,
+                message=message,
+                phase=ProvisionalChatPhase.CREATING,
+            )
+            self._provisional_chats[spare.chat_id] = provisional
+        self._creation_settled_by_chat[spare.chat_id] = settled
+        if any(self._is_spare_usable_locked(ready, terms) for ready in self._spares):
+            self._spare_replenish_not_before = time.monotonic() + SPARE_CHAT_REPLENISH_DELAY_SECONDS
+        return provisional
+
+    def _release_reserved_spare_locked(self, chat_id: ChatId) -> bool:
+        """Give up the spare reserved for a chat awaiting its first send whose launch cannot take it, so that it is
+        destroyed: at once when it is up, else as soon as its create ends. Returns whether the chat had one, still
+        to be destroyed before the chat's own create can take the id. Lock held."""
+        spare = self._spare_locked(chat_id)
+        if spare is None:
+            return False
+        match spare.phase:
+            case SpareChatPhase.RESERVED:
+                released_phase = SpareChatPhase.RELEASED if spare.ready_at is None else SpareChatPhase.DISCARDING
+                self._set_spare_phase_locked(chat_id, released_phase)
+            case SpareChatPhase.RELEASED | SpareChatPhase.DISCARDING:
+                pass
+            case SpareChatPhase.CREATING | SpareChatPhase.READY | SpareChatPhase.CLAIMED:
+                raise AgentCreationError(
+                    f"Chat {chat_id}'s id is held by a spare agent that was never reserved for it"
+                )
+        return True
+
+    def _settle_handed_spare(self, chat_id: ChatId, model_pick: ModelPick | None, message: str) -> None:
+        """Hand a chat that took a ready spare its pick and first message, then mark its creation settled,
+        so a create that waits answers only once the first message is in, as a create of its own does."""
+        try:
+            self._settle_new_chat(chat_id, str(chat_id), model_pick, message)
+        finally:
+            with self._lock:
+                settled = self._creation_settled_by_chat.get(chat_id)
+            if settled is not None:
+                settled.set()
+
+    def ensure_spare_chat(self) -> None:
+        """Keep the pool of spare agents full on the terms the next new chat would get.
+
+        A ready spare whose terms went stale (the default account, the project, or the fast mode a new
+        chat starts in changed), that has waited ``SPARE_CHAT_MAX_AGE_SECONDS``, or whose process died
+        is destroyed (one reserved for a chat only for the last two), and a spare is started for a chat
+        awaiting its first send that holds none while such chats hold fewer spares than the pool keeps,
+        else while the pool holds fewer than its size, one at a time (mngr's host lock runs creates one
+        at a time anyway). Nothing happens in a manager that keeps no spares (a secondary chat), once
+        the app is stopping, before the agent list is known, or during the backoff that follows a
+        spare's failed create or destroy or its process dying (most likely shed for memory); with no
+        account to start one on, the ready spares are destroyed and none is started. The mngr commands
+        run on threads of their own.
+        """
+        if not self._is_keeping_spares or self._shutdown_event.is_set():
+            return
+        try:
+            account: Account | None = resolve_binding()
+        except (AccountError, BindingError) as e:
+            _loguru_logger.trace("No account to keep spare chat agents on: {}", e)
+            account = None
+        harness = harness_for(account) if account is not None else None
+        now = time.monotonic()
+        with self._lock:
+            if not self._is_agent_list_known or now < self._spare_retry_not_before:
+                return
+            terms = None if account is None or harness is None else self._new_chat_terms_locked(account.id, "")
+            self._retire_stale_spares_locked(terms, now)
+            discarded_ids = [
+                spare.chat_id
+                for spare in self._spares
+                if spare.phase is SpareChatPhase.DISCARDING and spare.chat_id not in self._spare_ids_being_discarded
+            ]
+            work_dir = self._resolve_agent_work_dir(self._own_agent_id)
+            new_spare = None if work_dir is None else self._record_new_spare_locked(terms, now)
+            # Marked only once nothing above can raise, so a failed write leaves them to the next sweep.
+            self._spare_ids_being_discarded.update(discarded_ids)
+        for discarded_id in discarded_ids:
+            self._creation_cg.start_new_thread(
+                target=self._discard_spare,
+                args=(discarded_id,),
+                name=f"discard-spare-{str(discarded_id)[:8]}",
+                is_checked=False,
+            )
+        if new_spare is not None and harness is not None and work_dir is not None:
+            self._creation_cg.start_new_thread(
+                target=self._run_spare_creation,
+                args=(new_spare, harness, Path(work_dir)),
+                name=f"create-spare-{str(new_spare.chat_id)[:8]}",
+                is_checked=False,
+            )
+
+    def _retire_stale_spares_locked(self, terms: SpareChatTerms | None, now: float) -> None:
+        """Mark every ready spare that cannot be handed to a new chat on ``terms``, and every booted one reserved
+        for a chat whose process died or that reached the maximum age, as due a destroy. Lock held."""
+        stale_spares = [
+            spare
+            for spare in self._spares
+            if (spare.phase is SpareChatPhase.READY and not self._is_spare_usable_locked(spare, terms))
+            or (
+                spare.phase is SpareChatPhase.RESERVED
+                and spare.ready_at is not None
+                and not self._is_spare_fresh_locked(spare)
+            )
+        ]
+        for stale in stale_spares:
+            self._set_spare_phase_locked(stale.chat_id, SpareChatPhase.DISCARDING)
+        # A spare whose process died was most likely shed for memory: its replacement waits out
+        # the backoff rather than being shed in turn.
+        if any(not self._is_spare_process_alive_locked(stale) for stale in stale_spares):
+            self._spare_retry_not_before = now + SPARE_CHAT_RETRY_BACKOFF_SECONDS
+
+    def _record_new_spare_locked(self, terms: SpareChatTerms | None, now: float) -> SpareChatAgent | None:
+        """Record the next spare on ``terms``, and return it for its create; None when no spare is due. Lock held.
+
+        A chat awaiting its first send that holds no spare and would fit one on ``terms`` (minted before
+        any account was signed in, say, or after its reserved spare was destroyed) comes first: the spare
+        is started under its id and name, reserved for it, while awaiting chats hold fewer spares than the
+        pool keeps. Otherwise one is started for the pool when the pool is short and may grow now. Nothing
+        is started while a spare for either is still being created.
+        """
+        pooled = pooled_spares(self._spares)
+        if (
+            terms is None
+            or now < self._spare_retry_not_before
+            or any(
+                spare.phase is SpareChatPhase.CREATING
+                or (spare.phase is SpareChatPhase.RESERVED and spare.ready_at is None)
+                for spare in self._spares
+            )
+        ):
+            return None
+        awaiting = (
+            self._awaiting_chat_without_spare_locked(terms) if self._may_reserve_another_spare_locked() else None
+        )
+        if awaiting is not None:
+            new_spare = SpareChatAgent(
+                chat_id=awaiting.chat_id, display_name=awaiting.name, terms=terms, phase=SpareChatPhase.RESERVED
+            )
+        elif len(pooled) >= self._spare_chat_pool_size or (
+            any(spare.phase is SpareChatPhase.READY for spare in pooled) and now < self._spare_replenish_not_before
+        ):
+            return None
+        else:
+            new_spare = SpareChatAgent(
+                chat_id=ChatId(str(AgentId())),
+                display_name=self._mint_display_name_locked(""),
+                terms=terms,
+                phase=SpareChatPhase.CREATING,
+            )
+        self._spares = (*self._spares, new_spare)
+        return new_spare
+
+    def _awaiting_chat_without_spare_locked(self, terms: SpareChatTerms) -> ProvisionalChat | None:
+        """An unseeded chat awaiting its first send that holds no spare, and whose account, project, and fast
+        mode a spare on ``terms`` fits; None when there is none. Lock held."""
+        return next(
+            (
+                provisional
+                for provisional in self._provisional_chats.values()
+                if provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
+                and not provisional.is_seeded
+                and provisional.account_id in ("", terms.account_id)
+                and self._spare_locked(provisional.chat_id) is None
+                and str(provisional.chat_id) not in self._agents
+                and self._new_chat_terms_locked(
+                    terms.account_id, provisional.project_id, self._fast_mode_state_locked(provisional.chat_id)
+                )
+                == terms
+            ),
+            None,
+        )
+
+    def _move_handed_spare_into_chat_band(self, chat_id: ChatId) -> None:
+        """Move a spare a chat just took out of the ``SPARE_AGENT`` band, as a chat just started.
+
+        Its ``chat_spare`` label launched every process it has in that band. The chat prioritizer
+        moves its main process (the first pid it registered). Its other registered pid (codex's
+        app-server daemon) and the subprocesses its harness spawned while it waited are in
+        ``SPARE_AGENT`` too and the prioritizer does not re-tag them, so they are brought down to
+        the chat launch band, where a chat's harness processes start. Each process moves before its
+        subprocesses, so one spawned meanwhile inherits the chat band.
+        """
+        self._oom_prioritizer.record_chat_started(chat_id)
+        self._move_spare_tree_into_chat_launch_band(chat_id, is_main_process_moved=False)
+
+    def _move_spare_tree_into_chat_launch_band(self, chat_id: ChatId, is_main_process_moved: bool) -> None:
+        """Write the chat launch band (``CHAT_AGENT_BASE``) to a taken spare's registered pids and their
+        subprocesses, leaving its main process (the first pid) to the prioritizer unless ``is_main_process_moved``.
+        Nothing for an agent with no registered pid yet: a claimed spare's launch starts in the spare band, as
+        its label still says, and is moved by the boot wait (``_wait_for_spare_harness``)."""
+        writer = self._oom_score_adj_writer
+        if writer is None:
+            return
+        for index, root_pid in enumerate(self._resolve_agent_pids(str(chat_id))):
+            if index > 0 or is_main_process_moved:
+                writer(root_pid, CHAT_AGENT_BASE)
+            for descendant_pid in self._list_descendant_pids(root_pid):
+                writer(descendant_pid, CHAT_AGENT_BASE)
+
+    def _relabel_handed_spare_in_background(self, chat_id: ChatId) -> None:
+        """``_relabel_handed_spare`` on a thread of its own. Not once the app is stopping: the chat's
+        folder already holds its fast mode, so the next start relabels it."""
+        if self._shutdown_event.is_set():
+            return
+        self._creation_cg.start_new_thread(
+            target=self._relabel_handed_spare,
+            args=(chat_id,),
+            name=f"relabel-spare-{str(chat_id)[:8]}",
+            is_checked=False,
+        )
+
+    def _relabel_handed_spare(self, chat_id: ChatId) -> None:
+        """Set the ``chat_spare`` label of a spare a chat took to false, so the agent's other readers (a
+        secondary chat, the launch wrapper's memory band, the memory report) take it for a chat too.
+
+        This manager lists it meanwhile. One that fails is run again by a later session sweep.
+        """
+        cmd = _build_spare_relabel_command(self._mngr_binary, str(chat_id))
+        try:
+            result = run_local_command_modern_version(
+                command=cmd, cwd=None, is_checked=False, timeout=_RENAME_TIMEOUT_SECONDS
+            )
+        except (OSError, ConcurrencyGroupError) as e:
+            failure = str(e)
+        else:
+            failure = None if result.returncode == 0 else f"exit {result.returncode}: {result.stderr.strip()}"
+        if failure is None:
+            return
+        _loguru_logger.warning("Could not relabel spare agent {} as its chat's agent ({})", chat_id, failure)
+        with self._lock:
+            if chat_id in self._spare_ids_awaiting_relabel:
+                self._spare_ids_due_relabel.add(chat_id)
+
+    def _retry_due_spare_relabels(self) -> None:
+        """Run the relabel of every handed-over spare whose relabel failed again."""
+        with self._lock:
+            due_ids = sorted(self._spare_ids_due_relabel)
+            self._spare_ids_due_relabel.clear()
+        for chat_id in due_ids:
+            self._relabel_handed_spare_in_background(chat_id)
+
+    def _settle_spare_relabels_locked(self) -> None:
+        """Stop waiting on the relabel of every handed-over spare the tracked agents show relabelled. Lock held."""
+        relabelled_ids = [
+            chat_id
+            for chat_id in self._spare_ids_awaiting_relabel
+            if (agent := self._agents.get(chat_id)) is not None and agent.labels.get(CHAT_SPARE_LABEL) != "true"
+        ]
+        for chat_id in relabelled_ids:
+            self._forget_spare_relabel_locked(chat_id)
+
+    def _forget_spare_relabel_locked(self, agent_id: str) -> None:
+        """Stop waiting on an agent's relabel: it landed, or the agent is gone. Lock held."""
+        self._spare_ids_awaiting_relabel.discard(ChatId(agent_id))
+        self._spare_ids_due_relabel.discard(ChatId(agent_id))
+
+    def _handle_spares_from_before_start(self) -> None:
+        """Deal, once the agent list is first known, with every agent labelled a spare that this run did
+        not start. One whose chat folder holds its fast mode was handed to a chat whose relabel never
+        landed, so it is listed and relabelled. Any other is a spare an earlier run kept, maybe built by
+        older code, so it is destroyed, hidden until it is gone. A manager that keeps no spares leaves
+        them alone, and only hides them."""
+        if not self._is_keeping_spares:
+            return
+        with self._lock:
+            if self._are_earlier_spares_handled or not self._is_agent_list_known:
+                return
+            self._are_earlier_spares_handled = True
+            earlier_spares = [
+                agent
+                for agent in self._agents.values()
+                if agent.labels.get(CHAT_SPARE_LABEL) == "true" and self._spare_locked(ChatId(agent.id)) is None
+            ]
+        handed_ids = [
+            ChatId(agent.id)
+            for agent in earlier_spares
+            if read_fast_mode_state(self._chat_files_root / agent.id) is not None
+        ]
+        leftovers = tuple(
+            SpareChatAgent(
+                chat_id=ChatId(agent.id),
+                display_name=agent.labels.get("display_name", agent.name),
+                terms=SpareChatTerms(
+                    account_id=agent.labels.get("account", ""),
+                    project_label=agent.labels.get("project", ""),
+                    is_fast=False,
+                ),
+                phase=SpareChatPhase.DISCARDING,
+            )
+            for agent in earlier_spares
+            if agent.id not in handed_ids
+        )
+        with self._lock:
+            self._spare_ids_awaiting_relabel.update(handed_ids)
+            self._spares = (*self._spares, *leftovers)
+        for chat_id in handed_ids:
+            _loguru_logger.info("Relabelling spare agent {}, which a chat took before this app started", chat_id)
+            self._relabel_handed_spare_in_background(chat_id)
+        if leftovers:
+            _loguru_logger.info("Destroying {} spare agent(s) kept before this app started", len(leftovers))
+            self.ensure_spare_chat_in_background()
+
+    def ensure_spare_chat_in_background(self) -> None:
+        """``ensure_spare_chat`` on a thread of its own, for a caller that must not wait on or fail by it (a sign-in,
+        a hand-over)."""
+        # A stopping app's creation group takes no new threads.
+        if self._shutdown_event.is_set():
+            return
+        self._creation_cg.start_new_thread(target=self.ensure_spare_chat, name="ensure-spare-chat", is_checked=False)
+
+    def _wait_for_spare_harness(self, spare: SpareChatAgent, harness: HarnessType) -> str | None:
+        """Wait until a created spare's harness accepts input; None once it does, else why it did not:
+        its process died (most likely shed for memory while it booted), it did not come up within
+        ``SPARE_CHAT_BOOT_TIMEOUT_SECONDS``, or the app is stopping. None at once for a spare released
+        meanwhile, which is destroyed rather than waited for.
+
+        ``mngr create`` with no message returns before the harness is up, and a spare handed over
+        then takes its chat's first message into a harness still booting. A spare a chat claimed
+        waits the same way: its chat is settled only once the harness is up. Meanwhile each poll
+        moves a claimed spare's processes out of the spare band, since the ones its launch registers
+        after the claim start there.
+        """
+        spec = get_harness_spec(harness)
+        state_dir = self._get_agent_state_dir(str(spare.chat_id))
+        deadline = time.monotonic() + SPARE_CHAT_BOOT_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if not is_harness_starting_up(state_dir, spec.startup_ready_marker, spec.process_started_marker_filename):
+                return None
+            with self._lock:
+                is_dead = not self._is_spare_process_alive_locked(spare)
+                current = self._spare_locked(spare.chat_id)
+                is_claimed = current is not None and current.phase is SpareChatPhase.CLAIMED
+                is_released = current is not None and current.phase is SpareChatPhase.RELEASED
+            if is_released:
+                return None
+            if is_dead:
+                return "the agent's process exited before the harness came up"
+            if is_claimed:
+                self._move_spare_tree_into_chat_launch_band(spare.chat_id, is_main_process_moved=True)
+            if self._shutdown_event.wait(timeout=SPARE_CHAT_BOOT_POLL_SECONDS):
+                return "the chat app stopped before the harness came up"
+        return f"the harness did not come up within {SPARE_CHAT_BOOT_TIMEOUT_SECONDS:.0f}s"
+
+    def _run_spare_creation(self, spare: SpareChatAgent, harness: HarnessType, work_dir: Path) -> None:
+        """The spare's creation thread: ``_create_spare``, then ``_abandon_spare_left_starting``.
+
+        The thread runs with ``is_checked=False``, which logs whatever escapes and nothing more,
+        so a spare an exception left being created is abandoned here: a chat that claimed it
+        would otherwise wait at "creating" for good, a phase its page cannot discard.
+        """
+        try:
+            self._create_spare(spare, harness, work_dir)
+        finally:
+            self._abandon_spare_left_starting(spare.chat_id)
+
+    def _abandon_spare_left_starting(self, chat_id: ChatId) -> None:
+        """Hand a spare still starting (``SpareChatAgent.is_starting``) to the sweep's destroy, failing and answering a
+        chat that claimed it. A no-op once ``_create_spare`` has run to its end, which leaves the spare started or
+        gone. A chat it was reserved or released for is left as it is: its launch waits for the destroy."""
+        with self._lock:
+            spare = self._spare_locked(chat_id)
+            if spare is None or not spare.is_starting():
+                return
+            self._spare_claim_by_chat.pop(chat_id, None)
+            self._spare_retry_not_before = time.monotonic() + SPARE_CHAT_RETRY_BACKOFF_SECONDS
+            self._set_spare_phase_locked(chat_id, SpareChatPhase.DISCARDING)
+            provisional = self._provisional_chats.get(chat_id)
+            is_claim_waiting = (
+                spare.phase is SpareChatPhase.CLAIMED
+                and provisional is not None
+                and provisional.phase is ProvisionalChatPhase.CREATING
+            )
+            if is_claim_waiting:
+                self._mark_creation_failed_locked(chat_id, _CHAT_START_BROKE_OFF_ERROR)
+            settled = self._creation_settled_by_chat.get(chat_id) if is_claim_waiting else None
+        _loguru_logger.warning("Starting spare agent {} broke off; the sweep destroys it", chat_id)
+        if is_claim_waiting:
+            if settled is not None:
+                settled.set()
+            self._broadcaster.broadcast_provisional_chat_completed(
+                chat_id=chat_id, success=False, error=_CHAT_START_BROKE_OFF_ERROR
+            )
+
+    def _create_spare(self, spare: SpareChatAgent, harness: HarnessType, work_dir: Path) -> None:
+        """Create a spare silently, on its terms, under the name it reserved, and wait for its harness to come up.
+
+        A spare nothing claimed becomes ready; one a new chat claimed meanwhile becomes that chat,
+        which settles the chat's provisional record the way a create of its own would. A spare
+        whose create fails or whose harness never comes up is destroyed, and the next one waits
+        out the backoff; a claiming chat is left failed with the reason, for its "Try again".
+        """
+        agent_id = str(spare.chat_id)
+        cmd = _build_chat_create_command(
+            self._mngr_binary,
+            spare.display_name,
+            spare.chat_id,
+            agent_id,
+            {},
+            harness,
+            launch_role_templates(spare.terms.is_fast),
+            spare.terms.project_label,
+            _account_binding_args(harness, spare.terms.account_id, self._get_agent_state_dir(agent_id)),
+            extra_labels=(f"{CHAT_SPARE_LABEL}=true",),
+        )
+        output_tail = CreationOutputTail()
+        _loguru_logger.info("mngr create (spare): [cwd: {}] {}", work_dir, shlex.join(cmd))
+        try:
+            result = run_local_command_modern_version(
+                command=cmd,
+                cwd=work_dir,
+                is_checked=False,
+                trace_output=True,
+                trace_on_line_callback=output_tail,
+                shutdown_event=self._shutdown_event,
+            )
+            failure = None if result.returncode == 0 else f"mngr create exited with code {result.returncode}"
+        except (OSError, ConcurrencyGroupError) as e:
+            failure = str(e)
+        if failure is None:
+            with self._lock:
+                self._track_created_agent_locked(
+                    AgentStateItem(
+                        id=agent_id,
+                        name=canonical_agent_name(spare.display_name),
+                        state="RUNNING",
+                        labels={
+                            **_chat_agent_labels(
+                                spare.display_name, spare.terms.account_id, spare.terms.project_label
+                            ),
+                            CHAT_SPARE_LABEL: "true",
+                        },
+                        work_dir=str(work_dir),
+                        harness=harness,
+                    )
+                )
+            self._ensure_activity_tracking(agent_id)
+            self._ensure_model_tracking(agent_id)
+            failure = self._wait_for_spare_harness(spare, harness)
+        self._settle_spare_creation(spare, None if failure is None else failure_notice(failure, output_tail.text()))
+
+    def _settle_spare_creation(self, spare: SpareChatAgent, error: str | None) -> None:
+        """Settle a spare whose creation ended, cleanly (no ``error``) or with the reason it failed.
+
+        A clean one a chat claimed becomes that chat; a clean one nothing claimed becomes ready and
+        tops the pool up (one reserved for a chat stays reserved). A failed one is destroyed after the
+        backoff is set, and a chat that claimed it is left failed with ``error``. A released one is
+        destroyed either way, for the chat whose create waits on that.
+        """
+        with self._lock:
+            current = self._spare_locked(spare.chat_id)
+            claim = self._spare_claim_by_chat.pop(spare.chat_id, None)
+            if current is None or current.phase is not SpareChatPhase.CLAIMED:
+                claim = None
+            is_released = current is not None and current.phase is SpareChatPhase.RELEASED
+            # Taken now: the discard below forgets the chat's per-chat records, this event included.
+            settled = self._creation_settled_by_chat.get(spare.chat_id) if claim is not None else None
+            if claim is not None and error is None:
+                self._hand_over_spare_locked(spare.chat_id)
+                self._provisional_chats.pop(spare.chat_id, None)
+            elif is_released:
+                self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.DISCARDING)
+                self._spare_ids_being_discarded.add(spare.chat_id)
+                if error is not None:
+                    self._spare_retry_not_before = time.monotonic() + SPARE_CHAT_RETRY_BACKOFF_SECONDS
+            elif error is None:
+                ready_at = time.monotonic()
+                self._spares = tuple(
+                    other.as_ready(ready_at) if other.chat_id == spare.chat_id else other for other in self._spares
+                )
+            else:
+                self._set_spare_phase_locked(spare.chat_id, SpareChatPhase.DISCARDING)
+                self._spare_retry_not_before = time.monotonic() + SPARE_CHAT_RETRY_BACKOFF_SECONDS
+                self._spare_ids_being_discarded.add(spare.chat_id)
+                if claim is not None:
+                    self._mark_creation_failed_locked(spare.chat_id, error)
+        if claim is not None and error is None:
+            self._settle_claimed_spare(spare.chat_id, claim, settled, None)
+        elif is_released:
+            _loguru_logger.info("Destroying spare agent {}, released by the chat it was reserved for", spare.chat_id)
+            self._discard_spare_unless_stopping(spare.chat_id)
+        elif error is None:
+            _loguru_logger.debug("Spare agent {} is ready", spare.chat_id)
+            self.ensure_spare_chat()
+        elif claim is not None:
+            _loguru_logger.warning("Could not start spare agent {} for its chat: {}", spare.chat_id, error)
+            try:
+                self._discard_spare_unless_stopping(spare.chat_id)
+            finally:
+                self._settle_claimed_spare(spare.chat_id, claim, settled, error)
+        else:
+            _loguru_logger.warning("Could not start spare agent {}: {}", spare.chat_id, error)
+            self._discard_spare_unless_stopping(spare.chat_id)
+
+    def _discard_spare_unless_stopping(self, chat_id: ChatId) -> None:
+        """``_discard_spare``, except while the app stops: the agent is still labelled a spare, so the next
+        start deals with it (``_handle_spares_from_before_start``: destroyed, or listed as its chat when a
+        chat claimed it), and a destroy run now would hold up the stop for as long as mngr takes."""
+        if self._shutdown_event.is_set():
+            _loguru_logger.info("Left spare agent {} for the next start", chat_id)
+            return
+        self._discard_spare(chat_id)
+
+    def _settle_claimed_spare(
+        self, chat_id: ChatId, claim: _SpareClaim, settled: threading.Event | None, error: str | None
+    ) -> None:
+        """Finish the chat that claimed a spare while it started: with no ``error``, list it and hand it
+        its pick and message; either way, set ``settled`` and answer the page's provisional record."""
+        try:
+            if error is None:
+                _loguru_logger.info("Handed claimed spare agent {} to its chat", chat_id)
+                self._move_handed_spare_into_chat_band(chat_id)
+                self._broadcast_chats_updated()
+                self._relabel_handed_spare_in_background(chat_id)
+                self._settle_new_chat(chat_id, str(chat_id), claim.model_pick, claim.message)
+        finally:
+            if settled is not None:
+                settled.set()
+            self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=error is None, error=error)
+
+    def _discard_spare(self, chat_id: ChatId) -> None:
+        """``mngr destroy`` a spare no longer wanted, and forget it once it is gone.
+
+        It stays hidden until then: it is untracked before it leaves the spares. A destroy mngr
+        refuses while the agent is still tracked is retried by a later sweep, after the backoff.
+        """
+        try:
+            result = self._run_mngr_destroy((str(chat_id),))
+        except (OSError, ConcurrencyGroupError) as e:
+            is_destroyed = False
+            failure = str(e)
+        else:
+            is_destroyed = result.returncode == 0
+            failure = f"exit {result.returncode}: {result.stderr.strip()}"
+        with self._lock:
+            is_gone = is_destroyed or str(chat_id) not in self._agents
+        if is_destroyed:
+            self.remove_agent(str(chat_id))
+        with self._lock:
+            self._spare_ids_being_discarded.discard(chat_id)
+            if is_gone:
+                self._drop_spare_locked(chat_id)
+            else:
+                self._spare_retry_not_before = time.monotonic() + SPARE_CHAT_RETRY_BACKOFF_SECONDS
+        if not is_gone:
+            _loguru_logger.warning("Could not destroy spare agent {} ({})", chat_id, failure)
+
+    def _await_spare_destroyed(self, chat_id: ChatId) -> bool:
+        """Wait until the spare holding ``chat_id`` is destroyed, running the destroy here when no other thread
+        has it; whether the spare is gone (False once the app is stopping, or when the destroy failed)."""
+        while not self._shutdown_event.is_set():
+            with self._lock:
+                spare = self._spare_locked(chat_id)
+                if spare is None:
+                    return True
+                is_destroy_due = (
+                    spare.phase is SpareChatPhase.DISCARDING and chat_id not in self._spare_ids_being_discarded
+                )
+                if is_destroy_due:
+                    self._spare_ids_being_discarded.add(chat_id)
+            if is_destroy_due:
+                self._discard_spare(chat_id)
+                with self._lock:
+                    return self._spare_locked(chat_id) is None
+            self._shutdown_event.wait(timeout=SPARE_CHAT_BOOT_POLL_SECONDS)
+        return False
+
+    def _run_creation_after_spare_destroy(
+        self,
+        chat_id: ChatId,
+        agent_id: str,
+        agent_name: str,
+        cmd: list[str],
+        work_dir: Path,
+        labels: dict[str, str],
+        harness: HarnessType,
+        record_entry: ChatAgentEntry | None = None,
+        model_pick: ModelPick | None = None,
+        deferred_message: str = "",
+    ) -> None:
+        """The creation thread of a chat awaiting its first send whose launch released the spare reserved for it:
+        ``_run_creation`` once that spare is destroyed, since a create under an id an agent still holds would
+        collide with it. The chat fails with the reason when the spare could not be destroyed, or when its launch
+        then stopped on an unexpected error."""
+        with self._lock:
+            settled = self._creation_settled_by_chat.get(chat_id)
+        failure = _RESERVED_SPARE_NOT_DESTROYED_ERROR
+        is_launchable = False
+        try:
+            if self._await_spare_destroyed(chat_id):
+                failure = _CHAT_START_BROKE_OFF_ERROR
+                with self._lock:
+                    # The spare's removal forgot the chat's per-chat records, this create's settled event included.
+                    if settled is not None:
+                        self._creation_settled_by_chat[chat_id] = settled
+                    self._fast_mode_for_launch_locked(chat_id)
+                is_launchable = True
+        finally:
+            if not is_launchable:
+                with self._lock:
+                    self._mark_creation_failed_locked(chat_id, failure)
+                if settled is not None:
+                    settled.set()
+                self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=False, error=failure)
+        if is_launchable:
+            self._run_creation(
+                chat_id,
+                agent_id,
+                agent_name,
+                cmd,
+                work_dir,
+                labels,
+                harness,
+                record_entry,
+                model_pick,
+                deferred_message,
+            )
 
     def wait_for_chat_creation(self, chat_id: ChatId, timeout: float) -> ChatCreationOutcome | None:
         """Wait for the ``mngr create`` behind ``create_chat`` to finish and say how it ended.
@@ -3202,8 +4278,12 @@ class AgentManager:
             return None
         with self._lock:
             self._creation_settled_by_chat.pop(chat_id, None)
-            # A seeded chat's agent has an id of its own, so the chat's agent is found by membership.
-            if any(self._chat_id_of_agent_locked(agent_id) == chat_id for agent_id in self._agents):
+            # A seeded chat's agent has an id of its own, so the chat's agent is found by membership;
+            # a spare still on the spares (a claimed one that failed) is no chat's.
+            if any(
+                self._chat_id_of_agent_locked(agent_id) == chat_id and not self._is_spare_locked(agent_id)
+                for agent_id in self._agents
+            ):
                 return ChatCreationOutcome(is_created=True)
             provisional = self._provisional_chats.get(chat_id)
         error = provisional.error if provisional is not None and provisional.error is not None else ""
@@ -3221,10 +4301,12 @@ class AgentManager:
         record_entry: ChatAgentEntry | None = None,
         model_pick: ModelPick | None = None,
         deferred_message: str = "",
+        is_spare_destroy_awaited: bool = False,
     ) -> None:
-        """Start a background thread to run agent creation."""
+        """Start a background thread to run agent creation, after the destroy of a spare that holds the chat's
+        id when ``is_spare_destroy_awaited``."""
         self._creation_cg.start_new_thread(
-            target=self._run_creation,
+            target=self._run_creation_after_spare_destroy if is_spare_destroy_awaited else self._run_creation,
             args=(
                 chat_id,
                 agent_id,
@@ -3434,10 +4516,12 @@ class AgentManager:
                     )
                     self._agents[agent_info.id] = agent_state
                 self._is_agent_list_known = True
+            self._handle_spares_from_before_start()
+            with self._lock:
                 labels_by_chat_id = {
                     self._chat_id_of_agent_locked(agent_info.id): agent_info.labels
                     for agent_info in agents
-                    if not self._is_archived_member_locked(agent_info.id)
+                    if not self._is_archived_member_locked(agent_info.id) and not self._is_spare_locked(agent_info.id)
                 }
             self._auto_open.seed_at_startup(labels_by_chat_id)
 
@@ -3466,6 +4550,7 @@ class AgentManager:
                 old_ids = set(self._agents.keys())
                 new_ids = set(new_agents.keys())
                 self._agents = new_agents
+                self._settle_spare_relabels_locked()
 
             for agent_id in new_ids:
                 self._ensure_activity_tracking(agent_id)
@@ -3633,6 +4718,11 @@ class AgentManager:
                 new_agents[agent_id] = self._agents.get(agent_id, created.agent)
             self._agents = new_agents
             self._match_by_agent_id = new_matches
+            self._settle_spare_relabels_locked()
+            for agent_id in (*removed_agent_ids, *let_go_agent_ids):
+                if agent_id not in new_agents:
+                    self._forget_spare_relabel_locked(agent_id)
+        self._handle_spares_from_before_start()
 
         for agent_id in added_agent_ids:
             added_agent_state = new_agents.get(agent_id)
@@ -3661,12 +4751,13 @@ class AgentManager:
 
         # The first listing seeds the reactor (what a workspace already had is judged against
         # the ledger); after that, every agent that appears is a candidate. Archived members
-        # are neither: their chat is seeded or noted through its active agent.
+        # are neither: their chat is seeded or noted through its active agent. Nor is a spare,
+        # which is no chat yet.
         with self._lock:
             chat_id_by_agent_id = {
                 agent_id: self._chat_id_of_agent_locked(agent_id)
                 for agent_id in details_by_id
-                if not self._is_archived_member_locked(agent_id)
+                if not self._is_archived_member_locked(agent_id) and not self._is_spare_locked(agent_id)
             }
         if not was_agent_list_known:
             self._auto_open.seed_at_startup(

@@ -12,14 +12,14 @@ The kernel cannot forbid that lowering without ``CAP_SYS_RESOURCE``, but
 Chromium writes each value exactly once (its periodic re-adjustment is
 ChromeOS-only), so an external raise sticks. The remapping spreads Chromium's own
 ordering across the whole band (the gradation is worth keeping: shedding one
-renderer kills one tab, not the whole browser, so renderers belong at the
-ceiling), only ever raises, and never touches a value already at or above the
+renderer kills one tab, not the whole browser, so renderers belong at the top
+of the band), only ever raises, and never touches a value already at or above the
 floor -- so an already-remapped process is left alone and repeated sweeps are
 idempotent.
 
 Who ends up where. The daemon is the sweep's *root*, never one of its own
 descendants, so it keeps its service band and stays far below the agents.
-Chromium's processes land where its gradation asks -- renderers at the ceiling,
+Chromium's processes land where its gradation asks -- renderers at the top,
 then gpu/utility, then the browser process at the floor. A descendant that never
 self-writes is remapped just above the floor (it inherited the daemon's low
 service value), so it still sits below every renderer, which is what we want: it

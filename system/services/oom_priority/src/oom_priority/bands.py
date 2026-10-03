@@ -48,6 +48,11 @@ PRIMARY_AGENT: Final[int] = PROTECTED
 USER_AGENT: Final[int] = 300
 WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
+# A spare chat agent: started ahead of the next new chat (the chat app's ``spare_chat.py``) and
+# used by no one yet. Alone at the ceiling, above the browser's renderers (``SHARED_BROWSER``)
+# and every agent's subprocesses: shedding it loses no work, and the chat app starts another
+# after its retry backoff.
+SPARE_AGENT: Final[int] = 1000
 
 # Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` and is re-tagged
 # at runtime from live activity (see the chat app's ``ChatOomPrioritizer``)
@@ -84,6 +89,11 @@ _CHAT_RECENCY_MAX_BONUS: Final[int] = 120
 _CHAT_RECENCY_STEP: Final[int] = 15
 
 _HOUR: Final[float] = 3600.0
+
+# How long a chat that just began on an agent started ahead of it (a spare the chat app
+# handed it) sits at ``CHAT_AGENT_FLOOR``: the user opened it this moment, before its page
+# has reported presence or its first message has landed.
+CHAT_JUST_STARTED_GRACE_SECONDS: Final[float] = 60.0
 
 # How a chat's freshness decays with idle time: ``(idle_seconds, freshness)``
 # points in ascending idle order, linearly interpolated between neighbours and
@@ -135,8 +145,13 @@ def chat_agent_oom_score_adj(
     recency_rank: int | None,
     idle_seconds: float | None,
     is_mid_turn: bool,
+    seconds_since_started: float | None = None,
 ) -> int:
     """Map a chat agent's live activity to its ``oom_score_adj``.
+
+    A chat that began on an agent started ahead of it (``seconds_since_started``, None for
+    any other chat) sits at ``CHAT_AGENT_FLOOR`` for ``CHAT_JUST_STARTED_GRACE_SECONDS``,
+    whatever its other signals; after that it is scored like any chat.
 
     Lower is more protected. Two forces move a chat within its band, starting
     from ``CHAT_AGENT_BASE``. Engagement pulls it down:
@@ -160,6 +175,11 @@ def chat_agent_oom_score_adj(
 
     The result is clamped to ``[CHAT_AGENT_FLOOR, CHAT_AGENT_STALE_CEILING]``.
     """
+    if (
+        seconds_since_started is not None
+        and seconds_since_started < CHAT_JUST_STARTED_GRACE_SECONDS
+    ):
+        return CHAT_AGENT_FLOOR
     engagement_bonus = 0
     if is_open:
         engagement_bonus += _CHAT_OPEN_BONUS
@@ -258,7 +278,7 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # subsystem, so it is *less* expendable than the coordinator below -- whose
     # death Chromium survives -- but more so than the workspace's own services:
     # by the time the service bands are being shed at all, every Chromium process
-    # (910-1000) is long gone and this display is holding nothing.
+    # (910-990) is long gone and this display is holding nothing.
     "xvfb": 65,
     # The browser coordinator: the daemon that launches and drives Chromium, not
     # Chromium itself. The most expendable built-in service, but a *service*
@@ -285,8 +305,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "terminal-session": USER_SERVICE,
 }
 
-# The shared-browser band: the absolute ceiling, one above AGENT_SUBPROCESS, so a
-# browser always outranks even an agent's build/test subprocess and is shed first.
+# The top of the shared-browser band, above AGENT_SUBPROCESS, so a browser always
+# outranks even an agent's build/test subprocess and is shed first. It stops below
+# the ceiling, which ``SPARE_AGENT`` holds alone: a renderer costs a tab to shed,
+# a spare chat agent nothing.
 #
 # Only the processes that actually hold a browser's memory belong here. Nothing
 # is tagged into this band at spawn: Chromium's processes arrive by self-writing
@@ -294,7 +316,7 @@ SERVICE_BANDS: Final[dict[str, int]] = {
 # ``shared_browser_oom_score_adj``). The coordinator that launches them is tagged
 # as a service instead (``SERVICE_BANDS["browser"]``) -- shedding it frees none of
 # Chromium's memory, so it must not outrank the renderers it manages.
-SHARED_BROWSER: Final[int] = 1000
+SHARED_BROWSER: Final[int] = 990
 
 # The floor of the browser band's *range*. Chromium deliberately overwrites any
 # inherited ``oom_score_adj`` once per process at startup with its own internal
@@ -329,11 +351,11 @@ def shared_browser_oom_score_adj(self_assigned: int) -> int:
     The input range is Chromium's own gradation, ``0..CHROMIUM_SELF_ASSIGNED_MAX``,
     rather than the full 0..1000 an ``oom_score_adj`` could span. Scaling against
     1000 would squeeze every Chromium process into the bottom third of the band
-    (renderers reaching only 937), leaving the top of the band to whatever merely
+    (renderers reaching only 934), leaving the top of the band to whatever merely
     *inherited* a high value -- which is never a renderer, because a renderer
     always self-writes. Renderers hold nearly all of a browser's memory and cost
-    only one tab to shed, so they belong at the ceiling. Anything Chromium marks
-    as even more expendable than a renderer clamps there too.
+    only one tab to shed, so they belong at the top of the band. Anything Chromium
+    marks as even more expendable than a renderer clamps there too.
     """
     clamped = max(0, min(CHROMIUM_SELF_ASSIGNED_MAX, self_assigned))
     span = SHARED_BROWSER - SHARED_BROWSER_FLOOR
