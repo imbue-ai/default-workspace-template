@@ -1,5 +1,5 @@
 /**
- * The dialog for one desktop's settings (plan section 4.8): its name, colour, glyph, and wallpaper,
+ * The dialog for one desktop's settings (plan section 4.8): its name, colour, glyph, wallpaper, and theme,
  * plus the one place a desktop can be deleted. Deleting is confirm-gated in
  * place (a second, red button inside this same dialog) rather than a second stacked dialog. The
  * last desktop cannot be deleted; the shell refuses with a 409 the dialog shows.
@@ -10,6 +10,7 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
 import type { Desktop, Wallpaper, WallpaperListing } from "../model/records";
+import { UI_THEMES, retroIconUrlFor, type UiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
 
 // The palette is exactly the glyphs' own signature colors, so every desktop colour belongs to
@@ -25,9 +26,18 @@ export interface DesktopSettingsDialogAttrs {
   readonly wallpapers: readonly WallpaperListing[] | null;
   /** Whether the dialog opens straight into the delete confirmation. */
   readonly isDeleting: boolean;
-  readonly onSave: (name: string, color: string, glyph: number, wallpaper: Wallpaper | null) => Promise<void>;
+  readonly onSave: (
+    name: string,
+    color: string,
+    glyph: number,
+    wallpaper: Wallpaper | null,
+    theme: UiTheme,
+  ) => Promise<void>;
   readonly onDelete: () => Promise<void>;
   readonly onCancel: () => void;
+  /** Show a picked theme before it is saved; null when the dialog closes, which puts back whatever
+   *  the desktop has saved by then. */
+  readonly onPreviewTheme: (theme: UiTheme | null) => void;
 }
 
 function normalizedGlyphIndex(glyph: number): number {
@@ -45,6 +55,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
   let color = SQUIGGLE_GLYPHS[0].color;
   let glyphIndex = 0;
   let wallpaper: Wallpaper | null = null;
+  let theme: UiTheme = "default";
   let isSaving = false;
   let isDeleting = false;
   let isConfirmingDelete = false;
@@ -58,7 +69,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     error = null;
     m.redraw();
     try {
-      await attrs.onSave(chosen, color, glyphIndex, resolvedWallpaper(attrs.wallpapers));
+      await attrs.onSave(chosen, color, glyphIndex, resolvedWallpaper(attrs.wallpapers), theme);
     } catch (e) {
       error = (e as Error).message;
       isSaving = false;
@@ -170,6 +181,37 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     ]);
   }
 
+  /** One look to pick, previewed by the file-folder icon it draws (the standard look's has none). */
+  function themeChoice(attrs: DesktopSettingsDialogAttrs, choice: (typeof UI_THEMES)[number]): m.Vnode {
+    const isSelected = choice.name === theme;
+    const previewUrl = retroIconUrlFor(choice.name, "files");
+    return m(
+      "button",
+      {
+        type: "button",
+        "data-theme": choice.name,
+        class:
+          "flex w-28 shrink-0 cursor-pointer flex-col items-center gap-1 rounded-md border bg-transparent p-2 " +
+          (isSelected ? "border-accent ring-2 ring-accent" : "border-default"),
+        "aria-pressed": isSelected ? "true" : "false",
+        onclick() {
+          theme = choice.name;
+          attrs.onPreviewTheme(theme);
+        },
+      },
+      [
+        previewUrl === null
+          ? m(
+              "span",
+              { class: "flex h-8 w-8 items-center justify-center" },
+              m.trust(squiggleMarkup(glyphIndex, color, 28)),
+            )
+          : m("img", { class: "retro-icon h-8 w-8", src: previewUrl, alt: "" }),
+        m("span", { class: "type-helper text-primary" }, choice.label),
+      ],
+    );
+  }
+
   function deleteConfirmationActions(attrs: DesktopSettingsDialogAttrs): m.Children {
     return [
       m(
@@ -229,7 +271,11 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
       color = desktop.color;
       glyphIndex = normalizedGlyphIndex(desktop.glyph);
       wallpaper = desktop.wallpaper;
+      theme = desktop.theme;
       isConfirmingDelete = vnode.attrs.isDeleting;
+    },
+    onremove(vnode) {
+      vnode.attrs.onPreviewTheme(null);
     },
     view(vnode) {
       const attrs = vnode.attrs;
@@ -280,6 +326,8 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
           ),
           m("label", { class: MODAL_LABEL_CLASS }, "Wallpaper"),
           m("div", { class: "mb-3" }, wallpaperPicker(attrs)),
+          m("label", { class: MODAL_LABEL_CLASS }, "Theme"),
+          m("div", { class: "mb-3 flex flex-wrap gap-2" }, UI_THEMES.map((choice) => themeChoice(attrs, choice))),
           error ? m("p", { class: "type-helper mt-1 text-danger" }, error) : null,
           isConfirmingDelete
             ? m("p", { class: MODAL_MESSAGE_CLASS }, [

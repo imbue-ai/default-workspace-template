@@ -10,6 +10,7 @@
 
 import { appIconMarkupForApp } from "./components/appIcon";
 import type { AppRecord, Frame } from "../model/records";
+import { retroAppIconUrl } from "@imbue/workspace-ui/src/themes/uiTheme";
 
 const XMLNS = "http://www.w3.org/2000/svg";
 
@@ -59,7 +60,19 @@ export function zoneGlyph(frame: Frame, size: number): string {
   );
 }
 
-/** The glyph an app wears everywhere: its own icon, its monogram, or the generic app glyph. */
+/** The glyph an app wears everywhere: under a retro theme, the theme's pixel-art icon for it (the
+ *  generic program icon for an app not in the registry); otherwise its own icon, its monogram, or
+ *  the generic app glyph. */
 export function appGlyph(app: Pick<AppRecord, "name" | "icon"> | undefined, size: number): string {
+  const retroUrl = retroAppIconUrl(app?.name ?? "app");
+  if (retroUrl !== null) return retroIconMarkup(retroUrl, size);
   return appIconMarkupForApp(app, size, glyph("app", size));
+}
+
+/** A pixel-art icon (a bundled asset, never workspace content) as the svg every icon slot sizes. */
+function retroIconMarkup(url: string, size: number): string {
+  return (
+    `<svg xmlns="${XMLNS}" class="retro-icon" width="${size}" height="${size}" viewBox="0 0 32 32" aria-hidden="true">` +
+    `<image href="${url}" width="32" height="32"/></svg>`
+  );
 }

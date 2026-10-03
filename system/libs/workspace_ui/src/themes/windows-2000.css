@@ -1,0 +1,320 @@
+/* Windows 2000 theme (Desktop settings > Theme): the desktop and its apps in the Windows 2000 look,
+   built on win95.css (https://alexbsoft.github.io/win95.css/), recolored to the Windows 2000 face
+   gray. The library (vendor/, scoped by scripts/vendor-retro-themes.mjs) is imported unlayered, so its
+   components win over the utility classes on the elements that carry its class names: windows
+   (.card, .card-header, .header-inactive), buttons (.btn), dialogs (.modal-content, .modal-header),
+   menus (.dropdown-menu, .dropdown-item), the taskbar (.taskbar) and fields (.form-95). The rules
+   below remap the design tokens and draw the rest: the four-tone bevels, the caption buttons and the
+   Explorer-style selection. Everything is scoped to :root[data-ui-theme="windows-2000"]. */
+@import "./vendor/windows-2000/lib.css";
+
+:root[data-ui-theme="windows-2000"] {
+  --c-bg: #d4d0c8;
+  --c-bg-sidebar: #d4d0c8;
+  --c-bg-chat: #ffffff;
+  --c-bg-composer: #ffffff;
+  --c-bg-code: #ffffff;
+  /* Tooltip yellow. */
+  --c-bg-user-bubble: #ffffe1;
+  --c-fill-hover: rgb(10 36 106 / 0.1);
+  --c-fill-active: #0a246a;
+  --c-text-primary: #000000;
+  --c-text-secondary: #000000;
+  --c-text-faint: #808080;
+  --c-border: #808080;
+  --c-border-faint: #d4d0c8;
+  --c-border-strong: #404040;
+  --c-border-code: #808080;
+  --c-accent: #0a246a;
+  --c-accent-hover: #0a246a;
+  --c-accent-light: rgb(10 36 106 / 0.12);
+  --c-surface: #d4d0c8;
+  --c-surface-secondary: #d4d0c8;
+  --c-inverse-surface: #0a246a;
+  --c-inverse-surface-hover: #0a246a;
+  --font-sans: Tahoma, "MS Sans Serif", Verdana, sans-serif;
+  --font-mono: "Lucida Console", "Courier New", monospace;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --c-shadow-raised: var(--win-raised);
+  --c-shadow-overlay: var(--win-raised), 1px 1px 0 #000000;
+
+  /* The Windows 2000 bevels, outermost line first: light and dark edges, then the inner light and
+     shadow lines. */
+  --win-raised: inset -1px -1px #404040, inset 1px 1px #d4d0c8, inset -2px -2px #808080, inset 2px 2px #ffffff;
+  --win-pressed: inset -1px -1px #ffffff, inset 1px 1px #404040, inset -2px -2px #d4d0c8, inset 2px 2px #808080;
+  --win-sunken: inset -1px -1px #ffffff, inset 1px 1px #808080, inset -2px -2px #d4d0c8, inset 2px 2px #404040;
+  --win-thin-raised: inset -1px -1px #808080, inset 1px 1px #ffffff;
+  --win-thin-pressed: inset -1px -1px #ffffff, inset 1px 1px #808080;
+
+  --desk-default-wallpaper: none;
+  --desk-window-radius: 0px;
+  /* A window's outer two bevel lines, drawn outside its face-gray border (the frame's own background
+     stays clear: the page shows through it). */
+  --desk-window-shadow: -1px -1px 0 #ffffff, 1px 1px 0 #808080, -2px -2px 0 #d4d0c8, 2px 2px 0 #404040;
+  --desk-taskbar-surface: #d4d0c8;
+  --desk-taskbar-entry-shadow: none;
+  --desk-icon-radius: 0px;
+  --desk-icon-shadow: none;
+  --desk-icon-shadow-lifted: none;
+  --desk-shortcut-label-shadow: none;
+}
+/* Metrics: behaviour reads these (theme/metrics.ts re-reads them when the theme changes). Touch
+   mode keeps its own finger-sized bar. */
+:root[data-ui-theme="windows-2000"]:not([data-touch]) {
+  --desk-title-bar-height: 19px;
+}
+
+:root[data-ui-theme="windows-2000"] body {
+  font-family: var(--font-sans);
+}
+:root[data-ui-theme="windows-2000"] ::selection {
+  background: #0a246a;
+  color: #ffffff;
+}
+:root[data-ui-theme="windows-2000"] :is(code, pre, kbd) {
+  font-family: var(--font-mono);
+}
+:root[data-ui-theme="windows-2000"] .app-layout {
+  background-color: #3a6ea5;
+}
+
+/* Windows: a face-gray border inside the two outer bevel lines. */
+:root[data-ui-theme="windows-2000"] .window-frame.card {
+  border: 2px solid #d4d0c8;
+  background: transparent;
+}
+
+/* The caption: navy fading to sky blue while the window is active, gray fading to silver when not;
+   the title white and bold. */
+:root[data-ui-theme="windows-2000"] .title-bar.card-header {
+  gap: 0;
+  padding: 0 2px;
+  border-bottom: 1px solid #d4d0c8;
+  background: linear-gradient(to right, #0a246a, #a6caf0);
+  color: #ffffff;
+}
+:root[data-ui-theme="windows-2000"] .title-bar.card-header.header-inactive {
+  background: linear-gradient(to right, #808080, #c0c0c0) !important;
+  color: #d4d0c8;
+}
+:root[data-ui-theme="windows-2000"] .title-bar > span:first-child {
+  opacity: 1;
+}
+:root[data-ui-theme="windows-2000"] .title-bar > span:first-child > svg {
+  width: 16px;
+  height: 16px;
+}
+:root[data-ui-theme="windows-2000"] .window-title {
+  margin-left: 3px;
+  font-family: Tahoma, "MS Sans Serif", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 1;
+  color: inherit;
+}
+/* Caption buttons: 16 by 14, raised, with the system's pixel glyphs; Close stands apart. */
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control {
+  min-width: 0;
+  min-height: 0;
+  width: 16px;
+  height: 14px;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: center no-repeat #d4d0c8;
+  box-shadow: var(--win-raised);
+  translate: none;
+}
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control > * {
+  display: none;
+}
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control:active {
+  box-shadow: var(--win-pressed);
+  background-position: calc(50% + 1px) calc(50% + 1px);
+}
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control[data-window-control="close"] {
+  margin-left: 2px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='7' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h2v1H0zM6 0h2v1H6zM1 1h2v1H1zM5 1h2v1H5zM2 2h4v1H2zM3 3h2v1H3zM2 4h4v1H2zM1 5h2v1H1zM5 5h2v1H5zM0 6h2v1H0zM6 6h2v1H6z'/%3E%3C/svg%3E");
+}
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control[data-window-control="minimize"] {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='7' shape-rendering='crispEdges'%3E%3Cpath d='M1 5h6v2H1z'/%3E%3C/svg%3E");
+}
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control[data-window-control="maximize"] {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='9' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h9v2H0zM0 2h1v7H0zM8 2h1v7H8zM0 8h9v1H0z'/%3E%3C/svg%3E");
+}
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control[data-window-control="restore"] {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' shape-rendering='crispEdges'%3E%3Cpath d='M2 0h6v2H2zM7 2h1v3H7zM6 4h1v1H6zM2 2h1v1H2zM0 3h6v2H0zM0 5h1v3H0zM5 5h1v3H5zM0 7h6v1H0z'/%3E%3C/svg%3E");
+}
+/* The window's own actions (reload, the window menu): white glyphs on the caption, raised under the pointer. */
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]) {
+  width: 18px;
+  height: 16px;
+  margin-left: 2px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+}
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]) > * {
+  display: block;
+}
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]):hover {
+  box-shadow: var(--win-thin-raised);
+}
+:root[data-ui-theme="windows-2000"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]):active {
+  box-shadow: var(--win-thin-pressed);
+}
+
+/* Push buttons: win95.css's raised face; pressed, they sink without the library's dither. The
+   default (primary) button wears the black ring Enter would press. */
+:root[data-ui-theme="windows-2000"] .btn {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  translate: none;
+  transition: none;
+}
+:root[data-ui-theme="windows-2000"] .btn:not(:disabled):active {
+  border-style: solid;
+  border-color: #404040 #ffffff #ffffff #404040;
+  background: #d4d0c8;
+}
+:root[data-ui-theme="windows-2000"] .btn--primary {
+  outline: 1px solid #000000;
+  outline-offset: 0;
+}
+/* Icon-only buttons are toolbar buttons: flat, raised under the pointer, sunk while pressed. */
+:root[data-ui-theme="windows-2000"] .btn.p-0 {
+  border: none;
+  background: transparent;
+  color: #000000;
+}
+:root[data-ui-theme="windows-2000"] .btn.p-0:not(:disabled):hover {
+  box-shadow: var(--win-thin-raised);
+}
+:root[data-ui-theme="windows-2000"] .btn.p-0:not(:disabled):active {
+  box-shadow: var(--win-thin-pressed);
+  background: transparent;
+}
+
+/* Fields: white and sunk, like win95.css's .form-95. */
+:root[data-ui-theme="windows-2000"] :is(input[type="text"], input[type="search"], input[type="email"], input[type="password"], input[type="url"], input[type="number"], select) {
+  border: none;
+  border-radius: 0;
+  background-color: #ffffff;
+  box-shadow: var(--win-sunken);
+  font-family: var(--font-sans);
+}
+:root[data-ui-theme="windows-2000"] textarea {
+  border-radius: 0;
+  font-family: var(--font-sans);
+}
+
+/* Menus: win95.css's raised gray card; the row under the pointer turns navy. */
+:root[data-ui-theme="windows-2000"] .dropdown-menu {
+  padding: 2px;
+  font-family: var(--font-sans);
+}
+:root[data-ui-theme="windows-2000"] .dropdown-item {
+  border-radius: 0;
+}
+:root[data-ui-theme="windows-2000"] .dropdown-item:not([aria-disabled="true"]):hover,
+:root[data-ui-theme="windows-2000"] .dropdown-item:not([aria-disabled="true"]):hover * {
+  background: #0a246a;
+  color: #ffffff;
+}
+
+/* Dialogs: a compact raised gray frame in 8-point type, whose header is a caption across its full
+   width; fields 21px tall and push buttons 75 by 23, as Windows 2000 sized them. */
+:root[data-ui-theme="windows-2000"] .modal-content {
+  --font-size-heading-lg: 12px;
+  --font-size-heading: 12px;
+  --font-size-body: 12px;
+  --font-size-row: 12px;
+  --font-size-helper: 11px;
+  padding: 0 10px 10px;
+  border: none;
+  box-shadow: var(--win-raised), 1px 1px 0 #000000;
+}
+:root[data-ui-theme="windows-2000"] .modal-content > .modal-header {
+  margin: 3px -7px 10px;
+  padding: 2px 4px;
+  min-height: 18px;
+}
+:root[data-ui-theme="windows-2000"] .modal-content > .modal-header .modal-title {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffffff;
+}
+:root[data-ui-theme="windows-2000"] .modal-content :is(input[type="text"], input[type="search"], input[type="email"], input[type="password"], input[type="url"], input[type="number"]) {
+  height: 21px;
+  padding: 2px 4px;
+}
+:root[data-ui-theme="windows-2000"] .modal-content .btn:not(.p-0) {
+  height: 23px;
+  min-width: 75px;
+  padding: 0 8px;
+}
+
+/* The taskbar: win95.css's raised strip; each window a raised button, the active one sunk on a
+   lighter checker. */
+:root[data-ui-theme="windows-2000"] .taskbar {
+  font-family: var(--font-sans);
+}
+:root[data-ui-theme="windows-2000"] .taskbar-entry {
+  border-radius: 0;
+  background: #d4d0c8;
+  box-shadow: var(--win-raised);
+}
+:root[data-ui-theme="windows-2000"] .taskbar-entry[data-focused="true"] {
+  background: url("./vendor/windows-2000/assets/background.bmp");
+  box-shadow: var(--win-pressed);
+  font-weight: 700;
+}
+:root[data-ui-theme="windows-2000"] .launcher-field {
+  border-radius: 0;
+  margin-top: 0;
+}
+
+/* Desktop icon labels: white on the desktop's own blue. */
+:root[data-ui-theme="windows-2000"] .shortcut-label {
+  color: #ffffff;
+}
+
+:root[data-ui-theme="windows-2000"] .retro-icon {
+  image-rendering: pixelated;
+}
+
+/* Inside the chat: the user's words on a tooltip, the composer a sunken field, tool calls in a
+   sunken well, and the chat you are in selected the way Explorer selects a file. */
+:root[data-ui-theme="windows-2000"] .message-user-bubble {
+  border: 1px solid #000000;
+  border-radius: 0;
+}
+:root[data-ui-theme="windows-2000"] .message-input-box {
+  border: none;
+  box-shadow: var(--win-sunken);
+}
+:root[data-ui-theme="windows-2000"] .tool-call-block {
+  border: none;
+  background: #d4d0c8;
+  box-shadow: var(--win-sunken);
+}
+:root[data-ui-theme="windows-2000"] .chat-rail-row[aria-current="true"],
+:root[data-ui-theme="windows-2000"] .chat-rail-row[aria-current="true"] * {
+  background: #0a246a;
+  color: #ffffff;
+}
+
+/* Getting Started: each tile a raised panel on the dialog face. */
+:root[data-ui-theme="windows-2000"] .getting-started-tile {
+  border: none;
+  background: #d4d0c8;
+  box-shadow: var(--win-raised);
+}
+:root[data-ui-theme="windows-2000"] .getting-started-tile:active {
+  box-shadow: var(--win-pressed);
+}

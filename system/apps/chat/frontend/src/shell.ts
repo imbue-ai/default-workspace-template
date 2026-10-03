@@ -19,6 +19,7 @@ import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
 import { rootPathFor } from "./root/selection";
 import { prependToComposer } from "./views/MessageInput";
+import { applyUiTheme, mirrorParentUiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
 
 /** The path of a sub-agent view: the chat, the agent whose session it is, and the session. */
 export function subagentViewPath(key: string): string {
@@ -86,7 +87,15 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     if (isPresenceReported) reportPresence("hidden");
     m.redraw();
   };
-  connection = connectToShell({ onHandshake, onShown, onHidden });
+  // A chat page wears its desktop's theme: told by the shell when it frames the page itself, read off the chat
+  // root when the root frames it (the shell never messages those).
+  connection = connectToShell({
+    onHandshake,
+    onShown,
+    onHidden,
+    onTheme: (theme) => void applyUiTheme(document.documentElement, theme),
+  });
+  mirrorParentUiTheme();
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in
     // rather than by messaging (it never sends the shell's messages); the shell's own frames

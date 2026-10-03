@@ -124,6 +124,9 @@
      full width, which read as a wall rather than as the other side of a
      conversation. */
   --width-agent-gutter: 60px;
+  /* Elevation values, behind --shadow-raised / --shadow-overlay (see @theme below). */
+  --c-shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --c-shadow-overlay: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08);
 }
 
 /* The colour-utility layer: clean semantic names over the --c-* values,
@@ -202,9 +205,11 @@
   /* Elevation -- two box-shadow steps. --shadow-raised is the subtle resting
      lift on interactive cards; --shadow-overlay is the one soft floating
      shadow shared by everything above the page -- menus, pickers, modals,
-     tooltips, the lightbox. */
-  --shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
-  --shadow-overlay: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08);
+     tooltips, the lightbox. Tailwind copies a shadow token's value into its
+     utility, so the values live in --c-shadow-* (the value layer) and these
+     point at them, which lets a retro theme (themes/) redeclare them at runtime. */
+  --shadow-raised: var(--c-shadow-raised);
+  --shadow-overlay: var(--c-shadow-overlay);
 }
 
 /* Font family comes from the preflight default (re-based onto --font-sans above). */

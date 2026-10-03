@@ -29,7 +29,8 @@ import { initEmbedderRelay } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
-import { followRenderModes } from "./theme/metrics";
+import { applyUiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
+import { currentRenderModes, followRenderModes, readThemeMetrics } from "./theme/metrics";
 import { App, BACKDROP_AREA_ATTRIBUTE } from "./views/App";
 
 /** Rewrite the page's URL with its query string put through ``strip``, leaving the path, the hash, and the
@@ -82,6 +83,13 @@ function bootstrap(): void {
   const root = document.documentElement;
   const readStyle = (element: HTMLElement): CSSStyleDeclaration => getComputedStyle(element);
   let store: DesktopStore | null = null;
+  // The page wears the theme of the desktop on screen (Desktop settings). A theme can redeclare
+  // metric tokens (the title bar height), so the metrics the geometry reads are taken again under it.
+  const followDesktopTheme = (): void => {
+    if (store === null) return;
+    if (!applyUiTheme(root, store.shownTheme())) return;
+    store.setThemeMetrics(readThemeMetrics(readStyle(root)), currentRenderModes(root));
+  };
   followRenderModes(
     root,
     (query) => window.matchMedia(query),
@@ -94,7 +102,10 @@ function bootstrap(): void {
           socket: new ShellSocket(clientId),
           metrics,
           modes,
-          redraw: () => m.redraw(),
+          redraw: () => {
+            followDesktopTheme();
+            m.redraw();
+          },
           reloadInterface,
           popOut: popOutBridge,
           soloWindowId: solo?.windowId ?? null,

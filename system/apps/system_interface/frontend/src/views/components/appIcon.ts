@@ -5,7 +5,7 @@
  * An app registers its icon as SVG markup (`forward_port.py --icon`), the
  * registry carries it verbatim on the app's row, and the server hands it to
  * this UI on `AppEntry.icon`. That markup is authored by a skill, so it is
- * untrusted: every surface that draws an app goes through
+ * untrusted: every surface that draws an app's registered icon goes through
  * `appIconMarkup`/`appIconMarkupForApp` here, and nothing inlines a registry
  * string on its own.
  *

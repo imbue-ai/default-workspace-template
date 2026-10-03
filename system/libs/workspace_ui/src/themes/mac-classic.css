@@ -1,0 +1,313 @@
+/* Classic Mac theme (Desktop settings > Theme): the desktop and its apps dressed as the Macintosh of
+   System 6 and 7, built on system.css (https://sakofchit.github.io/system.css/). The library
+   (vendor/, scoped by scripts/vendor-retro-themes.mjs) is imported unlayered, so its components win
+   over the utility classes on the elements that carry its class names (.btn, .standard-dialog,
+   .title-bar, .title), and its element rules draw the scrollbars, fields and selects. The rules below
+   remap the design tokens and draw what the library has no component for. Chicago sets titles,
+   buttons, menus and headings, as it did on the Mac; body text is Geneva and code Monaco. Everything
+   is scoped to :root[data-ui-theme="mac-classic"]. */
+@import "./vendor/mac-classic/lib.css";
+
+:root[data-ui-theme="mac-classic"] {
+  --c-bg: #ffffff;
+  --c-bg-sidebar: #ffffff;
+  --c-bg-chat: #ffffff;
+  --c-bg-composer: #ffffff;
+  --c-bg-code: #ffffff;
+  --c-bg-user-bubble: #ffffff;
+  --c-fill-hover: rgb(0 0 0 / 0.08);
+  --c-fill-active: rgb(0 0 0 / 0.16);
+  --c-text-primary: #000000;
+  --c-text-secondary: #000000;
+  --c-text-faint: #555555;
+  --c-border: #000000;
+  --c-border-faint: #000000;
+  --c-border-strong: #000000;
+  --c-border-code: #000000;
+  --c-accent: #000000;
+  --c-accent-hover: #000000;
+  --c-accent-light: rgb(0 0 0 / 0.08);
+  --c-text-on-accent: #ffffff;
+  --c-surface: #ffffff;
+  --c-surface-secondary: #ffffff;
+  --c-inverse-surface: #000000;
+  --c-inverse-surface-hover: #000000;
+  --font-sans: Geneva, "Retro Geneva 9", "Helvetica Neue", sans-serif;
+  --font-mono: Monaco, "Retro Monaco", ui-monospace, monospace;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --c-shadow-raised: 1px 1px 0 #000000;
+  --c-shadow-overlay: 2px 2px 0 #000000;
+
+  --mac-chicago: "Retro Chicago", Geneva, sans-serif;
+  /* The 50% gray of the System 6 desktop: a one-pixel checker. An SVG with no size of its own takes
+     the backdrop's, and its pattern tiles in CSS pixels, so the wallpaper's cover sizing cannot
+     stretch it. */
+  --desk-default-wallpaper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25'%3E%3Cdefs%3E%3Cpattern id='d' width='2' height='2' patternUnits='userSpaceOnUse'%3E%3Crect width='1' height='1'/%3E%3Crect x='1' y='1' width='1' height='1'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width='100%25' height='100%25' fill='white'/%3E%3Crect width='100%25' height='100%25' fill='url(%23d)'/%3E%3C/svg%3E");
+  --desk-window-radius: 0px;
+  --desk-window-shadow: 1px 1px 0 #000000;
+  --desk-taskbar-surface: #ffffff;
+  --desk-taskbar-entry-shadow: none;
+  --desk-icon-radius: 0px;
+  --desk-icon-shadow: none;
+  --desk-icon-shadow-lifted: 2px 2px 0 #000000;
+  --desk-shortcut-label-shadow: none;
+}
+/* Metrics: behaviour reads these (theme/metrics.ts re-reads them when the theme changes). Touch
+   mode keeps its own finger-sized bar. */
+:root[data-ui-theme="mac-classic"]:not([data-touch]) {
+  --desk-title-bar-height: 20px;
+}
+
+:root[data-ui-theme="mac-classic"] ::selection {
+  background: #000000;
+  color: #ffffff;
+}
+:root[data-ui-theme="mac-classic"] :is(h1, h2, h3, h4, .type-heading, .type-heading-lg, .type-section) {
+  font-family: var(--mac-chicago);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+:root[data-ui-theme="mac-classic"] :is(code, pre, kbd) {
+  font-family: var(--font-mono);
+}
+
+/* Windows: a one-pixel black frame with a one-pixel shadow. */
+:root[data-ui-theme="mac-classic"] .window {
+  border: none;
+  overflow: visible;
+}
+:root[data-ui-theme="mac-classic"] .window-frame {
+  border: 1px solid #000000;
+}
+
+/* The title bar: white; the focused window's striped with six black lines between white margins, its
+   name centred on a white patch over the stripes, the close box at the left and the collapse and zoom
+   boxes at the right. */
+:root[data-ui-theme="mac-classic"] .title-bar {
+  position: relative;
+  gap: 0;
+  padding: 0 7px;
+  border-bottom: 1px solid #000000;
+  background: #ffffff;
+}
+:root[data-ui-theme="mac-classic"] .window[data-focused="true"] .title-bar {
+  background: repeating-linear-gradient(#000000 0 1px, transparent 1px 2px) 2px 4px / calc(100% - 4px) 11px
+      no-repeat,
+    #ffffff;
+}
+/* The app's icon: System 7 titles carried none. */
+:root[data-ui-theme="mac-classic"] .title-bar > span:first-child {
+  display: none;
+}
+:root[data-ui-theme="mac-classic"] .title-bar .title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 160px);
+  margin: 0;
+  padding: 0 6px;
+  background: #ffffff;
+  font-family: var(--mac-chicago);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 19px;
+  opacity: 1;
+  color: #000000;
+  pointer-events: none;
+}
+:root[data-ui-theme="mac-classic"] .window:not([data-focused="true"]) .title-bar .title {
+  color: #808080;
+}
+/* Every control sits on a white patch that parts the stripes around it. */
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 11px;
+  width: 11px;
+  padding: 0;
+  margin: 0 0 0 6px;
+  border: 1px solid #000000;
+  border-image: none;
+  border-radius: 0;
+  background: #ffffff;
+  box-shadow: 0 0 0 2px #ffffff;
+  color: transparent;
+  translate: none;
+}
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control > * {
+  display: none;
+}
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:active {
+  background: #000000;
+}
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control[data-window-control="close"] {
+  order: -1;
+  margin: 0;
+}
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control[data-window-control="close"]:active {
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='9' shape-rendering='crispEdges'%3E%3Cpath d='M4 0h1v3H4zM4 6h1v3H4zM0 4h3v1H0zM6 4h3v1H6zM1 1h1v1H1zM7 1h1v1H7zM1 7h1v1H1zM7 7h1v1H7zM2 2h1v1H2zM6 2h1v1H6zM2 6h1v1H2zM6 6h1v1H6z'/%3E%3C/svg%3E")
+    center no-repeat #ffffff;
+}
+/* The collapse box (System 7.5's window shade): two lines across the middle. */
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control[data-window-control="minimize"] {
+  background: linear-gradient(#000000, #000000) center 3px / 100% 1px no-repeat,
+    linear-gradient(#000000, #000000) center 5px / 100% 1px no-repeat, #ffffff;
+}
+/* The zoom box: a small box in the box's top-left corner. */
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:is([data-window-control="maximize"], [data-window-control="restore"]) {
+  background: linear-gradient(#000000, #000000) 5px 0 / 1px 6px no-repeat,
+    linear-gradient(#000000, #000000) 0 5px / 6px 1px no-repeat, #ffffff;
+}
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:is([data-window-control="minimize"], [data-window-control="maximize"], [data-window-control="restore"]):active {
+  background: #000000;
+}
+/* The window's own actions (reload, the window menu) keep their glyphs, on white patches by the close box. */
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]) {
+  height: 14px;
+  width: 16px;
+  margin-left: 8px;
+  border: none;
+  box-shadow: 0 0 0 1px #ffffff;
+  color: #000000;
+}
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]) > * {
+  display: block;
+}
+:root[data-ui-theme="mac-classic"] .title-bar .btn.window-control:is([data-window-control="refresh"], [data-window-control="menu"]):active {
+  color: #ffffff;
+}
+
+/* Push buttons: system.css's rounded button for anything with words on it; the default (primary)
+   button wears the thick ring Return would press. Icon-only buttons are bare glyphs that invert
+   while pressed. */
+:root[data-ui-theme="mac-classic"] .btn {
+  font-family: var(--mac-chicago);
+  font-weight: 400;
+  color: #000000;
+  background: #ffffff;
+  border-width: 5px;
+  transition: none;
+  translate: none;
+}
+:root[data-ui-theme="mac-classic"] .btn:not(:disabled):hover {
+  background: #ffffff;
+}
+:root[data-ui-theme="mac-classic"] .btn:not(:disabled):active {
+  background: #000000;
+  color: #ffffff;
+}
+:root[data-ui-theme="mac-classic"] .btn--primary {
+  border-image: url("./vendor/mac-classic/assets/button-default.svg") 60 stretch;
+  border-width: 8px;
+}
+:root[data-ui-theme="mac-classic"] .btn.p-0 {
+  border: none;
+  border-image: none;
+  border-radius: 0;
+  background: transparent;
+}
+:root[data-ui-theme="mac-classic"] .btn.p-0:not(:disabled):hover {
+  background: rgb(0 0 0 / 0.08);
+}
+:root[data-ui-theme="mac-classic"] .btn.p-0:not(:disabled):active {
+  background: #000000;
+  color: #ffffff;
+}
+
+/* Fields: system.css's one-pixel black box, in Geneva rather than the library's bitmap Chicago. */
+:root[data-ui-theme="mac-classic"] :is(input, textarea, select) {
+  font-family: var(--font-sans);
+  border-radius: 0;
+}
+
+/* Menus: a white card with a black edge and a hard shadow; the row under the pointer inverts. */
+:root[data-ui-theme="mac-classic"] .dropdown-menu {
+  border: 1px solid #000000;
+  border-radius: 0;
+  box-shadow: 1px 1px 0 #000000;
+  padding: 2px 0;
+  font-family: var(--mac-chicago);
+}
+:root[data-ui-theme="mac-classic"] .dropdown-item {
+  border-radius: 0;
+}
+:root[data-ui-theme="mac-classic"] .dropdown-item:not([aria-disabled="true"]):hover,
+:root[data-ui-theme="mac-classic"] .dropdown-item:not([aria-disabled="true"]):hover * {
+  background: #000000;
+  color: #ffffff;
+}
+
+/* Dialogs: system.css's standard dialog, a double black frame. */
+:root[data-ui-theme="mac-classic"] .standard-dialog {
+  border: 2px solid #000000;
+  border-radius: 0;
+  box-shadow: 2px 2px 0 #000000;
+  outline: 1px solid #000000;
+  outline-offset: -6px;
+  padding: 12px;
+}
+
+/* The taskbar: a white strip ruled off from the desktop, the window you are in inverted. */
+:root[data-ui-theme="mac-classic"] .taskbar {
+  border-top: 1px solid #000000;
+  font-family: var(--mac-chicago);
+}
+:root[data-ui-theme="mac-classic"] .taskbar-entry {
+  border-radius: 0;
+}
+:root[data-ui-theme="mac-classic"] .taskbar-entry[data-focused="true"] {
+  background: #000000;
+  color: #ffffff;
+}
+:root[data-ui-theme="mac-classic"] .launcher-field {
+  background: #ffffff;
+  border: 1px solid #000000;
+  border-radius: 0;
+  box-shadow: 1px 1px 0 #000000;
+}
+
+/* Finder labels: black on a white patch that hugs the name. */
+:root[data-ui-theme="mac-classic"] .shortcut-label > * {
+  color: #000000;
+  background: #ffffff;
+  border-radius: 0;
+  padding: 0 2px;
+  font-weight: 400;
+}
+
+:root[data-ui-theme="mac-classic"] .retro-icon {
+  image-rendering: pixelated;
+}
+
+/* Inside the chat: the user's words in a rounded box with a hard shadow, the composer a plain field,
+   the chat you are in inverted in the list, tool calls in a dotted box. */
+:root[data-ui-theme="mac-classic"] .message-user-bubble {
+  border: 1px solid #000000;
+  border-radius: 8px;
+  box-shadow: 1px 1px 0 #000000;
+}
+:root[data-ui-theme="mac-classic"] .message-input-box {
+  border: 1px solid #000000;
+  box-shadow: 1px 1px 0 #000000;
+}
+:root[data-ui-theme="mac-classic"] .tool-call-block {
+  border: 1px dotted #000000;
+}
+:root[data-ui-theme="mac-classic"] .chat-rail-row[aria-current="true"],
+:root[data-ui-theme="mac-classic"] .chat-rail-row[aria-current="true"] * {
+  background: #000000;
+  color: #ffffff;
+}
+
+/* Getting Started: each tile a little window. */
+:root[data-ui-theme="mac-classic"] .getting-started-tile {
+  border: 1px solid #000000;
+  box-shadow: 1px 1px 0 #000000;
+}
+:root[data-ui-theme="mac-classic"] .getting-started-tile:hover {
+  box-shadow: 2px 2px 0 #000000;
+}

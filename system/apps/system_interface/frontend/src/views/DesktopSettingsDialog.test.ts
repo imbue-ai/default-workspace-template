@@ -17,6 +17,7 @@ function render(overrides: Partial<DesktopSettingsDialogAttrs> = {}): DesktopSet
     onSave: vi.fn(async () => undefined),
     onDelete: vi.fn(async () => undefined),
     onCancel: vi.fn(),
+    onPreviewTheme: vi.fn(),
     ...overrides,
   };
   mountView(() => m(DesktopSettingsDialog, attrs));
@@ -49,10 +50,10 @@ describe("DesktopSettingsDialog", () => {
     const attrs = render();
     pressEnterInNameField();
     await settled();
-    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), null);
+    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), null, "default");
   });
 
-  it("saves every edited field: the typed name, the picked colour, glyph, and wallpaper", async () => {
+  it("saves every edited field: the typed name, the picked colour, glyph, wallpaper, and theme", async () => {
     const attrs = render({ wallpapers: [{ kind: "bundled", name: "dawn", url: "/wallpapers/bundled/dawn" }] });
     const input = card().querySelector(".desktop-settings-name") as HTMLInputElement;
     input.value = "  Studio ";
@@ -61,10 +62,26 @@ describe("DesktopSettingsDialog", () => {
     swatches[swatches.length - 1].click();
     (card().querySelector('[aria-label="Squiggle 3"]') as HTMLButtonElement).click();
     (card().querySelector('[data-wallpaper="bundled:dawn"]') as HTMLButtonElement).click();
+    (card().querySelector('[data-theme="windows-2000"]') as HTMLButtonElement).click();
     (card().querySelector(".desktop-settings-save") as HTMLButtonElement).click();
     await settled();
     const pickedColor = swatches[swatches.length - 1].getAttribute("aria-label")?.replace("Color ", "");
-    expect(attrs.onSave).toHaveBeenCalledWith("Studio", pickedColor, 2, { kind: "bundled", name: "dawn" });
+    expect(attrs.onSave).toHaveBeenCalledWith(
+      "Studio",
+      pickedColor,
+      2,
+      { kind: "bundled", name: "dawn" },
+      "windows-2000",
+    );
+  });
+
+  it("previews a picked theme at once and drops the preview when the dialog closes", () => {
+    const attrs = render();
+    (card().querySelector('[data-theme="mac-classic"]') as HTMLButtonElement).click();
+    expect(attrs.onPreviewTheme).toHaveBeenLastCalledWith("mac-classic");
+    expect(attrs.onSave).not.toHaveBeenCalled();
+    unmountViews();
+    expect(attrs.onPreviewTheme).toHaveBeenLastCalledWith(null);
   });
 
   it("does not save a blank name: Save is disabled and Enter posts nothing", async () => {
@@ -150,7 +167,7 @@ describe("a wallpaper the workspace no longer offers", () => {
     });
     (card().querySelector(".desktop-settings-save") as HTMLButtonElement).click();
     await settled();
-    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), null);
+    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), null, "default");
   });
 
   it("leaves a wallpaper that is still on offer selected and saved as itself", async () => {
@@ -161,9 +178,12 @@ describe("a wallpaper the workspace no longer offers", () => {
     expect(pressed()).toEqual(["bundled:arcs"]);
     (card().querySelector(".desktop-settings-save") as HTMLButtonElement).click();
     await settled();
-    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), {
-      kind: "bundled",
-      name: "arcs",
-    });
+    expect(attrs.onSave).toHaveBeenCalledWith(
+      "Home",
+      expect.any(String),
+      expect.any(Number),
+      { kind: "bundled", name: "arcs" },
+      "default",
+    );
   });
 });

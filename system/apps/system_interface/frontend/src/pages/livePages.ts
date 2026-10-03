@@ -35,6 +35,7 @@ import {
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_SHOWN,
+  SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
@@ -56,6 +57,7 @@ import {
 import type { DesktopState } from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import type { DesktopStore, PageDriver } from "../store/DesktopStore";
+import { currentUiTheme, onUiThemeChanged } from "@imbue/workspace-ui/src/themes/uiTheme";
 
 export const LIVE_PAGE_ATTRIBUTE = "data-live-page";
 /** The element of a window's chrome the page is laid over. */
@@ -150,6 +152,7 @@ export class LivePagesLayer implements PageDriver {
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
+    onUiThemeChanged((theme) => this.sendTheme(theme));
   }
 
   /** Set which pages live; applied by the next reconcile. */
@@ -551,6 +554,14 @@ export class LivePagesLayer implements PageDriver {
       path,
     });
     page.greetedDesktopId = desktopId;
+    sendToChildFrame(page.frame, SHELL_THEME, { theme: currentUiTheme() });
+  }
+
+  /** Tell every greeted page the theme the desktop now wears. */
+  private sendTheme(theme: string): void {
+    for (const page of this.pages.values()) {
+      if (page.greetedDesktopId !== null) sendToChildFrame(page.frame, SHELL_THEME, { theme });
+    }
   }
 
   private syncVisibility(page: LivePage, isVisible: boolean): void {

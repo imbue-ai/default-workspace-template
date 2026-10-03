@@ -1,5 +1,6 @@
 import re
 import secrets
+from enum import StrEnum
 from enum import auto
 from typing import Any
 from typing import Final
@@ -191,6 +192,18 @@ class WallpaperKind(LowerCaseStrEnum):
 
     BUNDLED = auto()
     FILE = auto()
+
+
+class DesktopTheme(StrEnum):
+    """The look a desktop wears (Desktop settings): the standard one, or a retro one (a wire value).
+
+    The values are spelled out because they contain dashes; they are also the data-ui-theme value the
+    frontend's theme stylesheets are scoped to.
+    """
+
+    DEFAULT = "default"
+    MAC_CLASSIC = "mac-classic"
+    WINDOWS_2000 = "windows-2000"
 
 
 class IfPresent(LowerCaseStrEnum):

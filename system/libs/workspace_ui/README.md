@@ -37,6 +37,11 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `src/embed-contract.d.ts`: the Imbue Studio embed contract (the vendored source is
   aliased by each app's vite config); `src/terminalFocus.ts`: the focus grant
   the shell sends a framed page.
+- `src/themes/`: the retro looks (Classic Mac on system.css, Windows 2000 on
+  win95.css) a desktop can wear: a stylesheet per theme, scoped to its
+  `:root[data-ui-theme]` value, and `uiTheme.ts`, which applies a theme and
+  finds an app's pixel-art icon (see `src/themes/README.md`). `scripts/`
+  regenerates the vendored libraries and draws the icons.
 - `src/search.ts`: `matchesQuery`, the one text match of the workspace's
   typeaheads (every whitespace token of the query occurring in one of the given
   texts, case-insensitively), which the desktop's launcher, the Getting Started

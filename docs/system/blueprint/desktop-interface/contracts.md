@@ -107,6 +107,15 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 - A missing file, or one whose `version` is not 1 or that fails validation (logged), reads as listing every app with a shortcut on any desktop, and the next reconcile writes it; with no `desktops.json` either, the default desktop's seeding writes it.
 - `desktops.json` carries none of it.
 
+### 4.1b `desktop_themes.json`
+
+`{"version": 1, "themes": {"<desktop id>": "mac-classic" | "windows-2000"}}`: the look each desktop wears (Desktop settings > Theme), for the desktops that do not wear the standard one.
+
+- Kept beside `desktops.json` rather than in it: a shell from before themes still reads that file after a rollback, and its records refuse a key they do not know.
+- A desktop missing from the file wears the standard look (`default`); setting a desktop back to it drops its entry, and deleting a desktop drops its entry too.
+- A missing file, or one whose `version` is not 1 or that fails validation (logged), reads as no desktop being themed.
+- The desktop record on the wire (section 5.2) carries the theme as `theme`.
+
 ### 4.2 `placements/<desktop_id>/<client_id>.json`
 
 ```json
@@ -177,6 +186,7 @@ A preview shell (`system-interface --preview`, booted by `preview_app.py` over a
 | `POST /api/desktops` | `{"name", "color", "glyph"}` | `201 desktop`, seeded shortcuts, no windows, wallpaper `null`; `409` on an id conflict |
 | `POST /api/desktops/<id>/settings` | `{"name", "color", "glyph"}` | `200 desktop` |
 | `POST /api/desktops/<id>/wallpaper` | `{"wallpaper": wallpaper \| null}` | `200 desktop`; `404` when the named wallpaper does not exist |
+| `POST /api/desktops/<id>/theme` | `{"theme": "default" \| "mac-classic" \| "windows-2000"}` | `200 desktop` (section 4.1b); `400` for another theme name; `404` for an unknown desktop |
 | `POST /api/desktops/<id>/delete` | | `200 {"fallback_desktop_id"}`; `409` for the last desktop |
 | `POST /api/desktops/<id>/shortcuts` | `{"target", "mode", "cell"}` | `200 desktop`; replaces the entry for the same `(app, launch)`; `400` for an app or launch path the registry does not declare |
 | `POST /api/desktops/<id>/shortcuts/move` | `{"app", "launch", "cell"}` | `200 desktop`; an occupant of the cell is moved to the nearest free cell (section 10) |
@@ -404,6 +414,7 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-window-move-ease` | `cubic-bezier(0.2, 0, 0, 1)` | | no |
 | `--desk-launcher-menu-width` | `22rem` | | no |
 
+The retro themes a desktop can wear (section 4.1b; `system/libs/workspace_ui/src/themes/`) redeclare tokens under `:root[data-ui-theme="..."]`, `--desk-title-bar-height` (outside touch mode) among the ones `metrics.ts` reads, so the shell reads the metrics again whenever the desktop on screen changes theme.
 The phone breakpoint is `PHONE_MAX_SHORT_SIDE_PX = 500` and `PHONE_MAX_LONG_SIDE_PX = 1000` in `theme/metrics.ts`, applied to the viewport whichever way round as `matchMedia("(max-width: 500px) and (max-height: 1000px), (max-height: 500px) and (max-width: 1000px)")`, which sets `data-phone`; touch is `matchMedia("(pointer: coarse)")`.
 The phone layout's own tokens (`--desk-phone-*`, and `--desk-toast-gap` and `--desk-toast-radius` for the toasts both layouts draw) are declared on `:root` and read by no behaviour: the bar's controls (`64px` by `42px`), its `48px` pill, and `12px` of padding (above and beside the controls; below them, only the safe-area inset), the sheets' radius and top, the rows and the home grid's tiles.
 The resize handles are strips of `--desk-resize-edge` overhanging the window's border by `--desk-resize-overhang` (so a press just outside the frame still grabs an edge), inset from the corners by `--desk-resize-edge-inset`; the corners are `--desk-resize-corner` squares over the same overhang.

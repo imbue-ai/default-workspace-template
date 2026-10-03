@@ -74,6 +74,7 @@ from imbue.system_interface.shell.layout_ops import SHORTCUT_OPS
 from imbue.system_interface.shell.layout_ops import SHOW_OP
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import DesktopTheme
 from imbue.system_interface.shell.primitives import IfPresent
 from imbue.system_interface.shell.primitives import ShowOutcome
 from imbue.system_interface.shell.primitives import WallpaperKind
@@ -130,6 +131,12 @@ class DesktopWallpaperRequest(FrozenModel):
     """The body of the wallpaper route."""
 
     wallpaper: Wallpaper | None = Field(description="The wallpaper reference, or null for the theme's default")
+
+
+class DesktopThemeRequest(FrozenModel):
+    """The body of the theme route."""
+
+    theme: DesktopTheme = Field(description="The look to wear")
 
 
 class DesktopShortcutRequest(FrozenModel):
@@ -205,6 +212,14 @@ def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(DesktopWallpaperRequest)
     shell = _shell()
     desktop = shell.desktops.set_wallpaper(desktop_id, _existing_wallpaper(body.wallpaper))
+    shell.broadcast_desktops_updated()
+    return jsonify(shell.desktop_wire_json(desktop))
+
+
+def set_desktop_theme(desktop_id: str) -> ResponseReturnValue:
+    body = parse_request_body(DesktopThemeRequest)
+    shell = _shell()
+    desktop = shell.desktops.set_theme(desktop_id, body.theme)
     shell.broadcast_desktops_updated()
     return jsonify(shell.desktop_wire_json(desktop))
 
@@ -399,6 +414,9 @@ def register_desktop_routes(application: Flask) -> None:
         view_func=set_desktop_wallpaper,
         methods=["POST"],
         endpoint="set_desktop_wallpaper",
+    )
+    application.add_url_rule(
+        "/api/desktops/<desktop_id>/theme", view_func=set_desktop_theme, methods=["POST"], endpoint="set_desktop_theme"
     )
     application.add_url_rule(
         "/api/desktops/<desktop_id>/delete", view_func=delete_desktop, methods=["POST"], endpoint="delete_desktop"

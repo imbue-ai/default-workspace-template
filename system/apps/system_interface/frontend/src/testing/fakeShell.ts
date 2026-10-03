@@ -33,6 +33,7 @@ import { SHOWN_HOME } from "../model/records";
 import { withShownRecorded } from "../reducers/desktopState";
 import type { DesktopSocket, SocketHandlers } from "../store/socket";
 import { clientRecord } from "./records";
+import type { UiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
 
 /** The frame the shell answers for a pinned window a client has never placed (the shell's own constant). */
 export const PINNED_WINDOW_FRAME = { x: 0.46, y: 0.05, width: 0.5, height: 0.9 };
@@ -165,6 +166,7 @@ export class FakeDesktopApi implements DesktopApi {
       color,
       glyph,
       wallpaper: null,
+      theme: "default",
       shortcuts: [],
       windows: [],
     };
@@ -176,6 +178,12 @@ export class FakeDesktopApi implements DesktopApi {
     this.calls.push(`updateDesktopSettings:${desktopId}:${name}`);
     this.refuse();
     return this.replace({ ...this.desktop(desktopId), name, color, glyph });
+  }
+
+  async setDesktopTheme(desktopId: string, theme: UiTheme): Promise<Desktop> {
+    this.calls.push(`setDesktopTheme:${desktopId}:${theme}`);
+    this.refuse();
+    return this.replace({ ...this.desktop(desktopId), theme });
   }
 
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {

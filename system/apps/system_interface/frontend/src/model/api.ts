@@ -35,6 +35,7 @@ import type {
   WallpaperListing,
   WindowRecord,
 } from "./records";
+import type { UiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
 
 const HTTP_CONFLICT = 409;
 
@@ -66,6 +67,10 @@ export async function updateDesktopSettings(
 
 export async function setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {
   return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/wallpaper"), { wallpaper }));
+}
+
+export async function setDesktopTheme(desktopId: string, theme: UiTheme): Promise<Desktop> {
+  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/theme"), { theme }));
 }
 
 /** Delete a desktop; answers the desktop its clients fall back to. The last desktop is refused. */

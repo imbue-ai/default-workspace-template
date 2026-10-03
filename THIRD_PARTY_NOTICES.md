@@ -2,8 +2,11 @@
 
 The workspace's own code carries its own terms: the shell app under
 `system/apps/system_interface/LICENSE`, and each vendored subtree under
-`system/vendor/` its own `LICENSE`. This file carries the notices that
-third-party material copied into the tree asks for.
+`system/vendor/` its own `LICENSE`. The retro themes' copies of system.css
+and win95.css, with the fonts and images those packages ship, sit under
+`system/libs/workspace_ui/src/themes/vendor/<theme>/` with each package's
+`LICENSE` beside them. This file carries the notices that third-party material
+copied into the tree asks for.
 
 Bundled dependencies are not listed here. A dependency installed from npm or
 PyPI keeps its own licence inside its package, and a build that reproduces one
@@ -28,4 +31,6 @@ editing this one -- a notice restated in someone else's words stops being the
 notice.
 
 The app icons are not Lucide's: every one is drawn for this workspace to the
-rules in `docs/system/app-icons.md`.
+rules in `docs/system/app-icons.md`, and the retro themes' pixel-art icons under
+`system/libs/workspace_ui/src/themes/icons/` were drawn for the workspace with
+Retro Diffusion.

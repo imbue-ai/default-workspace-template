@@ -4,6 +4,9 @@
    system/libs/workspace_ui). What follows is this page's own: the template rails' scrollbar
    and edge fades, which no utility expresses. */
 @import "@imbue/workspace-ui/src/base.css";
+/* The retro themes a desktop can wear; the page wears its desktop's (themes/uiTheme.ts). */
+@import "@imbue/workspace-ui/src/themes/mac-classic.css";
+@import "@imbue/workspace-ui/src/themes/windows-2000.css";
 
 /* Why explicit sources (`source(none)` + `@source`): the utility classes live in the TS views'
    class strings, so enumerating the sources keeps the scan deterministic and off the rest of the

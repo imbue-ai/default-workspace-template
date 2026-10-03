@@ -35,7 +35,9 @@ export const MODAL_OVERLAY_CLASS =
   "animate-[modal-overlay-in_150ms_ease-out]";
 
 const MODAL_CARD_CLASS =
-  "modal-card w-[420px] max-w-[90vw] p-6 bg-surface border border-default rounded-lg shadow-overlay " +
+  // `modal-content` (win95.css) and `standard-dialog` (system.css) are the retro themes' dialog
+  // frames, inert outside them.
+  "modal-card modal-content standard-dialog w-[420px] max-w-[90vw] p-6 bg-surface border border-default rounded-lg shadow-overlay " +
   "animate-[modal-card-in_var(--dur-slow)_cubic-bezier(0.16,1,0.3,1)]";
 
 const MODAL_HEADER_CLASS = "modal-header mb-4 flex items-center gap-2";

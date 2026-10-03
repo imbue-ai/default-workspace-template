@@ -15,6 +15,7 @@ import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu"
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "./models/TemplateCatalog";
 import { GettingStartedPage } from "./views/GettingStartedPage";
+import { applyUiTheme } from "@imbue/workspace-ui/src/themes/uiTheme";
 
 export const PAGE_PATH = "/";
 export const PAGE_TITLE = "Getting Started";
@@ -22,6 +23,7 @@ export const PAGE_TITLE = "Getting Started";
 function bootstrap(): void {
   let handshake: ShellHandshake | null = null;
   const connection = connectToShell({
+    onTheme: (theme) => void applyUiTheme(document.documentElement, theme),
     onHandshake: (received) => {
       handshake = received;
       connection.location(PAGE_PATH, PAGE_TITLE);

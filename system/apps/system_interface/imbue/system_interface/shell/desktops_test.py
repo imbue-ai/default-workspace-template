@@ -39,6 +39,7 @@ from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
+from imbue.system_interface.shell.primitives import DesktopTheme
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.primitives import WallpaperKind
@@ -323,11 +324,22 @@ def test_desktops_are_created_settled_and_deleted_with_the_last_one_refused(tmp_
     papered = store.set_wallpaper("research", Wallpaper(kind=WallpaperKind.BUNDLED, name=WallpaperName("dunes")))
     assert papered.wallpaper is not None and papered.wallpaper.name == "dunes"
     assert store.set_wallpaper("research", None).wallpaper is None
+    assert store.read_themes() == {}
+    assert store.set_theme("research", DesktopTheme.WINDOWS_2000).name == "Research 2"
+    assert store.read_themes() == {"research": DesktopTheme.WINDOWS_2000}
+    # desktops.json keeps the shape a shell from before themes reads; the theme lives beside it.
+    read_desktops_file_in_its_released_shape(store.state_directory)
+    store.set_theme("research", DesktopTheme.DEFAULT)
+    assert store.read_themes() == {}
+    with pytest.raises(DesktopNotFoundError):
+        store.set_theme("nowhere", DesktopTheme.MAC_CLASSIC)
     assert find_desktop_by_name_or_id(store.list_desktops(), "research 2") is not None
     assert find_desktop_by_name_or_id(store.list_desktops(), "nowhere") is None
 
+    store.set_theme("home", DesktopTheme.MAC_CLASSIC)
     outcome = store.delete_desktop("home")
     assert outcome.deleted.id == home.id and outcome.fallback_desktop_id == "research"
+    assert "home" not in store.read_themes()
     with pytest.raises(LastDesktopError):
         store.delete_desktop("research")
     with pytest.raises(DesktopNotFoundError):

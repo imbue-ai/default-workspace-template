@@ -56,7 +56,8 @@ import { Portal } from "../portal";
 /** The floating card. Positioning is the caller's -- `fixed` here, `absolute` for a card that
  *  lives in its parent -- along with min-width and text size. */
 export function menuCardClass(extra = ""): string {
-  const parts = ["z-(--z-popover) rounded-xl border border-default bg-surface py-1 shadow-overlay"];
+  // `dropdown-menu` is win95.css's menu, inert outside its theme.
+  const parts = ["dropdown-menu z-(--z-popover) rounded-xl border border-default bg-surface py-1 shadow-overlay"];
   if (extra !== "") parts.push(extra);
   return parts.join(" ");
 }
@@ -87,7 +88,8 @@ function rowGapClass(tightGap: boolean | undefined): string {
 
 export function menuRowClass(options: MenuRowOptions = {}): string {
   const parts = [
-    `flex h-8 items-center ${MENU_ROW_SLAB} text-left hover:bg-fill-hover ${MENU_ROW_FOCUS}`,
+    // `dropdown-item` is win95.css's menu row, inert outside its theme.
+    `dropdown-item flex h-8 items-center ${MENU_ROW_SLAB} text-left hover:bg-fill-hover ${MENU_ROW_FOCUS}`,
     options.inert === true ? "cursor-default" : "cursor-pointer",
     rowGapClass(options.tightGap),
   ];
