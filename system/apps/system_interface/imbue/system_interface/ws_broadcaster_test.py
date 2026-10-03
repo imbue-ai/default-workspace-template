@@ -371,7 +371,7 @@ def test_desktops_placements_and_active_desktop_events_are_typed() -> None:
 
     broadcaster.broadcast_desktops_updated([{"id": "home"}])
     broadcaster.broadcast_placements_updated("home", "client-1", "save-0123456789abcdef")
-    broadcaster.broadcast_active_desktop_changed("client-1", "home")
+    broadcaster.broadcast_active_desktop_changed("client-1", "home", 3, "report-0123456789abcdef")
 
     assert json.loads(_get_message(client_queue)) == {"type": "desktops_updated", "desktops": [{"id": "home"}]}
     assert json.loads(_get_message(client_queue)) == {
@@ -384,4 +384,6 @@ def test_desktops_placements_and_active_desktop_events_are_typed() -> None:
         "type": "active_desktop_changed",
         "client_id": "client-1",
         "desktop_id": "home",
+        "revision": 3,
+        "report_id": "report-0123456789abcdef",
     }

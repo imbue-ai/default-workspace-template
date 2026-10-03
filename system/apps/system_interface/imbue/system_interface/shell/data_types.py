@@ -30,6 +30,7 @@ from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DesktopId
 from imbue.system_interface.shell.primitives import IfPresent
 from imbue.system_interface.shell.primitives import LaunchTargetKind
+from imbue.system_interface.shell.primitives import ReportId
 from imbue.system_interface.shell.primitives import SaveId
 from imbue.system_interface.shell.primitives import ShortcutTargetKind
 from imbue.system_interface.shell.primitives import ShowOutcome
@@ -74,6 +75,11 @@ class ClientRecord(FrozenModel):
         default=(),
         description="What the client has shown on the phone layout, most recent last: window ids and 'home', "
         "each at most once",
+    )
+    desktop_revision: int = Field(
+        default=0,
+        description="Counts the moves of the stored active desktop and the reports redirected off a deleted desktop: "
+        "orders the client's desktop news",
     )
 
 
@@ -173,6 +179,16 @@ class ClientStateReport(FrozenModel):
     client_id: ClientId = Field(description="The reporting client")
     active_desktop: DesktopId = Field(description="The desktop the client is on now")
     previous_desktop: str = Field(default="", description="The desktop it was on before, empty on connect")
+    report_id: ReportId | None = Field(
+        default=None,
+        description="The window's id for a report that moves the client, echoed on the broadcast it causes; None for a "
+        "following report",
+    )
+    is_following: bool = Field(
+        default=False,
+        description="Whether the window only followed the client's stored desktop (a push): the connection is "
+        "registered on it and the record is not moved",
+    )
 
 
 class PopOutStateReport(FrozenModel):

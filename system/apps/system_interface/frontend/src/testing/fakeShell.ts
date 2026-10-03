@@ -31,7 +31,7 @@ import type {
 import { withWindowMinimized, withWindowPlacedOnOpen, withWindowRaised, withoutPlacement } from "../geometry/stack";
 import { SHOWN_HOME } from "../model/records";
 import { withShownRecorded } from "../reducers/desktopState";
-import type { DesktopSocket, SocketHandlers } from "../store/socket";
+import type { ClientStateReport, DesktopSocket, SocketHandlers } from "../store/socket";
 import { clientRecord } from "./records";
 
 /** The frame the shell answers for a pinned window a client has never placed (the shell's own constant). */
@@ -460,7 +460,7 @@ export class FakeDesktopApi implements DesktopApi {
 
 export class FakeDesktopSocket implements DesktopSocket {
   handlers: SocketHandlers | null = null;
-  readonly reports: { activeDesktop: string; previousDesktop: string }[] = [];
+  readonly reports: ClientStateReport[] = [];
   /** How many times the store registered the socket as a pop-out's. */
   popOutReports = 0;
 
@@ -468,8 +468,8 @@ export class FakeDesktopSocket implements DesktopSocket {
     this.handlers = handlers;
   }
 
-  reportClientState(activeDesktop: string, previousDesktop: string): void {
-    this.reports.push({ activeDesktop, previousDesktop });
+  reportClientState(report: ClientStateReport): void {
+    this.reports.push(report);
   }
 
   reportPopOut(): void {

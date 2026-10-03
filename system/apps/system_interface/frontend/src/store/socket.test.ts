@@ -84,13 +84,34 @@ afterEach(() => {
 describe("ShellSocket", () => {
   it("opens the shell's socket, says so once open, and reports the client state only while open", () => {
     expect(current().url).toMatch(/^ws:\/\/.+\/api\/ws$/);
-    socket.reportClientState("home", "");
+    socket.reportClientState({ activeDesktop: "home", previousDesktop: "", reportId: "report-1", isFollowing: false });
     expect(current().sent).toEqual([]);
     current().open();
     expect(handlers.onConnected).toHaveBeenCalledTimes(1);
-    socket.reportClientState("home", "work");
+    socket.reportClientState({
+      activeDesktop: "home",
+      previousDesktop: "work",
+      reportId: "report-2",
+      isFollowing: false,
+    });
+    socket.reportClientState({ activeDesktop: "work", previousDesktop: "", reportId: null, isFollowing: true });
     expect(current().sent.map((raw) => JSON.parse(raw) as unknown)).toEqual([
-      { type: "client_state", client_id: "client-1", active_desktop: "home", previous_desktop: "work" },
+      {
+        type: "client_state",
+        client_id: "client-1",
+        active_desktop: "home",
+        previous_desktop: "work",
+        report_id: "report-2",
+        is_following: false,
+      },
+      {
+        type: "client_state",
+        client_id: "client-1",
+        active_desktop: "work",
+        previous_desktop: "",
+        report_id: null,
+        is_following: true,
+      },
     ]);
   });
 
@@ -100,6 +121,13 @@ describe("ShellSocket", () => {
     current().receive({ type: "desktops_updated", desktops: [] });
     current().receive({ type: "placements_updated", desktop_id: "home", client_id: "client-1", save_id: "s-1" });
     current().receive({ type: "active_desktop_changed", client_id: "client-1" });
+    current().receive({
+      type: "active_desktop_changed",
+      client_id: "client-1",
+      desktop_id: "work",
+      revision: 7,
+      report_id: "report-9",
+    });
     current().receive({
       type: "client_entries_changed",
       client_id: "client-1",
@@ -119,7 +147,18 @@ describe("ShellSocket", () => {
       clientId: "client-1",
       saveId: "s-1",
     });
-    expect(handlers.onActiveDesktopChanged).toHaveBeenCalledWith({ clientId: "client-1", desktopId: "" });
+    expect(handlers.onActiveDesktopChanged).toHaveBeenCalledWith({
+      clientId: "client-1",
+      desktopId: "",
+      revision: 0,
+      reportId: null,
+    });
+    expect(handlers.onActiveDesktopChanged).toHaveBeenCalledWith({
+      clientId: "client-1",
+      desktopId: "work",
+      revision: 7,
+      reportId: "report-9",
+    });
     current().receive({ type: "avatar_status", mood: "working", is_stale: false });
     expect(handlers.onAvatarStatus).toHaveBeenCalledWith({ mood: "working", is_stale: false });
     current().receive({ type: "avatar_selection_changed", design: "jelly-cat" });
