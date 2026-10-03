@@ -527,6 +527,35 @@ class RecordingLayoutOpShell:
         return self.body, self.status
 
 
+class RecordedGatewayRequest(FrozenModel):
+    """One request a ``RecordingGateway`` received."""
+
+    path: str = Field(description="The request's path")
+    headers: dict[str, str] = Field(description="The request's headers")
+    body: Any = Field(description="The request's JSON body")
+
+
+class RecordingGateway:
+    """A stand-in latchkey gateway that records every POST under ``/minds-api-proxy/`` and answers each with
+    one status."""
+
+    def __init__(self, status: int) -> None:
+        self.received: list[RecordedGatewayRequest] = []
+        self.status = status
+        self.application = Flask("recording-gateway")
+        self.application.add_url_rule(
+            "/minds-api-proxy/<path:rest>", view_func=self._accept, methods=["POST"], endpoint="minds_api_proxy"
+        )
+
+    def _accept(self, rest: str) -> tuple[str, int]:
+        self.received.append(
+            RecordedGatewayRequest(
+                path=request.path, headers=dict(request.headers), body=request.get_json(force=True, silent=True)
+            )
+        )
+        return json.dumps({"ok": True}), self.status
+
+
 def build_temporary_secret_request_store() -> SecretRequestStore:
     """A store rooted in a fresh temporary directory, laid out like the workspace's data/."""
     root = Path(tempfile.mkdtemp(prefix="chat-secret-requests-"))
