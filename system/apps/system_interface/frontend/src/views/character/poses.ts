@@ -2,9 +2,9 @@
  * What the character does, per mood -- the layer between the workspace's
  * avatar status and the rig's verbs.
  *
- * Only the moods the workspace can actually emit are mapped here, and the rig
- * below carries only the channels these drive. Richer behaviours -- a glance, a
- * question, a jump -- are a matter of scoring the rig's verbs, and wait on
+ * Only the moods and moments the workspace can actually signal are mapped here,
+ * and the rig below carries only the channels these drive. Richer behaviours --
+ * a glance, a question -- are a matter of scoring the rig's verbs, and wait on
  * something in the workspace being able to ask for them.
  */
 import type { BlobRig } from "./rig";
@@ -78,4 +78,59 @@ export function press(rig: BlobRig, angle: number): void {
 /** Let go of a press. */
 export function releasePress(rig: BlobRig): void {
   rig.release();
+}
+
+/** How deep a hover dents, in radii -- under the working dents, so it reads as a flinch and not a blow. */
+const HOVER_DENT_DEPTH = 0.025;
+/** How far a hover shifts the body away from the pointer, in screen pixels whatever size it is drawn at. */
+const HOVER_SHIFT_PX = 2;
+
+/**
+ * Lean away from a pointer resting at `angle` (radians from the centre, as
+ * `press`): a slight dent where it is and the body a couple of pixels the other
+ * way. `unitsPerPx` is the character's drawing scale, so the shift stays a
+ * couple of pixels in a small entry and a large one alike. Held where it was
+ * first asked for until `unhover`.
+ */
+export function hover(rig: BlobRig, angle: number, unitsPerPx: number): void {
+  const away = HOVER_SHIFT_PX * unitsPerPx;
+  rig.shy(angle, HOVER_DENT_DEPTH, -away * Math.cos(angle), -away * Math.sin(angle));
+}
+
+/** The pointer has gone; settle back. */
+export function unhover(rig: BlobRig): void {
+  rig.unshy();
+}
+
+/** Peak height of the arrival jump, in radii. */
+const JUMP_HEIGHT = 0.95;
+/** Crouch before launching, and the beat before pushing off. */
+const JUMP_CROUCH = 0.6;
+const JUMP_GATHER = 0.07;
+/** Squash on touchdown. */
+const JUMP_IMPACT = 1.8;
+
+/**
+ * Jump once: gather, launch, float, fall, land -- what the character does when
+ * it has just been chosen, so the switch reads as someone turning up rather
+ * than a picture being swapped.
+ *
+ * Only the launch and the touchdown are cued. Stretching up, easing off at the
+ * apex and stretching again on the way down come from the hop velocity, so they
+ * are in step with the arc. Both deliberate shape changes are impulses on the
+ * impact channel, so the jump leaves the held posture alone.
+ */
+export function jump(rig: BlobRig): void {
+  // Push off just past the deepest point of the crouch, so the rebound is still
+  // unfolding as it leaves the ground. Without the crouch it reads as being
+  // yanked upward rather than pushing off.
+  rig.pop(JUMP_CROUCH);
+  rig.after(JUMP_GATHER, () => {
+    const air = rig.hop(JUMP_HEIGHT);
+    rig.after(air, () => {
+      // The impact arrives from underneath, so fold it and dent the bottom.
+      rig.pop(JUMP_IMPACT);
+      rig.poke(Math.PI / 2, 0.6);
+    });
+  });
 }
