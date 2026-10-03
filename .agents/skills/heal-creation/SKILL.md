@@ -161,8 +161,8 @@ last hardened merge.
 
 Then merge `mngr/heal-$TARGET`, destroy the worker per `lead-proxy.md`
 (`create_worker.py destroy --name heal-$TARGET`), and go live by type: a **skill** needs
-nothing beyond the merge; an **app** wants a window refresh (`python3
-system/scripts/layout.py refresh --app <app-name>`); a background **service** has no
+nothing beyond the merge; an **app** wants a window refresh (`uv run
+workspace-layout refresh --app <app-name>`); a background **service** has no
 window -- restart it (`supervisorctl restart <name>`) instead. Then close the
 ticket:
 

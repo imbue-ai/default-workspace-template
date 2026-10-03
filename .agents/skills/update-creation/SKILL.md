@@ -219,7 +219,7 @@ Then merge `mngr/update-$TARGET`, destroy the worker per `lead-proxy.md`
 - **skill**: nothing beyond the merge (the worker's cross-reference sweep is part
   of the change). If the target is a built-in upstream skill, note the local
   drift to reconcile later via `update-self` / `submit-upstream-changes`.
-- **service**: refresh its window (`python3 system/scripts/layout.py refresh
+- **service**: refresh its window (`uv run workspace-layout refresh
   --app <service-name>`).
 - **a critical app**: do **not** merge or go live here -- the careful flow
   (`update-app/references/critical-app.md`) drives the live preview loop and

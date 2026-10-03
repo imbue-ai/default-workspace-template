@@ -206,12 +206,12 @@ at any other time -- they asked to see the browser, or should watch what you do 
 yourself:
 
 ```bash
-python3 system/scripts/layout.py open browser --path "/?session=browser-1"
+uv run workspace-layout open browser --path "/?session=browser-1"
 ```
 
 That restores and raises the window, or opens one if there is none. It changes what the user is
 looking at the moment it returns, so run it when you want them to look, and never tell them to
-open a browser you can show them (the `manage-desktop` skill has the rest of `layout.py`).
+open a browser you can show them (the `manage-desktop` skill has the rest of `workspace-layout`).
 
 The window is **viewer only** -- your real output is here in the CLI. Read and relay it; never tell
 the user to "check the window" for results.

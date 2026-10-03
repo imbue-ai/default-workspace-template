@@ -26,7 +26,7 @@ the root venv):
     uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name> [--repo-root PATH]
 
 ``up`` prints the preview's app name (``<name>-preview``) on stdout; open a window
-of it with ``python3 system/scripts/layout.py open <name>-preview``. ``refresh``
+of it with ``uv run workspace-layout open <name>-preview``. ``refresh``
 re-boots the inner process in place after a rebuild, leaving the ports, the wrapper,
 the registrations, and the window untouched. ``down`` tears the preview down together
 with the siblings it booted, and verifies the processes died.

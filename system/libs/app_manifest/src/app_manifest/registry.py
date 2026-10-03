@@ -29,9 +29,9 @@ from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
 
-# The registry's location, exactly as system/scripts/forward_port.py and
-# system/scripts/layout.py resolve it: relative to the cwd (the repo root under
-# supervisord) unless MINDS_APPS_FILE points elsewhere.
+# The registry's location, exactly as system/scripts/forward_port.py resolves it:
+# relative to the cwd (the repo root under supervisord) unless MINDS_APPS_FILE
+# points elsewhere.
 DEFAULT_APPS_FILE: Final[str] = "data/.state/apps.toml"
 ENV_APPS_FILE: Final[str] = "MINDS_APPS_FILE"
 

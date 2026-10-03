@@ -43,6 +43,7 @@ members = [
     "system-interface",
     "terminal-app",
     "tk-command-parsing",
+    "workspace-layout",
 ]
 
 [[package]]
@@ -424,6 +425,7 @@ dependencies = [
     { name = "simple-websocket" },
     { name = "websockets" },
     { name = "werkzeug" },
+    { name = "workspace-layout" },
 ]
 
 [package.metadata]
@@ -439,6 +441,7 @@ requires-dist = [
     { name = "simple-websocket", specifier = ">=1.0" },
     { name = "websockets", specifier = ">=13" },
     { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [[package]]
@@ -644,6 +647,7 @@ dependencies = [
     { name = "tomlkit" },
     { name = "watchdog" },
     { name = "werkzeug" },
+    { name = "workspace-layout" },
 ]
 
 [package.dev-dependencies]
@@ -687,6 +691,7 @@ requires-dist = [
     { name = "tomlkit", specifier = ">=0.12" },
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [package.metadata.requires-dev]
@@ -901,6 +906,7 @@ dependencies = [
     { name = "share-gateway" },
     { name = "tk-command-parsing" },
     { name = "tomlkit" },
+    { name = "workspace-layout" },
 ]
 
 [package.dev-dependencies]
@@ -938,6 +944,7 @@ requires-dist = [
     { name = "share-gateway", editable = "system/services/share_gateway" },
     { name = "tk-command-parsing", editable = "system/libs/tk_command_parsing" },
     { name = "tomlkit", specifier = ">=0.12" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [package.metadata.requires-dev]
@@ -1208,6 +1215,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "werkzeug" },
+    { name = "workspace-layout" },
 ]
 
 [package.dev-dependencies]
@@ -1231,6 +1239,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [package.metadata.requires-dev]
@@ -3367,6 +3376,7 @@ dependencies = [
     { name = "simple-websocket" },
     { name = "watchdog" },
     { name = "werkzeug" },
+    { name = "workspace-layout" },
 ]
 
 [package.dev-dependencies]
@@ -3401,6 +3411,7 @@ requires-dist = [
     { name = "simple-websocket", specifier = ">=1.0" },
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [package.metadata.requires-dev]
@@ -3452,6 +3463,7 @@ dependencies = [
     { name = "loguru" },
     { name = "pydantic" },
     { name = "werkzeug" },
+    { name = "workspace-layout" },
 ]
 
 [package.dev-dependencies]
@@ -3470,6 +3482,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [package.metadata.requires-dev]
@@ -3840,6 +3853,29 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
+]
+
+[[package]]
+name = "workspace-layout"
+version = "0.1.0"
+source = { editable = "system/libs/workspace_layout" }
+dependencies = [
+    { name = "app-manifest" },
+    { name = "click" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "pydantic" },
+    { name = "tenacity" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "click", specifier = ">=8.1" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=825d7ab3b691e061f5f4a149a4130c8bd42d83ba" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pydantic", specifier = ">=2.12" },
+    { name = "tenacity", specifier = ">=8.0" },
 ]
 
 [[package]]

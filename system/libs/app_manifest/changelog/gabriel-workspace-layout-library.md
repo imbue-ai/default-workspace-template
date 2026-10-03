@@ -1,0 +1,1 @@
+`app_manifest.shell_windows` (the shell URL lookup and the window readers) moved to the new `workspace_layout` library, along with the `ShellStub` test stand-in, which `workspace_layout.testing.LoopbackShell` replaces.

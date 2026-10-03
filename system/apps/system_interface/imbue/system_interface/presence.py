@@ -35,6 +35,8 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.primitives import UserId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
@@ -45,7 +47,6 @@ from imbue.system_interface.profiles import UserProfile
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.identity import RequestIdentity
-from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -185,7 +186,7 @@ class PresenceStore(MutableModel):
             for path in sorted(self.users_directory.glob("*.json")):
                 try:
                     UserId(path.stem)
-                except InvalidShellValueError:
+                except InvalidLayoutValueError:
                     logger.warning("Skipped a presence file whose name is not a user id: {}", path.name)
                     continue
                 user = self._read_user(path)

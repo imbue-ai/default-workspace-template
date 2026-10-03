@@ -684,7 +684,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
    * user turn yet. Pressing the armed account again, or the account the chat runs on, takes the
    * choice back. Each row also carries the default toggle: the starred
    * account is the one a new chat opens on when nothing names one (the New Tab tile, the rail
-   * shortcut, an agent's `layout.py open chat`).
+   * shortcut, an agent's `workspace-layout open chat`).
    */
   function providerSubmenu(chatId: string, current: ProviderAccount | null): m.Children {
     const rows = getAccounts();

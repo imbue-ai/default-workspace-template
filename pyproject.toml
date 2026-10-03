@@ -16,6 +16,9 @@ dependencies = [
     "host-backup",
     "share-gateway",
     "tk-command-parsing",
+    # Agents run `uv run workspace-layout` from the repo root, so its console script
+    # must survive a sync of the root closure.
+    "workspace-layout",
     "imbue-common",
     "tomlkit>=0.12",
     "playwright==1.58.0",
@@ -107,6 +110,7 @@ pytest-workspace-env = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
+workspace-layout = { workspace = true }
 # Apps that other members depend on (their test suites boot each other).
 system-interface = { workspace = true }
 chat = { workspace = true }

@@ -3,8 +3,10 @@
 You are here because the app's `app.toml` says `critical = true` (the shell,
 the chat, the terminal, and any user app that declares it), or because the
 change is under `system/libs/workspace_ui/`, which rebuilds both the shell's and
-the chat's bundles. A broken build of one of these is served straight to the
-user as their workspace, or as the surface they would use to fix it. That forces
+the chat's bundles, or under `system/libs/workspace_layout/`, the wire contract
+of the shell's layout routes that the shell, the chat, and the terminal all run.
+A broken build of one of these is served straight to the user as their
+workspace, or as the surface they would use to fix it. That forces
 three adjustments to `update-app`'s ordinary live loop, and nothing else changes:
 the editing lease, the demonstrative-prototype taxonomy, and the turn-end harden
 handoff are all `update-app`'s and the references it points at.
@@ -30,7 +32,7 @@ worker, only after the user approves the shape.
 
 **Never edit a critical app's tree in the served checkout.** Do not run
 `Edit`/`Write` on files under its `system/apps/<package>/` (or under
-`system/libs/workspace_ui/`) here, and do not rebuild or restart the live app
+`system/libs/workspace_ui/` or `system/libs/workspace_layout/`) here, and do not rebuild or restart the live app
 from uncommitted edits. Every change is made in the worktree, built and
 previewed there, and landed on the live tree only through the apply once the
 user has approved it and the worker has hardened it. (A heal of a critical app
@@ -45,7 +47,10 @@ time" describes. Three deltas:
   <name>` for every critical app whose code it changes or whose preview it
   boots, a `--with` sibling included. A change under `system/libs/workspace_ui/`
   or to `system/package.json` / `system/package-lock.json` rebuilds every
-  frontend, so it takes `system_interface` and `chat`. Take them all or none,
+  frontend, so it takes `system_interface` and `chat`; a change under
+  `system/libs/workspace_layout/` changes what the shell, the chat, and the
+  terminal read each other's layout messages with, so it takes
+  `system_interface`, `chat`, and `terminal`. Take them all or none,
   before editing any of them: check each one in `tk ready`
   (`grep -E -- "- editing critical app <name>$"`), take them in name order, and
   if any is held by another agent, release the ones you took before surfacing
@@ -139,7 +144,9 @@ free port over a copy of its store, framing a pty preview it is booted with
 (`--app terminal --with terminal-pty`), since the pages frame the pty the
 registry names. A `workspace_ui` change previews as the shell with the chat:
 `--app system_interface --with chat --instance-key "${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`, and the
-preview shell's copied registry points at that secondary chat. Exit 0 means it
+preview shell's copied registry points at that secondary chat. A `workspace_layout`
+change previews the same way, since the chat's ops and the shell's answers are
+where its shapes cross. Exit 0 means it
 came up healthy; on a non-zero exit, fix the build and re-run, and do not open
 a window on a broken boot. It refuses to boot if another pass's preview of the
 same app is up rather than hijacking it; surface that and coordinate.
@@ -147,7 +154,7 @@ same app is up rather than hijacking it; surface that and coordinate.
 Only once it is up, open its window:
 
 ```bash
-python3 system/scripts/layout.py open <name>-preview
+uv run workspace-layout open <name>-preview
 ```
 
 **That `open` is the hand-off, not setup.** It puts the window on the user's
@@ -187,7 +194,7 @@ registrations, same wrapper page -- and only the window comes and goes. Close it
 first, so the user is not watching a half-built round land:
 
 ```bash
-python3 system/scripts/layout.py close <name>-preview
+uv run workspace-layout close <name>-preview
 ```
 
 (A `close` with no connected client answers the same `HTTP 412` an `open` does;
@@ -213,7 +220,7 @@ Then edit, and refresh the preview in place:
   user never sees the broken round.
 
 Check the round on the preview's own port while the window is still closed, then
-`layout.py open <name>-preview` again. That re-open is the round's hand-off,
+`workspace-layout open <name>-preview` again. That re-open is the round's hand-off,
 exactly as the first one was.
 
 **Commit before each surface**, so branch `HEAD` always equals what the user is
@@ -247,7 +254,7 @@ shapes.
 worktrees, so before creating the worker, release your hold on it:
 
 ```bash
-python3 system/scripts/layout.py close <name>-preview
+uv run workspace-layout close <name>-preview
 uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
 git worktree remove "data/.tasks/critical-live/update-$SLUG"
 ```
@@ -306,7 +313,7 @@ WORK_DIR=$(mngr ls --include "name == \"update-$SLUG\"" --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
     --app <name> --worktree "$WORK_DIR" [--with <sibling>]... [--instance-key <key>]
-python3 system/scripts/layout.py open <name>-preview
+uv run workspace-layout open <name>-preview
 ```
 
 A fix whose effect the user cannot trigger on demand gives them nothing to look
@@ -330,7 +337,7 @@ another critical app may have applied since you branched.
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
    git diff --name-only --no-renames "$BASE" "mngr/update-$SLUG" > /tmp/update-$SLUG-files.txt
-   git diff --name-only "$BASE" HEAD -- system/apps/<package>/ system/libs/workspace_ui/ \
+   git diff --name-only "$BASE" HEAD -- system/apps/<package>/ system/libs/workspace_ui/ system/libs/workspace_layout/ \
        system/package.json system/package-lock.json $(cat /tmp/update-$SLUG-files.txt)
    ```
 
@@ -401,7 +408,7 @@ another critical app may have applied since you branched.
    ticket, and release the leases:
 
    ```bash
-   python3 system/scripts/layout.py close <name>-preview
+   uv run workspace-layout close <name>-preview
    uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
    ```
 
