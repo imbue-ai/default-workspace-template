@@ -16,7 +16,13 @@ import { buildMessageWithAttachments, formatFileSize } from "../models/attachmen
 import { stageElementReferences } from "../models/elementReferences";
 import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
-import { getPendingPick, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
+import {
+  getPendingPick,
+  isSwitchSending,
+  nextSendSwitchTarget,
+  setPendingAccount,
+  setSwitchSending,
+} from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
 import { beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
@@ -295,10 +301,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let externalRetry: (() => Promise<void>) | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
-  // The switch to the pending lane (spec 5.1): the handoff request is out, or the cancel of a
-  // running switch is out.
-  let isSwitchInFlight = false;
+  // The cancel of a running switch is out.
   let isCancelSwitchInFlight = false;
+  // The chat whose switch-and-send message is still being prepared (uploads, the composer guard):
+  // not sent yet, so the switch is still the next send's.
+  let switchPreparingChatId: string | null = null;
 
   function focusMessageTextarea(): void {
     messageTextareaElement?.focus();
@@ -398,7 +405,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         currentChatId = chatId;
         messageText = localStorage.getItem(messageTextKey(chatId)) ?? "";
         isInterruptInFlight = false;
-        isSwitchInFlight = false;
         isCancelSwitchInFlight = false;
         // The notices name a command typed for the previous agent, so they must not follow the
         // user to the next one.
@@ -644,25 +650,37 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
        * the held-send rendering the next snapshot brings replaces it exactly; the queued text
        * draining took off the old agent comes back for the composer.
        */
-      async function handleSwitchAndSend(target: ProviderAccount): Promise<void> {
-        if (!chatId || isSwitchInFlight) {
+      async function handleSwitchAndSend(): Promise<void> {
+        if (!chatId || isSwitchSending(chatId) || switchPreparingChatId === chatId) {
           return;
         }
-        isSwitchInFlight = true;
-        m.redraw();
-        const prepared = await prepareSend();
+        switchPreparingChatId = chatId;
+        let prepared: PreparedSend | null;
+        try {
+          prepared = await prepareSend();
+        } finally {
+          if (switchPreparingChatId === chatId) switchPreparingChatId = null;
+        }
         if (prepared === null) {
-          isSwitchInFlight = false;
           m.redraw();
           return;
         }
         const { text: sentText, finalText, attachments: sentAttachments } = prepared;
+        // Read once the message is ready, not at the press: until then the choice could still be
+        // changed or taken back, and the account and its pick must go out as one.
+        const target = nextSendSwitchTarget(chatId);
+        if (target === null) {
+          restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+          m.redraw();
+          return;
+        }
+        const pick = getPendingPick(chatId)?.identity ?? null;
+        setSwitchSending(chatId, true);
         const messageId = mintMessageId();
         const outgoingId = addOutgoing(chatId, sentText, messageId);
         m.redraw();
         try {
           await whenChatRegistered(chatId);
-          const pick = getPendingPick(chatId)?.identity ?? null;
           const { returned_block } = await switchChat(chatId, target.id, finalText, messageId, pick);
           prependToComposer(chatId, returned_block);
         } catch (err) {
@@ -676,7 +694,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             actionFailureDetail = detail;
           }
         } finally {
-          isSwitchInFlight = false;
+          setSwitchSending(chatId, false);
           m.redraw();
         }
         refocusAfterSend();
@@ -768,8 +786,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
       /** Enter and the send button do the same thing: send, or carry the armed switch out. */
       function handleSubmit(): Promise<void> {
+        if (chatId && isSwitchSending(chatId)) {
+          return Promise.resolve();
+        }
         if (switchTarget !== null) {
-          return chatId && canSend ? handleSwitchAndSend(switchTarget) : Promise.resolve();
+          return chatId && canSend ? handleSwitchAndSend() : Promise.resolve();
         }
         return handleSend();
       }
@@ -1173,13 +1194,18 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
       const chat = getChatById(chatId);
       // The switch the chat is in the middle of, if any, and the one the next send would start.
-      // Nothing is pending once a switch is running: the lane was applied by confirming it.
       const handoff = chat?.handoff ?? null;
-      const switchTarget = handoff === null ? pendingSwitchTarget(chatId) : null;
+      const switchTarget = nextSendSwitchTarget(chatId);
+      // A draft typed while the switch request is out waits for it: sent now, it would reach the
+      // agent the chat is leaving, ahead of the switch.
+      const isSendHeldForSwitch = isSwitchSending(chatId);
       // A chosen provider arms a switch, and the next send carries the chat to it, so the composer
-      // comes back as soon as one is armed.
+      // comes back as soon as one is armed, and stays while that switch is sent.
       const isBlockedBySignedOutAccount =
-        handoff === null && switchTarget === null && isAccountSignedOut(chat?.active_agent.account_id);
+        handoff === null &&
+        switchTarget === null &&
+        !isSendHeldForSwitch &&
+        isAccountSignedOut(chat?.active_agent.account_id);
 
       // The stop button is only meaningful while the agent has an interruptible
       // turn in progress -- the same condition that drives the activity indicator
@@ -1349,7 +1375,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                                 icon: true,
                                 round: true,
                                 extra: "message-input-send-button shrink-0",
-                                ...hoverTooltipAttrs("Send message", "above"),
+                                readonly: isSendHeldForSwitch,
+                                ...hoverTooltipAttrs(
+                                  isSendHeldForSwitch ? "Sending is paused until the switch starts" : "Send message",
+                                  "above",
+                                ),
                                 "aria-label": "Send message",
                                 onclick: handleSubmit,
                               },
