@@ -40,7 +40,7 @@ A fourth label, ``runtime_dir=<repo-relative runtime dir>``, records where the
 worker's task file and reports live, so ``destroy`` can carry a descendant's
 runtime dir upward without opening any task file.
 
-Six subcommands cover the lead-side lifecycle, and one (``report``) the
+Seven subcommands cover the lead-side lifecycle, and one (``report``) the
 worker side:
 
 ``launch``
@@ -90,9 +90,11 @@ worker side:
 ``reply``
     Sends the lead's answer to a worker's gate (or any nudge) to the worker's
     chat, through the chat app (``system/scripts/message_chat.py``), addressed
-    by the ``worker_agent_id`` that ``launch`` stamped into the task file. A
-    task file from before that stamp is reached by ``mngr message <name>``
-    instead, with the worker's name given through ``reply --name``.
+    by the ``worker_agent_id`` that ``launch`` stamped into the task file. The
+    send revives a worker that is not running: one ``stop`` stopped, one that
+    crashed, and one the OOM daemon shed. Once the message is delivered, an
+    ``archived_at`` label ``stop`` set is blanked, so a later crash of a worker
+    ``stop`` had stopped is restarted like any other.
 
 ``destroy``
     Destroys the worker agent and, by default, every worker underneath it (the
@@ -113,7 +115,8 @@ worker side:
     with ``mngr stop --archive``: processes go, worktrees and branches stay,
     and the ``archived_at`` label marks each one as stopped on purpose rather
     than crashed. This is what a lead does with a worker that failed.
-    ``--no-recursive`` stops the one agent.
+    ``--no-recursive`` stops the one agent. ``reply`` brings a stopped worker
+    back.
 
 The ``launch`` / ``await`` / ``launch-sync`` subcommands take the same
 ``--task-file``: ``launch`` sends it to the worker, and ``await`` /
@@ -962,9 +965,12 @@ def launch(
     whatever ``branch`` names -- so uncommitted changes never reach
     it (and ``mngr create`` refuses a dirty tree anyway) -- launch stops with an
     actionable "commit first" message rather than letting that surface as an
-    opaque ``mngr create`` failure. Malformed task-file frontmatter instead
-    raises ``ValueError`` (full traceback) -- that's a bug in how the task file
-    was composed, not a bad CLI argument.
+    opaque ``mngr create`` failure. A failed ``mngr create`` returns 2 as well,
+    and so does one that reports no agent id: the task cannot be addressed to
+    that worker, so it is not sent, and the worker is left behind with no task
+    for the caller to destroy before launching again. Malformed task-file
+    frontmatter instead raises ``ValueError`` (full traceback) -- that's a bug
+    in how the task file was composed, not a bad CLI argument.
 
     ``state_dir`` is the lead's ``MNGR_AGENT_STATE_DIR``; when set, the
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
@@ -1154,14 +1160,16 @@ def launch(
         return 2
 
     worker_agent_id = _created_agent_id(getattr(created, "stdout", "") or "")
-    if worker_agent_id is not None:
-        _stamp_worker_agent_id(task_file, worker_agent_id)
-    else:
+    if worker_agent_id is None:
         print(
-            f"create_worker: warning: `mngr create {name}` reported no agent id; "
-            "the task goes to the worker by name and `reply` needs --name",
+            f"create_worker: `mngr create {name}` reported no agent id, so the task "
+            "cannot be addressed to the worker and was not sent. The worker exists "
+            f"with no task: destroy it (create_worker.py destroy --name {name}) "
+            "before launching again.",
             file=sys.stderr,
         )
+        return 2
+    _stamp_worker_agent_id(task_file, worker_agent_id)
 
     rsync_dir(name, runtime_dir, runner, toplevel)
     if artifacts_dir is not None:
@@ -1169,38 +1177,37 @@ def launch(
 
     _flush_common_transcript(state_dir, runner)
 
-    if worker_agent_id is not None:
-        runner.run(
-            [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
-            check=True,
-        )
-    else:
-        runner.run(
-            ["mngr", "message", name, "--message-file", str(task_file)],
-            check=True,
-        )
+    runner.run(
+        [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
+        check=True,
+    )
 
     print(
-        f"create_worker: worker {name} launched and runtime synced"
-        + (f" (agent id {worker_agent_id})" if worker_agent_id is not None else "")
+        f"create_worker: worker {name} launched and runtime synced "
+        f"(agent id {worker_agent_id})"
     )
     return 0
+
+
+# The messenger's exit codes for a message that reached the worker: delivered (or
+# queued), and delivered but blocked on a dialog (``system/scripts/message_chat.py``).
+_MESSENGER_DELIVERED_RCS = (0, 7)
 
 
 def reply(
     task_file: Path,
     message: str | None,
     message_file: Path | None,
-    name: str | None,
     runner: Runner | None = None,
 ) -> int:
     """Send the lead's reply to the worker's chat. Returns the process exit code.
 
     Addressed by the ``worker_agent_id`` ``launch`` stamped into the task file,
-    through the chat app; a task file without it (a worker launched before the
-    stamp existed) is reached by ``mngr message`` with ``--name``, and is a usage
-    error without one. The messenger's exit status (``mngr message``'s codes) is
-    passed through.
+    through the chat app, whose send revives a worker that is not running. Once
+    the message is delivered an ``archived_at`` label ``stop`` set is blanked, so
+    a worker ``stop`` stopped is no longer marked as stopped on purpose; a failed
+    blank is a warning, not a failure, since the message already landed. The
+    messenger's exit status (``mngr message``'s codes) is passed through.
     """
     runner = runner or Runner()
     if (message is None) == (message_file is None):
@@ -1221,21 +1228,41 @@ def reply(
         else [f"--message={message}"]
     )
     worker_agent_id = _read_frontmatter_field(task_file, _WORKER_AGENT_ID_FIELD)
-    if worker_agent_id is not None:
-        argv = [*_message_chat_argv(worker_agent_id), *source]
-    elif name:
-        # CLEANUP: drop this name-addressed fallback once no in-flight worker
-        # predates the ``worker_agent_id`` stamp (a template release after this one).
-        argv = ["mngr", "message", name, *source]
-    else:
+    if worker_agent_id is None:
         print(
-            f"create_worker: {task_file} has no {_WORKER_AGENT_ID_FIELD} (launched before "
-            "it was stamped?); pass --name to reach the worker by its mngr name.",
+            f"create_worker: {task_file} has no {_WORKER_AGENT_ID_FIELD}, so it names "
+            "no worker to reply to.",
             file=sys.stderr,
         )
         return 2
-    result = runner.run(argv, check=False)
-    return int(getattr(result, "returncode", 0) or 0)
+    result = runner.run([*_message_chat_argv(worker_agent_id), *source], check=False)
+    returncode = int(getattr(result, "returncode", 0) or 0)
+    if returncode in _MESSENGER_DELIVERED_RCS and _may_be_archived(
+        worker_agent_id, runner
+    ):
+        unarchived = _mngr_lifecycle_call(
+            "label", worker_agent_id, ["-l", "archived_at="], "unarchived", runner
+        )
+        if not unarchived.succeeded:
+            print(
+                f"create_worker: warning: the reply was delivered, but {unarchived.detail}, "
+                "so the worker may still be marked as stopped on purpose; blank its "
+                "archived_at label by hand.",
+                file=sys.stderr,
+            )
+    return returncode
+
+
+def _may_be_archived(agent_id: str, runner: Runner) -> bool:
+    """Whether the agent may carry a non-empty ``archived_at`` label.
+
+    mngr cannot remove a label, and its ``--archived`` / ``--active`` filters
+    test only for the label's presence, so blanking it on an agent that never
+    had one would mark that agent archived. A listing that does not show the
+    agent is no evidence either way, and reads as "may be".
+    """
+    record = _record_with_id(_agent_records(runner), agent_id)
+    return record is None or _record_label(record, "archived_at") is not None
 
 
 def _oom_priority_src() -> Path:
@@ -1711,10 +1738,9 @@ def await_report(
                 "daemon to relieve memory pressure -- its agent process was shed "
                 "and its background tasks (including its own report poll) were "
                 "cancelled, so it will NOT report until it is revived. Revive it "
-                f"with: mngr start {worker_name} --restart  (a plain message "
-                "or `mngr start` will not relaunch a shed agent), then nudge it to "
-                "continue (create_worker.py reply --task-file <task file> -m "
-                "continue). You do not need to resend the task -- it survives in the worker's "
+                "by messaging it to continue (create_worker.py reply --task-file "
+                "<task file> -m continue): the send relaunches a shed agent. "
+                "You do not need to resend the task -- it survives in the worker's "
                 "conversation history, and a SessionStart hook already tells the "
                 "revived worker it was paused, so it re-checks state before "
                 "continuing.",
@@ -2425,7 +2451,6 @@ def _run_reply(args: argparse.Namespace, runner: Runner | None) -> int:
         task_file=args.task_file,
         message=args.message,
         message_file=args.message_file,
-        name=args.name,
         runner=runner,
     )
 
@@ -2648,7 +2673,9 @@ def build_parser() -> argparse.ArgumentParser:
     reply_parser = subparsers.add_parser(
         "reply",
         help="Send the lead's reply (a gate answer, a nudge) to the worker's chat, "
-        "through the chat app, addressed by the id launch stamped into the task file.",
+        "through the chat app, addressed by the id launch stamped into the task file. "
+        "Revives a worker that is not running and blanks an archived_at label "
+        "stop set.",
     )
     reply_parser.add_argument(
         "--task-file",
@@ -2661,11 +2688,6 @@ def build_parser() -> argparse.ArgumentParser:
     reply_source.add_argument(
         "--message-file", type=Path, help="A file whose contents are the reply."
     )
-    reply_parser.add_argument(
-        "--name",
-        help="Worker name, used only when the task file predates the `worker_agent_id` stamp.",
-    )
-
     return parser
 
 

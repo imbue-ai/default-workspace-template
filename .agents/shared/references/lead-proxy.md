@@ -76,15 +76,15 @@ next poll.
 
 If await exits with code 75, the worker's own agent was **shed by the OOM
 daemon** to relieve memory pressure: it will not report until revived. This is
-not a worker bug -- revive it with `mngr start <WORKER_NAME> --restart` (a plain
-message or `mngr start` does not relaunch a shed agent), then nudge it to
-continue with `create_worker.py reply --task-file <TASK_FILE> -m continue`. You
-do not need to resend the task: it survives in the worker's conversation
-history, and a SessionStart hook already tells the revived worker it was paused,
-so it re-checks state before continuing. Before reviving it, and whenever a
-worker's `question` gate reports that a test command was shed, free memory
-with the user per `.agents/shared/references/freeing-memory.md`: a revival or
-rerun into the same pressure is shed again.
+not a worker bug -- revive it by nudging it to continue with
+`create_worker.py reply --task-file <TASK_FILE> -m continue`, whose send
+relaunches a shed agent. You do not need to resend the task: it survives in
+the worker's conversation history, and a SessionStart hook already tells the
+revived worker it was paused, so it re-checks state before continuing. Before
+reviving it, and whenever a worker's `question` gate reports that a test
+command was shed, free memory with the user per
+`.agents/shared/references/freeing-memory.md`: a revival or rerun into the
+same pressure is shed again.
 
 ## Diagnose worker liveness before invoking failure flow
 
@@ -160,8 +160,7 @@ uv run .agents/skills/launch-task/scripts/create_worker.py reply \
 file's frontmatter (`worker_agent_id`) and sends through the chat app
 (`system/scripts/message_chat.py`, which falls back to `mngr message` on its
 own when the chat app cannot take the message); never message a worker by its
-mngr name. A task file from before the stamp (an in-flight worker launched by an
-older template) takes `--name <WORKER_NAME>` as the fallback address.
+mngr name.
 
 To escalate, ask the user, wait for the user's reply, then forward it the same
 way.
@@ -293,6 +292,24 @@ On `type: status`:
   ```
   Its branch, worktree, and transcript stay for inspection. A timeout is
   the same once the liveness diagnosis says the worker is dead or wedged.
+
+### Resuming after the user overrides a failure
+
+When the user answers a `stuck` report with a decision (apply it anyway, an
+answer to what blocked the worker), resume the same worker rather than
+finishing its task yourself. Re-take whatever preconditions the calling skill
+holds for a pass (a lease, a run record), then send it the decision:
+
+```bash
+uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+    --task-file <TASK_FILE> -m "<the user's decision>"
+```
+
+The send brings the stopped worker back in its worktree with its conversation
+intact, and `reply` blanks the `archived_at` label the stop set, so a later
+crash of it is restarted like any other
+(`.agents/skills/launch-task/references/dead-worker-recovery.md`). Then re-arm
+the `await` poll and end your turn.
 
 - `name: no-update-needed` (or other skill-specific benign no-op terminals) --
   the worker decided there was nothing to do. Close any tracking ticket and
