@@ -369,7 +369,7 @@ function railHead(attrs: ChatRailAttrs): m.Vnode {
   ]);
 }
 
-/** A button in the phone layout's bars, the header's and the drawer's, which read as one bar. */
+/** A button in the phone layout's bars on a touchscreen, the header's and the drawer's, which read as one bar. */
 export const BAR_ICON_BUTTON_CLASS =
   "flex size-9 flex-none items-center justify-center rounded-lg text-primary hover:bg-fill-hover";
 
