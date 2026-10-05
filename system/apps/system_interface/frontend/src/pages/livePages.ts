@@ -518,22 +518,20 @@ export class LivePagesLayer implements PageDriver {
 
   /** Where a window's chrome is drawn right now (mid-travel included), in the host's pixels. */
   private windowBox(windowId: string): PixelRect | null {
-    const element = this.host.parentElement?.querySelector<HTMLElement>(
-      `[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`,
-    );
-    if (element === undefined || element === null) return null;
-    const box = element.getBoundingClientRect();
-    if (box.width <= 0 || box.height <= 0) return null;
-    const origin = this.host.getBoundingClientRect();
-    return { x: box.left - origin.left, y: box.top - origin.top, width: box.width, height: box.height };
+    const box = this.measureInHost(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`);
+    return box === null ? null : { x: box.left, y: box.top, width: box.width, height: box.height };
   }
 
   private contentBox(windowId: string): HostRect | null {
-    const content = this.host.parentElement?.querySelector<HTMLElement>(
-      `[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"] [${WINDOW_CONTENT_ATTRIBUTE}]`,
-    );
-    if (content === undefined || content === null) return null;
-    const box = content.getBoundingClientRect();
+    return this.measureInHost(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"] [${WINDOW_CONTENT_ATTRIBUTE}]`);
+  }
+
+  /** The box of the element ``selector`` names beside the host, in the host's pixels; null when it is absent or
+   *  empty. */
+  private measureInHost(selector: string): HostRect | null {
+    const element = this.host.parentElement?.querySelector<HTMLElement>(selector);
+    if (element === undefined || element === null) return null;
+    const box = element.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0) return null;
     const origin = this.host.getBoundingClientRect();
     return { left: box.left - origin.left, top: box.top - origin.top, width: box.width, height: box.height };
