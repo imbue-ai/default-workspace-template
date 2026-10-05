@@ -15,6 +15,12 @@ dependencies = [
     "tenacity>=8.0",
 ]
 
+[dependency-groups]
+dev = [
+    # Used by check_no_type_errors in test_workspace_layout_ratchets.py, pinned to the shell's version.
+    "ty==0.0.24",
+]
+
 [project.scripts]
 workspace-layout = "workspace_layout.cli:main"
 
@@ -24,6 +30,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/workspace_layout"]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]
 
 [tool.ruff]
 line-length = 119

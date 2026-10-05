@@ -415,7 +415,10 @@ OpBody = (
 
 
 def _body_model(op: LayoutOp, args: dict[str, Any]) -> type[OpBody]:
-    """The body model an op is read with; a ``refresh`` is of an app when its arguments name one, else of a window."""
+    """The body model an op is read with; a ``refresh`` is of an app when its arguments name one, else of a window.
+
+    A match rather than a discriminated union on ``op``, so an op added to LayoutOp fails type checking until it has a
+    body."""
     match op:
         case LayoutOp.CONTEXT:
             return ContextBody

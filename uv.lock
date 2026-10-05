@@ -3868,6 +3868,11 @@ dependencies = [
     { name = "tenacity" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
@@ -3877,6 +3882,9 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12" },
     { name = "tenacity", specifier = ">=8.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.24" }]
 
 [[package]]
 name = "wsproto"

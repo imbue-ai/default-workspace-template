@@ -19,3 +19,5 @@ New library `workspace_layout`: the shell's layout routes (the op route, the des
 - `WindowClosedHint` and `parse_window_closed_hint` are the body the shell posts when a window closes.
 
 - `read_app_window_paths` reads the shell's desktops through the same request as every other read, so a shell that hangs up mid-answer reads as unknown (the sweep skips) rather than raising out of the sweep, and a redirect is not followed.
+
+- The library is type-checked by its own test suite (`ty`, pinned to the version the shell uses), so the exhaustive match that maps each op to its body actually fails a build when an op has none.
