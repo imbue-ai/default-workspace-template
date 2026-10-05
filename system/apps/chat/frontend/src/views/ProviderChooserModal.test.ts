@@ -571,6 +571,22 @@ describe("a sign-in finished in the browser", () => {
     expect(root.textContent).toContain(PASTE_STEP_LABEL);
   });
 
+  it("starts nothing when the desktop app's late answer to Try again comes after the user went back", async () => {
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    const root = await clickLane("anthropic");
+    let answer: (isRelaying: boolean) => void = () => undefined;
+    requestProviderRelay.mockImplementationOnce(() => new Promise<boolean>((resolve) => (answer = resolve)));
+
+    (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
+    (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+    // What the real abortFlow does to the live flow.
+    state.flow = null;
+    answer(false);
+    await settled();
+
+    expect(startFlow).toHaveBeenCalledOnce();
+  });
+
   it("stops offering ChatGPT's browser sign-in once the desktop app can no longer open the page", async () => {
     state.lanes = [CHATGPT];
     state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");

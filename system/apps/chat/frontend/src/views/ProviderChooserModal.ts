@@ -789,7 +789,14 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             onclick: () => {
               if (flow === null || flow.relay_url === null) return;
               void relay(flow.relay_url, flow.flow_id).then((isRelaying) => {
-                if (!isRelaying)
+                // The user may have gone back, closed the chooser, or finished meanwhile.
+                const live = getFlow();
+                const isStillWaiting =
+                  mode === "relay" &&
+                  live !== null &&
+                  live.flow_id === flow.flow_id &&
+                  live.status.state === "pending";
+                if (!isRelaying && isStillWaiting)
                   signInAnotherWay(current, "Imbue Studio couldn't open the sign-in page. Sign in here instead:");
               });
             },
