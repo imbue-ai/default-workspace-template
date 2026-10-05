@@ -293,7 +293,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       m.redraw();
       return;
     }
-    const manual = current.methods.find((each) => each.shape !== "browser" && !isPaste(each)) ?? current.methods[0];
+    const manual = relaylessFallback(current) ?? current.methods[0];
     void begin(current, manual, {
       fromChooser: true,
       accountId: reauthAccountId ?? undefined,
