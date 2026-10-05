@@ -1394,23 +1394,21 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
 _PHONE_VIEWPORT: ViewportSize = {"width": 393, "height": 852}
 
 
-def _open_phone_chat_root(page: Page, server: RunningWorkspace, path: str = _FIXTURE_ROOT_PATH) -> None:
-    """Open the chat root at a phone's width on a touchscreen, at the chat app's own URL: its layout follows its own
-    width whatever frames it, so the shell's phone layout is not what is under test here. The touchscreen gives the
-    drawer its finger's form; under a mouse it holds the rail's (``_open_narrow_chat_root``)."""
-    page.context.new_cdp_session(page).send(
-        "Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1}
-    )
+def _open_narrow_chat_root(page: Page, server: RunningWorkspace, path: str = _FIXTURE_ROOT_PATH) -> None:
+    """Open the chat root at a phone's size, at the chat app's own URL: its layout follows its own size whatever frames
+    it, so the shell's phone layout is not what is under test here. With no touch emulated it is under a mouse."""
     page.set_viewport_size(_PHONE_VIEWPORT)
     page.goto(f"{server.chat_url}{path}")
     expect(page.locator('.chat-root[data-compact="true"]')).to_be_visible(timeout=15000)
 
 
-def _open_narrow_chat_root(page: Page, server: RunningWorkspace) -> None:
-    """Open the chat root in a window as narrow as a phone, under a mouse."""
-    page.set_viewport_size(_PHONE_VIEWPORT)
-    page.goto(f"{server.chat_url}{_FIXTURE_ROOT_PATH}")
-    expect(page.locator('.chat-root[data-compact="true"]')).to_be_visible(timeout=15000)
+def _open_phone_chat_root(page: Page, server: RunningWorkspace, path: str = _FIXTURE_ROOT_PATH) -> None:
+    """Open the chat root at a phone's size on a touchscreen, which gives the drawer its finger's form; under a mouse
+    it holds the rail's (``_open_narrow_chat_root``)."""
+    page.context.new_cdp_session(page).send(
+        "Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1}
+    )
+    _open_narrow_chat_root(page, server, path)
 
 
 def _dismiss_drawer_by_its_scrim(page: Page) -> None:
