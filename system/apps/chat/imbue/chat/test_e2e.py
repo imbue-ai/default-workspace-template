@@ -74,8 +74,6 @@ pytestmark = [
     ),
 ]
 
-_TRIGGER_TIMEOUT_MS = 20000
-
 # The default desktop every shell starts with, where the chat's seeded shortcut and every window here live.
 _HOME_DESKTOP_ID = slugify_desktop_name(DEFAULT_DESKTOP_NAME)
 # The chat root's path with the fixture chat selected: what a link, and the agent's auto-open, open.
@@ -584,9 +582,8 @@ def _min_message_index(messages: list[str]) -> int:
 def test_a_minimized_chat_preserves_its_scroll_window(tmp_path: Path, page: Page) -> None:
     """Minimizing a chat's window (and restoring it) must not move its loaded window.
 
-    A minimized window's page stays mounted while hidden with ``display: none`` and its scroll element
-    reports every metric as 0, which the paging logic must not read as a jump to the very start of
-    the conversation.
+    A minimized window's page stays mounted and keeps its size while hidden, and a message streamed
+    meanwhile must not move the reader's place, then or after the restore.
     """
     events = _make_long_conversation_events(150)
     with _running_e2e_server(tmp_path, session_events=events) as server:
@@ -595,7 +592,9 @@ def test_a_minimized_chat_preserves_its_scroll_window(tmp_path: Path, page: Page
             "() => { const el = document.querySelector('.app-content'); return el && el.scrollHeight > el.clientHeight * 2; }",
             timeout=15000,
         )
-        entry = _taskbar_entry(page, _the_chat_window(server)["id"])
+        window_id = _the_chat_window(server)["id"]
+        entry = _taskbar_entry(page, window_id)
+        live_page = page.locator(f'iframe[data-live-page="{window_id}"]')
         expect(entry).to_have_attribute("data-focused", "true")
         page.wait_for_timeout(1000)
 
@@ -610,13 +609,11 @@ def test_a_minimized_chat_preserves_its_scroll_window(tmp_path: Path, page: Page
         anchor_message = before_hidden[0]
         assert _min_message_index(before_hidden) >= 50, f"setup should be reading mid-history: {before_hidden[:3]}"
 
-        # A click on the focused window's taskbar entry minimizes it: the page is hidden in place.
+        # A click on the focused window's taskbar entry minimizes it: the page is hidden in place, at its size.
         entry.click()
         expect(entry).to_have_attribute("data-minimized", "true")
-        _chat_frame(page).wait_for_function(
-            "() => { const el = document.querySelector('.app-content'); return el && el.clientHeight === 0; }",
-            timeout=_TRIGGER_TIMEOUT_MS,
-        )
+        expect(live_page).to_be_hidden()
+        assert _chat_frame(page).evaluate("() => document.querySelector('.app-content').clientHeight") > 0
 
         with open(server.session_file, "a") as handle:
             handle.write(
@@ -642,10 +639,7 @@ def test_a_minimized_chat_preserves_its_scroll_window(tmp_path: Path, page: Page
 
         entry.click()
         expect(entry).to_have_attribute("data-minimized", "false")
-        _chat_frame(page).wait_for_function(
-            "() => { const el = document.querySelector('.app-content'); return el && el.clientHeight > 0; }",
-            timeout=_TRIGGER_TIMEOUT_MS,
-        )
+        expect(live_page).to_be_visible()
         page.wait_for_timeout(1000)
         after_restore = _visible_user_messages(page)
         scroll_top_after = _chat_frame(page).evaluate("() => document.querySelector('.app-content').scrollTop")
