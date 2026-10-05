@@ -377,6 +377,24 @@ describe("a sign-in finished in the browser", () => {
     ],
   });
 
+  /** The Anthropic lane with its API-key method offered under the browser sign-in. */
+  function anthropicWithApiKey(): Lane {
+    return lane({
+      methods: [
+        ...lane().methods,
+        {
+          id: "api_key",
+          label: "Use an API key",
+          description: "",
+          signup_url: "",
+          note: "",
+          shape: "paste",
+          is_primary: false,
+        },
+      ],
+    });
+  }
+
   async function settled(): Promise<void> {
     for (let index = 0; index < 5; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
   }
@@ -416,22 +434,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("offers reopening the page and another way in side by side while the browser is out", async () => {
-    state.lanes = [
-      lane({
-        methods: [
-          ...lane().methods,
-          {
-            id: "api_key",
-            label: "Use an API key",
-            description: "",
-            signup_url: "",
-            note: "",
-            shape: "paste",
-            is_primary: false,
-          },
-        ],
-      }),
-    ];
+    state.lanes = [anthropicWithApiKey()];
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
 
     const root = await clickLane("anthropic");
@@ -487,22 +490,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("keeps Claude's code steps one click from the browser wait, on the same sign-in", async () => {
-    state.lanes = [
-      lane({
-        methods: [
-          ...lane().methods,
-          {
-            id: "api_key",
-            label: "Use an API key",
-            description: "",
-            signup_url: "",
-            note: "",
-            shape: "paste",
-            is_primary: false,
-          },
-        ],
-      }),
-    ];
+    state.lanes = [anthropicWithApiKey()];
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
     const root = await clickLane("anthropic");
 
@@ -615,22 +603,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("offers Claude's code steps after a sign-in fails, rather than the browser again", async () => {
-    state.lanes = [
-      lane({
-        methods: [
-          ...lane().methods,
-          {
-            id: "api_key",
-            label: "Use an API key",
-            description: "",
-            signup_url: "",
-            note: "",
-            shape: "paste",
-            is_primary: false,
-          },
-        ],
-      }),
-    ];
+    state.lanes = [anthropicWithApiKey()];
     state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
     const root = await clickLane("anthropic");
     state.flow = { ...(state.flow as object), status: { state: "failed", detail: "Denied.", account_id: null } };
@@ -650,22 +623,7 @@ describe("a sign-in finished in the browser", () => {
   });
 
   it("signs an API-key account in again with a key, not a browser sign-in", () => {
-    state.lanes = [
-      lane({
-        methods: [
-          ...lane().methods,
-          {
-            id: "api_key",
-            label: "Use an API key",
-            description: "",
-            signup_url: "",
-            note: "",
-            shape: "paste",
-            is_primary: false,
-          },
-        ],
-      }),
-    ];
+    state.lanes = [anthropicWithApiKey()];
     state.accounts = [{ ...account("a1", "anthropic", "Anthropic (Claude Code)"), reauth_method: "api_key" }];
     const root = document.createElement("div");
     m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
