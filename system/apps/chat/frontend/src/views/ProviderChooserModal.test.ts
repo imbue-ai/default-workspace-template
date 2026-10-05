@@ -514,23 +514,34 @@ describe("a sign-in finished in the browser", () => {
     expect(startFlow).toHaveBeenCalledOnce();
   });
 
-  it("shows a method's note above its steps, so a setting the sign-in needs comes first", async () => {
-    state.lanes = [
-      lane({
-        ...CHATGPT,
-        methods: CHATGPT.methods.map((each) =>
-          each.id === "device" ? { ...each, note: "Turn on *the setting* first." } : each,
-        ),
-      }),
-    ];
+  const CHATGPT_WITH_NOTE = lane({
+    ...CHATGPT,
+    methods: CHATGPT.methods.map((each) =>
+      each.id === "chatgpt" ? { ...each, note: "Turn on *the setting* first." } : each,
+    ),
+  });
+
+  it("shows the browser sign-in's note while it waits on the browser", async () => {
+    state.lanes = [CHATGPT_WITH_NOTE];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+
+    const root = await clickLane("openai");
+
+    expect(root.textContent).toContain("Finish signing in to OpenAI in your browser.");
+    const note = root.querySelector('[data-e2e="method-note"]');
+    expect(note?.textContent?.trim()).toBe("Turn on the setting first.");
+    expect(note?.querySelector("em")?.textContent).toBe("the setting");
+  });
+
+  it("shows no note on the one-time code, which does not need the setting", async () => {
+    requestProviderRelay.mockResolvedValue(false);
+    state.lanes = [CHATGPT_WITH_NOTE];
     state.flow = { ...(startedFlow("code_then_wait", null) as object), code: "ABCD-1234" };
 
     const root = await clickLane("openai");
 
-    const note = root.querySelector('[data-e2e="method-note"]');
-    expect(note?.textContent?.trim()).toBe("Turn on the setting first.");
-    expect(note?.querySelector("em")?.textContent).toBe("the setting");
     expect(root.textContent).toContain("ABCD-1234");
+    expect(root.querySelector('[data-e2e="method-note"]')).toBeNull();
   });
 
   it("moves ChatGPT to its one-time code when the browser is not coming back", async () => {

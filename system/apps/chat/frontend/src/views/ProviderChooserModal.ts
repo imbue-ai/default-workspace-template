@@ -608,9 +608,6 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         : `Use your ${current.provider_name} account. Approve access in your browser, and if it gives you a code, paste it below.`;
     return [
       m("p", { class: css.LEAD }, currentMethod.description || lead),
-      currentMethod.note !== ""
-        ? m("div", { class: css.NOTE, "data-e2e": "method-note" }, m.trust(renderMarkdown(currentMethod.note)))
-        : null,
       flow.url !== null ? openLinkStep(flow.url, `Open ${current.provider_name} sign-in page`) : null,
       flow.shape === "code_then_wait" ? showCodeStep(flow.code) : pasteCodeStep(),
     ];
@@ -780,6 +777,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     const flow = getFlow();
     return [
       m("p", { class: css.LEAD }, `Finish signing in to ${current.provider_name} in your browser.`),
+      method !== null && method.note !== ""
+        ? m("div", { class: css.NOTE, "data-e2e": "method-note" }, m.trust(renderMarkdown(method.note)))
+        : null,
       m("div", { class: css.RELAY_ACTIONS }, [
         m(
           Button,

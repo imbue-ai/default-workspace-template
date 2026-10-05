@@ -34,7 +34,7 @@ export interface LaneMethod {
   description: string;
   /** Empty unless the provider has to be signed up for before a key exists. */
   signup_url: string;
-  /** Markdown shown above the sign-in steps; empty when the method needs no account setting. */
+  /** Markdown shown while the sign-in waits on the browser; empty when it needs no account setting. */
   note: string;
   shape: FlowShape;
   is_primary: boolean;
