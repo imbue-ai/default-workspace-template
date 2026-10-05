@@ -375,11 +375,16 @@ describe("covered pages", () => {
     expect(spy.mock.calls.map((call) => call[0].type)).not.toContain(SHELL_HIDDEN);
   });
 
-  it("unparks every covered page for the length of a press, whose drag moves windows with no reconcile", () => {
+  it("unparks every covered page while a window is moved, which moves it with no reconcile, but not for a press", () => {
     drawChromeAt("win-2", CASCADE_RECT);
     layer.reconcile();
+    // A press that may still become a drag moves nothing yet.
     layer.setGestureActive(true);
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    store.beginWindowMove("win-2", { x: 300, y: 60 });
+    layer.reconcile();
     expect(isParked(wrapperOf("win-1"))).toBe(false);
+    store.endWindowMove({ x: 300, y: 60 });
     layer.setGestureActive(false);
     expect(isParked(wrapperOf("win-1"))).toBe(true);
   });

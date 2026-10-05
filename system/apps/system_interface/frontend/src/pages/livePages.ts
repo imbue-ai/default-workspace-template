@@ -488,11 +488,12 @@ export class LivePagesLayer implements PageDriver {
   /**
    * The shown pages the windows in front of them cover, both where the windows are drawn now and where they are
    * going: a window still travelling to its place covers nothing until it lands there, and one travelling away
-   * uncovers at once. Nothing is covered during a press, whose drag moves windows with no reconcile.
+   * uncovers at once. Nothing is covered while a window is moved or resized, which moves it with no reconcile.
    */
   private coveredWindowIds(drawn: readonly DrawnWindow[], shownPageIds: ReadonlySet<string>): Set<string> {
     const covered = new Set<string>();
-    if (this.isGestureActive) return covered;
+    const gesture = this.store.getGesture();
+    if (gesture !== null && gesture.kind !== "shortcut" && gesture.kind !== "floating-entry") return covered;
     const metrics = this.store.getMetrics();
     const backdrop = this.store.getBackdropSize();
     // A shown page parked as covered still counts: whatever covers it covers the window's content area too.
