@@ -120,10 +120,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   let currentChatId: string | null = null;
   let panelElement: HTMLElement | null = null;
 
-  // Whether the page's frame is on screen. The shell keeps a minimized window's frame mounted
-  // and mithril redraws globally, so the component keeps running while hidden against an
-  // element collapsed to zero size; running scroll work then would corrupt the retained
-  // scroll position. The page feeds the shell's authoritative visibility in via the
+  // Whether the page's frame is laid out. The chat root keeps the frames of chats it is not
+  // showing mounted with `display: none` and mithril redraws globally, so the component keeps
+  // running while hidden against an element collapsed to zero size; running scroll work then
+  // would corrupt the retained scroll position. The page feeds the frame's layout in via the
   // ``isVisible`` attr (see isFrameRendered in shell.ts); the scroll hooks below skip
   // while it is false.
   // Defaults to true so the panel works before the first render sets it.
