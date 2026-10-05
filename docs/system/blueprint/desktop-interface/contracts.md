@@ -386,7 +386,7 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-unsnap-distance` | `12px` | | yes |
 | `--desk-drag-threshold` | `4px` | `8px` | yes |
 | `--desk-touch-target` | `32px` | `44px` | yes |
-| `--desk-window-radius` | `12px` | | no |
+| `--desk-window-radius` | `12px` | | yes |
 | `--desk-window-shadow` | `var(--shadow-overlay)` | | no |
 | `--desk-taskbar-surface` | translucent surface | | no |
 | `--desk-backdrop` | `var(--c-bg)` | | no |

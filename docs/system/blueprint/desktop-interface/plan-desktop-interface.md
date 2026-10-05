@@ -365,7 +365,7 @@ Touch needs nothing extra beyond `touch-action: none` on handles.
 ### 6.6 Theme and metrics
 
 `theme/default.css` extends `base.css` with the desktop tokens of contracts.md section 11.
-`metrics.ts` reads the ones behaviour needs (title bar height, taskbar heights, cell sizes, inset, minimum window size, minimum visible title width, snap threshold, drag threshold, touch target size) from `getComputedStyle(document.documentElement)` once at boot and again on `data-phone` or `data-touch` change, and hands the store a frozen `ThemeMetrics`.
+`metrics.ts` reads the ones behaviour needs (title bar height, window radius, taskbar heights, cell sizes, inset, minimum window size, minimum visible title width, snap threshold, drag threshold, touch target size) from `getComputedStyle(document.documentElement)` once at boot and again on `data-phone` or `data-touch` change, and hands the store a frozen `ThemeMetrics`.
 No metric is a literal in TypeScript, and the phone breakpoint is the one exception in the other direction: it is a TypeScript constant applied as a `matchMedia` query on the viewport's size that sets `data-phone`, and CSS keys off the attribute, so it too lives once.
 
 ## 7. The app contract (v2)
