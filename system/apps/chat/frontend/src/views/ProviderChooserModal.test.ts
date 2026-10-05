@@ -82,6 +82,7 @@ function lane(overrides: Partial<Lane> = {}): Lane {
         label: "Claude subscription",
         description: "Sign in with your Claude account.",
         signup_url: "",
+        note: "",
         shape: "url_then_code",
         is_primary: true,
       },
@@ -101,6 +102,7 @@ const PI_KEY_LANE = lane({
       label: "Paste a key",
       description: "Pick the provider, then paste its key.",
       signup_url: "",
+      note: "",
       shape: "paste",
       is_primary: true,
     },
@@ -359,6 +361,7 @@ describe("a sign-in finished in the browser", () => {
         label: "Use your ChatGPT plan (runs on Codex)",
         description: "",
         signup_url: "",
+        note: "",
         shape: "browser",
         is_primary: true,
       },
@@ -367,6 +370,7 @@ describe("a sign-in finished in the browser", () => {
         label: "ChatGPT with a code",
         description: "",
         signup_url: "",
+        note: "",
         shape: "code_then_wait",
         is_primary: false,
       },
@@ -421,6 +425,7 @@ describe("a sign-in finished in the browser", () => {
             label: "Use an API key",
             description: "",
             signup_url: "",
+            note: "",
             shape: "paste",
             is_primary: false,
           },
@@ -491,6 +496,7 @@ describe("a sign-in finished in the browser", () => {
             label: "Use an API key",
             description: "",
             signup_url: "",
+            note: "",
             shape: "paste",
             is_primary: false,
           },
@@ -506,6 +512,25 @@ describe("a sign-in finished in the browser", () => {
     expect(root.textContent).toContain(PASTE_STEP_LABEL);
     expect(root.textContent).toContain("Use an API key");
     expect(startFlow).toHaveBeenCalledOnce();
+  });
+
+  it("shows a method's note above its steps, so a setting the sign-in needs comes first", async () => {
+    state.lanes = [
+      lane({
+        ...CHATGPT,
+        methods: CHATGPT.methods.map((each) =>
+          each.id === "device" ? { ...each, note: "Turn on *the setting* first." } : each,
+        ),
+      }),
+    ];
+    state.flow = { ...(startedFlow("code_then_wait", null) as object), code: "ABCD-1234" };
+
+    const root = await clickLane("openai");
+
+    const note = root.querySelector('[data-e2e="method-note"]');
+    expect(note?.textContent?.trim()).toBe("Turn on the setting first.");
+    expect(note?.querySelector("em")?.textContent).toBe("the setting");
+    expect(root.textContent).toContain("ABCD-1234");
   });
 
   it("moves ChatGPT to its one-time code when the browser is not coming back", async () => {
@@ -569,6 +594,7 @@ describe("a sign-in finished in the browser", () => {
             label: "Use an API key",
             description: "",
             signup_url: "",
+            note: "",
             shape: "paste",
             is_primary: false,
           },
@@ -603,6 +629,7 @@ describe("a sign-in finished in the browser", () => {
             label: "Use an API key",
             description: "",
             signup_url: "",
+            note: "",
             shape: "paste",
             is_primary: false,
           },

@@ -158,6 +158,8 @@ class AppServerMethod(FrozenModel):
     label: str
     description: str
     login: CodexLogin
+    # Markdown shown above the sign-in steps, for an account setting the sign-in needs.
+    note: str = ""
     # As on `PtyMethod`: nothing else bounds a flow the user may walk away from.
     flow_deadline_s: float = 900.0
 
@@ -302,6 +304,8 @@ LANE_OPENAI = Lane(
             label="ChatGPT with a code",
             description="Enter a one-time code on another device.",
             login=CodexLogin.DEVICE,
+            note="Note: You must first turn on *Enable device code sign-in…* at the bottom of the ChatGPT "
+            "settings page.",
         ),
         PasteMethod(
             id="api_key",

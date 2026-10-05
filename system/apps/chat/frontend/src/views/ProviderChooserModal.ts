@@ -42,6 +42,7 @@ import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { MODAL_OVERLAY_CLASS } from "@imbue/workspace-ui/src/components/Modal";
 import { backdropDismissAttrs } from "@imbue/workspace-ui/src/components/modalBackdrop";
 import { Dropdown } from "@imbue/workspace-ui/src/components/dropdown";
+import { renderMarkdown } from "../markdown";
 import { providerMark } from "./providerMarks";
 import { removeAccountDialog } from "./removeAccountDialog";
 import * as css from "./providerSignInStyles";
@@ -607,6 +608,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         : `Use your ${current.provider_name} account. Approve access in your browser, and if it gives you a code, paste it below.`;
     return [
       m("p", { class: css.LEAD }, currentMethod.description || lead),
+      currentMethod.note !== ""
+        ? m("div", { class: css.NOTE, "data-e2e": "method-note" }, m.trust(renderMarkdown(currentMethod.note)))
+        : null,
       flow.url !== null ? openLinkStep(flow.url, `Open ${current.provider_name} sign-in page`) : null,
       flow.shape === "code_then_wait" ? showCodeStep(flow.code) : pasteCodeStep(),
     ];

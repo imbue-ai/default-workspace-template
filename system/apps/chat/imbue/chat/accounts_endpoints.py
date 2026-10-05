@@ -25,6 +25,7 @@ from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import ClaudeAuthError
 from imbue.chat.harnesses.claude.auth import read_managed_auth_env
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.lanes import AppServerMethod
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.lanes import LaneNotFoundError
@@ -80,6 +81,7 @@ def list_lanes() -> Response:
                     "label": method.label,
                     "description": method.description,
                     "signup_url": method.signup_url if isinstance(method, PasteMethod) else "",
+                    "note": method.note if isinstance(method, AppServerMethod) else "",
                     "shape": flow_shape(method).value,
                     "is_primary": index == 0,
                 }

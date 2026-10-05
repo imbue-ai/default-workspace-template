@@ -76,7 +76,7 @@ def test_lanes_carry_every_key_the_chooser_reads() -> None:
         }
         assert lane["harness_label"], "the sign-in header has nothing to name the harness with"
         for method in lane["methods"]:
-            assert set(method) == {"id", "label", "description", "signup_url", "shape", "is_primary"}
+            assert set(method) == {"id", "label", "description", "signup_url", "note", "shape", "is_primary"}
         for key_provider in lane["key_providers"]:
             assert set(key_provider) == {"provider_id", "display", "env_var", "hint"}
 

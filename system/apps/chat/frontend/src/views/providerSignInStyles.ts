@@ -94,6 +94,9 @@ export const LEAD = "mb-4 type-body leading-relaxed text-primary";
  *  rather than promoted to a numbered step -- "go to a website if you have not already" is not
  *  half of a two-part procedure. */
 export const LEAD_LINK = "text-accent underline underline-offset-2 hover:text-accent-hover";
+/** Something to do on the provider's side before the steps can work. Under the lead, in full
+ *  colour rather than a hint's faint, because skipping it fails the sign-in. */
+export const NOTE = "-mt-2 mb-4 type-helper leading-snug text-primary";
 
 /** The right-hand end of the header: the harness line and the close button, as one group.
  *
