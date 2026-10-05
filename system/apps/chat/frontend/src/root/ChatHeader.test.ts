@@ -110,30 +110,20 @@ describe("the chat header", () => {
     expect(verbs.renameChat).not.toHaveBeenCalled();
   });
 
-  it("is a finger's height on a touchscreen and denser under a mouse", () => {
+  it.each([
+    { device: "a touchscreen", isTouch: true, height: "h-11", otherHeight: "h-9", buttonSize: "size-9" },
+    { device: "a mouse", isTouch: false, height: "h-9", otherHeight: "h-11", buttonSize: "size-7" },
+  ])("is $height with $buttonSize buttons under $device", ({ isTouch, height, otherHeight, buttonSize }) => {
+    root = document.createElement("div");
+    document.body.appendChild(root);
     const context = chatRailAttrsFixture();
-    const header = (isTouch: boolean): HTMLElement => {
-      root = document.createElement("div");
-      document.body.appendChild(root);
-      m.mount(root, {
-        view: () => m(ChatHeader, { row: null, context, isListOpen: false, onOpenList: () => undefined, isTouch }),
-      });
-      const bar = root.querySelector<HTMLElement>(".chat-header");
-      if (bar === null) throw new Error("no header");
-      return bar;
-    };
+    m.mount(root, {
+      view: () => m(ChatHeader, { row: null, context, isListOpen: false, onOpenList: () => undefined, isTouch }),
+    });
 
-    const touchBar = header(true);
-    expect(touchBar.className).toContain("h-11");
-    expect(touchBar.querySelector(".chat-header-list")?.className).toContain("size-9");
-    if (root !== null) {
-      m.mount(root, null);
-      root.remove();
-    }
-
-    const mouseBar = header(false);
-    expect(mouseBar.className).toContain("h-9");
-    expect(mouseBar.className).not.toContain("h-11");
-    expect(mouseBar.querySelector(".chat-header-list")?.className).toContain("size-7");
+    const bar = root.querySelector<HTMLElement>(".chat-header");
+    expect(bar?.classList.contains(height)).toBe(true);
+    expect(bar?.classList.contains(otherHeight)).toBe(false);
+    expect(bar?.querySelector(".chat-header-list")?.classList.contains(buttonSize)).toBe(true);
   });
 });
