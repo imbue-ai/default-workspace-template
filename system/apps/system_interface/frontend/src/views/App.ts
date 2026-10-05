@@ -339,13 +339,19 @@ export function App(): m.Component<AppAttrs> {
    *  Re-measuring per frame is the placement a drag already does, driven by the transition
    *  instead of by the pointer. */
   function followTravellingWindows(): void {
+    let hasTravelEnded = false;
     for (const windowId of [...travellingWindows.keys()]) {
       // A window that leaves the desktop mid-travel (closed, or its desktop swapped for another) has its
       // transitions cancelled on a chrome already out of the document, where the event never reaches the
       // backdrop that listens for it: the frame that cannot find the chrome is what ends its travel.
-      if (windowElement(windowId) === null) travellingWindows.delete(windowId);
-      else pages?.placePage(windowId);
+      if (windowElement(windowId) === null) {
+        travellingWindows.delete(windowId);
+        hasTravelEnded = true;
+      } else {
+        pages?.placePage(windowId);
+      }
     }
+    if (hasTravelEnded && travellingWindows.size === 0) pages?.reconcile();
     travelFrame = travellingWindows.size > 0 ? requestAnimationFrame(followTravellingWindows) : null;
   }
 
