@@ -65,6 +65,29 @@ function drag(panel: HTMLElement, toX: number): void {
   firstRow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
 
+/** Mount the drawer under a mouse, the rail stored at `storedWidth` and, when given, laid out at `drawnWidth` (jsdom
+ *  lays nothing out); `press` sends a mouse press's events to the list's resize edge. */
+function mountUnderMouse({ storedWidth, drawnWidth }: { storedWidth?: number; drawnWidth?: number } = {}): {
+  rail: HTMLElement;
+  handle: HTMLElement;
+  press: (type: string, clientX: number) => void;
+} {
+  if (storedWidth !== undefined) {
+    window.localStorage.setItem("chat-root-rail-width", String(storedWidth));
+    initRailWidth();
+  }
+  const panel = mount(false, false);
+  const rail = panel.querySelector<HTMLElement>(".chat-rail");
+  const handle = panel.querySelector<HTMLElement>(".chat-rail-resize");
+  if (rail === null || handle === null) throw new Error("no rail or no resize handle");
+  if (drawnWidth !== undefined) rail.getBoundingClientRect = () => new DOMRect(0, 0, drawnWidth, 800);
+  handle.setPointerCapture = () => undefined;
+  const press = (type: string, clientX: number): void => {
+    handle.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 2, button: 0, clientX, clientY: 400 }));
+  };
+  return { rail, handle, press };
+}
+
 beforeEach(() => {
   onPick = vi.fn();
   onDismiss = vi.fn();
@@ -159,13 +182,7 @@ describe("ChatDrawer under a mouse", () => {
   });
 
   it("resizes from the list's edge without the press dragging the drawer away", () => {
-    const panel = mount(false, false);
-    const handle = panel.querySelector<HTMLElement>(".chat-rail-resize");
-    if (handle === null) throw new Error("no resize handle");
-    handle.setPointerCapture = () => undefined;
-    const press = (type: string, clientX: number): void => {
-      handle.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 2, button: 0, clientX, clientY: 400 }));
-    };
+    const { rail, press } = mountUnderMouse();
     press("pointerdown", 240);
     press("pointermove", 0);
     press("pointerup", 0);
@@ -174,21 +191,11 @@ describe("ChatDrawer under a mouse", () => {
     m.redraw.sync();
 
     expect(onDismiss).not.toHaveBeenCalled();
-    expect(panel.querySelector<HTMLElement>(".chat-rail")?.style.width).toBe(`${MIN_RAIL_WIDTH_PX}px`);
+    expect(rail.style.width).toBe(`${MIN_RAIL_WIDTH_PX}px`);
   });
 
   it("drags from the width it draws when the window holds the list narrower than its width", () => {
-    window.localStorage.setItem("chat-root-rail-width", "480");
-    initRailWidth();
-    const panel = mount(false, false);
-    const rail = panel.querySelector<HTMLElement>(".chat-rail");
-    const handle = panel.querySelector<HTMLElement>(".chat-rail-resize");
-    if (rail === null || handle === null) throw new Error("no rail or no resize handle");
-    rail.getBoundingClientRect = () => new DOMRect(0, 0, 340, 800);
-    handle.setPointerCapture = () => undefined;
-    const press = (type: string, clientX: number): void => {
-      handle.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 3, button: 0, clientX, clientY: 400 }));
-    };
+    const { rail, press } = mountUnderMouse({ storedWidth: 480, drawnWidth: 340 });
     press("pointerdown", 340);
     press("pointermove", 320);
     press("pointerup", 320);
@@ -198,13 +205,7 @@ describe("ChatDrawer under a mouse", () => {
   });
 
   it("steps an arrow key from the width it draws when the window holds the list narrower than its width", () => {
-    window.localStorage.setItem("chat-root-rail-width", "480");
-    initRailWidth();
-    const panel = mount(false, false);
-    const rail = panel.querySelector<HTMLElement>(".chat-rail");
-    const handle = panel.querySelector<HTMLElement>(".chat-rail-resize");
-    if (rail === null || handle === null) throw new Error("no rail or no resize handle");
-    rail.getBoundingClientRect = () => new DOMRect(0, 0, 340, 800);
+    const { rail, handle } = mountUnderMouse({ storedWidth: 480, drawnWidth: 340 });
     handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     m.redraw.sync();
 
