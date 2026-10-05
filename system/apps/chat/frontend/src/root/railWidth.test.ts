@@ -5,8 +5,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
-import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { ChatRail } from "./ChatRail";
+import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import { DEFAULT_RAIL_WIDTH_PX, MAX_RAIL_WIDTH_PX, MIN_RAIL_WIDTH_PX, initRailWidth, railWidth } from "./railWidth";
 
 const STORAGE_KEY = "chat-root-rail-width";
@@ -17,18 +17,7 @@ function mountRail(): { rail: HTMLElement; handle: HTMLElement } {
   root = document.createElement("div");
   document.body.appendChild(root);
   m.mount(root, {
-    view: () =>
-      m(ChatRail, {
-        rows: [],
-        selectedChatId: null,
-        isInDrawer: false,
-        isTouch: false,
-        onPick: () => undefined,
-        onNew: () => undefined,
-        referenceScope: scopeOfHandshake(null),
-        onDraftReference: () => undefined,
-        isReferenceDraftAvailable: false,
-      }),
+    view: () => m(ChatRail, chatRailAttrsFixture()),
   });
   const rail = root.querySelector<HTMLElement>(".chat-rail");
   const handle = root.querySelector<HTMLElement>(".chat-rail-resize");

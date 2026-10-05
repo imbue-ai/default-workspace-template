@@ -17,9 +17,9 @@ const verbs = vi.hoisted(() => ({
 vi.mock("./verbs", () => verbs);
 
 import m from "mithril";
-import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { ChatDrawer } from "./ChatDrawer";
 import { MIN_RAIL_WIDTH_PX, initRailWidth } from "./railWidth";
+import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import type { ChatRailAttrs } from "./ChatRail";
 import type { ChatRow } from "./rows";
 
@@ -35,17 +35,7 @@ let onPick = vi.fn<(chatId: string) => void>();
 let onDismiss = vi.fn<() => void>();
 
 function rail(isTouch: boolean): ChatRailAttrs {
-  return {
-    rows: ROWS,
-    selectedChatId: "agent-1",
-    isInDrawer: true,
-    isTouch,
-    onPick,
-    onNew: () => undefined,
-    referenceScope: scopeOfHandshake(null),
-    onDraftReference: () => undefined,
-    isReferenceDraftAvailable: false,
-  };
+  return chatRailAttrsFixture({ rows: ROWS, selectedChatId: "agent-1", isInDrawer: true, isTouch, onPick });
 }
 
 function mount(isCovered = false, isTouch = true): HTMLElement {
