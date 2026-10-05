@@ -491,8 +491,7 @@ export class LivePagesLayer implements PageDriver {
    */
   private coveredWindowIds(drawn: readonly DrawnWindow[], shownPageIds: ReadonlySet<string>): Set<string> {
     const covered = new Set<string>();
-    const gesture = this.store.getGesture();
-    if (gesture !== null && gesture.kind !== "shortcut" && gesture.kind !== "floating-entry") return covered;
+    if (this.store.windowGesture() !== null) return covered;
     const metrics = this.store.getMetrics();
     const backdrop = this.store.getBackdropSize();
     // A shown page parked as covered still counts: whatever covers it covers the window's content area too.
