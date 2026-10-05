@@ -1,0 +1,1 @@
+The desktop-interface docs describe how the shell now hides pages: hidden and fully covered pages are parked out of the viewport rather than set to `display: none`, a covered page stays shown to the app contract, and the shell answers a hidden page's `shell:capabilities` with `shell:hidden`.

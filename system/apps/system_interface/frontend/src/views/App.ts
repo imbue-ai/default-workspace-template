@@ -367,6 +367,8 @@ export function App(): m.Component<AppAttrs> {
     travellingWindows.delete(windowId);
     // Where the chrome landed, not the last value a frame happened to catch on the way.
     pages?.placePage(windowId);
+    // A window that travelled over another's page covers it only once it has landed.
+    if (travellingWindows.size === 0) pages?.reconcile();
   }
 
   /** Paint a floating entry as the store now has it, straight onto its box: the per-move step of its drag, and

@@ -635,7 +635,7 @@
   function sendPaneSize() {
     if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
     const rect = stage.getBoundingClientRect();
-    // Skip ONLY a collapsed pane (a hidden window's frame reads a 0x0 box): reporting that
+    // Skip ONLY a collapsed pane (a 0x0 box): reporting that
     // clamps to the 320x240 minimum and poisons the capture region. A REAL size is always
     // reported -- even if the app tab is momentarily backgrounded (document.hidden) -- so a
     // resize is never dropped and the browser reliably grows to fill the pane.
@@ -665,12 +665,16 @@
   // -> make me the sole active stream) or "h" (I went off-screen -> pause me, 0 CPU / 0
   // bandwidth). The server arbitrates (last interaction wins, ordered by its own receive
   // time so multi-device clocks don't matter) and pauses everyone else.
-  // "Visible" = the whole workspace tab isn't backgrounded (Page Visibility) AND this pane
-  // isn't a hidden window's frame (display:none -> the canvas box is 0x0, read reliably).
+  // "Visible" = the whole workspace tab isn't backgrounded (Page Visibility), the workspace shell
+  // hasn't hidden this pane's window (minimized, on another desktop: a hidden window's frame keeps
+  // its size, so the shell's word, relayed by the contract script below, is the only sign), AND the
+  // pane isn't collapsed (0x0).
+  const SHELL_VISIBILITY_EVENT = "browser:shell-visibility";
+  let isShellHidden = false;
   function paneVisible() {
-    if (document.hidden) return false;
+    if (document.hidden || isShellHidden) return false;
     const r = stage.getBoundingClientRect();
-    return r.width > 4 && r.height > 4;  // display:none / detached pane -> 0x0
+    return r.width > 4 && r.height > 4;
   }
   function sendStream(msg) { if (streamWs && streamWs.readyState === WebSocket.OPEN) streamWs.send(msg); }
   let claimedActive = false, wasVisible = false;
@@ -693,8 +697,12 @@
     wasVisible = vis;
   }
   document.addEventListener("visibilitychange", onVisibilityTransition);
+  document.addEventListener(SHELL_VISIBILITY_EVENT, (event) => {
+    isShellHidden = !event.detail.isShown;
+    onVisibilityTransition();
+  });
   new IntersectionObserver(onVisibilityTransition, { threshold: [0, 0.01] }).observe(stage);
-  setInterval(onVisibilityTransition, 1500);  // belt: catches a display:none<->visible flip the observer missed
+  setInterval(onVisibilityTransition, 1500);  // belt: catches a collapse<->visible flip the observer missed
   // Belt for sizing: unconditionally re-assert the true pane size on a cadence. The
   // ResizeObserver/visibility re-report can miss on a fresh reconnect (it runs before the
   // pane has laid out, then never fires again since the pane doesn't change), leaving the
@@ -1180,9 +1188,13 @@ registerProcessor('pb', PB);`;
             })
             .catch((error) => console.warn("[browser] close-tab request failed", error));
         };
+        const tellShellVisibility = (isShown) =>
+          document.dispatchEvent(new CustomEvent("browser:shell-visibility", { detail: { isShown } }));
         const connection = connectToShell({
           capabilities: { navigation: false, closeChord: true },
           onCloseRequest: closeRemoteTab,
+          onShown: () => tellShellVisibility(true),
+          onHidden: () => tellShellVisibility(false),
         });
         window.addEventListener("focus", () => connection.focused());
         if (session) connection.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));

@@ -256,13 +256,13 @@ describe("a window drag", () => {
       document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
     measureContent();
     m.redraw.sync();
-    expect(pageOf().style.display).toBe("");
+    expect(pageOf().style.visibility).toBe("");
     store.setCanPopOut(true);
     const listener = gestureListener as GestureListener;
     listener.onBegin(binding, { x: 100, y: 60 }, { x: 100, y: 60 });
     store.setTearOut("win-1", "out");
     m.redraw.sync();
-    expect(pageOf().style.display).toBe("none");
+    expect(pageOf().style.visibility).toBe("hidden");
     store.setTearOut("win-1", "released");
     m.redraw.sync();
     expect(store.getGesture()).toBeNull();
@@ -270,7 +270,7 @@ describe("a window drag", () => {
     m.redraw.sync();
     measureContent();
     m.redraw.sync();
-    expect(pageOf().style.display).toBe("");
+    expect(pageOf().style.visibility).toBe("");
   });
 
   it("turns window motion off for the press and back on when it ends", () => {
@@ -823,7 +823,7 @@ describe("a solo shell", () => {
     const host = document.querySelector('[data-solo-window="win-1"] .live-pages') as HTMLElement;
     resizeHost(host, 1000, 800);
     const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
-    expect(page.style.display).toBe("");
+    expect(page.style.visibility).toBe("");
     expect(page.style.pointerEvents).toBe("auto");
     expect([page.style.left, page.style.top, page.style.width, page.style.height]).toEqual([
       "0px",
@@ -882,7 +882,7 @@ describe("the switch to the phone layout", () => {
     const host = document.querySelector("[data-phone-page-host] .live-pages") as HTMLElement;
     resizeHost(host, 393, 760);
     const page = document.querySelector('iframe[data-live-page="win-1"]')?.parentElement as HTMLElement;
-    expect([page.style.display, page.style.width, page.style.height]).toEqual(["", "393px", "760px"]);
+    expect([page.style.visibility, page.style.width, page.style.height]).toEqual(["", "393px", "760px"]);
     resizeHost(host, 393, 420);
     expect([page.style.width, page.style.height]).toEqual(["393px", "420px"]);
     resizeHost(host, 852, 300);

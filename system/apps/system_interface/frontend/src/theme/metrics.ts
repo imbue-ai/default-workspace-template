@@ -23,6 +23,7 @@ export const TOUCH_ATTRIBUTE = "data-touch";
 
 export interface ThemeMetrics {
   readonly titleBarHeight: number;
+  readonly windowRadius: number;
   readonly taskbarHeight: number;
   readonly cellWidth: number;
   readonly cellHeight: number;
@@ -41,6 +42,7 @@ export interface ThemeMetrics {
 
 const TOKEN_BY_METRIC: Readonly<Record<keyof ThemeMetrics, string>> = {
   titleBarHeight: "--desk-title-bar-height",
+  windowRadius: "--desk-window-radius",
   taskbarHeight: "--desk-taskbar-height",
   cellWidth: "--desk-cell-width",
   cellHeight: "--desk-cell-height",

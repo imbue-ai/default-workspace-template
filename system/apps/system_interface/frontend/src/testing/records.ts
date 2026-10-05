@@ -227,6 +227,7 @@ export function noticeWire(apps: string[], overrides: Partial<UpdateNoticeWire> 
 export function themeMetricsRecord(overrides: Partial<ThemeMetrics> = {}): ThemeMetrics {
   return {
     titleBarHeight: 36,
+    windowRadius: 12,
     taskbarHeight: 48,
     cellWidth: 96,
     cellHeight: 112,
