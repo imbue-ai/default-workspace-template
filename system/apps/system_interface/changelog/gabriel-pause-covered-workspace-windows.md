@@ -1,4 +1,4 @@
-Windows that are hidden or completely covered by other windows no longer cost CPU or GPU. An app that animates all the time (a spinning 3D globe, a canvas loop) kept rendering at full frame rate behind other windows, and a busy desktop could hold the whole renderer above 100% CPU.
+The browser no longer renders the pages of windows that are hidden or completely covered by other windows. An app that animates all the time (a spinning 3D globe, a canvas loop) kept rendering at full frame rate behind other windows, and a busy desktop could hold the whole renderer above 100% CPU.
 
 - A page the windows in front of it completely cover is moved out of the viewport and made invisible, which stops the browser rendering it in Chromium, Safari and Firefox. It is still shown as far as the app is concerned: it gets no `shell:hidden`. Rounded corners are respected, so the notches two snapped windows leave over a third keep that page live. A window still sliding into place covers nothing until it lands, one sliding away uncovers at once, and nothing is covered while a window is being dragged or resized.
 
