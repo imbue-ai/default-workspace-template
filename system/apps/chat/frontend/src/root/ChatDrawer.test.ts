@@ -162,12 +162,12 @@ describe("ChatDrawer", () => {
 
 describe("ChatDrawer under a mouse", () => {
   it("holds the rail's form of the list at the width the rail was dragged to", () => {
-    window.localStorage.setItem("chat-root-rail-width", "320");
-    initRailWidth();
-    const panel = mount(false, false);
+    const { rail } = mountUnderMouse({ storedWidth: 320 });
+    const panel = rail.closest<HTMLElement>(".chat-drawer-panel");
+    if (panel === null) throw new Error("no drawer panel");
 
     expect(panel.className).not.toContain("w-[86%]");
-    expect(panel.querySelector<HTMLElement>(".chat-rail")?.style.width).toBe("320px");
+    expect(rail.style.width).toBe("320px");
     // The rail's head and dense rows: "New chat" spelled out, a rename pencil rather than a kebab.
     expect(panel.querySelector(".chat-rail-new")?.textContent).toBe("New chat");
     expect(panel.querySelector(".chat-rail-row")?.className).not.toContain("min-h-11");
@@ -176,8 +176,8 @@ describe("ChatDrawer under a mouse", () => {
   });
 
   it("picks the chat on screen again when its row is clicked, which is what closes the drawer", () => {
-    const panel = mount(false, false);
-    panel.querySelector<HTMLElement>('.chat-rail-row[data-chat-id="agent-1"]')?.click();
+    const { rail } = mountUnderMouse();
+    rail.querySelector<HTMLElement>('.chat-rail-row[data-chat-id="agent-1"]')?.click();
     expect(onPick).toHaveBeenCalledWith("agent-1");
   });
 

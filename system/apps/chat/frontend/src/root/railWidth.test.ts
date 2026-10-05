@@ -26,14 +26,16 @@ function mountRail(): { rail: HTMLElement; handle: HTMLElement } {
   return { rail, handle };
 }
 
+/** Send a mouse press's `type` event to the list's resize edge. */
+function pressEdge(handle: HTMLElement, type: string, clientX: number): void {
+  handle.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, button: 0, clientX, clientY: 300 }));
+}
+
 function dragEdge(handle: HTMLElement, fromX: number, toX: number): void {
-  const press = (type: string, clientX: number): void => {
-    handle.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, button: 0, clientX, clientY: 300 }));
-  };
-  press("pointerdown", fromX);
-  press("pointermove", (fromX + toX) / 2);
-  press("pointermove", toX);
-  press("pointerup", toX);
+  pressEdge(handle, "pointerdown", fromX);
+  pressEdge(handle, "pointermove", (fromX + toX) / 2);
+  pressEdge(handle, "pointermove", toX);
+  pressEdge(handle, "pointerup", toX);
   m.redraw.sync();
 }
 
@@ -95,16 +97,13 @@ describe("rail width", () => {
 
   it("ends a drag whose rail goes mid-drag, so a later rail is not resized by a hover", () => {
     const first = mountRail();
-    const press = (handle: HTMLElement, type: string, clientX: number): void => {
-      handle.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, button: 0, clientX, clientY: 300 }));
-    };
-    press(first.handle, "pointerdown", 180);
-    press(first.handle, "pointermove", 260);
+    pressEdge(first.handle, "pointerdown", 180);
+    pressEdge(first.handle, "pointermove", 260);
     unmountRail();
     expect(window.localStorage.getItem(STORAGE_KEY)).toBe("260");
 
     const second = mountRail();
-    press(second.handle, "pointermove", 400);
+    pressEdge(second.handle, "pointermove", 400);
     m.redraw.sync();
     expect(second.rail.style.width).toBe("260px");
   });
