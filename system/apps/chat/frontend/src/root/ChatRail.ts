@@ -455,9 +455,13 @@ function renamePencil(row: ChatRow): m.Vnode {
   return m(
     "span",
     {
+      // Out of sight it takes no room, the row's gap included, so the title runs to the row's end; it opens up, and
+      // the title shortens, only while the row is under the pointer or the pencil has the keyboard. Narrowed to
+      // nothing rather than hidden, so a tab still reaches it.
       class:
-        "chat-rail-rename flex-none rounded p-0.5 text-faint opacity-0 hover:bg-fill-hover hover:text-primary " +
-        "group-hover:opacity-100 focus-visible:opacity-100",
+        "chat-rail-rename -ml-2 w-0 flex-none overflow-hidden rounded p-0 text-faint opacity-0 " +
+        "hover:bg-fill-hover hover:text-primary group-hover:ml-0 group-hover:w-auto group-hover:p-0.5 " +
+        "group-hover:opacity-100 focus-visible:ml-0 focus-visible:w-auto focus-visible:p-0.5 focus-visible:opacity-100",
       ...innerButtonAttrs("Rename chat", () => beginRename(row)),
     },
     m.trust(icon("edit", { size: 13 })),
