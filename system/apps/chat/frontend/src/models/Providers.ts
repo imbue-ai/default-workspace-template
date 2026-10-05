@@ -87,13 +87,6 @@ interface FlowStart {
   relay_url: string | null;
 }
 
-/** Which lane and method a live flow runs, and the account it re-authenticates, if any. */
-export interface FlowTarget {
-  laneId: string;
-  methodId: string;
-  accountId: string | null;
-}
-
 interface FlowStatus {
   state: FlowState;
   detail: string | null;
@@ -234,10 +227,10 @@ export async function deleteAccount(accountId: string): Promise<void> {
 /**
  * The live sign-in, if any. One at a time, matching the server.
  */
-let flow: (FlowStart & FlowTarget & { status: FlowStatus }) | null = null;
+let flow: (FlowStart & { status: FlowStatus }) | null = null;
 let pollTimer: number | null = null;
 
-export function getFlow(): (FlowStart & FlowTarget & { status: FlowStatus }) | null {
+export function getFlow(): (FlowStart & { status: FlowStatus }) | null {
   return flow;
 }
 
@@ -264,13 +257,7 @@ export async function startFlow(laneId: string, methodId: string, accountId?: st
     body: { lane_id: laneId, method_id: methodId, account_id: accountId ?? null },
   });
   if (attempt !== startGeneration) return;
-  flow = {
-    ...started,
-    laneId,
-    methodId,
-    accountId: accountId ?? null,
-    status: { state: "pending", detail: null, account_id: null },
-  };
+  flow = { ...started, status: { state: "pending", detail: null, account_id: null } };
   // Stopped HERE rather than before the await: two overlapping sign-ins both reached the await
   // with nothing yet to stop, and both then started a poller. The first interval was left with
   // no reference to it, GETting a flow id the server had already forgotten every two seconds
