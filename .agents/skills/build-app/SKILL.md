@@ -42,8 +42,8 @@ they asked, in one line, and carry on.
 
 **One turn carries the whole build.** From the moment you start planning until
 an interactive node is due, you stay inside a single turn: you wait for each
-worker with a foreground `await` (Step 4), read its report, launch whatever
-became ready, and wait again. Ending the turn is how you hand the floor back to
+worker with a foreground `await-any` (Step 4), read the report of whichever
+one finished, launch whatever became ready, and wait again. Ending the turn is how you hand the floor back to
 the user, so every end mid-build invites a "how's it going?" that you must then
 answer -- three runs were lost that way, with the conversation exhausted before
 the app was live. The only turn ends in a build are the ones an interactive node
@@ -179,6 +179,12 @@ Run that once per worker the pool names, replacing `high-1` in the `--name`, the
 `--runtime-dir` and the `--task-file`, and setting the `awk` test to that worker's
 capability -- `high` for `high-1` and `high-2`, `medium` for the two `medium`s, `low` for
 `low-1`. Two workers of the same capability share a model and differ only in their name.
+
+**Issue all of them at once**, as separate commands in a single message, so the creates
+run concurrently rather than one worker's create delaying the next one's. Separate
+commands, not one command with five launches in it: each worker still needs its own
+command for the same reason node launches do. Done sequentially the pool comes up
+staggered, and the last worker is a minute behind the first for no reason.
 
 Do not wait for their ready reports. They read while you clarify, and Step 4 sends the
 first node to an agent that is already warm -- `launch` there becomes a `reply`, since
@@ -387,6 +393,16 @@ Repeat until every node is done.
    - **Break ties by who finished longest ago** -- their context is coldest, so nothing is
      lost by giving them something new.
 
+   **Drain `ready` before every wait.** Dispatch, re-run `ready`, dispatch again, and keep
+   going until it prints nothing you have a free worker for. Only then wait. If you are about
+   to wait while a worker is free and `ready` still names a node of its capability, you have
+   skipped a dispatch -- go back and send it. Measured builds have run a pool of five at an
+   average of under one worker busy, almost all of it this one mistake.
+
+   When `ready` names several nodes you can start, write all their task files in **one**
+   `write-task` -- `--node` is repeatable (`--node 2 --node 4 --node 5`) and the plan is read
+   once for the whole wave. The sends themselves stay one command per node.
+
    Send the node to the worker you chose, by name:
 
    ```bash
@@ -422,16 +438,24 @@ Repeat until every node is done.
 
    Nothing is copied into `$BUILD`. The task file names an absolute `finish_report_path` under
    `$RUN`, the worker writes there directly, and `report` makes the directory itself -- so the
-   report lands where `await` and `write-task` already look.
+   report lands where `await-any` and `write-task` already look.
 
    The task file is named twice on purpose: `--message-file` is what the agent receives, and
    `--task-file` is the required argument `reply` normally reads a worker id out of, which
    `--message-with-mngr` addresses by name instead.
 
    ```bash
-   uv run .agents/skills/launch-task/scripts/create_worker.py await \
-       --name "$APP-<agent>" --task-file "$RUN/nodes/N/task.md" --timeout 9m
+   uv run .agents/skills/launch-task/scripts/create_worker.py await-any \
+       --name "$APP-<agent-a>" --task-file "$RUN/nodes/A/task.md" \
+       --name "$APP-<agent-b>" --task-file "$RUN/nodes/B/task.md" \
+       --timeout 9m
    ```
+
+   **Name every worker you have running, every time.** `await-any` returns on the first
+   report of any of them and prints `resolved worker=<name> task-file=<path>` on stderr, so
+   you know whose report you just read. Waiting on one worker when three are running is the
+   single most expensive mistake available here: the other two finish, sit idle, and get no
+   new node until the one you picked happens to be done.
 
    One agent does its nodes **one at a time**, so two nodes of the same capability never run
    at once; nodes of different capabilities still do. Send a node only once every node in its
@@ -478,19 +502,30 @@ Repeat until every node is done.
 
 4. **Start each interactive node it printed** with Step 5. Add it to `running`.
 
-5. **Wait for the running workers, in the foreground, one at a time.** Take them
-   in the order you launched them:
+5. **Wait for all the running workers at once, in the foreground.** Name every
+   one of them in a single `await-any`, which returns the moment any of them
+   reports:
 
    ```bash
-   uv run .agents/skills/launch-task/scripts/create_worker.py await \
-       --name "$APP-node-N" --task-file "$RUN/nodes/N/task.md" --timeout 9m
+   uv run .agents/skills/launch-task/scripts/create_worker.py await-any \
+       --name "$APP-node-1" --task-file "$RUN/nodes/1/task.md" \
+       --name "$APP-node-4" --task-file "$RUN/nodes/4/task.md" \
+       --name "$APP-node-5" --task-file "$RUN/nodes/5/task.md" \
+       --timeout 9m
    ```
 
+   Pass **every** node still running, not the one you are most interested in.
+   `await-any` prints `resolved worker=<name> task-file=<path>` on stderr, so you
+   know which report you are holding; handle that one (item 6), launch whatever
+   it unblocked, and run `await-any` again over whoever is still going. Waiting
+   on a single worker while others run means an early finisher waits for a late
+   one for no reason, and that idle time is the largest avoidable cost in a
+   parallel build.
+
    Run it as an ordinary foreground command with the longest tool timeout you
-   can give it, and keep your turn open. The wait is a poll on the worker's
-   report, not a sleep: the other workers keep building throughout, and a node
-   that finished while you were waiting on an earlier one returns immediately
-   when its turn comes.
+   can give it, and keep your turn open. The wait is a poll on the workers'
+   reports, not a sleep: every worker keeps building throughout, and a node that
+   finished while the command was starting returns immediately.
 
    `--timeout 9m` is short on purpose -- it fits inside one tool call. **Exit 124
    means only that the 9 minutes elapsed**, so re-run the same command; a worker
@@ -504,7 +539,7 @@ Repeat until every node is done.
    answerable between short delegations, while a build is many workers deep and
    an hour long, and each turn it ends costs it a conversation.
 
-6. **Handle each report as its `await` returns.** Follow
+6. **Handle each report as `await-any` returns it.** Follow
    `.agents/shared/references/lead-proxy.md` for reading the report, diagnosing
    a timeout, and a worker stopped for memory (exit 75) -- everything but its
    polling advice, which item 5 replaces. The reports dir is
@@ -603,7 +638,7 @@ For a review:
           --name "$APP-node-K" --message-with-mngr -m "<the change>"
       ```
 
-      Then wait on it again (Step 4, item 5). The `await` that printed the
+      Then wait on it again (Step 4, item 5). The `await-any` that printed the
       builder's last report already archived it, so its next report lands
       cleanly.
    2. When its new report lands, **merge its branch again** -- the change is a
@@ -662,9 +697,18 @@ live comes first and the teardown happens afterwards, while the user already has
    That single hardening pass is the only thorough test-and-review run the app
    gets; no worker ran one. It runs in a worker of its own, so start it before the
    teardown rather than after it.
-5. **Stop the workers.** Destroy every worker still running, naming each one.
-   With `settings.worker_pool` that is one per worker the pool named (`$APP-high-1`,
-   `$APP-high-2`, `$APP-medium-1`, ...); with
+5. **Stop the workers** -- all of them in **one** command, with a `--name` each:
+
+   ```bash
+   uv run .agents/skills/launch-task/scripts/create_worker.py destroy \
+       --name "$APP-high-1" --name "$APP-high-2" \
+       --name "$APP-medium-1" --name "$APP-medium-2" --name "$APP-low-1"
+   ```
+
+   One call reads the agent listing once for the whole pool; one call per worker
+   reads it once each, which is nearly all of what a teardown costs. Name every
+   worker still running: with `settings.worker_pool` that is one per worker the
+   pool named (`$APP-high-1`, `$APP-high-2`, `$APP-medium-1`, ...); with
    `settings.tier_agents` it is `$APP-low`, `$APP-medium` and `$APP-high`; otherwise it
    is one per `$APP-node-N` you launched, and the destroy also removes that worker's
    worktree.

@@ -703,27 +703,37 @@ def _run_ready(
     return 0
 
 
-def _run_write_task(run_dir: Path, node_idx: int) -> int:
+def _run_write_task(run_dir: Path, node_indices: Sequence[int]) -> int:
+    """Write the task file for each node named, reading the plan once for all of them.
+
+    A wave of ready nodes is dispatched together, so their task files are written
+    together: the per-call cost here is interpreter start-up, which several
+    ``--node`` arguments pay once instead of once each. Every index is validated
+    before anything is written, so a bad one fails the whole call rather than
+    leaving half a wave's task files on disk.
+    """
     plan = _read_plan_json(run_dir)
     nodes = plan["nodes"]
     assert isinstance(nodes, list)
-    if not 0 <= node_idx < len(nodes):
-        raise PlanError(f"no such node in the plan: {node_idx}")
-    report_by_node_idx = {
-        idx: report
-        for idx in nodes[node_idx]["access"]
-        if (report := read_node_report(run_dir, idx)) is not None
-    }
-    task_path = node_task_path(run_dir, node_idx)
-    task_text = render_node_task(
-        plan=plan,
-        node_idx=node_idx,
-        finish_report_path=node_report_path(run_dir, node_idx),
-        report_by_node_idx=report_by_node_idx,
-    )
-    task_path.parent.mkdir(parents=True, exist_ok=True)
-    task_path.write_text(task_text, encoding="utf-8")
-    print(f"plan_orchestration: wrote the task for node {node_idx} to {task_path}")
+    for node_idx in node_indices:
+        if not 0 <= node_idx < len(nodes):
+            raise PlanError(f"no such node in the plan: {node_idx}")
+    for node_idx in node_indices:
+        report_by_node_idx = {
+            idx: report
+            for idx in nodes[node_idx]["access"]
+            if (report := read_node_report(run_dir, idx)) is not None
+        }
+        task_path = node_task_path(run_dir, node_idx)
+        task_text = render_node_task(
+            plan=plan,
+            node_idx=node_idx,
+            finish_report_path=node_report_path(run_dir, node_idx),
+            report_by_node_idx=report_by_node_idx,
+        )
+        task_path.parent.mkdir(parents=True, exist_ok=True)
+        task_path.write_text(task_text, encoding="utf-8")
+        print(f"plan_orchestration: wrote the task for node {node_idx} to {task_path}")
     return 0
 
 
@@ -797,10 +807,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     task_parser = subparsers.add_parser(
-        "write-task", help="Write <run-dir>/nodes/<node>/task.md for one node's worker."
+        "write-task",
+        help="Write <run-dir>/nodes/<node>/task.md for each node's worker. "
+        "--node is repeatable: pass a whole wave of ready nodes in one call.",
     )
     task_parser.add_argument("--run-dir", type=Path, required=True)
-    task_parser.add_argument("--node", type=int, required=True)
+    task_parser.add_argument("--node", type=int, required=True, action="append", default=[])
 
     args = parser.parse_args(argv)
     try:

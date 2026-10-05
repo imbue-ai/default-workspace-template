@@ -86,24 +86,23 @@ You never talk to the user, and you never start anything that asks the user for
 something, such as a `latchkey` permission request. Every contact with the user
 is a separate node the orchestrator runs.
 
-## How to check your work
+## Checking is not your job
 
-One command, and only one: whatever proves the files you wrote load. For Python
-that is importing the module you added (`uv run python -c "import <module>"`);
-for a page or a static asset it is that the file parses. Then report.
+Do not check your own work. Write the piece your subtask names, commit it, and
+report. No import check, no test suite, no throwaway script that drives your
+piece, no serving the app and loading it with curl or Playwright, none of the
+full test suite, coverage, ratchets, `/autofix` or any review gate, even where
+`CLAUDE.md` asks for them.
 
-**Build nothing to check with unless your subtask asks you to.** No test suite,
-no throwaway script that drives your piece, no serving the app and loading it
-with curl or Playwright, and none of the full test suite, coverage, ratchets,
-`/autofix` or any review gate, even where `CLAUDE.md` asks for them. In a build
-this instruction used to ask every node for a served check, and four of five
-workers answered it by writing their own `check_*.py` -- between a third and two
-thirds of each worker's time, which found nothing that mattered.
+In a build this file used to ask every node for a single served check, and four
+of five workers answered it by writing their own `check_*.py` -- between a third
+and two thirds of each worker's time, which found nothing that mattered. Asking
+for one command invited a suite.
 
-What that check would have caught is already caught, later and in one place: the
+What a check would have caught is already caught, later and in one place: the
 orchestrator serves a preview of the whole app at each review, in front of the
 user, and one hardening pass runs the real tests once everything is built. Your
-job is to hand over a piece that loads and a report that says what you built.
+job is to hand over a piece and a report that says what you built.
 
 **Unless checking is the subtask.** A plan can name a node whose whole job is to
 verify -- that the app serves and renders, that a behaviour holds, sometimes

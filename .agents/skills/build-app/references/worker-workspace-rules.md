@@ -64,13 +64,13 @@ whole account of what you did.
 - **Naming is informative, not cheeky.** Service names, app names, skill names, command names: prefer something that explains what the thing does (`slack-inbox-checker`) over something clever (`nothing-new`). Cute names tax every later mention.
 - **Platform-internal APIs are valid.** Don't restrict yourself to officially documented public APIs. If a platform's own client (web app, mobile app) uses internal or undocumented endpoints to do something, those endpoints are fair game -- inspect what the official client actually calls and use the same endpoints with the same user-session auth. This is often cleaner than designing brute-force workarounds on top of a limited public API.
 
-# Manual verification and testing
+# Verification is not yours
 
-Before declaring any feature complete, manually verify it: exercise the feature exactly as a real user would, with real inputs, and critically evaluate whether it *actually does the right thing*. 
-Do not confuse "no errors" with "correct behavior" -- a command that exits 0 but produces wrong output is not working.
-
-Then crystallize the verified behavior into formal tests. 
-Assert on things that are true if and only if the feature worked correctly -- this ensures tests are both reliable and meaningful.
+The workspace's own rules tell an agent to manually verify every feature and turn what it
+verified into tests. That is for an agent that owns a whole piece of work end to end. You own
+one node of a build: `worker-node.md` says not to check your own work, and that is the rule
+here. The orchestrator shows the whole app to the user at each review, and one hardening pass
+runs the real tests once everything is built.
 
 # Using crystallized skills
 

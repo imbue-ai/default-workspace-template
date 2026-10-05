@@ -1704,6 +1704,173 @@ def _archive_report(
     report_path.replace(target)
 
 
+class _AwaitTarget(NamedTuple):
+    """One worker an await watches: where its report lands, and who to diagnose if it never does.
+
+    ``label`` is what the caller knows the target by -- the task file path, for a
+    CLI await -- and is printed when a multi-target wait resolves, so the caller
+    learns *which* worker it just collected without re-deriving it from the report.
+    """
+
+    report_path: Path
+    worker_name: str | None = None
+    label: str | None = None
+
+
+def _collect_if_ready(
+    target: _AwaitTarget,
+    stream: TextIO,
+    watch_milestones: bool,
+    archive_timestamp: Callable[[], str],
+) -> bool:
+    """Print and consume ``target``'s report, or a milestone beside it, if one is there.
+
+    Returns whether anything was collected. ``report.md`` is checked first and
+    wins; a milestone is archived under its own name so the worker's copy keeps
+    re-delivering and ``_unconsumed_milestones`` recognises a handled one.
+    """
+    report_path = target.report_path
+    if report_path.is_file():
+        text = report_path.read_text(encoding="utf-8")
+        stream.write(text)
+        _archive_report(
+            report_path,
+            _consumed_report_name(
+                parse_report(text), archive_timestamp(), report_path.suffix
+            ),
+        )
+        return True
+    if watch_milestones:
+        unconsumed = _unconsumed_milestones(report_path)
+        if unconsumed:
+            milestone_path = unconsumed[0]
+            stream.write(milestone_path.read_text(encoding="utf-8"))
+            consumed_dir = _consumed_dir(report_path)
+            _archive_report(milestone_path, archive_dir=consumed_dir)
+            print(
+                f"create_worker: milestone report from {milestone_path}, "
+                f"archived as {consumed_dir / milestone_path.name}",
+                file=sys.stderr,
+            )
+            return True
+    return False
+
+
+def _diagnose_silence(
+    target: _AwaitTarget,
+    consecutive_idle_count: int,
+    pending_shed_check: Callable[[str], bool] | None,
+    idle_check: Callable[[str], bool] | None,
+) -> tuple[int | None, int]:
+    """Why ``target`` has not reported, if the answer is already knowable.
+
+    Returns the exit code to stop on (or ``None`` to keep waiting) and the
+    target's updated consecutive-idle count. The shed check runs first: a shed
+    agent also reads as not-running, and the shed diagnosis is the more specific
+    one and is recovered differently.
+    """
+    name = target.worker_name
+    if name is None:
+        return None, 0
+    if pending_shed_check is not None and pending_shed_check(name):
+        print(
+            f"create_worker: worker '{name}' was stopped by the OOM "
+            "daemon to relieve memory pressure -- its agent process was shed "
+            "and its background tasks (including its own report poll) were "
+            "cancelled, so it will NOT report until it is revived. Revive it "
+            f"with: mngr start {name} --restart  (a plain message "
+            "or `mngr start` will not relaunch a shed agent), then nudge it to "
+            "continue (create_worker.py reply --task-file <task file> -m "
+            "continue). You do not need to resend the task -- it survives in the worker's "
+            "conversation history, and a SessionStart hook already tells the "
+            "revived worker it was paused, so it re-checks state before "
+            "continuing.",
+            file=sys.stderr,
+        )
+        return _AWAIT_SHED_RC, consecutive_idle_count
+    if idle_check is not None:
+        consecutive_idle_count = (
+            consecutive_idle_count + 1 if idle_check(name) else 0
+        )
+        if consecutive_idle_count >= _IDLE_POLLS_BEFORE_GIVING_UP:
+            print(
+                f"create_worker: worker '{name}' has ended its turn "
+                f"(idle for {consecutive_idle_count} consecutive polls) but no "
+                f"report has appeared at {target.report_path}. A worker still waiting "
+                "on a live sub-worker of its own does NOT count as idle, so "
+                "this is not a nested dispatch in flight. Either it finished "
+                "and the report delivery failed (look for the report inside the "
+                "worker's own worktree -- its `work_dir` in `mngr list "
+                f"--format jsonl` for {name} -- under the report's "
+                "relative path, and copy it to the path above), or it stopped "
+                "without reporting (read its transcript: "
+                f"mngr transcript {name}; nudge it with create_worker.py "
+                "reply --task-file <task file> -m 'deliver your report per "
+                "worker-reporting.md'). Not waiting out the remaining timeout.",
+                file=sys.stderr,
+            )
+            return _AWAIT_IDLE_RC, consecutive_idle_count
+    return None, consecutive_idle_count
+
+
+def await_targets(
+    targets: Sequence[_AwaitTarget],
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+    sleeper: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    out: TextIO | None = None,
+    pending_shed_check: Callable[[str], bool] | None = None,
+    idle_check: Callable[[str], bool] | None = None,
+    archive_timestamp: Callable[[], str] = _utc_timestamp,
+    watch_milestones: bool = True,
+) -> tuple[int, _AwaitTarget | None]:
+    """Block until the FIRST of ``targets`` resolves, and say which one did.
+
+    Returns that target's exit code and the target itself (``None`` on timeout,
+    which belongs to no single target). One target behaves exactly as a single
+    await always has, which is how ``await_report`` is built.
+
+    Each poll checks every target's report before diagnosing any target's
+    silence, so a report that has landed always beats a shed-or-idle verdict on
+    some other worker -- the same precedence a single await applies between its
+    own report and its own diagnosis. A diagnosis does end the whole wait: a shed
+    or stalled worker is something the caller must act on, and the workers still
+    running keep running and will still be there to await again.
+
+    ``sleeper``/``clock`` are injected so tests can drive the loop without real
+    time. Reports are checked before the first sleep, so one already present
+    returns immediately.
+    """
+    stream: TextIO = sys.stdout if out is None else out
+    deadline = clock() + timeout_seconds
+    idle_counts = [0] * len(targets)
+    while True:
+        for target in targets:
+            if _collect_if_ready(target, stream, watch_milestones, archive_timestamp):
+                return 0, target
+        for index, target in enumerate(targets):
+            stop_code, idle_counts[index] = _diagnose_silence(
+                target, idle_counts[index], pending_shed_check, idle_check
+            )
+            if stop_code is not None:
+                return stop_code, target
+        if clock() >= deadline:
+            where = (
+                str(targets[0].report_path)
+                if len(targets) == 1
+                else "any of " + ", ".join(str(t.report_path) for t in targets)
+            )
+            print(
+                f"create_worker: timed out after {timeout_seconds:g}s waiting for "
+                f"{where}; the worker may still be alive -- diagnose liveness "
+                f"per lead-proxy.md before invoking the failure flow",
+                file=sys.stderr,
+            )
+            return _AWAIT_TIMEOUT_RC, None
+        sleeper(poll_interval_seconds)
+
+
 def await_report(
     report_path: Path,
     timeout_seconds: float,
@@ -1764,85 +1931,23 @@ def await_report(
     ``sleeper``/``clock`` are injected so tests can drive the poll loop without
     real time. The file is checked before the first sleep, so a report already
     present returns immediately.
+
+    This is ``await_targets`` over a single target; waiting on several at once
+    is that function, and ``await-any`` on the CLI.
     """
-    stream: TextIO = sys.stdout if out is None else out
-    deadline = clock() + timeout_seconds
-    consecutive_idle_count = 0
-    while True:
-        if report_path.is_file():
-            text = report_path.read_text(encoding="utf-8")
-            stream.write(text)
-            _archive_report(
-                report_path,
-                _consumed_report_name(
-                    parse_report(text), archive_timestamp(), report_path.suffix
-                ),
-            )
-            return 0
-        if watch_milestones:
-            unconsumed = _unconsumed_milestones(report_path)
-            if unconsumed:
-                milestone_path = unconsumed[0]
-                stream.write(milestone_path.read_text(encoding="utf-8"))
-                consumed_dir = _consumed_dir(report_path)
-                _archive_report(milestone_path, archive_dir=consumed_dir)
-                print(
-                    f"create_worker: milestone report from {milestone_path}, "
-                    f"archived as {consumed_dir / milestone_path.name}",
-                    file=sys.stderr,
-                )
-                return 0
-        if (
-            worker_name is not None
-            and pending_shed_check is not None
-            and pending_shed_check(worker_name)
-        ):
-            print(
-                f"create_worker: worker '{worker_name}' was stopped by the OOM "
-                "daemon to relieve memory pressure -- its agent process was shed "
-                "and its background tasks (including its own report poll) were "
-                "cancelled, so it will NOT report until it is revived. Revive it "
-                f"with: mngr start {worker_name} --restart  (a plain message "
-                "or `mngr start` will not relaunch a shed agent), then nudge it to "
-                "continue (create_worker.py reply --task-file <task file> -m "
-                "continue). You do not need to resend the task -- it survives in the worker's "
-                "conversation history, and a SessionStart hook already tells the "
-                "revived worker it was paused, so it re-checks state before "
-                "continuing.",
-                file=sys.stderr,
-            )
-            return _AWAIT_SHED_RC
-        if worker_name is not None and idle_check is not None:
-            consecutive_idle_count = (
-                consecutive_idle_count + 1 if idle_check(worker_name) else 0
-            )
-            if consecutive_idle_count >= _IDLE_POLLS_BEFORE_GIVING_UP:
-                print(
-                    f"create_worker: worker '{worker_name}' has ended its turn "
-                    f"(idle for {consecutive_idle_count} consecutive polls) but no "
-                    f"report has appeared at {report_path}. A worker still waiting "
-                    "on a live sub-worker of its own does NOT count as idle, so "
-                    "this is not a nested dispatch in flight. Either it finished "
-                    "and the report delivery failed (look for the report inside the "
-                    "worker's own worktree -- its `work_dir` in `mngr list "
-                    f"--format jsonl` for {worker_name} -- under the report's "
-                    "relative path, and copy it to the path above), or it stopped "
-                    "without reporting (read its transcript: "
-                    f"mngr transcript {worker_name}; nudge it with create_worker.py "
-                    "reply --task-file <task file> -m 'deliver your report per "
-                    "worker-reporting.md'). Not waiting out the remaining timeout.",
-                    file=sys.stderr,
-                )
-                return _AWAIT_IDLE_RC
-        if clock() >= deadline:
-            print(
-                f"create_worker: timed out after {timeout_seconds:g}s waiting for "
-                f"{report_path}; the worker may still be alive -- diagnose liveness "
-                f"per lead-proxy.md before invoking the failure flow",
-                file=sys.stderr,
-            )
-            return _AWAIT_TIMEOUT_RC
-        sleeper(poll_interval_seconds)
+    exit_code, _resolved = await_targets(
+        [_AwaitTarget(report_path=report_path, worker_name=worker_name)],
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+        sleeper=sleeper,
+        clock=clock,
+        out=out,
+        pending_shed_check=pending_shed_check,
+        idle_check=idle_check,
+        archive_timestamp=archive_timestamp,
+        watch_milestones=watch_milestones,
+    )
+    return exit_code
 
 
 def _dispatch_subtree(
@@ -2039,9 +2144,28 @@ def destroy(
     recursive: bool = True,
     delete_branches: bool = False,
 ) -> int:
-    """Destroy the worker agent and (by default) every worker under it.
+    """Destroy one worker agent and (by default) every worker under it.
 
-    Deepest first, the root last, so each agent's worktree is still there when
+    ``destroy_many`` over a single name; see it for the ordering and the
+    branch/warning contract.
+    """
+    return destroy_many(
+        [name],
+        runner,
+        recursive=recursive,
+        delete_branches=delete_branches,
+    )
+
+
+def destroy_many(
+    names: Sequence[str],
+    runner: Runner | None = None,
+    recursive: bool = True,
+    delete_branches: bool = False,
+) -> int:
+    """Destroy several worker agents and (by default) every worker under each.
+
+    Deepest first, each root last, so each agent's worktree is still there when
     the runtime dirs of the workers it dispatched are pulled out of it.
     RUNNING descendants are destroyed too -- a superseded pass's in-flight
     siblings are exactly what needs to go. Branches survive unless
@@ -2050,28 +2174,39 @@ def destroy(
     whichever it is, but only while the agent still exists -- so read it before
     destroying. Every step is best-effort; one outcome line per agent, and ``0``
     only if every agent was destroyed.
+
+    Taking the whole list in one call is what a teardown wants: the mngr agent
+    listing and the repo-toplevel probe are read once for all of them instead of
+    once per worker, which is most of what a single destroy costs. An agent that
+    appears twice -- named directly and also reachable under another name's
+    subtree -- is destroyed once.
     """
     runner = runner or Runner()
     records = _agent_records(runner)
-    subtree = _subtree_of(name, records)
     toplevel = _repo_toplevel(runner)
     flags = ["--force", "-b"] if delete_branches else ["--force"]
     outcomes: list[_LifecycleOutcome] = []
-    if not recursive:
-        _orphan_warning(name, subtree, "destroyed")
-        subtree = ()
-    for record in subtree:
-        _relocate_task_dirs(record, runner, toplevel)
-        _unmerged_work_warning(record, runner)
-        child = _record_name(record)
+    already_destroyed: set[str] = set()
+
+    def _destroy_one(agent_name: str, record: Mapping[str, object] | None) -> None:
+        if agent_name in already_destroyed:
+            return
+        already_destroyed.add(agent_name)
+        if record is not None:
+            _relocate_task_dirs(record, runner, toplevel)
+            _unmerged_work_warning(record, runner)
         outcomes.append(
-            _mngr_lifecycle_call("destroy", child, flags, "destroyed", runner)
+            _mngr_lifecycle_call("destroy", agent_name, flags, "destroyed", runner)
         )
-    own = _record_named(records, name)
-    if own is not None:
-        _relocate_task_dirs(own, runner, toplevel)
-        _unmerged_work_warning(own, runner)
-    outcomes.append(_mngr_lifecycle_call("destroy", name, flags, "destroyed", runner))
+
+    for name in names:
+        subtree = _subtree_of(name, records)
+        if not recursive:
+            _orphan_warning(name, subtree, "destroyed")
+            subtree = ()
+        for record in subtree:
+            _destroy_one(_record_name(record), record)
+        _destroy_one(name, _record_named(records, name))
     return _print_outcomes(outcomes)
 
 
@@ -2457,6 +2592,55 @@ def _run_await(args: argparse.Namespace) -> int:
     )
 
 
+def _run_await_any(args: argparse.Namespace) -> int:
+    """Wait for whichever of several workers reports first.
+
+    The lead's collection loop is otherwise serial: ``await`` blocks on one task
+    file, so N workers running at once are collected one after another and the
+    lead cannot act on an early finisher until the worker it happens to be
+    blocked on is done. This returns on the first report and names its worker on
+    stderr, so the lead can hand that worker its next node while the others keep
+    running.
+
+    ``--task-file`` and ``--name`` are repeatable and paired in the order given,
+    the same two arguments a single ``await`` takes.
+    """
+    if len(args.task_file) != len(args.name):
+        print(
+            f"create_worker: await-any got {len(args.task_file)} --task-file and "
+            f"{len(args.name)} --name; pass one --name per --task-file, in the "
+            "same order.",
+            file=sys.stderr,
+        )
+        return 2
+    # A missing/malformed ``finish_report_path`` is an authoring bug in the task
+    # file; let the ValueError raise for a full traceback, as ``await`` does.
+    targets = [
+        _AwaitTarget(
+            report_path=_read_finish_report_path(task_file),
+            worker_name=name,
+            label=str(task_file),
+        )
+        for task_file, name in zip(args.task_file, args.name)
+    ]
+    exit_code, resolved = await_targets(
+        targets,
+        timeout_seconds=args.timeout,
+        poll_interval_seconds=args.poll_interval,
+        pending_shed_check=_worker_has_pending_shed,
+        idle_check=functools.partial(_worker_is_idle, runner=Runner()),
+    )
+    if resolved is not None:
+        # The whole point of await-any: say which worker this was, so the caller
+        # does not have to infer it from the report body.
+        print(
+            f"create_worker: await-any resolved worker={resolved.worker_name} "
+            f"task-file={resolved.label}",
+            file=sys.stderr,
+        )
+    return exit_code
+
+
 def _run_launch_sync(args: argparse.Namespace, runner: Runner | None) -> int:
     # Validate the wait target up front so a missing/malformed field fails like
     # await -- a ValueError here is an authoring bug, so let it raise with a full
@@ -2502,7 +2686,7 @@ def _run_report(args: argparse.Namespace, runner: Runner | None) -> int:
 
 
 def _run_destroy(args: argparse.Namespace, runner: Runner | None) -> int:
-    return destroy(
+    return destroy_many(
         args.name,
         runner,
         recursive=not args.no_recursive,
@@ -2632,6 +2816,44 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"How often to check for the report (default {_DEFAULT_POLL_INTERVAL}).",
     )
 
+    await_any_parser = subparsers.add_parser(
+        "await-any",
+        help="Block until the FIRST of several workers reports, print that "
+        "report, and name its worker on stderr. Use this instead of `await` "
+        "whenever more than one worker is running, so an early finisher can be "
+        "given its next task while the others keep going.",
+    )
+    await_any_parser.add_argument(
+        "--task-file",
+        required=True,
+        action="append",
+        type=Path,
+        default=[],
+        help="Repeatable. One per running worker; each file's frontmatter "
+        "`finish_report_path` names a file to wait for.",
+    )
+    await_any_parser.add_argument(
+        "--name",
+        required=True,
+        action="append",
+        default=[],
+        help="Repeatable, paired with --task-file in the order given. Used to "
+        "watch the shed ledger and the idle check per worker.",
+    )
+    await_any_parser.add_argument(
+        "--timeout",
+        default=_DEFAULT_TIMEOUT,
+        type=_parse_duration,
+        help=f"Max wait before giving up on all of them (default {_DEFAULT_TIMEOUT}). "
+        "Accepts e.g. '30m', '90s', '1h', or bare seconds.",
+    )
+    await_any_parser.add_argument(
+        "--poll-interval",
+        default=_DEFAULT_POLL_INTERVAL,
+        type=_parse_duration,
+        help=f"How often to check for reports (default {_DEFAULT_POLL_INTERVAL}).",
+    )
+
     launch_sync_parser = subparsers.add_parser(
         "launch-sync",
         help="Blocking launch + foreground await + structured-result JSON + "
@@ -2740,7 +2962,15 @@ def build_parser() -> argparse.ArgumentParser:
         "its branch (mngr/<name> by default, or whatever --branch resolved to) "
         "survives unless --delete-branches.",
     )
-    destroy_parser.add_argument("--name", required=True, help="Worker name to destroy.")
+    destroy_parser.add_argument(
+        "--name",
+        required=True,
+        action="append",
+        default=[],
+        help="Worker name to destroy. Repeatable: pass every worker of a teardown "
+        "in one call, which reads the agent listing once for all of them instead "
+        "of once each.",
+    )
     destroy_parser.add_argument(
         "--no-recursive",
         action="store_true",
@@ -2814,6 +3044,8 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         return _run_stop(args, runner)
     if args.command == "reply":
         return _run_reply(args, runner)
+    if args.command == "await-any":
+        return _run_await_any(args)
     return _run_await(args)
 
 

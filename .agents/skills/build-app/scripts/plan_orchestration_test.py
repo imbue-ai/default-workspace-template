@@ -892,3 +892,53 @@ def test_without_a_pool_the_flows_own_cap_still_applies() -> None:
         )
     )
     assert plan_orchestration.find_ready_nodes(plan, [], []) == [0, 1, 2, 3, 4]
+
+
+def test_cli_write_task_writes_a_whole_wave_in_one_call(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A wave of ready nodes is dispatched together, so its task files are written together.
+
+    One call per node pays interpreter start-up per node, which is the whole cost of
+    this command; the lead writes a wave with one call instead.
+    """
+    run_dir = _write_run_dir(tmp_path, _TODO_PLAN)
+    assert plan_orchestration.main(["parse", "--run-dir", str(run_dir)]) == 0
+    for idx, report in ((0, "Spec is settled."), (1, "Scaffolded.")):
+        report_path = plan_orchestration.node_report_path(run_dir, idx)
+        report_path.parent.mkdir(parents=True)
+        report_path.write_text(report)
+    capsys.readouterr()
+
+    exit_code = plan_orchestration.main(
+        ["write-task", "--run-dir", str(run_dir), "--node", "2", "--node", "4"]
+    )
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    for idx in (2, 4):
+        assert plan_orchestration.node_task_path(run_dir, idx).is_file()
+        assert f"wrote the task for node {idx}" in out
+
+
+def test_cli_write_task_writes_nothing_when_any_node_is_out_of_range(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A bad index fails the whole call, so a wave is never half-written."""
+    run_dir = _write_run_dir(tmp_path, _TODO_PLAN)
+    assert plan_orchestration.main(["parse", "--run-dir", str(run_dir)]) == 0
+    for idx, report in ((0, "Spec is settled."), (1, "Scaffolded.")):
+        report_path = plan_orchestration.node_report_path(run_dir, idx)
+        report_path.parent.mkdir(parents=True)
+        report_path.write_text(report)
+    capsys.readouterr()
+
+    exit_code = plan_orchestration.main(
+        ["write-task", "--run-dir", str(run_dir), "--node", "2", "--node", "99"]
+    )
+
+    assert exit_code == 2
+    assert "no such node in the plan: 99" in capsys.readouterr().err
+    assert not plan_orchestration.node_task_path(run_dir, 2).is_file(), (
+        "the valid node must not be written when a later one is invalid"
+    )

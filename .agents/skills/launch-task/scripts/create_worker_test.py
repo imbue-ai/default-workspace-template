@@ -4543,3 +4543,270 @@ def test_reverting_a_provisional_merge_hides_it_from_done_until_reinstated(
     # Reverting the revert is what puts it back.
     _git(lead, "revert", "--no-edit", revert_commit)
     assert "line2-usable" in (lead / _CREATION_FILENAME).read_text()
+
+
+# --- await-any: one wait across several running workers -----------------------------
+#
+# These pin the behaviour the lead's throughput depends on. A single `await` blocks on
+# one worker, so the lead collects N running workers strictly in the order it happens to
+# ask -- and an early finisher sits idle until its turn. `await-any` returns on the first
+# report and says whose it was.
+
+
+def _await_target(tmp_path: Path, slug: str, name: str) -> tuple[Path, object]:
+    """A report path under `slug` plus the target that watches it."""
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / slug / "reports" / "report.md"
+    )
+    report.parent.mkdir(parents=True, exist_ok=True)
+    return report, create_worker_mod._AwaitTarget(
+        report_path=report, worker_name=name, label=f"{slug}/task.md"
+    )
+
+
+def test_await_any_returns_the_first_report_and_names_its_worker(
+    tmp_path: Path,
+) -> None:
+    """The worker that finishes first is the one collected, whatever the argument order."""
+    _first_report, first = _await_target(tmp_path, "alpha", "pool-1")
+    second_report, second = _await_target(tmp_path, "beta", "pool-2")
+    out = io.StringIO()
+
+    polls = {"n": 0}
+
+    def _sleep(_seconds: float) -> None:
+        polls["n"] += 1
+        if polls["n"] == 2:
+            second_report.write_text("---\ntype: status\nname: beta-done\n---\n\nbeta\n")
+
+    exit_code, resolved = create_worker_mod.await_targets(
+        [first, second],
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        sleeper=_sleep,
+        clock=lambda: 0.0,
+        out=out,
+    )
+
+    assert exit_code == 0
+    assert resolved is second
+    assert resolved.worker_name == "pool-2"
+    assert "beta-done" in out.getvalue()
+
+
+def test_await_any_does_not_sleep_when_a_report_is_already_there(
+    tmp_path: Path,
+) -> None:
+    """A report already on disk returns at once even when other workers are still running."""
+    _pending_report, pending = _await_target(tmp_path, "alpha", "pool-1")
+    ready_report, ready = _await_target(tmp_path, "beta", "pool-2")
+    ready_report.write_text("---\ntype: status\nname: ready\n---\n\nhere\n")
+    out = io.StringIO()
+
+    def _boom(_seconds: float) -> None:
+        raise AssertionError("await-any must not sleep when a report already exists")
+
+    exit_code, resolved = create_worker_mod.await_targets(
+        [pending, ready],
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        sleeper=_boom,
+        clock=lambda: 0.0,
+        out=out,
+    )
+
+    assert exit_code == 0
+    assert resolved is ready
+    assert "here" in out.getvalue()
+
+
+def test_await_any_collects_a_landed_report_over_another_workers_shed(
+    tmp_path: Path,
+) -> None:
+    """A report that landed beats a shed verdict on a different worker.
+
+    Same precedence a single await applies between its own report and its own
+    diagnosis: the work that is finished is handed over first, and the shed worker
+    is still shed on the next call.
+    """
+    _shed_report, shed_target = _await_target(tmp_path, "alpha", "pool-1")
+    done_report, done_target = _await_target(tmp_path, "beta", "pool-2")
+    done_report.write_text("---\ntype: status\nname: done\n---\n\nfinished\n")
+    out = io.StringIO()
+
+    exit_code, resolved = create_worker_mod.await_targets(
+        [shed_target, done_target],
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        sleeper=lambda _s: None,
+        clock=lambda: 0.0,
+        out=out,
+        pending_shed_check=lambda name: name == "pool-1",
+    )
+
+    assert exit_code == 0
+    assert resolved is done_target
+
+
+def test_await_any_surfaces_a_shed_worker_when_nobody_has_reported(
+    tmp_path: Path,
+) -> None:
+    """With no report anywhere, a shed worker ends the wait and is named."""
+    _a_report, a = _await_target(tmp_path, "alpha", "pool-1")
+    _b_report, b = _await_target(tmp_path, "beta", "pool-2")
+
+    exit_code, resolved = create_worker_mod.await_targets(
+        [a, b],
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        sleeper=lambda _s: None,
+        clock=lambda: 0.0,
+        out=io.StringIO(),
+        pending_shed_check=lambda name: name == "pool-2",
+    )
+
+    assert exit_code == create_worker_mod._AWAIT_SHED_RC
+    assert resolved is b
+
+
+def test_await_any_counts_idle_polls_per_worker(tmp_path: Path) -> None:
+    """One worker idling does not accumulate idle polls against the others."""
+    _a_report, a = _await_target(tmp_path, "alpha", "pool-1")
+    _b_report, b = _await_target(tmp_path, "beta", "pool-2")
+    clock = {"t": 0.0}
+
+    def _tick(_seconds: float) -> None:
+        clock["t"] += 5.0
+
+    exit_code, resolved = create_worker_mod.await_targets(
+        [a, b],
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        sleeper=_tick,
+        clock=lambda: clock["t"],
+        out=io.StringIO(),
+        idle_check=lambda name: name == "pool-2",
+    )
+
+    assert exit_code == create_worker_mod._AWAIT_IDLE_RC
+    assert resolved is b, "the idle worker is the one reported, not its busy neighbour"
+
+
+def test_await_any_timeout_names_every_report_it_waited_for(tmp_path: Path) -> None:
+    """A timeout belongs to no single worker, so it returns no target and lists them all."""
+    _a_report, a = _await_target(tmp_path, "alpha", "pool-1")
+    _b_report, b = _await_target(tmp_path, "beta", "pool-2")
+    clock = {"t": 0.0}
+
+    def _tick(_seconds: float) -> None:
+        clock["t"] += 5.0
+
+    exit_code, resolved = create_worker_mod.await_targets(
+        [a, b],
+        timeout_seconds=10,
+        poll_interval_seconds=5,
+        sleeper=_tick,
+        clock=lambda: clock["t"],
+        out=io.StringIO(),
+    )
+
+    assert exit_code == create_worker_mod._AWAIT_TIMEOUT_RC
+    assert resolved is None
+
+
+def test_await_any_cli_rejects_mismatched_names_and_task_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Two task files and one name is a caller bug, caught before any waiting starts."""
+    task = tmp_path / "task.md"
+    task.write_text("---\nfinish_report_path: reports/report.md\n---\n\nwork\n")
+
+    exit_code = create_worker_mod.main(
+        [
+            "await-any",
+            "--task-file", str(task),
+            "--task-file", str(task),
+            "--name", "pool-1",
+        ]
+    )
+
+    assert exit_code == 2
+    assert "one --name per --task-file" in capsys.readouterr().err
+
+
+# --- destroy_many: one teardown call for the whole pool -----------------------------
+#
+# A pooled build ends with five workers to destroy. One call per worker re-reads the mngr
+# agent listing and re-probes the repo toplevel five times, which is most of what the
+# teardown costs; these pin that the listing is read once and nothing is destroyed twice.
+
+
+def test_destroy_many_reads_the_agent_listing_once_for_every_worker() -> None:
+    """Five workers in one call means one `mngr list`, not five."""
+    pool = [_unique(f"pool-{index}") for index in range(5)]
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(*[_agent_record(name, "WAITING", work_dir=f"/wt/{name}") for name in pool]),
+    )
+
+    rc = create_worker_mod.destroy_many(pool, runner)
+
+    assert rc == 0
+    listings = [c for c in runner.calls if c.argv[:2] == ["mngr", "list"]]
+    assert len(listings) == 1, "the pool's listing must be read once, not once per worker"
+    assert _lifecycle_argvs(runner) == [
+        ["mngr", "destroy", name, "--force"] for name in pool
+    ]
+
+
+def test_destroy_many_destroys_a_worker_named_twice_only_once() -> None:
+    """A name that is also reachable under another name's subtree is destroyed once."""
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    # `child` is named directly and is also a descendant of `root`.
+    rc = create_worker_mod.destroy_many([child, root], runner)
+
+    assert rc == 0
+    destroyed = [c[2] for c in _lifecycle_argvs(runner) if c[:2] == ["mngr", "destroy"]]
+    assert destroyed == [grandchild, child, stuck, root], (
+        "each agent destroyed once, deepest first within each named root"
+    )
+
+
+def test_destroy_one_name_behaves_exactly_as_before() -> None:
+    """`destroy` is `destroy_many` over a single name, with the same call sequence."""
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    destroyed = [c[2] for c in _lifecycle_argvs(runner) if c[:2] == ["mngr", "destroy"]]
+    assert destroyed == [grandchild, child, stuck, root]
+
+
+def test_destroy_cli_accepts_repeated_names() -> None:
+    """The CLI passes every --name through to one destroy_many call."""
+    first, second = _unique("pool-a"), _unique("pool-b")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(first, "WAITING", work_dir=f"/wt/{first}"),
+            _agent_record(second, "WAITING", work_dir=f"/wt/{second}"),
+        ),
+    )
+
+    rc = create_worker_mod.main(
+        ["destroy", "--name", first, "--name", second], runner=runner
+    )
+
+    assert rc == 0
+    destroyed = [c[2] for c in _lifecycle_argvs(runner) if c[:2] == ["mngr", "destroy"]]
+    assert destroyed == [first, second]
