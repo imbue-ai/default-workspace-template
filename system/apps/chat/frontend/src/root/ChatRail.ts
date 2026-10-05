@@ -261,6 +261,12 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
   onremove() {
     // A menu still open when the rail unmounts would keep its Escape listener on the window.
     railMenu.dispose();
+    // A drag whose edge goes with the rail (Escape closing the drawer mid-drag) never sees its release; ended here,
+    // it cannot resize a later rail on a mere hover.
+    if (resizeDrag !== null) {
+      resizeDrag = null;
+      saveRailWidth();
+    }
   },
   view({ attrs }) {
     pruneDeleting(attrs.rows);

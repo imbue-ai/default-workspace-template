@@ -42,12 +42,15 @@ beforeEach(() => {
   initRailWidth();
 });
 
+function unmountRail(): void {
+  if (root === null) return;
+  m.mount(root, null);
+  root.remove();
+  root = null;
+}
+
 afterEach(() => {
-  if (root !== null) {
-    m.mount(root, null);
-    root.remove();
-    root = null;
-  }
+  unmountRail();
   window.localStorage.clear();
 });
 
@@ -88,6 +91,22 @@ describe("rail width", () => {
     m.redraw.sync();
     expect(rail.style.width).toBe(`${DEFAULT_RAIL_WIDTH_PX}px`);
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("ends a drag whose rail goes mid-drag, so a later rail is not resized by a hover", () => {
+    const first = mountRail();
+    const press = (handle: HTMLElement, type: string, clientX: number): void => {
+      handle.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, button: 0, clientX, clientY: 300 }));
+    };
+    press(first.handle, "pointerdown", 180);
+    press(first.handle, "pointermove", 260);
+    unmountRail();
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe("260");
+
+    const second = mountRail();
+    press(second.handle, "pointermove", 400);
+    m.redraw.sync();
+    expect(second.rail.style.width).toBe("260px");
   });
 
   it("follows a width another root of this browser saves", () => {
