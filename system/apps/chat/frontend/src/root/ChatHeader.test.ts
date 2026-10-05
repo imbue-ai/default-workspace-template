@@ -19,6 +19,7 @@ import m from "mithril";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { ChatDrawer } from "./ChatDrawer";
 import { ChatHeader } from "./ChatHeader";
+import type { ChatHeaderAttrs } from "./ChatHeader";
 import type { ChatRow } from "./rows";
 
 const ONLY_CHAT: ChatRow = {
@@ -36,6 +37,18 @@ const RENAMED_CHAT: ChatRow = { ...ONLY_CHAT, chatId: "agent-2", agentIds: ["age
 
 let root: HTMLElement | null = null;
 
+/** What the header's kebab needs of the root, for ``rows`` with ``selectedChatId`` on screen. */
+function headerContext(rows: ChatRow[], selectedChatId: string | null): ChatHeaderAttrs["context"] {
+  return {
+    rows,
+    selectedChatId,
+    onPick: () => undefined,
+    referenceScope: scopeOfHandshake(null),
+    onDraftReference: () => undefined,
+    isReferenceDraftAvailable: false,
+  };
+}
+
 afterEach(() => {
   if (root !== null) {
     m.mount(root, null);
@@ -50,14 +63,7 @@ describe("the chat header", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     root = document.createElement("div");
     document.body.appendChild(root);
-    const context = {
-      rows: [ONLY_CHAT],
-      selectedChatId: ONLY_CHAT.chatId,
-      onPick: () => undefined,
-      referenceScope: scopeOfHandshake(null),
-      onDraftReference: () => undefined,
-      isReferenceDraftAvailable: false,
-    };
+    const context = headerContext([ONLY_CHAT], ONLY_CHAT.chatId);
     m.mount(root, {
       view: () =>
         m(ChatHeader, { row: ONLY_CHAT, context, isListOpen: false, onOpenList: () => undefined, isTouch: true }),
@@ -123,14 +129,7 @@ describe("the chat header", () => {
   });
 
   it("is a finger's height on a touchscreen and denser under a mouse", () => {
-    const context = {
-      rows: [],
-      selectedChatId: null,
-      onPick: () => undefined,
-      referenceScope: scopeOfHandshake(null),
-      onDraftReference: () => undefined,
-      isReferenceDraftAvailable: false,
-    };
+    const context = headerContext([], null);
     const header = (isTouch: boolean): HTMLElement => {
       root = document.createElement("div");
       document.body.appendChild(root);
