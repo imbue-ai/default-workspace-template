@@ -17,7 +17,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    # Used by check_no_type_errors in test_workspace_layout_ratchets.py, pinned to the shell's version.
+    # Used by check_no_type_errors in test_workspace_layout_type_check.py, pinned to the shell's version.
     "ty==0.0.24",
 ]
 
