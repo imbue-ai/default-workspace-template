@@ -298,8 +298,8 @@ LANE_OPENAI = Lane(
             label="Use your ChatGPT plan (runs on Codex)",
             description="Sign in with your ChatGPT account in your browser.",
             login=CodexLogin.BROWSER,
-            note="Note: You must first turn on *Enable device code sign-in…* at the bottom of the ChatGPT "
-            "settings page.",
+            note="Note: You must first turn on *Enable device code sign-in…* at the bottom of the "
+            "[ChatGPT settings page](https://chatgpt.com/settings/security).",
         ),
         AppServerMethod(
             id="device",

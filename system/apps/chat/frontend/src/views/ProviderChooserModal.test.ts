@@ -517,7 +517,9 @@ describe("a sign-in finished in the browser", () => {
   const CHATGPT_WITH_NOTE = lane({
     ...CHATGPT,
     methods: CHATGPT.methods.map((each) =>
-      each.id === "chatgpt" ? { ...each, note: "Turn on *the setting* first." } : each,
+      each.id === "chatgpt"
+        ? { ...each, note: "Turn on *the setting* in [the settings](https://example.com/settings)." }
+        : each,
     ),
   });
 
@@ -529,8 +531,9 @@ describe("a sign-in finished in the browser", () => {
 
     expect(root.textContent).toContain("Finish signing in to OpenAI in your browser.");
     const note = root.querySelector('[data-e2e="method-note"]');
-    expect(note?.textContent?.trim()).toBe("Turn on the setting first.");
+    expect(note?.textContent?.trim()).toBe("Turn on the setting in the settings.");
     expect(note?.querySelector("em")?.textContent).toBe("the setting");
+    expect(note?.querySelector("a")?.getAttribute("href")).toBe("https://example.com/settings");
   });
 
   it("shows no note on the one-time code, which does not need the setting", async () => {
