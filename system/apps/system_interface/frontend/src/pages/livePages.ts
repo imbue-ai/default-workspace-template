@@ -330,7 +330,7 @@ export class LivePagesLayer implements PageDriver {
       }
       shown.push({ page, box, stackIndex: index, isInteractive: !this.isGestureActive && window.id === focused });
     });
-    const covered = this.coveredWindowIds(drawn, new Set(shown.map(({ page }) => page.windowId)));
+    const covered = this.coveredWindowIds(drawn, new Set(shown.map(({ page }) => page.windowId)), focused);
     for (const { page, box, stackIndex, isInteractive } of shown) {
       this.show(page, box, stackIndex, isInteractive, covered.has(page.windowId));
       if (desktop !== null && page.greetedDesktopId !== null && page.greetedDesktopId !== desktop.id) {
@@ -488,8 +488,14 @@ export class LivePagesLayer implements PageDriver {
    * The shown pages the windows in front of them cover, both where the windows are drawn now and where they are
    * going: a window still travelling to its place covers nothing until it lands there, and one travelling away
    * uncovers at once. Nothing is covered while a window is moved or resized, which moves it with no reconcile.
+   * The focused window's page never is: nothing is in front of it, and parking it (its content dragged below the
+   * backdrop) would take the keyboard from the window the user is in.
    */
-  private coveredWindowIds(drawn: readonly DrawnWindow[], shownPageIds: ReadonlySet<string>): Set<string> {
+  private coveredWindowIds(
+    drawn: readonly DrawnWindow[],
+    shownPageIds: ReadonlySet<string>,
+    focused: string | null,
+  ): Set<string> {
     const covered = new Set<string>();
     if (this.store.windowGesture() !== null) return covered;
     const metrics = this.store.getMetrics();
@@ -506,7 +512,7 @@ export class LivePagesLayer implements PageDriver {
     });
     drawn.forEach((entry, index) => {
       const here = now[index];
-      if (!shownPageIds.has(entry.windowId) || here === null) return;
+      if (!shownPageIds.has(entry.windowId) || entry.windowId === focused || here === null) return;
       const isCoveredWhereGoing = isPageCovered(going[index].rect, going.slice(index + 1), backdrop, metrics);
       const frontNow = now.slice(index + 1).filter((front): front is FrontWindow => front !== null);
       if (isCoveredWhereGoing && isPageCovered(here.rect, frontNow, backdrop, metrics)) covered.add(entry.windowId);

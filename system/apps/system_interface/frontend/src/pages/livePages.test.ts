@@ -401,6 +401,21 @@ describe("covered pages", () => {
     expect(isParked(wrapperOf("win-1"))).toBe(true);
   });
 
+  it("parks a page whose content is below the backdrop, but not the focused window's, which keeps the keyboard", () => {
+    // Both dragged down until only their title bars show, win-2 last, so it is on top and focused.
+    const belowBackdrop = { x: 0.05, y: 1, width: 0.6, height: 0.7 };
+    store.setWindowFrame("win-1", belowBackdrop);
+    store.setWindowFrame("win-2", belowBackdrop);
+    for (const windowId of ["win-1", "win-2"]) drawChromeAt(windowId, { left: 50, top: 764, width: 600, height: 560 });
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    frameOf("win-2").focus();
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    expect(isParked(wrapperOf("win-2"))).toBe(false);
+    expect(document.activeElement).toBe(frameOf("win-2"));
+  });
+
   it("covers a page once the window travelling over it lands, and uncovers it as soon as the window leaves", () => {
     // Placed over win-1, but still travelling there from the bottom right.
     drawChromeAt("win-2", { left: 600, top: 450, width: 400, height: 350 });
