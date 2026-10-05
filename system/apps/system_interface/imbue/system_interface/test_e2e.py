@@ -283,8 +283,9 @@ def e2e_server(tmp_path: Path) -> Generator[E2EServer, None, None]:
 # It imports the shell's served contract module and connects: it reports its location (path and a title derived
 # from it) once greeted, and exposes the verbs the tests drive (navigate in place, ask for an open). A navigable
 # page declares the capability and shows a pushed path in place; a plain one declares nothing, so the shell reloads
-# its frame to move it. Its ``#held`` input is state no reload survives, and it records each shown and hidden it is told. It installs the served element context
-# menu as a scaffolded app's page does, so a right-click in the frame drafts through the shell.
+# its frame to move it. Its ``#held`` input is state no reload survives, and it records each shown and hidden it is
+# told. It installs the served element context menu as a scaffolded app's page does, so a right-click in the frame
+# drafts through the shell.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
 <div id="where"></div><input id="held" value="" />
 <script type="module">
