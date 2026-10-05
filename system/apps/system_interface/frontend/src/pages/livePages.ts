@@ -318,7 +318,7 @@ export class LivePagesLayer implements PageDriver {
       if (placement.is_detached || placement.window_id === this.tornOutWindowId) return;
       const { window } = found;
       const app = appByName(state, window.app);
-      drawn.push({ windowId: window.id, isPlaceholderShown: app !== undefined && isAppShownStopped(state, app) });
+      drawn.push({ windowId: window.id, isPlaceholderShown: isAppShownStopped(state, app) });
       if (app === undefined) return;
       const page = this.pages.get(window.id) ?? this.create(window, app);
       shownIds.add(window.id);
