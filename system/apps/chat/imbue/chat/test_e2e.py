@@ -1402,12 +1402,17 @@ def _open_narrow_chat_root(page: Page, server: RunningWorkspace, path: str = _FI
     expect(page.locator('.chat-root[data-compact="true"]')).to_be_visible(timeout=15000)
 
 
-def _open_phone_chat_root(page: Page, server: RunningWorkspace, path: str = _FIXTURE_ROOT_PATH) -> None:
-    """Open the chat root at a phone's size on a touchscreen, which gives the drawer its finger's form; under a mouse
-    it holds the rail's (``_open_narrow_chat_root``)."""
+def _emulate_touchscreen(page: Page) -> None:
+    """Make the page's primary pointer a finger, which is what ``(pointer: coarse)`` reads."""
     page.context.new_cdp_session(page).send(
         "Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1}
     )
+
+
+def _open_phone_chat_root(page: Page, server: RunningWorkspace, path: str = _FIXTURE_ROOT_PATH) -> None:
+    """Open the chat root at a phone's size on a touchscreen, which gives the drawer its finger's form; under a mouse
+    it holds the rail's (``_open_narrow_chat_root``)."""
+    _emulate_touchscreen(page)
     _open_narrow_chat_root(page, server, path)
 
 
@@ -1506,9 +1511,7 @@ def test_a_touchscreen_keeps_the_phone_layout_sideways_where_a_mouse_gets_the_ra
     page.goto(f"{e2e_server.chat_url}{_FIXTURE_ROOT_PATH}")
     expect(page.locator(".chat-root")).to_have_attribute("data-compact", "false", timeout=15000)
 
-    page.context.new_cdp_session(page).send(
-        "Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1}
-    )
+    _emulate_touchscreen(page)
     page.reload()
     expect(page.locator(".chat-root")).to_have_attribute("data-compact", "true", timeout=15000)
 
