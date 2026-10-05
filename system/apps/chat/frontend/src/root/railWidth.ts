@@ -15,7 +15,7 @@ const STORAGE_KEY = "chat-root-rail-width";
 let width = DEFAULT_RAIL_WIDTH_PX;
 let isFollowingStorage = false;
 
-export function clampRailWidth(px: number): number {
+function clampRailWidth(px: number): number {
   return Math.round(Math.min(MAX_RAIL_WIDTH_PX, Math.max(MIN_RAIL_WIDTH_PX, px)));
 }
 
