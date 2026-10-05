@@ -2,6 +2,7 @@
 /**
  * The phone layout's header: its kebab offers the chat on screen what a right-click on its row in the list does,
  * and, as that row, nothing once the chat is being deleted; with the drawer open over it, a rename is the row's alone.
+ * Under a mouse the bar is denser than a touchscreen's.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -119,5 +120,39 @@ describe("the chat header", () => {
     expect(fields[0].closest("[data-chat-drawer]")).not.toBeNull();
     expect(document.activeElement).toBe(fields[0]);
     expect(verbs.renameChat).not.toHaveBeenCalled();
+  });
+
+  it("is a finger's height on a touchscreen and denser under a mouse", () => {
+    const context = {
+      rows: [],
+      selectedChatId: null,
+      onPick: () => undefined,
+      referenceScope: scopeOfHandshake(null),
+      onDraftReference: () => undefined,
+      isReferenceDraftAvailable: false,
+    };
+    const header = (isTouch: boolean): HTMLElement => {
+      root = document.createElement("div");
+      document.body.appendChild(root);
+      m.mount(root, {
+        view: () => m(ChatHeader, { row: null, context, isListOpen: false, onOpenList: () => undefined, isTouch }),
+      });
+      const bar = root.querySelector<HTMLElement>(".chat-header");
+      if (bar === null) throw new Error("no header");
+      return bar;
+    };
+
+    const touchBar = header(true);
+    expect(touchBar.className).toContain("h-11");
+    expect(touchBar.querySelector(".chat-header-list")?.className).toContain("size-9");
+    if (root !== null) {
+      m.mount(root, null);
+      root.remove();
+    }
+
+    const mouseBar = header(false);
+    expect(mouseBar.className).toContain("h-9");
+    expect(mouseBar.className).not.toContain("h-11");
+    expect(mouseBar.querySelector(".chat-header-list")?.className).toContain("size-7");
   });
 });
