@@ -1,7 +1,7 @@
 """Browser: the viewer pauses its stream while the workspace shell hides its window, in a real Chromium.
 
-The shell no longer collapses a hidden window's frame to 0x0 (it keeps the page's size and moves it out of
-the viewport), so the shell's ``shell:hidden`` is the only sign the viewer gets. The viewer is framed by a
+The shell keeps a hidden window's page at its size (it moves it out of the viewport), so the shell's
+``shell:hidden`` is the only sign the viewer gets. The viewer is framed by a
 stand-in shell page and imports a stand-in contract module that exposes the handlers it registers; its stream
 socket is answered by a stub that records what the page sends.
 """

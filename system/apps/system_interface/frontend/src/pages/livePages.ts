@@ -81,10 +81,9 @@ export const PAGE_FRAME_ALLOW = "clipboard-read; clipboard-write";
 // refused with a 400, which would leave the whole report, path included, unstored.
 export const MAX_WINDOW_TITLE_LENGTH = 256;
 
-// A parked page is moved far out of the viewport, where every engine stops rendering a cross-origin frame
-// (Chromium, Safari and Firefox all stop its animation frames), and made invisible, which keeps it out of
-// clicks, focus, find-in-page and the accessibility tree. ``display: none`` would drop the page's layout
-// instead: the app would see a zero-size viewport and lose its document scroll, and Safari keeps rendering it.
+// A parked page is moved far out of the viewport, where browsers stop rendering a cross-origin frame, and made
+// invisible, which keeps it out of clicks, focus, find-in-page and the accessibility tree. Unlike ``display: none``,
+// it keeps the page's size, layout and scroll.
 const PARKED_TRANSFORM = "translateX(-100000px)";
 
 interface LivePage {
@@ -665,8 +664,7 @@ export class LivePagesLayer implements PageDriver {
     page.isNavigationCapable = payload.navigation === true;
     page.isCloseChordCapable = payload.closeChord === true;
     // A contract the page imports connects after its load, so it missed the visibility the load told it. A page takes
-    // itself to be shown until told otherwise, so only a hidden one is told again (a shown terminal takes the keyboard
-    // focus on being told).
+    // itself to be shown until told otherwise, so only a hidden one is told again.
     if (page.isHidden && page.greetedDesktopId !== null) sendToChildFrame(page.frame, SHELL_HIDDEN);
   }
 
