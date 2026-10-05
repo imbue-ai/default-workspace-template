@@ -2,10 +2,11 @@
  * The live pages (desktop-interface plan section 6.4): one iframe per window per client, keyed
  * by window id, created when the window is first shown in this client and destroyed only when
  * the window closes or its desktop is deleted. A page is never re-parented (that reloads it):
- * a hidden page is parked out of the browser's rendering (``PARKED_TRANSFORM``), and so is a shown page
- * whose window the windows in front of it cover, which stays shown to the app contract. The reconcile step
- * positions each page over its window's content box (``placePage`` re-places one page per pointer move of a drag or resize,
- * with no redraw), in the same stacking context as the window chrome so a window's edges and
+ * a hidden page is parked out of the browser's rendering (``PARKED_TRANSFORM``), and so is a shown
+ * page whose window the windows in front of it cover, which stays shown to the app contract. The
+ * reconcile step positions each page over its window's content box (``placePage`` re-places one
+ * page per pointer move of a drag or resize, with no redraw), in the same stacking context as the
+ * window chrome so a window's edges and
  * shield stay clickable over a cross-origin page. Every page but the focused one is inert
  * (``pointer-events: none``), and every page is inert for the length of a press on a handle,
  * which is longer than the drag it may become: the pixels a press spends reaching the drag
@@ -495,6 +496,7 @@ export class LivePagesLayer implements PageDriver {
     if (this.isGestureActive) return covered;
     const metrics = this.store.getMetrics();
     const backdrop = this.store.getBackdropSize();
+    // A shown page parked as covered still counts: whatever covers it covers the window's content area too.
     const isContentOpaque = drawn.map((entry) => entry.isPlaceholderShown || shownPageIds.has(entry.windowId));
     const going = drawn.map((entry, index) => ({
       rect: this.store.windowRect(entry.windowId),
