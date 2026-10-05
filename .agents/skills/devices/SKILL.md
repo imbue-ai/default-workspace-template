@@ -26,11 +26,11 @@ offline or asleep. A connected device checks in every
 than that is probably not reachable.
 
 
-## Routing requests with X-Latchkey-Desktop
+## Routing requests with X-Latchkey-Device
 
 Requests to the Studio (sending notifications, accessing files, requesting
 permissions, and other calls under `/minds-api-proxy`, `/permissions` and
-`/permission-requests`) accept an optional `X-Latchkey-Desktop` header. Its value
+`/permission-requests`) accept an optional `X-Latchkey-Device` header. Its value
 can be:
 
 - `*`, to send the request to every known device, including offline ones;
