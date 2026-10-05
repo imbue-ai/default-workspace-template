@@ -27,7 +27,6 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
   let onDismiss: () => void = () => undefined;
   let isCovered = false;
   let panel: HTMLElement | null = null;
-  let scrim: HTMLElement | null = null;
   // The press being followed, from its pointerdown to its release; null between presses.
   let press: { pointerId: number; startX: number; startY: number; offset: number; isDragging: boolean } | null = null;
   // Set when a press ended as a drag, so the click it releases into does not also pick a row.
@@ -37,7 +36,6 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
     if (panel === null) return;
     panel.style.transition = isAnimated ? "transform var(--dur-slow) ease-out" : "none";
     panel.style.transform = offset === 0 ? "" : `translateX(${offset}px)`;
-    if (scrim !== null) scrim.style.opacity = String(1 + offset / panel.offsetWidth);
   }
 
   function onPointerMove(event: PointerEvent): void {
@@ -98,7 +96,6 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
     oncreate({ dom }) {
       window.addEventListener("keydown", onKeydown);
       panel = dom.querySelector<HTMLElement>(".chat-drawer-panel");
-      scrim = dom.querySelector<HTMLElement>(".chat-drawer-scrim");
       // Native listeners: a drag moves the panel directly, frame by frame, with no redraw of the root behind it.
       panel?.addEventListener("pointerdown", onPointerDown);
       panel?.addEventListener("click", swallowClickAfterDrag, true);
@@ -109,7 +106,6 @@ export function ChatDrawer(): m.Component<ChatDrawerAttrs> {
       window.removeEventListener("pointerup", endPress);
       window.removeEventListener("pointercancel", endPress);
       panel = null;
-      scrim = null;
       press = null;
     },
     view({ attrs }) {
