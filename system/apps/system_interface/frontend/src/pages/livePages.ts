@@ -666,8 +666,8 @@ export class LivePagesLayer implements PageDriver {
     if (page === undefined) return;
     page.isNavigationCapable = payload.navigation === true;
     page.isCloseChordCapable = payload.closeChord === true;
-    // A contract the page imports connects after its load, so it missed the visibility the load told it. A page takes
-    // itself to be shown until told otherwise, so only a hidden one is told again.
+    // A page that loads the contract after its own load (a dynamic ``import()``) missed the visibility the load told
+    // it. A page takes itself to be shown until told otherwise, so only a hidden one is told again.
     if (page.isHidden && page.greetedDesktopId !== null) sendToChildFrame(page.frame, SHELL_HIDDEN);
   }
 
