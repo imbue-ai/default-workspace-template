@@ -49,6 +49,7 @@ from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.claude.auth import parse_credential_lines
+from imbue.chat.harnesses.claude.auth import read_managed_auth_env
 from imbue.chat.harnesses.claude.auth import record_api_key_approval
 from imbue.chat.harnesses.codex.sign_in import APP_SERVER_SOCKET_FILENAME
 from imbue.chat.harnesses.codex.sign_in import CodexLoginClient
@@ -829,6 +830,9 @@ class AuthFlowService:
         if not session.minted and not accounts.account_exists(session.account_id, self._home):
             self._fail_locked(session, "That account was removed while you were signing in.")
             raise FlowError(session.detail or "account removed")
+        method = session.method
+        if isinstance(method, PtyMethod) and method.result_sink is None and session.lane.harness is HarnessType.CLAUDE:
+            _drop_claude_env_credential(accounts.account_dir(session.account_id, self._home))
         account = accounts.commit_account(session.account_id, session.lane.id, display, self._home)
         # A re-auth is only worth doing if the chats on that account come back. They do not on
         # their own: claude reads its settings env at process start, and nothing shows codex's
@@ -1059,6 +1063,16 @@ def write_claude_env(account_path: Path, managed_env: Mapping[str, str]) -> None
     # arrives through a sign-in is ours to approve, in this account's own .claude.json.
     record_api_key_approval(managed_env, account_path / ".claude.json")
     settings.chmod(0o600)
+
+
+def _drop_claude_env_credential(account_path: Path) -> None:
+    """Remove the managed credential from an account's settings.json env block, if it holds one.
+
+    `claude auth login` writes its credential to .credentials.json, which a key or token in the env
+    block outranks, so a sign-in that lands one has to take the old one away or claude keeps using it.
+    """
+    if read_managed_auth_env(settings_path_override=account_path / "settings.json"):
+        write_claude_env(account_path, {})
 
 
 def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:

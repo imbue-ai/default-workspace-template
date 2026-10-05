@@ -651,6 +651,29 @@ def test_claude_decides_its_own_sign_in(
     assert (probed != []) is is_probed
 
 
+def test_a_browser_re_auth_takes_away_the_env_credential_that_would_outrank_it(tmp_path: Path) -> None:
+    """claude ranks a key or token in the settings env above what `claude auth login` writes, so one
+    left behind would keep every chat on the old credential after "Signed in again"."""
+    service = AuthFlowService.create(
+        home=tmp_path,
+        work_dir=tmp_path / "work",
+        spawner=lambda *_a, **_k: _finished_claude("Login successful.\r\n", 0),
+        probe=lambda *_a: SignedIn.YES,
+    )
+    pasted = service.start("anthropic", "api_key")
+    service.submit_key(pasted.flow_id, "sk-ant-old", None)
+    (account,) = read_index(tmp_path).accounts
+    settings_path = tmp_path / ".minds" / "accounts" / account.id / "settings.json"
+    settings = json.loads(settings_path.read_text())
+    settings["env"]["DISABLE_TELEMETRY"] = "1"
+    settings_path.write_text(json.dumps(settings))
+
+    again = service.start("anthropic", "subscription", account_id=account.id)
+
+    assert service.poll(again.flow_id).state is FlowState.OK
+    assert json.loads(settings_path.read_text())["env"] == {"DISABLE_TELEMETRY": "1"}
+
+
 def test_a_claude_sign_in_still_running_waits(tmp_path: Path) -> None:
     process = FakePexpectProcess(
         [(0, f"Browser didn't open? Use the url below\r\n{_CLAUDE_MANUAL_URL}")],
