@@ -635,10 +635,10 @@
   function sendPaneSize() {
     if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
     const rect = stage.getBoundingClientRect();
-    // Skip ONLY a collapsed pane (a 0x0 box): reporting that
-    // clamps to the 320x240 minimum and poisons the capture region. A REAL size is always
-    // reported -- even if the app tab is momentarily backgrounded (document.hidden) -- so a
-    // resize is never dropped and the browser reliably grows to fill the pane.
+    // Skip ONLY a collapsed pane (a 0x0 box): reporting that clamps to the 320x240 minimum
+    // and poisons the capture region. A REAL size is always reported -- even if the app tab
+    // is momentarily backgrounded (document.hidden) -- so a resize is never dropped and the
+    // browser reliably grows to fill the pane.
     if (rect.width < 5 || rect.height < 5) return;
     const w = Math.max(320, Math.round(rect.width) & ~1);
     const h = Math.max(240, Math.round(rect.height) & ~1);
