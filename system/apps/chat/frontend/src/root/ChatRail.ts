@@ -326,8 +326,13 @@ function resizeHandle(): m.Vnode {
       if (event.button !== 0) return;
       event.preventDefault();
       event.stopPropagation();
-      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-      resizeDrag = { pointerId: event.pointerId, startX: event.clientX, startWidth: railWidth() };
+      const handle = event.currentTarget as HTMLElement;
+      handle.setPointerCapture(event.pointerId);
+      // The drawer can draw the list narrower than its width, held back from the window's edge; the drag starts from
+      // what is drawn, so the edge follows the pointer from the first move.
+      const drawnWidth = handle.parentElement?.getBoundingClientRect().width ?? 0;
+      const startWidth = drawnWidth > 0 ? Math.min(railWidth(), drawnWidth) : railWidth();
+      resizeDrag = { pointerId: event.pointerId, startX: event.clientX, startWidth };
     },
     onpointermove: (event: PointerEvent & { redraw?: boolean }) => {
       if (resizeDrag === null || event.pointerId !== resizeDrag.pointerId) {
