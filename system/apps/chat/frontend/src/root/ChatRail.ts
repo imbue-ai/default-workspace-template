@@ -22,7 +22,7 @@ import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { elementReferenceRows, targetOfEvent } from "@imbue/workspace-ui/src/context_menu_rows";
-import { describeElement, type ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
+import { describeElement, type ReferenceClick, type ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import { kebabGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
@@ -150,6 +150,18 @@ function setRunningFromMenu(row: ChatRow, isRunning: boolean): void {
 /** What a row's menu needs of the root: the rows, the one shown, and how to show another. */
 export type RowMenuContext = Pick<ChatRailAttrs, "rows" | "selectedChatId" | "onPick">;
 
+/** What a reference to an element of the list needs of the root, as its right-click menu does. */
+export type RowReferenceContext = Pick<
+  ChatRailAttrs,
+  "referenceScope" | "onDraftReference" | "isReferenceDraftAvailable"
+>;
+
+/** The reference rows of a menu about ``element``, opened at ``click``: what a right-click on it offers. */
+export function referenceRowsFor(attrs: RowReferenceContext, element: Element, click: ReferenceClick): MenuRow[] {
+  const reference = describeElement(element, click, attrs.referenceScope);
+  return elementReferenceRows(reference, attrs.onDraftReference, attrs.isReferenceDraftAvailable);
+}
+
 /** Delete from the menu, after asking. When it is the chat the root shows, the root moves to
  *  the next one in the list first, so it is not left on a page whose chat is gone. */
 function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
@@ -197,8 +209,7 @@ export function rowMenuRows(attrs: RowMenuContext, row: ChatRow, referenceRows: 
 /** The reference rows for a right-click on a row's element, built as the menu opens. */
 function referenceRowsForEvent(attrs: ChatRailAttrs, event: MouseEvent): MenuRow[] {
   const target = targetOfEvent(event, document);
-  const reference = describeElement(target.element, target.click, attrs.referenceScope);
-  return elementReferenceRows(reference, attrs.onDraftReference, attrs.isReferenceDraftAvailable);
+  return referenceRowsFor(attrs, target.element, target.click);
 }
 
 // The status marks

@@ -1481,7 +1481,7 @@ def test_a_narrow_window_under_a_mouse_opens_the_rail_in_the_drawer_at_its_dragg
     x, y = handle["x"] + handle["width"] / 2, handle["y"] + handle["height"] / 2
     page.mouse.move(x, y)
     page.mouse.down()
-    page.mouse.move(x + 60, y, steps=10)
+    page.mouse.move(x + 120, y, steps=10)
     page.mouse.up()
     expect(rail).to_have_attribute("style", "width: 300px;")
 
@@ -1498,15 +1498,35 @@ def test_a_narrow_window_under_a_mouse_opens_the_rail_in_the_drawer_at_its_dragg
 
 
 @pytest.mark.timeout(60, func_only=False)
+def test_a_touchscreen_keeps_the_phone_layout_sideways_where_a_mouse_gets_the_rail(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """A phone turned sideways is wider than a mouse's narrow layout reaches, but it keeps the phone layout, by the
+    shell's phone rule; the same window under a mouse shows the rail."""
+    landscape: ViewportSize = {"width": _PHONE_VIEWPORT["height"], "height": _PHONE_VIEWPORT["width"]}
+    page.set_viewport_size(landscape)
+    page.goto(f"{e2e_server.chat_url}{_FIXTURE_ROOT_PATH}")
+    expect(page.locator(".chat-root")).to_have_attribute("data-compact", "false", timeout=15000)
+
+    page.context.new_cdp_session(page).send(
+        "Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1}
+    )
+    page.reload()
+    expect(page.locator(".chat-root")).to_have_attribute("data-compact", "true", timeout=15000)
+
+
+@pytest.mark.timeout(60, func_only=False)
 def test_the_phone_header_kebab_renames_the_chat_on_screen(e2e_server: RunningWorkspace, page: Page) -> None:
-    """The header's kebab offers the row menu's verbs for the chat on screen, and its Rename is typed in place of the
-    title and lands on the chat."""
+    """The header's kebab offers what a right-click on the chat's row offers, verbs then reference rows, and its
+    Rename is typed in place of the title and lands on the chat."""
     _open_phone_chat_root(page, e2e_server)
     expect(page.locator(".chat-header-title")).to_have_text("test-agent")
 
     page.locator("[data-chat-header-menu]").click()
     menu = page.locator(".chat-header-menu")
-    expect(menu.locator("[data-menu-row]")).to_have_text(["Rename", "Stop chat", "Delete chat"])
+    expect(menu.locator("[data-menu-row]")).to_have_text(
+        ["Rename", "Stop chat", "Delete chat", "Copy reference", "Explain...", "Modify..."]
+    )
     menu.locator('[data-menu-row="rename"]').click()
     field = page.locator(".chat-header .chat-rail-rename-input")
     expect(field).to_be_focused()

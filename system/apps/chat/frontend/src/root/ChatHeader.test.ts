@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * The phone layout's header: its kebab offers the chat on screen the verbs its row in the list offers, and, as
- * that row, nothing once the chat is being deleted; with the drawer open over it, a rename is the row's alone.
+ * The phone layout's header: its kebab offers the chat on screen what a right-click on its row in the list does,
+ * and, as that row, nothing once the chat is being deleted; with the drawer open over it, a rename is the row's alone.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -49,7 +49,14 @@ describe("the chat header", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     root = document.createElement("div");
     document.body.appendChild(root);
-    const context = { rows: [ONLY_CHAT], selectedChatId: ONLY_CHAT.chatId, onPick: () => undefined };
+    const context = {
+      rows: [ONLY_CHAT],
+      selectedChatId: ONLY_CHAT.chatId,
+      onPick: () => undefined,
+      referenceScope: scopeOfHandshake(null),
+      onDraftReference: () => undefined,
+      isReferenceDraftAvailable: false,
+    };
     m.mount(root, {
       view: () =>
         m(ChatHeader, { row: ONLY_CHAT, context, isListOpen: false, onOpenList: () => undefined, isTouch: true }),
@@ -57,6 +64,16 @@ describe("the chat header", () => {
 
     root.querySelector<HTMLElement>("[data-chat-header-menu]")?.click();
     m.redraw.sync();
+    // What a right-click on the chat's row in the list offers: its verbs, then the reference rows.
+    const menuRows = [...document.querySelectorAll<HTMLElement>(".chat-header-menu [data-menu-row]")];
+    expect(menuRows.map((menuRow) => menuRow.getAttribute("data-menu-row"))).toEqual([
+      "rename",
+      "stop",
+      "delete",
+      "copy-reference",
+      "explain-element",
+      "modify-element",
+    ]);
     document.querySelector<HTMLElement>('.chat-header-menu [data-menu-row="delete"]')?.click();
     m.redraw.sync();
 

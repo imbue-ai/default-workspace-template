@@ -4,7 +4,7 @@
  * phone layout's drawer opens at the same width.
  */
 
-export const DEFAULT_RAIL_WIDTH_PX = 240;
+export const DEFAULT_RAIL_WIDTH_PX = 180;
 export const MIN_RAIL_WIDTH_PX = 100;
 export const MAX_RAIL_WIDTH_PX = 480;
 

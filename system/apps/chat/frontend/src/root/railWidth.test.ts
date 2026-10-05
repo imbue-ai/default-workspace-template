@@ -67,7 +67,7 @@ describe("rail width", () => {
     const { rail, handle } = mountRail();
     expect(rail.style.width).toBe(`${DEFAULT_RAIL_WIDTH_PX}px`);
 
-    dragEdge(handle, 240, 300);
+    dragEdge(handle, 180, 300);
     expect(rail.style.width).toBe("300px");
     expect(handle.getAttribute("aria-valuenow")).toBe("300");
     expect(window.localStorage.getItem(STORAGE_KEY)).toBe("300");

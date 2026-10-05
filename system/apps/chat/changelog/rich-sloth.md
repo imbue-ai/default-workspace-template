@@ -1,5 +1,7 @@
-The chat list is resizable: drag its right edge (or focus the edge and use the arrow keys) to make it between 100px and 480px wide; a double-click on the edge puts it back to the default 240px. The width is kept per browser across reloads.
+The chat list is resizable: drag its right edge (or focus the edge and use the arrow keys) to make it between 100px and 480px wide; a double-click on the edge puts it back to the default 180px. The width is kept per browser across reloads.
 
 In a narrow chat window on a desktop (a mouse rather than a touchscreen), the header's list button now opens the chat list exactly as the wide window shows it -- dense rows, a rename pencil on hover, "New chat" spelled out -- at the width it was dragged to, instead of the phone's finger-sized drawer. Phones and other touchscreens keep the finger-sized drawer.
 
 Under a mouse, the narrow layout's header is denser (36px, smaller buttons) to match the desktop's chrome; touchscreens keep the 44px bar. The drawer, on every device, now floats with the same soft shadow as menus over an undimmed chat, and a click or tap beside it still closes it.
+
+The narrow layout's header menu (the three dots) now offers everything a right-click on the chat's row in the list does: Rename, Stop or Restart, Delete, and Copy reference, Explain... and Modify..., which point at the chat's title in the header. The narrow layout now follows the device: on a touchscreen it is on whenever the screen is phone-sized either way round (by the desktop shell's own phone rule, a short side at most 500px and a long side at most 1000px), so a phone keeps it turned sideways and a tablet never gets it; under a mouse it starts at 500px wide or less, down from 700px.

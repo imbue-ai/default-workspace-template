@@ -1,23 +1,23 @@
 /**
  * The chat root's header in the phone layout: a list button that opens the chats' drawer, the
- * title of the chat on screen, and a kebab offering that chat's verbs, the same rows its row in
- * the list offers. A rename from here is typed in place of the title; while the drawer is open, the
+ * title of the chat on screen, and a kebab offering what a right-click on that chat's row in the
+ * list offers: its verbs, and the reference rows, about the title here. A rename from here is typed in place of the title; while the drawer is open, the
  * row there holds the field instead. On a touchscreen the bar is a finger's height; under a mouse
  * it is as dense as the rest of the desktop's chrome.
  */
 
 import m from "mithril";
-import { createMenu } from "@imbue/workspace-ui/src/components/menu";
+import { createMenu, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { kebabGlyph, listGlyph } from "../glyphs";
-import { BAR_ICON_BUTTON_CLASS, isDeleting, isRenaming, renameField, rowMenuRows } from "./ChatRail";
-import type { RowMenuContext } from "./ChatRail";
+import { BAR_ICON_BUTTON_CLASS, isDeleting, isRenaming, referenceRowsFor, renameField, rowMenuRows } from "./ChatRail";
+import type { RowMenuContext, RowReferenceContext } from "./ChatRail";
 import type { ChatRow } from "./rows";
 
 export interface ChatHeaderAttrs {
   /** The chat on screen, or null with none selected. */
   row: ChatRow | null;
-  /** What the kebab's verbs need of the root, as the list's own menu does. */
-  context: RowMenuContext;
+  /** What the kebab's rows need of the root, as the list's own menu does. */
+  context: RowMenuContext & RowReferenceContext;
   /** Whether the drawer is open over the header. */
   isListOpen: boolean;
   onOpenList: () => void;
@@ -37,6 +37,8 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
     minWidth: 144,
     extraClass: "chat-header-menu",
   });
+  // The reference rows of the menu now open, built as it opens.
+  let referenceRows: MenuRow[] = [];
 
   return {
     onremove() {
@@ -47,6 +49,7 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
       // A chat being deleted offers nothing more, as its row in the list does not.
       const isRowDeleting = row !== null && isDeleting(row.chatId);
       const hasVerbs = row !== null && !row.isProvisional && !isRowDeleting;
+      const triggerAttrs = menu.triggerAttrs();
       const buttonClass = attrs.isTouch ? BAR_ICON_BUTTON_CLASS : DENSE_BAR_ICON_BUTTON_CLASS;
       return m(
         "header",
@@ -88,12 +91,26 @@ export function ChatHeader(): m.Component<ChatHeaderAttrs> {
                   class: `chat-header-menu-button ${buttonClass}`,
                   "aria-label": "Chat actions",
                   "data-chat-header-menu": "",
-                  ...menu.triggerAttrs(),
+                  ...triggerAttrs,
+                  onclick: (event: MouseEvent) => {
+                    const button = event.currentTarget as HTMLElement;
+                    const title = button.closest(".chat-header")?.querySelector(".chat-header-title") ?? button;
+                    const box = button.getBoundingClientRect();
+                    const x = box.left + box.width / 2;
+                    const y = box.top + box.height / 2;
+                    referenceRows = referenceRowsFor(attrs.context, title, {
+                      clientX: x,
+                      clientY: y,
+                      pageX: x + window.scrollX,
+                      pageY: y + window.scrollY,
+                    });
+                    (triggerAttrs.onclick as (event: MouseEvent) => void)(event);
+                  },
                 },
                 kebabGlyph(attrs.isTouch ? 18 : 16),
               )
             : null,
-          hasVerbs ? menu.view(rowMenuRows(attrs.context, row)) : null,
+          hasVerbs ? menu.view(rowMenuRows(attrs.context, row, referenceRows)) : null,
         ],
       );
     },
