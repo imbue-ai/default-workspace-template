@@ -28,25 +28,38 @@ export interface AvatarImageAttrs {
   readonly class: string;
 }
 
-export const AvatarImage: m.Component<AvatarImageAttrs> = {
-  view(vnode) {
-    const { design, defaultDesign, mood } = vnode.attrs;
-    if (design === IMBUE_CHARACTER_DESIGN_ID) {
-      return m(ImbueCharacter, { mood, isAttending: vnode.attrs.isAttending === true, class: vnode.attrs.class });
-    }
-    return m("img", {
-      "data-avatar-image": design,
-      src: avatarImageUrl(design, mood),
-      alt: "",
-      draggable: false,
-      class: vnode.attrs.class,
-      onerror: (event: Event) => {
-        const image = event.currentTarget as HTMLImageElement;
-        const fallback = avatarImageUrl(defaultDesign, mood);
-        if (design !== defaultDesign && !image.src.endsWith(fallback)) image.src = fallback;
-      },
-    });
-  },
+export const AvatarImage: m.ClosureComponent<AvatarImageAttrs> = () => {
+  // The design this instance drew last. A change from one to the character is the character being
+  // chosen; a first draw -- a page load, or the entry drawn somewhere new -- is not.
+  let drawnDesign: string | null = null;
+
+  return {
+    view(vnode) {
+      const { design, defaultDesign, mood } = vnode.attrs;
+      const isSwitch = drawnDesign !== null && drawnDesign !== design;
+      drawnDesign = design;
+      if (design === IMBUE_CHARACTER_DESIGN_ID) {
+        return m(ImbueCharacter, {
+          mood,
+          isAttending: vnode.attrs.isAttending === true,
+          isArriving: isSwitch,
+          class: vnode.attrs.class,
+        });
+      }
+      return m("img", {
+        "data-avatar-image": design,
+        src: avatarImageUrl(design, mood),
+        alt: "",
+        draggable: false,
+        class: vnode.attrs.class,
+        onerror: (event: Event) => {
+          const image = event.currentTarget as HTMLImageElement;
+          const fallback = avatarImageUrl(defaultDesign, mood);
+          if (design !== defaultDesign && !image.src.endsWith(fallback)) image.src = fallback;
+        },
+      });
+    },
+  };
 };
 
 /**
