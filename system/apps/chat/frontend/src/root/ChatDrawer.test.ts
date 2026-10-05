@@ -196,4 +196,18 @@ describe("ChatDrawer under a mouse", () => {
 
     expect(rail.style.width).toBe("320px");
   });
+
+  it("steps an arrow key from the width it draws when the window holds the list narrower than its width", () => {
+    window.localStorage.setItem("chat-root-rail-width", "480");
+    initRailWidth();
+    const panel = mount(false, false);
+    const rail = panel.querySelector<HTMLElement>(".chat-rail");
+    const handle = panel.querySelector<HTMLElement>(".chat-rail-resize");
+    if (rail === null || handle === null) throw new Error("no rail or no resize handle");
+    rail.getBoundingClientRect = () => new DOMRect(0, 0, 340, 800);
+    handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    m.redraw.sync();
+
+    expect(rail.style.width).toBe("324px");
+  });
 });

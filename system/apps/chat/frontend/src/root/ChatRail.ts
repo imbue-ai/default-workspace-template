@@ -307,6 +307,13 @@ function endResize(event: PointerEvent): void {
   saveRailWidth();
 }
 
+/** The width the list is drawn at, which a drag or an arrow key moves from. The drawer can draw the list narrower than
+ *  its width, held back from the window's edge; starting from what is drawn, the edge moves from the first step. */
+function drawnRailWidth(handle: HTMLElement): number {
+  const drawnWidth = handle.parentElement?.getBoundingClientRect().width ?? 0;
+  return drawnWidth > 0 ? Math.min(railWidth(), drawnWidth) : railWidth();
+}
+
 /** The list's right edge, dragged to resize it. The pointer is captured for the drag, so it keeps coming here while
  *  it crosses the chat's frame; the drawer's own drag never sees the press. */
 function resizeHandle(): m.Vnode {
@@ -328,11 +335,7 @@ function resizeHandle(): m.Vnode {
       event.stopPropagation();
       const handle = event.currentTarget as HTMLElement;
       handle.setPointerCapture(event.pointerId);
-      // The drawer can draw the list narrower than its width, held back from the window's edge; the drag starts from
-      // what is drawn, so the edge follows the pointer from the first move.
-      const drawnWidth = handle.parentElement?.getBoundingClientRect().width ?? 0;
-      const startWidth = drawnWidth > 0 ? Math.min(railWidth(), drawnWidth) : railWidth();
-      resizeDrag = { pointerId: event.pointerId, startX: event.clientX, startWidth };
+      resizeDrag = { pointerId: event.pointerId, startX: event.clientX, startWidth: drawnRailWidth(handle) };
     },
     onpointermove: (event: PointerEvent & { redraw?: boolean }) => {
       if (resizeDrag === null || event.pointerId !== resizeDrag.pointerId) {
@@ -350,7 +353,8 @@ function resizeHandle(): m.Vnode {
     onkeydown: (event: KeyboardEvent) => {
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
-      setRailWidth(railWidth() + (event.key === "ArrowRight" ? RESIZE_KEY_STEP_PX : -RESIZE_KEY_STEP_PX));
+      const step = event.key === "ArrowRight" ? RESIZE_KEY_STEP_PX : -RESIZE_KEY_STEP_PX;
+      setRailWidth(drawnRailWidth(event.currentTarget as HTMLElement) + step);
       saveRailWidth();
     },
   });
