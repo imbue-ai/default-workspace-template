@@ -315,7 +315,7 @@ async function settle(status: FlowStatus, flowId: string): Promise<void> {
       chooserOnDismissed = null;
       run(status.account_id);
     }
-    // Nothing left to say, so the chooser goes by itself; a note about the key stays up.
+    // Nothing left to say, so the chooser goes by itself; a success with a detail stays up to show it.
     if (status.detail === null) closeProviderChooser();
   } else if (status.state === "failed") {
     releaseRelay(flow);
