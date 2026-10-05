@@ -375,6 +375,18 @@ describe("covered pages", () => {
     expect(spy.mock.calls.map((call) => call[0].type)).not.toContain(SHELL_HIDDEN);
   });
 
+  it("counts the stopped placeholder in front as covering, but not a window with neither page nor placeholder", () => {
+    drawChromeAt("win-2", CASCADE_RECT);
+    socket.deliver().onAppsUpdated([docs, { ...notes, is_running: false, program: "" }]);
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-2"))).toBe(true);
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+    // With its app unknown the window in front paints only its title bar, and the page behind shows through.
+    socket.deliver().onAppsUpdated([docs]);
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(false);
+  });
+
   it("unparks every covered page while a window is moved, which moves it with no reconcile, but not for a press", () => {
     drawChromeAt("win-2", CASCADE_RECT);
     layer.reconcile();
