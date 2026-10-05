@@ -400,8 +400,9 @@ Claude sign-in succeeds on the CLI's clean exit with its success line, or, if
 the line was reworded, on its own probe; a denial the browser reports says
 access wasn't approved (claude.ai's own Deny reports nothing, so the chooser
 keeps waiting with Try again). A ChatGPT code login that ChatGPT refuses says to turn on device code
-sign-in for Codex in ChatGPT's security settings. "Sign in again" uses the kind
-of credential the account already holds (`reauth_method` on each account row).
+sign-in for Codex in ChatGPT's security settings. "Sign in again" on an API-key
+account asks for a key again; any other account signs in through its lane's
+first way in (`reauth_method` on each account row).
 
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
