@@ -6,11 +6,10 @@
  * page whose window the windows in front of it cover, which stays shown to the app contract. The
  * reconcile step positions each page over its window's content box (``placePage`` re-places one
  * page per pointer move of a drag or resize, with no redraw), in the same stacking context as the
- * window chrome so a window's edges and
- * shield stay clickable over a cross-origin page. Every page but the focused one is inert
- * (``pointer-events: none``), and every page is inert for the length of a press on a handle,
- * which is longer than the drag it may become: the pixels a press spends reaching the drag
- * threshold have to be ones the shell can see.
+ * window chrome so a window's edges and shield stay clickable over a cross-origin page. Every
+ * page but the focused one is inert (``pointer-events: none``), and every page is inert for the
+ * length of a press on a handle, which is longer than the drag it may become: the pixels a press
+ * spends reaching the drag threshold have to be ones the shell can see.
  *
  * The shell side of the app contract lives here too: the handshake after every load and on a
  * desktop change, ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
