@@ -3,7 +3,7 @@
  * The rail's width: dragged from its right edge within its bounds, kept in storage for the next
  * load, nudged by the arrow keys, and put back to the default by a double-click on the edge.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { ChatRail } from "./ChatRail";
@@ -99,5 +99,16 @@ describe("rail width", () => {
     m.redraw.sync();
     expect(rail.style.width).toBe(`${DEFAULT_RAIL_WIDTH_PX}px`);
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("follows a width another root of this browser saves", () => {
+    const { rail } = mountRail();
+    const redraw = vi.spyOn(m, "redraw");
+    window.localStorage.setItem(STORAGE_KEY, "260");
+    window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEY }));
+    expect(redraw).toHaveBeenCalled();
+    m.redraw.sync();
+    expect(rail.style.width).toBe("260px");
+    redraw.mockRestore();
   });
 });
