@@ -30,7 +30,6 @@ export function windowIcon(
           design: avatar.design,
           defaultDesign: avatar.defaultDesign,
           mood: avatar.status.mood,
-          switchedAt: avatar.switchedAt,
           class: "size-full object-contain",
         })
       : m.trust(appGlyph(app, glyphSize)),

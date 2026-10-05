@@ -765,7 +765,7 @@ export class DesktopStore {
       onAvatarStatus: (status) => this.dispatch({ type: "avatar_status_updated", status }),
       onAvatarSelectionChanged: (design) => {
         this.avatarSelectionPushes += 1;
-        this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: null, pushedAt: performance.now() });
+        this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: null });
       },
       onUpdateNoticeChanged: (wire) =>
         this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
@@ -949,7 +949,7 @@ export class DesktopStore {
     try {
       const catalog = await this.deps.api.fetchAvatars();
       const design = this.avatarSelectionPushes === pushesBefore ? catalog.selected : this.state.avatar.design;
-      this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: catalog.default, pushedAt: null });
+      this.dispatch({ type: "avatar_selection_updated", design, defaultDesign: catalog.default });
     } catch (error) {
       console.warn("[si] could not read the avatar designs", error);
     }

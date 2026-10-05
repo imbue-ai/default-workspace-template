@@ -25,44 +25,41 @@ export interface AvatarImageAttrs {
   /** Whether the user is at this entry's window. Only the character answers it, and only an entry
    *  knows: a caller that is drawing the avatar as an identifying icon leaves it out. */
   readonly isAttending?: boolean;
-  /** When a pushed selection last switched the design (`AvatarState.switchedAt`). */
-  readonly switchedAt?: number | null;
   readonly class: string;
 }
 
-/**
- * How soon after a switch a character that mounts counts as the one just chosen, in ms.
- *
- * The switch mounts it on the next redraw, so the slack is only for a busy page. The bound keeps the
- * jump to the switch: the character also mounts on every load and whenever its entry is drawn
- * somewhere else.
- */
-const ARRIVAL_WINDOW_MS = 1000;
+export const AvatarImage: m.ClosureComponent<AvatarImageAttrs> = () => {
+  // The design this instance drew last. A change from one to the character is the character being
+  // chosen; a first draw -- a page load, or the entry drawn somewhere new -- is not.
+  let drawnDesign: string | null = null;
 
-export const AvatarImage: m.Component<AvatarImageAttrs> = {
-  view(vnode) {
-    const { design, defaultDesign, mood, switchedAt } = vnode.attrs;
-    if (design === IMBUE_CHARACTER_DESIGN_ID) {
-      return m(ImbueCharacter, {
-        mood,
-        isAttending: vnode.attrs.isAttending === true,
-        isArriving: switchedAt != null && performance.now() - switchedAt < ARRIVAL_WINDOW_MS,
+  return {
+    view(vnode) {
+      const { design, defaultDesign, mood } = vnode.attrs;
+      const isSwitch = drawnDesign !== null && drawnDesign !== design;
+      drawnDesign = design;
+      if (design === IMBUE_CHARACTER_DESIGN_ID) {
+        return m(ImbueCharacter, {
+          mood,
+          isAttending: vnode.attrs.isAttending === true,
+          isArriving: isSwitch,
+          class: vnode.attrs.class,
+        });
+      }
+      return m("img", {
+        "data-avatar-image": design,
+        src: avatarImageUrl(design, mood),
+        alt: "",
+        draggable: false,
         class: vnode.attrs.class,
+        onerror: (event: Event) => {
+          const image = event.currentTarget as HTMLImageElement;
+          const fallback = avatarImageUrl(defaultDesign, mood);
+          if (design !== defaultDesign && !image.src.endsWith(fallback)) image.src = fallback;
+        },
       });
-    }
-    return m("img", {
-      "data-avatar-image": design,
-      src: avatarImageUrl(design, mood),
-      alt: "",
-      draggable: false,
-      class: vnode.attrs.class,
-      onerror: (event: Event) => {
-        const image = event.currentTarget as HTMLImageElement;
-        const fallback = avatarImageUrl(defaultDesign, mood);
-        if (design !== defaultDesign && !image.src.endsWith(fallback)) image.src = fallback;
-      },
-    });
-  },
+    },
+  };
 };
 
 /**
@@ -112,7 +109,6 @@ export function entryStyleParts(
           defaultDesign: avatar.defaultDesign,
           mood: avatar.status.mood,
           isAttending: isUserAtWindow(entry),
-          switchedAt: avatar.switchedAt,
           class: imageClass,
         })
       : m.trust(appGlyph(entry.app, glyphSize)),
