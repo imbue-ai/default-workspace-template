@@ -117,6 +117,9 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   let isRelayUnavailable = false;
   // Bumped by every `begin`, so a request that has been superseded can tell and stand down.
   let generation = 0;
+  // Bumped by every ask to the desktop app. The ack has one slot, so a newer ask settles an older
+  // one as false, which is not the desktop app's answer.
+  let relayAsk = 0;
   // Why the chooser moved the user to another way of signing in, shown above it.
   let notice: string | null = null;
 
@@ -155,9 +158,13 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     return offeredMethods(candidate).find((each) => each.shape !== "browser" && !isPaste(each)) ?? null;
   }
 
-  /** Hand a started flow's page to the desktop app; whether it is relaying. */
-  async function relay(url: string, flowId: string): Promise<boolean> {
+  /** Hand a started flow's page to the desktop app; whether it is relaying, or null when a newer
+   *  ask took its place before it was answered. */
+  async function relay(url: string, flowId: string): Promise<boolean | null> {
+    relayAsk += 1;
+    const ask = relayAsk;
     const isRelaying = await requestProviderRelay(url, flowId);
+    if (ask !== relayAsk) return null;
     if (!isRelaying) isRelayUnavailable = true;
     return isRelaying;
   }
@@ -227,7 +234,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         const isRelaying = await relay(started.relay_url, started.flow_id);
         if (attempt !== generation) return;
         isOpeningBrowser = false;
-        if (isRelaying) mode = "relay";
+        if (isRelaying === true) mode = "relay";
       }
       if (mode !== "relay" && chosenMethod.shape === "browser") {
         // This sign-in cannot finish without the relay, so it gives way to one that can.
@@ -789,6 +796,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
             onclick: () => {
               if (flow === null || flow.relay_url === null) return;
               void relay(flow.relay_url, flow.flow_id).then((isRelaying) => {
+                if (isRelaying === null) return;
                 // The user may have gone back, closed the chooser, or finished meanwhile.
                 const live = getFlow();
                 const isStillWaiting =

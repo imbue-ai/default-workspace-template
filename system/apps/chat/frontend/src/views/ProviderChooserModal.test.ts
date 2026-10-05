@@ -575,6 +575,25 @@ describe("a sign-in finished in the browser", () => {
     expect(startFlow).toHaveBeenCalledOnce();
   });
 
+  it("keeps waiting on the browser when Try again is clicked twice and the first ask is cut short", async () => {
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+    const root = await clickLane("openai");
+    let cutShort: (isRelaying: boolean) => void = () => undefined;
+    requestProviderRelay.mockImplementationOnce(() => new Promise<boolean>((resolve) => (cutShort = resolve)));
+
+    const tryAgain = root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement;
+    tryAgain.click();
+    tryAgain.click();
+    // What the real requestProviderRelay does to an ask a newer one replaced.
+    cutShort(false);
+    await settled();
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    expect(startFlow).toHaveBeenCalledOnce();
+    expect(root.textContent).toContain("Finish signing in to OpenAI in your browser.");
+  });
+
   it("stops offering ChatGPT's browser sign-in once the desktop app can no longer open the page", async () => {
     state.lanes = [CHATGPT];
     state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
