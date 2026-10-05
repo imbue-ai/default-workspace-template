@@ -1,0 +1,335 @@
+// @vitest-environment jsdom
+import "@imbue/workspace-ui/src/testing/dom";
+import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
+import m from "mithril";
+import { afterEach, describe, expect, it } from "vitest";
+import type { BackupRetention, Note, NotesDocument } from "../models/notes";
+import { MemoriesPage } from "./MemoriesPage";
+
+afterEach(() => {
+  unmountViews();
+});
+
+const BACKED_UP: BackupRetention = {
+  is_backed_up: true,
+  longest_kept: "24 months",
+  schedule: ["hourly for 24 hours", "daily for 30 days", "weekly for 12 weeks", "monthly for 24 months"],
+  settings_path: "data/system/backup.toml",
+};
+
+function note(fileName: string, description: string, noteType: Note["note_type"]): Note {
+  return {
+    file_name: fileName,
+    name: fileName.replace(".md", ""),
+    description,
+    note_type: noteType,
+    body: "Some detail.",
+    raw_text: `---\ndescription: ${description}\n---\n\nSome detail.\n`,
+    modified_at: "2026-10-01T10:00:00Z",
+    version: `1-${fileName.length}`,
+    attribution: null,
+  };
+}
+
+function documentWith(backups: BackupRetention): NotesDocument {
+  return {
+    notes_dir: "/home/user/workspace/data/memories",
+    index_path: "/home/user/workspace/data/memories/MEMORY.md",
+    backups,
+    notes: [note("role.md", "Is a product designer", "USER"), note("units.md", "Prefers metric units", "FEEDBACK")],
+    messages: [],
+  };
+}
+
+interface Rendered {
+  readonly root: HTMLElement;
+  readonly deleted: string[];
+}
+
+function render(backups: BackupRetention = BACKED_UP, deleteAnswer: string | null = null): Rendered {
+  const deleted: string[] = [];
+  const root = mountView(() =>
+    m(MemoriesPage, {
+      state: { kind: "loaded", document: documentWith(backups) },
+      onSave: async () => null,
+      onDelete: async (target: Note) => {
+        deleted.push(target.file_name);
+        return deleteAnswer;
+      },
+    }),
+  );
+  return { root, deleted };
+}
+
+function buttonLabelled(root: HTMLElement, label: string): HTMLButtonElement {
+  const button = Array.from(root.querySelectorAll<HTMLButtonElement>("button")).find(
+    (candidate) => candidate.textContent?.trim() === label,
+  );
+  if (button === undefined) throw new Error(`no button labelled ${label}`);
+  return button;
+}
+
+function click(root: HTMLElement, label: string): void {
+  buttonLabelled(root, label).click();
+  m.redraw.sync();
+}
+
+async function settle(): Promise<void> {
+  for (let tick = 0; tick < 5; tick++) await Promise.resolve();
+  m.redraw.sync();
+}
+
+describe("deleting a note", () => {
+  it("states up front that the backups keep notes, including deleted ones", () => {
+    const { root } = render();
+
+    expect(root.textContent).toContain(
+      "Your workspace's backups also hold these notes, including ones you delete, for up to 24 months.",
+    );
+  });
+
+  it("asks first, naming the note, that it can't be undone, and the copy the backups keep", () => {
+    const { root, deleted } = render();
+
+    click(root, "Delete");
+
+    const text = root.textContent ?? "";
+    expect(text).toContain("Delete this note for good?");
+    expect(text).toContain('"Is a product designer"');
+    expect(text).toContain("This can't be undone.");
+    expect(text).toContain("A copy stays in your workspace's backups until they expire, up to 24 months from now.");
+    expect(text).toContain("Chats that are open now, and the transcripts of chats that read it, still have it");
+    expect(deleted).toEqual([]);
+  });
+
+  it("does nothing on Cancel", () => {
+    const { root, deleted } = render();
+
+    click(root, "Delete");
+    click(root, "Cancel");
+
+    expect(root.textContent).not.toContain("Delete this note for good?");
+    expect(deleted).toEqual([]);
+  });
+
+  it("deletes the note it was opened for and says the backups still hold a copy", async () => {
+    const { root, deleted } = render();
+
+    Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+      .filter((button) => button.textContent?.trim() === "Delete")[1]
+      .click();
+    m.redraw.sync();
+    click(root, "Delete for good");
+    await settle();
+
+    expect(deleted).toEqual(["units.md"]);
+    expect(root.textContent).not.toContain("Delete this note for good?");
+    expect(root.querySelector('[role="status"]')?.textContent).toBe(
+      "Deleted. A copy stays in your backups for up to 24 months.",
+    );
+  });
+
+  it("shows the reason when the delete is refused", async () => {
+    const refusal = "A chat changed this note while you had it open, so nothing was changed.";
+    const { root } = render(BACKED_UP, refusal);
+
+    click(root, "Delete");
+    click(root, "Delete for good");
+    await settle();
+
+    expect(root.querySelector('[role="status"]')?.textContent).toBe(refusal);
+  });
+
+  it("says a delete is final in a workspace with no backups", async () => {
+    const { root } = render({ ...BACKED_UP, is_backed_up: false });
+
+    expect(root.textContent).toContain("This workspace isn't backed up, so a note you delete is gone for good.");
+    click(root, "Delete");
+    expect(root.textContent).toContain("This workspace isn't backed up, so no other copy is kept.");
+    click(root, "Delete for good");
+    await settle();
+    expect(root.querySelector('[role="status"]')?.textContent).toBe("Deleted.");
+  });
+});
+
+interface SaveCall {
+  readonly fileName: string;
+  readonly description: string;
+  readonly body: string;
+  readonly version: string;
+}
+
+describe("editing a note", () => {
+  function renderEditable(answer: () => Promise<string | null> = async () => null): {
+    root: HTMLElement;
+    saves: SaveCall[];
+    document: { current: NotesDocument };
+  } {
+    const saves: SaveCall[] = [];
+    const document = { current: documentWith(BACKED_UP) };
+    const root = mountView(() =>
+      m(MemoriesPage, {
+        state: { kind: "loaded", document: document.current },
+        onSave: async (fileName: string, description: string, body: string, version: string) => {
+          saves.push({ fileName, description, body, version });
+          return answer();
+        },
+        onDelete: async () => null,
+      }),
+    );
+    return { root, saves, document };
+  }
+
+  function typeSummary(root: HTMLElement, text: string): void {
+    const input = root.querySelector<HTMLInputElement>("input[id^='edit-description-']")!;
+    input.value = text;
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    m.redraw.sync();
+  }
+
+  /** What the page renders after it re-reads the notes and a chat has changed role.md meanwhile. */
+  function chatChangedRole(document: { current: NotesDocument }): void {
+    document.current = {
+      ...document.current,
+      notes: document.current.notes.map((current) =>
+        current.file_name === "role.md"
+          ? { ...current, version: "2-99", description: "Is a design lead", body: "Leads the design team." }
+          : current,
+      ),
+    };
+    m.redraw.sync();
+  }
+
+  it("saves against the version the edit started from", async () => {
+    const { root, saves } = renderEditable();
+
+    click(root, "Edit");
+    typeSummary(root, "Is a senior product designer");
+    click(root, "Save");
+    await settle();
+
+    expect(saves).toEqual([
+      { fileName: "role.md", description: "Is a senior product designer", body: "Some detail.", version: "1-7" },
+    ]);
+  });
+
+  it("shows a chat's change made during the edit, and replaces it only when asked", async () => {
+    const { root, saves, document } = renderEditable();
+
+    click(root, "Edit");
+    typeSummary(root, "Is a senior product designer");
+    chatChangedRole(document);
+
+    expect(root.querySelector(".memories-conflict")?.textContent).toContain(
+      "A chat changed this note while you were editing it. Its version now reads:Is a design leadLeads the design team.",
+    );
+    expect(() => buttonLabelled(root, "Save")).toThrow();
+    click(root, "Replace with my version");
+    await settle();
+
+    expect(saves).toEqual([
+      { fileName: "role.md", description: "Is a senior product designer", body: "Some detail.", version: "2-99" },
+    ]);
+  });
+
+  it("keeps the draft when the save is refused", async () => {
+    const refusal = "A chat changed this note while you had it open, so nothing was changed.";
+    const { root } = renderEditable(async () => refusal);
+
+    click(root, "Edit");
+    typeSummary(root, "Is a senior product designer");
+    click(root, "Save");
+    await settle();
+
+    expect(root.querySelector('[role="status"]')?.textContent).toBe(refusal);
+    expect(root.querySelector<HTMLInputElement>("input[id^='edit-description-']")?.value).toBe(
+      "Is a senior product designer",
+    );
+  });
+
+  it("opens the editor with the summary focused, and saves only once something changed", () => {
+    const { root } = renderEditable();
+
+    click(root, "Edit");
+    const input = root.querySelector<HTMLInputElement>("input[id^='edit-description-']");
+    expect(globalThis.document.activeElement).toBe(input);
+    expect(buttonLabelled(root, "Save").disabled).toBe(true);
+
+    typeSummary(root, "Is a senior product designer");
+    expect(buttonLabelled(root, "Save").disabled).toBe(false);
+    typeSummary(root, "Is a product designer");
+    expect(buttonLabelled(root, "Save").disabled).toBe(true);
+    typeSummary(root, " ");
+    expect(buttonLabelled(root, "Save").disabled).toBe(true);
+  });
+
+  it("offers to replace a chat's change even when the draft is unchanged", () => {
+    const { root, document } = renderEditable();
+
+    click(root, "Edit");
+    chatChangedRole(document);
+
+    expect(buttonLabelled(root, "Replace with my version").disabled).toBe(false);
+  });
+
+  it("lets only one note be edited at a time", () => {
+    const { root } = renderEditable();
+
+    click(root, "Edit");
+
+    expect(buttonLabelled(root, "Edit").disabled).toBe(true);
+    click(root, "Cancel");
+    expect(
+      Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+        .filter((button) => button.textContent?.trim() === "Edit")
+        .map((button) => button.disabled),
+    ).toEqual([false, false]);
+  });
+
+  it("keeps the unsaved text on screen when a chat deletes the note being edited, until dismissed", () => {
+    const { root, document } = renderEditable();
+
+    click(root, "Edit");
+    typeSummary(root, "Is a senior product designer");
+    document.current = {
+      ...document.current,
+      notes: document.current.notes.filter((current) => current.file_name !== "role.md"),
+    };
+    m.redraw.sync();
+
+    const panel = root.querySelector<HTMLElement>(".memories-orphaned-draft");
+    expect(panel?.textContent).toBe(
+      "A chat deleted the note you were editing. Your unsaved text is below; copy anything you want to keep.Is a senior product designerSome detail.Dismiss",
+    );
+    expect(root.querySelector("input[id^='edit-description-']")).toBeNull();
+    expect(panel?.nextElementSibling?.tagName).toBe("SECTION");
+    expect(buttonLabelled(root, "Edit").disabled).toBe(true);
+
+    click(root, "Dismiss");
+
+    expect(root.querySelector(".memories-orphaned-draft")).toBeNull();
+    expect(buttonLabelled(root, "Edit").disabled).toBe(false);
+  });
+
+  it("disables every action while a save is in flight, and announces the outcome", async () => {
+    let finish: (answer: string | null) => void = () => undefined;
+    const { root } = renderEditable(() => new Promise((resolve) => (finish = resolve)));
+    const status = (): HTMLElement | null => root.querySelector<HTMLElement>('[role="status"]');
+    const actions = (): boolean[] =>
+      Array.from(root.querySelectorAll<HTMLButtonElement>("button"))
+        .filter((button) => ["Save", "Cancel", "Edit", "Delete"].includes(button.textContent?.trim() ?? ""))
+        .map((button) => button.disabled);
+
+    expect(status()?.textContent).toBe("");
+    click(root, "Edit");
+    typeSummary(root, "Is a senior product designer");
+    click(root, "Save");
+
+    expect(actions()).toEqual([true, true, true, true]);
+    finish(null);
+    await settle();
+
+    expect(actions()).toEqual([false, false, false, false]);
+    expect(status()?.textContent).toBe("Saved. New chats will use this version.");
+  });
+});

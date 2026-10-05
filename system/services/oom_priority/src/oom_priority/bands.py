@@ -272,9 +272,12 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # directly. It holds little memory and supervisord restarts it if shed.
     "files": 75,
     # The Getting Started page: one static page and a cached catalog. A shed costs
-    # one reload of a window that shows nothing of the user's, so this is the most
-    # expendable built-in service of all.
+    # one reload of a window that shows nothing of the user's.
     "getting-started": 80,
+    # The memories app: reads and writes the memory notes on request and holds
+    # nothing between requests (an unsaved edit lives in the page, not here), so
+    # this is the most expendable built-in service of all.
+    "memories": 85,
     "user": USER_SERVICE,
     # The shell of a workspace terminal window (and everything run in it), tagged by the
     # terminal app's session command. Not a supervisord program: the pane is a child of the

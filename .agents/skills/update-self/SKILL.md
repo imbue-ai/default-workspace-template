@@ -494,9 +494,9 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the report names the worker's **built frontend bundles** (the shell's
-`static/`, the chat app's, and the Getting Started app's), append
+`static/`, the chat app's, the Getting Started app's, and Agent Memory's), append
 `--worker-bundle system_interface=<path> --worker-bundle chat=<path>
---worker-bundle getting_started=<path>` so the exact builds the worker validated
+--worker-bundle getting_started=<path> --worker-bundle memories=<path>` so the exact builds the worker validated
 are installed instead of a live build; the apply installs them only as a set (one
 `npm run build` emits them all), and builds live when any is missing or stale.
 
