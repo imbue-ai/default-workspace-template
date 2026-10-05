@@ -272,7 +272,7 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
           {
             // A touch's allowed gestures are read from the touched row up to the first scrolling ancestor, this
             // list, so the drawer's own pan-y must be repeated here for a sideways drag over the rows to reach it.
-            class: `chat-rail-list min-h-0 flex-1 overflow-y-auto px-2 pb-2${attrs.isTouch ? " touch-pan-y" : ""}`,
+            class: `chat-rail-list min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-2${attrs.isTouch ? " touch-pan-y" : ""}`,
           },
           attrs.rows.map((row) => railRow(attrs, row)),
         ),
@@ -340,7 +340,7 @@ function resizeHandle(): m.Vnode {
 }
 
 function railHead(attrs: ChatRailAttrs): m.Vnode {
-  return m("div", { class: "chat-rail-head flex flex-none items-center gap-1 p-2" }, [
+  return m("div", { class: "chat-rail-head flex flex-none items-center gap-1 overflow-hidden p-2" }, [
     m(
       "button",
       {

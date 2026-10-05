@@ -19,7 +19,7 @@ vi.mock("./verbs", () => verbs);
 import m from "mithril";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { ChatDrawer } from "./ChatDrawer";
-import { initRailWidth } from "./railWidth";
+import { MIN_RAIL_WIDTH_PX, initRailWidth } from "./railWidth";
 import type { ChatRailAttrs } from "./ChatRail";
 import type { ChatRow } from "./rows";
 
@@ -115,8 +115,10 @@ describe("ChatDrawer", () => {
     expect(onPick).toHaveBeenCalledWith("agent-1");
   });
 
-  it("goes on a tap on the scrim and on Escape", () => {
-    mount();
+  it("floats with a soft shadow over an undimmed chat, and goes on a tap beside it and on Escape", () => {
+    const panel = mount();
+    expect(panel.className).toContain("shadow-overlay");
+    expect(root?.querySelector(".chat-drawer-scrim")?.className).toContain("bg-transparent");
     root?.querySelector<HTMLElement>(".chat-drawer-scrim")?.click();
     expect(onDismiss).toHaveBeenCalledTimes(1);
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
@@ -175,13 +177,13 @@ describe("ChatDrawer under a mouse", () => {
       handle.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 2, button: 0, clientX, clientY: 400 }));
     };
     press("pointerdown", 240);
-    press("pointermove", 120);
-    press("pointerup", 120);
+    press("pointermove", 0);
+    press("pointerup", 0);
     pointer(window, "pointermove", 0);
     pointer(window, "pointerup", 0);
     m.redraw.sync();
 
     expect(onDismiss).not.toHaveBeenCalled();
-    expect(panel.querySelector<HTMLElement>(".chat-rail")?.style.width).toBe("180px");
+    expect(panel.querySelector<HTMLElement>(".chat-rail")?.style.width).toBe(`${MIN_RAIL_WIDTH_PX}px`);
   });
 });

@@ -51,7 +51,8 @@ describe("the chat header", () => {
     document.body.appendChild(root);
     const context = { rows: [ONLY_CHAT], selectedChatId: ONLY_CHAT.chatId, onPick: () => undefined };
     m.mount(root, {
-      view: () => m(ChatHeader, { row: ONLY_CHAT, context, isListOpen: false, onOpenList: () => undefined }),
+      view: () =>
+        m(ChatHeader, { row: ONLY_CHAT, context, isListOpen: false, onOpenList: () => undefined, isTouch: true }),
     });
 
     root.querySelector<HTMLElement>("[data-chat-header-menu]")?.click();
@@ -80,7 +81,13 @@ describe("the chat header", () => {
     };
     m.mount(root, {
       view: () => [
-        m(ChatHeader, { row: RENAMED_CHAT, context: rail, isListOpen: true, onOpenList: () => undefined }),
+        m(ChatHeader, {
+          row: RENAMED_CHAT,
+          context: rail,
+          isListOpen: true,
+          onOpenList: () => undefined,
+          isTouch: true,
+        }),
         m(ChatDrawer, { rail, isCovered: false, onDismiss: () => undefined }),
       ],
     });

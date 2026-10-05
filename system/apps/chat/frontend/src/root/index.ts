@@ -359,6 +359,7 @@ const ChatRoot: m.Component = {
               onOpenList: () => {
                 isDrawerOpen = true;
               },
+              isTouch: touchQuery.matches,
             })
           : m(ChatRail, rail),
         m("div", { class: "chat-root-slot relative min-h-0 min-w-0 flex-1" }, [

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import m from "mithril";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
 import { ChatRail } from "./ChatRail";
-import { DEFAULT_RAIL_WIDTH_PX, MAX_RAIL_WIDTH_PX, initRailWidth, railWidth } from "./railWidth";
+import { DEFAULT_RAIL_WIDTH_PX, MAX_RAIL_WIDTH_PX, MIN_RAIL_WIDTH_PX, initRailWidth, railWidth } from "./railWidth";
 
 const STORAGE_KEY = "chat-root-rail-width";
 
@@ -83,7 +83,7 @@ describe("rail width", () => {
 
     window.localStorage.setItem(STORAGE_KEY, "40");
     initRailWidth();
-    expect(railWidth()).toBe(180);
+    expect(railWidth()).toBe(MIN_RAIL_WIDTH_PX);
     window.localStorage.setItem(STORAGE_KEY, "not a width");
     initRailWidth();
     expect(railWidth()).toBe(DEFAULT_RAIL_WIDTH_PX);
