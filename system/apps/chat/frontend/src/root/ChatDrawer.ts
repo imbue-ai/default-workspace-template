@@ -1,11 +1,10 @@
 /**
  * The chats' drawer in the chat root's phone layout: the list (``ChatRail``, rows unchanged)
  * on a panel that slides in from the left over the chat, floating with a menu's soft shadow over
- * a clear scrim that takes the tap beside it. On a
- * touchscreen the panel takes most of the width; under a mouse it is as wide as the rail the
- * list draws in a wider window. A tap on
- * the scrim, Escape, or dragging the panel back to the left dismisses it; while a modal is open
- * over the drawer, Escape is the modal's.
+ * a clear scrim that takes the tap beside it. On a touchscreen the panel takes most of the
+ * width; under a mouse it is as wide as the rail the list draws in a wider window. A tap on the
+ * scrim, Escape, or dragging the panel back to the left dismisses it; while a modal is open over
+ * the drawer, Escape is the modal's.
  */
 
 import m from "mithril";

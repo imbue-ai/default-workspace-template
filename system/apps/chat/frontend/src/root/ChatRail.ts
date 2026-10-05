@@ -15,7 +15,8 @@
  * holds the list just as the rail draws it, at the rail's width. On a touchscreen it takes the
  * finger's form: "New chat" is a plus in its header, and each row carries a kebab offering the
  * right-click menu's verbs, since nothing on a phone right-clicks. The phone header's kebab
- * offers them too, for the chat on screen (``rowMenuRows``, ``renameField``).
+ * offers the whole right-click menu, verbs and reference rows, for the chat on screen
+ * (``rowMenuRows``, ``referenceRowsFor``, ``renameField``).
  */
 
 import m from "mithril";

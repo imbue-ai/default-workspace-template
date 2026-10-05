@@ -1,9 +1,10 @@
 /**
  * The chat root's header in the phone layout: a list button that opens the chats' drawer, the
  * title of the chat on screen, and a kebab offering what a right-click on that chat's row in the
- * list offers: its verbs, and the reference rows, about the title here. A rename from here is typed in place of the title; while the drawer is open, the
- * row there holds the field instead. On a touchscreen the bar is a finger's height; under a mouse
- * it is as dense as the rest of the desktop's chrome.
+ * list offers: its verbs, and the reference rows, about the title here. A rename from here is
+ * typed in place of the title; while the drawer is open, the row there holds the field instead.
+ * On a touchscreen the bar is a finger's height; under a mouse it is as dense as the rest of the
+ * desktop's chrome.
  */
 
 import m from "mithril";
