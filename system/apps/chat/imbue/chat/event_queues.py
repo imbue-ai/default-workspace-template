@@ -35,14 +35,14 @@ class AgentEventQueues:
 
     def __init__(self) -> None:
         self._queues: dict[str, list[queue.Queue[dict[str, Any] | None]]] = defaultdict(list)
-        # Reentrant for two same-thread re-entries into unregister() while the
-        # lock is held. Deliberate: broadcast_batch evicts an overflowing
-        # consumer from inside its locked delivery loop (_evict_locked ->
-        # unregister). Indirect: a CPython GC cycle during an allocation inside
-        # a locked section can finalize an abandoned SSE event_generator (from
-        # an unrelated prior stream), whose `finally` block calls unregister()
-        # on the same thread. With a non-reentrant Lock either re-entrance
-        # self-deadlocks.
+        # Reentrant for two kinds of same-thread re-entry into unregister() while
+        # the lock is held. Deliberate: closing a consumer under the lock goes
+        # through _close_locked -> unregister, from broadcast_batch's eviction of
+        # an overflowing consumer and from end_streams. Indirect: a CPython GC
+        # cycle during an allocation inside a locked section can finalize an
+        # abandoned SSE event_generator (from an unrelated prior stream), whose
+        # `finally` block calls unregister() on the same thread. With a
+        # non-reentrant Lock either re-entrance self-deadlocks.
         self._lock: threading.RLock = threading.RLock()
         self._shutdown: bool = False
 
