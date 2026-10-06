@@ -10,6 +10,8 @@ from share_gateway.identity import RequesterIdentity
 from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import SESSION_LIFETIME_SECONDS
+from share_gateway.session_cookie import describe_session_cookie_value
+from share_gateway.session_cookie import describe_session_cookies
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.session_cookie import set_session_cookie
 from share_gateway.session_cookie import strip_session_cookie
@@ -105,6 +107,34 @@ def test_verify_session_from_cookies_accepts_whichever_copy_verifies() -> None:
     assert verify_session_from_cookies(_SECRET, both, _DOMAIN) == _BOB
     assert verify_session_from_cookies(_SECRET, {}, _DOMAIN) is None
     assert verify_session_from_cookies(_SECRET, {SESSION_COOKIE_NAME: "garbage"}, _DOMAIN) is None
+
+
+def _cookie_issued_at(issued_at: datetime, lifetime: timedelta) -> str:
+    claims = {"user_id": "user-bob-4471", "email": "bob@example.com", "owner": False, "aud": _DOMAIN}
+    return jwt.encode({**claims, "iat": issued_at, "exp": issued_at + lifetime}, _SECRET, algorithm="HS256")
+
+
+def test_describe_session_cookie_names_why_a_cookie_opens_no_session_and_when_it_was_issued() -> None:
+    issued_at = datetime(2026, 10, 4, 18, 45, 56, tzinfo=timezone.utc)
+    expired = _cookie_issued_at(issued_at, timedelta(hours=1))
+    assert describe_session_cookie_value(_SECRET, expired, _DOMAIN) == (
+        "expired (issued 2026-10-04T18:45:56Z, expires 2026-10-04T19:45:56Z)"
+    )
+    assert describe_session_cookie_value("rotated-secret", expired, _DOMAIN).startswith(
+        "signed with another key (issued 2026-10-04T18:45:56Z,"
+    )
+    fresh = mint_session_cookie_value(_SECRET, _BOB, _DOMAIN)
+    assert describe_session_cookie_value(_SECRET, fresh, "other." + _DOMAIN).startswith("issued for another domain (")
+    assert describe_session_cookie_value(_SECRET, fresh, _DOMAIN).startswith("valid (issued ")
+    assert describe_session_cookie_value(_SECRET, "garbage", _DOMAIN) == "malformed"
+    assert describe_session_cookie_value(_SECRET, "", _DOMAIN) == "absent"
+
+
+def test_describe_session_cookies_covers_both_copies_and_never_the_value() -> None:
+    value = mint_session_cookie_value(_SECRET, _BOB, _DOMAIN)
+    described = describe_session_cookies(_SECRET, {PARTITIONED_SESSION_COOKIE_NAME: value}, _DOMAIN)
+    assert described.startswith(f"{SESSION_COOKIE_NAME} absent; {PARTITIONED_SESSION_COOKIE_NAME} valid (issued ")
+    assert value not in described
 
 
 def test_strip_session_cookie_removes_only_ours() -> None:

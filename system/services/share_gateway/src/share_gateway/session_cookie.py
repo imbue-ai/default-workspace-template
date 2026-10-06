@@ -72,12 +72,12 @@ def _optional_text_claim(claims: dict[str, object], name: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def verify_session_cookie_value(
+def _check_session_cookie_value(
     signing_secret: str, cookie_value: str, workspace_domain: str
-) -> "RequesterIdentity | None":
-    """Return the session identity, or None when the cookie is missing, expired, forged, or pre-dates user ids."""
+) -> RequesterIdentity | str:
+    """The session identity, or why the cookie opens no session."""
     if not cookie_value:
-        return None
+        return "absent"
     try:
         claims = jwt.decode(
             cookie_value,
@@ -85,13 +85,62 @@ def verify_session_cookie_value(
             algorithms=[_SESSION_ALGORITHM],
             audience=workspace_domain,
         )
-    except jwt.PyJWTError:
-        return None
+    except jwt.InvalidSignatureError:
+        return "signed with another key"
+    except jwt.ExpiredSignatureError:
+        return "expired"
+    except jwt.InvalidAudienceError:
+        return "issued for another domain"
+    except jwt.DecodeError:
+        return "malformed"
+    except jwt.PyJWTError as exc:
+        return f"rejected ({type(exc).__name__})"
     user_id = _optional_text_claim(claims, "user_id")
     email = _optional_text_claim(claims, "email")
     if user_id is None or email is None:
-        return None
+        return "pre-dates user ids"
     return RequesterIdentity(user_id=user_id, email=email, is_owner=bool(claims.get("owner", False)))
+
+
+def verify_session_cookie_value(
+    signing_secret: str, cookie_value: str, workspace_domain: str
+) -> "RequesterIdentity | None":
+    """Return the session identity, or None when the cookie is missing, expired, forged, or pre-dates user ids."""
+    checked = _check_session_cookie_value(signing_secret, cookie_value, workspace_domain)
+    return checked if isinstance(checked, RequesterIdentity) else None
+
+
+def _format_claim_time(claims: Mapping[str, object], name: str) -> str:
+    value = claims.get(name)
+    if not isinstance(value, int):
+        return "unknown"
+    return datetime.fromtimestamp(value, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def describe_session_cookie_value(signing_secret: str, cookie_value: str, workspace_domain: str) -> str:
+    """Whether one session cookie value opens a session (or why not), and when it was issued and expires.
+
+    For the gateway's log: it tells a cookie the browser never sent apart from one it sent but the gateway
+    rejected, and the issue time identifies which sign-in minted it. Never includes the value itself.
+    """
+    checked = _check_session_cookie_value(signing_secret, cookie_value, workspace_domain)
+    status = "valid" if isinstance(checked, RequesterIdentity) else checked
+    if not cookie_value:
+        return status
+    try:
+        claims = jwt.decode(cookie_value, options={"verify_signature": False})
+    except jwt.PyJWTError:
+        return status
+    return f"{status} (issued {_format_claim_time(claims, 'iat')}, expires {_format_claim_time(claims, 'exp')})"
+
+
+def describe_session_cookies(signing_secret: str, cookies: Mapping[str, str], workspace_domain: str) -> str:
+    """``describe_session_cookie_value`` for each session cookie copy, whether or not the request carried it."""
+    descriptions = []
+    for cookie_name in _SESSION_COOKIE_NAMES:
+        description = describe_session_cookie_value(signing_secret, cookies.get(cookie_name, ""), workspace_domain)
+        descriptions.append(f"{cookie_name} {description}")
+    return "; ".join(descriptions)
 
 
 def verify_session_from_cookies(

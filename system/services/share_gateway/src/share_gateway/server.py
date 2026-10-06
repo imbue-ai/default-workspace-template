@@ -40,6 +40,8 @@ from share_gateway.identity import render_identity_header
 from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
 from share_gateway.origin_policy import is_request_origin_allowed
+from share_gateway.session_cookie import describe_session_cookie_value
+from share_gateway.session_cookie import describe_session_cookies
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.session_cookie import set_session_cookie
 from share_gateway.session_cookie import strip_session_cookie
@@ -202,6 +204,15 @@ def build_gateway_app(
         client_ip = forwarded_client_ip(request.headers) or "unknown-client"
         log(f"Denied {client_ip} -> {host or '(no host)'}: {reason}")
 
+    # Sign-ins are logged too, with what the browser presented and its user
+    # agent: a visitor sent to sign in again and again (an iOS home-screen
+    # app) is only diagnosable by telling a cookie the browser dropped from
+    # one it sent and the gateway rejected.
+    def _log_sign_in_event(event: str, host: str, cookie_detail: str) -> None:
+        client_ip = forwarded_client_ip(request.headers) or "unknown-client"
+        user_agent = request.headers.get("User-Agent", "") or "(none)"
+        log(f"{event} {client_ip} -> {host or '(no host)'}: {cookie_detail}; user agent: {user_agent}")
+
     @app.get("/_auth/healthz")
     def healthz() -> Response:
         return Response("ok", status=200, mimetype="text/plain")
@@ -278,10 +289,12 @@ def build_gateway_app(
         cookie_header = request.headers.get("Cookie", "")
         identity = verify_session_from_cookies(signing_secret, request.cookies, workspace_domain)
         if identity is None:
+            cookie_detail = describe_session_cookies(signing_secret, request.cookies, workspace_domain)
             accept_header = request.headers.get("Accept", "")
             if _is_html_navigation(method, accept_header, is_websocket_upgrade):
+                _log_sign_in_event("Sign-in required", host, cookie_detail)
                 return _redirect_to_broker(_requested_url(host, forwarded_uri), is_confirmed=False, is_retry=False)
-            _log_denied("no session on a non-HTML request", host)
+            _log_denied(f"no session on a non-HTML request ({cookie_detail})", host)
             return Response("authentication required", status=401, mimetype="text/plain")
 
         # The owner reaches every origin of their own workspace regardless of
@@ -345,9 +358,14 @@ def build_gateway_app(
             return _forbidden()
         _upgrade_invite(grants, handoff)
 
-        response = Response(status=302, headers={"Location": _post_login_redirect_target(next_url)})
-        set_session_cookie(
-            response, mint_session_cookie_value(signing_secret, handoff, workspace_domain), workspace_domain
+        redirect_target = _post_login_redirect_target(next_url)
+        response = Response(status=302, headers={"Location": redirect_target})
+        session_value = mint_session_cookie_value(signing_secret, handoff, workspace_domain)
+        set_session_cookie(response, session_value, workspace_domain)
+        _log_sign_in_event(
+            f"Signed in {handoff.user_id} from",
+            redirect_target.removeprefix("https://").split("/", 1)[0],
+            f"new session {describe_session_cookie_value(signing_secret, session_value, workspace_domain)}",
         )
         return response
 

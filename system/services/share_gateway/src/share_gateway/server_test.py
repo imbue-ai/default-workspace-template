@@ -193,6 +193,34 @@ def test_unauthenticated_html_navigation_redirects_to_broker_with_callback_origi
     assert "confirmed" not in query
 
 
+def test_sign_in_redirect_logs_what_the_browser_presented_and_its_user_agent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    harness = _make_harness(tmp_path)
+    now = datetime.now(timezone.utc)
+    expired = jwt.encode(
+        {
+            "user_id": _BOB_USER_ID,
+            "email": "bob@example.com",
+            "aud": _DOMAIN,
+            "iat": now - timedelta(days=31),
+            "exp": now - timedelta(days=1),
+        },
+        _SIGNING_SECRET,
+        algorithm="HS256",
+    )
+    harness.client.set_cookie(SESSION_COOKIE_NAME, expired)
+    headers = {**_verify_headers(host=_WEB_HOST), "User-Agent": "iPhone-WebApp/26.0", "X-Forwarded-For": "203.0.113.9"}
+
+    resp = harness.client.get("/_auth/verify", headers=headers)
+
+    assert resp.status_code == 302
+    logged = capsys.readouterr().err
+    assert f"Sign-in required 203.0.113.9 -> {_WEB_HOST}: {SESSION_COOKIE_NAME} expired (issued " in logged
+    assert f"{PARTITIONED_SESSION_COOKIE_NAME} absent; user agent: iPhone-WebApp/26.0" in logged
+    assert expired not in logged
+
+
 def test_unauthenticated_non_html_request_gets_401(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
 
@@ -325,6 +353,26 @@ def test_callback_sets_both_domain_cookies_and_redirects_to_next(tmp_path: Path)
     harness.client.set_cookie(SESSION_COOKIE_NAME, plain_value)
     verified = harness.client.get("/_auth/verify", headers=_verify_headers())
     assert verified.status_code == 200
+
+
+def test_callback_logs_the_sign_in_with_the_new_session_and_user_agent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    harness = _make_harness(tmp_path)
+    nonce = harness.pending_logins.mint(is_retry=False)
+    token = _mint_handoff(nonce)
+
+    resp = harness.client.get(
+        f"/_auth/callback?token={token}&state={nonce}&next=https://{_WEB_HOST}/panel",
+        headers={"User-Agent": "iPhone-WebApp/26.0"},
+    )
+
+    assert resp.status_code == 302
+    logged = capsys.readouterr().err
+    assert f"Signed in {_BOB_USER_ID} from unknown-client -> {_WEB_HOST}: new session valid (issued " in logged
+    assert "user agent: iPhone-WebApp/26.0" in logged
+    assert token not in logged
+    assert _cookie_value(set_cookies_by_name(resp)[SESSION_COOKIE_NAME]) not in logged
 
 
 def test_verify_accepts_the_partitioned_copy_alone(tmp_path: Path) -> None:
