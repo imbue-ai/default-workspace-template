@@ -5637,27 +5637,31 @@ def test_a_new_chat_claims_a_spare_still_starting_and_becomes_it_once_its_harnes
 @pytest.mark.parametrize(
     "create_unfitting_chat",
     [
-        lambda manager: manager.create_chat("", account_id=_openai_account()),
-        lambda manager: manager.create_chat("Budget review 3308"),
-        lambda manager: manager.create_chat("", labels={"auto_open": "true"}),
-        lambda manager: manager.create_chat("", is_installation_check_skipped=True),
+        lambda manager, other_account_id: manager.create_chat("", account_id=other_account_id),
+        lambda manager, _other_account_id: manager.create_chat("Budget review 3308"),
+        lambda manager, _other_account_id: manager.create_chat("", labels={"auto_open": "true"}),
+        lambda manager, _other_account_id: manager.create_chat("", is_installation_check_skipped=True),
     ],
     ids=["another account", "an explicit name", "caller labels", "a check waiver"],
 )
-@pytest.mark.flaky
 def test_a_new_chat_the_spares_do_not_fit_is_created_and_the_spares_are_kept(
     broadcaster: WebSocketBroadcaster,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    create_unfitting_chat: Callable[[AgentManager], CreatedChat],
+    create_unfitting_chat: Callable[[AgentManager, str], CreatedChat],
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
+        # Set up before the pool fills: a committed account becomes the most recently used one, so
+        # unless the default is pinned, the ready spare's creation thread can find it stale.
+        default_account_id = read_index().accounts[0].id
+        other_account_id = _openai_account()
+        set_default_account(default_account_id, is_default=True)
         manager.ensure_spare_chat()
         spares = _wait_for_ready_spares(manager, 1)
 
-        created = create_unfitting_chat(manager)
+        created = create_unfitting_chat(manager, other_account_id)
 
         assert created.chat_id not in [spare.chat_id for spare in spares]
         wait_until_true(
@@ -6664,14 +6668,14 @@ def test_an_awaiting_chat_no_spare_fits_is_minted_and_launched_as_before(
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
-        spares: list[SpareChatAgent] = []
-        if is_other_account_spare_ready:
-            manager.ensure_spare_chat()
-            spares = _wait_for_ready_spares(manager, 1)
         default_account_id = read_index().accounts[0].id
         openai_account_id = _openai_account()
         # The spare stays on the default account; the awaiting chat is minted for the other one.
         set_default_account(default_account_id, is_default=True)
+        spares: list[SpareChatAgent] = []
+        if is_other_account_spare_ready:
+            manager.ensure_spare_chat()
+            spares = _wait_for_ready_spares(manager, 1)
 
         awaiting = manager.mint_awaiting_chat(openai_account_id)
 
