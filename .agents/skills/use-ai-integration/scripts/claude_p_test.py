@@ -366,12 +366,11 @@ def test_credentials_fall_back_to_settings_without_snapshot(
     assert creds.base_url is None
 
 
-def test_credentials_read_default_claude_dir_when_config_dir_env_unset(
+def test_credentials_read_default_claude_dir_without_config_dir_or_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With CLAUDE_CONFIG_DIR unset -- the workspace-wide default since the
-    ~/.claude cutover -- the resolver reads the shared ~/.claude/settings.json
-    instead of skipping settings entirely."""
+    """With CLAUDE_CONFIG_DIR unset and no provider account, the resolver reads
+    the shared ~/.claude/settings.json instead of skipping settings entirely."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
