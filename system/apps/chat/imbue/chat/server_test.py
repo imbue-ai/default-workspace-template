@@ -527,9 +527,7 @@ def test_a_watcher_released_before_it_starts_leaves_no_watch_thread_running(tmp_
         state.shutdown()
 
 
-def test_opening_a_stopped_chats_stream_keeps_the_watcher_through_a_release_while_it_is_built(
-    tmp_path: Path,
-) -> None:
+def test_opening_a_stopped_chats_stream_keeps_the_watcher_through_a_release_while_it_is_built() -> None:
     """The release spares only a chat with an open stream, so a release landing while the stream's watcher
     is built must already count the stream, or the stream opens with nothing feeding it."""
     manager = _ReleasingWhileSeedingAgentManager.build(WebSocketBroadcaster())
