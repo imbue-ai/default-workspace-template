@@ -3577,8 +3577,8 @@ class AgentManager:
             if agent_id in before_details and before_details[agent_id].state != agent.state
         }
         # Agents whose lifecycle TRANSITIONED into a positively-dead state this event --
-        # a stop, an OOM shed, an idle shutdown. The chat-memory contract says a stopped
-        # chat nobody is streaming holds no resident transcript; see the eviction below.
+        # a stop, an OOM shed, an idle shutdown. The archived members among them are evicted
+        # below, on the transition alone, so a later read of their segment stays resident.
         newly_dead_ids = {
             agent_id
             for agent_id in state_changed_ids
