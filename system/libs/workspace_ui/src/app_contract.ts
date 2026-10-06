@@ -47,8 +47,9 @@ export const SHELL_DRAFT_TEXT = "shell:draft-text";
 /** App to shell: a message for whichever apps registered its type (``open:file``, ``open:url``, ...; desktop-interface
  *  contracts.md section 5.6), so a page says what it wants done without naming the app that does it. */
 export const SHELL_MESSAGE = "shell:message";
-/** App to shell: open a link to one of the workspace's app addresses (another app's page) or another workspace's,
- *  which only the shell can put on screen: it opens that app's window at the address, or says why it cannot. */
+/** App to shell: open a local URL, or a link to one of the workspace's app addresses (another app's page) or another
+ *  workspace's, which only the shell can put on screen: it opens the app's window there (for a local URL, the app
+ *  registered at its port, else the workspace's browser), or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
 
 /**
