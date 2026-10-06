@@ -31,7 +31,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 _READ_TIMEOUT_SECONDS: Final[float] = 10.0
 
 
-class MindsNotificationsClient(MutableModel):
+class ImbueStudioNotificationsClient(MutableModel):
     """Posts the chat app's calls to the Imbue Studio app's notification feed, one at a time, off the caller's thread."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
@@ -46,7 +46,7 @@ class MindsNotificationsClient(MutableModel):
     )
 
     _executor: ThreadPoolExecutor = PrivateAttr(
-        default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="minds-notifications")
+        default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="imbue-studio-notifications")
     )
 
     def mark_chat_read(self, chat_id: ChatId) -> Future[None]:

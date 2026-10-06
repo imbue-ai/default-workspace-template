@@ -1789,7 +1789,7 @@ def test_a_report_that_starts_someone_watching_marks_the_chat_read_in_the_app_on
             client.post("/api/chats/agent-beef01/presence", json=_presence_body("visible", "page-3", is_focused=True))
             wait_for(lambda: len(gateway.received) >= 2, timeout=15.0, error_message="the read calls never arrived")
         finally:
-            manager._minds_notifications.shutdown()
+            manager._imbue_studio_notifications.shutdown()
 
     assert [received.path for received in gateway.received] == [
         "/minds-api-proxy/api/v1/agents/agent-c0ffee/notifications/read",

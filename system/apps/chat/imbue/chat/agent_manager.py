@@ -110,9 +110,9 @@ from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
+from imbue.chat.imbue_studio_notifications import ImbueStudioNotificationsClient
 from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.message_stamps import MessageStampStore
-from imbue.chat.minds_notifications import MindsNotificationsClient
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
@@ -905,7 +905,7 @@ class AgentManager:
     _presence: PresenceTracker
     # Tells the Imbue Studio app a chat was read when it goes from unwatched to watched. Reaches the
     # app only when ``build`` was given the gateway; the default drops every call.
-    _minds_notifications: MindsNotificationsClient
+    _imbue_studio_notifications: ImbueStudioNotificationsClient
     # Runs periodic context compaction checks (mngr autocompact run) for active chats.
     _autocompactor: ChatAutoCompactor
     # Surfaces the window of a chat created from outside with an auto-open label (the Imbue
@@ -1040,7 +1040,7 @@ class AgentManager:
         manager._pending_permission_ids_by_agent = {}
         manager._connecting_message_ids_by_agent = {}
         manager._presence = PresenceTracker()
-        manager._minds_notifications = MindsNotificationsClient(
+        manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=minds_gateway, resolve_agent_id=manager.current_agent_id_of_chat
         )
         # Built last: its ``list_chat_ids`` / ``resolve_process_started_at`` callbacks
@@ -1111,7 +1111,7 @@ class AgentManager:
         """Stop the follower, the session sweep, and creation threads."""
         self._shutdown_event.set()
         self._oom_prioritizer.stop()
-        self._minds_notifications.shutdown()
+        self._imbue_studio_notifications.shutdown()
         self._autocompactor.stop()
         self._auto_open.stop()
         self._model_state_poller.stop()
@@ -1516,7 +1516,7 @@ class AgentManager:
         Studio app when the report is what made someone watch it."""
         transition = self._oom_prioritizer.record_presence(chat_id, report)
         if transition.is_newly_watched:
-            self._minds_notifications.mark_chat_read(chat_id)
+            self._imbue_studio_notifications.mark_chat_read(chat_id)
 
     def chat_watchers(self, chat_id: ChatId) -> list[str]:
         """The page instances watching the chat now (shown and focused, recently reported)."""

@@ -461,8 +461,8 @@ focused, and under 90 seconds old; `GET /api/chats/<chat-id>/watchers` (loopback
 lists the watching instances, and the notify-user skill's script sends that list on
 with its notification so the Imbue Studio app shows nothing to a user already reading
 the chat. When a report turns a chat from unwatched to watched, the app is told the
-chat was read (`minds_notifications.py`, through the latchkey gateway as the chat's
-current agent, off the request thread).
+chat was read (`imbue_studio_notifications.py`, through the latchkey gateway as the
+chat's current agent, off the request thread).
 
 ## Memory shedding
 

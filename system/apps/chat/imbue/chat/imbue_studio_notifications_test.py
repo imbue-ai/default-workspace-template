@@ -5,8 +5,8 @@ from contextlib import contextmanager
 
 from pydantic import SecretStr
 
+from imbue.chat.imbue_studio_notifications import ImbueStudioNotificationsClient
 from imbue.chat.latchkey_gateway import GatewayAccess
-from imbue.chat.minds_notifications import MindsNotificationsClient
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import serve_app
@@ -15,8 +15,8 @@ from imbue.system_interface.testing import find_free_port
 _FUTURE_TIMEOUT_SECONDS = 15.0
 
 
-def _client(base_url: str, override: str | None, agent_by_chat: dict[str, str]) -> MindsNotificationsClient:
-    return MindsNotificationsClient(
+def _client(base_url: str, override: str | None, agent_by_chat: dict[str, str]) -> ImbueStudioNotificationsClient:
+    return ImbueStudioNotificationsClient(
         gateway=GatewayAccess(
             base_url=base_url,
             password=SecretStr("gateway-password-7731"),
@@ -29,7 +29,7 @@ def _client(base_url: str, override: str | None, agent_by_chat: dict[str, str]) 
 @contextmanager
 def _served_client(
     status: int, agent_by_chat: dict[str, str], override: str | None = None, base_url_suffix: str = ""
-) -> Iterator[tuple[RecordingGateway, MindsNotificationsClient]]:
+) -> Iterator[tuple[RecordingGateway, ImbueStudioNotificationsClient]]:
     """A client pointed at a served ``RecordingGateway`` answering ``status``; shut down on exit."""
     gateway = RecordingGateway(status=status)
     with serve_app(gateway.application) as served:
@@ -76,7 +76,7 @@ def test_an_unreachable_gateway_is_ignored() -> None:
 
 
 def test_nothing_is_posted_for_a_chat_with_no_agent_or_without_a_gateway() -> None:
-    without_gateway = MindsNotificationsClient(gateway=None, resolve_agent_id=lambda _chat_id: "agent-chat1")
+    without_gateway = ImbueStudioNotificationsClient(gateway=None, resolve_agent_id=lambda _chat_id: "agent-chat1")
     try:
         with _served_client(200, {}) as (gateway, client):
             client.mark_chat_read(ChatId("agent-provisional")).result(timeout=_FUTURE_TIMEOUT_SECONDS)
