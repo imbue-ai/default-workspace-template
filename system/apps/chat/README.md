@@ -252,21 +252,20 @@ nothing to disk. The pool is topped up one spare at a time; with a pool larger
 than one, while another spare is still ready, 30 seconds after a hand-over, so
 the next boot does not compete with the new chat's first turn. A sign-in starts
 the spares at once, and the session sweep keeps them current: one whose terms
-went stale, that has been ready for six hours
-(`SPARE_CHAT_MAX_AGE_SECONDS`, since it carries the date and git state its
-harness loaded at start, and may predate a code update), or whose process died
-is destroyed and replaced, and after a failed create or destroy the spares wait
-five minutes. Nothing about the spares is kept on disk but the label: on its
-first agent list after a restart, the app relabels an agent still labelled a
-spare whose chat folder holds its fast mode (a chat took it, and its relabel
-never landed) and destroys every other one. `GET /api/agents`, the plain mngr
-listing, does list the spares. The label also starts a spare and every process
-it spawns in `oom_priority`'s ceiling band (`SPARE_AGENT`, 1000, above the
-browser's renderers at 990), so memory pressure sheds it before anything else;
-one that dies is replaced after the same backoff. A hand-over moves its
-processes down to the chat band, and the chat that takes it sits at the engaged
-chat floor for its first minute (`CHAT_JUST_STARTED_GRACE_SECONDS`), then is
-prioritized like any chat.
+went stale, that has been ready for six hours (`SPARE_CHAT_MAX_AGE_SECONDS`,
+since it carries the date and git state its harness loaded at start, and may
+predate a code update), or whose process died is destroyed and replaced, and
+after a failed create or destroy the spares wait five minutes. Nothing about the
+spares is kept on disk but the label: on its first agent list after a restart,
+the app relabels an agent still labelled a spare whose chat folder holds its
+fast mode (a chat took it, and its relabel never landed) and destroys every
+other one. `GET /api/agents`, the plain mngr listing, does list the spares. The
+label also starts a spare and every process it spawns in `oom_priority`'s
+ceiling band (`SPARE_AGENT`, 1000, above the browser's renderers at 990), so
+memory pressure sheds it before anything else; one that dies is replaced after
+the same backoff. A hand-over moves its processes down to the chat band, and the
+chat that takes it sits at the engaged chat floor for its first minute
+(`CHAT_JUST_STARTED_GRACE_SECONDS`), then is prioritized like any chat.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
