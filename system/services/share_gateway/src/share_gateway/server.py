@@ -40,6 +40,7 @@ from share_gateway.identity import render_identity_header
 from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
 from share_gateway.origin_policy import is_request_origin_allowed
+from share_gateway.session_cookie import SESSION_COOKIE_NAMES
 from share_gateway.session_cookie import describe_session_cookie_value
 from share_gateway.session_cookie import describe_session_cookies
 from share_gateway.session_cookie import mint_session_cookie_value
@@ -204,14 +205,23 @@ def build_gateway_app(
         client_ip = forwarded_client_ip(request.headers) or "unknown-client"
         log(f"Denied {client_ip} -> {host or '(no host)'}: {reason}")
 
-    # Sign-ins are logged too, with what the browser presented and its user
-    # agent: a visitor sent to sign in again and again (an iOS home-screen
-    # app) is only diagnosable by telling a cookie the browser dropped from
-    # one it sent and the gateway rejected.
-    def _log_sign_in_event(event: str, host: str, cookie_detail: str) -> None:
+    # Sign-ins are logged too, with what the browser presented: a visitor sent
+    # to sign in again and again (an iOS home-screen app) is only diagnosable
+    # by telling a cookie the browser dropped from one it sent and the gateway
+    # rejected, and an empty cookie jar from one that lost only the session.
+    def _log_sign_in_event(event: str, host: str, detail: str) -> None:
         client_ip = forwarded_client_ip(request.headers) or "unknown-client"
-        user_agent = request.headers.get("User-Agent", "") or "(none)"
-        log(f"{event} {client_ip} -> {host or '(no host)'}: {cookie_detail}; user agent: {user_agent}")
+        other_cookie_names = sorted(name for name in request.cookies if name not in SESSION_COOKIE_NAMES)
+        fetch_dest = request.headers.get("Sec-Fetch-Dest", "-")
+        fetch_site = request.headers.get("Sec-Fetch-Site", "-")
+        context = ", ".join(
+            [
+                f"other cookies: {' '.join(other_cookie_names) or '(none)'}",
+                f"fetch dest/site: {fetch_dest}/{fetch_site}",
+                f"user agent: {request.headers.get('User-Agent', '') or '(none)'}",
+            ]
+        )
+        log(f"{event} {client_ip} -> {host or '(no host)'}: {detail}; {context}")
 
     @app.get("/_auth/healthz")
     def healthz() -> Response:
@@ -362,10 +372,11 @@ def build_gateway_app(
         response = Response(status=302, headers={"Location": redirect_target})
         session_value = mint_session_cookie_value(signing_secret, handoff, workspace_domain)
         set_session_cookie(response, session_value, workspace_domain)
+        session_detail = describe_session_cookie_value(signing_secret, session_value, workspace_domain)
         _log_sign_in_event(
-            f"Signed in {handoff.user_id} from",
-            redirect_target.removeprefix("https://").split("/", 1)[0],
-            f"new session {describe_session_cookie_value(signing_secret, session_value, workspace_domain)}",
+            "Signed in",
+            auth_host,
+            f"user {handoff.user_id}, new session {session_detail}, landing on {redirect_target}",
         )
         return response
 

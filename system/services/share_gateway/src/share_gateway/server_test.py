@@ -210,15 +210,26 @@ def test_sign_in_redirect_logs_what_the_browser_presented_and_its_user_agent(
         algorithm="HS256",
     )
     harness.client.set_cookie(SESSION_COOKIE_NAME, expired)
-    headers = {**_verify_headers(host=_WEB_HOST), "User-Agent": "iPhone-WebApp/26.0", "X-Forwarded-For": "203.0.113.9"}
+    harness.client.set_cookie("app_theme", "dark-7731")
+    headers = {
+        **_verify_headers(host=_WEB_HOST),
+        "User-Agent": "iPhone-WebApp/26.0",
+        "X-Forwarded-For": "203.0.113.9",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Site": "none",
+    }
 
     resp = harness.client.get("/_auth/verify", headers=headers)
 
     assert resp.status_code == 302
     logged = capsys.readouterr().err
     assert f"Sign-in required 203.0.113.9 -> {_WEB_HOST}: {SESSION_COOKIE_NAME} expired (issued " in logged
-    assert f"{PARTITIONED_SESSION_COOKIE_NAME} absent; user agent: iPhone-WebApp/26.0" in logged
+    assert (
+        f"{PARTITIONED_SESSION_COOKIE_NAME} absent; other cookies: app_theme, fetch dest/site: document/none, "
+        "user agent: iPhone-WebApp/26.0"
+    ) in logged
     assert expired not in logged
+    assert "dark-7731" not in logged
 
 
 def test_unauthenticated_non_html_request_gets_401(tmp_path: Path) -> None:
@@ -369,7 +380,9 @@ def test_callback_logs_the_sign_in_with_the_new_session_and_user_agent(
 
     assert resp.status_code == 302
     logged = capsys.readouterr().err
-    assert f"Signed in {_BOB_USER_ID} from unknown-client -> {_WEB_HOST}: new session valid (issued " in logged
+    signed_in_prefix = f"Signed in unknown-client -> {_AUTH_LABEL}.{_DOMAIN}: user {_BOB_USER_ID}, new session valid ("
+    assert signed_in_prefix in logged
+    assert f"landing on https://{_WEB_HOST}/panel; other cookies: (none)" in logged
     assert "user agent: iPhone-WebApp/26.0" in logged
     assert token not in logged
     assert _cookie_value(set_cookies_by_name(resp)[SESSION_COOKIE_NAME]) not in logged

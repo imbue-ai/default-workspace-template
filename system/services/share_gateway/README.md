@@ -91,6 +91,17 @@ refusal, and logs every denial (never the token) to the service's stderr:
   is never grant-checked, so they still get in.
 - A verified account with no grant is **"Not shared with you"** (403).
 
+Sign-ins are logged as well as denials. Every HTML navigation sent to the
+broker writes a `Sign-in required` line, and every completed callback a
+`Signed in` line. Each says, for both session cookie copies, whether the
+browser sent it and, if the gateway rejected it, why (expired, signed with
+another key, issued for another domain, malformed) and when it was issued and
+expires. It also names the request's other cookies (names only), its
+`Sec-Fetch-Dest`/`Sec-Fetch-Site`, and its user agent. A `no session` denial
+carries the same per-copy detail. That tells a browser that dropped the
+session from one the gateway turned away. Cookie and token values never reach
+the log.
+
 ## When the stack cannot come up
 
 Bringing the stack up needs the connector twice (the certificate, then the

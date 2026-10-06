@@ -50,7 +50,7 @@ SESSION_COOKIE_NAME = "imbue_machine_session"
 PARTITIONED_SESSION_COOKIE_NAME = "imbue_machine_session_partitioned"
 SESSION_LIFETIME_SECONDS = 30 * 24 * 3600
 
-_SESSION_COOKIE_NAMES = (SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME)
+SESSION_COOKIE_NAMES = (SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME)
 _SESSION_ALGORITHM = "HS256"
 
 
@@ -137,7 +137,7 @@ def describe_session_cookie_value(signing_secret: str, cookie_value: str, worksp
 def describe_session_cookies(signing_secret: str, cookies: Mapping[str, str], workspace_domain: str) -> str:
     """``describe_session_cookie_value`` for each session cookie copy, whether or not the request carried it."""
     descriptions = []
-    for cookie_name in _SESSION_COOKIE_NAMES:
+    for cookie_name in SESSION_COOKIE_NAMES:
         description = describe_session_cookie_value(signing_secret, cookies.get(cookie_name, ""), workspace_domain)
         descriptions.append(f"{cookie_name} {description}")
     return "; ".join(descriptions)
@@ -147,7 +147,7 @@ def verify_session_from_cookies(
     signing_secret: str, cookies: Mapping[str, str], workspace_domain: str
 ) -> "RequesterIdentity | None":
     """The identity of the first session cookie copy that verifies, or None when neither does."""
-    for cookie_name in _SESSION_COOKIE_NAMES:
+    for cookie_name in SESSION_COOKIE_NAMES:
         identity = verify_session_cookie_value(signing_secret, cookies.get(cookie_name, ""), workspace_domain)
         if identity is not None:
             return identity
@@ -156,7 +156,7 @@ def verify_session_from_cookies(
 
 def set_session_cookie(response: Response, cookie_value: str, workspace_domain: str) -> None:
     """Attach both copies of the workspace session cookie (see the module docstring)."""
-    for cookie_name in _SESSION_COOKIE_NAMES:
+    for cookie_name in SESSION_COOKIE_NAMES:
         is_partitioned = cookie_name == PARTITIONED_SESSION_COOKIE_NAME
         response.set_cookie(
             cookie_name,
@@ -176,6 +176,6 @@ def strip_session_cookie(cookie_header: str) -> str:
     kept_parts = []
     for part in cookie_header.split(";"):
         name, _, _value = part.strip().partition("=")
-        if name.strip() not in _SESSION_COOKIE_NAMES:
+        if name.strip() not in SESSION_COOKIE_NAMES:
             kept_parts.append(part.strip())
     return "; ".join(kept_parts)
