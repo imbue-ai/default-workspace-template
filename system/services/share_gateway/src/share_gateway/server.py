@@ -274,6 +274,32 @@ def build_gateway_app(
         )
         log(f"{event} {client_ip} -> {host or '(no host)'}: {detail}; {context}")
 
+    # MIND-457 trigger probe (never merged): public routes on the auth label that set test cookies and report
+    # which cookies, fetch context and user agent each request carried.
+    _probe_cookie_lifetime_seconds = 30 * 24 * 3600
+
+    def _probe_report(event: str) -> str:
+        cookie_names = " ".join(sorted(request.cookies)) or "(none)"
+        fetch_context = f"{request.headers.get('Sec-Fetch-Dest', '-')}/{request.headers.get('Sec-Fetch-Site', '-')}"
+        user_agent = request.headers.get("User-Agent", "") or "(none)"
+        client_ip = forwarded_client_ip(request.headers) or "unknown-client"
+        log(f"mind457 probe {event} {client_ip}: cookies: {cookie_names}; fetch dest/site: {fetch_context}; ua: {user_agent}")
+        return html.escape(f"{event}: cookies sent with this request: {cookie_names} (fetch {fetch_context})")
+
+    @app.get("/_auth/mind457/set")
+    def mind457_set() -> Response:
+        response = Response(f"<p>{_probe_report('set')}</p><p>p_lax and p_plain set</p>", mimetype="text/html")
+        response.set_cookie("p_lax", "1", max_age=_probe_cookie_lifetime_seconds, secure=True, path="/", samesite="Lax")
+        response.set_cookie("p_plain", "1", max_age=_probe_cookie_lifetime_seconds, secure=True, path="/")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/_auth/mind457/cookies")
+    def mind457_cookies() -> Response:
+        response = Response(f"<p>{_probe_report('cookies')}</p>", mimetype="text/html")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.get("/_auth/healthz")
     def healthz() -> Response:
         return Response("ok", status=200, mimetype="text/plain")
