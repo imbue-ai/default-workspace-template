@@ -30,6 +30,11 @@ in both places a visitor reaches a shared workspace from:
   when it is partitioned by the embedding site. A Lax cookie is not even
   stored from inside that iframe, so the two copies never overlap.
 
+An iOS home-screen web app's launch request leaves out every Lax cookie, this
+one included, even though a navigation the page starts sends it. The gateway
+answers such a navigation with a page that retries it once (``server.py``)
+rather than giving up the Lax protection above.
+
 Safari 18.5 through 26.1 rejects a cookie carrying ``Partitioned`` outright
 instead of storing it unpartitioned (WebKit bug 292975), so a lone
 partitioned cookie leaves an iOS visitor with no session at all. Verification
