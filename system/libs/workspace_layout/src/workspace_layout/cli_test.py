@@ -391,6 +391,13 @@ def test_a_popped_out_window_refusal_exits_4_and_says_force_overrides_it(
             id="unpaired",
         ),
         pytest.param(
+            ["open", "files", "--beside"],
+            {"is_raised_in_own_window": True},
+            f"opened window {_CHAT_ID} (chat at /?chat=agent-1) on desktop home for client c1 "
+            "(raised in its own window: the user popped it out, so it stays there)",
+            id="found-raised-not-paired",
+        ),
+        pytest.param(
             ["open", "files"],
             {"has_no_desktop_window": True},
             "(client c1 has no desktop window open, only popped-out ones; the window is there when one opens)",

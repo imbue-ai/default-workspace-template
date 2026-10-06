@@ -724,12 +724,19 @@ def _cmd_open(args: argparse.Namespace, context: LayoutCliContext) -> int:
         OpenBody(args=arguments),
         OpenAnswer,
         lambda answer: (
-            f"opened window {_describe_window(answer, answer.window_id)}"
-            f"{f' beside {arguments.beside}' if arguments.beside and answer.unpaired_beside is None else ''} "
+            f"opened window {_describe_window(answer, answer.window_id)}{_describe_beside(arguments, answer)} "
             f"on {_describe_target(answer)}"
         ),
         _print_window_id,
     )
+
+
+def _describe_beside(arguments: OpenArgs, answer: OpenAnswer) -> str:
+    """The " beside <window>" an open's summary carries when it paired the window, "" when it did not: no
+    ``--beside``, a partner popped out, or the window found popped out and raised in its own window."""
+    if arguments.beside is None or answer.unpaired_beside is not None or answer.is_raised_in_own_window:
+        return ""
+    return f" beside {arguments.beside}"
 
 
 def _print_window_id(answer: OpenAnswer) -> None:
