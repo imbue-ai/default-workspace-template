@@ -146,7 +146,7 @@ A user id matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, as the identity header c
 
 ### 4.5 `avatar_selection.json`
 
-`{"version": 1, "design": "<design id>"}`: the workspace's avatar design; absent or unreadable reads as the default (`gummy-seal`). The registered designs live at `data/.apps/system_interface/avatars/catalog.json` (`docs/system/avatar-designs.md`).
+`{"version": 1, "design": "<design id>"}`: the workspace's avatar design; absent or unreadable reads as the default (`imbue-character`). The registered designs live at `data/.apps/system_interface/avatars/catalog.json` (`docs/system/avatar-designs.md`).
 
 ### 4.6 Wallpapers
 
@@ -322,15 +322,19 @@ Targeting: `args.client`, else the client that most recently messaged the reques
 | `open` | `app`, `path?`, `launch?`, `params?`, `if_present?`, `minimized?`, `beside?` | open a window at `path`, else at the page of the launch path (`launch`, else the app's `default_shortcut.launch`, else its first): a GET launch path with `params` as the query string, a POST launch path posted `params` for the page it answers (section 5.3, with the targeted client as `client_id`, or none when the open is unplaced); a window of the app at that page is focused unless `if_present` is `new`; with `minimized`, a window this open creates is placed minimized and one it finds is left as placed; with `beside` (a window argument, resolved as the window verbs resolve one), the two are framed as `paired_frames` gives, for the target client alone: the opened window `PAIRED_WIDTH` wide at the named window's `y` and `height`, against whichever side of it has that much room (the right first), and on top; the named window is untouched, down to its state, where a side has the room; where neither has, it moves (keeping its width and height) by the least that opens `PAIRED_WIDTH` on one side, which is the side that already has more of it, ties going right; and it is narrowed to `PAIRED_WIDTH` at `x = 0` only when it is wider than that. And a `beside` naming no window on the desktop (or naming `self` or `pinned` with no requester to resolve it against) leaves the opened window as placed rather than refusing the open, while a `beside` that is no window spelling at all, and `beside` with `minimized`, are refused before the window is opened; answers the window id |
 | `focus` | `window` | restore and raise |
 | `minimize`, `restore`, `maximize` | `window` | set the placement accordingly |
-| `place` | `window`, `zone` (`left`, `right`, `maximized`) or `frame` (`x,y,width,height`) | set the state, or the frame with state `NORMAL` |
+| `place` | `window`, `state` (`SNAPPED_LEFT`, `SNAPPED_RIGHT`, `MAXIMIZED`) or `frame` (a frame record, section 4.2) | set the state, or the frame with state `NORMAL` |
 | `close` | `window` | close for everyone |
 | `navigate` | `window`, `path` | set the window's path as if its page had reported it; the client's page follows |
-| `refresh` | `window` or `app` | transient: reload the page(s) |
+| `refresh` | `window`, or `app` alone | transient: reload the window's page on the client, or every page of the app on every client |
 | `reload_system_interface` | | transient: reload every window of the shell |
-| `shortcuts`, `shortcut set`, `shortcut move`, `shortcut remove` | as section 5.2 | edit the desktop's shortcuts |
-| `wallpaper` | `wallpaper` | set the desktop's wallpaper |
+| `shortcuts` | | answer the desktop (its `shortcuts` included) |
+| `shortcut_set` | `app`, `launch`, `mode?` (`focus`, the default, or `new`), `cell?` (a grid cell record, `{"column", "row"}`; the next free cell when absent) | add the shortcut, or change its mode or cell, as section 5.2's shortcut route does |
+| `shortcut_move` | `app`, `launch`, `cell` | move the shortcut, as section 5.2's move route does |
+| `shortcut_remove` | `app`, `launch` | take the shortcut off the desktop |
+| `wallpaper` | `wallpaper` (a wallpaper record, `{"kind", "name"}`, or `null`; required) | set the desktop's wallpaper, or clear it with `null` |
 
-`window` is a window id, `self`, or an app name (that app's most recently focused window on the target client's active desktop).
+`window` is a window id, `self`, `pinned`, or an app name (that app's most recently focused window on the target client's active desktop).
+The bodies, the answers, and the records they carry are the models of `system/libs/workspace_layout` (`ops`, `answers`, `records`): one body model per op, carrying the arguments the table gives it, which the shell reads every body with, builds its answers from, and every caller reads them with. A body is refused with `400` before anything is looked up when it carries an argument its op does not take (`client` and `desktop` included: a `refresh` of an `app` and `reload_system_interface` take neither), lacks one the op requires, or breaks a rule of its arguments (a path that is not a window path, a `state` `place` does not set, a frame outside the unit square, an `open` naming both a `path` and a `launch` or `params`); the `detail` names every such argument. `context`, `desktops`, and `list` read no arguments and ignore what they are sent.
 `show` knows nothing of what the path shows and reads no meaning into a query string. `showing` is a list of the app's other paths that count as already showing it (`path` itself always does). `repoint` is a list of the app's pages, each a path with no query string or fragment, whose windows `show` may point at `path`; absent or empty, step 2 below repoints nothing. A `showing` entry that is not a path, or a `repoint` entry that is not a page, is a `400`. For the target client, every path as that client sees it (its own stored path for an independent window), the first of these that applies:
 
 1. `raised`: a window of `app` at `path` or a `showing` path, on the client's active desktop before any other and nearest the top of the client's stack first, minimized or not, is restored and raised; one on another desktop is raised there and the client switched to that desktop.
@@ -343,7 +347,7 @@ Whichever of the four it is, once its edit is written the client's windows are s
 An `open` that places its window for a client (not `minimized`) and a `focus` likewise send that client's windows an `open` or `focus` `layout_op` naming the window (`{"window"}`) once written, which only a phone layout acts on.
 
 `show` is answered like the document ops, with `desktop_id`, `desktop`, and `layout` those of the desktop the path is shown on, and `"shown"` one of the four above.
-Document ops are applied to the files and answered with `{"ok", "desktop_id", "client_id", "desktop", "layout", "window_id"?}`; the two transient ops travel only as `layout_op`.
+Document ops are applied to the files and answered with `{"ok", "desktop_id", "client_id", "desktop", "layout", "window_id"?}`; the two transient ops travel only as `layout_op` and are answered `{"ok", "target_client_id"}` (null when every client's windows apply it).
 `split`, `move`, and every instance verb (`rename`, `delete`, `stop`, `start`, `replace-url`) are refused with an error naming the replacement; `chat:`, `terminal:`, and `app:` spellings are refused with an error saying to give an app name and a path.
 Exit codes are `0`, `1`, `3`.
 

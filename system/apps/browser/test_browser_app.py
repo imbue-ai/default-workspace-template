@@ -133,7 +133,7 @@ def test_a_window_closed_post_sweeps_at_once_and_answers_no_content(monkeypatch:
     monkeypatch.setattr(bsession.BrowserSessionManager, "sweep_from_shell", fake_sweep)
 
     response = runner.application.test_client().post(
-        "/api/window-closed", json={"path": "/?session=browser-1", "window_id": "win-1", "desktop_id": "home"}
+        "/api/window-closed", json={"path": "/?session=browser-1", "window_id": "win-0000000000000001", "desktop_id": "home"}
     )
 
     assert response.status_code == 204

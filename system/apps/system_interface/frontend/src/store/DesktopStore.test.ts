@@ -1243,7 +1243,7 @@ describe("the avatar", () => {
     const store = makeStore();
     await store.start(NO_LINK);
     api.refusal = null;
-    expect(store.getState().avatar.design).toBe("gummy-seal");
+    expect(store.getState().avatar.design).toBe("imbue-character");
   });
 });
 

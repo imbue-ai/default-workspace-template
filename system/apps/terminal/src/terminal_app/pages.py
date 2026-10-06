@@ -25,7 +25,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
-from workspace_layout.windows import window_query_value
+from workspace_layout.windows import parse_window_closed_hint, window_query_value
 
 from terminal_app.errors import (
     InvalidTerminalValueError,
@@ -327,12 +327,10 @@ def closed_window_terminal(hint_body: object) -> TmuxSessionName | None:
     None for a path with no session (the root, or one naming something that is not a session name), or a body of
     another shape than the shell posts.
     """
-    if not isinstance(hint_body, dict):
+    hint = parse_window_closed_hint(hint_body)
+    if hint is None:
         return None
-    path = hint_body.get("path")
-    if not isinstance(path, str):
-        return None
-    raw_name = window_query_value(path, SESSION_QUERY_KEY)
+    raw_name = window_query_value(hint.path, SESSION_QUERY_KEY)
     if raw_name is None:
         return None
     try:

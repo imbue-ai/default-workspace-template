@@ -11,6 +11,8 @@ from flask.testing import FlaskClient
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import LayoutOp
+from workspace_layout.primitives import UserId
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
@@ -22,7 +24,6 @@ from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
-from imbue.system_interface.shell.primitives import UserId
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeLivenessProber
@@ -31,6 +32,7 @@ from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
+from imbue.system_interface.shell.testing import message_report
 from imbue.system_interface.shell.testing import read_stub_update_self_calls
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
@@ -465,7 +467,7 @@ def test_context_summarizes_every_client_from_the_log_and_the_live_registrations
 ) -> None:
     shell = _shell(app)
     _register_client(app, "c1", "home")
-    shell.activity.append_message("c1", "home", "chat", "agent-1", "hello")
+    shell.activity.append_message(message_report("c1", "home", "chat", "agent-1", "hello"))
     # A second client that has connected and done nothing else: it has no event in the log.
     _register_client(app, "c9", "home")
 
@@ -497,7 +499,7 @@ def test_an_op_is_attributed_to_the_client_that_last_messaged_the_requesting_age
     assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] is None
     assert _op(client, "focus", {"window": "files"}, requester).status_code == 412
 
-    shell.activity.append_message("c7", "home", "chat", "agent-1", "hello")
+    shell.activity.append_message(message_report("c7", "home", "chat", "agent-1", "hello"))
     attributed = _op(client, "open", {"app": "files"}, requester)
     assert attributed.status_code == 200 and attributed.get_json()["client_id"] == "c7"
     assert _op(client, "open", {"app": "files"}, {"app": "chat", "marker": "agent-2"}).get_json()["client_id"] is None
@@ -518,7 +520,7 @@ def test_an_op_goes_to_the_one_connected_client_once_the_messaging_client_has_go
     shell = _shell(app)
     requester = {"app": "chat", "marker": "agent-1"}
     messaging_window = _register_client(app, "c7", "home")
-    shell.activity.append_message("c7", "home", "chat", "agent-1", "build me a calculator")
+    shell.activity.append_message(message_report("c7", "home", "chat", "agent-1", "build me a calculator"))
     shell.broadcaster.unregister(messaging_window)
 
     assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] == "c7"
@@ -538,7 +540,7 @@ def test_a_gone_messaging_client_keeps_its_op_from_another_users_connected_clien
     shell = _shell(app)
     requester = {"app": "chat", "marker": "agent-1"}
     owner_window = _register_client(app, "c7", "home")
-    shell.activity.append_message("c7", "home", "chat", "agent-1", "build me a calculator")
+    shell.activity.append_message(message_report("c7", "home", "chat", "agent-1", "build me a calculator"))
     shell.broadcaster.unregister(owner_window)
     _arrive(client, "c-alice", _ALICE)
     _register_client(app, "c-alice", "alice")
@@ -551,10 +553,10 @@ def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
     searched under a made-up key."""
     shell = _shell(app)
     _register_client(app, "c7", "home")
-    shell.activity.append_message("c7", "home", "files", "None", "hello")
+    shell.activity.append_message(message_report("c7", "home", "files", "None", "hello"))
     _register_client(app, "c1", "home")
 
-    assert resolve_client(shell, {}, OpRequester(app=AppName("files"), marker="")) is None
+    assert resolve_client(shell, None, OpRequester(app=AppName("files"), marker="")) is None
 
 
 # Pinned windows (pinned-taskbar-entries plan sections 3.2 and 4.5)
@@ -1166,6 +1168,18 @@ def test_placements_are_saved_per_client_and_a_stale_save_is_refused(client: Fla
 # Section 8: the verbs of the op route
 
 
+@pytest.mark.parametrize("op", list(LayoutOp), ids=lambda op: op.value)
+def test_an_op_refuses_an_argument_it_does_not_take_unless_it_reads_none(
+    client: FlaskClient, app: Flask, op: LayoutOp
+) -> None:
+    _register_client(app, "c1", "home")
+
+    answered = _op(client, op.value, {"no_such_argument": 1}, _TERMINAL_REQUESTER)
+
+    is_refused_for_the_argument = answered.status_code == 400 and "no_such_argument" in answered.get_json()["detail"]
+    assert is_refused_for_the_argument is (op not in (LayoutOp.CONTEXT, LayoutOp.DESKTOPS, LayoutOp.LIST))
+
+
 def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskClient, app: Flask) -> None:
     client_queue = _register_client(app, "c1", "home")
     requester = _TERMINAL_REQUESTER
@@ -1200,10 +1214,12 @@ def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskCli
     minimized = _op(client, "minimize", {"window": "terminal"}, requester)
     assert minimized.get_json()["window_id"] == first_id
     assert minimized.get_json()["layout"]["placements"][-1]["is_minimized"] is True
-    placed = _op(client, "place", {"window": first_id, "zone": "left"}, requester).get_json()
+    placed = _op(client, "place", {"window": first_id, "state": "SNAPPED_LEFT"}, requester).get_json()
     assert placed["layout"]["placements"][-1]["state"] == "SNAPPED_LEFT"
     assert placed["layout"]["placements"][-1]["is_minimized"] is False
-    framed = _op(client, "place", {"window": first_id, "frame": "0.1,0.2,0.5,0.5"}, requester).get_json()
+    framed = _op(
+        client, "place", {"window": first_id, "frame": {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.5}}, requester
+    ).get_json()
     assert framed["layout"]["placements"][-1]["state"] == "NORMAL"
     assert framed["layout"]["placements"][-1]["frame"] == {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.5}
     maximized = _op(client, "maximize", {"window": first_id}, requester).get_json()
@@ -1216,10 +1232,12 @@ def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskCli
         "/?session=terminal-7",
     ]
     assert _op(client, "place", {"window": first_id}, requester).status_code == 400
-    assert _op(client, "place", {"window": first_id, "zone": "up"}, requester).status_code == 400
+    assert _op(client, "place", {"window": first_id, "zone": "left"}, requester).status_code == 400
+    assert _op(client, "place", {"window": first_id, "state": "NORMAL"}, requester).status_code == 400
+    assert _op(client, "place", {"window": first_id, "frame": "0.1,0.2,0.5,0.5"}, requester).status_code == 400
     assert _op(client, "focus", {"window": "files"}, requester).status_code == 404
     refused = _op(client, "open", {"app": "chat:alice"}, requester)
-    assert refused.status_code == 400 and "app name and a path" in refused.get_json()["detail"]
+    assert refused.status_code == 400 and "invalid app name 'chat:alice'" in refused.get_json()["detail"]
 
     # A refresh of one window goes to the target client; a refresh of a whole app and the interface reload to
     # every window.
@@ -1283,7 +1301,9 @@ def test_shortcut_and_wallpaper_ops_edit_the_target_desktop(client: FlaskClient,
     assert [entry["target"]["app"] for entry in shortcuts] == ["terminal", "files"]
     added = _op(client, "shortcut_set", {"app": "files", "launch": "open", "mode": "new"}, requester).get_json()
     assert added["desktop"]["shortcuts"][1]["mode"] == "new"
-    moved = _op(client, "shortcut_move", {"app": "files", "launch": "open", "cell": "3,1"}, requester).get_json()
+    moved = _op(
+        client, "shortcut_move", {"app": "files", "launch": "open", "cell": {"column": 3, "row": 1}}, requester
+    ).get_json()
     assert moved["desktop"]["shortcuts"][1]["cell"] == {"column": 3, "row": 1}
     assert _op(client, "shortcut_move", {"app": "files", "launch": "open"}, requester).status_code == 400
     removed = _op(client, "shortcut_remove", {"app": "files", "launch": "open"}, requester).get_json()
@@ -1394,7 +1414,7 @@ def test_an_open_asked_to_sit_beside_a_window_with_room_leaves_that_window_alone
     requester = _TERMINAL_REQUESTER
     anchor = _open_window(client, "terminal", "/?session=terminal-7").get_json()["window"]["id"]
     anchor_frame = {"x": 0.05, "y": 0.1, "width": 0.4, "height": 0.7}
-    _op(client, "place", {"window": anchor, "frame": "0.05,0.1,0.4,0.7"}, requester)
+    _op(client, "place", {"window": anchor, "frame": {"x": 0.05, "y": 0.1, "width": 0.4, "height": 0.7}}, requester)
 
     opened = _op(client, "open", {"app": "files", "path": "/notes/", "beside": anchor}, requester)
     assert opened.status_code == 200
@@ -1416,7 +1436,7 @@ def test_an_open_beside_a_window_with_no_room_moves_that_window_across_only(clie
     requester = _TERMINAL_REQUESTER
     anchor = _open_window(client, "terminal", "/?session=terminal-7").get_json()["window"]["id"]
     # Mid-backdrop, with less than half of it free on either side.
-    _op(client, "place", {"window": anchor, "frame": "0.2,0.15,0.4,0.5"}, requester)
+    _op(client, "place", {"window": anchor, "frame": {"x": 0.2, "y": 0.15, "width": 0.4, "height": 0.5}}, requester)
 
     window_id = _op(client, "open", {"app": "files", "path": "/notes/", "beside": anchor}, requester).get_json()[
         "window_id"
@@ -1435,7 +1455,7 @@ def test_an_open_beside_a_snapped_window_leaves_the_snap_as_it_is(client: FlaskC
     _register_client(app, "c1", "home")
     requester = _TERMINAL_REQUESTER
     anchor = _open_window(client, "terminal", "/?session=terminal-7").get_json()["window"]["id"]
-    _op(client, "place", {"window": anchor, "zone": "left"}, requester)
+    _op(client, "place", {"window": anchor, "state": "SNAPPED_LEFT"}, requester)
 
     window_id = _op(client, "open", {"app": "files", "path": "/notes/", "beside": anchor}, requester).get_json()[
         "window_id"

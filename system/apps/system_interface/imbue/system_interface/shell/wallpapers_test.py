@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from workspace_layout.ops import Wallpaper
 from workspace_layout.primitives import WallpaperKind
 from workspace_layout.primitives import WallpaperName
+from workspace_layout.records import Wallpaper
 
 from imbue.system_interface.shell.wallpapers import WallpaperDirectories
 from imbue.system_interface.shell.wallpapers import list_wallpapers

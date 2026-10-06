@@ -3,8 +3,8 @@
 import json
 
 import pytest
+from workspace_layout.errors import InvalidLayoutValueError
 
-from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.identity import ANONYMOUS_OWNER
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.identity import parse_identity_header
@@ -42,5 +42,5 @@ def test_only_a_signed_in_requester_other_than_the_owner_is_a_visiting_user() ->
     assert visiting_user_id(RequestIdentity(owner=True, user_id="user-owner", email="owner@example.com")) is None
     assert visiting_user_id(RequestIdentity(owner=False)) is None
     assert visiting_user_id(RequestIdentity(owner=False, user_id="user-bob", email="bob@example.com")) == "user-bob"
-    with pytest.raises(InvalidShellValueError):
+    with pytest.raises(InvalidLayoutValueError):
         visiting_user_id(RequestIdentity(owner=False, user_id="../etc", email="x@example.com"))

@@ -152,13 +152,15 @@ and the profile cache.
   announced as `desktops_updated` and `placements_updated`; `context` answers every
   client's recent activity, folded from the client-activity log and the live
   socket registrations, and `desktops` and `list` answer the inventory
-  document (`GET /api/inventory`'s `{desktops, apps, clients}`); only
-  `refresh` and `reload_system_interface` reach the browser as `layout_op`
-  messages.
+  document (`GET /api/inventory`'s `{desktops, apps, clients}`);
+  `refresh` and `reload_system_interface` reach the browser only as
+  `layout_op` messages, and `focus`, `show`, and an `open` that is not
+  minimized also send one telling the target client which window they put in
+  front.
 
 The backend is the `imbue/system_interface/shell/` subpackage (inventory and
 liveness, desktops, placements, wallpapers, clients, users and the request
-identity, client activity, layout ops, the pure desktop document editor, the
+identity, client activity, the pure desktop document editor, the
 routes with their shared helpers, state); the package root holds the process
 (`main.py`, `server.py`), the not-built placeholder, and the update-staleness
 check. The frontend
@@ -413,7 +415,7 @@ uv run workspace-layout desktops
 uv run workspace-layout context
 uv run workspace-layout open files --path /home/user/workspace/data/notes/ --desktop Research
 uv run workspace-layout open terminal
-uv run workspace-layout place self --zone left
+uv run workspace-layout place self --state snapped-left
 uv run workspace-layout navigate win-0123456789abcdef /other/
 ```
 

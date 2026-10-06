@@ -86,7 +86,7 @@ def _sandbox(tmp_path: Path) -> Path:
     return sandbox
 
 
-def test_context_and_desktops_round_trip_through_script_and_endpoint(
+def test_context_and_desktops_round_trip_through_the_command_and_endpoint(
     layout_server: PipelineHarness, tmp_path: Path
 ) -> None:
     """``context --json`` is empty for a machine nobody has opened and lists a client as soon as it connects,
@@ -178,7 +178,7 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
 
     for verb, extra, expected in (
         ("focus", [], (window_id, "NORMAL", False)),
-        ("place", ["--zone", "left"], (window_id, "SNAPPED_LEFT", False)),
+        ("place", ["--state", "snapped-left"], (window_id, "SNAPPED_LEFT", False)),
         ("minimize", [], (window_id, "SNAPPED_LEFT", True)),
         ("restore", [], (window_id, "NORMAL", False)),
         ("maximize", [], (window_id, "MAXIMIZED", False)),
@@ -198,6 +198,8 @@ def test_open_lands_a_window_the_window_verbs_arrange_and_close_takes_away(
     assert missing.returncode == 1 and window_id in missing.stderr
 
 
+# Starts the command once per show and read, and every start pays for the interpreter and its imports.
+@pytest.mark.timeout(30)
 def test_show_raises_a_window_already_showing_the_page_and_moves_only_what_repoint_names(
     layout_server: PipelineHarness, connected_client: "queue.Queue[str | None]", tmp_path: Path
 ) -> None:

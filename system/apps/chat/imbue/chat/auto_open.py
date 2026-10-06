@@ -31,12 +31,15 @@ from typing import Final
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from workspace_layout.errors import ShellAnswerMalformedError
 from workspace_layout.errors import ShellOpError
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WindowPage
+from workspace_layout.primitives import WindowPath
 
 from imbue.chat.primitives import ChatId
-from imbue.chat.shell_client import chat_show_request
+from imbue.chat.shell_client import chat_show_args
 from imbue.imbue_common.mutable_model import MutableModel
 
 logger = _loguru_logger
@@ -55,16 +58,16 @@ LEDGER_FILENAME: Final[str] = "auto_opened_chats.json"
 _DELIVERED_KEY: Final = "delivered"
 
 # The chat root: the chat list, beside whichever chat is selected.
-CHAT_ROOT_PAGE: Final[str] = "/"
+CHAT_ROOT_PAGE: Final[WindowPage] = WindowPage("/")
 
 
 def is_auto_open_labeled(labels: Mapping[str, str]) -> bool:
     return any(labels.get(label) == "true" for label in AUTO_OPEN_LABELS)
 
 
-def chat_root_path(chat_id: ChatId) -> str:
+def chat_root_path(chat_id: ChatId) -> WindowPath:
     """The chat root's path with the chat selected (plan section 9.1): where the auto-opened window lands."""
-    return f"{CHAT_ROOT_PAGE}?chat={chat_id}"
+    return WindowPath(f"{CHAT_ROOT_PAGE}?chat={chat_id}")
 
 
 class AutoOpenLedger(MutableModel):
@@ -242,6 +245,9 @@ class AutoOpenReactor(MutableModel):
             return
         try:
             client_ids = [client.id for client in self.shell.connected_clients()]
+        except ShellAnswerMalformedError as e:
+            logger.warning("The shell's client list is not one, so {} chat(s) stay held: {}", len(pending), e)
+            return
         except ShellOpError as e:
             # The shell may be restarting; the next wake asks again.
             logger.debug("Could not list the shell's clients, so {} chat(s) stay held: {}", len(pending), e)
@@ -287,9 +293,17 @@ class AutoOpenReactor(MutableModel):
 
     def _is_shown(self, chat_id: ChatId, client_id: ClientId) -> bool:
         """Ask the shell to show the chat root on the chat to one client; whichever way it shows it counts."""
-        request = chat_show_request(chat_root_path(chat_id), showing=(), repoint=(), client_id=client_id)
+        request = chat_show_args(chat_root_path(chat_id), showing=(), repoint=(), client_id=client_id)
         try:
             self.shell.show(request)
+        except ShellAnswerMalformedError as e:
+            logger.warning(
+                "The shell answered the show of chat {} to client {} with something else, so it is held: {}",
+                chat_id,
+                client_id,
+                e,
+            )
+            return False
         except ShellOpError as e:
             logger.info("The shell did not show chat {} to client {}, so it is held: {}", chat_id, client_id, e)
             return False

@@ -71,7 +71,7 @@ observe`, its own supervised service) writes, and serves:
   (`focus_chat.py`) to put the chat root with the chat selected (`/?chat=<chat-id>`) on that client's
   screen, the chat's own page (`/<chat-id>`) counting as already showing it and a subagent view not,
   and a chat root window (`/`) on screen allowed to be moved to it. The shell picks the window. It
-  answers the shell's `shown` and window id; `400` for a chat id of the wrong shape, `403` in a
+  answers the shell's `shown` and window id; `400` for a chat or client id of the wrong shape, `403` in a
   secondary chat, and `502` when the shell cannot be reached, refuses, or answers something else.
 - `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
   the update apply polls on the `--preflight` boot and on every critical app

@@ -117,6 +117,12 @@ default-flags-tui=["report"]
 default-flags-ide=["report"]
 format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
 
+# Makes this directory ty's project (test_no_type_errors runs ty from here). ty
+# skips a pyproject.toml with no [tool.ty] table and keeps searching upward, so
+# without one, a checkout nested in another project (e.g. a clone under mngr's
+# .external_worktrees/) would be checked as part of that project instead.
+[tool.ty]
+
 [tool.pyright]
 venvPath = "."
 venv = ".venv"

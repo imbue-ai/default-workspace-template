@@ -17,8 +17,9 @@ from pydantic import ConfigDict
 from pydantic import Field
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.errors import ShellOpError
-from workspace_layout.ops import ShowRequest
+from workspace_layout.ops import ShowArgs
 from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WindowPath
 
 from imbue.chat.auto_open import CHAT_ROOT_PAGE
 from imbue.chat.auto_open import chat_root_path
@@ -27,7 +28,7 @@ from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import ChatId
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import parse_request_body
-from imbue.chat.shell_client import chat_show_request
+from imbue.chat.shell_client import chat_show_args
 from imbue.chat.state import get_state
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
@@ -51,16 +52,16 @@ class FocusChatRequest(FrozenModel):
     chat_id: str = Field(alias="chatId", description="The chat to show")
 
 
-def chat_page_path(chat_id: ChatId) -> str:
+def chat_page_path(chat_id: ChatId) -> WindowPath:
     """The chat's own page: one chat, no list beside it."""
-    return f"/{chat_id}"
+    return WindowPath(f"/{chat_id}")
 
 
 @pure
-def show_chat_request(chat_id: ChatId, client_id: ClientId) -> ShowRequest:
+def show_chat_args(chat_id: ChatId, client_id: ClientId) -> ShowArgs:
     """The ``show`` that puts the chat on the client's screen: the chat root with the chat selected, the chat's own
     page counting as already showing it, and a chat root window on another chat moved to it."""
-    return chat_show_request(
+    return chat_show_args(
         chat_root_path(chat_id), showing=(chat_page_path(chat_id),), repoint=(CHAT_ROOT_PAGE,), client_id=client_id
     )
 
@@ -71,8 +72,8 @@ def _error(detail: str, status_code: int) -> Response:
 
 def focus_chat_endpoint() -> Response:
     """``POST /api/focus-chat``: ask the shell to show the chat to the client. Answers the shell's ``shown`` and
-    window; 400 for a chat or client id of the wrong shape, 403 in a secondary chat (it opens no windows), and 502 when the
-    shell could not be reached, refused, or answered something that is not a show's answer."""
+    window; 400 for a chat or client id of the wrong shape, 403 in a secondary chat (it opens no windows), and 502
+    when the shell could not be reached, refused, or answered something that is not a show's answer."""
     focus_request = parse_request_body(FocusChatRequest)
     if not AGENT_ID_PATTERN.fullmatch(focus_request.chat_id):
         return _error(f"{focus_request.chat_id!r} is not a chat id", HTTP_BAD_REQUEST)
@@ -85,7 +86,7 @@ def focus_chat_endpoint() -> Response:
         return _error(str(e), HTTP_BAD_REQUEST)
     chat_id = ChatId(focus_request.chat_id)
     try:
-        answer = state.shell.show(show_chat_request(chat_id, client_id))
+        answer = state.shell.show(show_chat_args(chat_id, client_id))
     except ShellOpError as e:
         logger.warning("Could not show chat {} to client {}: {}", chat_id, focus_request.client_id, e)
         return _error(str(e), HTTP_BAD_GATEWAY)

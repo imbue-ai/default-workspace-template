@@ -1,6 +1,6 @@
 ---
 name: manage-desktop
-description: Use when you want to open, arrange, or close windows on the user's desktop (open an app or a page, focus, place, minimize, maximize, close, navigate, refresh), switch or read desktops, edit a desktop's shortcuts or wallpaper, or work out which screen a request came from.
+description: Use when you want to open, arrange, or close windows on the user's desktop (open an app or a page, show a page, focus, place, minimize, maximize, close, navigate, refresh), switch or read desktops, edit a desktop's shortcuts or wallpaper, or work out which screen a request came from.
 metadata:
   author: imbue
   crystallized: true
@@ -138,7 +138,7 @@ target client's placements only:
 
 | Goal | Command |
 |---|---|
-| Snap a window to a half of the screen, or maximize it | `uv run workspace-layout place <window> --zone left\|right\|maximized` |
+| Snap a window to a half of the screen, or maximize it | `uv run workspace-layout place <window> --state snapped-left\|snapped-right\|maximized` |
 | Put a window at an exact frame (fractions of the backdrop) | `uv run workspace-layout place <window> --frame 0.05,0.05,0.6,0.7` |
 | Minimize / restore / maximize | `uv run workspace-layout minimize <window>` / `restore <window>` / `maximize <window>` |
 | Point a window at another path under its app | `uv run workspace-layout navigate <window> /other/path` |
@@ -160,8 +160,8 @@ uv run workspace-layout open terminal --beside
 Two `place`s put two windows that are both already open on the halves:
 
 ```bash
-uv run workspace-layout place self --zone left
-uv run workspace-layout place "$(uv run workspace-layout open terminal)" --zone right
+uv run workspace-layout place self --state snapped-left
+uv run workspace-layout place "$(uv run workspace-layout open terminal)" --state snapped-right
 ```
 
 ## Shortcuts and the wallpaper
@@ -247,10 +247,10 @@ The shell edits the files itself and answers with the result, so every op
 returns as soon as the file is written; a connected window shows it within a
 redraw. Ops print a one-line description on **stderr** (`opened window
 win-... (terminal at /?session=terminal-3) on desktop home for client ...`, `placed window ...
-in the left zone ...`); `refresh` prints `(sent refresh to client <id>)`.
+as snapped-left ...`); `refresh` prints `(sent refresh to client <id>)`.
 
 **stdout** is reserved for machine-readable output: the id of the window
-`open` made, the structured output of the read commands, and the desktop's
+`open` or `show` put on screen, the structured output of the read commands, and the desktop's
 shortcuts as they stand after a `shortcut set`, `shortcut move`, or
 `shortcut remove`.
 

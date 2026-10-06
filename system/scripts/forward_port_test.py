@@ -601,9 +601,8 @@ def test_every_carrier_of_the_reserved_name_set_holds_the_same_set() -> None:
     ``forward_port.py`` is stdlib-only by contract and cannot import the
     ``app_manifest`` library that owns it. Comparing the sets is what makes the
     copy safe; sampling names cannot, since any name absent from the sample is
-    free to diverge. Every
-    carrier this repo owns belongs here: one left out is one free to drift,
-    which is the state this guard was written to end.
+    free to diverge. Every carrier this repo owns belongs here: one left out is
+    one free to drift, which is the state this guard was written to end.
 
     A third carrier is the mngr repo's: ``SEED_APP_RESERVED_NAMES`` in
     ``apps/minds_evals/imbue/minds_evals/data_types.py``, copied from

@@ -47,10 +47,11 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from imbue.mngr.cli.output_helpers import write_human_line, write_stderr_line
+from loguru import logger
 from workspace_layout.client import ShellLayoutClient, requester_from_environment
 from workspace_layout.errors import ShellOpError
-from workspace_layout.ops import OpenRequest
-from workspace_layout.primitives import IfPresent
+from workspace_layout.ops import OpenArgs
+from workspace_layout.primitives import IfPresent, WindowPath
 from workspace_layout.shell_url import shell_base_url
 
 from browser.primitives import APP_NAME
@@ -194,13 +195,11 @@ def _open_viewer_window(browser_name: str, *, is_minimized: bool) -> None:
     shell = ShellLayoutClient(
         shell_url=shell_base_url(), requester=requester_from_environment(), timeout_seconds=_SHELL_OP_TIMEOUT_SECONDS
     )
-    request = OpenRequest(
+    request = OpenArgs(
         app=APP_NAME,
-        path=f"/?session={browser_name}",
+        path=WindowPath(f"/?session={browser_name}"),
         if_present=IfPresent.FOCUS,
-        is_minimized=is_minimized,
-        client_id=None,
-        desktop=None,
+        minimized=is_minimized,
     )
     try:
         shell.open(request)
@@ -560,6 +559,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    # The CLI reports everything it has to say itself; the layout client's own logs would add lines to stderr
+    # that no agent reading this command's output expects.
+    logger.remove()
     args = _build_parser().parse_args()
     raise SystemExit(args.func(args))
 

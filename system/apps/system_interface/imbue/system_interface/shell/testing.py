@@ -23,15 +23,21 @@ from app_manifest.registry import read_registry
 from flask import Flask
 from flask import request
 from loguru import logger
+from workspace_layout.ops import ClientActivityReport
+from workspace_layout.primitives import ClientActivityKind
+from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowState
+from workspace_layout.primitives import WindowTitle
+from workspace_layout.records import Desktop
+from workspace_layout.records import Window
+from workspace_layout.records import WindowPlacement
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.server import create_application
-from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopsDocument
-from imbue.system_interface.shell.data_types import Window
-from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
@@ -40,9 +46,6 @@ from imbue.system_interface.shell.identity import IDENTITY_HEADER
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPoster
-from imbue.system_interface.shell.primitives import WindowPath
-from imbue.system_interface.shell.primitives import WindowState
-from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.state_files import write_json_atomic
 from imbue.system_interface.shell.update_notice import LAST_GOOD_RECORD_REL
 from imbue.system_interface.shell.update_notice import UPDATE_SELF_SCRIPT_REL
@@ -546,4 +549,16 @@ def file_viewer_registry_row(url: str) -> str:
             for handler in manifest.message_handlers
             if handler.show is not None
         ],
+    )
+
+
+def message_report(client_id: str, desktop_id: str, app: str, key: str, text: str) -> ClientActivityReport:
+    """A client-activity report of a message a client sent to an app's page."""
+    return ClientActivityReport(
+        client_id=ClientId(client_id),
+        desktop_id=DesktopId(desktop_id),
+        kind=ClientActivityKind.MESSAGE,
+        app=app,
+        key=key,
+        text=text,
     )

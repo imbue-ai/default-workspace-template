@@ -9,47 +9,51 @@ from http.client import HTTPMessage
 from typing import IO
 from typing import Any
 from typing import Final
+from typing import TypeVar
 
 from app_manifest.primitives import AppName
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 
-from workspace_layout.answers import ConnectedClient
+from workspace_layout.answers import ClientView
 from workspace_layout.answers import DesktopOpAnswer
-from workspace_layout.answers import DesktopSummary
+from workspace_layout.answers import InventoryDocument
 from workspace_layout.answers import OpenAnswer
 from workspace_layout.answers import ShowAnswer
+from workspace_layout.answers import TransientOpAnswer
 from workspace_layout.answers import parse_answer
 from workspace_layout.answers import parse_listing
 from workspace_layout.answers import quote_answer
 from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.interfaces import ShellLayoutInterface
-from workspace_layout.ops import CLOSE_OP
-from workspace_layout.ops import FOCUS_OP
-from workspace_layout.ops import NAVIGATE_OP
-from workspace_layout.ops import OPEN_OP
-from workspace_layout.ops import PLACE_OP
-from workspace_layout.ops import REFRESH_OP
-from workspace_layout.ops import SHOW_OP
 from workspace_layout.ops import ClientActivityReport
-from workspace_layout.ops import NavigateRequest
-from workspace_layout.ops import OpenRequest
+from workspace_layout.ops import NavigateArgs
+from workspace_layout.ops import NavigateBody
+from workspace_layout.ops import OpBody
+from workspace_layout.ops import OpenArgs
+from workspace_layout.ops import OpenBody
 from workspace_layout.ops import OpRequester
-from workspace_layout.ops import PlaceRequest
-from workspace_layout.ops import ShowRequest
-from workspace_layout.ops import WindowRequest
-from workspace_layout.ops import navigate_op_arguments
+from workspace_layout.ops import PlaceArgs
+from workspace_layout.ops import PlaceBody
+from workspace_layout.ops import RefreshAppArgs
+from workspace_layout.ops import RefreshAppBody
+from workspace_layout.ops import RefreshArgs
+from workspace_layout.ops import RefreshWindowBody
+from workspace_layout.ops import ShowArgs
+from workspace_layout.ops import ShowBody
+from workspace_layout.ops import WindowArgs
+from workspace_layout.ops import WindowOpBody
 from workspace_layout.ops import op_request_body
-from workspace_layout.ops import open_op_arguments
-from workspace_layout.ops import place_op_arguments
-from workspace_layout.ops import show_op_arguments
-from workspace_layout.ops import window_op_arguments
+from workspace_layout.primitives import LayoutOp
+from workspace_layout.records import DesktopView
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import DESKTOPS_ROUTE
+from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 
 ENV_MINDS_CHAT_ID: Final[str] = "MINDS_CHAT_ID"
@@ -62,6 +66,8 @@ SHELL_REQUEST_SLOW_SECONDS: Final[float] = 0.5
 
 _HTTP_SUCCESS_RANGE: Final[range] = range(200, 300)
 
+_Answer = TypeVar("_Answer", bound=FrozenModel)
+
 
 class ShellResponse(FrozenModel):
     """One answer of the shell as it came: the status, and the body as a JSON object or else its text."""
@@ -72,6 +78,15 @@ class ShellResponse(FrozenModel):
     @property
     def is_success(self) -> bool:
         return self.status_code in _HTTP_SUCCESS_RANGE
+
+
+@pure
+def _refusal_detail(body: dict[str, Any] | str) -> str:
+    """What a refusal says: the shell's ``detail`` whole (a 412 lists the connected clients at its end), else the
+    body shortened, as a proxy's error page is."""
+    if isinstance(body, dict) and "detail" in body:
+        return str(body["detail"]).strip()
+    return quote_answer(body)
 
 
 @pure
@@ -144,56 +159,75 @@ class ShellLayoutClient(ShellLayoutInterface):
     requester: OpRequester | None = Field(frozen=True, description="Who every op says asked; None for nobody")
     timeout_seconds: float = Field(frozen=True, description="How long one request may take before it is abandoned")
 
-    def _request(self, method: str, route: str, body: Mapping[str, Any] | None, described: str) -> ShellResponse:
+    def _request(
+        self,
+        method: str,
+        route: str,
+        body: Mapping[str, Any] | None,
+        described: str,
+        timeout_seconds: float | None = None,
+    ) -> ShellResponse:
         url = f"{self.shell_url}{route}"
         started_at = time.monotonic()
         try:
-            response = request_shell(method, url, body, self.timeout_seconds)
+            response = request_shell(
+                method, url, body, self.timeout_seconds if timeout_seconds is None else timeout_seconds
+            )
         except ShellUnreachableError as e:
             raise ShellUnreachableError(f"Could not reach the shell at {url} for the {described}: {e}") from e
         elapsed = time.monotonic() - started_at
         if elapsed > SHELL_REQUEST_SLOW_SECONDS:
             logger.warning("Asked the shell for the {} slowly, in {:.1f}s", described, elapsed)
         if not response.is_success:
+            detail = _refusal_detail(response.body)
             raise ShellRefusedOpError(
-                f"The shell refused the {described} ({response.status_code}): {quote_answer(response.body)}",
+                f"The shell refused the {described} ({response.status_code}): {detail}",
                 status_code=response.status_code,
+                detail=detail,
             )
         return response
 
-    def _post_op(self, op: str, arguments: Mapping[str, Any]) -> dict[str, Any] | str:
-        return self._request("POST", LAYOUT_OP_ROUTE, op_request_body(op, arguments, self.requester), op).body
+    def post_op(self, body: OpBody, model: type[_Answer], timeout_seconds: float | None = None) -> _Answer:
+        """Post one op under this client's requester and read the shell's answer as ``model``."""
+        asked = body.model_copy_update(to_update(body.field_ref().requester, self.requester))
+        answered = self._request("POST", LAYOUT_OP_ROUTE, op_request_body(asked), asked.op, timeout_seconds).body
+        return parse_answer(model, answered, asked.op)
 
-    def show(self, request: ShowRequest) -> ShowAnswer:
-        return parse_answer(ShowAnswer, self._post_op(SHOW_OP, show_op_arguments(request)), SHOW_OP)
+    def show(self, args: ShowArgs) -> ShowAnswer:
+        return self.post_op(ShowBody(args=args), ShowAnswer)
 
-    def open(self, request: OpenRequest) -> OpenAnswer:
-        return parse_answer(OpenAnswer, self._post_op(OPEN_OP, open_op_arguments(request)), OPEN_OP)
+    def open(self, args: OpenArgs) -> OpenAnswer:
+        return self.post_op(OpenBody(args=args), OpenAnswer)
 
-    def focus(self, request: WindowRequest) -> DesktopOpAnswer:
-        return parse_answer(DesktopOpAnswer, self._post_op(FOCUS_OP, window_op_arguments(request)), FOCUS_OP)
+    def focus(self, args: WindowArgs) -> DesktopOpAnswer:
+        return self.post_op(WindowOpBody(op=LayoutOp.FOCUS, args=args), DesktopOpAnswer)
 
-    def navigate(self, request: NavigateRequest) -> DesktopOpAnswer:
-        return parse_answer(DesktopOpAnswer, self._post_op(NAVIGATE_OP, navigate_op_arguments(request)), NAVIGATE_OP)
+    def navigate(self, args: NavigateArgs) -> DesktopOpAnswer:
+        return self.post_op(NavigateBody(args=args), DesktopOpAnswer)
 
-    def place(self, request: PlaceRequest) -> DesktopOpAnswer:
-        return parse_answer(DesktopOpAnswer, self._post_op(PLACE_OP, place_op_arguments(request)), PLACE_OP)
+    def place(self, args: PlaceArgs) -> DesktopOpAnswer:
+        return self.post_op(PlaceBody(args=args), DesktopOpAnswer)
 
-    def close(self, request: WindowRequest) -> DesktopOpAnswer:
-        return parse_answer(DesktopOpAnswer, self._post_op(CLOSE_OP, window_op_arguments(request)), CLOSE_OP)
+    def close(self, args: WindowArgs) -> DesktopOpAnswer:
+        return self.post_op(WindowOpBody(op=LayoutOp.CLOSE, args=args), DesktopOpAnswer)
 
-    def refresh(self, request: WindowRequest) -> None:
-        self._post_op(REFRESH_OP, window_op_arguments(request))
+    def refresh(self, args: RefreshArgs) -> TransientOpAnswer:
+        if isinstance(args, RefreshAppArgs):
+            return self.post_op(RefreshAppBody(args=args), TransientOpAnswer)
+        return self.post_op(RefreshWindowBody(args=args), TransientOpAnswer)
 
-    def connected_clients(self) -> list[ConnectedClient]:
+    def inventory(self, timeout_seconds: float | None = None) -> InventoryDocument:
+        """The inventory document (desktop contracts.md section 5.5)."""
+        body = self._request("GET", INVENTORY_ROUTE, None, "inventory", timeout_seconds).body
+        return parse_answer(InventoryDocument, body, "inventory")
+
+    def connected_clients(self) -> list[ClientView]:
         body = self._request("GET", CLIENTS_ROUTE, None, "client list").body
-        return [
-            client for client in parse_listing(ConnectedClient, body, "clients", "client list") if client.is_connected
-        ]
+        return [client for client in parse_listing(ClientView, body, "clients", "client list") if client.is_connected]
 
-    def desktops(self) -> list[DesktopSummary]:
+    def desktops(self) -> list[DesktopView]:
         body = self._request("GET", DESKTOPS_ROUTE, None, "desktops").body
-        return parse_listing(DesktopSummary, body, "desktops", "desktops")
+        return parse_listing(DesktopView, body, "desktops", "desktops")
 
     def record_client_activity(self, report: ClientActivityReport) -> None:
         # The shell may be down or restarting, and the caller keeps working without it, so an unreachable or failing
@@ -215,34 +249,35 @@ def _no_shell_error(described: str) -> ShellUnreachableError:
 
 
 class DisconnectedShell(ShellLayoutInterface):
-    """A shell with nobody connected and nothing to show on: the stand-in where no shell is wired (a test, a
-    secondary chat)."""
+    """A shell with nobody connected and nothing to show on: the stand-in where no shell is wired."""
 
-    def show(self, request: ShowRequest) -> ShowAnswer:
-        raise _no_shell_error(f"show {request.path} to client {request.client_id}")
+    def show(self, args: ShowArgs) -> ShowAnswer:
+        raise _no_shell_error(f"show {args.path} to client {args.client}")
 
-    def open(self, request: OpenRequest) -> OpenAnswer:
-        raise _no_shell_error(f"open {request.path} of {request.app}")
+    def open(self, args: OpenArgs) -> OpenAnswer:
+        page = args.path if args.path is not None else f"launch path {args.launch or 'default'}"
+        raise _no_shell_error(f"open {page} of {args.app}")
 
-    def focus(self, request: WindowRequest) -> DesktopOpAnswer:
-        raise _no_shell_error(f"focus window {request.window}")
+    def focus(self, args: WindowArgs) -> DesktopOpAnswer:
+        raise _no_shell_error(f"focus window {args.window}")
 
-    def navigate(self, request: NavigateRequest) -> DesktopOpAnswer:
-        raise _no_shell_error(f"navigate window {request.window}")
+    def navigate(self, args: NavigateArgs) -> DesktopOpAnswer:
+        raise _no_shell_error(f"navigate window {args.window}")
 
-    def place(self, request: PlaceRequest) -> DesktopOpAnswer:
-        raise _no_shell_error(f"place window {request.window}")
+    def place(self, args: PlaceArgs) -> DesktopOpAnswer:
+        raise _no_shell_error(f"place window {args.window}")
 
-    def close(self, request: WindowRequest) -> DesktopOpAnswer:
-        raise _no_shell_error(f"close window {request.window}")
+    def close(self, args: WindowArgs) -> DesktopOpAnswer:
+        raise _no_shell_error(f"close window {args.window}")
 
-    def refresh(self, request: WindowRequest) -> None:
-        raise _no_shell_error(f"refresh window {request.window}")
+    def refresh(self, args: RefreshArgs) -> TransientOpAnswer:
+        target = f"app {args.app}" if isinstance(args, RefreshAppArgs) else f"window {args.window}"
+        raise _no_shell_error(f"refresh {target}")
 
-    def connected_clients(self) -> list[ConnectedClient]:
+    def connected_clients(self) -> list[ClientView]:
         return []
 
-    def desktops(self) -> list[DesktopSummary]:
+    def desktops(self) -> list[DesktopView]:
         return []
 
     def record_client_activity(self, report: ClientActivityReport) -> None:

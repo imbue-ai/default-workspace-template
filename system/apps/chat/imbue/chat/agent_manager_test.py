@@ -3845,13 +3845,13 @@ def test_observe_events_feed_the_auto_open_reactor(
     manager._handle_observe_event(make_full_agent_state_event([at_start, plain]))
     reactor.flush()
 
-    assert [(request.path, request.client_id) for request in shell.shows] == [(f"/?chat={at_start.id}", "c1")]
+    assert [(request.path, request.client) for request in shell.shows] == [(f"/?chat={at_start.id}", "c1")]
     assert not reactor.ledger.is_delivered(ChatId(plain.id))
 
     appeared = _agent_details("assist-new", labels={"assist": "true", "auto_open": "true"})
     manager._handle_observe_event(make_agent_state_event(appeared))
     reactor.flush()
-    assert (shell.shows[-1].path, shell.shows[-1].client_id) == (f"/?chat={appeared.id}", "c1")
+    assert (shell.shows[-1].path, shell.shows[-1].client) == (f"/?chat={appeared.id}", "c1")
     assert reactor.ledger.is_delivered(ChatId(appeared.id))
 
     manager._handle_observe_event(make_agent_removed_event(appeared.id, appeared.name, appeared.host.id))

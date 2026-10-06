@@ -35,7 +35,8 @@ touches and the `app.toml` of the app that owns it (`system/apps/<package>/app.t
 If it says `critical = true` -- the shell (`system_interface`), the chat, the
 terminal, and any user app that declares it -- or if the change is under
 `system/libs/workspace_ui/` (the shared library both critical bundles are built
-from), **follow [`references/critical-app.md`](references/critical-app.md) and
+from) or `system/libs/workspace_layout/` (the layout wire contract the shell, the
+chat, and the terminal all run), **follow [`references/critical-app.md`](references/critical-app.md) and
 stop reading here.** A critical app is never edited in the served tree: that
 flow runs the same live loop against an isolated worktree, with a preview window
 as the user's view, and goes live through the atomic update apply once a

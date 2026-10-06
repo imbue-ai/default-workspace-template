@@ -12,6 +12,7 @@ from imbue.system_interface.avatar.catalog import MAX_REGISTERED_DESIGNS
 from imbue.system_interface.avatar.catalog import _MAX_CATALOG_BYTES
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
+from imbue.system_interface.avatar.designs import GUMMY_SEAL_DESIGN_ID
 from imbue.system_interface.avatar.designs import LIVE_DESIGN_ID
 from imbue.system_interface.avatar.primitives import DesignId
 from imbue.system_interface.avatar.testing import MINIMAL_DESIGN_SVG
@@ -61,7 +62,7 @@ def test_a_stored_design_outlives_a_change_to_the_shared_stylesheet(tmp_path: Pa
 def test_a_bundled_id_is_never_replaced(tmp_path: Path) -> None:
     store = AvatarCatalogStore(directory=tmp_path / "avatars")
     with pytest.raises(InvalidShellValueError, match="bundled"):
-        store.register(design_registration(str(DEFAULT_DESIGN_ID)))
+        store.register(design_registration(str(GUMMY_SEAL_DESIGN_ID)))
 
 
 def test_the_catalog_never_grows_past_its_bound(tmp_path: Path) -> None:
