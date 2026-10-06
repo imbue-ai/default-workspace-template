@@ -19,7 +19,14 @@ from browser.testing import (
     VIEWER_URL,
     wait_until,
 )
-from playwright.sync_api import Browser, BrowserContext, Frame, Page, Route, WebSocketRoute
+from playwright.sync_api import (
+    Browser,
+    BrowserContext,
+    Frame,
+    Page,
+    Route,
+    WebSocketRoute,
+)
 
 pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
 
@@ -78,9 +85,13 @@ def _open(
         if url.startswith(_SHELL_URL):
             route.fulfill(status=200, content_type="text/html", body=_SHELL_PAGE)
         elif url == VIEWER_URL:
-            route.fulfill(status=200, content_type="text/html", body=VIEWER_PATH.read_text())
+            route.fulfill(
+                status=200, content_type="text/html", body=VIEWER_PATH.read_text()
+            )
         elif url == _CONTRACT_URL and is_contract_served:
-            route.fulfill(status=200, content_type="text/javascript", body=_CONTRACT_MODULE)
+            route.fulfill(
+                status=200, content_type="text/javascript", body=_CONTRACT_MODULE
+            )
         else:
             route.fulfill(status=404, body="")
 
@@ -130,8 +141,12 @@ def test_a_viewer_loaded_in_a_hidden_window_opens_no_stream_until_the_shell_show
         page.evaluate("window.tell('shell:shown')")
         wait_until(page, lambda: viewer.claims == ["i"])
         # Sized like every connect: the pane's box rounded to whole pixels, then down to an even count.
-        width, height = (math.floor(side + 0.5) & ~1 for side in frame.evaluate(_STAGE_SIZE))
-        assert viewer.stream_urls == [f"ws://localhost/browsers/browser-1/stream?w={width}&h={height}"]
+        width, height = (
+            math.floor(side + 0.5) & ~1 for side in frame.evaluate(_STAGE_SIZE)
+        )
+        assert viewer.stream_urls == [
+            f"ws://localhost/browsers/browser-1/stream?w={width}&h={height}"
+        ]
     finally:
         context.close()
 
@@ -139,7 +154,9 @@ def test_a_viewer_loaded_in_a_hidden_window_opens_no_stream_until_the_shell_show
 def test_a_framed_viewer_whose_contract_cannot_load_streams_as_a_page_on_its_own(
     module_browser: Browser,
 ) -> None:
-    context, page, _frame, viewer = _open(module_browser, "shown", is_contract_served=False)
+    context, page, _frame, viewer = _open(
+        module_browser, "shown", is_contract_served=False
+    )
     try:
         wait_until(page, lambda: viewer.claims == ["i"])
         assert len(viewer.stream_urls) == 1
