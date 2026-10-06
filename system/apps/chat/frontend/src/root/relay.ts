@@ -8,8 +8,8 @@
  * messages for the minds chrome, ``shell:focused`` (which the root re-posts as its own, since the
  * shell raises the root's window for it), ``shell:open`` of a sub-agent view, ``shell:draft-text``
  * from a sub-agent view (which has no composer of its own to draft into), ``shell:message`` (a
- * clicked link's ``open:file`` or ``open:url``, for whichever app opens it), and ``shell:open-link``
- * (a clicked link to another app's address, which the shell opens as that app's window).
+ * clicked file link's ``open:file``, for whichever app opens it), and ``shell:open-link`` (a
+ * clicked local link, or a link to another app's address, which the shell opens where it belongs).
  * One ``shell:open`` is the root's own business: a page asking for a sibling chat names the
  * root's path for it (``/?chat=<id>``), and the root that already frames a chat list selects
  * that chat in place, exactly as its own New chat button does, rather than asking the shell for

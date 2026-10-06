@@ -31,6 +31,7 @@ import {
   textRowDisabledReason,
 } from "../model/launch";
 import { applyPresence } from "../model/Presence";
+import { windowAtBackendUrl } from "../model/pageUrl";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -1022,16 +1023,22 @@ export class DesktopStore {
     return true;
   }
 
-  /** Open a link where it belongs in this workspace: a local URL in the workspace's browser (``open:url``), one of
-   *  this workspace's app addresses as that app's window at its path. Another workspace's address is refused with a
-   *  notice. ``workspaceHost`` is this page's own host, which says which workspace it is; ``senderApp`` is the app
+  /** Open a link where it belongs in this workspace: a local URL at an app's registered backend port as that app's
+   *  window at its path, any other local URL in the workspace's browser (``open:url``), one of this workspace's app
+   *  addresses as that app's window at its path. Another workspace's address is refused with a notice. ``workspaceHost`` is this page's own host, which says which workspace it is; ``senderApp`` is the app
    *  whose page asked, or null for the Imbue Studio chrome, and names the ``open:url`` it sends. */
   async openLink(url: string, workspaceHost: string, senderApp: string | null): Promise<void> {
     const target = classifyLink(url, workspaceHost);
     switch (target.kind) {
-      case "local-url":
+      case "local-url": {
+        const backendWindow = windowAtBackendUrl(this.state.apps, target.url);
+        if (backendWindow !== null) {
+          await this.openWindowAt(backendWindow.app.name, backendWindow.path, "focus");
+          return;
+        }
         await this.deliverMessage({ type: OPEN_URL_MESSAGE, url: target.url }, senderApp ?? EMBEDDER_SENDER);
         return;
+      }
       case "app-address": {
         const app = this.state.apps.find((candidate) => candidate.label === target.label);
         if (app === undefined) {

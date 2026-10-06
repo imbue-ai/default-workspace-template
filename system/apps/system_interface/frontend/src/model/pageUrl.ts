@@ -32,3 +32,34 @@ export function windowPageUrl(
 ): string {
   return `${appOrigin(app, host, protocol)}${path.startsWith("/") ? path : `/${path}`}`;
 }
+
+/** The host names a backend URL's loopback host may be written as. */
+const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function loopbackUrl(url: string): URL | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  return LOOPBACK_HOSTNAMES.has(parsed.hostname) ? parsed : null;
+}
+
+/** The window a local URL is a page of: the openable app whose registered backend URL has the URL's scheme and
+ *  port (on any loopback host name), and the URL's path. This is how a link an agent writes to an app it runs
+ *  (``http://localhost:<port>/...``, the only address of it the agent knows) opens as that app's window. Null when
+ *  no openable app is registered there. */
+export function windowAtBackendUrl(
+  apps: readonly AppRecord[],
+  url: string,
+): { readonly app: AppRecord; readonly path: string } | null {
+  const link = loopbackUrl(url);
+  if (link === null) return null;
+  const app = apps.find((candidate) => {
+    if (candidate.internal) return false;
+    const backend = loopbackUrl(candidate.url);
+    return backend !== null && backend.protocol === link.protocol && backend.port === link.port;
+  });
+  return app === undefined ? null : { app, path: `${link.pathname}${link.search}` };
+}

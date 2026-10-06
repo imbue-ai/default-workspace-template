@@ -1367,6 +1367,16 @@ describe("links Imbue Studio hands over", () => {
     ]);
   });
 
+  it("opens a local URL at an app's registered backend port as that app's window at its path, not in the browser", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("news", { url: "http://127.0.0.1:8095" })]);
+
+    await store.openLink("http://localhost:8095/story/7?ref=chat", SHELL_HOST, "chat");
+
+    expect(api.calls).toContain("openWindow:home:news:/story/7?ref=chat:focus");
+    expect(api.relayedMessages).toEqual([]);
+  });
+
   it("opens one of this workspace's app addresses as that app's window at its path, raising one already there", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), FILES_APP]);

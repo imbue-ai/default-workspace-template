@@ -111,7 +111,7 @@ The standard rows, each present only when it applies:
 | Paste | The target is editable and the browser exposes `navigator.clipboard.readText` | Inserts the clipboard's text at the caret |
 | Select All | The target is editable | Selects the field's whole value |
 | Copy link address | The target is in an anchor with an `href` | Copies the absolute URL |
-| Open link | The target is in an anchor with an `href` | Routes the link as a click on it would (`workspace_ui`'s `links.ts`, the workspace link routing plan): a file in the File Viewer, a local URL in the workspace's browser, an app's address as that app's window, an external link in the user's browser |
+| Open link | The target is in an anchor with an `href` | Routes the link as a click on it would (`workspace_ui`'s `links.ts`, the workspace link routing plan): a file in the File Viewer, a local URL as the window of the app registered at its port or else in the workspace's browser, an app's address as that app's window, an external link in the user's browser |
 | Copy image address | The target is an image with a `src` | Copies the absolute URL |
 
 The reference rows, always present:

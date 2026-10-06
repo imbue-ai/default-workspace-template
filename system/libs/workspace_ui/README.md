@@ -41,8 +41,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   (`blueprint/workspace-link-routing/` in the mngr repo): `classifyLink` calls a
   link external, a file, a local URL, one of this workspace's app addresses,
   another workspace's, or unroutable; `routeLink` and `routeLinkElement` act on
-  it through the page's shell connection (`open:file` or `open:url` as a
-  `shell:message`, `openPath`, `shell:open-link`, or a new browser tab), with a
+  it through the page's shell connection (`open:file` as a `shell:message`,
+  `openPath`, `shell:open-link` for a local URL or another app's address, or a
+  new browser tab), with a
   download or a new tab when no shell frames the page; `installLinkRouting`
   routes a page's plain, modified, and middle clicks. An absolute path is a file
   only in a link the page routes that way (a chat message's): `routeLinkElement`

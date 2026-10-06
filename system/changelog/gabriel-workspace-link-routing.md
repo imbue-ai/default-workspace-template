@@ -2,7 +2,7 @@ Links clicked inside a workspace open inside the workspace: files in the File Vi
 
 - The File Viewer registers `open:file`, shown on the file's (or folder's) view page and raising a window already there.
 
-- AGENTS.md tells agents to link files by absolute path and services running in the workspace by their localhost URL.
+- AGENTS.md tells agents to link files by absolute path and services running in the workspace by their localhost URL, which opens a registered app as its own window.
 
 - The desktop-interface and workspace-app-model contracts describe the new message handler forms, `shell:message`, and `minds:open-link`, and drop the reserved `handles` table.
 

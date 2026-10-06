@@ -7,3 +7,5 @@ The desktop delivers messages that apps send each other, and opens the links Imb
 - Popups a workspace page opens to a local address, which Imbue Studio now turns back into the workspace, open where they belong: a local page in the browser, one of this workspace's app addresses as that app's window, and another workspace's address is refused with a notice.
 
 - A link in an app's page to another app of the workspace opens as that app's window (`shell:open-link`), and a link in the desktop's own chrome to a local address opens the same way a forwarded popup does.
+
+- A local URL at the port an app registered (`http://localhost:8095/...`, the only address of an app an agent knows) opens as that app's window at the URL's path, from a chat link, a page's link, or a forwarded popup alike; a local URL no app is registered at still opens in the browser.

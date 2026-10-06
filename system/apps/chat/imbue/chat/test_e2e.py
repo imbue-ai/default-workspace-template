@@ -1550,6 +1550,45 @@ def test_a_replys_file_link_opens_in_the_file_viewer_and_its_local_link_goes_to_
             assert page.context.pages == [page]
 
 
+@pytest.mark.timeout(120, func_only=False)
+def test_a_replys_localhost_link_to_a_registered_apps_port_opens_that_apps_window_not_the_browser(
+    tmp_path: Path, page: Page
+) -> None:
+    """An agent knows an app it runs only by its backend's ``http://localhost:<port>`` URL, so a reply's link to that
+    port opens the app's own window at the link's path and query, and nothing is posted to the app that opens
+    URLs."""
+    opened_urls: list[dict[str, Any]] = []
+    with (
+        serve_app(message_handling_app([], "/unused", 200)) as news,
+        serve_app(message_handling_app(opened_urls, _OPEN_URL_HANDLER_PATH, 200)) as url_opener,
+    ):
+        rows = (
+            registry_row_toml("news", news.http_url),
+            registry_row_toml("browser", url_opener.http_url, message_handlers=[("open:url", _OPEN_URL_HANDLER_PATH)]),
+        )
+        session_events = _question_and_reply_events(
+            "uuid-app-link",
+            "Where is the story?",
+            f"It is in [the news app](http://localhost:{news.port}/story/7?ref=chat).",
+        )
+        with _running_e2e_server(tmp_path, session_events=session_events, extra_rows=rows) as server:
+            _open_fixture_chat(page, server)
+            chat = _chat(page)
+            app_link = chat.get_by_role("link", name="the news app")
+            expect(app_link).to_be_visible(timeout=15000)
+            chat_url = _chat_frame(page).url
+
+            app_link.click()
+            wait_for(
+                lambda: [window["path"] for window in _app_windows(server, "news")] == ["/story/7?ref=chat"],
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="no news window opened at the linked path",
+            )
+            assert opened_urls == []
+            assert _chat_frame(page).url == chat_url
+
+
 # A folder whose name holds characters a URL spells in different ways: a space, parentheses, an apostrophe.
 _ODD_FOLDER_NAME = "q4 (final)'s"
 _FOLDER_LINK_SESSION_EVENTS = _question_and_reply_events(

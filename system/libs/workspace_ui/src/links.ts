@@ -6,10 +6,11 @@
  *   rule is exactly the Imbue Studio desktop app's ``isExternalUrl``, which decides the same thing for a popup, and
  *   a shared fixture keeps the two in step.
  * - An absolute path is a **file** of the workspace, opened in the File Viewer (``open:file``).
- * - A URL on a local host (``localhost``, ``127.0.0.1``, ``[::1]``, ``*.localhost``) is a **local URL**, opened in
- *   the workspace's browser (``open:url``), unless it is the address of an app of a workspace: one of this
- *   workspace's apps (an **app address**, opened as that app's window: by the page itself for its own app, by the
- *   shell through ``shell:open-link`` for another) or another workspace's (which the shell refuses).
+ * - A URL on a local host (``localhost``, ``127.0.0.1``, ``[::1]``, ``*.localhost``) is a **local URL**, which the
+ *   shell opens (``shell:open-link``): as the window of the app registered at its port, else in the workspace's
+ *   browser (``open:url``). That is unless it is the address of an app of a workspace: one of this workspace's apps
+ *   (an **app address**, opened as that app's window: by the page itself for its own app, by the shell through
+ *   ``shell:open-link`` for another) or another workspace's (which the shell refuses).
  * - Anything else (a relative path, a fragment, another scheme) is **unroutable**.
  *
  * This module touches no message primitive: it acts through the page's app-contract connection.
@@ -100,7 +101,8 @@ export interface LinkRoutingContext {
   readonly isFramed: boolean;
   openPath(path: string, ifPresent: OpenIfPresent): void;
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
-  /** Ask the shell to open a workspace app address that is not the page's own (``shell:open-link``). */
+  /** Ask the shell to open a local URL, or a workspace app address that is not the page's own
+   *  (``shell:open-link``). */
   openLink(url: string): void;
   /** The page's own host, which says which workspace (and which app) it is in. */
   readonly pageHost: string;
@@ -128,7 +130,8 @@ export function routeLink(href: string, context: LinkRoutingContext): boolean {
       else context.download(href);
       return true;
     case "local-url":
-      if (context.isFramed) context.sendMessage(OPEN_URL_MESSAGE, { url: target.url });
+      // The shell knows which app, if any, serves the URL's port; only it can tell an app's window from a page.
+      if (context.isFramed) context.openLink(target.url);
       else context.openInNewTab(target.url);
       return true;
     case "app-address":

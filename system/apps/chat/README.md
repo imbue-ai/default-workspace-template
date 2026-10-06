@@ -103,8 +103,10 @@ A link in a message keeps its real address, and the page routes every click on
 it (plain, modified, or middle) through `workspace_ui`'s `links.ts`, as the
 element menu's "Open link" does: an absolute path opens the file or folder in
 the File Viewer (`open:file`), a local address (`localhost`, `127.0.0.1`,
-`[::1]`, `*.localhost`) in the workspace's browser (`open:url`), another app's
-address of the workspace as that app's window (`shell:open-link`), and an
+`[::1]`, `*.localhost`) through the shell (`shell:open-link`), which opens the
+window of the app registered at its port or else the workspace's browser,
+another app's address of the workspace as that app's window
+(`shell:open-link`), and an
 external link in the user's own browser. A chat opened on its own, with no
 shell above its root (`isShellAbove` in `frontend/src/shell.ts`), downloads a
 linked file and opens a local link in a new tab instead.

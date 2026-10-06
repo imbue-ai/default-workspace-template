@@ -103,7 +103,8 @@ export interface ShellConnection {
   draftText(text: string): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
   sendMessage(type: string, fields: Readonly<Record<string, unknown>>): void;
-  /** Ask the shell to open a link to an address of the workspace's apps (or another workspace's) as a window. */
+  /** Ask the shell to open a local URL (as the window of the app at its port, else in the workspace's browser), or
+   *  an address of the workspace's apps (or another workspace's) as a window. */
   openLink(url: string): void;
   /** Stop listening to the shell. */
   disconnect(): void;

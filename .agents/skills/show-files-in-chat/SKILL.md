@@ -85,5 +85,7 @@ local absolute-path form for files you produced on this machine.
   mistyped path, or an extension that is not one of the inline image formats
   above (a non-image extension is treated as a download, not an inline image).
 - For a local web app or service, link its localhost URL instead
-  (`[the preview](http://localhost:3000/)`): clicking it opens it in the
+  (`[the preview](http://localhost:3000/)`). Clicking it opens the app's own
+  window when it is an app registered with the workspace (the port it
+  registered in `data/.state/apps.toml`), and otherwise opens it in the
   workspace's browser.

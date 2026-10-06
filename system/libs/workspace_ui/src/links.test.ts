@@ -130,11 +130,7 @@ function recordingContext(isFramed: boolean): RecordingContext {
 describe("routeLink", () => {
   it.each<[string, string, unknown[]]>([
     ["a file as open:file", "/home/user/a%20b.md", ["sendMessage", "open:file", { path: "/home/user/a b.md" }]],
-    [
-      "a local URL as open:url",
-      "http://localhost:3000/",
-      ["sendMessage", "open:url", { url: "http://localhost:3000/" }],
-    ],
+    ["a local URL through the shell", "http://localhost:3000/", ["openLink", "http://localhost:3000/"]],
     [
       "the page's own app address in place",
       `http://chat-ab12cd34.${COORDINATE}/?chat=agent-1`,
