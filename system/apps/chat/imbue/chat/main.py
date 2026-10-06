@@ -186,7 +186,8 @@ def build_production_state(
     # Eviction wiring: the state drops what an agent holds resident -- the transcript,
     # watch thread, and inotify watches -- when the manager sees it destroyed (the whole
     # chat's when it was the active agent) or an archived member die, and after every
-    # observe event releases each stopped chat nobody is streaming.
+    # observe event (and every stream close, in server.py) releases each stopped chat
+    # nobody is streaming.
     agent_manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
     agent_manager.set_unviewed_transcript_release(state.release_unviewed_stopped_transcripts)
     agent_manager.set_chat_stream_ender(state.event_queues.end_streams)

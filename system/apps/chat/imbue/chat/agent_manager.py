@@ -3909,9 +3909,10 @@ class AgentManager:
     def set_unviewed_transcript_release(self, callback: Callable[[], None]) -> None:
         """Wire the release of stopped chats' transcripts nobody is streaming (the composition root calls this once).
 
-        Invoked after every observe event: the only release of a chat whose active agent died.
-        Level-triggered, so a stopped chat that a read rebuilds after its stop is dropped too,
-        once its last stream closes."""
+        Invoked after every observe event, which releases a chat whose active agent died unless it
+        is being streamed; the server runs the same release when a chat's stream closes, which
+        drops a streamed chat once its last stream goes. Level-triggered, so a stopped chat that a
+        read rebuilds after its stop is dropped too."""
         self._unviewed_transcript_release = callback
 
     def set_chat_stream_ender(self, callback: Callable[[str], None]) -> None:
