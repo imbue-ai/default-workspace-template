@@ -94,6 +94,9 @@ _SLOW_HOLD_SECONDS = 2.5
 # Claude's executor takes an injected bounded lock, so its slow corner is cheap.
 _CLAUDE_LOCK_WAIT_SECONDS = 0.3
 _CLAUDE_SLOW_HOLD_SECONDS = 0.8
+# A FAST send must land inside the stop's wait however late its timer fires on a loaded machine; the flock
+# wait returns the moment the send releases, so the generous bound costs nothing.
+_CLAUDE_FAST_LOCK_WAIT_SECONDS = 10.0
 
 # Logical clock base for the claude world's on-disk timestamps and marker mtimes (an arbitrary
 # past epoch; only the ordering matters).
@@ -701,6 +704,7 @@ def _run_claude_stop(world: _ClaudeWorld, send_mode: str) -> None:
         if send_mode == _SEND_MODE_SLOW:
             world.ledger.killable.add(inflight_text)
         sender = world.begin_inflight_send(inflight_text, hold)
+    lock_wait_seconds = _CLAUDE_FAST_LOCK_WAIT_SECONDS if send_mode == _SEND_MODE_FAST else _CLAUDE_LOCK_WAIT_SECONDS
     agent_info = AgentInfo(
         id="claude-storm-agent",
         name="claude-storm-agent",
@@ -716,7 +720,7 @@ def _run_claude_stop(world: _ClaudeWorld, send_mode: str) -> None:
         press_chord=world.press_chord_stop,
         mark_idle=world.mark_idle,
         restart_drain_to_base=lambda: restart_drain(agent_info, world.watcher, world.restart_process, lambda: None),
-        try_message_lock=lambda: try_hold_message_lock(world.agent_state_dir, wait_seconds=_CLAUDE_LOCK_WAIT_SECONDS),
+        try_message_lock=lambda: try_hold_message_lock(world.agent_state_dir, wait_seconds=lock_wait_seconds),
     )
     if sender is not None:
         sender.join()
