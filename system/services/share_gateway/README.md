@@ -107,13 +107,14 @@ session (see the `session_cookie.py` docstring).
 
 Sign-ins are logged as well as denials. Every HTML navigation without a
 session writes a `Sign-in required` line naming what it was answered with (the
-retry page or the broker redirect), and every completed callback a
-`Signed in` line. Each says, for both session cookie copies, whether the
-browser sent it and, if the gateway rejected it, why (expired, signed with
-another key, issued for another domain, malformed) and when it was issued and
-expires. It also names the request's other cookies (names only), its
-`Sec-Fetch-Dest`/`Sec-Fetch-Site`, and its user agent. A `no session` denial
-carries the same per-copy detail. That tells a browser that dropped the
+retry page or the broker redirect). It says, for both session cookie copies,
+whether the browser sent it and, if the gateway rejected it, why (expired,
+signed with another key, issued for another domain, malformed) and when it was
+issued and expires; a `no session` denial carries the same per-copy detail.
+Every completed callback writes a `Signed in` line naming the user, when the
+new session was issued and expires, and where the visitor lands. Both lines
+also name the request's other cookies (names only), its
+`Sec-Fetch-Dest`/`Sec-Fetch-Site`, and its user agent. That tells a browser that dropped the
 session from one the gateway turned away. Cookie and token values never reach
 the log.
 
