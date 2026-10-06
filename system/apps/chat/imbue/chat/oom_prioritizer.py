@@ -20,7 +20,8 @@ Signals, and where each comes from:
   ``mngr message`` or by another agent), and staying in one marks the chat
   mid-turn, which suspends its staleness climb until the turn ends,
 - **started** -- the chat app handing a new chat a spare agent it started ahead of
-  it, via ``record_chat_started``; the chat sits at the engaged floor for
+  it, or a chat awaiting its first send holding a reserved spare that is up, via
+  ``record_chat_started``; the chat sits at the engaged floor for
   ``CHAT_JUST_STARTED_GRACE_SECONDS``, then is scored like any chat.
 
 Idle time is measured against the most recent of those events, wall-clock, with
@@ -185,7 +186,7 @@ class ChatOomPrioritizer:
 
     def record_chat_started(self, chat_id: ChatId) -> None:
         """Stamp a chat that just began on an agent started earlier (a spare the chat app handed
-        it) as engaged now, then re-tag every chat.
+        it, or one reserved for it while it awaits its first send) as engaged now, then re-tag every chat.
 
         Without it the staleness clock would run from that agent's process start, so a spare
         that waited a day for a chat would begin as an abandoned one. The user opened the chat
