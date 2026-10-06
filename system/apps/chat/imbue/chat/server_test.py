@@ -71,6 +71,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
 from imbue.chat.server import _revive_and_retry_send
+from imbue.chat.server import _stream_events
 from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
@@ -536,9 +537,11 @@ def test_opening_a_stopped_chats_stream_keeps_the_watcher_through_a_release_whil
     manager.note_agent_list_known()
     seed_agent_state(manager, "stopped-agent", name="stopped-agent", state="STOPPED")
     manager.release = state.release_unviewed_stopped_transcripts
-    client = create_application(state).test_client()
     try:
-        response = client.get("/api/chats/stopped-agent/stream", buffered=False)
+        # Called in an app context rather than through the test client, which reads the first frame (the
+        # first keepalive, seconds away) before it returns.
+        with create_application(state).app_context():
+            response = _stream_events("stopped-agent")
 
         assert response.status_code == 200
         assert manager.release is None
