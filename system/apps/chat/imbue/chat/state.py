@@ -1,6 +1,5 @@
 import threading
 from collections.abc import Callable
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +24,7 @@ from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.primitives import ChatId
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.shell_client import ShellLayoutInterface
@@ -257,7 +257,7 @@ class ChatAppState(MutableModel):
         Rebuild-on-demand is `get_or_create_watcher` and `get_or_create_loader`: viewing a
         stopped chat re-reads its transcript from disk transparently.
         """
-        self._evict_resident_unless(agent_id, lambda: False)
+        self._evict_resident(agent_id, spared_if_streamed=None)
 
     def release_unviewed_stopped_transcripts(self) -> None:
         """Evict what each stopped chat holds resident, unless a stream of it is open.
@@ -272,20 +272,21 @@ class ChatAppState(MutableModel):
         for agent_id in resident_agent_ids:
             chat_id = self.agent_manager.chat_id_of_agent(agent_id)
             if self.agent_manager.is_chat_stopped(chat_id):
-                self._evict_resident_unless(agent_id, partial(self.event_queues.has_consumers, str(chat_id)))
+                self._evict_resident(agent_id, spared_if_streamed=chat_id)
 
-    def _evict_resident_unless(self, agent_id: str, is_kept: Callable[[], bool]) -> None:
-        """Evict one agent's watcher and loader unless ``is_kept``, judged under the lock a build takes.
+    def _evict_resident(self, agent_id: str, spared_if_streamed: ChatId | None) -> None:
+        """Evict one agent's watcher and loader, unless ``spared_if_streamed`` names a chat with an open stream.
 
-        A stream registers before building its watcher, so a ``has_consumers`` judged here either
-        counts a stream opening now or pops before that stream builds a fresh watcher.
+        The stream is checked under the lock a watcher build takes, and a stream registers before
+        building its watcher, so a stream opening now is either counted here or builds a fresh
+        watcher after this pops.
 
         The watcher is popped under the lock but stopped outside it -- `stop` joins the
         watch thread, and holding the lock across that join would stall every other
         watcher creation for the duration.
         """
         with self._watchers_lock:
-            if is_kept():
+            if spared_if_streamed is not None and self.event_queues.has_consumers(str(spared_if_streamed)):
                 return
             watcher = self.watchers.pop(agent_id, None)
             loader = self.loaders.pop(agent_id, None)
