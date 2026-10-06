@@ -3065,7 +3065,9 @@ class AgentManager:
 
         With a spare on ``spare_account_id`` and the terms a new chat there gets (a ready one, else
         one still being created), the chat takes the spare's id and name, and the spare is reserved
-        for it (``spare_chat.py``), unless awaiting chats already hold as many spares as the pool keeps;
+        for it (``spare_chat.py``), and the chat is bound to the spare's account, the default when it
+        opened, so a later change of default leaves it as it would any chat; unless awaiting chats already
+        hold as many spares as the pool keeps;
         otherwise both are minted fresh, and the next spare started is reserved for the chat when it
         fits (``_record_new_spare_locked``).
         """
@@ -3085,7 +3087,7 @@ class AgentManager:
         provisional = ProvisionalChat(
             chat_id=chat_id,
             name=name,
-            account_id=account_id,
+            account_id=account_id if spare is None else spare.terms.account_id,
             phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
         )
         self._provisional_chats[chat_id] = provisional
@@ -3726,6 +3728,10 @@ class AgentManager:
                 name=f"discard-spare-{str(discarded_id)[:8]}",
                 is_checked=False,
             )
+        if new_spare is not None and new_spare.phase is SpareChatPhase.RESERVED:
+            bound = self.get_provisional_chat(new_spare.chat_id)
+            if bound is not None:
+                self._broadcast_provisional(bound)
         if new_spare is not None and harness is not None and work_dir is not None:
             self._creation_cg.start_new_thread(
                 target=self._run_spare_creation,
@@ -3759,9 +3765,9 @@ class AgentManager:
 
         A chat awaiting its first send that holds no spare and would fit one on ``terms`` (minted before
         any account was signed in, say, or after its reserved spare was destroyed) comes first: the spare
-        is started under its id and name, reserved for it, while awaiting chats hold fewer spares than the
-        pool keeps. Otherwise one is started for the pool when the pool is short and may grow now. Nothing
-        is started while a spare for either is still being created.
+        is started under its id and name, reserved for it, and the chat is bound to its account, while
+        awaiting chats hold fewer spares than the pool keeps. Otherwise one is started for the pool when the
+        pool is short and may grow now. Nothing is started while a spare for either is still being created.
         """
         pooled = pooled_spares(self._spares)
         if (
@@ -3780,6 +3786,9 @@ class AgentManager:
         if awaiting is not None:
             new_spare = SpareChatAgent(
                 chat_id=awaiting.chat_id, display_name=awaiting.name, terms=terms, phase=SpareChatPhase.RESERVED
+            )
+            self._provisional_chats[awaiting.chat_id] = awaiting.model_copy_update(
+                to_update(awaiting.field_ref().account_id, terms.account_id)
             )
         elif len(pooled) >= self._spare_chat_pool_size or (
             any(spare.phase is SpareChatPhase.READY for spare in pooled) and now < self._spare_replenish_not_before

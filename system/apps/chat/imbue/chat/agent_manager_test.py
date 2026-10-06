@@ -6164,6 +6164,7 @@ def test_an_awaiting_chat_minted_with_no_spare_has_the_next_spare_started_under_
     try:
         awaiting = manager.awaiting_chat_for_empty_list()
         assert manager._spares == ()
+        window = broadcaster.register()
 
         manager.ensure_spare_chat()
 
@@ -6174,6 +6175,15 @@ def test_an_awaiting_chat_minted_with_no_spare_has_the_next_spare_started_under_
         )
         (reserved,) = _reserved_spares(manager)
         assert (reserved.chat_id, reserved.display_name) == (awaiting.chat_id, awaiting.name)
+        bound = manager.get_provisional_chat(awaiting.chat_id)
+        assert bound is not None and bound.account_id == reserved.terms.account_id
+        pushed = _drain(window)
+        assert any(
+            message["type"] == "provisional_chat_created"
+            and message["chat_id"] == awaiting.chat_id
+            and message["account_id"] == reserved.terms.account_id
+            for message in pushed
+        )
         (pooled,) = _wait_for_ready_spares(manager, 1)
         assert pooled.chat_id != awaiting.chat_id
         assert manager.get_chat_snapshots() == []
@@ -6250,6 +6260,28 @@ def test_an_awaiting_chats_reserved_spare_is_not_replaced_when_its_terms_go_stal
 
         assert _reserved_spares(manager) == [spare.with_phase(SpareChatPhase.RESERVED)]
         assert ["destroy", spare.chat_id, "--force"] not in _mngr_calls(argv_log, "destroy")
+    finally:
+        manager.stop()
+
+
+def test_the_empty_list_chat_keeps_the_account_it_opened_on_when_the_default_changes(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        awaiting = manager.awaiting_chat_for_empty_list()
+        assert awaiting.account_id == spare.terms.account_id
+        set_default_account(_openai_account(), is_default=True)
+
+        manager.ensure_spare_chat()
+        launched = manager.create_chat("", chat_id=awaiting.chat_id, account_id=awaiting.account_id)
+
+        assert launched.chat_id == spare.chat_id
+        assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [spare.chat_id]
+        assert _mngr_verbs_naming(argv_log, spare.chat_id) == ["create"]
     finally:
         manager.stop()
 
