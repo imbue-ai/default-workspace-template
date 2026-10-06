@@ -349,8 +349,7 @@ class HarnessSpec(FrozenModel):
     # does not, the page hides the stop button while the chat is compacting. Shipped on the catalog.
     can_interrupt_compaction: bool = False
     # Whether a /compact sent from the composer reaches the agent as its own compact command
-    # (claude types it into its pane), so the chat shows the compaction it starts. False where
-    # it would reach the model as prose (codex) or the composer declines it (pi). Backend-only.
+    # (not prose for the model), so the chat shows the compaction it starts. Backend-only.
     is_composer_compact_forwarded: bool = False
 
 

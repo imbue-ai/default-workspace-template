@@ -73,7 +73,7 @@ class HarnessActivityTracker(ABC):
 
     # Filename of the marker the harness's mngr plugin holds while the agent's context is
     # being compacted, or None when the harness writes none (its compactions show only
-    # through the chat's own requests). Claude's compaction hooks write one.
+    # through the chat's own requests).
     compacting_marker_filename: ClassVar[str | None] = None
 
     # Signals every harness caches. Declared at class level so a `build()`

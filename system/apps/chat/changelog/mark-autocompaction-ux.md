@@ -6,7 +6,7 @@ Turn on idle compaction for chats, with a per-chat and per-workspace toggle, and
 
 - **`autocompact` agent label:** A chat's agents carry `autocompact=on|off`, stamped at create and handoff and rewritten by `mngr label` when the toggle changes (a stopped agent is relabeled too), so `mngr list` shows the setting. `autocompact` is now a label only the app sets.
 
-- **In-process sweep:** The 60-second sweep calls the autocompact plugin's `compact_stale_agents_by_name` in process instead of launching `mngr autocompact run`, passing only the running chats that have the toggle on. With none opted in it does no work at all (no config read, no plugin call). A failed config read or plugin call is logged as a warning, an unexpected error is logged without stopping the sweep, a tick is skipped while the previous sweep still runs, and a sweep slower than 30 seconds logs a warning. Each compaction request and toggle change writes one `autocompact: ...` line to the chat service log.
+- **In-process sweep:** The 60-second sweep calls the autocompact plugin's `compact_stale_agents_by_name` in process instead of launching `mngr autocompact run`, passing only the running chats that have the toggle on. With none opted in it does no work at all (no config read, no plugin call). A failed config read or plugin call is logged as a warning, an unexpected error is logged without stopping the sweep, and a slow sweep delays the next tick and logs a warning past 30 seconds. Each compaction request and toggle change writes one `autocompact: ...` line to the chat service log.
 
 - **Settings and catalog for the UI:** `/api/settings` gains `autocompact_default`, `is_autocompact_notice_shown`, and `compaction_status_presentation` (`strip`, `placeholder` or `both`, a temporary switch for the compaction-status design review). Each `/api/harnesses` entry gains `supports_compaction` (Claude, Codex, Pi) and `can_interrupt_compaction` (Claude only).
 
@@ -17,3 +17,41 @@ Turn on idle compaction for chats, with a per-chat and per-workspace toggle, and
 - **Cleared on interrupt:** The stop button and the interrupt route remove the agent's `compacting` marker and the chat's pending request after interrupting, since a cancelled compaction reports no completion.
 
 - **`compaction_cause` on the compacted event:** The "Context was compacted" status event carries `compaction_cause`: `"idle"` (the idle sweep), `"manual"` (a `/compact`), `"native"` (Claude compacted on its own), or `null` when unknown. It is attached as the event is stored and streamed, so a reload sees the same value; a compaction the chat holds no record of falls back to a recent `last_compaction.json`.
+
+- **Auto-compact in the model menu:** A chat on a harness that supports compaction gets an Auto-compact row in its model menu, reading On or Off. Its submenu picks On or Off for this chat, explains "Saves ~50% by compacting right before the cache expires.", and has a "Use On/Off for new chats" switch that makes the chat's current choice the workspace default.
+
+- **"Compacting…" status:** While a chat is compacting, the activity strip above the composer reads "Compacting…" ("Compacting, then replying…" once a message is queued behind it), and an inline placeholder row with the same label sits at the end of the conversation until the compaction's pill arrives. `compaction_status_presentation` in `/api/settings` picks which of the two show (`strip`, `placeholder`, or `both`, the default); it is temporary, for the design review below.
+
+- **"why?" on the compaction pill:** Each "Context was compacted" pill has a "why?" button whose popover names the cause: "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu." (idle sweep), "Compacted because you asked (/compact)." (manual), "Your agent triggered compaction. You can ask it about its current setting, or tell it to change it." (native), and "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu." when the cause is unknown.
+
+- **One-time notice:** The latest compaction pill carries a dismissible notice, "Idle chats now compact automatically to keep replies fast and cheap. Turn this off per chat, or for new chats, under Auto-compact in the model menu.", until the user dismisses it once for the workspace (`is_autocompact_notice_shown`).
+
+- **Stop button during compaction:** The stop button stays hidden while a chat compacts on a harness whose interrupt cannot cancel a compaction (`can_interrupt_compaction` false: Codex and Pi). On Claude it shows and cancels the compaction.
+
+## Design review
+
+The review compares the two ways of showing a compaction in progress and picks one; the other, and the setting, are then removed.
+
+- **Choosing a presentation:** `PUT /api/settings` replaces the settings whole (a field left out takes its default), so send back what `GET` returns with only `compaction_status_presentation` changed, then reload open chat pages, which read the settings once. The chat app listens on 127.0.0.1:8010 in a workspace:
+
+  ```bash
+  curl -s http://127.0.0.1:8010/api/settings | jq '.settings | .compaction_status_presentation = "strip"' \
+    | curl -s -X PUT -H 'Content-Type: application/json' --data @- http://127.0.0.1:8010/api/settings
+  ```
+
+  Use `"strip"`, `"placeholder"`, or `"both"` as the value; the body sent is the full settings object, for example `{..., "compaction_status_presentation": "placeholder", ...}`.
+
+- **What each looks like:** `strip` shows only the activity strip above the composer, with its pulsing dot and "Compacting…" label in the place "Thinking…" normally takes. `placeholder` shows only a small centred pill-shaped row with a pulsing dot and the same label at the end of the conversation, where the "Context was compacted" pill will land; the row goes when that pill arrives or the chat stops compacting. `both` shows the two at once.
+
+- **Triggering a compaction:** Type `/compact` in a Claude chat's composer; the status shows at once and ends with the pill and its "why?" reading the manual cause. To see an idle-sweep compaction, add to `.mngr/settings.local.toml`:
+
+  ```toml
+  [plugins.autocompact]
+  mode = "proactive_timer"
+  min_context_tokens = 0
+  epsilon_offset_minutes = 60
+  ```
+
+  With the chat's Auto-compact on, the next sweep (within a minute) compacts any idle chat that has had a turn, and the pill's "why?" reads the idle cause. Remove the lines afterwards.
+
+- **What to compare:** whether the status is noticed when the user is reading the conversation versus typing; whether the placeholder row reads as a message or as status, and how its handoff to the "Context was compacted" pill looks; whether `both` feels redundant; and how each behaves with a message queued behind the compaction ("Compacting, then replying…") and on a Codex or Pi chat, where there is no stop button during an idle compaction.

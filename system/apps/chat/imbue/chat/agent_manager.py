@@ -58,6 +58,7 @@ from imbue.chat.chat_handoffs import HandoffRunner
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import cancel_refused_detail
 from imbue.chat.chat_handoffs import converging_detail
+from imbue.chat.chat_handoffs import created_chat_agent_labels
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_handoffs import has_user_turn
@@ -237,9 +238,9 @@ FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO: Final[int] = 2
 
 
 # How long a compaction may show as in progress without finishing: a chat's own request (the
-# pending entry) and a harness's ``compacting`` marker both stop counting after this. A compaction
-# of a small context took about 30 s in the prototype; one still "running" after this is one whose
-# completion never came (a cancelled compaction, a failed summarization, a crash).
+# pending entry) and a harness's ``compacting`` marker both stop counting after this. One still
+# "running" after this is one whose completion never came (a cancelled compaction, a failed
+# summarization, a crash).
 PENDING_COMPACTION_TIMEOUT_SECONDS: Final[float] = 600.0
 
 # How recent a ``last_compaction.json`` must be to name the cause of a compacted event the chat
@@ -377,10 +378,11 @@ def _build_chat_create_command(
     # readiness and delivers the first message before returning, so a repoint afterwards
     # lands after the first turn has already run on the wrong credential.
     cmd.extend(account_args)
-    # What this create carries beyond what the builder knows: a successor agent's membership
-    # (``chat_id``, ``chat_seq``), which the first agent of a chat only gets at its first
-    # handoff, and an outside caller's own labels (``auto_open``, to have the shell surface the
-    # chat's window), which ``create_chat`` screens against ``APP_OWNED_LABEL_KEYS`` first.
+    # What this create carries beyond what the builder knows: the chat's idle compaction setting
+    # (``autocompact``), a successor agent's membership (``chat_id``, ``chat_seq``), which the
+    # first agent of a chat only gets at its first handoff, and an outside caller's own labels
+    # (``auto_open``, to have the shell surface the chat's window), which ``create_chat`` screens
+    # against ``APP_OWNED_LABEL_KEYS`` first.
     for label in extra_labels:
         cmd.extend(["--label", label])
     for setting in settings:
@@ -849,6 +851,9 @@ class AgentManager:
     _broadcaster: WebSocketBroadcaster
     _messenger: MngrMessenger
     _lock: threading.Lock
+    # Held across an idle compaction toggle's file write and its ``mngr label``, so two quick
+    # toggles cannot finish their relabels out of order and leave the label contradicting the file.
+    _autocompact_toggle_lock: threading.Lock
     # The live view of observed agents keyed by id, folded from the observe
     # stream: an AGENTS_FULL_STATE snapshot rebuilds it wholesale, an AGENT_STATE
     # upserts one agent, and an AGENT_REMOVED drops one. ``_agents`` /
@@ -944,9 +949,7 @@ class AgentManager:
     # tracker declares one): re-derives the agent's activity when the marker appears or goes.
     _compacting_marker_poller: AgentFilePoller
     # Per agent, the compaction this chat asked for and has not seen finish: when it asked
-    # (monotonic) and why. Counts as COMPACTING for ``PENDING_COMPACTION_TIMEOUT_SECONDS``;
-    # cleared by the agent's compacted event, by ``last_compaction.json`` recording a finish
-    # after the request, by an interrupt, and by the timeout.
+    # (monotonic) and why. Counts as COMPACTING for at most ``PENDING_COMPACTION_TIMEOUT_SECONDS``.
     _compaction_pending_by_agent: dict[str, tuple[float, CompactionCause]]
     # Per agent, the cause of the compaction last seen in progress, kept until its compacted
     # event arrives (which is stamped with it) or the compaction is abandoned.
@@ -1042,6 +1045,7 @@ class AgentManager:
         manager._broadcaster = broadcaster
         manager._messenger = messenger
         manager._lock = threading.Lock()
+        manager._autocompact_toggle_lock = threading.Lock()
         manager._session_sweep_stop = threading.Event()
         manager._session_sweep_thread = None
         manager._agent_details_by_id = {}
@@ -2134,6 +2138,7 @@ class AgentManager:
             note_agent_renamed=self._note_agent_renamed,
             note_agent_created=self._note_agent_created,
             build_create_command=self._build_successor_create_command,
+            get_autocompact_state=self.get_autocompact_state,
             broadcast_transcript_events=self._broadcast_chat_events,
             now=lambda: datetime.now(timezone.utc),
             monotonic=time.monotonic,
@@ -2387,10 +2392,8 @@ class AgentManager:
         with self._lock:
             primary = self._agents.get(self._own_agent_id)
             primary_labels = dict(primary.labels) if primary else {}
-        # The chat's fast mode travels with it: a successor starts fast when the chat would. Its
-        # idle compaction setting is labeled on the successor the same way.
+        # The chat's fast mode travels with it: a successor starts fast when the chat would.
         role_templates = launch_role_templates(self.get_fast_mode_state(spec.chat_id).launches_fast)
-        autocompact_label = self.get_autocompact_state(spec.chat_id).label
         return _build_chat_create_command(
             self._mngr_binary,
             spec.name,
@@ -2401,7 +2404,7 @@ class AgentManager:
             role_templates,
             spec.project_id,
             _account_binding_args(spec.harness, spec.account_id, self._get_agent_state_dir(spec.agent_id)),
-            extra_labels=(*spec.extra_labels, autocompact_label),
+            extra_labels=spec.extra_labels,
         )
 
     def _broadcast_chat_events(self, chat_id: ChatId, events: list[dict[str, Any]]) -> None:
@@ -3051,13 +3054,16 @@ class AgentManager:
         whose agent is destroyed or not yet created has nothing to relabel, and its next create
         stamps the label. A relabel that fails is logged and leaves the setting recorded.
         """
-        write_autocompact_state(self._chat_files_root / chat_id, state)
-        _loguru_logger.info("autocompact: toggle chat={} enabled={}", chat_id, state.is_enabled)
-        with self._lock:
-            chat = self._resolve_chat_locked(chat_id)
-            agent_id = chat.active_agent_id if chat is not None and chat.active_agent_id in self._agents else None
-        if agent_id is None:
-            return
+        with self._autocompact_toggle_lock:
+            write_autocompact_state(self._chat_files_root / chat_id, state)
+            _loguru_logger.info("autocompact: toggle chat={} enabled={}", chat_id, state.is_enabled)
+            with self._lock:
+                chat = self._resolve_chat_locked(chat_id)
+                agent_id = chat.active_agent_id if chat is not None and chat.active_agent_id in self._agents else None
+            if agent_id is not None:
+                self._relabel_autocompact(chat_id, agent_id, state)
+
+    def _relabel_autocompact(self, chat_id: ChatId, agent_id: str, state: ChatAutocompactState) -> None:
         try:
             result = run_local_command_modern_version(
                 command=relabel_autocompact_command(self._mngr_binary, agent_id, state),
@@ -3302,6 +3308,11 @@ class AgentManager:
         # With a pick the message follows the create rather than riding it: the model has to be
         # set before the first turn, and ``mngr create --message`` starts that turn itself.
         deferred_message = launch_message if model_pick is not None else ""
+        create_labels = [
+            *membership_labels,
+            autocompact.label,
+            *(f"{key}={value}" for key, value in extra_labels.items()),
+        ]
         cmd = _build_chat_create_command(
             self._mngr_binary,
             display_name,
@@ -3313,11 +3324,7 @@ class AgentManager:
             project_id,
             account_args,
             initial_message="" if deferred_message else launch_message,
-            extra_labels=[
-                *membership_labels,
-                autocompact.label,
-                *(f"{key}={value}" for key, value in extra_labels.items()),
-            ],
+            extra_labels=create_labels,
             settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING] if is_installation_check_skipped else [],
         )
 
@@ -3326,14 +3333,9 @@ class AgentManager:
         # Mirror the labels the created mngr agent will carry (see
         # ``_build_chat_create_command``), so the pre-observe AgentStateItem below
         # renders exactly like the observed agent will.
-        labels: dict[str, str] = {"user_created": "true", "display_name": display_name, **extra_labels}
-        project_label = _chat_project_label(primary_labels, project_id)
-        if project_label:
-            labels["project"] = project_label
-        labels["account"] = account.id
-        for label in (*membership_labels, autocompact.label):
-            key, _separator, value = label.partition("=")
-            labels[key] = value
+        labels = created_chat_agent_labels(
+            display_name, account.id, _chat_project_label(primary_labels, project_id), create_labels
+        )
         canonical_name = canonical_agent_name(display_name)
         with self._lock:
             self._creation_settled_by_chat[launched_chat_id] = threading.Event()

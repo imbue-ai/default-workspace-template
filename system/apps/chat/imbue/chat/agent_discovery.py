@@ -28,7 +28,6 @@ from imbue.mngr.api.message import send_key_chord_to_agents
 from imbue.mngr.api.message import send_message_to_agents
 from imbue.mngr.api.providers import close_provider_instances_for_context
 from imbue.mngr.config.data_types import MngrContext
-from imbue.mngr.config.data_types import PluginConfigT
 from imbue.mngr.config.loader import load_config
 from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.main import get_or_create_plugin_manager
@@ -36,7 +35,8 @@ from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.utils.env_utils import parse_env_file
-from imbue.mngr_autocompact.manager import compact_stale_agents_by_name
+from imbue.mngr_autocompact.config import AutoCompactPluginConfig
+from imbue.mngr_autocompact.config import ContextCompactionMode
 
 logger = _loguru_logger
 
@@ -87,27 +87,26 @@ def _get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
     return mngr_ctx, cg
 
 
-def read_plugin_config(name: str, config_type: type[PluginConfigT]) -> PluginConfigT:
-    """A plugin's config as this workspace's mngr resolves it: its defaults when no config file sets it."""
-    mngr_ctx, cg = _get_mngr_context()
-    try:
-        return mngr_ctx.get_plugin_config(name, config_type)
-    finally:
-        cg.__exit__(None, None, None)
+CompactByNameFn = Callable[[MngrContext, Sequence[AgentName]], Sequence[AgentName]]
 
 
-def compact_stale_agents_named(names: Sequence[str]) -> list[str]:
-    """Ask mngr's autocompact plugin to compact whichever of the named agents are stale; returns the names it compacted.
+def compact_stale_agents_if_enabled(names: Sequence[str], compact_by_name: CompactByNameFn) -> list[str]:
+    """Compact whichever of the named agents are stale, when the workspace's mngr config has proactive compaction on.
 
-    A name that no longer resolves to a running agent with compaction support is skipped by the
-    plugin rather than raised, since a chat can stop between being listed and this call.
+    Returns the names compacted. One mngr context serves both the mode read and the plugin call
+    (``compact_by_name``, mngr's ``compact_stale_agents_by_name`` outside tests), which skips a
+    name that no longer resolves to a running agent with compaction support rather than raising,
+    since a chat can stop between being listed and this call.
 
-    mngr caches provider instances per context, and this builds a fresh context on every call (the
-    sweep's once a minute), so the context's instances are closed before it is dropped.
+    mngr caches provider instances per context, and this builds a fresh context on every call, so
+    the context's instances are closed before it is dropped.
     """
     mngr_ctx, cg = _get_mngr_context()
     try:
-        compacted = compact_stale_agents_by_name(mngr_ctx, [AgentName(name) for name in names])
+        config = mngr_ctx.get_plugin_config("autocompact", AutoCompactPluginConfig)
+        if config.mode != ContextCompactionMode.PROACTIVE_TIMER:
+            return []
+        compacted = compact_by_name(mngr_ctx, [AgentName(name) for name in names])
     finally:
         try:
             close_provider_instances_for_context(mngr_ctx)

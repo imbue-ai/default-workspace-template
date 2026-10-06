@@ -531,31 +531,26 @@ def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
         manager.stop()
 
 
-def test_a_handoffs_successor_is_labeled_with_the_chats_idle_compaction_setting(
+def test_a_handoffs_successor_is_created_and_tracked_with_the_chats_idle_compaction_setting(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": "acct-anthropic"})
+    account = _openai_account()
     try:
-        chat_id = ChatId("agent-compactchat")
-        spec = SuccessorCreateSpec(
-            name="Chat 1",
-            chat_id=chat_id,
-            agent_id="agent-next",
-            harness=HarnessType.CLAUDE,
-            project_id="",
-            account_id="acct-1",
-            extra_labels=("chat_id=agent-compactchat", "chat_seq=2"),
-        )
-        # No setting of its own: the workspace default (on).
-        argv = manager._build_successor_create_command(spec)
-        assert_mngr_argv_valid(argv)
-        labels = [argv[i + 1] for i, token in enumerate(argv) if token == "--label"]
-        assert labels[-3:] == ["chat_id=agent-compactchat", "chat_seq=2", "autocompact=on"]
-        manager.set_autocompact_state(chat_id, ChatAutocompactState(is_enabled=False))
-        argv = manager._build_successor_create_command(spec)
-        assert argv[-2:] == ["--label", "autocompact=off"]
+        manager.set_autocompact_state(ChatId(first), ChatAutocompactState(is_enabled=False))
+        manager.begin_handoff(ChatId(first), account, "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
+
+        record = _wait_until_settled(store, ChatId(first))
+        successor = manager.get_agent_by_id(record.agents[1].agent_id)
     finally:
         manager.stop()
+
+    (create_line,) = [line for line in argv_log.read_text().splitlines() if line.startswith("create ")]
+    assert "--label autocompact=off" in create_line
+    assert successor is not None and successor.labels["autocompact"] == "off"
 
 
 def _seed_turns() -> tuple[SeedTurn, ...]:
@@ -2435,6 +2430,52 @@ def test_toggling_idle_compaction_relabels_the_chats_agent_whether_running_or_st
         ]
     finally:
         manager.stop()
+
+
+def test_two_quick_toggles_leave_the_label_matching_the_last_setting_written(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A slow ``mngr label`` for the first toggle cannot finish after the second toggle's and overwrite it."""
+    log_path = tmp_path / "mngr-argv.log"
+    slow_mngr = tmp_path / "slow-fake-mngr"
+    slow_mngr.write_text(
+        "#!/bin/sh\n"
+        f'printf "start %s\\n" "$*" >> "{log_path}"\n'
+        'case "$*" in *autocompact=off*) sleep 0.5 ;; esac\n'
+        f'printf "end %s\\n" "$*" >> "{log_path}"\n'
+    )
+    slow_mngr.chmod(0o755)
+    manager = AgentManager.build(broadcaster, mngr_binary=str(slow_mngr), chat_files_root=tmp_path / "chats")
+    chat_id = ChatId("agent-alive")
+    try:
+        seed_agent_state(manager, "agent-alive", name="Chat-1", state="RUNNING")
+        turn_off = threading.Thread(
+            target=manager.set_autocompact_state, args=(chat_id, ChatAutocompactState(is_enabled=False))
+        )
+        turn_on = threading.Thread(
+            target=manager.set_autocompact_state, args=(chat_id, ChatAutocompactState(is_enabled=True))
+        )
+        turn_off.start()
+        wait_until_true(
+            lambda: log_path.exists() and "autocompact=off" in log_path.read_text(), 5, "the first relabel's start"
+        )
+        turn_on.start()
+        turn_off.join(timeout=10)
+        turn_on.join(timeout=10)
+
+        file_state = read_autocompact_state(tmp_path / "chats" / chat_id)
+        agent = manager.get_agent_by_id("agent-alive")
+    finally:
+        manager.stop()
+
+    assert log_path.read_text().splitlines() == [
+        "start label agent-alive --label autocompact=off",
+        "end label agent-alive --label autocompact=off",
+        "start label agent-alive --label autocompact=on",
+        "end label agent-alive --label autocompact=on",
+    ]
+    assert file_state == ChatAutocompactState(is_enabled=True)
+    assert agent is not None and agent.labels["autocompact"] == "on"
 
 
 def test_toggling_a_chat_with_no_tracked_agent_writes_the_setting_and_runs_no_label(

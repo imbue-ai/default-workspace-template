@@ -18,6 +18,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import _account_binding_args
 from imbue.chat.agent_manager import _build_chat_create_command
+from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
@@ -349,6 +350,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
         note_agent_renamed=workspace.note_agent_renamed,
         note_agent_created=workspace.note_agent_created,
         build_create_command=workspace.build_create_command,
+        get_autocompact_state=lambda chat_id: ChatAutocompactState(is_enabled=False),
         broadcast_transcript_events=workspace.broadcast,
         now=lambda: _NOW,
         monotonic=workspace.monotonic,
@@ -470,7 +472,7 @@ def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path)
     create = argv[1].split(" ")
     assert create[:3] == ["create", "Chat-1", "--id"] and create[3] == successor
     assert "--type codex" in argv[1]
-    assert f"--label chat_id={chat_id} --label chat_seq=2" in argv[1]
+    assert f"--label chat_id={chat_id} --label chat_seq=2 --label autocompact=off" in argv[1]
     assert f"--label account={_OPENAI_ACCOUNT.id}" in argv[1]
     assert "--label project=inbox" in argv[1]
     assert "--message" not in argv[1]
@@ -479,7 +481,15 @@ def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path)
     assert f"also on disk at {summary}" in prompt
     assert "<predecessor-summary>\n# Summary\n\nThe user wants the tests green.\n</predecessor-summary>" in prompt
     assert "${" not in prompt
-    assert successor in workspace.agents and workspace.agents[successor].labels["chat_seq"] == "2"
+    assert successor in workspace.agents and workspace.agents[successor].labels == {
+        "user_created": "true",
+        "display_name": "Chat 1",
+        "account": _OPENAI_ACCOUNT.id,
+        "project": "inbox",
+        "chat_id": str(chat_id),
+        "chat_seq": "2",
+        "autocompact": "off",
+    }
     # The chip went out on the chat's stream, and the held send followed the prompt to the successor.
     assert [(chat, [event["type"] for event in events]) for chat, events in workspace.broadcasts] == [
         (str(chat_id), [AGENT_SWITCH_EVENT_TYPE])
