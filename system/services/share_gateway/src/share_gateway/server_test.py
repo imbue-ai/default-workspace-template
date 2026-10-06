@@ -5,7 +5,9 @@ from pathlib import Path
 from urllib.parse import parse_qs
 from urllib.parse import urlsplit
 
+import html
 import json
+import re
 
 import jwt
 import pytest
@@ -216,7 +218,7 @@ def test_sign_in_redirect_logs_what_the_browser_presented_and_its_user_agent(
         "User-Agent": "iPhone-WebApp/26.0",
         "X-Forwarded-For": "203.0.113.9",
         "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-Site": "same-origin",
     }
 
     resp = harness.client.get("/_auth/verify", headers=headers)
@@ -225,11 +227,84 @@ def test_sign_in_redirect_logs_what_the_browser_presented_and_its_user_agent(
     logged = capsys.readouterr().err
     assert f"Sign-in required 203.0.113.9 -> {_WEB_HOST}: {SESSION_COOKIE_NAME} expired (issued " in logged
     assert (
-        f"{PARTITIONED_SESSION_COOKIE_NAME} absent; other cookies: app_theme, fetch dest/site: document/none, "
-        "user agent: iPhone-WebApp/26.0"
+        f"{PARTITIONED_SESSION_COOKIE_NAME} absent; redirected to the broker; other cookies: app_theme, "
+        "fetch dest/site: document/same-origin, user agent: iPhone-WebApp/26.0"
     ) in logged
     assert expired not in logged
     assert "dark-7731" not in logged
+
+
+def _retry_page_broker_urls(page: str) -> list[str]:
+    """Every broker URL the retry page can send the visitor to: its noscript refresh, its link, and its script."""
+    refresh_url = re.search(r'<meta http-equiv="refresh" content="0; url=([^"]*)">', page)
+    link_url = re.search(r'<a href="([^"]*)">', page)
+    script_url = re.search(r"var brokerUrl = (.*);", page)
+    assert refresh_url is not None and link_url is not None and script_url is not None
+    return [html.unescape(refresh_url.group(1)), html.unescape(link_url.group(1)), json.loads(script_url.group(1))]
+
+
+def test_user_initiated_navigation_without_a_session_is_retried_from_the_page(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    headers = {
+        **_verify_headers(host=_WEB_HOST, uri="/x?y=1&z=2"),
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Site": "none",
+    }
+
+    resp = harness.client.get("/_auth/verify", headers=headers)
+
+    # Non-2xx, so caddy hands the page to the browser instead of letting the request through.
+    assert resp.status_code == 401
+    assert resp.mimetype == "text/html"
+    assert resp.headers["Cache-Control"] == "no-store"
+    broker_urls = _retry_page_broker_urls(resp.get_data(as_text=True))
+    assert len(set(broker_urls)) == 1
+    # The fallback is exactly today's sign-in redirect, on a nonce the callback will accept once.
+    query = parse_qs(urlsplit(broker_urls[0]).query)
+    assert broker_urls[0].startswith(f"{_BROKER_URL}/share/authorize?")
+    assert query["machine_domain"] == [_DOMAIN]
+    assert query["next"] == [f"https://{_WEB_HOST}/x?y=1&z=2"]
+    assert query["callback_origin"] == [_AUTH_ORIGIN]
+    assert "confirmed" not in query
+    pending_login = harness.pending_logins.consume(query["state"][0])
+    assert pending_login is not None
+    assert pending_login.is_retry is False
+
+
+def test_retry_page_logs_the_path_taken(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    harness = _make_harness(tmp_path)
+
+    harness.client.get("/_auth/verify", headers={**_verify_headers(host=_WEB_HOST), "Sec-Fetch-Site": "none"})
+
+    logged = capsys.readouterr().err
+    assert (
+        f"Sign-in required unknown-client -> {_WEB_HOST}: {SESSION_COOKIE_NAME} absent; "
+        f"{PARTITIONED_SESSION_COOKIE_NAME} absent; answered with the retry page; "
+    ) in logged
+
+
+def test_retry_page_never_reflects_the_requested_url_as_markup(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    hostile_uri = '/"></a></script><script>alert(1)</script>?q=</script><b>'
+    headers = {**_verify_headers(host=_WEB_HOST, uri=hostile_uri), "Sec-Fetch-Site": "none"}
+
+    resp = harness.client.get("/_auth/verify", headers=headers)
+
+    page = resp.get_data(as_text=True)
+    assert "alert(1)" not in page
+    assert page.count("<script>") == 1
+    assert page.count("</script>") == 1
+    for broker_url in _retry_page_broker_urls(page):
+        assert parse_qs(urlsplit(broker_url).query)["next"] == [f"https://{_WEB_HOST}{hostile_uri}"]
+
+
+def test_user_initiated_navigation_with_a_session_is_let_through(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+
+    resp = harness.client.get("/_auth/verify", headers={**_verify_headers(), "Sec-Fetch-Site": "none"})
+
+    assert resp.status_code == 200
 
 
 def test_unauthenticated_non_html_request_gets_401(tmp_path: Path) -> None:

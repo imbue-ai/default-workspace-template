@@ -12,6 +12,7 @@ anyone else is sent through the broker once more; only a second failure shows
 the "Sign-in link expired" page.
 """
 
+import html
 import json
 import secrets
 import threading
@@ -93,6 +94,42 @@ height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
 The workspace owner needs to fix the workspace's sharing settings.</p></div></body></html>
 """
 
+# A navigation the visitor started themselves (``Sec-Fetch-Site: none``) can arrive without the Lax session
+# cookie the browser holds: an iOS home-screen web app's launch request withholds every SameSite=Lax cookie,
+# while any navigation a page starts carries it. So such a navigation is retried once from this page before
+# the visitor is sent to sign in. The flag in sessionStorage is the loop guard: served again while it is
+# fresh, the page goes to the broker. It is short-lived because nothing clears it after a retry succeeds.
+_SESSION_RETRY_WINDOW_SECONDS = 10
+
+_SESSION_RETRY_PAGE = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Signing in...</title>
+<noscript><meta http-equiv="refresh" content="0; url={broker_url_attribute}"></noscript>
+<style>body{{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
+height:100vh;margin:0;color:#334155}}div{{text-align:center}}</style></head>
+<body><div><h1>Signing in&hellip;</h1>
+<p><a href="{broker_url_attribute}">Continue to sign in</a></p></div>
+<script>
+(function () {{
+  var brokerUrl = {broker_url_literal};
+  // Navigating to the current URL with its fragment would only scroll, not reload.
+  var pageUrl = location.href.split("#")[0];
+  var flagKey = "share_gateway_session_retry:" + pageUrl;
+  try {{
+    if (Date.now() - Number(sessionStorage.getItem(flagKey)) < {retry_window_milliseconds}) {{
+      sessionStorage.removeItem(flagKey);
+      location.replace(brokerUrl);
+      return;
+    }}
+    sessionStorage.setItem(flagKey, String(Date.now()));
+  }} catch (error) {{
+    location.replace(brokerUrl);
+    return;
+  }}
+  location.replace(pageUrl);
+}})();
+</script></body></html>
+"""
+
 
 class PendingLogin:
     """One in-flight broker login: when its nonce was minted, and whether it is already the retry of a failed callback."""
@@ -152,6 +189,20 @@ def forwarded_client_ip(headers: Mapping[str, str]) -> str:
 def _requested_url(host: str, forwarded_uri: str) -> str:
     uri = forwarded_uri if forwarded_uri.startswith("/") else "/"
     return f"https://{host}{uri}"
+
+
+def _script_string_literal(value: str) -> str:
+    # json.dumps escapes quotes, backslashes, and U+2028/U+2029; escaping the markup characters too keeps
+    # the value from closing the <script> element it is embedded in.
+    return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
+def _render_session_retry_page(broker_url: str) -> str:
+    return _SESSION_RETRY_PAGE.format(
+        broker_url_attribute=html.escape(broker_url, quote=True),
+        broker_url_literal=_script_string_literal(broker_url),
+        retry_window_milliseconds=_SESSION_RETRY_WINDOW_SECONDS * 1000,
+    )
 
 
 def build_gateway_app(
@@ -302,8 +353,19 @@ def build_gateway_app(
             cookie_detail = describe_session_cookies(signing_secret, request.cookies, workspace_domain)
             accept_header = request.headers.get("Accept", "")
             if _is_html_navigation(method, accept_header, is_websocket_upgrade):
-                _log_sign_in_event("Sign-in required", host, cookie_detail)
-                return _redirect_to_broker(_requested_url(host, forwarded_uri), is_confirmed=False, is_retry=False)
+                requested_url = _requested_url(host, forwarded_uri)
+                if request.headers.get("Sec-Fetch-Site") == "none":
+                    _log_sign_in_event("Sign-in required", host, f"{cookie_detail}; answered with the retry page")
+                    # Any non-2xx answer reaches the browser as-is through caddy's forward_auth.
+                    broker_url = _broker_authorize_url(requested_url, is_confirmed=False, is_retry=False)
+                    return Response(
+                        _render_session_retry_page(broker_url),
+                        status=401,
+                        mimetype="text/html",
+                        headers={"Cache-Control": "no-store"},
+                    )
+                _log_sign_in_event("Sign-in required", host, f"{cookie_detail}; redirected to the broker")
+                return _redirect_to_broker(requested_url, is_confirmed=False, is_retry=False)
             _log_denied(f"no session on a non-HTML request ({cookie_detail})", host)
             return Response("authentication required", status=401, mimetype="text/plain")
 
@@ -406,6 +468,9 @@ def build_gateway_app(
         return f"https://{shell_label}.{workspace_domain}/" if shell_label else auth_origin
 
     def _redirect_to_broker(next_url: str, is_confirmed: bool, is_retry: bool) -> Response:
+        return Response(status=302, headers={"Location": _broker_authorize_url(next_url, is_confirmed, is_retry)})
+
+    def _broker_authorize_url(next_url: str, is_confirmed: bool, is_retry: bool) -> str:
         nonce = pending_logins.mint(is_retry=is_retry)
         # The broker delivers its post-login callback to the dedicated auth
         # origin (the only label serving /_auth/callback), then bounces to
@@ -418,7 +483,7 @@ def build_gateway_app(
         }
         if is_confirmed:
             query["confirmed"] = "1"
-        return Response(status=302, headers={"Location": f"{materials.broker_url}/share/authorize?{urlencode(query)}"})
+        return f"{materials.broker_url}/share/authorize?{urlencode(query)}"
 
     def _is_workspace_url(url: str) -> bool:
         if not url.startswith("https://"):

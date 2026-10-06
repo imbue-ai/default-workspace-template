@@ -91,8 +91,23 @@ refusal, and logs every denial (never the token) to the service's stderr:
   is never grant-checked, so they still get in.
 - A verified account with no grant is **"Not shared with you"** (403).
 
-Sign-ins are logged as well as denials. Every HTML navigation sent to the
-broker writes a `Sign-in required` line, and every completed callback a
+A navigation the visitor started themselves (`Sec-Fetch-Site: none`: a typed
+URL, a bookmark, a home-screen icon) that arrives without a session is not
+sent to the broker straight away. It gets a small **"Signing in..."** page
+(401, `Cache-Control: no-store`) that loads the same URL once more from the
+page. An iOS home-screen web app's launch request can leave out every
+`SameSite=Lax` cookie, the session cookie included, while a navigation a page
+starts carries it, so the retry lets the visitor straight in. A retry that
+still has no session goes to the broker as usual. A short-lived flag in the
+tab's `sessionStorage` makes sure the page retries at most once, and the page
+goes straight to the broker when scripts or `sessionStorage` are unavailable.
+Dropping `SameSite=Lax` from the session cookie would also fix the launch, but
+Lax is what keeps a foreign page's plain GETs from carrying the owner's
+session (see the `session_cookie.py` docstring).
+
+Sign-ins are logged as well as denials. Every HTML navigation without a
+session writes a `Sign-in required` line naming what it was answered with (the
+retry page or the broker redirect), and every completed callback a
 `Signed in` line. Each says, for both session cookie copies, whether the
 browser sent it and, if the gateway rejected it, why (expired, signed with
 another key, issued for another domain, malformed) and when it was issued and
