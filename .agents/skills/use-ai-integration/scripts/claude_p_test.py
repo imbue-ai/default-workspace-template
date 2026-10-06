@@ -204,13 +204,18 @@ def _write_claude_accounts(
     *,
     mru: str,
     default_account: str | None = None,
+    codex_account_ids: tuple[str, ...] = (),
 ) -> Path:
-    """Give ``home`` these claude accounts, in index order; return the accounts root."""
+    """Give ``home`` these claude accounts, in index order; return the accounts root.
+
+    Any ``codex_account_ids`` are written ahead of them, as the oldest accounts.
+    """
     accounts = home / ".minds" / "accounts"
-    for account_id in account_ids:
+    for account_id in (*codex_account_ids, *account_ids):
         (accounts / account_id).mkdir(parents=True)
     index: dict[str, object] = {
-        "accounts": [{"id": a, "lane": "anthropic"} for a in account_ids],
+        "accounts": [{"id": a, "lane": "openai"} for a in codex_account_ids]
+        + [{"id": a, "lane": "anthropic"} for a in account_ids],
         "mru": mru,
     }
     if default_account is not None:
@@ -238,20 +243,35 @@ def test_child_env_keeps_the_agents_own_account(
     assert claude_p._child_env()["CLAUDE_CONFIG_DIR"] == "/accounts/the-chats-own"
 
 
-def test_child_env_prefers_the_pinned_default_account_over_the_most_recent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("default_account", "codex_account_ids", "expected"),
+    [
+        pytest.param("acct-pinned", (), "acct-pinned", id="pinned-claude-account"),
+        pytest.param(
+            "acct-codex", ("acct-codex",), "acct-recent", id="pinned-codex-account"
+        ),
+    ],
+)
+def test_child_env_runs_on_the_default_claude_account(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    default_account: str,
+    codex_account_ids: tuple[str, ...],
+    expected: str,
 ) -> None:
-    """Outside an agent, the child runs on the account a chat created now would get."""
+    """Outside an agent, the child runs on the Claude account a chat created now would get:
+    the pinned default when it is a Claude account, else the most recently used one."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     accounts = _write_claude_accounts(
         tmp_path,
         ("acct-pinned", "acct-recent"),
         mru="acct-recent",
-        default_account="acct-pinned",
+        default_account=default_account,
+        codex_account_ids=codex_account_ids,
     )
 
-    assert claude_p._child_env()["CLAUDE_CONFIG_DIR"] == str(accounts / "acct-pinned")
+    assert claude_p._child_env()["CLAUDE_CONFIG_DIR"] == str(accounts / expected)
 
 
 def test_child_env_leaves_config_dir_unset_without_an_account(
