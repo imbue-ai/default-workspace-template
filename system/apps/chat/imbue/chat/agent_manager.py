@@ -2550,7 +2550,7 @@ class AgentManager:
         # The agent is positively gone, so what it held resident goes with it (the whole chat's
         # transcripts when it was the chat's active agent), and so does the codex
         # live-user-turn record keyed by its id.
-        self._evict_chat_transcripts(agent_id)
+        self._evict_removed_agent(agent_id)
         drop_live_user_turns(agent_id)
         self._broadcast_chats_updated()
 
@@ -3650,12 +3650,12 @@ class AgentManager:
         for agent_id in let_go_agent_ids:
             self._stop_activity_tracking(agent_id)
             self._stop_model_tracking(agent_id)
-            self._evict_chat_transcripts(agent_id)
+            self._evict_removed_agent(agent_id)
 
         for agent_id in removed_agent_ids:
             self._stop_activity_tracking(agent_id)
             self._stop_model_tracking(agent_id)
-            self._evict_chat_transcripts(agent_id)
+            self._evict_removed_agent(agent_id)
             with self._lock:
                 self._pending_permission_ids_by_agent.pop(agent_id, None)
                 is_own_chat = not self._is_recorded_member_locked(agent_id)
@@ -3723,7 +3723,7 @@ class AgentManager:
             ]
         )
 
-    def _evict_chat_transcripts(self, agent_id: str) -> None:
+    def _evict_removed_agent(self, agent_id: str) -> None:
         """Drop what a removed agent held resident: the whole chat's transcripts when it was the
         chat's active agent, else its own alone (an archived member going leaves the chat, and
         the watcher a user may be viewing, standing).
