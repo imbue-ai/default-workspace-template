@@ -1,0 +1,1 @@
+- Fixed the chat frontend failing to build on main: the model bar's check for a signed-out chat's account called `pendingSwitchTarget` after a concurrent change had removed its import.
