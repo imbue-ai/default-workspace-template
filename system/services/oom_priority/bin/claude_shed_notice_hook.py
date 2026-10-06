@@ -8,6 +8,12 @@ records naming this agent that have not yet been acknowledged, prints a notice
 (SessionStart stdout becomes session context), and appends a delivery marker so
 the same notice is not injected again.
 
+An agent still labelled a spare chat agent (``chat_spare=true``) is never a
+revived one: the chat app destroys a spare whose process died and starts a new
+one, often under the same name (the first free "Chat N", or the name of the chat
+it is reserved for). Records under its name belong to an earlier agent, so they
+are acknowledged without the notice.
+
 Self-contained beyond the stdlib-only ``oom_priority`` package (imported via a
 ``sys.path`` insert), since claude runs SessionStart hooks under a plain
 ``python3``.
@@ -17,10 +23,9 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(
-    0, str(Path(__file__).resolve().parents[1] / "src")
-)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from oom_priority.agent_identity import is_spare_agent
 from oom_priority.ledger import (
     append_notice_delivered,
     pending_shed_timestamps,
@@ -34,6 +39,9 @@ def main() -> None:
         return
     pending = pending_shed_timestamps(read_records(), agent_name)
     if not pending:
+        return
+    if is_spare_agent(agent_name):
+        append_notice_delivered(agent_name, max(pending))
         return
 
     print(

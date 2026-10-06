@@ -5,3 +5,5 @@ The browser band now tops out at 990 (`SHARED_BROWSER`, down from 1000; the floo
 `memory_candidates.py` leaves agents labelled `chat_spare=true` out of its idle chats, since no chat list shows a spare until a chat takes it.
 
 The registry no longer has `lookup_pid_by_agent_id`: the chat app, its only caller, now reads every live pid of an agent through `live_pids_by_agent_id`.
+
+The revival-notice hook (`claude_shed_notice_hook.py`) no longer tells a spare chat agent it was stopped for memory pressure. The chat app replaces a shed spare with a new one, often under the same name ("Chat N", or the name of the empty chat it is reserved for), and that new agent used to find the earlier spare's shed record and carry the notice into the next new chat. A record under a name still labelled `chat_spare=true` is now marked delivered without the notice; once a chat takes the spare, a shed of its own is reported as before.
