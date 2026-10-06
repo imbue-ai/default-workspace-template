@@ -253,7 +253,6 @@ def test_user_initiated_navigation_without_a_session_is_retried_from_the_page(tm
 
     resp = harness.client.get("/_auth/verify", headers=headers)
 
-    # Non-2xx, so caddy hands the page to the browser instead of letting the request through.
     assert resp.status_code == 401
     assert resp.mimetype == "text/html"
     assert resp.headers["Cache-Control"] == "no-store"
