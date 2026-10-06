@@ -26,7 +26,8 @@ ready spare beyond the pool's size.
 
 A spare is created with the label ``chat_spare=true``, which is what every reader goes by: the
 chat listings (a secondary chat's included) hide an agent so labelled, the launch wrapper starts
-it in the most expendable memory band, and the memory report leaves it out. A hand-over lists the
+it in the most expendable memory band (until a chat takes or reserves it and it is up), and the
+memory report leaves it out. A hand-over lists the
 chat at once and sets the label to false in the background. Nothing else is kept on disk: a
 restart of the chat app destroys every agent still labelled a spare, except one whose chat
 folder shows a chat already took it, which is relabelled instead. A reservation writes nothing

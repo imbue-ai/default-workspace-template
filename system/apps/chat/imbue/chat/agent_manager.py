@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from loguru import logger as _loguru_logger
 from oom_priority.bands import CHAT_AGENT_BASE
+from oom_priority.bands import SPARE_AGENT
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.proctree import list_descendant_pids
 from oom_priority.registry import live_pids_by_agent_id
@@ -1154,7 +1155,7 @@ class AgentManager:
         # Built last: its ``list_chat_ids`` / ``resolve_process_started_at`` callbacks
         # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
-            list_chat_ids=manager.get_chat_ids,
+            list_chat_ids=manager._oom_managed_chat_ids,
             resolve_pid=lambda chat_id: manager._resolve_active_pid(chat_id),
             # A secondary's presence is its own windows', not the workspace's, and the scores it
             # would write are the live chat's, so it keeps an inert prioritizer.
@@ -1556,6 +1557,20 @@ class AgentManager:
                 for agent, chat in self._listed_chats_locked()
                 if agent.labels.get("agent_created") != "true"
             ]
+
+    def _oom_managed_chat_ids(self) -> list[ChatId]:
+        """``get_chat_ids`` plus every chat awaiting its first send whose reserved spare is up: that agent is the
+        chat's, scored as a chat just started (``_start_reserved_spare_as_chat``), not as a spare."""
+        chat_ids = self.get_chat_ids()
+        with self._lock:
+            held_ids = [
+                spare.chat_id
+                for spare in self._spares
+                if spare.phase is SpareChatPhase.RESERVED
+                and spare.ready_at is not None
+                and spare.chat_id in self._provisional_chats
+            ]
+        return [*chat_ids, *held_ids]
 
     def restart_agents_on_account_in_background(self, account_id: str) -> None:
         """Kick off `restart_agents_on_account` on its own thread and return at once.
@@ -3025,6 +3040,7 @@ class AgentManager:
             provisional, is_spare_reserved = self._mint_awaiting_chat_locked(account_id, spare_account_id)
         self._broadcast_provisional(provisional)
         if is_spare_reserved:
+            self._start_reserved_spare_as_chat(provisional.chat_id)
             self.ensure_spare_chat_in_background()
         return provisional
 
@@ -3043,6 +3059,7 @@ class AgentManager:
             minted, is_spare_reserved = self._mint_awaiting_chat_locked("", spare_account_id)
         self._broadcast_provisional(minted)
         if is_spare_reserved:
+            self._start_reserved_spare_as_chat(minted.chat_id)
             self.ensure_spare_chat_in_background()
         return minted
 
@@ -3149,8 +3166,9 @@ class AgentManager:
     def discard_provisional_chat(self, chat_id: str) -> bool:
         """Drop a provisional chat that is not being created: one awaiting its first send (its seed
         goes with it), or one whose create failed. Returns whether anything was dropped; a create in
-        flight cannot be taken back and is left alone. A spare reserved for the chat goes back to the pool,
-        where the session sweep destroys the oldest ready spare beyond the pool's size."""
+        flight cannot be taken back and is left alone. A spare reserved for the chat goes back to the pool, and
+        to the ``SPARE_AGENT`` band, where the session sweep destroys the oldest ready spare beyond the pool's
+        size."""
         parsed = parse_chat_ref(chat_id)
         if parsed is None:
             return False
@@ -3160,6 +3178,8 @@ class AgentManager:
                 return False
             del self._provisional_chats[parsed]
             self._awaiting_fast_mode_by_chat.pop(parsed, None)
+            held = self._spare_locked(parsed)
+            is_held_agent_up = held is not None and held.phase is SpareChatPhase.RESERVED and held.ready_at is not None
             self._spares = tuple(
                 spare.as_unreserved() if spare.chat_id == parsed and spare.phase is SpareChatPhase.RESERVED else spare
                 for spare in self._spares
@@ -3169,6 +3189,9 @@ class AgentManager:
             # A failed create has already written the chat's fast mode into its folder.
             if record is None or record.is_seed_only:
                 self._delete_record_locked(parsed)
+        if is_held_agent_up:
+            self._oom_prioritizer.forget_chat(parsed)
+            self._write_band_to_spare_tree(parsed, SPARE_AGENT, is_main_process_written=True)
         self._auto_open.forget(parsed)
         self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
         return True
@@ -3844,6 +3867,17 @@ class AgentManager:
             None,
         )
 
+    def _start_reserved_spare_as_chat(self, chat_id: ChatId) -> None:
+        """Score the spare reserved for a chat awaiting its first send as that chat's agent once it is up: the
+        engaged floor for ``CHAT_JUST_STARTED_GRACE_SECONDS``, then like any chat, so an empty chat just opened
+        is not shed first and one left untouched climbs as any idle chat does. Nothing while it still boots:
+        its settle calls this again once its harness is up."""
+        with self._lock:
+            held = self._spare_locked(chat_id)
+            is_up = held is not None and held.phase is SpareChatPhase.RESERVED and held.ready_at is not None
+        if is_up:
+            self._move_handed_spare_into_chat_band(chat_id)
+
     def _move_handed_spare_into_chat_band(self, chat_id: ChatId) -> None:
         """Move a spare a chat just took out of the ``SPARE_AGENT`` band, as a chat just started.
 
@@ -3862,14 +3896,19 @@ class AgentManager:
         subprocesses, leaving its main process (the first pid) to the prioritizer unless ``is_main_process_moved``.
         Nothing for an agent with no registered pid yet: a claimed spare's launch starts in the spare band, as
         its label still says, and is moved by the boot wait (``_wait_for_spare_harness``)."""
+        self._write_band_to_spare_tree(chat_id, CHAT_AGENT_BASE, is_main_process_written=is_main_process_moved)
+
+    def _write_band_to_spare_tree(self, chat_id: ChatId, band: int, is_main_process_written: bool) -> None:
+        """Write ``band`` to a spare's registered pids and their subprocesses, its main process (the first pid)
+        only when ``is_main_process_written``."""
         writer = self._oom_score_adj_writer
         if writer is None:
             return
         for index, root_pid in enumerate(self._resolve_agent_pids(str(chat_id))):
-            if index > 0 or is_main_process_moved:
-                writer(root_pid, CHAT_AGENT_BASE)
+            if index > 0 or is_main_process_written:
+                writer(root_pid, band)
             for descendant_pid in self._list_descendant_pids(root_pid):
-                writer(descendant_pid, CHAT_AGENT_BASE)
+                writer(descendant_pid, band)
 
     def _relabel_handed_spare_in_background(self, chat_id: ChatId) -> None:
         """``_relabel_handed_spare`` on a thread of its own. Not once the app is stopping: the chat's
@@ -4126,6 +4165,7 @@ class AgentManager:
             if current is None or current.phase is not SpareChatPhase.CLAIMED:
                 claim = None
             is_released = current is not None and current.phase is SpareChatPhase.RELEASED
+            is_reserved_and_up = error is None and current is not None and current.phase is SpareChatPhase.RESERVED
             # Taken now: the discard below forgets the chat's per-chat records, this event included.
             settled = self._creation_settled_by_chat.get(spare.chat_id) if claim is not None else None
             if claim is not None and error is None:
@@ -4154,6 +4194,8 @@ class AgentManager:
             self._discard_spare_unless_stopping(spare.chat_id)
         elif error is None:
             _loguru_logger.debug("Spare agent {} is ready", spare.chat_id)
+            if is_reserved_and_up:
+                self._start_reserved_spare_as_chat(spare.chat_id)
             self.ensure_spare_chat()
         elif claim is not None:
             _loguru_logger.warning("Could not start spare agent {} for its chat: {}", spare.chat_id, error)

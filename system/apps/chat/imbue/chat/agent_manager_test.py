@@ -6044,6 +6044,96 @@ def test_a_spare_is_left_in_its_launch_band_and_takes_the_chat_band_once_a_chat_
         manager.stop()
 
 
+def test_an_empty_chat_that_takes_a_ready_spare_scores_it_as_a_chat_just_started(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager, adj_writes, pids_by_agent_id, descendant_pids_by_pid = _band_recording_spare_manager(
+        broadcaster, monkeypatch, tmp_path, mngr_binary
+    )
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        spare_pid = 48221
+        harness_child_pid = 48223
+        pids_by_agent_id[spare.chat_id] = [spare_pid]
+        descendant_pids_by_pid[spare_pid] = [harness_child_pid]
+
+        awaiting = manager.awaiting_chat_for_empty_list()
+
+        assert awaiting.chat_id == spare.chat_id
+        assert [adj for pid, adj in adj_writes if pid == spare_pid][-1:] == [bands.CHAT_AGENT_FLOOR]
+        assert [adj for pid, adj in adj_writes if pid == harness_child_pid][-1:] == [bands.CHAT_AGENT_BASE]
+        # Still scored as a chat on later sweeps, while the pool's own spare stays in the spare band.
+        (pooled,) = _wait_for_ready_spares(manager, 1)
+        pooled_pid = 48225
+        pids_by_agent_id[pooled.chat_id] = [pooled_pid]
+        adj_writes.clear()
+        manager.ensure_spare_chat()
+        manager._oom_prioritizer.reapply()
+        assert [adj for pid, adj in adj_writes if pid == spare_pid][-1:] == [bands.CHAT_AGENT_FLOOR]
+        assert [pid for pid, _adj in adj_writes if pid == pooled_pid] == []
+    finally:
+        manager.stop()
+
+
+def test_an_empty_chat_whose_spare_is_still_booting_scores_it_as_a_chat_once_it_is_up(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, _argv_log = _write_booting_mngr_binary(tmp_path)
+    manager, adj_writes, pids_by_agent_id, descendant_pids_by_pid = _band_recording_spare_manager(
+        broadcaster, monkeypatch, tmp_path, mngr_binary
+    )
+    try:
+        manager.ensure_spare_chat()
+        booting = _wait_for_created_spare(manager)
+        spare_pid = 48227
+        pids_by_agent_id[booting.chat_id] = [spare_pid]
+
+        awaiting = manager.awaiting_chat_for_empty_list()
+        assert awaiting.chat_id == booting.chat_id
+        manager._oom_prioritizer.reapply()
+        assert [pid for pid, _adj in adj_writes if pid == spare_pid] == []
+
+        _mark_harness_ready(tmp_path, booting.chat_id)
+
+        wait_until_true(
+            lambda: [adj for pid, adj in adj_writes if pid == spare_pid][-1:] == [bands.CHAT_AGENT_FLOOR],
+            timeout_seconds=15.0,
+            what="the empty chat's agent taking the engaged floor once its harness is up",
+        )
+    finally:
+        manager.stop()
+
+
+def test_discarding_an_empty_chat_puts_its_agent_back_in_the_spare_band(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager, adj_writes, pids_by_agent_id, descendant_pids_by_pid = _band_recording_spare_manager(
+        broadcaster, monkeypatch, tmp_path, mngr_binary
+    )
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        spare_pid = 48229
+        harness_child_pid = 48231
+        pids_by_agent_id[spare.chat_id] = [spare_pid]
+        descendant_pids_by_pid[spare_pid] = [harness_child_pid]
+        awaiting = manager.awaiting_chat_for_empty_list()
+        assert [adj for pid, adj in adj_writes if pid == spare_pid][-1:] == [bands.CHAT_AGENT_FLOOR]
+
+        assert manager.discard_provisional_chat(awaiting.chat_id)
+
+        assert [adj for pid, adj in adj_writes if pid == spare_pid][-1:] == [bands.SPARE_AGENT]
+        assert [adj for pid, adj in adj_writes if pid == harness_child_pid][-1:] == [bands.SPARE_AGENT]
+        adj_writes.clear()
+        manager._oom_prioritizer.reapply()
+        assert [pid for pid, _adj in adj_writes if pid == spare_pid] == []
+    finally:
+        manager.stop()
+
+
 def test_a_spare_claimed_while_it_starts_leaves_the_spare_band_at_once_and_is_engaged_once_up(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

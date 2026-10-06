@@ -267,7 +267,9 @@ renderers at 990), so memory pressure sheds it before anything else; one that
 dies is replaced after the same backoff. A hand-over moves its processes down to
 the chat band, and the chat that takes it sits at the engaged chat floor for its
 first minute (`CHAT_JUST_STARTED_GRACE_SECONDS`), then is prioritized like any
-chat.
+chat. A chat awaiting its first send takes its reserved spare the same way once
+the spare is up: from then on the agent is that chat's, scored with its presence
+and idle time, and only an unreserved spare stays in the spare band.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
