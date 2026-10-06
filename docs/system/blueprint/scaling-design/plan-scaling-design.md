@@ -24,13 +24,17 @@ default, `?before=`/`?after=` page in either direction, `?offset=` jumps, and ev
 response carries `offset` + `total` so the client places its window in the whole
 conversation. All of them are O(limit + session-file count) over the resident store.
 
-Memory lifetime is owned by watcher eviction: when an agent is destroyed or its lifecycle
-transitions into a positively-dead state (a UI stop, `mngr stop`, an OOM shed, idle
-shutdown), the agent manager's composition-wired callback pops and stops its watcher --
-the resident transcript, watch thread, and inotify watches go with it. Viewing a stopped
-chat rebuilds the watcher from disk on demand, and after every observe event the app state
-drops each stopped chat's rebuilt transcript again unless a stream of the chat is open (a
-send reviving the chat counts as not stopped).
+Memory lifetime is owned by watcher eviction, which pops and stops a watcher -- the
+resident transcript, watch thread, and inotify watches go with it. When an agent is
+destroyed, the agent manager's composition-wired callback evicts it (the whole chat's
+transcripts when it was the chat's active agent); an archived member whose lifecycle
+transitions into a positively-dead state is evicted the same way. A chat whose active
+agent dies (a UI stop, `mngr stop`, an OOM shed, idle shutdown) is dropped instead by the
+app state's release, which runs after every observe event and drops what each stopped
+chat holds unless a stream of the chat is open (a send reviving the chat counts as not
+stopped): the stream is fed only by the watcher, and a reported death can be momentary.
+Viewing a stopped chat rebuilds the watcher from disk on demand, and the release drops it
+again at the first observe event after its last stream closes.
 
 Live delivery is a hint layer, never the source of truth: per-connection SSE queues are
 bounded, an overflowing consumer is disconnected on the first full `put`, and the
