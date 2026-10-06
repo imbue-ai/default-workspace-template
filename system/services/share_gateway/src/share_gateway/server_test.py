@@ -259,7 +259,7 @@ def test_user_initiated_navigation_without_a_session_is_retried_from_the_page(tm
     assert resp.headers["Cache-Control"] == "no-store"
     broker_urls = _retry_page_broker_urls(resp.get_data(as_text=True))
     assert len(set(broker_urls)) == 1
-    # The fallback is exactly today's sign-in redirect, on a nonce the callback will accept once.
+    # The fallback is the sign-in redirect's own URL, on a nonce the callback will accept once.
     query = parse_qs(urlsplit(broker_urls[0]).query)
     assert broker_urls[0].startswith(f"{_BROKER_URL}/share/authorize?")
     assert query["machine_domain"] == [_DOMAIN]
