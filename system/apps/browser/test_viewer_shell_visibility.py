@@ -78,7 +78,7 @@ class _Viewer:
 
 @contextmanager
 def _framed_viewer(
-    module_browser: Browser, visibility_at_load: str, is_contract_served: bool = True
+    module_browser: Browser, visibility_at_load: str, is_contract_served: bool
 ) -> Iterator[tuple[Page, Frame, _Viewer]]:
     viewer = _Viewer()
 
@@ -113,7 +113,9 @@ def _framed_viewer(
 def test_the_viewer_releases_the_stream_while_the_shell_hides_its_window_and_claims_it_when_shown(
     module_browser: Browser,
 ) -> None:
-    with _framed_viewer(module_browser, "shown") as (page, frame, viewer):
+    with _framed_viewer(
+        module_browser, visibility_at_load="shown", is_contract_served=True
+    ) as (page, frame, viewer):
         # A shown pane claims the stream as soon as its socket opens.
         wait_until(page, lambda: viewer.claims[-1:] == ["i"])
         shown_size = frame.evaluate(_STAGE_SIZE)
@@ -135,7 +137,9 @@ def test_a_viewer_loaded_in_a_hidden_window_opens_no_stream_until_the_shell_show
 ) -> None:
     """A window reloaded while minimized must neither claim the stream from the viewer in front nor size the
     browser to its own pane: it connects only once shown, at its size, and claims then."""
-    with _framed_viewer(module_browser, "hidden") as (page, frame, viewer):
+    with _framed_viewer(
+        module_browser, visibility_at_load="hidden", is_contract_served=True
+    ) as (page, frame, viewer):
         page.wait_for_timeout(BELT_SETTLE_MS)
         assert viewer.stream_urls == []
 
@@ -153,7 +157,9 @@ def test_a_viewer_loaded_in_a_hidden_window_opens_no_stream_until_the_shell_show
 def test_a_framed_viewer_whose_contract_cannot_load_streams_as_a_page_on_its_own(
     module_browser: Browser,
 ) -> None:
-    with _framed_viewer(module_browser, "shown", is_contract_served=False) as (
+    with _framed_viewer(
+        module_browser, visibility_at_load="shown", is_contract_served=False
+    ) as (
         page,
         _frame,
         viewer,
