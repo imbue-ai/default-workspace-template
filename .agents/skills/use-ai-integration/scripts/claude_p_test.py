@@ -244,31 +244,35 @@ def test_child_env_keeps_the_agents_own_account(
 
 
 @pytest.mark.parametrize(
-    ("default_account", "codex_account_ids", "expected"),
+    ("default_account", "mru", "expected"),
     [
-        pytest.param("acct-pinned", (), "acct-pinned", id="pinned-claude-account"),
         pytest.param(
-            "acct-codex", ("acct-codex",), "acct-recent", id="pinned-codex-account"
+            "acct-oldest", "acct-recent", "acct-oldest", id="pinned-claude-account"
         ),
+        pytest.param(
+            "acct-codex", "acct-recent", "acct-recent", id="pinned-codex-account"
+        ),
+        pytest.param(None, "acct-codex", "acct-oldest", id="codex-most-recently-used"),
     ],
 )
 def test_child_env_runs_on_the_default_claude_account(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    default_account: str,
-    codex_account_ids: tuple[str, ...],
+    default_account: str | None,
+    mru: str,
     expected: str,
 ) -> None:
     """Outside an agent, the child runs on the Claude account a chat created now would get:
-    the pinned default when it is a Claude account, else the most recently used one."""
+    the pinned default when it is a Claude account, else the most recently used one when
+    it is, else the oldest."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     accounts = _write_claude_accounts(
         tmp_path,
-        ("acct-pinned", "acct-recent"),
-        mru="acct-recent",
+        ("acct-oldest", "acct-recent"),
+        mru=mru,
         default_account=default_account,
-        codex_account_ids=codex_account_ids,
+        codex_account_ids=("acct-codex",),
     )
 
     assert claude_p._child_env()["CLAUDE_CONFIG_DIR"] == str(accounts / expected)
