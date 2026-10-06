@@ -277,7 +277,7 @@ Beside it the shell builds and every app serves `/_static/context_menu.js`, the 
 | Direction | Type | Payload |
 |---|---|---|
 | shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "app", "path"}`; after every `load` of the frame and when the window's desktop changes; `app` is the name of the app the window belongs to (element-reference-menu plan section 5) |
-| shell to page | `shell:shown`, `shell:hidden` | `{}`; hidden is minimized, on another desktop, pulled out, showing the stopped placeholder (its app is stopped and nothing brings it back on a request), or on a phone any page but the shown window's; a page covered by the windows in front of it stays shown, and keeps its size either way |
+| shell to page | `shell:shown`, `shell:hidden` | `{}`; one of the two right after the handshake on every `load` of the frame, then whenever the window's visibility changes; hidden is minimized, on another desktop, pulled out, showing the stopped placeholder (its app is stopped and nothing brings it back on a request), or on a phone any page but the shown window's; a page covered by the windows in front of it stays shown, and keeps its size either way |
 | shell to page | `shell:close-request` | `{}`; a page that declared `closeChord: true` keeps its window, any other page's window closes right after |
 | shell to page | `shell:navigate` | `{"path"}`; only to a page that declared `navigation: true` |
 | page to shell | `shell:capabilities` | `{"navigation": bool, "closeChord": bool}`; sent once by `connectToShell`; absent means `false`. The shell answers a hidden page's with `shell:hidden`, since a page that loads the contract after its own load (a dynamic `import()`) misses the visibility sent at load |
