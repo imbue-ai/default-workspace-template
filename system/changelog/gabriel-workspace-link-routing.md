@@ -1,4 +1,4 @@
-Links clicked inside a workspace open inside the workspace: files in the File Viewer, local addresses in the workspace's browser.
+Links clicked inside a workspace open inside the workspace: files in the File Viewer, local addresses as the window of the app registered at their port or else in the workspace's browser.
 
 - The File Viewer registers `open:file`, shown on the file's (or folder's) view page and raising a window already there.
 
