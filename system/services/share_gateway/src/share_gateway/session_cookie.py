@@ -114,7 +114,12 @@ def _format_claim_time(claims: Mapping[str, object], name: str) -> str:
     value = claims.get(name)
     if not isinstance(value, int):
         return "unknown"
-    return datetime.fromtimestamp(value, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # The claims are read without verifying the signature, so a forged cookie can carry any number.
+    try:
+        claim_time = datetime.fromtimestamp(value, timezone.utc)
+    except (OverflowError, ValueError, OSError):
+        return f"out of range ({value})"
+    return claim_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def describe_session_cookie_value(signing_secret: str, cookie_value: str, workspace_domain: str) -> str:

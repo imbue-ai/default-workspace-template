@@ -128,6 +128,10 @@ def test_describe_session_cookie_names_why_a_cookie_opens_no_session_and_when_it
     assert describe_session_cookie_value(_SECRET, fresh, _DOMAIN).startswith("valid (issued ")
     assert describe_session_cookie_value(_SECRET, "garbage", _DOMAIN) == "malformed"
     assert describe_session_cookie_value(_SECRET, "", _DOMAIN) == "absent"
+    forged = jwt.encode({"aud": _DOMAIN, "iat": 10**20, "exp": -(10**15)}, "forger-secret-0000", algorithm="HS256")
+    assert describe_session_cookie_value(_SECRET, forged, _DOMAIN) == (
+        f"signed with another key (issued out of range ({10**20}), expires out of range ({-(10**15)}))"
+    )
 
 
 def test_describe_session_cookies_covers_both_copies_and_never_the_value() -> None:
