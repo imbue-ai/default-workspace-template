@@ -18,7 +18,9 @@ import fcntl
 import json
 import os
 import queue
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -38,6 +40,8 @@ from contextlib import closing
 from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -152,6 +156,144 @@ def observer_holding_the_lock(events_base_dir: Path) -> Iterator[None]:
         yield
     finally:
         release_observe_lock(fd)
+
+
+class StandInAnthropicApi:
+    """A loopback stand-in for the Anthropic API, for the ``real_claude`` tests to point Claude Code at with
+    ``ANTHROPIC_BASE_URL``.
+
+    It records every request's path, auth headers and body. With ``reply_for`` set, ``POST /v1/messages`` gets a
+    valid answer carrying the text ``reply_for`` picks from the request body: the server-sent events of a streamed
+    message when the request asks for a stream, else the message as JSON. Every other request, and every request
+    when ``reply_for`` is None, is answered 401, which is enough to observe the credential a request carries.
+    """
+
+    def __init__(self, reply_for: Callable[[dict[str, Any]], str] | None = None) -> None:
+        self.captured: list[dict[str, Any]] = []
+        self.first_request_event = threading.Event()
+        captured = self.captured
+        first_request_event = self.first_request_event
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("content-length") or 0)
+                raw_body = self.rfile.read(length) if length else b""
+                try:
+                    body = json.loads(raw_body) if raw_body else {}
+                except ValueError:
+                    body = {}
+                captured.append(
+                    {
+                        "path": self.path,
+                        "x-api-key": self.headers.get("x-api-key"),
+                        "authorization": self.headers.get("authorization"),
+                        "body": body,
+                    }
+                )
+                first_request_event.set()
+                if reply_for is not None and self.command == "POST" and self.path.split("?")[0] == "/v1/messages":
+                    self._answer_message(body, reply_for(body))
+                    return
+                self._send(401, "application/json", _anthropic_error("authentication_error", "stand-in"))
+
+            do_GET = do_POST
+
+            def _answer_message(self, body: dict[str, Any], text: str) -> None:
+                model = str(body.get("model", "claude-haiku-4-5"))
+                if body.get("stream"):
+                    self._send(200, "text/event-stream", _streamed_message_events(model, text))
+                else:
+                    self._send(200, "application/json", json.dumps(_message(model, text)).encode())
+
+            def _send(self, status: int, content_type: str, payload: bytes) -> None:
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            # Signature mirrors BaseHTTPRequestHandler.log_message (including
+            # the builtin-shadowing `format` name) to satisfy override checks.
+            def log_message(self, format: str, *args: object) -> None:
+                pass
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self.port = self._server.server_address[1]
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    def __enter__(self) -> "StandInAnthropicApi":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._server.shutdown()
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+
+def _anthropic_error(error_type: str, message: str) -> bytes:
+    return json.dumps({"type": "error", "error": {"type": error_type, "message": message}}).encode()
+
+
+def _message(model: str, text: str) -> dict[str, Any]:
+    return {
+        "id": "msg_stand_in",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+
+def _streamed_message_events(model: str, text: str) -> bytes:
+    """The server-sent events of one streamed message holding a single text block."""
+    started = {
+        **_message(model, ""),
+        "content": [],
+        "stop_reason": None,
+        "usage": {"input_tokens": 10, "output_tokens": 1},
+    }
+    events: list[tuple[str, dict[str, Any]]] = [
+        ("message_start", {"type": "message_start", "message": started}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 5},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events).encode()
+
+
+def skip_unless_pinned_claude() -> None:
+    """Skip the calling test unless ``claude`` on PATH is the version ``.mngr/settings.toml`` pins.
+
+    For the ``real_claude`` tests, which assert behaviours of the exact binary workspaces ship.
+    """
+    if shutil.which("claude") is None:
+        pytest.skip("claude binary not on PATH")
+    installed = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
+    settings = tomllib.loads((Path(__file__).parents[5] / ".mngr" / "settings.toml").read_text())
+    pinned = settings["agent_types"]["claude"]["version"]
+    if not installed.startswith(pinned):
+        pytest.skip(f"claude on PATH is {installed!r}, not the pinned {pinned!r}; these tests assert the pin")
 
 
 def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
