@@ -52,7 +52,8 @@ import {
   whenAccountsReadyToChoose,
 } from "../models/Providers";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
-import { COMPACT_MEDIA_QUERY, TOUCH_MEDIA_QUERY } from "../compactLayout";
+import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
+import { COMPACT_MEDIA_QUERY } from "../compactLayout";
 import { ChatDrawer } from "./ChatDrawer";
 import { ChatHeader } from "./ChatHeader";
 import { ChatRail } from "./ChatRail";
