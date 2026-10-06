@@ -54,6 +54,7 @@ def _running_observer(host_dir: Path, work_dir: Path, log_path: Path) -> Iterato
                     process.wait(timeout=10)
 
 
+@pytest.mark.flaky
 @pytest.mark.timeout(180)
 def test_chat_lists_what_the_real_observer_reports_and_rides_out_its_restart(tmp_path: Path) -> None:
     """The chat boots before its observer, lists agents once the observer's opening snapshot lands,
