@@ -4198,6 +4198,10 @@ def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster:
         )
         manager._handle_observe_event(make_agent_state_event(stopped))
         assert evicted == [first]
+
+        # Edge-triggered: a read of the archived segment rebuilds it, and a later tick must not drop it.
+        manager._handle_observe_event(make_agent_state_event(stopped))
+        assert evicted == [first]
     finally:
         manager.stop()
 
