@@ -67,18 +67,19 @@ folder, not the shared one.
   `CLAUDE_CODE_OAUTH_TOKEN` is never snapshotted: it cannot authenticate
   direct API (litellm) calls.
 - With no key anywhere, `claude -p`, which authenticates itself from the
-  shared settings (a `CLAUDE_CODE_OAUTH_TOKEN` there, or a
+  account's settings (a `CLAUDE_CODE_OAUTH_TOKEN` there, or a
   `.credentials.json` login) -- every spawn is a fresh claude, so the keyless
   path always uses current auth.
 - If neither resolves, the call fails with a clear error from the path it
   attempted (litellm's auth error, or a non-zero `claude -p` exit surfaced as
   `ClaudeCLIError`) rather than hanging.
 
-`CLAUDE_CONFIG_DIR` is unset workspace-WIDE, so a bare `claude` in a terminal and the resolver
-in `claude_p.py` both land on claude's own default `~/.claude`, which is what makes the shared
-settings file findable from any process. A chat AGENT is the exception and is deliberately
-different: its own `CLAUDE_CONFIG_DIR` is set on its process, pointing at the account it was
-created against.
+`CLAUDE_CONFIG_DIR` is unset workspace-WIDE, so a bare `claude` in a terminal lands on claude's
+own default `~/.claude`. A chat AGENT is deliberately different: its own `CLAUDE_CONFIG_DIR` is
+set on its process, pointing at the account it was created against. `claude_p.py` runs its
+child `claude -p` on the account its resolver reads -- the agent's when the var is set, else the
+workspace's default account -- so a supervisord service or a cron job authenticates the same
+way a skill script inside a chat does.
 
 ## The mngr `claude -p` session-hook bug
 

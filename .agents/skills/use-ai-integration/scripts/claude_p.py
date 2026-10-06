@@ -11,11 +11,10 @@ importable package. It is the **keyless** path for an AI-driven service: when an
 instead (cheaper for non-agentic work; see the use-ai-integration skill). With no
 key, ``claude -p`` runs on the local Claude subscription's programmatic pool.
 
-Workspace credentials live in the ``env`` block of the shared
-``~/.claude/settings.json`` (claude's default config dir -- resolved via
-``$CLAUDE_CONFIG_DIR`` only when that var is explicitly set, which an Imbue Studio
-workspace never does; written by the in-UI Claude sign-in
-modal), NOT in the process environment -- long-lived services inherit a
+Workspace credentials live in the ``env`` block of a provider account's
+``settings.json`` under ``~/.minds/accounts/<id>/`` (the account
+``$CLAUDE_CONFIG_DIR`` names inside an agent, else the workspace's default
+account; written by the provider chooser), NOT in the process environment -- long-lived services inherit a
 frozen env from supervisord, so an env-var check would go stale the moment
 the user changes auth. Keyed (API key) integrations additionally snapshot
 the key + base URL into ``data/.secrets/anthropic.env`` at setup time
@@ -25,7 +24,7 @@ key it was set up with rather than silently switching. The user removes or
 re-snapshots that file (via the agent) to change an integration's key.
 ``read_workspace_ai_credentials`` resolves the snapshot first, then the
 settings file, then the process env (the last for non-workspace contexts);
-every fresh ``claude -p`` subprocess reads the shared settings itself, so
+every fresh ``claude -p`` subprocess runs on that same account and reads its settings itself, so
 the keyless path always uses current auth with no service restarts. The
 subscription ``CLAUDE_CODE_OAUTH_TOKEN`` is never snapshotted -- it cannot
 authenticate direct API (litellm) calls.
@@ -53,8 +52,9 @@ handles the things that are easy to get wrong by hand:
 
 Both unset ``MAIN_CLAUDE_SESSION_ID`` in the child environment (an inherited value
 makes the child look like mngr's managed main session and trips its
-stop/readiness hooks), request ``--output-format json``, run the blocking
-subprocess synchronously, and raise on a non-zero exit or a ``claude -p`` error
+stop/readiness hooks), point the child at the resolved account
+(``CLAUDE_CONFIG_DIR``), request ``--output-format json``, run the blocking
+subprocess synchronously with its stdin closed, and raise on a non-zero exit or a ``claude -p`` error
 result rather than silently returning empty text.
 """
 
@@ -126,6 +126,18 @@ def _default_account_dir() -> str:
         return ""
 
 
+def _account_config_dir() -> str:
+    """The account folder claude runs on: ``$CLAUDE_CONFIG_DIR``, else the default account's, else "".
+
+    Inside an agent the var IS set -- mngr sources the agent's env file into every
+    process in its tmux session, so a skill script, a worker, and the agent itself all
+    see the account the chat is bound to. Outside one -- a supervisord service, a cron
+    job -- nothing sets it and ~/.claude holds no credential, so fall back to the
+    workspace's default account rather than to nothing.
+    """
+    return os.environ.get("CLAUDE_CONFIG_DIR", "") or _default_account_dir()
+
+
 def _read_env_file(path: str) -> dict[str, str]:
     """Parse simple ``KEY=VALUE`` lines from an env file; {} if absent/unreadable."""
     values: dict[str, str] = {}
@@ -157,19 +169,7 @@ def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     """
     snapshot_env = _read_env_file(ANTHROPIC_ENV_SNAPSHOT_PATH)
     settings_env: dict[str, object] = {}
-    # Resolve the config dir the way claude itself does: $CLAUDE_CONFIG_DIR when
-    # explicitly set, else ~/.claude.
-    #
-    # Inside an agent the var IS set -- mngr sources the agent's env file into every
-    # process in its tmux session, so a skill script, a worker, and the agent itself all
-    # see the account the chat is bound to. Outside one -- a supervisord service, a cron
-    # job -- nothing sets it and ~/.claude holds no credential, so fall back to the
-    # workspace's default account rather than to nothing.
-    config_dir = (
-        os.environ.get("CLAUDE_CONFIG_DIR", "")
-        or _default_account_dir()
-        or os.path.expanduser("~/.claude")
-    )
+    config_dir = _account_config_dir() or os.path.expanduser("~/.claude")
     settings_path = os.path.join(config_dir, "settings.json")
     try:
         with open(settings_path, encoding="utf-8") as f:
@@ -251,9 +251,12 @@ class ClaudeResult:
 
 
 def _child_env(strip_mngr_agent_vars: bool = False) -> dict[str, str]:
-    """Build the child environment: a copy of os.environ minus the session var."""
+    """Build the child environment: a copy of os.environ minus the session var, on the account the resolver reads."""
     env = dict(os.environ)
     env.pop(_MAIN_CLAUDE_SESSION_ID, None)
+    config_dir = _account_config_dir()
+    if config_dir:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
     if strip_mngr_agent_vars:
         for var in _MNGR_AGENT_VARS:
             env.pop(var, None)
@@ -413,6 +416,8 @@ def _run_blocking(
     """Run ``claude -p`` synchronously and parse its JSON. Raises on failure."""
     proc = subprocess.run(
         list(argv),
+        # A service's inherited stdin never closes, and claude -p waits 3s for it.
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         env=dict(env),

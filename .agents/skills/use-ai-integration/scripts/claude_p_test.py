@@ -1,16 +1,17 @@
 """Unit tests for the copyable ``claude_p`` helper.
 
 These guard the parts that are easy to get wrong and that the module docstring
-promises: flag emission per scenario, the success-vs-error JSON arm handling, and
-the session-var scrub. The async wrappers' subprocess execution is not tested
-here -- it would need a real ``claude`` binary -- but they are thin shells over
-these covered helpers.
+promises: flag emission per scenario, the success-vs-error JSON arm handling, the
+session-var scrub, and how a call from a service launches ``claude`` (against a
+stub ``claude`` on ``PATH``, since the real binary needs a live sign-in).
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -195,6 +196,101 @@ def test_child_env_strips_mngr_vars_when_requested(
     assert "MNGR_AGENT_STATE_DIR" not in env
     # The real environment is untouched (we only scrub the copy).
     assert os.environ.get("MNGR_AGENT_NAME") == "lead"
+
+
+def _make_default_account(home: Path) -> Path:
+    """Give ``home`` one claude account, recorded as the most recently used; return its folder."""
+    accounts = home / ".minds" / "accounts"
+    account_dir = accounts / "acct-claude"
+    account_dir.mkdir(parents=True)
+    (accounts / "index.json").write_text(
+        json.dumps(
+            {
+                "accounts": [{"id": "acct-claude", "lane": "anthropic"}],
+                "mru": "acct-claude",
+            }
+        )
+    )
+    return account_dir
+
+
+def test_child_env_keeps_the_agents_own_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inside an agent, the child runs on the chat's account, not the workspace default."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _make_default_account(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/accounts/the-chats-own")
+
+    assert claude_p._child_env()["CLAUDE_CONFIG_DIR"] == "/accounts/the-chats-own"
+
+
+# Stands in for claude: reports the config dir it was given and whether its stdin is
+# at EOF (readable at once and empty), as the result text of a success payload.
+_STUB_CLAUDE = """#!/usr/bin/env python3
+import json, os, select
+stdin_at_eof = bool(select.select([0], [], [], 1.0)[0]) and os.read(0, 1) == b""
+observed = {"config_dir": os.environ.get("CLAUDE_CONFIG_DIR"), "stdin_at_eof": stdin_at_eof}
+print(json.dumps({"subtype": "success", "result": json.dumps(observed), "total_cost_usd": 0}))
+"""
+
+_SERVICE_CALL = """
+import sys
+sys.path.insert(0, sys.argv[1])
+from claude_p import claude_p_completion
+print(claude_p_completion("hello", system="Answer briefly.").text)
+"""
+
+
+def _complete_from_a_service(tmp_path: Path, home: Path) -> dict[str, object]:
+    """Run one completion the way a supervisord service does; return what claude saw.
+
+    The caller's environment has no ``CLAUDE_CONFIG_DIR``, and its stdin is a pipe
+    nothing ever closes.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "claude"
+    stub.write_text(_STUB_CLAUDE)
+    stub.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+    env["HOME"] = str(home)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    stdin_read, stdin_write = os.pipe()
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _SERVICE_CALL, str(_SCRIPT.parent)],
+            stdin=stdin_read,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=8,
+        )
+    finally:
+        os.close(stdin_read)
+        os.close(stdin_write)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_completion_from_a_service_runs_claude_on_the_default_account(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    account_dir = _make_default_account(home)
+
+    observed = _complete_from_a_service(tmp_path, home)
+
+    assert observed["config_dir"] == str(account_dir)
+
+
+def test_completion_from_a_service_gives_claude_a_closed_stdin(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _make_default_account(home)
+
+    observed = _complete_from_a_service(tmp_path, home)
+
+    assert observed["stdin_at_eof"] is True
 
 
 def _isolate_credential_sources(
