@@ -261,8 +261,7 @@ export const ChatRail: m.Component<ChatRailAttrs> = {
   onremove() {
     // A menu still open when the rail unmounts would keep its Escape listener on the window.
     railMenu.dispose();
-    // A drag whose edge goes with the rail (Escape closing the drawer mid-drag) never sees its release; ended here,
-    // it cannot resize a later rail on a mere hover.
+    // A drag whose edge goes with the rail (Escape closing the drawer mid-drag) never sees its release.
     if (resizeDrag !== null) {
       resizeDrag = null;
       saveRailWidth();
@@ -313,8 +312,8 @@ function endResize(event: PointerEvent): void {
   saveRailWidth();
 }
 
-/** The width the list is drawn at, which a drag or an arrow key moves from. The drawer can draw the list narrower than
- *  its width, held back from the window's edge; starting from what is drawn, the edge moves from the first step. */
+/** The width the list is drawn at, which a drag or an arrow key moves from: the drawer can draw it narrower than its
+ *  width, held back from the window's edge. */
 function drawnRailWidth(handle: HTMLElement): number {
   const drawnWidth = handle.parentElement?.getBoundingClientRect().width ?? 0;
   return drawnWidth > 0 ? Math.min(railWidth(), drawnWidth) : railWidth();
