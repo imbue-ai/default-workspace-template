@@ -4179,6 +4179,32 @@ def test_removing_a_chats_active_agent_drops_the_whole_chat_even_after_a_streame
         state.shutdown()
 
 
+def test_letting_go_a_chats_never_reported_active_agent_drops_the_whole_chat(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A created active agent the observe stream never reports is let go, and the release cannot tell an
+    untracked active agent's chat is stopped, so the let-go has to drop the archived segments as well."""
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    state = build_test_state(agent_manager=manager)
+    try:
+        created = manager.get_agent_by_id(second)
+        assert created is not None
+        manager._note_agent_created(created)
+        state.get_or_create_loader(make_agent_fixture(tmp_path, agent_id=first)[0])
+        state.get_or_create_watcher(make_agent_fixture(tmp_path, agent_id=second)[0])
+        archived = _agent_details(
+            f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first), state=AgentLifecycleState.STOPPED
+        )
+
+        for _ in range(FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO):
+            manager._handle_observe_event(make_full_agent_state_event([archived]))
+
+        assert manager.get_agent_by_id(second) is None
+        assert (state.loaders, state.watchers) == ({}, {})
+    finally:
+        state.shutdown()
+
+
 def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster: WebSocketBroadcaster) -> None:
     """A retiring agent that is still running when it is archived stops a moment later; that
     death is the member's, not the chat's, so the active agent's watcher (which a user may be

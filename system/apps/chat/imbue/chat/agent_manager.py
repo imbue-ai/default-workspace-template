@@ -3645,7 +3645,7 @@ class AgentManager:
         for agent_id in let_go_agent_ids:
             self._stop_activity_tracking(agent_id)
             self._stop_model_tracking(agent_id)
-            self._evict_watcher(agent_id)
+            self._evict_chat_transcripts(agent_id)
 
         for agent_id in removed_agent_ids:
             self._stop_activity_tracking(agent_id)
