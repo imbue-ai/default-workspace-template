@@ -92,7 +92,7 @@ class AgentEventQueues:
                         break
 
     def end_streams(self, chat_id: str) -> None:
-        """Close every open stream of ``chat_id``, so each page reconnects and resyncs over REST."""
+        """Close every open stream of ``chat_id``, so a chat page reconnects and resyncs over REST."""
         with self._lock:
             for event_queue in list(self._queues.get(chat_id, [])):
                 self._close_locked(chat_id, event_queue)

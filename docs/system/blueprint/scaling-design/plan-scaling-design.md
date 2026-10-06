@@ -35,8 +35,8 @@ and drops what each stopped chat holds unless a stream of the chat is open (a se
 the chat counts as not stopped): the stream is fed only by the watcher, and a reported death
 can be momentary. Viewing a stopped chat rebuilds the watcher from disk on demand, and the
 release drops it again as soon as its last stream closes. Removing a chat's active agent
-also ends the chat's open streams, since nothing feeds them after: each page reconnects and
-resyncs over REST once the agent is listed again.
+also ends the chat's open streams, since nothing feeds them after: the chat page reconnects
+and resyncs over REST once the agent is listed again.
 
 Live delivery is a hint layer, never the source of truth: per-connection SSE queues are
 bounded, an overflowing consumer is disconnected on the first full `put`, and the

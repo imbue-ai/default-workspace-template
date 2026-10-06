@@ -3730,7 +3730,7 @@ class AgentManager:
 
         The whole chat goes because the release cannot drop it later: a chat whose active agent
         is no longer tracked never reads as stopped. Its open streams are ended too, since nothing
-        feeds them once its watcher is gone: each page reconnects, and resyncs once the agent is
+        feeds them once its watcher is gone: the chat page reconnects, and resyncs once the agent is
         listed again (a removal can be a listing's momentary omission)."""
         with self._lock:
             chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent_id))
