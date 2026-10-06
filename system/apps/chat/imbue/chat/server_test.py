@@ -467,9 +467,8 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
 
 
 def test_a_stopped_chat_read_after_its_stop_is_released_once_nobody_streams_it(tmp_path: Path) -> None:
-    """Reading a stopped chat rebuilds its transcript after the stop's own eviction; the
-    release drops that rebuild, but not while a stream of the chat is open or a send is
-    reviving it, and never a running chat's."""
+    """Reading a stopped chat rebuilds its transcript; the release drops that rebuild, but not
+    while a stream of the chat is open or a send is reviving it, and never a running chat's."""
     state = build_test_state()
     seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
     seed_agent_state(state.agent_manager, "running-agent", name="running-agent", state="RUNNING")
