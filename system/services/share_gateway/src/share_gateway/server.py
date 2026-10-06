@@ -4,7 +4,9 @@ Every request to a shared origin passes through ``/_auth/verify`` (session
 cookie verified, identity re-checked against the grants file, Origin policy
 enforced, session cookie stripped from what the service sees, the verified
 identity handed on as ``X-Imbue-Identity``). Visitors without a session are
-bounced to the accounts broker and land back on ``/_auth/callback``, which
+bounced to the accounts broker (a navigation the visitor started themselves is
+first retried once from a "Signing in..." page) and land back on
+``/_auth/callback``, which
 verifies the broker's handoff token and sets the workspace session cookie. A
 callback whose nonce or token no longer verifies (a reopened link, a slow
 redirect) heals itself: a visitor who already holds a session is sent on, and

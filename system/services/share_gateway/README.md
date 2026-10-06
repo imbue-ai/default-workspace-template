@@ -23,7 +23,9 @@ three things running:
    policy (WebSocket upgrades need a workspace Origin; non-GETs reject a
    foreign one), strips the session cookie from what the service sees, and
    hands the service the verified identity (see "Request identity"). Visitors
-   without a session are redirected to the accounts broker and come back to
+   without a session are redirected to the accounts broker (after one retry
+   from a "Signing in..." page when they started the navigation themselves;
+   see "Login outcomes") and come back to
    `/_auth/callback`, which verifies the broker's 60-second RS256 handoff
    token (JWKS, audience, nonce, single-use jti) and sets the
    workspace-domain session cookie (30 days). What a failed callback shows is
