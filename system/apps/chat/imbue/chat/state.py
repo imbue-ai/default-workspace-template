@@ -252,9 +252,9 @@ class ChatAppState(MutableModel):
         and filesystem watches) and, for an archived member of a chat, its loader.
 
         The memory half of the chat lifecycle, so a chat that is not running and not being
-        viewed holds no chat-backend memory. Cheap no-op when nothing is resident. Rebuild-on-demand is `get_or_create_watcher`
-        and `get_or_create_loader`: viewing a stopped chat re-reads its transcript from disk
-        transparently.
+        viewed holds no chat-backend memory. Cheap no-op when nothing is resident.
+        Rebuild-on-demand is `get_or_create_watcher` and `get_or_create_loader`: viewing a
+        stopped chat re-reads its transcript from disk transparently.
 
         The watcher is popped under the lock but stopped outside it -- `stop` joins the
         watch thread, and holding the lock across that join would stall every other
