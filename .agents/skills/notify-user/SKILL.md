@@ -1,6 +1,6 @@
 ---
 name: notify-user
-description: "Tell the user, through the Imbue Studio app's notification feed (bell, badge, toast, and a system banner when they are away), that a turn in THIS CHAT ended with something they will want to know about or act on: a finished deliverable, a result they were waiting for, or a question only they can answer. For chat agents only -- never for launch-task workers, whose results reach the user through their parent chat. Not for chitchat, acknowledgements, progress with no result yet, or trivial answers."
+description: "Tell the user, through a notification in the Imbue Studio app, that a turn in THIS CHAT ended with something they will want to know about or act on: a finished deliverable, a result they were waiting for, or a question only they can answer. For chat agents only -- never for launch-task workers, whose results reach the user through their parent chat. Not for chitchat, acknowledgements, progress with no result yet, or trivial answers."
 compatibility: Requires the latchkey gateway env mngr injects into every agent (LATCHKEY_GATEWAY, LATCHKEY_GATEWAY_PASSWORD); python3 only.
 metadata:
   author: imbue
@@ -8,10 +8,9 @@ metadata:
 
 # Notify the user
 
-The Imbue Studio app keeps a notification feed behind the bell in its
-titlebar. This skill posts a message from this chat into that feed. Clicking
-the notification lands the user in this chat. It is one-way: any answer comes
-back in this chat.
+This skill posts a message from this chat to the Imbue Studio app's
+notification menu; clicking it brings the user here. It is one-way: any answer
+comes back in this chat.
 
 ## When to use it
 
@@ -31,8 +30,7 @@ question.
 Do NOT use it:
 
 - from a launch-task worker or any other sub-agent: a worker's results reach
-  the user through the chat that launched it, and only chats show up in the
-  app's feed;
+  the user through the chat that launched it;
 - as a progress ticker. It goes out as the turn ends, never partway
   through, and never more than once per turn.
 
@@ -48,8 +46,7 @@ terms (what they can now see, use, or decide), never the tool names or steps:
 python3 .agents/skills/notify-user/scripts/notify_user.py "The migration finished: 3 tables moved and verified."
 ```
 
-An optional `--title` becomes a prefix on the message in the feed and the
-banner (`Title: message`):
+An optional `--title` becomes a prefix on the message (`Title: message`):
 
 ```bash
 python3 .agents/skills/notify-user/scripts/notify_user.py --title "Test run" "All 412 tests passed."
