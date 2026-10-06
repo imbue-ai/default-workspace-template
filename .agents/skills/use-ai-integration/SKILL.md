@@ -102,7 +102,7 @@ from litellm import completion, completion_cost
 from claude_p import read_workspace_ai_credentials  # the file you copied in
 
 # Resolve credentials at call time: the data/.secrets/anthropic.env snapshot
-# first (see setup above), then the shared Claude settings, then the process
+# first (see setup above), then the Claude account's settings, then the process
 # env. litellm reads differently-named vars and is picky about a trailing
 # slash, so pass both explicitly.
 creds = read_workspace_ai_credentials()
