@@ -225,6 +225,31 @@ def test_child_env_keeps_the_agents_own_account(
     assert claude_p._child_env()["CLAUDE_CONFIG_DIR"] == "/accounts/the-chats-own"
 
 
+def test_child_env_prefers_the_pinned_default_account_over_the_most_recent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Outside an agent, the child runs on the account a chat created now would get."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    accounts = tmp_path / ".minds" / "accounts"
+    for account_id in ("acct-pinned", "acct-recent"):
+        (accounts / account_id).mkdir(parents=True)
+    (accounts / "index.json").write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {"id": "acct-pinned", "lane": "anthropic"},
+                    {"id": "acct-recent", "lane": "anthropic"},
+                ],
+                "default_account": "acct-pinned",
+                "mru": "acct-recent",
+            }
+        )
+    )
+
+    assert claude_p._child_env()["CLAUDE_CONFIG_DIR"] == str(accounts / "acct-pinned")
+
+
 # Stands in for claude: reports the config dir it was given and whether its stdin is
 # at EOF (readable at once and empty), as the result text of a success payload.
 _STUB_CLAUDE = """#!/usr/bin/env python3

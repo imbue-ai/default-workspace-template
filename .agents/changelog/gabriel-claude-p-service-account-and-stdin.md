@@ -5,3 +5,5 @@
 - Every call also waited 3 seconds. Under supervisord the child inherited a stdin that never closes, so `claude -p` waited for input before proceeding. The helper now gives it a closed stdin.
 
 - The helper's docstring and `references/billing-and-credentialing.md` no longer say `claude -p` authenticates from the shared `~/.claude`.
+
+- With `CLAUDE_CONFIG_DIR` unset, the helper now picks the workspace's default Claude account the way a new chat does: the pinned default, else the most recently used one. It used to take the most recently used one even when another was pinned as the default.

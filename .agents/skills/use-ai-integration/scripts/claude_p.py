@@ -106,11 +106,14 @@ ANTHROPIC_ENV_SNAPSHOT_PATH = "data/.secrets/anthropic.env"
 
 
 def _default_account_dir() -> str:
-    """The most recently used provider account's folder, or "" when there is none.
+    """The workspace's default claude account's folder, or "" when there is none.
 
-    Read straight from the index rather than imported from the system-interface package:
-    this script runs from whatever environment the caller has, which is frequently not
-    that venv. The format is one JSON object with an `accounts` list and an `mru` id.
+    Among the anthropic-lane accounts: the pinned default, else the most recently used,
+    else the oldest -- the chat app's rule for an agent created without an account.
+    Read straight from the index rather than imported from the chat app's package: this
+    script runs from whatever environment the caller has, which is frequently not that
+    venv. The format is one JSON object with an `accounts` list and optional
+    `default_account` and `mru` ids.
     """
     root = os.path.join(os.path.expanduser("~"), ".minds", "accounts")
     try:
@@ -119,7 +122,12 @@ def _default_account_dir() -> str:
         rows = [a for a in index.get("accounts", []) if a.get("lane") == "anthropic"]
         if not rows:
             return ""
-        chosen = next((a for a in rows if a.get("id") == index.get("mru")), rows[0])
+        by_id = {a.get("id"): a for a in rows}
+        chosen = (
+            by_id.get(index.get("default_account"))
+            or by_id.get(index.get("mru"))
+            or rows[0]
+        )
         path = os.path.join(root, str(chosen["id"]))
         return path if os.path.isdir(path) else ""
     except (OSError, ValueError, KeyError, TypeError):
