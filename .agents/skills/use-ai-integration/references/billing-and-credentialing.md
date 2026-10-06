@@ -48,7 +48,7 @@ naming that folder -- `CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex, `H
 antigravity, `PI_CODING_AGENT_DIR` for pi. Nothing rebinds a chat afterwards.
 
 This used to be one shared `~/.claude/settings.json` written by a single sign-in modal, which is
-why the resolver below reaches for a shared file. The shared path still exists and is still what
+why the resolver below still falls back to it when no account exists. The shared path is still what
 a bare `claude` in a terminal uses; it is no longer where a CHAT's credential lives. A helper
 that wants the credential a particular chat is running on has to read that chat's account
 folder, not the shared one.
