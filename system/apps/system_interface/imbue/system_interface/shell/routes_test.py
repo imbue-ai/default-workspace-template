@@ -1964,8 +1964,7 @@ def test_a_placement_verb_on_a_popped_out_window_is_refused_and_changes_nothing(
     assert refused.status_code == 423
     assert window_id in refused.get_json()["detail"] and "force" in refused.get_json()["detail"]
     assert layout_file.read_text() == stored_before
-    recorded = _shell(app).clients.get_client("c1")
-    assert recorded is not None and recorded.active_desktop == "home"
+    assert _shell(app).active_desktop_of_client("c1") == "home"
     assert drain_messages(client_queue) == []
 
 
@@ -1995,8 +1994,7 @@ def test_a_forced_placement_verb_brings_the_window_back_onto_its_own_desktop(
     assert (answer["is_brought_back"], answer["is_raised_in_own_window"]) == (True, False)
     placement = _placement_of(client, window_id, desktop_id="research")
     assert (placement["is_detached"], placement["state"], placement["is_minimized"]) == (False, *expected)
-    recorded = _shell(app).clients.get_client("c1")
-    assert recorded is not None and recorded.active_desktop == "home"
+    assert _shell(app).active_desktop_of_client("c1") == "home"
     assert "active_desktop_changed" not in [message["type"] for message in drain_messages(client_queue)]
 
 
@@ -2017,8 +2015,7 @@ def test_an_op_that_fails_leaves_the_client_on_its_desktop(
     failed = _op(client, op, {**args, "desktop": "research", "client": "c1"}, None)
 
     assert failed.status_code == status
-    recorded = _shell(app).clients.get_client("c1")
-    assert recorded is not None and recorded.active_desktop == "home"
+    assert _shell(app).active_desktop_of_client("c1") == "home"
 
 
 @pytest.mark.parametrize(
@@ -2060,8 +2057,7 @@ def test_focus_raises_a_popped_out_window_in_its_own_window_and_leaves_it_out(cl
         assert (answer["is_raised_in_own_window"], answer["is_brought_back"]) == (True, False)
         assert _placements(client, "c1", "research") == placements_before
         assert _layout_ops(client_queue) == [("show", {"window": window_id, "is_detached": True}, "c1", "")]
-    recorded = _shell(app).clients.get_client("c1")
-    assert recorded is not None and recorded.active_desktop == "home"
+    assert _shell(app).active_desktop_of_client("c1") == "home"
 
 
 def test_an_open_that_finds_a_popped_out_window_at_the_path_raises_it_in_its_own_window(
