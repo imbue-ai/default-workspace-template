@@ -39,7 +39,7 @@ _WORKSPACE = [
     _sample(31, "chat-app", 25, 300_000),
     _sample(40, "claude", 560, 250_000),  # an idle chat
     _sample(50, "pytest", 900, 20_000),
-    _sample(60, "tilion", 1000, 150_000),  # a Chromium renderer
+    _sample(60, "tilion", 990, 150_000),  # a Chromium renderer
     _sample(70, "python3", -1000, 600_000),  # the drill's hog
     _sample(80, "kworker", 0, None),  # no mm
 ]
@@ -55,7 +55,7 @@ def test_prediction_follows_the_bands_and_skips_what_earlyoom_cannot_pick() -> N
     assert [process.pid for process in ranking] == [60, 50, 40, 30, 31, 7]
     # pid 7 is --avoid-ed: 40000 KiB of RSS, 300 points below 0.
     assert ranking[-1].badness_kib == 40_000 - 300_000
-    assert ranking[0].badness_kib == 150_000 + 1000 * 1000
+    assert ranking[0].badness_kib == 150_000 + 990 * 1000
 
 
 def test_swap_and_page_tables_count_like_rss() -> None:
