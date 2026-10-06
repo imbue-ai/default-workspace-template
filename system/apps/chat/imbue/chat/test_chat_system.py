@@ -58,7 +58,8 @@ def _running_observer(host_dir: Path, work_dir: Path, log_path: Path) -> Iterato
 
 def _observe_processes() -> str:
     """Every ``mngr observe`` process on the machine, for a failure to name what still holds the lock."""
-    return subprocess.run(["pgrep", "-fl", "mngr observe"], capture_output=True, text=True).stdout
+    listing = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True, text=True, timeout=10).stdout
+    return "\n".join(line.strip() for line in listing.splitlines() if "mngr observe" in line)
 
 
 @pytest.mark.flaky
