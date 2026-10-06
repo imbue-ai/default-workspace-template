@@ -189,6 +189,7 @@ def build_production_state(
     # observe event releases each stopped chat nobody is streaming.
     agent_manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
     agent_manager.set_unviewed_transcript_release(state.release_unviewed_stopped_transcripts)
+    agent_manager.set_chat_stream_ender(state.event_queues.end_streams)
     return state
 
 

@@ -91,8 +91,19 @@ class AgentEventQueues:
                         self._evict_locked(chat_id, event_queue)
                         break
 
+    def end_streams(self, chat_id: str) -> None:
+        """Close every open stream of ``chat_id``, so each page reconnects and resyncs over REST."""
+        with self._lock:
+            for event_queue in list(self._queues.get(chat_id, [])):
+                self._close_locked(chat_id, event_queue)
+
     def _evict_locked(self, chat_id: str, event_queue: queue.Queue[dict[str, Any] | None]) -> None:
-        """Disconnect one overflowing consumer. Caller must hold ``self._lock``.
+        """Disconnect one overflowing consumer. Caller must hold ``self._lock``."""
+        self._close_locked(chat_id, event_queue)
+        logger.warning("Disconnected an SSE consumer for chat {}: its event queue overflowed", chat_id)
+
+    def _close_locked(self, chat_id: str, event_queue: queue.Queue[dict[str, Any] | None]) -> None:
+        """Unregister one consumer and end its stream. Caller must hold ``self._lock``.
 
         Drains the queue and pushes the shutdown sentinel so the handler thread, blocked on
         ``get``, wakes, sees ``None``, and closes its stream -- which triggers the client's
@@ -104,7 +115,6 @@ class AgentEventQueues:
             event_queue.put_nowait(None)
         except queue.Full:
             pass
-        logger.warning("Disconnected an SSE consumer for chat {}: its event queue overflowed", chat_id)
 
     def shutdown(self) -> None:
         with self._lock:

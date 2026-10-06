@@ -354,8 +354,9 @@ def _stream_filtered_events(
     event_queues: AgentEventQueues,
     event_queue: "queue.Queue[dict[str, Any] | None]",
     should_forward: Callable[[dict[str, Any]], bool],
+    on_closed: Callable[[], None],
 ) -> Iterator[str]:
-    """Yield SSE frames for queued events that pass ``should_forward``.
+    """Yield SSE frames for queued events that pass ``should_forward``, calling ``on_closed`` once the stream ends.
 
     Shared by the main agent stream and the per-subagent stream, which differ
     only in which events they keep: the main stream drops subagent-session
@@ -391,6 +392,8 @@ def _stream_filtered_events(
             "SSE stream closed for chat {} (conn {}, reason: {})", chat_id, id(event_queue), close_reason
         )
         event_queues.unregister(chat_id, event_queue)
+        if not event_queues.is_shutdown:
+            on_closed()
 
 
 def _sse_response(generator: Iterator[str]) -> Response:
@@ -440,7 +443,13 @@ def _stream_events(chat_id: str) -> Response:
     event_queue = _open_chat_stream(state, chat_id, lambda: state.get_or_create_watcher(agent_info))
 
     return _sse_response(
-        _stream_filtered_events(chat_id, state.event_queues, event_queue, state.is_main_session_event)
+        _stream_filtered_events(
+            chat_id,
+            state.event_queues,
+            event_queue,
+            state.is_main_session_event,
+            state.release_unviewed_stopped_transcripts,
+        )
     )
 
 
@@ -1362,6 +1371,7 @@ def _stream_subagent_events(chat_id: str, agent_id: str, subagent_session_id: st
             state.event_queues,
             event_queue,
             lambda event: event.get("agent_id") == segment.agent.id and event.get("session_id") == subagent_session_id,
+            state.release_unviewed_stopped_transcripts,
         )
     )
 

@@ -932,6 +932,9 @@ class AgentManager:
     # Set once at composition (``set_unviewed_transcript_release``); the app state knows who
     # is streaming. ``None`` (tests) = no release.
     _unviewed_transcript_release: Callable[[], None] | None
+    # Ends every open stream of a chat by its id. Set once at composition
+    # (``set_chat_stream_ender``); the streams live on the app state. ``None`` (tests) = none ended.
+    _chat_stream_ender: Callable[[str], None] | None
 
     @classmethod
     def build(
@@ -1015,6 +1018,7 @@ class AgentManager:
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
         manager._unviewed_transcript_release = None
+        manager._chat_stream_ender = None
         manager._auto_open = (
             auto_open
             if auto_open is not None
@@ -3725,12 +3729,17 @@ class AgentManager:
         the watcher a user may be viewing, standing).
 
         The whole chat goes because the release cannot drop it later: a chat whose active agent
-        is no longer tracked never reads as stopped."""
+        is no longer tracked never reads as stopped. Its open streams are ended too, since nothing
+        feeds them once its watcher is gone: each page reconnects, and resyncs once the agent is
+        listed again (a removal can be a listing's momentary omission)."""
         with self._lock:
             chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent_id))
-        member_ids = chat.member_agent_ids if chat is not None and chat.active_agent_id == agent_id else (agent_id,)
+        is_active_agent = chat is not None and chat.active_agent_id == agent_id
+        member_ids = chat.member_agent_ids if chat is not None and is_active_agent else (agent_id,)
         for member_id in member_ids:
             self._evict_watcher(member_id)
+        if chat is not None and is_active_agent and self._chat_stream_ender is not None:
+            self._chat_stream_ender(str(chat.chat_id))
 
     def _get_agent_state_dir(self, agent_id: str) -> Path:
         """Return the per-agent state directory under the local mngr host dir.
@@ -3904,6 +3913,13 @@ class AgentManager:
         Level-triggered, so a stopped chat that a read rebuilds after its stop is dropped too,
         once its last stream closes."""
         self._unviewed_transcript_release = callback
+
+    def set_chat_stream_ender(self, callback: Callable[[str], None]) -> None:
+        """Wire the ending of a chat's open streams (the composition root calls this once).
+
+        Invoked with a chat id when the chat's active agent is removed, since the removal drops
+        the watcher that fed those streams."""
+        self._chat_stream_ender = callback
 
     def _evict_watcher(self, agent_id: str) -> None:
         callback = self._watcher_eviction_callback

@@ -588,6 +588,7 @@ def build_test_state(
     # that nobody is streaming.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
     manager.set_unviewed_transcript_release(state.release_unviewed_stopped_transcripts)
+    manager.set_chat_stream_ender(state.event_queues.end_streams)
     return state
 
 

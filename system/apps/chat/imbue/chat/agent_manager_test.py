@@ -4158,14 +4158,16 @@ def test_a_chat_whose_active_agent_stops_unstreamed_drops_its_archived_segments_
 
 
 @pytest.mark.parametrize("is_removed_by_the_observer", [True, False], ids=["observe-stream", "remove-agent"])
-def test_removing_a_chats_active_agent_drops_the_whole_chat_even_after_a_streamed_stop(
+def test_removing_a_chats_active_agent_drops_the_whole_chat_and_ends_its_streams(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, is_removed_by_the_observer: bool
 ) -> None:
     """A stop while streamed leaves the chat resident, and once the active agent is gone the release can no
-    longer tell the chat is stopped, so the removal has to drop the archived segments as well."""
+    longer tell the chat is stopped, so the removal has to drop the archived segments as well. Nothing feeds
+    the chat's open stream after that, so the removal ends it: the page reconnects and resyncs instead of
+    reading as connected with nothing arriving."""
     manager, state, active, stopped, chat_id = _resident_recorded_chat(broadcaster, tmp_path)
     try:
-        state.event_queues.register(chat_id)
+        stream = state.event_queues.register(chat_id)
         manager._handle_observe_event(make_agent_state_event(stopped))
         assert (set(state.loaders), set(state.watchers)) == ({chat_id}, {str(active.id)})
 
@@ -4175,6 +4177,26 @@ def test_removing_a_chats_active_agent_drops_the_whole_chat_even_after_a_streame
             manager.remove_agent(str(active.id))
 
         assert (state.loaders, state.watchers) == ({}, {})
+        assert stream.get(timeout=1) is None
+        assert not state.event_queues.has_consumers(chat_id)
+    finally:
+        state.shutdown()
+
+
+def test_removing_an_archived_member_leaves_its_chats_stream_open(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, state, _active, _stopped, chat_id = _resident_recorded_chat(broadcaster, tmp_path)
+    try:
+        stream = state.event_queues.register(chat_id)
+        archived = _agent_details(
+            f"archived-1-Chat-1-{chat_id}", agent_id=MngrAgentId(chat_id), state=AgentLifecycleState.STOPPED
+        )
+
+        manager._handle_observe_event(make_agent_removed_event(archived.id, archived.name, archived.host.id))
+
+        assert state.event_queues.has_consumers(chat_id)
+        assert stream.empty()
     finally:
         state.shutdown()
 

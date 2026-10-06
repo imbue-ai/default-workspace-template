@@ -30,11 +30,13 @@ destroyed, the agent manager's composition-wired callback evicts it (the whole c
 transcripts when it was the chat's active agent); an archived member whose lifecycle
 transitions into a positively-dead state is evicted the same way. A chat whose active
 agent dies (a UI stop, `mngr stop`, an OOM shed, idle shutdown) is dropped instead by the
-app state's release, which runs after every observe event and drops what each stopped
-chat holds unless a stream of the chat is open (a send reviving the chat counts as not
-stopped): the stream is fed only by the watcher, and a reported death can be momentary.
-Viewing a stopped chat rebuilds the watcher from disk on demand, and the release drops it
-again at the first observe event after its last stream closes.
+app state's release, which runs after every observe event and whenever a stream closes,
+and drops what each stopped chat holds unless a stream of the chat is open (a send reviving
+the chat counts as not stopped): the stream is fed only by the watcher, and a reported death
+can be momentary. Viewing a stopped chat rebuilds the watcher from disk on demand, and the
+release drops it again as soon as its last stream closes. Removing a chat's active agent
+also ends the chat's open streams, since nothing feeds them after: each page reconnects and
+resyncs over REST once the agent is listed again.
 
 Live delivery is a hint layer, never the source of truth: per-connection SSE queues are
 bounded, an overflowing consumer is disconnected on the first full `put`, and the

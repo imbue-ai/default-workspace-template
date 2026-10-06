@@ -551,6 +551,26 @@ def test_opening_a_stopped_chats_stream_keeps_the_watcher_through_a_release_whil
         state.shutdown()
 
 
+def test_a_stopped_chat_is_released_as_soon_as_its_last_stream_closes() -> None:
+    """Waiting for the next observe event would keep a stopped chat nobody is viewing resident for minutes."""
+    state = build_test_state()
+    state.agent_manager.note_agent_list_known()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    try:
+        with create_application(state).app_context():
+            response = _stream_events("stopped-agent")
+        frames = iter(response.response)
+        state.event_queues.broadcast("stopped-agent", {"type": "probe"})
+        next(frames)
+        assert set(state.watchers) == {"stopped-agent"}
+
+        response.close()
+
+        assert state.watchers == {}
+    finally:
+        state.shutdown()
+
+
 def test_a_stream_whose_feed_fails_to_build_no_longer_counts_as_open() -> None:
     """The release spares a chat with an open stream, so a stream left registered after its feed failed to
     build would keep the chat's transcripts resident for good."""
@@ -3050,7 +3070,7 @@ def test_stream_filtered_events_forwards_only_matching_events() -> None:
         session_id = event.get("session_id")
         return session_id is None or session_id == "main-1"
 
-    frames = list(_stream_filtered_events("agent-1", event_queues, event_queue, is_main_session_event))
+    frames = list(_stream_filtered_events("agent-1", event_queues, event_queue, is_main_session_event, lambda: None))
     forwarded_ids = [json.loads(frame[len("data: ") :])["event_id"] for frame in frames if frame.startswith("data: ")]
 
     assert forwarded_ids == ["main-evt", "no-session"]
