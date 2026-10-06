@@ -66,8 +66,8 @@ class SpareChatPhase(UpperCaseStrEnum):
     # as soon as its create ends, so that chat's own create can take the id.
     RELEASED = auto()
     # No longer wanted (its terms went stale, it aged out, its process died, its create failed, the
-    # chat it was reserved for launched on other terms, or an earlier run of the app left it); its
-    # ``mngr destroy`` is due or running.
+    # chat it was reserved for launched on other terms, it is the oldest ready spare beyond the pool's
+    # size, or an earlier run of the app left it); its ``mngr destroy`` is due or running.
     DISCARDING = auto()
 
 
