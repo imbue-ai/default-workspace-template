@@ -4345,13 +4345,19 @@ class AgentManager:
         compacted event, which consumes it, and the next compaction replaces it.
         """
         with self._lock:
-            self._compaction_pending_by_agent.pop(agent_info.id, None)
+            is_pending_cleared = self._compaction_pending_by_agent.pop(agent_info.id, None) is not None
+        is_marker_cleared = False
         marker_filename = get_harness_spec(agent_info.harness).tracker_class.compacting_marker_filename
         if marker_filename is not None:
             try:
-                (agent_info.agent_state_dir / marker_filename).unlink(missing_ok=True)
+                (agent_info.agent_state_dir / marker_filename).unlink()
+                is_marker_cleared = True
+            except FileNotFoundError:
+                pass
             except OSError as e:
                 _loguru_logger.warning("Failed to remove the compacting marker of agent {}: {}", agent_info.id, e)
+        if is_pending_cleared or is_marker_cleared:
+            _loguru_logger.info("autocompact: compaction cleared by interrupt agent={}", agent_info.id)
         self._recompute_activity_state(agent_info.id, broadcast_on_change=True)
 
     def stamp_compaction_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:

@@ -4172,18 +4172,56 @@ def test_a_compact_command_sent_from_the_composer_shows_the_compaction_it_starts
     tmp_path: Path, harness: HarnessType, message: str, is_compaction_shown: bool
 ) -> None:
     agent_id = f"agent-{uuid4().hex}"
-    agent_info = _agent_info(agent_id=agent_id, harness=harness, agent_state_dir=tmp_path / "state")
+    # The fixture's transcript holds one exchange, the least Claude Code compacts.
+    claude_agent_info, _ = make_agent_fixture(tmp_path, agent_id=agent_id)
+    agent_info = claude_agent_info.model_copy_update(to_update(claude_agent_info.field_ref().harness, harness))
     manager, messenger = _manager_with_known_agents()
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
-    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.post(f"/api/chats/{agent_id}/message", json={"message": message})
+    state = build_test_state(agent_manager=manager)
+    try:
+        with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+            response = (
+                create_application(state)
+                .test_client()
+                .post(f"/api/chats/{agent_id}/message", json={"message": message})
+            )
 
-    assert response.status_code == 200
-    assert messenger.sent == [(agent_id, message)]
-    if is_compaction_shown:
-        assert manager._compaction_pending_by_agent[agent_id][1] == CompactionCause.MANUAL
-    else:
-        assert agent_id not in manager._compaction_pending_by_agent
+        assert response.status_code == 200
+        assert messenger.sent == [(agent_id, message)]
+        if is_compaction_shown:
+            assert manager._compaction_pending_by_agent[agent_id][1] == CompactionCause.MANUAL
+        else:
+            assert agent_id not in manager._compaction_pending_by_agent
+    finally:
+        state.shutdown()
+
+
+@pytest.mark.parametrize(
+    "session_events",
+    [
+        pytest.param([], id="fresh_chat"),
+        pytest.param([_user_event("uuid-1", "2026-01-01T00:00:00Z", "Hello agent!")], id="no_reply_yet"),
+    ],
+)
+def test_a_compact_command_before_the_first_reply_is_declined_and_not_sent(
+    tmp_path: Path, session_events: list[dict[str, Any]]
+) -> None:
+    agent_info, _ = make_agent_fixture(tmp_path, agent_id=f"agent-{uuid4().hex}", session_events=session_events)
+    manager, messenger = _manager_with_known_agents()
+    state = build_test_state(agent_manager=manager)
+    try:
+        with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+            response = (
+                create_application(state)
+                .test_client()
+                .post(f"/api/chats/{agent_info.id}/message", json={"message": "/compact"})
+            )
+
+        assert response.status_code == 500
+        assert response.get_json() == {"detail": "Nothing to compact yet.", "kind": "nothing_to_compact"}
+        assert messenger.sent == []
+        assert agent_info.id not in manager._compaction_pending_by_agent
+    finally:
+        state.shutdown()
 
 
 def test_the_stop_button_clears_a_compaction_it_cancelled(tmp_path: Path) -> None:
@@ -4211,17 +4249,24 @@ def test_the_stop_button_clears_a_compaction_it_cancelled(tmp_path: Path) -> Non
 
 def test_a_compact_command_the_agent_refused_shows_no_compaction(tmp_path: Path) -> None:
     agent_id = f"agent-{uuid4().hex}"
-    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=tmp_path / "state")
+    agent_info, _ = make_agent_fixture(tmp_path, agent_id=agent_id)
     messenger = RecordingMngrMessenger(succeeds=False)
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     manager.note_agent_list_known()
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
-    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "/compact"})
+    state = build_test_state(agent_manager=manager)
+    try:
+        with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+            response = (
+                create_application(state)
+                .test_client()
+                .post(f"/api/chats/{agent_id}/message", json={"message": "/compact"})
+            )
 
-    assert response.status_code != 200
-    assert messenger.sent == [(agent_id, "/compact")]
-    assert agent_id not in manager._compaction_pending_by_agent
+        assert response.status_code != 200
+        assert messenger.sent == [(agent_id, "/compact")]
+        assert agent_id not in manager._compaction_pending_by_agent
+    finally:
+        state.shutdown()
 
 
 def test_a_compact_command_sent_from_a_codex_composer_shows_no_compaction(tmp_path: Path) -> None:

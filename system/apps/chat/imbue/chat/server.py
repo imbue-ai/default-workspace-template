@@ -57,6 +57,7 @@ from imbue.chat.attachments import store_uploaded_file
 from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_handoffs import converging_detail
+from imbue.chat.chat_handoffs import is_genuine_user_turn
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
@@ -473,10 +474,28 @@ def _revive_and_retry_send(
     return outcome
 
 
+# What a composer ``/compact`` is refused with before the agent has an exchange to compact.
+NOTHING_TO_COMPACT_DETAIL: Final[str] = "Nothing to compact yet."
+NOTHING_TO_COMPACT_SEND_FAILURE_KIND: Final[str] = "nothing_to_compact"
+
+
+@pure
+def _has_compactable_exchange(events: list[dict[str, Any]]) -> bool:
+    """Whether a transcript holds a user turn and an assistant reply, the least Claude Code agrees to compact.
+
+    Claude Code refuses a smaller one ("Not enough messages to compact.") only after its
+    ``PreCompact`` hook has fired, and no ``PostCompact`` follows to clear the status that hook set.
+    """
+    return any(is_genuine_user_turn(event) for event in events) and any(
+        event.get("type") == "assistant_message" for event in events
+    )
+
+
 def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
     """Deliver one message to an agent the way the message route does, revival included.
 
-    Raises ``SendFailedError`` with the harness's own words when it refused, and can raise
+    Raises ``SendFailedError`` with the harness's own words when it refused, or with
+    ``NOTHING_TO_COMPACT_DETAIL`` for a forwarded ``/compact`` that would be refused, and can raise
     mngr's ``AgentNotFoundError`` when mngr no longer lists the agent. Shared with the
     handoff (its summary request and the sends it held), so every message a chat's agent
     receives takes one path.
@@ -486,7 +505,11 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     # can ever deliver it -- so a send arriving here first (a headless client, or the first
     # request after a restart) would otherwise enqueue a message with nothing running to drain
     # it, and decide "is a turn open?" from an unpublished reading.
-    state.get_or_create_watcher(agent_info)
+    watcher = state.get_or_create_watcher(agent_info)
+    spec = get_harness_spec(agent_info.harness)
+    is_forwarded_compact = spec.is_composer_compact_forwarded and is_compact_command(text)
+    if is_forwarded_compact and not _has_compactable_exchange(watcher.get_all_events()):
+        raise SendFailedError(NOTHING_TO_COMPACT_DETAIL, NOTHING_TO_COMPACT_SEND_FAILURE_KIND)
 
     # The agent's session owns the whole send lifecycle (contract A1/A2): the file session
     # records the message as *Sending* around mngr's blocking delivery (greying the tap button
@@ -517,11 +540,7 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
         # which would let the stopped-chat release drop the watcher of the chat it revived.
         if outcome is SendOutcome.OK:
             agent_manager.note_agent_alive(agent_info.id)
-    if (
-        outcome is SendOutcome.OK
-        and get_harness_spec(agent_info.harness).is_composer_compact_forwarded
-        and is_compact_command(text)
-    ):
+    if outcome is SendOutcome.OK and is_forwarded_compact:
         agent_manager.note_compaction_requested(agent_info.id, CompactionCause.MANUAL, requested_at)
     return outcome
 

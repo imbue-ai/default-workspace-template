@@ -5645,7 +5645,7 @@ def test_the_compacting_marker_poller_recomputes_when_the_marker_appears_and_goe
 
 
 def test_an_interrupt_clears_the_compacting_marker_and_the_pending_request(
-    agent_manager: AgentManager, tmp_path: Path
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
 ) -> None:
     agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
     marker = _write_compacting_marker(state_dir, "manual")
@@ -5662,6 +5662,10 @@ def test_an_interrupt_clears_the_compacting_marker_and_the_pending_request(
     # A second interrupt, with no marker left, is a quiet no-op.
     agent_manager.clear_compaction_after_interrupt(agent_info)
     assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    cleared_lines = _log_lines_starting(
+        loguru_records, f"autocompact: compaction cleared by interrupt agent={agent_id}"
+    )
+    assert cleared_lines == [f"INFO autocompact: compaction cleared by interrupt agent={agent_id}"]
     # The cause survives: a compaction the interrupt came too late for still names it.
     event = _compacted_event(seconds_ago=0.0)
     agent_manager.stamp_compaction_events(agent_id, [event])
