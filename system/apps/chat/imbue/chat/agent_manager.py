@@ -1185,8 +1185,9 @@ class AgentManager:
 
         Lock-free (a single ``dict.get``, atomic under the GIL): the OOM prioritizer calls this
         from a thread that may already hold ``_lock``, which is not reentrant. The chat ids it
-        hands over come from ``get_chat_ids``, which never names an archived member, so the
-        own-chat fallback is right for every id that reaches here.
+        hands over come from ``_oom_managed_chat_ids``: ``get_chat_ids``, which never names an
+        archived member, and chats awaiting their first send, which have no record and run on a
+        spare under their own id, so the own-chat fallback is right for every id that reaches here.
         """
         record = self._chat_record_by_id.get(chat_id)
         if record is None:
@@ -1541,13 +1542,14 @@ class AgentManager:
         )
 
     def get_chat_ids(self) -> list[ChatId]:
-        """Ids of the chats the OOM prioritizer manages: user-facing chats only.
+        """Ids of the listed user-facing chats, which the OOM prioritizer manages (``_oom_managed_chat_ids``).
 
         Excludes workers (``agent_created=true``), the primary services agent
         (``is_primary=true``), and archived members of a chat; those keep their launch
         bands -- workers maximally expendable, the primary pinned -- so no UI activity
-        moves their score. Spare agents are excluded too: they keep the ``SPARE_AGENT``
-        band their label launches them in until a chat takes one. Remote agents
+        moves their score. Spare agents are excluded too: one stays in the ``SPARE_AGENT``
+        band its label launches it in until a chat takes it, or until it is up while reserved
+        for a chat awaiting its first send, which ``_oom_managed_chat_ids`` adds. Remote agents
         are left in (they have no local pid, so the prioritizer's pid lookup skips them
         harmlessly).
         """
