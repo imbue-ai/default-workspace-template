@@ -12,7 +12,7 @@ from browser import session as bsession
 from browser.primitives import APP_NAME
 from imbue.mngr.utils.polling import wait_for
 from mock_cdp_client_test import TabClosingCdpClient
-from workspace_layout.testing import FAKE_WINDOW_ID, LoopbackShell, desktop_answer
+from workspace_layout.testing import FAKE_WINDOW_ID, LoopbackShell, desktop_answer, fake_desktop
 
 # The manifest the supervisord program line registers with ``forward_port.py --manifest``.
 _APP_MANIFEST_PATH = Path(__file__).parent / "app.toml"
@@ -189,7 +189,7 @@ def _running_browser_one() -> tuple[bsession.LiveBrowser, TabClosingCdpClient]:
 
 
 def _showing(shell: LoopbackShell, shown: str) -> None:
-    shell.op_answer = {**desktop_answer("home", "c-link", [], FAKE_WINDOW_ID, []), "shown": shown}
+    shell.op_answer = {**desktop_answer(fake_desktop("home"), "c-link", FAKE_WINDOW_ID), "shown": shown}
 
 
 def test_open_url_opens_the_page_in_front_and_shows_the_browser_to_the_client_that_asked(
@@ -207,7 +207,7 @@ def test_open_url_opens_the_page_in_front_and_shows_the_browser_to_the_client_th
     assert response.get_json() == {"browser": "browser-1", "window_id": FAKE_WINDOW_ID, "shown": "raised"}
     assert cdp.created == ["http://localhost:3000/app"]
     assert loopback_shell.posted_ops() == [
-        ("show", {"app": "browser", "path": "/?session=browser-1", "showing": [], "repoint": [], "client": "c-link"})
+        ("show", {"app": "browser", "path": "/?session=browser-1", "client": "c-link"})
     ]
 
 

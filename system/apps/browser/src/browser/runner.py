@@ -69,8 +69,8 @@ from pydantic import Field
 from simple_websocket import ConnectionClosed
 from workspace_layout.client import ShellLayoutClient
 from workspace_layout.errors import InvalidLayoutValueError, ShellOpError
-from workspace_layout.ops import ShowRequest
-from workspace_layout.primitives import ClientId
+from workspace_layout.ops import ShowArgs
+from workspace_layout.primitives import ClientId, WindowPath
 from workspace_layout.shell_url import shell_base_url
 
 from browser import mediastream, telemetry
@@ -394,7 +394,7 @@ def open_url() -> Response:
     page = browser_page_path(BrowserName(browser.browser_id))
     shell = ShellLayoutClient(shell_url=shell_base_url(), requester=None, timeout_seconds=_SHELL_SHOW_TIMEOUT_SECONDS)
     try:
-        shown = shell.show(ShowRequest(app=APP_NAME, path=page, showing=(), repoint=(), client_id=client_id))
+        shown = shell.show(ShowArgs(app=APP_NAME, path=WindowPath(page), client=client_id))
     except ShellOpError as e:
         logger.warning("Opened {} in browser {} but could not show its window: {}", url, browser.browser_id, e)
         return _launch_refusal(f"The browser has the page, but its window could not be shown: {e}", 502)
