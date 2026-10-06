@@ -50,6 +50,8 @@ SHELL_CONTEXT_MENU_PATH: Final[Path] = Path(
     "system/apps/system_interface/imbue/system_interface/static/_static/context_menu.js"
 )
 CONTEXT_MENU_ROUTE: Final[str] = "/_static/context_menu.js"
+# Every shell module an app's pages import.
+SHELL_MODULE_PATHS: Final[tuple[Path, ...]] = (SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH)
 
 # The registration script, relative to the repo root every supervised program runs from.
 FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")

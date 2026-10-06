@@ -38,8 +38,7 @@ from app_manifest.errors import SuiteSelectionError
 from app_manifest.manifest import app_package_directory
 from app_manifest.primitives import RepoRelativePath
 from app_manifest.primitives import is_path_covered_by
-from app_manifest.registry import SHELL_APP_CONTRACT_PATH
-from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
+from app_manifest.registry import SHELL_MODULE_PATHS
 from app_manifest.scope import LoadedManifest
 from app_manifest.scope import find_wiring_sections
 from app_manifest.scope import list_changed_files
@@ -402,9 +401,7 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
         npm_packages=read_npm_packages(repo_root),
         manifests=manifests,
         wiring_owners=_wiring_owners(repo_root, manifests),
-        has_shell_modules=all(
-            (repo_root / path).is_file() for path in (SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH)
-        ),
+        has_shell_modules=all((repo_root / path).is_file() for path in SHELL_MODULE_PATHS),
     )
 
 

@@ -12,7 +12,7 @@ from pydantic import Field
 from pydantic import PrivateAttr
 
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
-from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
+from app_manifest.registry import SHELL_MODULE_PATHS
 from app_manifest.selection import ALWAYS_RUN_GUARDS
 
 APP_ICON_MARKUP: Final[str] = (
@@ -164,7 +164,7 @@ def build_selection_workspace(repo_root: Path) -> None:
     init_git_repository(repo_root)
     write_repo_file(repo_root, "pyproject.toml", _SELECTION_ROOT_PYPROJECT)
     write_repo_file(repo_root, ".gitignore", f"{SHELL_APP_CONTRACT_PATH.parent.parent}/\n")
-    for module_path in (SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH):
+    for module_path in SHELL_MODULE_PATHS:
         write_repo_file(repo_root, str(module_path), "export {};\n")
     write_repo_file(repo_root, "conftest.py", "")
     write_repo_file(repo_root, "README.md", "# workspace\n")
@@ -244,7 +244,7 @@ def build_selection_workspace(repo_root: Path) -> None:
 
 def remove_shell_modules(repo_root: Path) -> None:
     """Delete the shell's built modules, as a fresh worktree lacks them."""
-    for module_path in (SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH):
+    for module_path in SHELL_MODULE_PATHS:
         (repo_root / module_path).unlink()
 
 
