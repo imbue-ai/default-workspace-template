@@ -14,9 +14,9 @@ A chat minted to await its first send (the one an empty chat list opens on, or a
 reserves a spare that fits, and is minted under that spare's id, name, and account instead of
 fresh ones, so a later change of default leaves it on the account it opened on, as any chat.
 One minted with no spare to reserve (before any account is signed in, say) has the next spare
-started under its own id and name, reserved for it and binding it to its account, ahead of the
-pool's. Such chats hold at most
-as many reserved spares as the pool keeps; one past that holds none until a reservation frees.
+started under its own id and name, reserved for it ahead of the pool's, and takes its account.
+Such chats hold at most as many reserved spares as the pool keeps; one past that holds none
+until a reservation frees.
 The spare stays hidden and leaves the pool, which is topped up. The chat's first send takes it
 as a new chat would when the send's account and fast mode fit it; otherwise the spare is
 destroyed and the chat created under the id once the spare is gone. The session sweep destroys a

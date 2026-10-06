@@ -232,15 +232,15 @@ provisional until that one is up, which is sooner than a create of its own that
 would queue behind it on mngr's host lock. Its message and model pick follow
 through the send path. A chat minted to await its first send (the one an empty
 chat list opens on, or an intake's) reserves a spare that fits its account (the
-intake's, else the default one) and takes that spare's id and name, and its
-account: a chat opened under one default keeps that account when the default
-changes later, as any chat does. The spare stays hidden, leaves the pool (which
-is topped up), and is not replaced while reserved; the session sweep destroys it only once
-its process dies or it has been up for six hours. Such a chat that holds no
-spare (minted before any sign-in, or after its spare was destroyed) has the
-next spare the app starts on its account's terms started under its own id and
-name, reserved for it, ahead of the pool's. Awaiting chats hold at most as
-many reserved spares as the pool keeps, so unsent drafts never keep more idle
+intake's, else the default one) and takes that spare's id, name, and account: a
+chat opened under one default keeps that account when the default changes
+later, as any chat does. The spare stays hidden, leaves the pool (which is
+topped up), and is not replaced while reserved; the session sweep destroys it
+only once its process dies or it has been up for six hours. Such a chat that
+holds no spare (minted before any sign-in, or after its spare was destroyed)
+has the next spare the app starts on its account's terms started under its own
+id and name, reserved for it, ahead of the pool's. Awaiting chats hold at most
+as many reserved spares as the pool keeps, so unsent drafts never keep more idle
 agents than that; a chat past the limit holds none until a reservation frees,
 and its first send before then creates the chat. The first send then takes a
 reserved spare as a create with no chat id would, at once when it is up, else
