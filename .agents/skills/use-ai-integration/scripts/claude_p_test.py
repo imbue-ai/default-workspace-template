@@ -250,6 +250,16 @@ def test_child_env_prefers_the_pinned_default_account_over_the_most_recent(
     assert claude_p._child_env()["CLAUDE_CONFIG_DIR"] == str(accounts / "acct-pinned")
 
 
+def test_child_env_leaves_config_dir_unset_without_an_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no account to name, the child keeps claude's own default, ~/.claude."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    assert "CLAUDE_CONFIG_DIR" not in claude_p._child_env()
+
+
 # Stands in for claude: reports the config dir it was given and whether its stdin is
 # at EOF (readable at once and empty), as the result text of a success payload.
 _STUB_CLAUDE = """#!/usr/bin/env python3
