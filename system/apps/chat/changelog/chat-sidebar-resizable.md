@@ -1,4 +1,4 @@
-The chat list is resizable: drag its right edge (or focus the edge and use the arrow keys) to make it between 100px and 480px wide; a double-click on the edge puts it back to the default 180px. The width is kept per browser across reloads.
+The chat list is resizable: drag its right edge (or focus the edge and use the arrow keys) to make it between 100px and 480px wide; a double-click on the edge puts it back to the default 180px. The width is kept per browser across reloads. A chat's title now runs to the end of its row; the rename pencil only takes room, shortening the title, while the row is hovered.
 
 In a narrow chat window on a desktop (a mouse rather than a touchscreen), the header's list button now opens the chat list exactly as the wide window shows it -- dense rows, a rename pencil on hover, "New chat" spelled out -- at the width it was dragged to, instead of the phone's finger-sized drawer. Phones and other touchscreens keep the finger-sized drawer.
 
