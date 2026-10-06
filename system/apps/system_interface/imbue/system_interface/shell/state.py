@@ -8,7 +8,6 @@ from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
-from typing import Any
 from typing import Final
 from typing import assert_never
 
@@ -25,7 +24,18 @@ from pydantic import field_validator
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowTitle
+from workspace_layout.records import ClientRecord
+from workspace_layout.records import Desktop
+from workspace_layout.records import DesktopLayout
+from workspace_layout.records import DesktopView
+from workspace_layout.records import EntryPresentation
+from workspace_layout.records import StoredWindowPath
+from workspace_layout.records import Window
+from workspace_layout.records import WindowView
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -45,32 +55,26 @@ from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
 from imbue.system_interface.shell.clients import entries_wire_json
-from imbue.system_interface.shell.close_hints import WindowClosedHint
+from imbue.system_interface.shell.close_hints import WindowClosedHintPost
 from imbue.system_interface.shell.close_hints import post_window_closed_hint
 from imbue.system_interface.shell.close_hints import window_closed_hint
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientArrivalOutcome
-from imbue.system_interface.shell.data_types import ClientRecord
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
-from imbue.system_interface.shell.data_types import DesktopLayout
-from imbue.system_interface.shell.data_types import EntryPresentation
 from imbue.system_interface.shell.data_types import LaunchOutcome
 from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
-from imbue.system_interface.shell.data_types import StoredWindowPath
 from imbue.system_interface.shell.data_types import UserRecord
-from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowOpenRequest
-from imbue.system_interface.shell.data_types import desktop_wire_json
+from imbue.system_interface.shell.data_types import desktop_view
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.data_types import effective_window
 from imbue.system_interface.shell.data_types import stoppable_program_of
-from imbue.system_interface.shell.data_types import window_wire_json
+from imbue.system_interface.shell.data_types import window_view
 from imbue.system_interface.shell.desktop_document import apps_with_their_default_shortcut_on
 from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import find_window
@@ -105,9 +109,6 @@ from imbue.system_interface.shell.launches import resolve_launch_destination
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import LaunchTargetKind
-from imbue.system_interface.shell.primitives import UserId
-from imbue.system_interface.shell.primitives import WindowPath
-from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.primitives import mint_window_id
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
@@ -166,7 +167,7 @@ class ShellState(MutableModel):
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
     )
-    close_hint_poster: Callable[[WindowClosedHint], None] = Field(
+    close_hint_poster: Callable[[WindowClosedHintPost], None] = Field(
         default=post_window_closed_hint,
         frozen=True,
         description="How an app is told a window of its closed; a test records the hints instead",
@@ -266,7 +267,7 @@ class ShellState(MutableModel):
         shortcuts_outcome = self.desktops.ensure_default_shortcuts_offered(rows)
         pinned_outcome = self.desktops.ensure_pinned_windows(pinned_apps(rows), datetime.now(timezone.utc))
         if shortcuts_outcome.is_written or pinned_outcome.is_written:
-            self.broadcaster.broadcast_desktops_updated(self.desktops_wire_json(pinned_outcome.desktops))
+            self.broadcaster.broadcast_desktops_updated(self.desktop_views(pinned_outcome.desktops))
         return pinned_outcome.desktops
 
     def create_desktop(self, name: str, color: str, glyph: int) -> Desktop:
@@ -374,9 +375,9 @@ class ShellState(MutableModel):
         raise DesktopNotFoundError(desktop_id)
 
     def broadcast_desktops_updated(self) -> None:
-        self.broadcaster.broadcast_desktops_updated(self.desktops_wire_json(self.list_desktops()))
+        self.broadcaster.broadcast_desktops_updated(self.desktop_views(self.list_desktops()))
 
-    def desktops_wire_json(self, desktops: Sequence[Desktop]) -> list[dict[str, Any]]:
+    def desktop_views(self, desktops: Sequence[Desktop]) -> list[DesktopView]:
         """The ``desktops`` of a listing or a ``desktops_updated``: every client's stored path for each independent
         window rides on the window, read once for the whole list."""
         by_client = self.window_paths.read_all_paths(self._independent_window_ids())
@@ -384,16 +385,16 @@ class ShellState(MutableModel):
         for client_id, paths in by_client.items():
             for window_id, stored in paths.items():
                 by_window.setdefault(window_id, {})[client_id] = stored.path
-        return [desktop_wire_json(desktop, by_window) for desktop in desktops]
+        return [desktop_view(desktop, by_window) for desktop in desktops]
 
-    def desktop_wire_json(self, desktop: Desktop) -> dict[str, Any]:
-        (wire,) = self.desktops_wire_json((desktop,))
-        return wire
+    def desktop_view(self, desktop: Desktop) -> DesktopView:
+        (view,) = self.desktop_views((desktop,))
+        return view
 
-    def window_wire_json(self, window: Window) -> dict[str, Any]:
+    def window_view(self, window: Window) -> WindowView:
         """One window as a listing shows it, with each client's own path when it is independent."""
         by_client = self.window_paths.read_all_paths({window.id})
-        return window_wire_json(
+        return window_view(
             window, {client_id: paths[window.id].path for client_id, paths in by_client.items() if window.id in paths}
         )
 

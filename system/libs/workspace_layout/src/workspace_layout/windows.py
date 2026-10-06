@@ -1,14 +1,22 @@
-import json
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any
 from typing import Final
 
+from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from loguru import logger
+from pydantic import Field
+from pydantic import ValidationError
 
+from workspace_layout.answers import DesktopsListing
+from workspace_layout.answers import quote_answer
+from workspace_layout.client import request_shell
+from workspace_layout.errors import ShellUnreachableError
+from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPath
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 
 # One loopback read of a small file the shell holds in memory; past this it is not answering.
@@ -25,55 +33,57 @@ def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
     """
     url = f"{shell_url}{DESKTOPS_ROUTE}"
     try:
-        with urllib.request.urlopen(url, timeout=WINDOW_READ_TIMEOUT_SECONDS) as response:
-            raw = response.read()
-    except (urllib.error.URLError, OSError) as e:
+        response = request_shell("GET", url, None, WINDOW_READ_TIMEOUT_SECONDS)
+    except ShellUnreachableError as e:
         logger.debug("Could not read the shell's desktops at {}: {}", url, e)
         return None
-    try:
-        document = json.loads(raw)
-    except ValueError as e:
-        logger.warning("The shell's desktops at {} are not JSON: {}", url, e)
+    if not response.is_success:
+        logger.debug("The shell answered its desktops at {} with {}", url, response.status_code)
         return None
-    paths = window_paths_of_app(document, app)
-    if paths is None:
-        logger.warning("The shell's desktops at {} are not shaped as {{desktops: [{{windows: [...]}}]}}", url)
-    return paths
+    if isinstance(response.body, str):
+        logger.warning("The shell's desktops at {} are not a JSON object: {}", url, quote_answer(response.body))
+        return None
+    try:
+        listing = DesktopsListing.model_validate(response.body, extra="ignore")
+    except ValidationError as e:
+        logger.warning("The shell's desktops at {} are not a desktops listing: {}", url, describe_validation_error(e))
+        return None
+    return _paths_of_app(listing, app)
 
 
 @pure
-def window_paths_of_app(document: Any, app: AppName) -> list[str] | None:
-    """The paths of ``app``'s windows in a desktops document, or None when the document is not one."""
-    if not isinstance(document, dict) or not isinstance(document.get("desktops"), list):
-        return None
+def _paths_of_app(listing: DesktopsListing, app: AppName) -> list[str]:
     paths: list[str] = []
-    for desktop in document["desktops"]:
-        if not isinstance(desktop, dict) or not isinstance(desktop.get("windows"), list):
-            return None
-        for window in desktop["windows"]:
-            if not isinstance(window, dict):
-                return None
-            window_app = window.get("app")
-            path = window.get("path")
-            client_paths = window.get("client_paths", {})
-            if not isinstance(window_app, str) or not isinstance(path, str) or not isinstance(client_paths, dict):
-                return None
-            if not all(isinstance(client_path, str) for client_path in client_paths.values()):
-                return None
-            if window_app == app:
-                paths.append(path)
+    for desktop in listing.desktops:
+        for window in desktop.windows:
+            if window.app == app:
+                paths.append(str(window.path))
                 # An independent window's shared path stays its home path; what each client's page shows rides
                 # beside it, and any one of them keeps a resource alive.
-                paths.extend(client_paths.values())
+                paths.extend(str(client_path) for client_path in window.client_paths.values())
     return paths
+
+
+class WindowClosedHint(FrozenModel):
+    """What the shell posts to an app's ``window_closed_path`` when a window of the app closes
+    (docs/system/specs/window-bound-resources.md section 4.6)."""
+
+    path: WindowPath = Field(description="The path the closed window's page was at")
+    window_id: WindowId = Field(description="The window that closed")
+    desktop_id: DesktopId = Field(description="The desktop it was on")
+
+
+@pure
+def parse_window_closed_hint(body: Any) -> WindowClosedHint | None:
+    """The hint a closed-window post carries, or None for a body of another shape."""
+    try:
+        return WindowClosedHint.model_validate(body, extra="ignore")
+    except ValidationError:
+        return None
 
 
 @pure
 def window_query_value(path: str, name: str) -> str | None:
-    """The first value of the query parameter ``name`` in a window path, or None when it carries none.
-
-    A window path without the parameter (an app's root, or a page of another kind) names no resource, so the
-    callers that sweep resources by window treat None as a window showing nothing.
-    """
+    """The first value of the query parameter ``name`` in a window path, or None when it carries none."""
     values = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query).get(name)
     return values[0] if values else None

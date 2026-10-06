@@ -37,7 +37,7 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `program` | string | no | `name` | The supervisord program that runs the app. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
 | `default_shortcut` | table | no | absent | `{action = "<id>", launch = "<id>"?, mode = "focus" \| "new"}`. `action` must be a declared action id, or `open` for a single-instance app. `launch`, optional, is the desktop interface's spelling: a declared launch path id, or `open` when the app declares none. |
-| `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation, `workspace-layout --param` validation, and the New Tab page (an action with a `message` param is one the page can seed a first message into). Forbidden when `instances = false`. |
+| `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation and the New Tab page (an action with a `message` param is one the page can seed a first message into). Forbidden when `instances = false`. |
 | `launch_paths` | array of tables | no | `[]` | Each `{id, label, path, params?}`: the paths the desktop interface opens windows at (`docs/system/blueprint/desktop-interface/contracts.md` section 2). `id` follows the action id rule, is unique, and is never `open` (reserved for the synthesized root launch path); `path` is rooted with one slash, carries no query string or fragment, and nothing a URL would escape; `params` is the optional `{name, label, required}` array naming the query parameters the shell may append. Declared beside `actions` until the desktop interface replaces the tabbed shell. |
 | `launcher_rank` | integer | no | absent | At least 1. The app's place among the New Tab page's leading "Open new" tiles, lowest first; an app without one follows every ranked app. The built-ins declare 10 (`chat`), 20 (`files`), 30 (`browser`), 40 (`terminal`). |
 | `references` | array of tables | no | `[]` | Each `{path, note?}`. `path` is a literal repo-root-relative POSIX file or directory the app owns outside its own folder (no globs, no `.` or `..` segments, no empty segments, no trailing slash, no backslashes, never under `system/vendor/` or `data/`, and never through a symlinked directory, which git does not report diffs through) and is unique within the manifest. `note` is one non-empty line, at most 200 characters, saying why it belongs to the app and which surface it uses. Location rules below. |
@@ -283,7 +283,7 @@ The arrangement ops `open`, `focus`, `split`, `close`, and `move` never travel o
 
 `everything.tabs` is every address of every listed instance, apps in registry order, instances in list order.
 The document also carries `is_preview`, whether the answering shell is a preview (section 6).
-`clients` is every stored client record (section 7's retention), each carrying `is_connected` and additionally `docked`, the addresses in that client's layout of its active view, so `workspace-layout list` can say where an instance is docked without reading layouts.
+`clients` is every stored client record (section 7's retention), each carrying `is_connected` and additionally `docked`, the addresses in that client's layout of its active view.
 
 ## 10. The browser-side contract (`app_contract.js`)
 
@@ -321,7 +321,9 @@ The shell inspects no payloads.
 
 ## 12. `workspace-layout` and the op route
 
-Subcommands: `list`, `inspect`, `where`, `context`, `views`, `load`, `open`, `focus`, `split`, `close`, `move`, `rename`, `delete`, `stop`, `start`, `maximize`, `restore`, `replace-url`, `refresh`, `shortcuts`, `shortcut set`, `shortcut remove`.
+Subcommands: `context`, `desktops`, `list`, `load`, `open`, `show`, `focus`, `minimize`, `restore`, `maximize`, `place`, `close`, `navigate`, `refresh`, `shortcuts`, `shortcut set`, `shortcut move`, `shortcut remove`, `wallpaper`.
+
+The op route and the command are specified by `docs/system/blueprint/desktop-interface/contracts.md` section 8, which supersedes the rest of this section: what follows is the tabbed shell's account (views, addresses, and the verbs the command refuses as retired), kept for reference.
 
 The script posts `{op, args, requester}` to `POST /api/layout/broadcast` on the shell (loopback only): `requester` is the caller's own chat as an address (`app:chat?instance=$MINDS_CHAT_ID`, the chat id the chat app sets on every agent it creates, with `$MNGR_AGENT_ID` standing in for an agent that is its own chat), which is what `self` names and how the shell attributes the op to a client; the shell itself names no app.
 The client's layout file is the truth of the arrangement, so the shell applies every arrangement op to that file itself and no browser needs to be connected for an op to land.

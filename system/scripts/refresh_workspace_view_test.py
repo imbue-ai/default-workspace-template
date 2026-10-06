@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import pytest
-from workspace_layout.ops import RELOAD_SYSTEM_INTERFACE_OP
+from workspace_layout.primitives import LayoutOp
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 from workspace_layout.testing import describe_op_body_problem
 
@@ -157,7 +157,7 @@ def test_the_broadcast_body_is_one_the_shells_op_route_takes() -> None:
 
     [(url, payload, _headers)] = http.posts
     assert url == f"{_BASE_URL}{LAYOUT_OP_ROUTE}"
-    assert payload["op"] == RELOAD_SYSTEM_INTERFACE_OP
+    assert payload["op"] == LayoutOp.RELOAD_SYSTEM_INTERFACE
     assert describe_op_body_problem(payload) is None
 
 

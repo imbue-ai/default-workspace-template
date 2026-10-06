@@ -5,6 +5,8 @@ from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WallpaperName
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowTitle
 
 
 def test_desktop_ids_are_slugs() -> None:
@@ -28,3 +30,14 @@ def test_client_ids_and_wallpaper_names_are_filename_safe() -> None:
             ClientId(malformed)
         with pytest.raises(InvalidLayoutValueError):
             WallpaperName(malformed)
+
+
+def test_window_paths_are_rooted_on_the_apps_origin_and_titles_are_trimmed() -> None:
+    assert WindowPath("/?chat=agent-1") == "/?chat=agent-1"
+    for bad in ("", "notes", "//evil.example", "/\x00"):
+        with pytest.raises(InvalidLayoutValueError):
+            WindowPath(bad)
+    assert WindowTitle("  Build log  ") == "Build log"
+    assert WindowTitle("") == ""
+    with pytest.raises(InvalidLayoutValueError):
+        WindowTitle("x" * 300)

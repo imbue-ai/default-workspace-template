@@ -7,6 +7,7 @@ from flask import Flask
 
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
+from imbue.system_interface.avatar.designs import GUMMY_SEAL_DESIGN_ID
 from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
 from imbue.system_interface.avatar.register_avatar import AvatarRegistrationError
 from imbue.system_interface.avatar.register_avatar import main
@@ -44,7 +45,7 @@ def test_the_helper_names_the_reason_a_design_is_refused(app: Flask, tmp_path: P
     with serve_app(app) as served:
         # The shell's own refusal reaches the caller with its reason.
         with pytest.raises(AvatarRegistrationError, match="bundled"):
-            _run(served.http_url, fine, str(DEFAULT_DESIGN_ID))
+            _run(served.http_url, fine, str(GUMMY_SEAL_DESIGN_ID))
         with pytest.raises(AvatarRegistrationError, match="custom CSS"):
             _run(served.http_url, custom, "custom")
         with pytest.raises(AvatarRegistrationError, match="exceeds"):

@@ -21,20 +21,22 @@ from getting_started.state_files import read_json_object
 from getting_started.state_files import write_json_atomic
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
+from workspace_layout.errors import ShellAnswerMalformedError
 from workspace_layout.errors import ShellOpError
 from workspace_layout.interfaces import ShellLayoutInterface
-from workspace_layout.ops import OpenRequest
-from workspace_layout.ops import PlaceRequest
+from workspace_layout.ops import OpenArgs
+from workspace_layout.ops import PlaceArgs
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import WindowPath
+from workspace_layout.records import Frame
 
 # The frame the window is placed at: the left complement of the shell's pinned frame (desktop contracts.md 4.2),
-# clear of the one-column shortcut grid on a wide backdrop (launcher plan section 3.4), as ``x,y,width,height`` in
-# fractions of the backdrop.
-FIRST_WINDOW_FRAME: Final[str] = "0.07,0.05,0.38,0.9"
+# clear of the one-column shortcut grid on a wide backdrop (launcher plan section 3.4).
+FIRST_WINDOW_FRAME: Final[Frame] = Frame(x=0.07, y=0.05, width=0.38, height=0.9)
 # The page the window opens at: the app's root, its one launch path.
-FIRST_WINDOW_PATH: Final[str] = "/"
+FIRST_WINDOW_PATH: Final[WindowPath] = WindowPath("/")
 
 LEDGER_FILENAME: Final[str] = "first_window.json"
 _DELIVERED_KEY: Final[str] = "is_delivered"
@@ -91,16 +93,14 @@ class FirstWindowOpener(MutableModel):
         if target is None:
             return FirstWindowDelivery(is_delivered=False, client_id=None)
         client_id, desktop_id = target
-        open_request = OpenRequest(
-            app=self.app,
-            path=FIRST_WINDOW_PATH,
-            if_present=IfPresent.FOCUS,
-            is_minimized=False,
-            client_id=client_id,
-            desktop=str(desktop_id),
+        open_request = OpenArgs(
+            app=self.app, path=FIRST_WINDOW_PATH, if_present=IfPresent.FOCUS, client=client_id, desktop=str(desktop_id)
         )
         try:
             opened = self.shell.open(open_request)
+        except ShellAnswerMalformedError as e:
+            logger.warning("The shell answered the open of the {} window with something else: {}", self.app, e)
+            return FirstWindowDelivery(is_delivered=False, client_id=None)
         except ShellOpError as e:
             logger.info("The shell did not open the {} window, so it stays owed: {}", self.app, e)
             return FirstWindowDelivery(is_delivered=False, client_id=None)
@@ -112,11 +112,14 @@ class FirstWindowOpener(MutableModel):
                 "The first-visit {} window {} is popped out for client {}; left there", self.app, window_id, client_id
             )
             return FirstWindowDelivery(is_delivered=True, client_id=client_id)
-        place_request = PlaceRequest(
-            window=str(window_id), frame=FIRST_WINDOW_FRAME, client_id=client_id, desktop=str(desktop_id)
+        place_request = PlaceArgs(
+            window=str(window_id), frame=FIRST_WINDOW_FRAME, client=client_id, desktop=str(desktop_id)
         )
         try:
             self.shell.place(place_request)
+        except ShellAnswerMalformedError as e:
+            logger.warning("The shell answered the place of window {} with something else: {}", window_id, e)
+            return FirstWindowDelivery(is_delivered=False, client_id=None)
         except ShellOpError as e:
             logger.info("The shell did not place window {}, so the first-visit window stays owed: {}", window_id, e)
             return FirstWindowDelivery(is_delivered=False, client_id=None)
@@ -134,6 +137,9 @@ class FirstWindowOpener(MutableModel):
         """The first connected client and the first desktop, or None while there is neither or the shell cannot say."""
         try:
             clients = self.shell.connected_clients()
+        except ShellAnswerMalformedError as e:
+            logger.warning("The shell's client list is not one: {}", e)
+            return None
         except ShellOpError as e:
             logger.debug("Could not list the shell's clients: {}", e)
             return None
@@ -141,6 +147,9 @@ class FirstWindowOpener(MutableModel):
             return None
         try:
             desktops = self.shell.desktops()
+        except ShellAnswerMalformedError as e:
+            logger.warning("The shell's desktops are not a desktop listing: {}", e)
+            return None
         except ShellOpError as e:
             logger.debug("Could not list the shell's desktops: {}", e)
             return None

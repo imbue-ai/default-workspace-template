@@ -70,7 +70,7 @@ observe`, its own supervised service) writes, and serves:
   (`focus_chat.py`) to put the chat root with the chat selected (`/?chat=<chat-id>`) on that client's
   screen, the chat's own page (`/<chat-id>`) counting as already showing it and a subagent view not,
   and a chat root window (`/`) on screen allowed to be moved to it. The shell picks the window. It
-  answers the shell's `shown` and window id; `400` for a chat id of the wrong shape, `403` in a
+  answers the shell's `shown` and window id; `400` for a chat or client id of the wrong shape, `403` in a
   secondary chat, and `502` when the shell cannot be reached, refuses, or answers something else.
 - `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
   the update apply polls on the `--preflight` boot and on every critical app
@@ -186,7 +186,12 @@ opens the dialog's rebind variant, whose picker starts from "Keep the current
 model", for changing account and model in one switch. A chat that has had no
 user turn skips the dialog too: it switches at once, with no summary and no
 handoff prompt, since there is nothing to hand over. Only a switch that will
-write a summary asks.
+write a summary asks. A press that lands before a new chat's transcript has
+loaded waits for that load before deciding. The strip, the "Switch and send"
+button and the model bar's "next" mark show only while the next send is what
+carries the switch out: once its message is sent the chip names the target,
+unmarked, until the new agent reports its model, and a failed switch leaves it
+on the agent the chat still runs on.
 While the chat converges the held messages render from the snapshot's
 `handoff.held_sends` (the message the user switched with stands down once the
 `agent_switch` marker carrying it is on the transcript, where it renders as the

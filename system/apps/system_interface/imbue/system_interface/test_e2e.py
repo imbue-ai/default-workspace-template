@@ -1761,12 +1761,13 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         expect(entry).to_have_attribute("data-entry-style", "avatar")
         expect(entry).to_have_attribute("data-mood", "idle")
         expect(entry).to_have_attribute("data-stale", "true")
-        assert _avatar_image_source(entry).endswith("/api/avatars/gummy-seal/image.svg?mood=idle")
+        # The default design is the character, which the page draws itself rather than loading as an image.
+        expect(entry.locator("[data-character-body]")).to_have_count(1)
+        expect(entry.locator("img")).to_have_count(0)
 
         _write_agent_events(server.agent_events_path, "RUNNING")
         expect(entry).to_have_attribute("data-mood", "working", timeout=15000)
         expect(entry).to_have_attribute("data-stale", "false")
-        assert _avatar_image_source(entry).endswith("/api/avatars/gummy-seal/image.svg?mood=working")
         _write_agent_events(server.agent_events_path, "STOPPED")
         expect(entry).to_have_attribute("data-mood", "idle", timeout=15000)
 
@@ -1774,7 +1775,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         _open_entry_menu(page, entry).locator('[data-menu-row="style-plain"]').click()
         expect(entry).to_have_attribute("data-entry-style", "plain", timeout=10000)
         expect(entry.locator("svg")).to_have_count(1)
-        expect(entry.locator("img")).to_have_count(0)
+        expect(entry.locator("[data-character-body]")).to_have_count(0)
         _wait_for_client_entry(
             server.base_url,
             _client_id(page),
@@ -1783,7 +1784,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         )
         _open_entry_menu(page, entry).locator('[data-menu-row="style-avatar"]').click()
         expect(entry).to_have_attribute("data-entry-style", "avatar", timeout=10000)
-        expect(entry.locator("img")).to_have_count(1)
+        expect(entry.locator("[data-character-body]")).to_have_count(1)
 
         with _second_client(page, server) as other:
             other_entry = _pinned_entry(other)
@@ -1795,7 +1796,7 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             _open_entry_menu(page, entry).locator('[data-menu-row="change-avatar"]').click()
             chooser = page.locator("[data-avatar-chooser]")
             expect(chooser).to_be_visible(timeout=5000)
-            expect(chooser.locator('[data-avatar-design="gummy-seal"]')).to_have_attribute("aria-pressed", "true")
+            expect(chooser.locator('[data-avatar-design="imbue-character"]')).to_have_attribute("aria-pressed", "true")
             chooser.locator('[data-avatar-design="jelly-cat"]').click()
             expect(chooser.locator('[data-avatar-design="jelly-cat"]')).to_have_attribute(
                 "aria-pressed", "true", timeout=10000
@@ -1965,7 +1966,7 @@ def test_a_phone_in_either_orientation_lands_on_the_pinned_window(
             expect(phone.locator("[data-taskbar]")).to_have_count(0)
             expect(phone.locator("[data-window-id] .title-bar")).to_have_count(0)
             _phone_shows(phone, pinned["id"])
-            expect(_phone_pill(phone).locator("[data-avatar-image]")).to_be_visible()
+            expect(_phone_pill(phone).locator("[data-character-body]")).to_be_visible()
             host = _box(phone.locator("[data-phone-page-host]"))
             _assert_same_box(_box(phone.locator(f'iframe[data-live-page="{pinned["id"]}"]')), host, "phone page")
             bar = _box(phone.locator("[data-phone-bar]"))
@@ -2257,7 +2258,7 @@ def test_a_pop_out_is_reached_by_a_refresh_of_its_window_and_stays_a_pop_out_ove
         )
 
     with pop_out.expect_navigation(timeout=15000):
-        _broadcast_op(e2e_server.base_url, "reload_system_interface", {"client": client_id})
+        _broadcast_op(e2e_server.base_url, "reload_system_interface", {})
     assert urllib.parse.parse_qs(urllib.parse.urlparse(pop_out.url).query)["solo"] == [window_id]
     _page_frame(pop_out, window_id)
     expect(pop_out.locator("[data-taskbar]")).to_have_count(0)

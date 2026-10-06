@@ -83,8 +83,8 @@ class ChatAppState(MutableModel):
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
     shell: ShellLayoutInterface = Field(
-        description="The shell's layout, for the routes that put a window on a client's screen; the auto-open "
-        "reactor is handed the same one"
+        description="The shell's layout, for the routes that put a window on a client's screen and the sends that "
+        "report a client's activity; the auto-open reactor is handed the same one"
     )
     # The secret requests agents file and the env files their answers are written to, and
     # the router's bridge the routes reach the chats through (attached by ``create_application``).

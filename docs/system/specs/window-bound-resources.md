@@ -28,7 +28,7 @@ Facts this design builds on, as of `mngr/desktop-ui-phase-6` with the cleanup fi
   `stop_browser` ends Chromium and its display while keeping the profile and the tab list; `close_and_forget` (`DELETE /browsers/<name>`, the fleet CLI's `close`) also deletes the profile.
   `POST /new` (the `new` launch path, body `{"url"?}`) creates a browser and answers `{"path": "/?session=<name>"}`, the page the shell opens.
   Chromium refuses two processes on one profile directory, so concurrent browsers cannot share a profile.
-- The **fleet CLI** (`agentic-browser-fleet new`) creates a browser and already opens a viewer window through `workspace-layout open browser --path /?session=<name>`, falling back to a printed hint when the shell cannot place it.
+- The **fleet CLI** (`agentic-browser-fleet new`) creates a browser and already opens a viewer window with the shell's `open` op of the browser's `/?session=<name>`, falling back to a printed hint when the shell cannot place it.
   The **lease** (`acquire`, `release`, `handoff`) says who is driving; it is not a lifetime.
 - The **op route**'s `open` writes the requesting client's placement on top, shown, and refuses with 412 when no client can be resolved (contracts section 8).
 - In the staging workspace before the cleanup fixes, every terminal window sat at `/new` (the wrapper could not load the contract module) and four tmux sessions backed two windows: reloads of a window still at its launch path re-ran it.
@@ -90,7 +90,7 @@ The `focus` browser shortcut raises this client's most recent browser window on 
 Shortcuts are seeded when a desktop is created; afterwards a desktop gains only the default shortcut of an app never offered before, and a workspace from before the offered record counts every app with a shortcut on a desktop as offered ([plan 3.2](../blueprint/desktop-interface/plan-desktop-interface.md)).
 So an existing desktop keeps its stored shortcuts (the chat's at `(chat, new)` in `new` mode, the others in `focus` mode).
 There is no automatic migration in this release, as for every other desktop-file change (plan section 15).
-A user flips a shortcut from its context menu ("Change shortcut to ...") or makes a new desktop; an agent runs `workspace-layout shortcut remove chat --launch new` and `workspace-layout shortcut set chat --launch root --mode new --cell <column,row>`.
+A user flips a shortcut from its context menu ("Change shortcut to ...") or makes a new desktop; an agent runs `uv run workspace-layout shortcut remove chat new` and `uv run workspace-layout shortcut set chat root --mode new --cell <column,row>`.
 The changelog entry says so.
 
 ## 4. Part B: window-bound resources
@@ -124,15 +124,15 @@ This is accepted for V1.
 
 ### 4.2 Reading the shell's windows
 
-A small stdlib reader in `system/libs/app_manifest` (the library both apps already depend on, beside `register_app`):
+A small reader in `system/libs/workspace_layout` (`workspace_layout.windows`, in the library both apps depend on to reach the shell):
 
 ```python
 def read_app_window_paths(shell_url: str, app: AppName) -> list[str] | None:
     """Every window path of ``app`` across every desktop, or None when the shell could not be read."""
 ```
 
-It GETs `{shell_url}/api/desktops` with a 2 second timeout over `urllib.request`, validates the `{"desktops": [{"windows": [{"app", "path", "client_paths"?}, ...]}, ...]}` shape it needs, and returns the paths of the windows whose `app` matches: each window's `path`, and every value of its `client_paths` (a pinned window with the `independent` scope keeps its shared path at its home path, and what each client's page shows rides beside it; any one of those views keeps the resource alive).
-The shell URL is `MINDS_WORKSPACE_SERVER_URL` with the default `http://127.0.0.1:8000`, resolved as `workspace-layout` and the chat's `shell_client.py` resolve it; a helper `shell_base_url()` moves into the same module so the three agree.
+It GETs `{shell_url}/api/desktops` with a 2 second timeout over `urllib.request`, reads the document as `workspace_layout`'s `DesktopsListing` (every window carrying its `app`, `path`, and `client_paths`; a document that is not one reads as unknown), and returns the paths of the windows whose `app` matches: each window's `path`, and every value of its `client_paths` (a pinned window with the `independent` scope keeps its shared path at its home path, and what each client's page shows rides beside it; any one of those views keeps the resource alive).
+The shell URL is `MINDS_WORKSPACE_SERVER_URL` with the default `http://127.0.0.1:8000`, resolved by `workspace_layout.shell_url.shell_base_url()`, which the apps, `workspace-layout`, and the chat's `shell_client.py` share, so they agree.
 
 A window-seen flag is one additive boolean on each app's record, defaulting to false, so a store written by the previous release reads unchanged.
 

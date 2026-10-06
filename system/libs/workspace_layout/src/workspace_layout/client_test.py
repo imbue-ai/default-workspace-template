@@ -3,12 +3,9 @@ from typing import Any
 
 import pytest
 from app_manifest.primitives import AppName
-from imbue.imbue_common.model_update import to_update
 
-from workspace_layout.answers import ConnectedClient
+from workspace_layout.answers import ClientView
 from workspace_layout.answers import DesktopOpAnswer
-from workspace_layout.answers import DesktopSummary
-from workspace_layout.answers import ShowAnswer
 from workspace_layout.client import ENV_MINDS_CHAT_ID
 from workspace_layout.client import ENV_MNGR_AGENT_ID
 from workspace_layout.client import DisconnectedShell
@@ -19,31 +16,43 @@ from workspace_layout.errors import ShellRefusedOpError
 from workspace_layout.errors import ShellUnreachableError
 from workspace_layout.errors import WindowPoppedOutError
 from workspace_layout.ops import ClientActivityReport
-from workspace_layout.ops import NavigateRequest
-from workspace_layout.ops import OpenRequest
+from workspace_layout.ops import NavigateArgs
+from workspace_layout.ops import OpenArgs
 from workspace_layout.ops import OpRequester
-from workspace_layout.ops import PlaceRequest
-from workspace_layout.ops import ShowRequest
-from workspace_layout.ops import WindowRequest
+from workspace_layout.ops import PlaceArgs
+from workspace_layout.ops import RefreshWindowArgs
+from workspace_layout.ops import ShowArgs
+from workspace_layout.ops import WindowArgs
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPage
+from workspace_layout.primitives import WindowPath
+from workspace_layout.records import Frame
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_layout.testing import FAKE_TIME
 from workspace_layout.testing import LoopbackShell
 from workspace_layout.testing import desktop_answer
+from workspace_layout.testing import fake_desktop
+from workspace_layout.testing import fake_window
 
 _WINDOW = "win-0123456789abcdef"
 _CLIENT = ClientId("client-1")
 _REQUESTER = OpRequester(app=AppName("chat"), marker="")
-_SHOW = ShowRequest(
-    app=AppName("chat"), path="/?chat=agent-1", showing=("/agent-1",), repoint=("/",), client_id=_CLIENT
+_SHOW = ShowArgs(
+    app=AppName("chat"),
+    path=WindowPath("/?chat=agent-1"),
+    showing=(WindowPath("/agent-1"),),
+    repoint=(WindowPage("/"),),
+    client=_CLIENT,
 )
-_SHOWN_ANSWER = {**desktop_answer("home", "client-1", [], _WINDOW, []), "shown": "navigated"}
+_SHOWN_ANSWER = {**desktop_answer(fake_desktop("home"), "client-1", _WINDOW), "shown": "navigated"}
 _ACTIVITY = ClientActivityReport(
     client_id=_CLIENT,
     desktop_id=DesktopId("home"),
@@ -71,8 +80,11 @@ def test_a_show_posts_the_show_op_under_the_requester_and_answers_the_shells_sho
 
     answer = _client(loopback_shell.url).show(_SHOW)
 
-    assert answer == ShowAnswer(
-        desktop_id=DesktopId("home"), client_id=_CLIENT, window_id=WindowId(_WINDOW), shown="navigated"
+    assert (answer.desktop_id, answer.client_id, answer.window_id, answer.shown) == (
+        DesktopId("home"),
+        _CLIENT,
+        WindowId(_WINDOW),
+        ShowOutcome.NAVIGATED,
     )
     assert loopback_shell.posted == [
         (
@@ -93,10 +105,15 @@ def test_a_show_posts_the_show_op_under_the_requester_and_answers_the_shells_sho
     assert loopback_shell.posted_content_types == ["application/json"]
 
 
-def test_a_shown_the_library_does_not_know_is_passed_through(loopback_shell: LoopbackShell) -> None:
-    loopback_shell.op_answer = {**_SHOWN_ANSWER, "shown": "tiled"}
+def test_an_answer_carrying_fields_the_library_does_not_know_still_reads(loopback_shell: LoopbackShell) -> None:
+    """A newer shell may add to its answers, at the top and inside the records they carry."""
+    window = {**fake_window(_WINDOW, "chat", "/?chat=agent-1").model_dump(mode="json"), "is_popped_out": True}
+    desktop = {**fake_desktop("home").model_dump(mode="json"), "windows": [window]}
+    loopback_shell.op_answer = {**_SHOWN_ANSWER, "desktop": desktop, "is_raised_in_own_window": True}
 
-    assert _client(loopback_shell.url).show(_SHOW).shown == "tiled"
+    answer = _client(loopback_shell.url).show(_SHOW)
+
+    assert [str(window.path) for window in answer.desktop.windows] == ["/?chat=agent-1"]
 
 
 @pytest.mark.parametrize(
@@ -104,37 +121,45 @@ def test_a_shown_the_library_does_not_know_is_passed_through(loopback_shell: Loo
     [
         (
             lambda client: client.open(
-                OpenRequest(
+                OpenArgs(
                     app=AppName("browser"),
-                    path="/?session=browser-1",
+                    path=WindowPath("/?session=browser-1"),
                     if_present=IfPresent.FOCUS,
-                    is_minimized=True,
-                    client_id=None,
-                    desktop=None,
+                    minimized=True,
                 )
             ),
             "open",
             {"app": "browser", "path": "/?session=browser-1", "if_present": "focus", "minimized": True},
         ),
         (
-            lambda client: client.focus(WindowRequest(window="self", client_id=_CLIENT, desktop=None)),
+            lambda client: client.focus(WindowArgs(window="self", client=_CLIENT)),
             "focus",
             {"window": "self", "client": "client-1"},
         ),
         (
-            lambda client: client.navigate(NavigateRequest(window="files", path="/b/", client_id=None, desktop=None)),
+            lambda client: client.navigate(NavigateArgs(window="files", path=WindowPath("/b/"))),
             "navigate",
             {"window": "files", "path": "/b/"},
         ),
         (
             lambda client: client.place(
-                PlaceRequest(window=_WINDOW, frame="0.07,0.05,0.38,0.9", client_id=_CLIENT, desktop="home")
+                PlaceArgs(
+                    window=_WINDOW,
+                    frame=Frame(x=0.07, y=0.05, width=0.38, height=0.9),
+                    client=_CLIENT,
+                    desktop="home",
+                )
             ),
             "place",
-            {"window": _WINDOW, "frame": "0.07,0.05,0.38,0.9", "client": "client-1", "desktop": "home"},
+            {
+                "window": _WINDOW,
+                "frame": {"x": 0.07, "y": 0.05, "width": 0.38, "height": 0.9},
+                "client": "client-1",
+                "desktop": "home",
+            },
         ),
         (
-            lambda client: client.close(WindowRequest(window=_WINDOW, client_id=None, desktop=None)),
+            lambda client: client.close(WindowArgs(window=_WINDOW)),
             "close",
             {"window": _WINDOW},
         ),
@@ -147,7 +172,7 @@ def test_each_document_op_posts_its_body_and_answers_the_window_the_shell_named(
     op: str,
     expected_args: dict[str, Any],
 ) -> None:
-    loopback_shell.op_answer = desktop_answer("home", "client-1", [], _WINDOW, [])
+    loopback_shell.op_answer = desktop_answer(fake_desktop("home"), "client-1", _WINDOW)
 
     answer = call(_client(loopback_shell.url))
 
@@ -156,18 +181,17 @@ def test_each_document_op_posts_its_body_and_answers_the_window_the_shell_named(
 
 
 def test_an_open_answered_with_no_window_is_malformed(loopback_shell: LoopbackShell) -> None:
-    loopback_shell.op_answer = desktop_answer("home", "client-1", [], None, [])
-    request = OpenRequest(
-        app=AppName("files"), path="/", if_present=IfPresent.FOCUS, is_minimized=False, client_id=None, desktop=None
-    )
+    loopback_shell.op_answer = desktop_answer(fake_desktop("home"), "client-1", None)
+    request = OpenArgs(app=AppName("files"), path=WindowPath("/"))
 
     with pytest.raises(ShellAnswerMalformedError, match="open"):
         _client(loopback_shell.url).open(request)
 
 
-def test_a_refresh_posts_the_window_and_needs_no_answer_beyond_success(loopback_shell: LoopbackShell) -> None:
-    _client(loopback_shell.url).refresh(WindowRequest(window="self", client_id=None, desktop=None))
+def test_a_refresh_posts_the_window_and_answers_the_client_it_reached(loopback_shell: LoopbackShell) -> None:
+    answer = _client(loopback_shell.url).refresh(RefreshWindowArgs(window="self"))
 
+    assert answer.target_client_id == ClientId("c1")
     assert loopback_shell.posted_ops() == [("refresh", {"window": "self"})]
 
 
@@ -184,20 +208,22 @@ def test_a_shell_that_refuses_an_op_raises_quoting_the_status_and_the_refusal(lo
 def test_a_place_on_a_popped_out_window_is_refused_as_such_and_applies_when_forced(
     loopback_shell: LoopbackShell,
 ) -> None:
-    request = PlaceRequest(window=_WINDOW, frame="0,0,0.5,1", client_id=None, desktop=None)
+    frame = Frame(x=0.0, y=0.0, width=0.5, height=1.0)
     loopback_shell.op_refusal = (423, {"detail": f"Window {_WINDOW} is popped out into its own window"})
 
     with pytest.raises(WindowPoppedOutError, match="popped out") as raised:
-        _client(loopback_shell.url).place(request)
+        _client(loopback_shell.url).place(PlaceArgs(window=_WINDOW, frame=frame))
     assert raised.value.status_code == 423
 
     loopback_shell.op_refusal = None
-    loopback_shell.op_answer = {**desktop_answer("home", "client-1", [], _WINDOW, []), "is_brought_back": True}
-    forced = request.model_copy_update(to_update(request.field_ref().is_forced, True))
-    answer = _client(loopback_shell.url).place(forced)
+    loopback_shell.op_answer = {**desktop_answer(fake_desktop("home"), "client-1", _WINDOW), "is_brought_back": True}
+    answer = _client(loopback_shell.url).place(PlaceArgs(window=_WINDOW, frame=frame, force=True))
 
     assert answer.is_brought_back is True and answer.is_raised_in_own_window is False
-    assert loopback_shell.posted_ops()[-1] == ("place", {"window": _WINDOW, "frame": "0,0,0.5,1", "force": True})
+    assert loopback_shell.posted_ops()[-1] == (
+        "place",
+        {"window": _WINDOW, "frame": {"x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0}, "force": True},
+    )
 
 
 def test_a_redirect_is_answered_as_it_came_rather_than_followed(loopback_shell: LoopbackShell) -> None:
@@ -230,8 +256,15 @@ def test_a_shell_url_without_a_scheme_raises_unreachable() -> None:
 
 @pytest.mark.parametrize(
     "answer",
-    ["not json", [], {"ok": True}, {**_SHOWN_ANSWER, "window_id": None}, {**_SHOWN_ANSWER, "window_id": "win-1"}],
-    ids=["not-json", "a-list", "no-shown", "no-window", "not-a-window-id"],
+    [
+        "not json",
+        [],
+        {"ok": True},
+        {**_SHOWN_ANSWER, "window_id": None},
+        {**_SHOWN_ANSWER, "window_id": "win-1"},
+        {**_SHOWN_ANSWER, "shown": "tiled"},
+    ],
+    ids=["not-json", "a-list", "no-shown", "no-window", "not-a-window-id", "unknown-shown"],
 )
 def test_a_2xx_to_a_show_that_is_not_a_show_answer_is_malformed(loopback_shell: LoopbackShell, answer: Any) -> None:
     loopback_shell.op_answer = answer
@@ -241,21 +274,21 @@ def test_a_2xx_to_a_show_that_is_not_a_show_answer_is_malformed(loopback_shell: 
 
 
 def test_the_connected_clients_are_the_listed_clients_holding_a_socket(loopback_shell: LoopbackShell) -> None:
+    on_home = ClientView(id=ClientId("c1"), active_desktop=DesktopId("home"), last_seen=FAKE_TIME, is_connected=True)
+    away = ClientView(id=ClientId("c2"), last_seen=FAKE_TIME, is_connected=False)
     loopback_shell.get_answers[CLIENTS_ROUTE] = (
         200,
         {
             "clients": [
-                {"id": "c1", "active_desktop": "home", "is_connected": True, "last_seen": "t"},
-                {"id": "c2", "active_desktop": None, "is_connected": False},
+                on_home.model_dump(mode="json"),
+                away.model_dump(mode="json"),
                 # One entry the contract does not allow is skipped rather than hiding the others.
                 {"id": "", "is_connected": True},
             ]
         },
     )
 
-    assert _client(loopback_shell.url).connected_clients() == [
-        ConnectedClient(id=ClientId("c1"), active_desktop=DesktopId("home"), is_connected=True)
-    ]
+    assert _client(loopback_shell.url).connected_clients() == [on_home]
 
 
 @pytest.mark.parametrize(
@@ -279,15 +312,13 @@ def test_an_empty_client_list_is_nobody(loopback_shell: LoopbackShell) -> None:
 
 
 def test_the_desktops_are_listed_in_the_shells_order(loopback_shell: LoopbackShell) -> None:
+    desktops = [fake_desktop("home"), fake_desktop("work")]
     loopback_shell.get_answers[DESKTOPS_ROUTE] = (
         200,
-        {"desktops": [{"id": "home", "name": "Home", "windows": []}, {"id": "work", "name": "Work", "windows": []}]},
+        {"desktops": [desktop.model_dump(mode="json") for desktop in desktops]},
     )
 
-    assert _client(loopback_shell.url).desktops() == [
-        DesktopSummary(id=DesktopId("home"), name="Home"),
-        DesktopSummary(id=DesktopId("work"), name="Work"),
-    ]
+    assert _client(loopback_shell.url).desktops() == desktops
 
 
 def test_client_activity_is_posted_to_the_shells_activity_route(loopback_shell: LoopbackShell) -> None:
@@ -340,7 +371,7 @@ def test_the_disconnected_shell_reaches_nobody() -> None:
     with pytest.raises(ShellUnreachableError):
         shell.show(_SHOW)
     with pytest.raises(ShellUnreachableError):
-        shell.focus(WindowRequest(window="self", client_id=None, desktop=None))
+        shell.focus(WindowArgs(window="self"))
 
 
 def test_the_requester_is_the_calling_agents_chat(monkeypatch: pytest.MonkeyPatch) -> None:

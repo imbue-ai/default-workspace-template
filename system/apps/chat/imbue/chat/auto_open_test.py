@@ -7,8 +7,9 @@ import pytest
 from workspace_layout.errors import ShellAnswerMalformedError
 from workspace_layout.errors import ShellOpError
 from workspace_layout.errors import ShellUnreachableError
-from workspace_layout.ops import ShowRequest
+from workspace_layout.ops import ShowArgs
 from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WindowPath
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import connected_client
 
@@ -16,7 +17,7 @@ from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import is_auto_open_labeled
 from imbue.chat.primitives import ChatId
-from imbue.chat.shell_client import chat_show_request
+from imbue.chat.shell_client import chat_show_args
 
 _LABELED = {"assist": "true"}
 
@@ -25,11 +26,11 @@ def _reactor(shell: FakeShell, ledger: AutoOpenLedger | None = None) -> AutoOpen
     return AutoOpenReactor(ledger=ledger if ledger is not None else AutoOpenLedger(path=None), shell=shell)
 
 
-def _shown(chat_id: str, client_id: str) -> ShowRequest:
+def _shown(chat_id: str, client_id: str) -> ShowArgs:
     """The show the reactor owes a chat for one client: the chat root on the chat, with no other path counting as
     showing it and no window to repoint, so the shell raises a window already there, else takes the pinned window,
     else opens one."""
-    return chat_show_request(f"/?chat={chat_id}", showing=(), repoint=(), client_id=ClientId(client_id))
+    return chat_show_args(WindowPath(f"/?chat={chat_id}"), showing=(), repoint=(), client_id=ClientId(client_id))
 
 
 def test_only_the_two_auto_open_labels_ask_for_a_window() -> None:
@@ -92,12 +93,16 @@ def test_a_refused_show_keeps_the_chat_pending() -> None:
 
 
 @pytest.mark.parametrize(
-    "error",
-    [ShellUnreachableError("the shell is restarting"), ShellAnswerMalformedError("the shell answered []")],
+    ("error", "level"),
+    [
+        (ShellUnreachableError("the shell is restarting"), "INFO"),
+        # A contract mismatch rather than a restarting shell.
+        (ShellAnswerMalformedError("the shell answered []"), "WARNING"),
+    ],
     ids=["unreachable", "malformed"],
 )
 def test_a_show_the_shell_did_not_carry_out_keeps_the_chat_pending_and_the_next_flush_retries_it(
-    error: ShellOpError,
+    error: ShellOpError, level: str, loguru_records: list[str]
 ) -> None:
     shell = FakeShell(clients=[connected_client("c1")], error=error)
     reactor = _reactor(shell)
@@ -106,6 +111,7 @@ def test_a_show_the_shell_did_not_carry_out_keeps_the_chat_pending_and_the_next_
     reactor.flush()
     assert reactor.pending_chat_ids() == {ChatId("chat-1")}
     assert not reactor.ledger.is_delivered(ChatId("chat-1"))
+    assert any(record.startswith(f"{level} ") and str(error) in record for record in loguru_records)
 
     shell.error = None
     reactor.flush()
@@ -113,9 +119,12 @@ def test_a_show_the_shell_did_not_carry_out_keeps_the_chat_pending_and_the_next_
     assert reactor.ledger.is_delivered(ChatId("chat-1"))
 
 
-def test_a_client_list_the_shell_could_not_give_keeps_the_chat_held_without_ending_the_flush() -> None:
+def test_a_client_list_the_shell_could_not_give_keeps_the_chat_held_without_ending_the_flush(
+    loguru_records: list[str],
+) -> None:
     """The flush thread's own catch does not cover a failed listing, so it must be answered here: an escape would
-    end the thread and silently stop surfacing every window."""
+    end the thread and silently stop surfacing every window. A listing that is not one is a contract mismatch, not a
+    restarting shell, so it is a warning."""
     shell = FakeShell(
         clients=[connected_client("c1")], listing_error=ShellAnswerMalformedError("the shell answered []")
     )
@@ -125,6 +134,7 @@ def test_a_client_list_the_shell_could_not_give_keeps_the_chat_held_without_endi
     reactor.flush()
     assert shell.shows == []
     assert reactor.pending_chat_ids() == {ChatId("chat-1")}
+    assert any(record.startswith("WARNING ") and "the shell answered []" in record for record in loguru_records)
 
     shell.listing_error = None
     reactor.flush()

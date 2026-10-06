@@ -15,10 +15,11 @@ class ShellUnreachableError(ShellOpError):
 
 
 class ShellRefusedOpError(ShellOpError):
-    """The shell answered with an error status."""
+    """The shell answered with an error status, and the detail it gave (its ``detail``, else the body's text)."""
 
-    def __init__(self, message: str, status_code: int) -> None:
+    def __init__(self, message: str, status_code: int, detail: str) -> None:
         self.status_code = status_code
+        self.detail = detail
         super().__init__(message)
 
 

@@ -9,9 +9,9 @@ from typing import assert_never
 from loguru import logger
 from pydantic import Field
 from workspace_layout.errors import InvalidLayoutValueError
-from workspace_layout.ops import Wallpaper
 from workspace_layout.primitives import WallpaperKind
 from workspace_layout.primitives import WallpaperName
+from workspace_layout.records import Wallpaper
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure

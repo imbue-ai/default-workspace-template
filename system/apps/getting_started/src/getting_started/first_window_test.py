@@ -9,12 +9,11 @@ from getting_started.first_window import FIRST_WINDOW_PATH
 from getting_started.first_window import FirstWindowLedger
 from getting_started.first_window import FirstWindowOpener
 from workspace_layout.errors import ShellUnreachableError
-from workspace_layout.ops import OPEN_OP
-from workspace_layout.ops import OpenRequest
-from workspace_layout.ops import PLACE_OP
-from workspace_layout.ops import PlaceRequest
+from workspace_layout.ops import OpenArgs
+from workspace_layout.ops import PlaceArgs
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import LayoutOp
 from workspace_layout.testing import FAKE_WINDOW_ID
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import connected_client
@@ -26,14 +25,9 @@ def _opener(tmp_path: Path, shell: FakeShell) -> FirstWindowOpener:
     return FirstWindowOpener(app=_APP, ledger=FirstWindowLedger(path=tmp_path / "first_window.json"), shell=shell)
 
 
-def _open_request(client_id: str) -> OpenRequest:
-    return OpenRequest(
-        app=_APP,
-        path=FIRST_WINDOW_PATH,
-        if_present=IfPresent.FOCUS,
-        is_minimized=False,
-        client_id=ClientId(client_id),
-        desktop="home",
+def _open_request(client_id: str) -> OpenArgs:
+    return OpenArgs(
+        app=_APP, path=FIRST_WINDOW_PATH, if_present=IfPresent.FOCUS, client=ClientId(client_id), desktop="home"
     )
 
 
@@ -46,7 +40,7 @@ def test_the_window_is_opened_and_placed_for_the_first_connected_client_and_then
     assert first.is_delivered is True and first.client_id == "client-b"
     assert shell.opens == [_open_request("client-b")]
     assert shell.placements == [
-        PlaceRequest(window=FAKE_WINDOW_ID, frame=FIRST_WINDOW_FRAME, client_id=ClientId("client-b"), desktop="home")
+        PlaceArgs(window=FAKE_WINDOW_ID, frame=FIRST_WINDOW_FRAME, client=ClientId("client-b"), desktop="home")
     ]
     assert opener.ledger.is_delivered() is True
     # A second attempt (a restart, say) opens nothing: the ledger says so.
@@ -79,12 +73,12 @@ def test_the_open_is_held_while_the_shell_cannot_list_its_clients(tmp_path: Path
 
 
 def test_a_refused_open_or_place_leaves_the_delivery_owed(tmp_path: Path) -> None:
-    shell = FakeShell(clients=[connected_client("client-a")], refused_ops=[OPEN_OP])
+    shell = FakeShell(clients=[connected_client("client-a")], refused_ops=[LayoutOp.OPEN])
     opener = _opener(tmp_path, shell)
     assert opener.deliver_once().is_delivered is False
     assert shell.placements == [] and opener.ledger.is_delivered() is False
 
-    shell.refused_ops = [PLACE_OP]
+    shell.refused_ops = [LayoutOp.PLACE]
     assert opener.deliver_once().is_delivered is False
     assert opener.ledger.is_delivered() is False
 

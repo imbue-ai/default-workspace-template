@@ -63,7 +63,7 @@ from typing import Any, Literal
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import PrivateAttr
-from workspace_layout.windows import read_app_window_paths, window_query_value
+from workspace_layout.windows import parse_window_closed_hint, read_app_window_paths, window_query_value
 
 from browser import chrome_launcher
 from browser import manifest as fleet_manifest
@@ -1913,12 +1913,10 @@ def closed_window_browser(hint_body: object) -> str | None:
     None for a path with no browser (the root, or one naming something that is not a browser name), or a body of
     another shape than the shell posts.
     """
-    if not isinstance(hint_body, dict):
+    hint = parse_window_closed_hint(hint_body)
+    if hint is None:
         return None
-    path = hint_body.get("path")
-    if not isinstance(path, str):
-        return None
-    return window_query_value(path, SESSION_QUERY_KEY)
+    return window_query_value(hint.path, SESSION_QUERY_KEY)
 
 
 class BrowserSessionManager(MutableModel):

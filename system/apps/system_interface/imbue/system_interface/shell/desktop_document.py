@@ -26,32 +26,32 @@ from app_manifest.registry import RegistryLaunchPath
 from app_manifest.registry import RegistryRow
 from pydantic import Field
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPage
+from workspace_layout.primitives import WindowPath
+from workspace_layout.primitives import WindowState
+from workspace_layout.primitives import WindowTitle
+from workspace_layout.records import Desktop
+from workspace_layout.records import DesktopLayout
+from workspace_layout.records import DesktopShortcut
+from workspace_layout.records import Frame
+from workspace_layout.records import GridCell
+from workspace_layout.records import ShortcutTarget
+from workspace_layout.records import Window
+from workspace_layout.records import WindowPlacement
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import AppPin
 from imbue.system_interface.shell.data_types import ClientDesktopView
-from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopChangeOutcome
-from imbue.system_interface.shell.data_types import DesktopLayout
-from imbue.system_interface.shell.data_types import DesktopShortcut
-from imbue.system_interface.shell.data_types import Frame
-from imbue.system_interface.shell.data_types import GridCell
-from imbue.system_interface.shell.data_types import ShortcutTarget
 from imbue.system_interface.shell.data_types import ShowChoice
-from imbue.system_interface.shell.data_types import Window
-from imbue.system_interface.shell.data_types import WindowPlacement
 from imbue.system_interface.shell.data_types import effective_launch_paths
 from imbue.system_interface.shell.errors import GridSearchExhaustedError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import WindowNotFoundError
-from imbue.system_interface.shell.primitives import ShowOutcome
-from imbue.system_interface.shell.primitives import WindowPage
-from imbue.system_interface.shell.primitives import WindowPath
-from imbue.system_interface.shell.primitives import WindowState
-from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.primitives import mint_window_id
 
 # The cascade rule (fixed, in fractions): window ``n`` of a client's desktop steps from the origin, cycling.
