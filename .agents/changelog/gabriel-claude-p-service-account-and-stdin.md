@@ -1,4 +1,4 @@
-`claude_p.py` works from a supervisord service or a cron job again.
+`claude_p.py` works from a supervisord service or a cron job again. A service that copied `claude_p.py` in earlier keeps both failures below until it copies the file again.
 
 - Every call failed with "OAuth session expired and could not be refreshed". With `CLAUDE_CONFIG_DIR` unset, the helper read credentials from the workspace's default account, but the `claude -p` it launched still looked in `~/.claude`, which holds no sign-in. The child now runs on the same account the resolver reads: the agent's own account inside a chat, else the workspace default.
 
