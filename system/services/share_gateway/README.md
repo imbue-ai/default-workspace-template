@@ -116,9 +116,9 @@ issued and expires; a `no session` denial carries the same per-copy detail.
 Every completed callback writes a `Signed in` line naming the user, when the
 new session was issued and expires, and where the visitor lands. Both lines
 also name the request's other cookies (names only), its
-`Sec-Fetch-Dest`/`Sec-Fetch-Site`, and its user agent. That tells a browser that dropped the
-session from one the gateway turned away. Cookie and token values never reach
-the log.
+`Sec-Fetch-Dest`/`Sec-Fetch-Site`, and its user agent. That tells a browser
+that dropped the session from one the gateway turned away. Cookie and token
+values never reach the log.
 
 ## When the stack cannot come up
 
