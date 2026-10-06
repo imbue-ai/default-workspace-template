@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from app_manifest.primitives import AppName
+from app_manifest.primitives import AppUrl
 from app_manifest.registry import RegistryRow
 from app_manifest.registry import read_registry
 
@@ -14,6 +16,7 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_announcements import ANNOUNCEMENTS_ARCHIVE_THRESHOLD_BYTES
 from imbue.system_interface.app_announcements import ANNOUNCEMENTS_REL
 from imbue.system_interface.app_announcements import AppAnnouncementWriter
+from imbue.system_interface.app_announcements import announced_row_of
 from imbue.system_interface.app_announcements import announcements_path_from_environment
 from imbue.system_interface.app_announcements import compress_staged_announcements
 from imbue.system_interface.shell.testing import registry_row_toml
@@ -30,8 +33,8 @@ def _events(events_path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in events_path.read_text().splitlines() if line]
 
 
-def _registered(name: str, url: str, label: str = "") -> str:
-    return registry_row_toml(name, url, label=label)
+def _registered(name: str, url: str, label: str = "", display_name: str | None = None) -> str:
+    return registry_row_toml(name, url, label=label, display_name=display_name)
 
 
 def test_the_first_announcement_registers_every_app(
@@ -108,6 +111,40 @@ def test_a_relabelled_app_is_re_announced(announcement_writer: AppAnnouncementWr
     events = _events(announcement_writer.events_path)
     assert [(event["type"], event["service"]) for event in events[1:]] == [("service_registered", "chat")]
     assert events[1]["label"] == "chat-bbbb2222"
+
+
+def test_an_announcement_carries_the_apps_display_name(
+    announcement_writer: AppAnnouncementWriter, tmp_path: Path
+) -> None:
+    """The stream is the only way the name users read leaves the workspace, and the minds desktop's share panel
+    has nothing but the registered name to show without it."""
+    announcement_writer.announce(
+        _rows(tmp_path, _registered("files", "http://localhost:8300", display_name="File Viewer"))
+    )
+
+    assert _events(announcement_writer.events_path)[0]["display_name"] == "File Viewer"
+
+
+def test_a_renamed_app_is_re_announced(announcement_writer: AppAnnouncementWriter, tmp_path: Path) -> None:
+    """An upgrade can change a manifest's display name alone, and consumers show it, so it must reach them
+    even though the app's name, URL, and label are untouched."""
+    announcement_writer.announce(_rows(tmp_path, _registered("files", "http://localhost:8300", display_name="Files")))
+
+    announcement_writer.announce(
+        _rows(tmp_path, _registered("files", "http://localhost:8300", display_name="File Viewer"))
+    )
+
+    events = _events(announcement_writer.events_path)
+    assert [(event["type"], event["service"]) for event in events[1:]] == [("service_registered", "files")]
+    assert events[1]["display_name"] == "File Viewer"
+
+
+def test_a_row_with_no_manifest_announces_an_empty_display_name() -> None:
+    """``--name --url`` rows (owner-exec, the vm exec service, previews) carry no display name at all, so it
+    announces as empty rather than absent: a consumer never has to tell "no name" from "older workspace"."""
+    row = RegistryRow(name=AppName("owner-exec"), url=AppUrl("http://localhost:8700"))
+
+    assert announced_row_of(row).display_name == ""
 
 
 def test_an_unwritable_stream_is_announced_again_on_the_next_read(tmp_path: Path) -> None:

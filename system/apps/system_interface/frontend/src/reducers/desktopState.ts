@@ -102,7 +102,7 @@ export interface AvatarState {
 }
 
 /** The design drawn until the shell says otherwise: the one the shell bundles as its default. */
-export const INITIAL_AVATAR_DESIGN = "gummy-seal";
+export const INITIAL_AVATAR_DESIGN = "imbue-character";
 
 export const INITIAL_AVATAR_STATE: AvatarState = {
   design: INITIAL_AVATAR_DESIGN,

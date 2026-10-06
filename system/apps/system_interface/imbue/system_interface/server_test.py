@@ -153,7 +153,7 @@ def test_the_touch_icon_and_the_manifest_follow_the_selected_avatar_and_the_work
     default_icon = client.get("/apple-touch-icon.png")
     assert default_icon.status_code == 200 and default_icon.mimetype == "image/png"
     assert png_size(default_icon.data) == (180, 180)
-    assert default_icon.data == client.get("/api/avatars/gummy-seal/icon.png?size=180").data
+    assert default_icon.data == client.get("/api/avatars/imbue-character/icon.png?size=180").data
     shell.avatar_selection.write(DesignId("jelly-cat"))
     assert client.get("/apple-touch-icon.png").data == client.get("/api/avatars/jelly-cat/icon.png").data
     # A selection naming a design the catalog no longer holds shows the default, as the avatar does.
