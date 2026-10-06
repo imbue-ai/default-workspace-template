@@ -3015,9 +3015,10 @@ class AgentManager:
         What an intake falls back to when it cannot launch a new chat at once: a draft into a new
         chat, or a first message with nothing signed in. The chat is listed as provisional in the
         ``awaiting_first_send`` phase under a minted "Chat N" name, with the account the intake
-        resolved (or none), and its page shows an empty conversation with the composer; the first
-        send launches it through ``create_chat`` by ``chat_id``. It has no record, so a restart of
-        this app drops it. It reserves a spare that fits (``_mint_awaiting_chat_locked``).
+        resolved, else that of the spare it reserves (or none), and its page shows an empty
+        conversation with the composer; the first send launches it through ``create_chat`` by
+        ``chat_id``. It has no record, so a restart of this app drops it. It reserves a spare that
+        fits (``_mint_awaiting_chat_locked``).
         """
         spare_account_id = self._spare_account_for_awaiting_chat(account_id)
         with self._lock:

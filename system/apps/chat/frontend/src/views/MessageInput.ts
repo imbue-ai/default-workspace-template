@@ -623,8 +623,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
       /**
        * The account a chat's first send launches it on: the one the chat was minted for when it
-       * names one (an intake's), else the signed-in one when there is one, else whatever the
-       * provider chooser produces, or null when it is dismissed instead.
+       * names one (an intake's, or its reserved spare's), else the signed-in one when there is
+       * one, else whatever the provider chooser produces, or null when it is dismissed instead.
        */
       async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | null> {
         await whenAccountsReadyToChoose();

@@ -299,9 +299,10 @@ to do, `POST /api/chats/intakes/<token>/apply` (with the picked `chat_id` when a
 pick was needed) consumes it and answers the chat plus either `composer_text` or
 `first_message`, and `DELETE` drops it. A `new_chat` intake with nothing signed in,
 or a draft into a new chat, mints an unseeded provisional chat in the
-`awaiting_first_send` phase ("Chat N", the intake's account or none, no record, so a
-restart of this app drops it); its page shows an empty conversation over the
-composer, and its first send launches it as a seeded chat's does.
+`awaiting_first_send` phase ("Chat N", the intake's account, else its reserved
+spare's, or none; no record, so a restart of this app drops it); its page shows
+an empty conversation over the composer, and its first send launches it as a
+seeded chat's does.
 
 An element reference (the right-click menu's description of an element,
 `docs/system/blueprint/element-reference-menu/`) enters a composer as an
