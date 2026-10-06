@@ -35,7 +35,7 @@ from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LE
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import SPARE_CHAT_MAX_AGE_SECONDS
-from imbue.chat.agent_manager import _RESERVED_SPARE_NOT_DESTROYED_ERROR
+from imbue.chat.agent_manager import _LAST_AGENT_NOT_DESTROYED_ERROR
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
@@ -6532,7 +6532,7 @@ def test_an_awaiting_chats_first_send_fails_without_a_create_when_its_spare_cann
 
         assert (spare.chat_id, False) in _await_provisional_completions(pushes)
         assert manager.wait_for_chat_creation(awaiting.chat_id, timeout=15.0) == ChatCreationOutcome(
-            is_created=False, error=_RESERVED_SPARE_NOT_DESTROYED_ERROR
+            is_created=False, error=_LAST_AGENT_NOT_DESTROYED_ERROR
         )
         failed = manager.get_provisional_chat(awaiting.chat_id)
         assert failed is not None and failed.phase is ProvisionalChatPhase.FAILED

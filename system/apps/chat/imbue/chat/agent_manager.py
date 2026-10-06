@@ -250,9 +250,9 @@ SPARE_CHAT_MAX_AGE_SECONDS: Final[float] = 6 * 3600.0
 # The reason a chat is given when starting its agent stopped on an unexpected error (its traceback is in
 # the log): the creation of a spare it claimed, or its launch once the spare reserved for it was destroyed.
 _CHAT_START_BROKE_OFF_ERROR: Final[str] = "Starting this chat's agent stopped on an unexpected error"
-# The reason a chat awaiting its first send fails when the spare reserved for it, which its launch could not
-# take, could not be destroyed, so the chat's own create cannot have the id yet.
-_RESERVED_SPARE_NOT_DESTROYED_ERROR: Final[str] = (
+# Why a chat cannot be created yet while a spare agent still holds its id: the spare a chat claimed failed and
+# is still being destroyed, or the spare reserved for a chat awaiting its first send could not be destroyed.
+_LAST_AGENT_NOT_DESTROYED_ERROR: Final[str] = (
     "This chat's last agent is still being cleaned up; try again in a few minutes"
 )
 
@@ -3331,9 +3331,7 @@ class AgentManager:
                 # it is destroyed first: a create under that id before then would be hidden as the
                 # spare, and destroyed with it.
                 if self._is_spare_locked(chat_id) and not is_spare_destroy_awaited:
-                    raise AgentCreationError(
-                        f"Chat {chat_id}'s last agent is still being cleaned up; try again in a few minutes"
-                    )
+                    raise AgentCreationError(_LAST_AGENT_NOT_DESTROYED_ERROR)
                 if provisional.is_seeded:
                     # A seeded chat's agent joins the seed on the record rather than taking the
                     # chat's id, whether this is its first send (the message is the launch's to
@@ -4301,7 +4299,7 @@ class AgentManager:
         then stopped on an unexpected error."""
         with self._lock:
             settled = self._creation_settled_by_chat.get(chat_id)
-        failure = _RESERVED_SPARE_NOT_DESTROYED_ERROR
+        failure = _LAST_AGENT_NOT_DESTROYED_ERROR
         is_launchable = False
         try:
             if self._await_spare_destroyed(chat_id):
