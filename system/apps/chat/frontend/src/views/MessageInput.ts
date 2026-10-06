@@ -70,6 +70,15 @@ const INPUT_BOX_CLASS =
   "message-input-box flex flex-col rounded-xl border bg-composer " +
   "[transition:border-color_150ms] focus-within:border-accent";
 
+/** The text and its buttons. ``fitComposer`` sets ``data-stacked`` on the row to put the buttons in a row of their
+ *  own under the text. */
+const MESSAGE_ROW_CLASS =
+  "message-input-row group/row flex flex-row items-center data-[stacked]:flex-col data-[stacked]:items-stretch";
+
+const TOOLBAR_CLASS =
+  "message-input-toolbar flex shrink-0 items-center gap-2 pr-3 " +
+  "group-data-[stacked]/row:self-end group-data-[stacked]/row:pb-1.5";
+
 const ATTACHMENT_DETAIL_BASE = "composer-attachment-detail text-(length:--font-size-helper)";
 
 const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
@@ -199,8 +208,15 @@ export function prependToComposer(chatId: string, block: string): void {
   m.redraw();
 }
 
-function autoResizeTextarea(textarea: HTMLTextAreaElement): void {
+/** Lay the composer out for its text: the buttons beside a message that fits on one line, or in a
+ *  row under a longer one, so the text gets the full width. Wrapping is measured with the buttons
+ *  beside the text whichever layout is showing, so the stacked layout's extra width cannot unwrap
+ *  the text and flip it back. */
+function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement): void {
+  row.removeAttribute("data-stacked");
+  textarea.style.overflowY = "hidden";
   textarea.style.height = "auto";
+  row.toggleAttribute("data-stacked", textarea.scrollHeight > textarea.clientHeight);
   textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
   textarea.style.overflowY = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT_PX ? "auto" : "hidden";
 }
@@ -258,6 +274,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let messageText = "";
   let currentChatId: string | null = null;
   let messageTextareaElement: HTMLTextAreaElement | null = null;
+  let messageRowElement: HTMLElement | null = null;
+  // Refits the composer when its width changes, since that changes where the text wraps.
+  let messageRowResizeObserver: ResizeObserver | null = null;
+  let messageRowWidthPx = 0;
   // Set instead of sending when the user types one of the harness's declared
   // auth commands (the `open_auth` composer popup). Delivered raw, /login or
   // /logout would run the harness's own auth flow inside the agent's terminal
@@ -309,6 +329,32 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
   function focusMessageTextarea(): void {
     messageTextareaElement?.focus();
+  }
+
+  function refitComposer(): void {
+    if (messageRowElement !== null && messageTextareaElement !== null) {
+      fitComposer(messageRowElement, messageTextareaElement);
+    }
+  }
+
+  function attachMessageRow(rowVnode: m.VnodeDOM): void {
+    const rowElement = rowVnode.dom as HTMLElement;
+    messageRowElement = rowElement;
+    messageRowWidthPx = rowElement.clientWidth;
+    messageRowResizeObserver = new ResizeObserver(() => {
+      if (rowElement.clientWidth !== messageRowWidthPx) {
+        messageRowWidthPx = rowElement.clientWidth;
+        refitComposer();
+      }
+    });
+    messageRowResizeObserver.observe(rowElement);
+    refitComposer();
+  }
+
+  function detachMessageRow(): void {
+    messageRowResizeObserver?.disconnect();
+    messageRowResizeObserver = null;
+    messageRowElement = null;
   }
 
   // Its own handler rather than the one above: each notice clears only its own state, and
@@ -1258,12 +1304,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                         attachments.map((attachment) => renderComposerAttachment(chatId, attachment)),
                       )
                     : null,
-                  m("div", { class: "message-input-row flex flex-row items-center" }, [
+                  m("div", { class: MESSAGE_ROW_CLASS, oncreate: attachMessageRow, onremove: detachMessageRow }, [
                     m("textarea", {
                       class:
                         "message-input-textbox flex-1 resize-none border-none bg-transparent pt-3.5 pr-2 pb-3.5 pl-5 " +
                         "font-sans text-(length:--font-size-body) leading-normal text-primary focus:outline-none " +
-                        "placeholder:text-faint",
+                        "placeholder:text-faint group-data-[stacked]/row:flex-none group-data-[stacked]/row:pr-5 " +
+                        "group-data-[stacked]/row:pb-1",
                       placeholder:
                         handoff !== null
                           ? handoffComposerPlaceholder(handoff)
@@ -1274,12 +1321,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                       value: messageText,
                       oncreate: (textareaVnode: m.VnodeDOM) => {
                         messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
-                        autoResizeTextarea(messageTextareaElement);
+                        refitComposer();
                         focusMessageTextarea();
                       },
                       onupdate: (textareaVnode: m.VnodeDOM) => {
                         messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
-                        autoResizeTextarea(messageTextareaElement);
+                        refitComposer();
                       },
                       onremove: () => {
                         messageTextareaElement = null;
@@ -1288,12 +1335,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                         const textarea = event.target as HTMLTextAreaElement;
                         messageText = textarea.value;
                         localStorage.setItem(messageTextKey(chatId), messageText);
-                        autoResizeTextarea(textarea);
+                        refitComposer();
                       },
                       onkeydown: handleKeydown,
                       onpaste: handlePaste,
                     }),
-                    m("div", { class: "message-input-toolbar flex shrink-0 items-center gap-2 pr-3" }, [
+                    m("div", { class: TOOLBAR_CLASS }, [
                       m(
                         Button,
                         {

@@ -66,6 +66,7 @@ import {
   areAccountsLoaded,
   getAccounts,
   getDefaultAccountId,
+  isAccountSignedOut,
   openProviderChooser,
 } from "../models/Providers";
 import { beginSwitchTo, beginSwitchToAccountId, openSwitchDialog, takeBackSwitch } from "./SwitchDialog";
@@ -679,11 +680,11 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
    *
    * Pressing any account but the chat's own begins the switch to it (``beginSwitchTo``): the
    * dialog for a handoff, which takes the model and offers a new chat instead; armed at once for
-   * a rebind (an account on the chat's own harness and lane); run at once for a chat with no
-   * user turn yet. Pressing the armed account again, or the account the chat runs on, takes the
-   * choice back. Each row also carries the default toggle: the starred
-   * account is the one a new chat opens on when nothing names one (the New Tab tile, the rail
-   * shortcut, an agent's `workspace-layout open chat`).
+   * a rebind (an account on the chat's own harness and lane) and for a chat whose account was
+   * signed out; run at once for a chat with no user turn yet. Pressing the armed account again, or
+   * the account the chat runs on, takes the choice back. Each row also carries the default toggle:
+   * the starred account is the one a new chat opens on when nothing names one (the New Tab tile,
+   * the rail shortcut, an agent's `workspace-layout open chat`).
    */
   function providerSubmenu(chatId: string, current: ProviderAccount | null): m.Children {
     const rows = getAccounts();
@@ -848,6 +849,17 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       // before its first model read, and opencode never leaves it); or the live model may
       // match no catalog option. Only the Model/Effort/Fast rows are suppressed.
       if (chat === undefined) return provisionalChip(chatId);
+      // A chat whose account was signed out runs on nothing until a provider is chosen for it, and
+      // the composer's notice in its place says so and offers the choice: the model it last ran
+      // stays out of the row rather than reading as current. A phone keeps its settings button.
+      if (
+        !isCompact &&
+        chat.handoff === null &&
+        pendingSwitchTarget(chatId) === null &&
+        isAccountSignedOut(chat.active_agent.account_id)
+      ) {
+        return null;
+      }
       // No account to name and no model to show. With no provider signed in, say so; otherwise
       // the chip below stands in (its Provider row reads "No account") until the model arrives,
       // which for a chat whose agent is still connecting takes a while. A phone keeps its settings

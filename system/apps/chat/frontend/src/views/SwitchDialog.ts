@@ -8,8 +8,9 @@
  * "Switch this chat" applies nothing yet: it arms the pending switch (``PendingLane``), which the
  * composer's next send carries out. Only a switch that will write a summary asks when the account is
  * pressed (``beginSwitchTo``): a chat that has had no user turn has no context to hand over and
- * switches at once, and a rebind keeps the agent, its conversation, and by default its model, so it
- * is armed at once. The rebind's variant of the dialog is what "Change" opens for it: the same
+ * switches at once, a rebind keeps the agent, its conversation, and by default its model, so it is
+ * armed at once, and so is a switch off an account that was signed out, which leaves the chat no
+ * provider to stay on. The rebind's variant of the dialog is what "Change" opens for it: the same
  * picker, starting from "Keep the current model".
  */
 
@@ -33,7 +34,7 @@ import {
   switchKind,
 } from "../models/PendingLane";
 import type { PendingPick } from "../models/PendingLane";
-import { accountForAgent } from "../models/Providers";
+import { accountForAgent, isAccountSignedOut } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { getEventsForChat, isTranscriptLoaded, mintMessageId, whenTranscriptLoadSettles } from "../models/Response";
 import { startChatOnAccount } from "../shell";
@@ -73,7 +74,9 @@ const pressWaitingOnLoadByChat = new Map<string, ProviderAccount>();
  * and no dialog; the draft, if any, stays in the composer and goes out normally once the chat
  * runs on the new account. A rebind is armed at once with no dialog, keeping the pick already
  * armed for that account, if any: the next send carries it out, so a turn in progress is not cut
- * short by the press. A handoff with context gets the dialog.
+ * short by the press. So is a switch off a signed-out account: the chat can no longer stay where
+ * it is, and choosing a provider for it is the answer the dialog would ask for. A handoff with
+ * context gets the dialog.
  */
 export function beginSwitchTo(chatId: string, target: ProviderAccount): void {
   // A new chat's page asks for its transcript before the chat app knows the chat and asks again
@@ -112,7 +115,7 @@ function decideSwitchTo(chatId: string, target: ProviderAccount): void {
     void switchFreshChat(chatId, target);
     return;
   }
-  if (switchKind(chat, target) === "rebind") {
+  if (switchKind(chat, target) === "rebind" || isAccountSignedOut(chat.active_agent.account_id)) {
     setPendingSwitch(chatId, target.id, getPendingAccountId(chatId) === target.id ? getPendingPick(chatId) : null);
     m.redraw();
     return;
@@ -339,6 +342,12 @@ export function SwitchDialog(): m.Component<{ chatId: string }> {
       const from = harnessLabel(chat?.active_agent.harness ?? "");
       const target = current.target;
       const isRebind = current.kind === "rebind";
+      const handoffBody = isAccountSignedOut(chat?.active_agent.account_id)
+        ? `This conversation moves to ${target.label}, starting with your next message.`
+        : chat?.status === "working"
+          ? `${from} wraps up what it is doing and hands the conversation to ${target.label}, ` +
+            "starting with your next message."
+          : `${from} hands the conversation to ${target.label}, starting with your next message.`;
       return m(
         dialog,
         {
@@ -346,8 +355,7 @@ export function SwitchDialog(): m.Component<{ chatId: string }> {
           body: [
             isRebind
               ? `${from} restarts on ${target.label} and keeps this conversation, starting with your next message.`
-              : `${from} wraps up what it is doing and hands the conversation to ${target.label}, ` +
-                "starting with your next message.",
+              : handoffBody,
           ],
           dismissLabel: "Cancel",
           isDismissable: !current.isBusy,

@@ -107,6 +107,8 @@ vi.mock("../models/Providers", () => ({
   accountForFirstSend: (id: string) =>
     providerState.accounts.find((a) => (a as { id: string }).id === id) ?? providerState.accounts[0] ?? null,
   areAccountsLoaded: () => providerState.isLoaded,
+  isAccountSignedOut: (id?: string | null) =>
+    !!id && providerState.isLoaded && !providerState.accounts.some((a) => (a as { id: string }).id === id),
   openProviderChooser: (intent: { onSignedIn?: unknown } = {}) =>
     chooserOpens.push({ hasOnSignedIn: intent.onSignedIn !== undefined }),
   deleteAccount: () => Promise.resolve(),
@@ -316,14 +318,20 @@ describe("the combo card", () => {
     expect(text).not.toContain("Model");
   });
 
-  it("says a chat whose account is gone has no account, not that nobody is signed in", () => {
+  it("shows no chip for a chat whose account was signed out, rather than the model it last ran", () => {
+    // The composer's notice stands in its place, with the way to choose a provider.
     agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-gone" } });
     render();
-    click(".model-selector-trigger");
-    const providerRow = document.querySelector('[data-menu-row="providers"]')?.textContent ?? "";
-    expect(providerRow).toContain("No account");
-    expect(providerRow).toContain("Pick one to move this chat to it");
-    expect(screenText()).not.toContain("Not signed in");
+    expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();
+    expect(screenText()).not.toContain("Opus");
+  });
+
+  it("brings the chip back for a signed-out chat once a provider is chosen for it", () => {
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-gone" } });
+    setPendingAccount("a1", "acct-1");
+    render();
+    expect(ROOT().querySelector(".model-selector-trigger")?.textContent).toContain("next");
+    setPendingAccount("a1", null);
   });
 
   it("renders a read-only harness without an effort control", () => {
@@ -1076,6 +1084,16 @@ describe("the phone layout's card", () => {
     expect(document.querySelector(".model-provider-menu--compact")).not.toBeNull();
     expect(screenText()).toContain("Provider");
     expect(screenText()).toContain("Stop agent");
+  });
+
+  it("keeps the settings button for a chat whose account was signed out, with a Provider row to move it on", () => {
+    agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-gone" } });
+    renderPhone();
+    tap("[data-composer-settings]");
+    const providerRow = document.querySelector('[data-menu-row="providers"]')?.textContent ?? "";
+    expect(providerRow).toContain("No account");
+    expect(providerRow).toContain("Pick one to move this chat to it");
+    expect(screenText()).not.toContain("Not signed in");
   });
 
   it("offers the picker's effort levels as segments, and a press sets the chat's effort at once", () => {
