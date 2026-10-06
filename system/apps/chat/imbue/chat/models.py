@@ -654,7 +654,9 @@ class ProvisionalChat(FrozenModel):
     name: str = Field(description="The display name minted for it")
     project_id: str = Field(default="", description="The project it was started in, for the agent's label")
     account_id: str = Field(
-        default="", description="The account it launches on; empty for a seeded chat before its first send"
+        default="",
+        description="The account it launches on: before its first send, the one it was minted for or took with "
+        "its reserved spare; empty when it has none (a seeded chat, or one minted with neither), and the send picks",
     )
     message: str = Field(default="", description="The first message the chat sends once it launches; empty for none")
     labels: dict[str, str] = Field(default_factory=dict, description="The extra labels its create was asked for")
