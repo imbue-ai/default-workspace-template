@@ -1,1 +1,3 @@
 - The notify-user script now asks the chat app which pages are watching the chat (shown and focused) and sends their ids as `watched_by`, so the Imbue Studio app can file the notification as read instead of showing it to a user who is already reading the chat. If the chat app does not answer within 2 seconds, the notification goes out without the field and the script prints `notify-user: could not check who is watching this chat (...); sending anyway` to stderr; the exit code still says whether the notification was accepted.
+
+- The notify-user skill drops its description of how the app files and displays a notification, which the agent does not act on; it now says only that the notification lands in the app's feed and is one-way.

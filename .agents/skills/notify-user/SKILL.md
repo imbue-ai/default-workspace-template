@@ -11,7 +11,8 @@ metadata:
 The Imbue Studio app keeps a notification feed: a bell in the titlebar, a badge on the
 dock icon, a toast card in every open window, and a system banner when the
 user is looking at something else. This skill posts a message from this chat
-into that feed. Clicking the notification lands the user in this chat.
+into that feed. Clicking the notification lands the user in this chat. It is
+one-way: any answer comes back in this chat.
 
 ## When to use it
 
@@ -61,14 +62,3 @@ code.** When it fails, say so in your reply -- "I tried to notify you but the
 notification did not go out" -- so the user knows why they heard nothing;
 never retry in a loop. A `could not check who is watching this chat` warning
 is not a failure: the notification still went out, and the exit code says so.
-
-## What happens on the other side
-
-The app files the message under this chat's name and its workspace. In the
-feed it reads as "<workspace> -- <this chat>" with your sentence beneath; the
-system banner carries the same three lines. Clicking or clearing it removes
-it; the user starting to read this chat marks it read, and it stays in the
-feed as a receipt. It never asks them to do anything. When the user is
-already reading this chat (its page is shown and focused) the script says so,
-and the app files the message as read without showing anything. Do not expect
-a reply through it: it is one-way.
