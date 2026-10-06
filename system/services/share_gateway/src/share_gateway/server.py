@@ -6,12 +6,11 @@ enforced, session cookie stripped from what the service sees, the verified
 identity handed on as ``X-Imbue-Identity``). Visitors without a session are
 bounced to the accounts broker (a navigation the visitor started themselves is
 first retried once from a "Signing in..." page) and land back on
-``/_auth/callback``, which
-verifies the broker's handoff token and sets the workspace session cookie. A
-callback whose nonce or token no longer verifies (a reopened link, a slow
-redirect) heals itself: a visitor who already holds a session is sent on, and
-anyone else is sent through the broker once more; only a second failure shows
-the "Sign-in link expired" page.
+``/_auth/callback``, which verifies the broker's handoff token and sets the
+workspace session cookie. A callback whose nonce or token no longer verifies (a
+reopened link, a slow redirect) heals itself: a visitor who already holds a
+session is sent on, and anyone else is sent through the broker once more; only
+a second failure shows the "Sign-in link expired" page.
 """
 
 import html
