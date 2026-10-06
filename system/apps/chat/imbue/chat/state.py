@@ -1,5 +1,6 @@
 import threading
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -255,22 +256,8 @@ class ChatAppState(MutableModel):
         viewed holds no chat-backend memory. Cheap no-op when nothing is resident.
         Rebuild-on-demand is `get_or_create_watcher` and `get_or_create_loader`: viewing a
         stopped chat re-reads its transcript from disk transparently.
-
-        The watcher is popped under the lock but stopped outside it -- `stop` joins the
-        watch thread, and holding the lock across that join would stall every other
-        watcher creation for the duration.
         """
-        with self._watchers_lock:
-            watcher = self.watchers.pop(agent_id, None)
-            loader = self.loaders.pop(agent_id, None)
-            is_watcher_starting = id(watcher) in self._starting_watchers
-        if watcher is not None:
-            logger.debug("Evicting the session watcher for agent {}", agent_id)
-            if not is_watcher_starting:
-                watcher.stop()
-        if loader is not None:
-            logger.debug("Evicting the loaded transcript of agent {}", agent_id)
-            loader.close()
+        self._evict_resident_unless(agent_id, lambda: False)
 
     def release_unviewed_stopped_transcripts(self) -> None:
         """Evict what each stopped chat holds resident, unless a stream of it is open.
@@ -284,8 +271,32 @@ class ChatAppState(MutableModel):
             resident_agent_ids = set(self.watchers) | set(self.loaders)
         for agent_id in resident_agent_ids:
             chat_id = self.agent_manager.chat_id_of_agent(agent_id)
-            if self.agent_manager.is_chat_stopped(chat_id) and not self.event_queues.has_consumers(str(chat_id)):
-                self.stop_and_remove_watcher(agent_id)
+            if self.agent_manager.is_chat_stopped(chat_id):
+                self._evict_resident_unless(agent_id, partial(self.event_queues.has_consumers, str(chat_id)))
+
+    def _evict_resident_unless(self, agent_id: str, is_kept: Callable[[], bool]) -> None:
+        """Evict one agent's watcher and loader unless ``is_kept``, judged under the lock a build takes.
+
+        A stream registers before building its watcher, so a ``has_consumers`` judged here either
+        counts a stream opening now or pops before that stream builds a fresh watcher.
+
+        The watcher is popped under the lock but stopped outside it -- `stop` joins the
+        watch thread, and holding the lock across that join would stall every other
+        watcher creation for the duration.
+        """
+        with self._watchers_lock:
+            if is_kept():
+                return
+            watcher = self.watchers.pop(agent_id, None)
+            loader = self.loaders.pop(agent_id, None)
+            is_watcher_starting = id(watcher) in self._starting_watchers
+        if watcher is not None:
+            logger.debug("Evicting the session watcher for agent {}", agent_id)
+            if not is_watcher_starting:
+                watcher.stop()
+        if loader is not None:
+            logger.debug("Evicting the loaded transcript of agent {}", agent_id)
+            loader.close()
 
     def stop_all_watchers(self) -> None:
         with self._watchers_lock:

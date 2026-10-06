@@ -551,6 +551,50 @@ def test_opening_a_stopped_chats_stream_keeps_the_watcher_through_a_release_whil
         state.shutdown()
 
 
+class _OpeningAStreamDuringTheCheckEventQueues(AgentEventQueues):
+    """On the first consumer check, opens a stream of the chat (register, then build its watcher) on another
+    thread, and lets it run before the check answers."""
+
+    def __init__(self, open_stream: Callable[[], None]) -> None:
+        super().__init__()
+        self._open_stream = open_stream
+        self.opener: threading.Thread | None = None
+
+    def has_consumers(self, chat_id: str) -> bool:
+        has_consumers = super().has_consumers(chat_id)
+        if self.opener is None:
+            self.opener = threading.Thread(target=self._open_stream)
+            self.opener.start()
+            # An unblocked opener finishes well within this; one waiting on the release's lock does not.
+            self.opener.join(timeout=0.5)
+        return has_consumers
+
+
+def test_a_stream_opening_while_the_release_checks_for_one_keeps_a_watcher(tmp_path: Path) -> None:
+    """The release's check for an open stream and its eviction have to be one step against the stream's
+    watcher build, or a stream opening in between takes the watcher the release then stops."""
+    state = build_test_state()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    stopped_info = _claude_agent_info_with_one_message(tmp_path, "stopped-agent", "STOPPED")
+    state.get_or_create_watcher(stopped_info)
+
+    def open_stream() -> None:
+        state.event_queues.register("stopped-agent")
+        state.get_or_create_watcher(stopped_info)
+
+    event_queues = _OpeningAStreamDuringTheCheckEventQueues(open_stream)
+    state.event_queues = event_queues
+    try:
+        state.release_unviewed_stopped_transcripts()
+        assert event_queues.opener is not None
+        event_queues.opener.join(timeout=10)
+
+        assert event_queues.has_consumers("stopped-agent")
+        assert set(state.watchers) == {"stopped-agent"}
+    finally:
+        state.shutdown()
+
+
 def _fake_watcher(
     get_all_events: Callable[[], list[dict[str, Any]]],
     start: Callable[[], None],
