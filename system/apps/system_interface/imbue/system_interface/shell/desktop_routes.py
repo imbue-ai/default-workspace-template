@@ -4,7 +4,7 @@ and the verbs of the op route."""
 from collections.abc import Callable
 from collections.abc import Sequence
 from typing import Any
-from typing import Final
+from typing import Literal
 from typing import assert_never
 
 from app_manifest.manifest import ShortcutMode
@@ -550,13 +550,6 @@ class _PopOutNotes(FrozenModel):
     )
 
 
-# The window verbs whose outcome is a window shown on the desktop, which a client with only pop-outs open cannot show
-# yet (``open`` and ``show`` say so for themselves).
-_DESKTOP_SURFACING_OPS: Final[frozenset[LayoutOp]] = frozenset(
-    {LayoutOp.FOCUS, LayoutOp.RESTORE, LayoutOp.MAXIMIZE, LayoutOp.PLACE}
-)
-
-
 def _resolve_target(shell: ShellState, arguments: OpTarget, requester: OpRequester | None) -> _DesktopOpTarget:
     """The client and desktop an op targets: ``args.desktop`` (by name or id), else the client's active desktop by the
     rule of desktop contracts.md section 4.3. The switch ``args.desktop`` asks for is left to ``_switch_as_asked``,
@@ -902,7 +895,7 @@ def _place(
 
 def _after_window_op(
     shell: ShellState,
-    op: LayoutOp,
+    op: WindowOp | Literal[LayoutOp.PLACE],
     target: _DesktopOpTarget,
     window_id: WindowId,
     notes: _PopOutNotes,
@@ -913,14 +906,20 @@ def _after_window_op(
     it, stays on its own desktop: the client's desktop window keeps the desktop it shows."""
     if not notes.is_raised_in_own_window and not notes.is_brought_back:
         _switch_as_asked(shell, target)
-    if notes.is_raised_in_own_window or op not in _DESKTOP_SURFACING_OPS:
+    if notes.is_raised_in_own_window:
         return notes
-    # After the switch, so a phone looks the window up among the desktop it is moved to.
-    if op is LayoutOp.FOCUS:
-        _announce_window_op(shell, LayoutOp.FOCUS, window_id, target.client_id, requester)
-    return notes.model_copy_update(
-        to_update(notes.field_ref().has_no_desktop_window, _has_no_desktop_window(shell, target.client_id))
-    )
+    match op:
+        case LayoutOp.MINIMIZE | LayoutOp.CLOSE:
+            return notes
+        case LayoutOp.FOCUS | LayoutOp.RESTORE | LayoutOp.MAXIMIZE | LayoutOp.PLACE:
+            # After the switch, so a phone looks the window up among the desktop it is moved to.
+            if op is LayoutOp.FOCUS:
+                _announce_window_op(shell, LayoutOp.FOCUS, window_id, target.client_id, requester)
+            return notes.model_copy_update(
+                to_update(notes.field_ref().has_no_desktop_window, _has_no_desktop_window(shell, target.client_id))
+            )
+        case _:
+            assert_never(op)
 
 
 def _navigate(
