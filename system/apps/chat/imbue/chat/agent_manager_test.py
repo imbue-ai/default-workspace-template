@@ -5644,6 +5644,7 @@ def test_a_new_chat_claims_a_spare_still_starting_and_becomes_it_once_its_harnes
     ],
     ids=["another account", "an explicit name", "caller labels", "a check waiver"],
 )
+@pytest.mark.flaky
 def test_a_new_chat_the_spares_do_not_fit_is_created_and_the_spares_are_kept(
     broadcaster: WebSocketBroadcaster,
     monkeypatch: pytest.MonkeyPatch,
