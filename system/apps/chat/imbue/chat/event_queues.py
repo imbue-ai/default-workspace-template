@@ -103,30 +103,28 @@ class AgentEventQueues:
         logger.warning("Disconnected an SSE consumer for chat {}: its event queue overflowed", chat_id)
 
     def _close_locked(self, chat_id: str, event_queue: queue.Queue[dict[str, Any] | None]) -> None:
-        """Unregister one consumer and end its stream. Caller must hold ``self._lock``.
-
-        Drains the queue and pushes the shutdown sentinel so the handler thread, blocked on
-        ``get``, wakes, sees ``None``, and closes its stream -- which triggers the client's
-        reconnect-with-snapshot resync.
-        """
+        """Unregister one consumer and end its stream. Caller must hold ``self._lock``."""
         self.unregister(chat_id, event_queue)
-        _drain_queue(event_queue)
-        try:
-            event_queue.put_nowait(None)
-        except queue.Full:
-            pass
+        _end_stream(event_queue)
 
     def shutdown(self) -> None:
         with self._lock:
             self._shutdown = True
             for chat_queues in self._queues.values():
                 for event_queue in chat_queues:
-                    _drain_queue(event_queue)
-                    try:
-                        event_queue.put_nowait(None)
-                    except queue.Full:
-                        pass
+                    _end_stream(event_queue)
             self._queues.clear()
+
+
+def _end_stream(event_queue: queue.Queue[dict[str, Any] | None]) -> None:
+    """Drain the queue and push the shutdown sentinel, so the handler thread, blocked on ``get``,
+    wakes, sees ``None``, and closes its stream -- which triggers the client's
+    reconnect-with-snapshot resync."""
+    _drain_queue(event_queue)
+    try:
+        event_queue.put_nowait(None)
+    except queue.Full:
+        pass
 
 
 def _drain_queue(event_queue: queue.Queue[dict[str, Any] | None]) -> None:
