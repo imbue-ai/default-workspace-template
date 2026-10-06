@@ -6245,38 +6245,24 @@ def test_the_pool_is_not_topped_up_while_an_awaiting_chats_spare_is_still_bootin
         manager.stop()
 
 
-def test_an_awaiting_chats_reserved_spare_is_not_replaced_when_its_terms_go_stale(
-    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("is_intake", [False, True], ids=["empty list", "intake"])
+def test_an_awaiting_chat_keeps_its_reserved_spare_and_account_when_the_default_changes(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, is_intake: bool
 ) -> None:
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
     try:
         manager.ensure_spare_chat()
         (spare,) = _wait_for_ready_spares(manager, 1)
-        manager.mint_awaiting_chat(spare.terms.account_id)
+        awaiting = (
+            manager.mint_awaiting_chat(spare.terms.account_id) if is_intake else manager.awaiting_chat_for_empty_list()
+        )
+        assert awaiting.account_id == spare.terms.account_id
         set_default_account(_openai_account(), is_default=True)
 
         manager.ensure_spare_chat()
 
         assert _reserved_spares(manager) == [spare.with_phase(SpareChatPhase.RESERVED)]
-        assert ["destroy", spare.chat_id, "--force"] not in _mngr_calls(argv_log, "destroy")
-    finally:
-        manager.stop()
-
-
-def test_the_empty_list_chat_keeps_the_account_it_opened_on_when_the_default_changes(
-    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
-    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
-    try:
-        manager.ensure_spare_chat()
-        (spare,) = _wait_for_ready_spares(manager, 1)
-        awaiting = manager.awaiting_chat_for_empty_list()
-        assert awaiting.account_id == spare.terms.account_id
-        set_default_account(_openai_account(), is_default=True)
-
-        manager.ensure_spare_chat()
         launched = manager.create_chat("", chat_id=awaiting.chat_id, account_id=awaiting.account_id)
 
         assert launched.chat_id == spare.chat_id
