@@ -1,0 +1,1 @@
+- Fix the chat frontend's type check, which failed on `main` after #773 and #811 merged: `ModelProviderMenu.ts` used `pendingSwitchTarget` without importing it, so every workspace image build failed at `build_workspace.sh`.
