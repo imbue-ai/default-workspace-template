@@ -41,6 +41,7 @@ from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
+from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.codex.ledger import ShoulderTapResult
@@ -70,6 +71,7 @@ from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
+from imbue.chat.server import _open_chat_stream
 from imbue.chat.server import _revive_and_retry_send
 from imbue.chat.server import _stream_events
 from imbue.chat.server import _stream_filtered_events
@@ -545,6 +547,25 @@ def test_opening_a_stopped_chats_stream_keeps_the_watcher_through_a_release_whil
         assert manager.release is None
         assert set(state.watchers) == {"stopped-agent"}
         response.close()
+    finally:
+        state.shutdown()
+
+
+def test_a_stream_whose_feed_fails_to_build_no_longer_counts_as_open() -> None:
+    """The release spares a chat with an open stream, so a stream left registered after its feed failed to
+    build would keep the chat's transcripts resident for good."""
+    state = build_test_state()
+
+    def failing_build() -> None:
+        raise ChatAppError("the transcript could not be read")
+
+    try:
+        with pytest.raises(ChatAppError):
+            _open_chat_stream(state, "stopped-agent", failing_build)
+        assert not state.event_queues.has_consumers("stopped-agent")
+
+        _open_chat_stream(state, "stopped-agent", lambda: None)
+        assert state.event_queues.has_consumers("stopped-agent")
     finally:
         state.shutdown()
 
