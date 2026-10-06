@@ -3300,6 +3300,8 @@ class AgentManager:
                     and not provisional.is_seeded
                     and self._release_reserved_spare_locked(provisional.chat_id)
                 )
+                if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
+                    raise AgentCreationError(f"Chat {chat_id} is not waiting to be launched")
                 # A chat whose claimed spare failed keeps the spare's id, and the spare's agent under
                 # it is destroyed first: a create under that id before then would be hidden as the
                 # spare, and destroyed with it.
@@ -3307,8 +3309,6 @@ class AgentManager:
                     raise AgentCreationError(
                         f"Chat {chat_id}'s last agent is still being cleaned up; try again in a few minutes"
                     )
-                if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
-                    raise AgentCreationError(f"Chat {chat_id} is not waiting to be launched")
                 if provisional.is_seeded:
                     # A seeded chat's agent joins the seed on the record rather than taking the
                     # chat's id, whether this is its first send (the message is the launch's to

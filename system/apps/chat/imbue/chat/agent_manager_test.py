@@ -6580,6 +6580,8 @@ def test_an_awaiting_chats_spare_still_booting_becomes_the_chat_once_its_harness
         assert provisional is not None and provisional.phase is ProvisionalChatPhase.CREATING
         assert not manager._creation_settled_by_chat[launched.chat_id].wait(timeout=1.0)
         assert sent == []
+        with pytest.raises(AgentCreationError, match="is not waiting to be launched"):
+            manager.create_chat("", chat_id=awaiting.chat_id, account_id=booting.terms.account_id, message="Again")
 
         _mark_harness_ready(tmp_path, booting.chat_id)
 
