@@ -484,6 +484,13 @@
 
   function connectStream() {
     if (browserId === null) return;
+    // Every viewer of the one browser shares its stream and its size: a connect sizes the
+    // capture to this pane and may claim the stream, so a pane the shell has not said is shown (a
+    // window reloaded while minimized or on another desktop) waits for it before connecting.
+    if (shellVisibility !== "shown") {
+      isStreamDeferred = true;
+      return;
+    }
     const url = new URL("browsers/" + browserId + "/stream", document.baseURI);
     url.protocol = (url.protocol === "https:") ? "wss:" : "ws:";
     // Pane size up front, IN the connect URL, so the first frame is already pane-sized
@@ -666,13 +673,14 @@
   // bandwidth). The server arbitrates (last interaction wins, ordered by its own receive
   // time so multi-device clocks don't matter) and pauses everyone else.
   // "Visible" = the whole workspace tab isn't backgrounded (Page Visibility), the workspace shell
-  // hasn't hidden this pane's window (minimized, on another desktop: a hidden window's frame keeps
-  // its size, so the shell's word, relayed by the contract script below, is the only sign), AND the
-  // pane isn't collapsed (0x0).
+  // has said this pane's window is shown (a hidden window's frame keeps its size, so the shell's
+  // word, relayed by the contract script below, is the only sign), AND the pane isn't collapsed
+  // (0x0). A page opened on its own has no shell and counts as shown.
   const SHELL_VISIBILITY_EVENT = "browser:shell-visibility";
-  let isShellHidden = false;
+  let shellVisibility = window.parent === window ? "shown" : "unknown";
+  let isStreamDeferred = false;
   function paneVisible() {
-    if (document.hidden || isShellHidden) return false;
+    if (document.hidden || shellVisibility !== "shown") return false;
     const r = stage.getBoundingClientRect();
     return r.width > 4 && r.height > 4;
   }
@@ -698,7 +706,11 @@
   }
   document.addEventListener("visibilitychange", onVisibilityTransition);
   document.addEventListener(SHELL_VISIBILITY_EVENT, (event) => {
-    isShellHidden = !event.detail.isShown;
+    shellVisibility = event.detail.isShown ? "shown" : "hidden";
+    if (shellVisibility === "shown" && isStreamDeferred) {
+      isStreamDeferred = false;
+      connectStream();
+    }
     onVisibilityTransition();
   });
   new IntersectionObserver(onVisibilityTransition, { threshold: [0, 0.01] }).observe(stage);
@@ -1158,13 +1170,18 @@ registerProcessor('pb', PB);`;
   boot();
 })();
 </script>
-<script type="module">
+<!-- A contract that cannot load (the shell's frontend not built) leaves nobody to say whether the
+     pane is shown: stream as a page opened on its own does. -->
+<script type="module" onerror="document.dispatchEvent(new CustomEvent('browser:shell-visibility', { detail: { isShown: true } }))">
   // The workspace shell's app contract (docs/system/blueprint/desktop-interface/contracts.md
   // section 7), imported from this page's own origin, which the daemon serves it from. The
   // window's path says WHICH browser this page shows and its title is that browser's name; what
   // the browser itself is looking at stays inside the streamed pixels. A session switch is a
   // whole new stream, so this page declares no navigation capability and the shell reloads the
-  // frame to move it.
+  // frame to move it. Imported statically, so it listens before this page's load: the shell says
+  // shown or hidden right after that load, and the stream above waits for that word.
+  import { connectToShell } from "/_static/app_contract.js";
+
   function browserTitle(name) {
     const numbered = /^browser-([0-9]+)$/.exec(name);
     return numbered === null ? name : `Browser ${numbered[1]}`;
@@ -1172,34 +1189,30 @@ registerProcessor('pb', PB);`;
   const session = new URLSearchParams(location.search).get("session");
   if (session) document.title = browserTitle(session);
   if (window.parent !== window) {
-    import("/_static/app_contract.js")
-      .then(({ connectToShell }) => {
-        // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window:
-        // the window-bound sweep would otherwise stop the whole browser. The browser is
-        // named by the page's own session parameter; the viewer's state above is closure-local.
-        const closeRemoteTab = () => {
-          if (session === null) return;
-          fetch(new URL("browsers/" + session + "/close-tab", document.baseURI), { method: "POST" })
-            .then(async (response) => {
-              if (response.ok) return;
-              let reason = "";
-              try { reason = (await response.json()).error || ""; } catch (_) {}
-              console.warn("[browser] close-tab refused (" + response.status + ")", reason);
-            })
-            .catch((error) => console.warn("[browser] close-tab request failed", error));
-        };
-        const tellShellVisibility = (isShown) =>
-          document.dispatchEvent(new CustomEvent("browser:shell-visibility", { detail: { isShown } }));
-        const connection = connectToShell({
-          capabilities: { navigation: false, closeChord: true },
-          onCloseRequest: closeRemoteTab,
-          onShown: () => tellShellVisibility(true),
-          onHidden: () => tellShellVisibility(false),
-        });
-        window.addEventListener("focus", () => connection.focused());
-        if (session) connection.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
-      })
-      .catch((error) => console.warn("[browser] could not load the shell contract", error));
+    // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window:
+    // the window-bound sweep would otherwise stop the whole browser. The browser is
+    // named by the page's own session parameter; the viewer's state above is closure-local.
+    const closeRemoteTab = () => {
+      if (session === null) return;
+      fetch(new URL("browsers/" + session + "/close-tab", document.baseURI), { method: "POST" })
+        .then(async (response) => {
+          if (response.ok) return;
+          let reason = "";
+          try { reason = (await response.json()).error || ""; } catch (_) {}
+          console.warn("[browser] close-tab refused (" + response.status + ")", reason);
+        })
+        .catch((error) => console.warn("[browser] close-tab request failed", error));
+    };
+    const tellShellVisibility = (isShown) =>
+      document.dispatchEvent(new CustomEvent("browser:shell-visibility", { detail: { isShown } }));
+    const connection = connectToShell({
+      capabilities: { navigation: false, closeChord: true },
+      onCloseRequest: closeRemoteTab,
+      onShown: () => tellShellVisibility(true),
+      onHidden: () => tellShellVisibility(false),
+    });
+    window.addEventListener("focus", () => connection.focused());
+    if (session) connection.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
   }
 </script>
 </body>

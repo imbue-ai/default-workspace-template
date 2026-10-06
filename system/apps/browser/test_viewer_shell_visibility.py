@@ -1,11 +1,14 @@
-"""Browser: the viewer pauses its stream while the workspace shell hides its window, in a real Chromium.
+"""Browser: the viewer streams only while the workspace shell shows its window, in a real Chromium.
 
 The shell keeps a hidden window's page at its size (it moves it out of the viewport), so the shell's
-``shell:hidden`` is the only sign the viewer gets. The viewer is framed by a stand-in shell page and imports
-a stand-in contract module that exposes the handlers it registers; its stream socket is answered by a stub
-that records what the page sends.
+``shell:shown`` and ``shell:hidden`` are the only sign the viewer gets. A stand-in shell frames the viewer and
+talks to it as the shell does: a handshake and the window's visibility after every load of the frame, and a
+message whenever the visibility changes. The viewer imports a stand-in contract module that hands those
+messages to its handlers as the real one does. Its stream socket is answered by a stub that records what the
+page opens and sends.
 """
 
+import math
 from typing import Final
 
 import pytest
@@ -16,76 +19,129 @@ from browser.testing import (
     VIEWER_URL,
     wait_until,
 )
-from playwright.sync_api import Browser, Route
+from playwright.sync_api import Browser, BrowserContext, Frame, Page, Route, WebSocketRoute
 
 pytestmark = [pytest.mark.browser, pytest.mark.timeout(60)]
 
 _SHELL_URL: Final[str] = "http://localhost/shell"
 _CONTRACT_URL: Final[str] = "http://localhost/_static/app_contract.js"
-_SHELL_PAGE: Final[str] = (
-    f'<!doctype html><iframe src="{VIEWER_URL}" style="width:800px;height:600px;border:0"></iframe>'
-)
-# The handlers the viewer gives ``connectToShell``, kept where the test can call them.
-_CONTRACT_MODULE: Final[str] = (
-    "export function connectToShell(handlers) {\n"
-    "  window.shellHandlers = handlers;\n"
-    "  return { focused() {}, location() {} };\n"
-    "}\n"
-)
+_SHELL_PAGE: Final[str] = f"""<!doctype html>
+<iframe id="page" src="{VIEWER_URL}" style="width:800px;height:600px;border:0"></iframe>
+<script>
+  const frame = document.getElementById("page");
+  window.tell = (type) => frame.contentWindow.postMessage({{ type }}, "*");
+  const atLoad = new URLSearchParams(location.search).get("visibility");
+  frame.addEventListener("load", () => {{
+    window.tell("shell:handshake");
+    window.tell(atLoad === "hidden" ? "shell:hidden" : "shell:shown");
+  }});
+</script>"""
+_CONTRACT_MODULE: Final[str] = """export function connectToShell(handlers) {
+  addEventListener("message", (event) => {
+    if (event.source !== parent) return;
+    if (event.data.type === "shell:shown") handlers.onShown?.();
+    if (event.data.type === "shell:hidden") handlers.onHidden?.();
+  });
+  parent.postMessage({ type: "shell:capabilities", ...handlers.capabilities }, "*");
+  return { focused() {}, location() {} };
+}
+"""
 _STAGE_SIZE: Final[str] = (
     "(() => { const box = document.getElementById('stage').getBoundingClientRect();"
     " return [box.width, box.height]; })()"
 )
 
 
-def test_the_viewer_releases_the_stream_while_the_shell_hides_its_window_and_claims_it_when_shown(
-    module_browser: Browser,
-) -> None:
-    claims: list[str] = []
+class _Viewer:
+    """The framed viewer's stream as the stub saw it: the URLs it opened and the claims it sent."""
+
+    def __init__(self) -> None:
+        self.stream_urls: list[str] = []
+        self.claims: list[str] = []
+
+    def stream(self, socket: WebSocketRoute) -> None:
+        self.stream_urls.append(socket.url)
+        socket.on_message(self._record)
+
+    def _record(self, message: str | bytes) -> None:
+        if isinstance(message, str) and message in ("i", "h"):
+            self.claims.append(message)
+
+
+def _open(
+    module_browser: Browser, visibility_at_load: str, is_contract_served: bool = True
+) -> tuple[BrowserContext, Page, Frame, _Viewer]:
+    viewer = _Viewer()
 
     def answer(route: Route) -> None:
         url = route.request.url
-        if url == _SHELL_URL:
+        if url.startswith(_SHELL_URL):
             route.fulfill(status=200, content_type="text/html", body=_SHELL_PAGE)
         elif url == VIEWER_URL:
-            route.fulfill(
-                status=200, content_type="text/html", body=VIEWER_PATH.read_text()
-            )
-        elif url == _CONTRACT_URL:
-            route.fulfill(
-                status=200, content_type="text/javascript", body=_CONTRACT_MODULE
-            )
+            route.fulfill(status=200, content_type="text/html", body=VIEWER_PATH.read_text())
+        elif url == _CONTRACT_URL and is_contract_served:
+            route.fulfill(status=200, content_type="text/javascript", body=_CONTRACT_MODULE)
         else:
             route.fulfill(status=404, body="")
 
-    def record_claim(message: str | bytes) -> None:
-        if isinstance(message, str) and message in ("i", "h"):
-            claims.append(message)
-
     context = module_browser.new_context(viewport={"width": 1000, "height": 800})
+    context.route("**/*", answer)
+    context.route_web_socket(STREAM_URL, viewer.stream)
+    page = context.new_page()
+    page.goto(f"{_SHELL_URL}?visibility={visibility_at_load}")
+    frame = page.frame(url=VIEWER_URL)
+    assert frame is not None
+    return context, page, frame, viewer
+
+
+def test_the_viewer_releases_the_stream_while_the_shell_hides_its_window_and_claims_it_when_shown(
+    module_browser: Browser,
+) -> None:
+    context, page, frame, viewer = _open(module_browser, "shown")
     try:
-        context.route("**/*", answer)
-        context.route_web_socket(
-            STREAM_URL, lambda socket: socket.on_message(record_claim)
-        )
-        page = context.new_page()
-        page.goto(_SHELL_URL)
-        viewer = page.frame(url=VIEWER_URL)
-        assert viewer is not None
         # A shown pane claims the stream as soon as its socket opens.
-        wait_until(page, lambda: claims[-1:] == ["i"])
-        wait_until(page, lambda: viewer.evaluate("window.shellHandlers !== undefined"))
-        shown_size = viewer.evaluate(_STAGE_SIZE)
+        wait_until(page, lambda: viewer.claims[-1:] == ["i"])
+        shown_size = frame.evaluate(_STAGE_SIZE)
 
-        viewer.evaluate("window.shellHandlers.onHidden()")
-        wait_until(page, lambda: claims[-1:] == ["h"])
-        released_at = len(claims)
+        page.evaluate("window.tell('shell:hidden')")
+        wait_until(page, lambda: viewer.claims[-1:] == ["h"])
+        released_at = len(viewer.claims)
         # Its size is unchanged, so only the shell's word keeps it released past the viewer's 1.5s belt.
-        assert viewer.evaluate(_STAGE_SIZE) == shown_size
+        assert frame.evaluate(_STAGE_SIZE) == shown_size
         page.wait_for_timeout(BELT_SETTLE_MS)
-        assert claims[released_at:] == []
+        assert viewer.claims[released_at:] == []
 
-        viewer.evaluate("window.shellHandlers.onShown()")
-        wait_until(page, lambda: claims[released_at:] == ["i"])
+        page.evaluate("window.tell('shell:shown')")
+        wait_until(page, lambda: viewer.claims[released_at:] == ["i"])
+    finally:
+        context.close()
+
+
+def test_a_viewer_loaded_in_a_hidden_window_opens_no_stream_until_the_shell_shows_it(
+    module_browser: Browser,
+) -> None:
+    """A window reloaded while minimized must neither claim the stream from the viewer in front nor size the
+    browser to its own pane: it connects only once shown, at its size, and claims then."""
+    context, page, frame, viewer = _open(module_browser, "hidden")
+    try:
+        page.wait_for_timeout(BELT_SETTLE_MS)
+        assert viewer.stream_urls == []
+
+        page.evaluate("window.tell('shell:shown')")
+        wait_until(page, lambda: viewer.claims == ["i"])
+        # Sized like every connect: the pane's box rounded to whole pixels, then down to an even count.
+        width, height = (math.floor(side + 0.5) & ~1 for side in frame.evaluate(_STAGE_SIZE))
+        assert viewer.stream_urls == [f"ws://localhost/browsers/browser-1/stream?w={width}&h={height}"]
+    finally:
+        context.close()
+
+
+def test_a_framed_viewer_whose_contract_cannot_load_streams_as_a_page_on_its_own(
+    module_browser: Browser,
+) -> None:
+    context, page, _frame, viewer = _open(module_browser, "shown", is_contract_served=False)
+    try:
+        wait_until(page, lambda: viewer.claims == ["i"])
+        assert len(viewer.stream_urls) == 1
     finally:
         context.close()

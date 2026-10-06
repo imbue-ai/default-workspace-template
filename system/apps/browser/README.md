@@ -88,6 +88,10 @@ background agent, which is its own chat -- or the human).
   which the viewer, when framed, imports to report `/?session=<name>` and
   `Browser N` as its location; it declares no navigation capability, since a
   session switch is a whole new stream, so the shell reloads the frame to move it.
+  Every viewer shares the browser's one stream and its size, so a framed viewer
+  opens its stream only once the shell says its window is shown: one reloaded
+  while minimized or on another desktop would otherwise pause the viewer in front
+  and resize the browser to its own pane.
 - **One window, so pop-ups are tabs**: the stream shows a single browser window, and the
   window guardian (`window_guardian.py`) closes any other (Ctrl+N, a tab dragged out). A page's
   `window.open` pop-up -- the shape of most "Sign in with ..." buttons -- opens as a tab in
