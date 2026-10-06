@@ -1107,7 +1107,7 @@ def _open(
     is_found_detached = found is not None and placement_of(layout, found.id).is_detached
     if found is not None and _is_detached_while_connected(shell, target.client_id, is_found_detached):
         _raise_in_own_window(shell, found.id, target.client_id, requester)
-        return found.id, _PopOutNotes(is_raised_in_own_window=True, unpaired_beside=unpaired_beside)
+        return found.id, _PopOutNotes(is_raised_in_own_window=True)
     window_id = shell.open_window(target.desktop.id, request).window.id
     _pair_beside(shell, target, anchor, window_id)
     _switch_as_asked(shell, target)

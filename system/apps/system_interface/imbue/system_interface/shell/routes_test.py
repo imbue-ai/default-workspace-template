@@ -2063,16 +2063,24 @@ def test_focus_raises_a_popped_out_window_in_its_own_window_and_leaves_it_out(cl
 def test_an_open_that_finds_a_popped_out_window_at_the_path_raises_it_in_its_own_window(
     client: FlaskClient, app: Flask
 ) -> None:
+    """A ``beside`` naming another popped-out window is not reported unpaired: the open opened nothing to pair."""
     client_queue = _register_client(app, "c1", "home")
     window_id = _window_id_at(client, "terminal", "/?session=t1")
     _pull_out(client, window_id)
+    partner = _window_id_at(client, "files", "/notes/")
+    _pull_out(client, partner)
     placements_before = _placements(client, "c1")
     drain_messages(client_queue)
 
-    found = _op(client, "open", {"app": "terminal", "path": "/?session=t1", "client": "c1"}, None)
+    found = _op(client, "open", {"app": "terminal", "path": "/?session=t1", "beside": partner, "client": "c1"}, None)
 
     assert found.status_code == 200
-    assert (found.get_json()["window_id"], found.get_json()["is_raised_in_own_window"]) == (window_id, True)
+    answer = found.get_json()
+    assert (answer["window_id"], answer["is_raised_in_own_window"], answer["unpaired_beside"]) == (
+        window_id,
+        True,
+        None,
+    )
     assert _placements(client, "c1") == placements_before
     assert _layout_ops(client_queue) == [("show", {"window": window_id, "is_detached": True}, "c1", "")]
     # Asked for another window at the path, the open opens one: the pop-out is left alone.
