@@ -156,13 +156,13 @@ def _read_env_file(path: str) -> dict[str, str]:
 
 
 def read_workspace_ai_credentials() -> WorkspaceAICredentials:
-    """Resolve current credentials: the snapshot file, then shared settings, then env.
+    """Resolve current credentials: the snapshot file, then account settings, then env.
 
     ``data/.secrets/anthropic.env`` -- the key snapshot a keyed integration
     writes at setup (``write_anthropic_env_snapshot``) -- wins for the API key
     and base URL: a built service stays pinned to the key it was set up with
     even after the user switches the workspace's sign-in in the modal. The
-    settings.json env block (written by the sign-in modal) is next; the
+    account's settings.json env block (written by the provider chooser) is next; the
     process env is only a fallback so this helper still works outside a
     workspace (e.g. local development with an exported key). The oauth token
     never comes from the snapshot (it is never written there).
