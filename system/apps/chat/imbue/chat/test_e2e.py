@@ -1496,7 +1496,8 @@ def test_a_narrow_window_under_a_mouse_opens_the_rail_in_the_drawer_at_its_dragg
     expect(drawer.locator("[data-chat-row-menu]")).to_have_count(0)
     panel = page.locator(".chat-drawer-panel").bounding_box()
     row = drawer.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]').bounding_box()
-    assert panel is not None and panel["width"] == 300, panel
+    # The panel's box is measured in fractional pixels.
+    assert panel is not None and abs(panel["width"] - 300) < 1, panel
     assert row is not None and row["height"] < 44, row
 
 
