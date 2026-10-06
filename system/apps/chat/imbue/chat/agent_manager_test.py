@@ -3705,17 +3705,27 @@ def _wait_for_streamed_content(stream: "queue.Queue[dict[str, Any] | None]", con
     return False
 
 
+def _watched_running_chat(
+    agent_manager: AgentManager, tmp_path: Path, name: str
+) -> tuple[ChatAppState, AgentDetails, AgentDetails, Path]:
+    """A running chat as the observer lists it, its transcript watched.
+
+    Returns the state holding the watcher, the agent's running and stopped details, and its session file.
+    """
+    state = build_test_state(agent_manager=agent_manager)
+    agent = _agent_details(name)
+    stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    agent_info, session_file = make_agent_fixture(tmp_path, agent_id=str(agent.id))
+    state.get_or_create_watcher(agent_info)
+    return state, agent, stopped, session_file
+
+
 def test_a_chat_nobody_streams_is_released_at_the_observe_event_reporting_its_stop(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
-    state = build_test_state(agent_manager=agent_manager)
-    agent = _agent_details("stoppable-agent")
-    stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
-    agent_manager._handle_observe_event(make_agent_state_event(agent))
-    agent_info, _session_file = make_agent_fixture(tmp_path, agent_id=str(agent.id))
+    state, _agent, stopped, _session_file = _watched_running_chat(agent_manager, tmp_path, "stoppable-agent")
     try:
-        state.get_or_create_watcher(agent_info)
-
         agent_manager._handle_observe_event(make_agent_state_event(stopped))
 
         assert state.watchers == {}
@@ -3726,13 +3736,9 @@ def test_a_chat_nobody_streams_is_released_at_the_observe_event_reporting_its_st
 def test_a_streamed_chat_keeps_streaming_through_a_momentary_stop(agent_manager: AgentManager, tmp_path: Path) -> None:
     """The observer can report a live agent dead for a moment, and the open stream is fed only by the
     chat's watcher, so the watcher has to outlive the report or the page silently stops receiving events."""
-    state = build_test_state(agent_manager=agent_manager)
-    agent = _agent_details("renamed-mid-turn")
-    stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
-    agent_manager._handle_observe_event(make_agent_state_event(agent))
-    agent_info, session_file = make_agent_fixture(tmp_path, agent_id=str(agent.id))
+    state, agent, stopped, session_file = _watched_running_chat(agent_manager, tmp_path, "renamed-mid-turn")
     try:
-        watcher = state.get_or_create_watcher(agent_info)
+        watcher = state.watchers[str(agent.id)]
         stream = state.event_queues.register(str(agent.id))
 
         agent_manager._handle_observe_event(make_agent_state_event(stopped))
@@ -3748,13 +3754,8 @@ def test_a_streamed_chat_keeps_streaming_through_a_momentary_stop(agent_manager:
 def test_a_chat_that_stops_while_streamed_is_released_at_the_first_observe_event_after_its_stream_closes(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
-    state = build_test_state(agent_manager=agent_manager)
-    agent = _agent_details("stopped-while-viewed")
-    stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
-    agent_manager._handle_observe_event(make_agent_state_event(agent))
-    agent_info, _session_file = make_agent_fixture(tmp_path, agent_id=str(agent.id))
+    state, agent, stopped, _session_file = _watched_running_chat(agent_manager, tmp_path, "stopped-while-viewed")
     try:
-        state.get_or_create_watcher(agent_info)
         stream = state.event_queues.register(str(agent.id))
 
         agent_manager._handle_observe_event(make_agent_state_event(stopped))
