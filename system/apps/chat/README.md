@@ -106,10 +106,10 @@ the File Viewer (`open:file`), a local address (`localhost`, `127.0.0.1`,
 `[::1]`, `*.localhost`) through the shell (`shell:open-link`), which opens the
 window of the app registered at its port or else the workspace's browser,
 another app's address of the workspace as that app's window
-(`shell:open-link`), and an
-external link in the user's own browser. A chat opened on its own, with no
-shell above its root (`isShellAbove` in `frontend/src/shell.ts`), downloads a
-linked file and opens a local link in a new tab instead.
+(`shell:open-link`), and an external link in the user's own browser. A chat
+opened on its own, with no shell above its root (`isShellAbove` in
+`frontend/src/shell.ts`), downloads a linked file and opens a local link in a
+new tab instead.
 Sends are reported to the shell's client-activity route so agents can
 attribute a request to a client, and the app asks the shell for windows,
 through one client of the `workspace_layout` library that asks as the chat app
