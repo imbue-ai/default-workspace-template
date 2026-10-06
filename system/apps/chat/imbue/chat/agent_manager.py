@@ -3235,6 +3235,9 @@ class AgentManager:
         A new chat whose terms the spare agents were started on (``spare_chat.py``) is handed a
         spare instead of a create: a ready one is listed at once, already running, and one still
         starting settles the chat when it is up; the message and pick follow through the send path.
+        A launch by ``chat_id`` of a chat awaiting its first send takes the spare reserved under that
+        id the same way when its account and fast mode fit it; otherwise that spare is destroyed first
+        and the chat is created under the id once it is gone, or fails when it cannot be destroyed.
         """
         extra_labels = dict(labels or {})
         try:
