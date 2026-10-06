@@ -64,7 +64,10 @@ class FirstWindowLedger(MutableModel):
 class FirstWindowDelivery(FrozenModel):
     """What one delivery attempt came to."""
 
-    is_delivered: bool = Field(description="Whether the window was opened and placed for a client")
+    is_delivered: bool = Field(
+        description="Whether the window was delivered to a client: opened and placed, or found popped out into its "
+        "own window and left there"
+    )
     client_id: ClientId | None = Field(description="The client it was delivered to, when it was")
 
 
