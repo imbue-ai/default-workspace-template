@@ -334,7 +334,7 @@ def test_the_window_verbs_post_the_window_and_the_target(
     assert "pointed window" in err and "at /?chat=agent-2" in err
 
 
-def test_the_verbs_that_can_be_refused_forward_force_and_the_rest_accept_it_unsent(
+def test_the_verbs_whose_arguments_take_force_send_it_and_the_rest_accept_it_unsent(
     loopback_shell: LoopbackShell, layout_context: LayoutCliContext
 ) -> None:
     loopback_shell.op_answer = _answer([_CHAT_WINDOW], _CHAT_ID)
