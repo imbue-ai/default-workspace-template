@@ -9,6 +9,8 @@ page opens and sends.
 """
 
 import math
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Final
 
 import pytest
@@ -21,7 +23,6 @@ from browser.testing import (
 )
 from playwright.sync_api import (
     Browser,
-    BrowserContext,
     Frame,
     Page,
     Route,
@@ -75,9 +76,10 @@ class _Viewer:
             self.claims.append(message)
 
 
-def _open(
+@contextmanager
+def _framed_viewer(
     module_browser: Browser, visibility_at_load: str, is_contract_served: bool = True
-) -> tuple[BrowserContext, Page, Frame, _Viewer]:
+) -> Iterator[tuple[Page, Frame, _Viewer]]:
     viewer = _Viewer()
 
     def answer(route: Route) -> None:
@@ -96,20 +98,22 @@ def _open(
             route.fulfill(status=404, body="")
 
     context = module_browser.new_context(viewport={"width": 1000, "height": 800})
-    context.route("**/*", answer)
-    context.route_web_socket(STREAM_URL, viewer.stream)
-    page = context.new_page()
-    page.goto(f"{_SHELL_URL}?visibility={visibility_at_load}")
-    frame = page.frame(url=VIEWER_URL)
-    assert frame is not None
-    return context, page, frame, viewer
+    try:
+        context.route("**/*", answer)
+        context.route_web_socket(STREAM_URL, viewer.stream)
+        page = context.new_page()
+        page.goto(f"{_SHELL_URL}?visibility={visibility_at_load}")
+        frame = page.frame(url=VIEWER_URL)
+        assert frame is not None
+        yield page, frame, viewer
+    finally:
+        context.close()
 
 
 def test_the_viewer_releases_the_stream_while_the_shell_hides_its_window_and_claims_it_when_shown(
     module_browser: Browser,
 ) -> None:
-    context, page, frame, viewer = _open(module_browser, "shown")
-    try:
+    with _framed_viewer(module_browser, "shown") as (page, frame, viewer):
         # A shown pane claims the stream as soon as its socket opens.
         wait_until(page, lambda: viewer.claims[-1:] == ["i"])
         shown_size = frame.evaluate(_STAGE_SIZE)
@@ -124,8 +128,6 @@ def test_the_viewer_releases_the_stream_while_the_shell_hides_its_window_and_cla
 
         page.evaluate("window.tell('shell:shown')")
         wait_until(page, lambda: viewer.claims[released_at:] == ["i"])
-    finally:
-        context.close()
 
 
 def test_a_viewer_loaded_in_a_hidden_window_opens_no_stream_until_the_shell_shows_it(
@@ -133,8 +135,7 @@ def test_a_viewer_loaded_in_a_hidden_window_opens_no_stream_until_the_shell_show
 ) -> None:
     """A window reloaded while minimized must neither claim the stream from the viewer in front nor size the
     browser to its own pane: it connects only once shown, at its size, and claims then."""
-    context, page, frame, viewer = _open(module_browser, "hidden")
-    try:
+    with _framed_viewer(module_browser, "hidden") as (page, frame, viewer):
         page.wait_for_timeout(BELT_SETTLE_MS)
         assert viewer.stream_urls == []
 
@@ -147,18 +148,15 @@ def test_a_viewer_loaded_in_a_hidden_window_opens_no_stream_until_the_shell_show
         assert viewer.stream_urls == [
             f"ws://localhost/browsers/browser-1/stream?w={width}&h={height}"
         ]
-    finally:
-        context.close()
 
 
 def test_a_framed_viewer_whose_contract_cannot_load_streams_as_a_page_on_its_own(
     module_browser: Browser,
 ) -> None:
-    context, page, _frame, viewer = _open(
-        module_browser, "shown", is_contract_served=False
-    )
-    try:
+    with _framed_viewer(module_browser, "shown", is_contract_served=False) as (
+        page,
+        _frame,
+        viewer,
+    ):
         wait_until(page, lambda: viewer.claims == ["i"])
         assert len(viewer.stream_urls) == 1
-    finally:
-        context.close()
