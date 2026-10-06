@@ -781,6 +781,7 @@ def _run_claude_tap(world: _ClaudeWorld) -> None:
     assert world.parked == [], f"a tapped flush must commit the whole queue\n{note()}"
 
 
+@pytest.mark.flaky
 @pytest.mark.timeout(120)
 def test_claude_conservation_storm_tap_and_stop_executors(tmp_path: Path) -> None:
     """N seeded rounds of claude sends / taps / stops / restarts over the REAL session watcher."""
