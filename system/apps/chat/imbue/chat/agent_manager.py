@@ -925,8 +925,8 @@ class AgentManager:
     # Evicts one agent's session watcher (releasing its resident transcript, thread, and
     # filesystem watches). Set once at composition (``set_watcher_eviction_callback``) --
     # the watcher registry lives on the app state, which the manager must not import; the
-    # manager only knows WHEN an agent is positively gone or stopped. ``None`` (tests) =
-    # no eviction.
+    # manager only knows WHEN an agent is positively gone or an archived member stopped.
+    # ``None`` (tests) = no eviction.
     _watcher_eviction_callback: Callable[[str], None] | None
     # Drops what stopped chats nobody is streaming hold resident, after every observe event.
     # Set once at composition (``set_unviewed_transcript_release``); the app state knows who
@@ -2545,7 +2545,7 @@ class AgentManager:
         self._stop_model_tracking(agent_id)
         # The agent is positively gone, so its resident transcript goes with it, and so does
         # the codex live-user-turn record keyed by its id.
-        self._evict_watcher(agent_id)
+        self._evict_chat_transcripts(agent_id)
         drop_live_user_turns(agent_id)
         self._broadcast_chats_updated()
 
@@ -3578,7 +3578,7 @@ class AgentManager:
         }
         # Agents whose lifecycle TRANSITIONED into a positively-dead state this event --
         # a stop, an OOM shed, an idle shutdown. The chat-memory contract says a stopped
-        # chat holds no resident transcript, so their watchers are evicted below.
+        # chat nobody is streaming holds no resident transcript; see the eviction below.
         newly_dead_ids = {
             agent_id
             for agent_id in state_changed_ids
@@ -3650,7 +3650,7 @@ class AgentManager:
         for agent_id in removed_agent_ids:
             self._stop_activity_tracking(agent_id)
             self._stop_model_tracking(agent_id)
-            self._evict_watcher(agent_id)
+            self._evict_chat_transcripts(agent_id)
             with self._lock:
                 self._pending_permission_ids_by_agent.pop(agent_id, None)
                 is_own_chat = not self._is_recorded_member_locked(agent_id)
@@ -3690,12 +3690,16 @@ class AgentManager:
         for agent_id in recompute_ids:
             self._recompute_activity_state(agent_id, broadcast_on_change=False)
 
-        # Drop the resident transcript of every chat that just stopped (its active agent
-        # died), its archived segments included; an archived member dying drops only its
-        # own. A read of a stopped chat rebuilds its transcript after that, so the release
-        # then drops what any stopped chat holds, sparing a chat whose stream is open.
-        for agent_id in newly_dead_ids:
-            self._evict_chat_transcripts(agent_id)
+        # An archived member dying drops only its own transcript. A chat whose active agent died
+        # is left to the release, which spares a chat whose stream is open: that stream is fed
+        # only by the chat's watcher, and a death the observer reports can be a moment in a
+        # live agent's rename.
+        with self._lock:
+            dead_archived_member_ids = [
+                agent_id for agent_id in newly_dead_ids if self._is_archived_member_locked(agent_id)
+            ]
+        for agent_id in dead_archived_member_ids:
+            self._evict_watcher(agent_id)
         if self._unviewed_transcript_release is not None:
             self._unviewed_transcript_release()
 
@@ -3716,9 +3720,12 @@ class AgentManager:
         )
 
     def _evict_chat_transcripts(self, agent_id: str) -> None:
-        """Drop what a dead agent held resident: the whole chat's transcripts when it was the
-        chat's active agent (the chat stopped), else its own alone (an archived member
-        stopping leaves the chat, and the watcher a user may be viewing, standing)."""
+        """Drop what a removed agent held resident: the whole chat's transcripts when it was the
+        chat's active agent, else its own alone (an archived member going leaves the chat, and
+        the watcher a user may be viewing, standing).
+
+        The whole chat goes because the release cannot drop it later: a chat whose active agent
+        is no longer tracked never reads as stopped."""
         with self._lock:
             chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent_id))
         member_ids = chat.member_agent_ids if chat is not None and chat.active_agent_id == agent_id else (agent_id,)
@@ -3884,19 +3891,18 @@ class AgentManager:
         """Wire transcript eviction (the composition root calls this once).
 
         Invoked, per agent, with everything resident for that agent to drop -- its watcher or
-        its archived segment's loader -- when an agent is removed (destroyed) or its chat's
-        lifecycle TRANSITIONS into a positively-dead state -- stop from the UI, ``mngr stop``,
-        an OOM shed, an idle shutdown. Edge-triggered on purpose: a level-triggered evict
-        would tear down the watcher a user is actively viewing on a stopped chat, right
-        after every rebuild-on-read."""
+        its archived segment's loader -- when an agent is removed (destroyed; the whole chat's
+        members when it was the chat's active agent) or an archived member dies. A chat whose
+        active agent dies is released by ``set_unviewed_transcript_release``'s callback
+        instead, which spares a chat someone is streaming."""
         self._watcher_eviction_callback = callback
 
     def set_unviewed_transcript_release(self, callback: Callable[[], None]) -> None:
         """Wire the release of stopped chats' transcripts nobody is streaming (the composition root calls this once).
 
-        Invoked after every observe event. The transition eviction alone would leave a
-        stopped chat that is read after its stop resident until the app restarts: the read
-        rebuilds its transcript, and no further transition comes to evict it."""
+        Invoked after every observe event: the only release of a chat whose active agent died.
+        Level-triggered, so a stopped chat that a read rebuilds after its stop is dropped too,
+        once its last stream closes."""
         self._unviewed_transcript_release = callback
 
     def _evict_watcher(self, agent_id: str) -> None:

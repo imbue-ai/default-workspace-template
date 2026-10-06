@@ -251,9 +251,10 @@ class ChatAppState(MutableModel):
         """Evict everything resident for one agent: its watcher (the resident transcript, thread,
         and filesystem watches) and, for an archived member of a chat, its loader.
 
-        The memory half of the chat lifecycle: called when an agent is destroyed or its
-        chat's lifecycle transitions to positively dead (stopped from the UI, `mngr stop`, an
-        OOM shed, idle shutdown), so a chat that is not running holds no chat-backend memory.
+        The memory half of the chat lifecycle: called when an agent is destroyed or an archived
+        member dies, and by `release_unviewed_stopped_transcripts` once a stopped chat (stopped
+        from the UI, `mngr stop`, an OOM shed, idle shutdown) has no stream open, so a chat that
+        is not running and not being viewed holds no chat-backend memory.
         Cheap no-op when nothing is resident. Rebuild-on-demand is `get_or_create_watcher`
         and `get_or_create_loader`: viewing a stopped chat re-reads its transcript from disk
         transparently.
@@ -277,9 +278,11 @@ class ChatAppState(MutableModel):
     def release_unviewed_stopped_transcripts(self) -> None:
         """Evict what each stopped chat holds resident, unless a stream of it is open.
 
-        Reading a stopped chat rebuilds its transcript, which the manager's eviction (on the
-        chat's transition into stopped) never sees. A chat with an open stream keeps its
-        transcript while its viewer reads it; the first call after the stream closes drops it.
+        The only release of a chat whose active agent died, run after every observe event, so it
+        also catches a stopped chat that a read rebuilt after its stop. A chat with an open stream
+        keeps its transcript while its viewer reads it, since the stream is fed only by the
+        watcher and a reported death can be momentary; the first call after the stream closes
+        drops it.
         """
         with self._watchers_lock:
             resident_agent_ids = set(self.watchers) | set(self.loaders)

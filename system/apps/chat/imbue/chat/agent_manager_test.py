@@ -98,6 +98,7 @@ from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
+from imbue.chat.state import ChatAppState
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RecordingShell
@@ -3679,31 +3680,110 @@ def test_remove_agent_evicts_the_watcher(agent_manager: AgentManager) -> None:
     assert evicted == [str(agent.id)]
 
 
-def test_lifecycle_transition_into_dead_evicts_the_watcher_once(agent_manager: AgentManager) -> None:
-    """Eviction is edge-triggered on the transition into a positively-dead lifecycle: a
-    stop (from the UI, mngr, an OOM shed, idle shutdown) drops the resident transcript,
-    while further observe ticks of the already-stopped agent do NOT re-evict -- a user
-    viewing a stopped chat's history rebuilds the watcher on read, and a level-triggered
-    evict would tear that rebuild down again every tick."""
-    evicted: list[str] = []
-    agent_manager.set_watcher_eviction_callback(evicted.append)
+def _claude_transcript_agent_info(tmp_path: Path, agent_id: str) -> tuple[AgentInfo, Path]:
+    """A claude agent whose transcript holds one user message, and the session file to append more to."""
+    agent_state_dir = tmp_path / agent_id / "agent_state"
+    agent_state_dir.mkdir(parents=True)
+    claude_config_dir = tmp_path / agent_id / "claude_config"
+    session_file = claude_config_dir / "projects" / "hash123" / "s1.jsonl"
+    session_file.parent.mkdir(parents=True)
+    _append_claude_user_message(session_file, "u1", "hello")
+    (agent_state_dir / "claude_session_id_history").write_text("s1\n")
+    agent_info = AgentInfo(
+        id=agent_id,
+        name=agent_id,
+        state="RUNNING",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+    )
+    return agent_info, session_file
+
+
+def _append_claude_user_message(session_file: Path, uuid: str, content: str) -> None:
+    line = {
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": content},
+    }
+    with session_file.open("a") as f:
+        f.write(json.dumps(line) + "\n")
+
+
+def _wait_for_streamed_content(stream: "queue.Queue[dict[str, Any] | None]", content: str) -> bool:
+    """Whether an event carrying ``content`` reaches the stream within the timeout."""
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        try:
+            event = stream.get(timeout=max(0.0, deadline - time.monotonic()))
+        except queue.Empty:
+            return False
+        if event is not None and event.get("content") == content:
+            return True
+    return False
+
+
+def test_a_chat_nobody_streams_is_released_at_the_observe_event_reporting_its_stop(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state = build_test_state(agent_manager=agent_manager)
     agent = _agent_details("stoppable-agent")
-    agent_manager._handle_observe_event(make_agent_state_event(agent))
-    assert evicted == []
-
     stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
-    agent_manager._handle_observe_event(make_agent_state_event(stopped))
-    assert evicted == [str(agent.id)]
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    agent_info, _session_file = _claude_transcript_agent_info(tmp_path, str(agent.id))
+    try:
+        state.get_or_create_watcher(agent_info)
 
-    # Another tick of the same dead state: no edge, no eviction.
-    agent_manager._handle_observe_event(make_agent_state_event(stopped))
-    assert evicted == [str(agent.id)]
+        agent_manager._handle_observe_event(make_agent_state_event(stopped))
 
-    # A restart followed by another stop evicts again.
-    running = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.RUNNING))
-    agent_manager._handle_observe_event(make_agent_state_event(running))
-    agent_manager._handle_observe_event(make_agent_state_event(stopped))
-    assert evicted == [str(agent.id), str(agent.id)]
+        assert state.watchers == {}
+    finally:
+        state.shutdown()
+
+
+def test_a_streamed_chat_keeps_streaming_through_a_momentary_stop(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """The observer can report a live agent dead for a moment (a rename moves its tmux session before its
+    data.json), and the open stream is fed only by the chat's watcher, so the watcher has to outlive the
+    report or the page silently stops receiving events."""
+    state = build_test_state(agent_manager=agent_manager)
+    agent = _agent_details("renamed-mid-turn")
+    stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    agent_info, session_file = _claude_transcript_agent_info(tmp_path, str(agent.id))
+    try:
+        watcher = state.get_or_create_watcher(agent_info)
+        stream = state.event_queues.register(str(agent.id))
+
+        agent_manager._handle_observe_event(make_agent_state_event(stopped))
+        agent_manager._handle_observe_event(make_agent_state_event(agent))
+
+        assert state.watchers == {str(agent.id): watcher}
+        _append_claude_user_message(session_file, "u2", "written after the stop")
+        assert _wait_for_streamed_content(stream, "written after the stop")
+    finally:
+        state.shutdown()
+
+
+def test_a_chat_that_stops_while_streamed_is_released_at_the_first_observe_event_after_its_stream_closes(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    state = build_test_state(agent_manager=agent_manager)
+    agent = _agent_details("stopped-while-viewed")
+    stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    agent_info, _session_file = _claude_transcript_agent_info(tmp_path, str(agent.id))
+    try:
+        state.get_or_create_watcher(agent_info)
+        stream = state.event_queues.register(str(agent.id))
+
+        agent_manager._handle_observe_event(make_agent_state_event(stopped))
+        assert set(state.watchers) == {str(agent.id)}
+
+        state.event_queues.unregister(str(agent.id), stream)
+        agent_manager._handle_observe_event(make_agent_state_event(stopped))
+        assert state.watchers == {}
+    finally:
+        state.shutdown()
 
 
 def test_a_stopped_chat_read_after_its_stop_is_released_at_the_next_observe_event(
@@ -4056,17 +4136,61 @@ def test_an_archived_members_removal_leaves_its_chats_records_and_transcripts_st
         assert [snapshot.chat_id for snapshot in manager.get_chat_snapshots()] == [first]
         # The member's own resident transcript goes; the chat's active segment stays.
         assert evicted == [first]
-
-        # The active agent stopping drops the whole chat's resident transcripts, archived
-        # segments included, and the observe stream's report of the death is what says so.
-        evicted.clear()
-        details = _agent_details("Chat-1", agent_id=MngrAgentId(second), state=AgentLifecycleState.RUNNING)
-        manager._handle_observe_event(make_agent_state_event(details))
-        stopped = details.model_copy_update(to_update(details.field_ref().state, AgentLifecycleState.STOPPED))
-        manager._handle_observe_event(make_agent_state_event(stopped))
-        assert set(evicted) == {first, second}
     finally:
         manager.stop()
+
+
+def _resident_recorded_chat(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> tuple[AgentManager, ChatAppState, AgentDetails, str]:
+    """A recorded chat as the observer lists it, its archived segment loaded and its active agent watched.
+
+    Returns the manager, the state holding both resident, the active agent's details, and the chat id.
+    """
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    state = build_test_state(agent_manager=manager)
+    archived = _agent_details(
+        f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first), state=AgentLifecycleState.STOPPED
+    )
+    active = _agent_details("Chat-1", agent_id=MngrAgentId(second), state=AgentLifecycleState.RUNNING)
+    manager._handle_observe_event(make_agent_state_event(archived))
+    manager._handle_observe_event(make_agent_state_event(active))
+    state.get_or_create_loader(_claude_transcript_agent_info(tmp_path, first)[0])
+    state.get_or_create_watcher(_claude_transcript_agent_info(tmp_path, second)[0])
+    assert (set(state.loaders), set(state.watchers)) == ({first}, {second})
+    return manager, state, active, first
+
+
+def test_a_chat_whose_active_agent_stops_unstreamed_drops_its_archived_segments_too(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, state, active, _chat_id = _resident_recorded_chat(broadcaster, tmp_path)
+    try:
+        stopped = active.model_copy_update(to_update(active.field_ref().state, AgentLifecycleState.STOPPED))
+        manager._handle_observe_event(make_agent_state_event(stopped))
+
+        assert (state.loaders, state.watchers) == ({}, {})
+    finally:
+        state.shutdown()
+
+
+def test_removing_a_chats_active_agent_drops_the_whole_chat_even_after_a_streamed_stop(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A stop while streamed leaves the chat resident, and once the active agent is gone the release can no
+    longer tell the chat is stopped, so the removal has to drop the archived segments as well."""
+    manager, state, active, chat_id = _resident_recorded_chat(broadcaster, tmp_path)
+    try:
+        state.event_queues.register(chat_id)
+        stopped = active.model_copy_update(to_update(active.field_ref().state, AgentLifecycleState.STOPPED))
+        manager._handle_observe_event(make_agent_state_event(stopped))
+        assert (set(state.loaders), set(state.watchers)) == ({chat_id}, {str(active.id)})
+
+        manager._handle_observe_event(make_agent_removed_event(active.id, active.name, active.host.id))
+
+        assert (state.loaders, state.watchers) == ({}, {})
+    finally:
+        state.shutdown()
 
 
 def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster: WebSocketBroadcaster) -> None:
