@@ -38,6 +38,8 @@ from app_manifest.errors import SuiteSelectionError
 from app_manifest.manifest import app_package_directory
 from app_manifest.primitives import RepoRelativePath
 from app_manifest.primitives import is_path_covered_by
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
+from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
 from app_manifest.scope import LoadedManifest
 from app_manifest.scope import find_wiring_sections
 from app_manifest.scope import list_changed_files
@@ -63,10 +65,11 @@ from app_manifest.workspace_graph import read_python_members
 from app_manifest.workspace_graph import read_root_dependencies
 from app_manifest.workspace_graph import read_root_ignored_directories
 
+_APPS_DIRECTORY: Final[str] = "system/apps"
 _PACKAGE_PARENT_DIRECTORIES: Final[tuple[str, ...]] = (
     "system/libs",
     "system/services",
-    "system/apps",
+    _APPS_DIRECTORY,
 )
 _SKILLS_DIRECTORY: Final[str] = ".agents/skills"
 # Agent prose, which only the always-run prose checks and the apps referencing it read.
@@ -245,6 +248,9 @@ class RepoLayout(FrozenModel):
     wiring_owners: Mapping[str, tuple[str, ...]] = Field(
         description="Each supervisord config file and the app directories with blocks in it"
     )
+    has_shell_modules: bool = Field(
+        description="Whether the tree holds the shell's built modules that every app's pages import"
+    )
 
 
 class _PytestRequest(FrozenModel):
@@ -396,6 +402,9 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
         npm_packages=read_npm_packages(repo_root),
         manifests=manifests,
         wiring_owners=_wiring_owners(repo_root, manifests),
+        has_shell_modules=all(
+            (repo_root / path).is_file() for path in (SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH)
+        ),
     )
 
 
@@ -907,17 +916,31 @@ def _frontend_commands(
     return commands
 
 
-def _browser_run_reasons(requests: Sequence[_PytestRequest]) -> tuple[SelectionReason, ...]:
-    """The reasons of every request that may run a browser test, which needs the bundles built
-    first (the browser tests skip, rather than fail, when they are missing): an own-root run
-    that includes its browser-marked tests, or one of files named on their own."""
+def _browser_run_reasons(
+    layout: RepoLayout,
+    requests: Sequence[_PytestRequest],
+    full_root_reasons: Sequence[SelectionReason],
+) -> tuple[SelectionReason, ...]:
+    """The reasons of every run that may drive a browser, which needs the bundles built first:
+    an own-root run that includes its browser-marked tests, or one of files named on their own
+    (those tests skip, rather than fail, when the bundles are missing). When the tree lacks the
+    shell's built modules, as a fresh worktree does, also every root-collected run of an app and
+    the full root suite: an app's pages import those modules, so its browser tests fail or hang
+    without them."""
     runs_browser = [
         request
         for request in requests
         if request.root != ROOT_DIRECTORY
         and (request.test_files is not None or request.marker_scope != MarkerScope.DEFAULT)
     ]
-    return _unique_reasons(runs_browser)
+    if layout.has_shell_modules:
+        return _unique_reasons(runs_browser)
+    root_app_runs = [
+        request
+        for request in requests
+        if request.root == ROOT_DIRECTORY and is_path_covered_by(_APPS_DIRECTORY, request.group)
+    ]
+    return tuple(dict.fromkeys((*_unique_reasons([*runs_browser, *root_app_runs]), *full_root_reasons)))
 
 
 def select_tests(
@@ -984,7 +1007,7 @@ def select_tests(
     # then the own-root suites
     always_run = _always_run_files(layout)
     commands = _frontend_commands(
-        layout, frontend_requests, _browser_run_reasons(pytest_requests)
+        layout, frontend_requests, _browser_run_reasons(layout, pytest_requests, full_root_reasons)
     )
     if is_full_root:
         commands.append(
