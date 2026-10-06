@@ -1157,10 +1157,16 @@ registerProcessor('pb', PB);`;
     reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(browserId); }, 1000);
   }
 
+  function browserTitle(name) {
+    const numbered = /^browser-([0-9]+)$/.exec(name);
+    return numbered === null ? name : `Browser ${numbered[1]}`;
+  }
+
   function boot() {
     const params = new URLSearchParams(location.search);
     const name = params.get("session");
     if (!name) { initOverlay.classList.add("static", "show"); initOverlay.querySelector(".msg").textContent = "Open a browser from the launcher."; return; }
+    document.title = browserTitle(name);
     initOverlay.classList.add("show");
     if (!("VideoDecoder" in window)) { initOverlay.classList.add("static"); initOverlay.querySelector(".msg").textContent = "This browser can't play the stream (WebCodecs missing)."; return; }
     setInitStage(15, "Starting browser…");  // seed the bar until the first control message lands
@@ -1182,12 +1188,7 @@ registerProcessor('pb', PB);`;
   // shown or hidden right after that load, and the stream above waits for that word.
   import { connectToShell } from "/_static/app_contract.js";
 
-  function browserTitle(name) {
-    const numbered = /^browser-([0-9]+)$/.exec(name);
-    return numbered === null ? name : `Browser ${numbered[1]}`;
-  }
   const session = new URLSearchParams(location.search).get("session");
-  if (session) document.title = browserTitle(session);
   if (window.parent !== window) {
     // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window:
     // the window-bound sweep would otherwise stop the whole browser. The browser is
@@ -1212,7 +1213,7 @@ registerProcessor('pb', PB);`;
       onHidden: () => tellShellVisibility(false),
     });
     window.addEventListener("focus", () => connection.focused());
-    if (session) connection.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
+    if (session) connection.location(`/?session=${encodeURIComponent(session)}`, document.title);
   }
 </script>
 </body>
