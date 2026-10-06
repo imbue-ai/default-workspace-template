@@ -329,9 +329,24 @@ def _isolate_credential_sources(
     """
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    _clear_credential_env_vars(monkeypatch)
+    return tmp_path / "settings.json"
+
+
+def _isolate_credential_sources_in_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Like ``_isolate_credential_sources``, but as a service sees it: no
+    CLAUDE_CONFIG_DIR, and HOME (so ~/.claude and ~/.minds) is the tmp dir."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _clear_credential_env_vars(monkeypatch)
+
+
+def _clear_credential_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"):
         monkeypatch.delenv(var, raising=False)
-    return tmp_path / "settings.json"
 
 
 def test_credentials_prefer_snapshot_over_settings(
@@ -371,11 +386,7 @@ def test_credentials_read_default_claude_dir_without_config_dir_or_account(
 ) -> None:
     """With CLAUDE_CONFIG_DIR unset and no provider account, the resolver reads
     the shared ~/.claude/settings.json instead of skipping settings entirely."""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"):
-        monkeypatch.delenv(var, raising=False)
+    _isolate_credential_sources_in_home(tmp_path, monkeypatch)
     default_dir = tmp_path / ".claude"
     default_dir.mkdir()
     (default_dir / "settings.json").write_text(
@@ -385,6 +396,23 @@ def test_credentials_read_default_claude_dir_without_config_dir_or_account(
     creds = claude_p.read_workspace_ai_credentials()
 
     assert creds.api_key == "sk-default-dir-key"
+
+
+def test_credentials_read_the_default_account_when_config_dir_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A service or cron job reads the workspace's default account, not ~/.claude."""
+    _isolate_credential_sources_in_home(tmp_path, monkeypatch)
+    account_dir = _make_default_account(tmp_path)
+    (account_dir / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-account-key"}}'
+    )
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-shared-key"}}'
+    )
+
+    assert claude_p.read_workspace_ai_credentials().api_key == "sk-account-key"
 
 
 def test_credentials_never_take_oauth_token_from_snapshot(
