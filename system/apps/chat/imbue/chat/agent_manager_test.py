@@ -6529,6 +6529,34 @@ def test_discarding_an_awaiting_chat_returns_its_spare_to_the_pool(
         manager.stop()
 
 
+def test_a_spare_a_discarded_chat_hands_back_to_a_full_pool_is_destroyed_by_the_sweep(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = _spare_manager(broadcaster, monkeypatch, tmp_path, mngr_binary, 1)
+    try:
+        manager.ensure_spare_chat()
+        (spare,) = _wait_for_ready_spares(manager, 1)
+        awaiting = manager.awaiting_chat_for_empty_list()
+        manager.ensure_spare_chat()
+        (refill,) = _wait_for_ready_spares(manager, 1)
+        assert awaiting.chat_id == spare.chat_id != refill.chat_id
+
+        assert manager.discard_provisional_chat(awaiting.chat_id) is True
+        manager.ensure_spare_chat()
+
+        wait_until_true(
+            lambda: _mngr_calls(argv_log, "destroy") == [["destroy", spare.chat_id, "--force"]]
+            and [other.chat_id for other in manager._spares] == [refill.chat_id],
+            timeout_seconds=15.0,
+            what="the handed-back spare destroyed",
+        )
+        assert len(_mngr_calls(argv_log, "create")) == 2
+        assert manager._spare_retry_not_before == 0.0
+    finally:
+        manager.stop()
+
+
 def test_an_awaiting_chats_spare_still_booting_becomes_the_chat_once_its_harness_is_up(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

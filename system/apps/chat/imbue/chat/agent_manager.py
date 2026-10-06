@@ -3149,7 +3149,8 @@ class AgentManager:
     def discard_provisional_chat(self, chat_id: str) -> bool:
         """Drop a provisional chat that is not being created: one awaiting its first send (its seed
         goes with it), or one whose create failed. Returns whether anything was dropped; a create in
-        flight cannot be taken back and is left alone. A spare reserved for the chat goes back to the pool."""
+        flight cannot be taken back and is left alone. A spare reserved for the chat goes back to the pool,
+        where the session sweep destroys the oldest ready spare beyond the pool's size."""
         parsed = parse_chat_ref(chat_id)
         if parsed is None:
             return False
@@ -3692,7 +3693,8 @@ class AgentManager:
 
         A ready spare whose terms went stale (the default account, the project, or the fast mode a new
         chat starts in changed), that has waited ``SPARE_CHAT_MAX_AGE_SECONDS``, or whose process died
-        is destroyed (one reserved for a chat only for the last two), and a spare is started for a chat
+        is destroyed (one reserved for a chat only for the last two), so is the oldest ready spare
+        beyond the pool's size (one a discarded chat handed back), and a spare is started for a chat
         awaiting its first send that holds none and fits those terms (one with no account, or on the
         default one), which takes its account, while such chats hold fewer spares than the pool keeps,
         else while the pool holds fewer than its size, one at a time (mngr's host lock runs creates one
@@ -3716,6 +3718,7 @@ class AgentManager:
                 return
             terms = None if account is None or harness is None else self._new_chat_terms_locked(account.id, "")
             self._retire_stale_spares_locked(terms, now)
+            self._retire_surplus_spares_locked()
             discarded_ids = [
                 spare.chat_id
                 for spare in self._spares
@@ -3763,6 +3766,19 @@ class AgentManager:
         # the backoff rather than being shed in turn.
         if any(not self._is_spare_process_alive_locked(stale) for stale in stale_spares):
             self._spare_retry_not_before = now + SPARE_CHAT_RETRY_BACKOFF_SECONDS
+
+    def _retire_surplus_spares_locked(self) -> None:
+        """Mark the oldest ready spares beyond the pool's size as due a destroy, once none is still being created:
+        a discarded chat hands its reserved spare back to a pool already topped up. Lock held."""
+        pooled = pooled_spares(self._spares)
+        if any(spare.phase is SpareChatPhase.CREATING for spare in pooled):
+            return
+        surplus_count = len(pooled) - self._spare_chat_pool_size
+        if surplus_count <= 0:
+            return
+        oldest_first = sorted(pooled, key=lambda spare: spare.ready_at or 0.0)
+        for surplus in oldest_first[:surplus_count]:
+            self._set_spare_phase_locked(surplus.chat_id, SpareChatPhase.DISCARDING)
 
     def _record_new_spare_locked(self, terms: SpareChatTerms | None, now: float) -> SpareChatAgent | None:
         """Record the next spare on ``terms``, and return it for its create; None when no spare is due. Lock held.

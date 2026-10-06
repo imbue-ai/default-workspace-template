@@ -21,7 +21,8 @@ destroyed because its process died or it aged out, has the next spare the app st
 account's terms started under its own id and name, reserved for it ahead of the pool's, and takes
 its account; a first send that comes before then creates the chat under the id. Such chats hold
 at most as many reserved spares as the pool keeps; one past that holds none until a reservation
-frees. A discarded chat returns its spare to the pool.
+frees. A discarded chat returns its spare to the pool, and the session sweep destroys the oldest
+ready spare beyond the pool's size.
 
 A spare is created with the label ``chat_spare=true``, which is what every reader goes by: the
 chat listings (a secondary chat's included) hide an agent so labelled, the launch wrapper starts
