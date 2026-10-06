@@ -1,0 +1,7 @@
+The model bar's green "next" mark, and the "Your next message switches this chat to ..." strip above the composer, now show only while the next message really is what switches the chat. Before, they could appear on a chat nobody had messaged yet, or stay up after the switching message had gone.
+
+- Choosing another provider on a new chat right after it opened could land before the page had loaded the chat's transcript. The page then treated the chat as possibly long, asked to confirm the switch (or armed it) instead of switching at once, and showed "next" on a chat that had no messages. It now waits for the load already in progress and then decides; a chat with no messages switches at once, as intended.
+
+- Once the switching message is sent, the chip names the account and model the chat is moving to without the "next" mark, and the menu states the target as "switching" instead of offering to change a pick that can no longer apply. When the new agent reports its model, the chip shows it. The strip and the "Switch and send" button also stand down while the switch request is out, and a second message typed in that moment stays in the composer, its send button paused, until the switch has been accepted.
+
+- After a failed switch the next message is an ordinary one, so the chip and the provider list no longer mark the failed account as "next"; the chip shows the model the chat is really on, and the failure notice says what happened.
