@@ -579,6 +579,23 @@ def test_a_stopped_chat_is_released_as_soon_as_its_last_stream_closes() -> None:
         state.shutdown()
 
 
+def test_a_stream_response_closed_before_its_first_frame_releases_its_stopped_chat() -> None:
+    """A HEAD request runs the stream's view, which registers the stream, but sends no body, so the frame
+    generator is closed before it ever starts and its own cleanup never runs."""
+    state = build_test_state()
+    state.agent_manager.note_agent_list_known()
+    seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    try:
+        # Buffered, so the client closes the body once it is read, as the server does after sending it.
+        response = create_application(state).test_client().head("/api/chats/stopped-agent/stream", buffered=True)
+
+        assert response.status_code == 200
+        assert not state.event_queues.has_consumers("stopped-agent")
+        assert state.watchers == {}
+    finally:
+        state.shutdown()
+
+
 def test_a_stream_whose_feed_fails_to_build_no_longer_counts_as_open() -> None:
     """The release spares a chat with an open stream, so a stream left registered after its feed failed to
     build would keep the chat's transcripts resident for good."""

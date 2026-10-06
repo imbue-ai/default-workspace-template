@@ -393,13 +393,20 @@ def _stream_filtered_events(
         event_queues.unregister(chat_id, event_queue)
 
 
-def _sse_response(state: ChatAppState, generator: Iterator[str]) -> Response:
-    """Stream ``generator``, releasing stopped chats nobody streams once the server closes the response.
+def _sse_response(
+    state: ChatAppState,
+    chat_id: str,
+    event_queue: "queue.Queue[dict[str, Any] | None]",
+    generator: Iterator[str],
+) -> Response:
+    """Stream ``generator``, unregistering its stream and releasing stopped chats nobody streams once the
+    server closes the response.
 
-    The release runs from the response's close, which the server calls on the request thread after
-    the generator's own close has unregistered its stream, rather than from the generator's
-    ``finally``: a GC sweep can finalize an abandoned generator on any thread, including one holding
-    a lock the release takes.
+    The release runs from the response's close, which the server calls on the request thread,
+    rather than from the generator's ``finally``: a GC sweep can finalize an abandoned generator on
+    any thread, including one holding a lock the release takes. The close unregisters the stream
+    too, since a generator closed before its first frame (a HEAD request) never runs its
+    ``finally``.
     """
     response = Response(
         generator,
@@ -410,11 +417,12 @@ def _sse_response(state: ChatAppState, generator: Iterator[str]) -> Response:
             "X-Accel-Buffering": "no",
         },
     )
-    response.call_on_close(lambda: _release_unviewed_stopped_transcripts_unless_shut_down(state))
+    response.call_on_close(lambda: _end_closed_stream(state, chat_id, event_queue))
     return response
 
 
-def _release_unviewed_stopped_transcripts_unless_shut_down(state: ChatAppState) -> None:
+def _end_closed_stream(state: ChatAppState, chat_id: str, event_queue: "queue.Queue[dict[str, Any] | None]") -> None:
+    state.event_queues.unregister(chat_id, event_queue)
     if not state.event_queues.is_shutdown:
         state.release_unviewed_stopped_transcripts()
 
@@ -454,7 +462,10 @@ def _stream_events(chat_id: str) -> Response:
     event_queue = _open_chat_stream(state, chat_id, lambda: state.get_or_create_watcher(agent_info))
 
     return _sse_response(
-        state, _stream_filtered_events(chat_id, state.event_queues, event_queue, state.is_main_session_event)
+        state,
+        chat_id,
+        event_queue,
+        _stream_filtered_events(chat_id, state.event_queues, event_queue, state.is_main_session_event),
     )
 
 
@@ -1372,6 +1383,8 @@ def _stream_subagent_events(chat_id: str, agent_id: str, subagent_session_id: st
 
     return _sse_response(
         state,
+        chat_id,
+        event_queue,
         _stream_filtered_events(
             chat_id,
             state.event_queues,
