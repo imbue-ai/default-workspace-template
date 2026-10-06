@@ -956,7 +956,7 @@ class AgentManager:
         chat_settings: ChatSettingsStore | None = None,
         autocompactor: ChatAutoCompactor | None = None,
         is_secondary: bool = False,
-        minds_gateway: GatewayAccess | None = None,
+        imbue_studio_gateway: GatewayAccess | None = None,
     ) -> Self:
         """Build an AgentManager with the given broadcaster.
 
@@ -979,7 +979,7 @@ class AgentManager:
         withholds the chat memory scores, the automatic context compaction, and the
         resumption of unfinished switches, all of which belong to the live chat alone, and
         refuses every switch (a handoff or a rebind), since its chat records are a scratch copy.
-        ``minds_gateway`` is how the Imbue Studio app is reached to mark a chat read when the user
+        ``imbue_studio_gateway`` is how the Imbue Studio app is reached to mark a chat read when the user
         starts watching it; the default reaches nobody.
         """
         manager = cls.__new__(cls)
@@ -1041,7 +1041,7 @@ class AgentManager:
         manager._connecting_message_ids_by_agent = {}
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
-            gateway=minds_gateway, resolve_agent_id=manager.current_agent_id_of_chat
+            gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
         )
         # Built last: its ``list_chat_ids`` / ``resolve_process_started_at`` callbacks
         # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.

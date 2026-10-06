@@ -1770,7 +1770,7 @@ def test_a_report_that_starts_someone_watching_marks_the_chat_read_in_the_app_on
     with serve_app(gateway.application) as served:
         manager = AgentManager.build(
             WebSocketBroadcaster(),
-            minds_gateway=GatewayAccess(
+            imbue_studio_gateway=GatewayAccess(
                 base_url=served.http_url, password=SecretStr("gateway-password-7731"), permissions_override=None
             ),
         )

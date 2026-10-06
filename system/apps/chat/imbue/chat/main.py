@@ -144,7 +144,7 @@ def build_production_state(
         chat_settings=chat_settings,
         is_secondary=is_secondary,
         # Reading a chat marks it read in the Imbue Studio app; a secondary's windows are a preview's, not the user's.
-        minds_gateway=None if is_secondary else GatewayAccess.from_environ(os.environ),
+        imbue_studio_gateway=None if is_secondary else GatewayAccess.from_environ(os.environ),
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
