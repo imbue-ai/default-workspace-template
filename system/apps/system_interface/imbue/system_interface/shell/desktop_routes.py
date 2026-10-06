@@ -922,15 +922,16 @@ def _after_window_op(
     match op:
         case LayoutOp.MINIMIZE | LayoutOp.CLOSE:
             return notes
-        case LayoutOp.FOCUS | LayoutOp.RESTORE | LayoutOp.MAXIMIZE | LayoutOp.PLACE:
+        case LayoutOp.FOCUS:
             # After the switch, so a phone looks the window up among the desktop it is moved to.
-            if op is LayoutOp.FOCUS:
-                _announce_window_op(shell, LayoutOp.FOCUS, window_id, target.client_id, requester)
-            return notes.model_copy_update(
-                to_update(notes.field_ref().has_no_desktop_window, _has_no_desktop_window(shell, target.client_id))
-            )
+            _announce_window_op(shell, LayoutOp.FOCUS, window_id, target.client_id, requester)
+        case LayoutOp.RESTORE | LayoutOp.MAXIMIZE | LayoutOp.PLACE:
+            pass
         case _:
             assert_never(op)
+    return notes.model_copy_update(
+        to_update(notes.field_ref().has_no_desktop_window, _has_no_desktop_window(shell, target.client_id))
+    )
 
 
 def _navigate(
