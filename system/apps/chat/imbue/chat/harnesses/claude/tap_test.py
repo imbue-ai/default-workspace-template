@@ -703,6 +703,71 @@ def test_stop_no_open_turn_is_a_noop(tmp_path: Path) -> None:
     assert recorder.mark_idle_calls == 0
 
 
+def test_stop_with_no_open_turn_while_compacting_presses_the_chord(tmp_path: Path) -> None:
+    """Empty mirror + no ``active`` marker + a compaction in flight -> the chord, unwatched, ``""``."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, active=False)
+    recorder = _StopRecorder()
+    lock_record: list[str] = []
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: _recording_try_lock(lock_record),
+        is_compaction_in_flight=lambda: True,
+    )
+    assert block == ""
+    assert recorder.presses == [True]
+    assert recorder.base_calls == 0
+    assert recorder.mark_idle_calls == 0
+    # The mirror was re-checked under the bounded lock before the chord.
+    assert lock_record == ["enter", "exit"]
+
+
+def test_stop_while_compacting_restarts_a_message_queued_behind_it(tmp_path: Path) -> None:
+    """A message that parked while the stop waited for the lock goes back to the composer, not into a new turn."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, active=False)
+    recorder = _StopRecorder(base_block="parked while compacting")
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[], _QUEUED], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+        is_compaction_in_flight=lambda: True,
+    )
+    assert block == "parked while compacting"
+    assert recorder.presses == []
+    assert recorder.base_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("is_bound", "press"),
+    [pytest.param(False, lambda: True, id="binding_not_active"), pytest.param(True, lambda: False, id="press_failed")],
+)
+def test_stop_while_compacting_falls_back_to_the_restart_when_the_chord_cannot_land(
+    tmp_path: Path, is_bound: bool, press: Callable[[], bool]
+) -> None:
+    state_dir, keybindings_path = _make_agent_paths(tmp_path, active=False, bind=is_bound)
+    recorder = _StopRecorder(press=press)
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], None),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(True),
+        is_compaction_in_flight=lambda: True,
+    )
+    assert block == "<base-block>"
+    assert recorder.base_calls == 1
+
+
 def test_stop_permissions_waiting_delegates_to_base(tmp_path: Path) -> None:
     """Empty mirror + a permission dialog -> the base (a blocked turn is still a turn); no chord."""
     state_dir, keybindings_path = _make_agent_paths(tmp_path, permissions_waiting=True)

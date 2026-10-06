@@ -79,6 +79,7 @@ function renderCompactionWhy(event: UserMessageEvent): { button: m.Vnode; popove
         sm: true,
         quiet: true,
         extra: "compaction-why-button",
+        "aria-label": "Why was the context compacted?",
         "aria-expanded": isOpen ? "true" : "false",
         "aria-controls": popoverId,
         onclick: () => {

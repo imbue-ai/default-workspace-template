@@ -408,14 +408,16 @@ a notice pointing at the terminal.
 
 **The "Compacting…" status.** While a chat's context is being compacted its
 activity state is `COMPACTING` (`compaction_status.py`, applied in
-`agent_manager.py`). It wins over a turn in progress, since Claude's own
-compaction runs mid-turn, but a stopped agent still reads idle. It counts as
-working: the chat list shows the chat as working, and the composer stays open,
-with a message sent meanwhile queued behind the compaction. The page shows
-"Compacting…", or "Compacting, then replying…" once a message is queued, on the
-activity strip above the composer and as a row at the end of the conversation
-where the pill will land (`compaction_status_presentation`, below). The state
-comes from two signals:
+`agent_manager.py`). Claude's marker (below) wins over a turn in progress,
+since Claude's own compaction runs mid-turn; a compaction the chat asked for
+shows only once the agent is idle, so a `/compact` queued behind a running turn
+leaves the turn's label up until the turn ends. A stopped agent still reads
+idle. It counts as working: the chat list shows the chat as working, and the
+composer stays open, with a message sent meanwhile queued behind the
+compaction. The page shows "Compacting…", or "Compacting, then replying…" once
+a message is queued, on the activity strip above the composer and as a row at
+the end of the conversation where the pill will land
+(`compaction_status_presentation`, below). The state comes from two signals:
 
 - mngr's Claude hooks: `PreCompact` writes a `compacting` marker in the agent's
   state dir, and `PostCompact` removes it and writes `last_compaction.json`. The
@@ -433,11 +435,18 @@ clears when the compaction finishes: the "Context was compacted" event arrives,
 or for Claude the marker goes or `last_compaction.json` records a finish after
 the request. One that never reports completion (cancelled, failed, or crashed)
 stops showing after 10 minutes (`PENDING_COMPACTION_TIMEOUT_SECONDS`), and a
-marker older than that is ignored. In a Claude chat the stop button stays up
-during a compaction and interrupts it like a turn; the app then drops the marker
-and its own pending request, since a cancelled compaction reports no completion.
-Codex and Pi interrupts do not cancel a compaction (`can_interrupt_compaction`),
-so their stop button is hidden while they compact.
+marker older than that is ignored. A request on a chat nobody has open, which no
+"Context was compacted" event can end, stops after 3 minutes instead
+(`UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS`) unless Claude's
+`last_compaction.json` ends it first. In a Claude chat the stop button stays up
+during a compaction: with no turn in flight it presses Claude's cancel chord
+(`M-q`, bound to `chat:cancel`, the action Escape takes), which is expected to
+cancel the compaction but has not yet been checked against a live Claude. When a
+chord or a restart was actually sent, the app drops the marker and its own
+pending request, since a cancelled compaction reports no completion; a stop that
+found nothing to interrupt leaves them alone. Codex and Pi interrupts do not
+cancel a compaction (`can_interrupt_compaction`), so their stop button is hidden
+while they compact.
 
 **Why a chat was compacted.** The "Context was compacted" pill has a "why?"
 button whose popover reads the event's `compaction_cause`:
@@ -452,10 +461,14 @@ button whose popover reads the event's `compaction_cause`:
   Auto-compact in the model menu."
 
 The cause is what the app saw while the compaction ran, else what it asked for,
-else what a `last_compaction.json` written in the last five minutes says. It is
-attached in memory as the event is stored and streamed, so a page reload keeps
-it, but a pill older than 10 minutes when the app first reads it (after a restart
-of the app, say) has no cause and shows the unknown text. Under the latest pill
+else the request it recorded in the agent's `compaction_request.json` within the
+10 minutes before the compaction finished, else what a `last_compaction.json`
+written in the last five minutes says. The request file is what keeps a sweep's
+compaction reading `idle` after the app restarts, since the sweep's `/compact`
+leaves `last_compaction.json` saying manual. The cause is attached in memory as
+the event is stored and streamed, so a page reload keeps it, but a pill older
+than 10 minutes when the app first reads it has no cause and shows the unknown
+text. Under the latest pill
 of whichever chat is open, a notice says "Idle chats now compact automatically
 to keep replies fast and cheap. Turn this off per chat, or for new chats, under
 Auto-compact in the model menu." It shows until dismissed once, which records

@@ -390,7 +390,9 @@ def _run_pi_stop(world: _PiWorld, watcher: _PiStormWatcher, agent_info: AgentInf
     block_before = world.peek_parked()
     sender = _stage_pi_send(world, send_mode)
     interrupter = PiInterruptToComposer.build(agent_info)
-    block = interrupter.drain_to_composer(watcher, world.restart_process, lambda: None, lambda: True, lambda: "")
+    block = interrupter.drain_to_composer(
+        watcher, world.restart_process, lambda: None, lambda: True, lambda: "", lambda: False
+    )
     if sender is not None:
         sender.join()
     returned = _block_texts(block)
@@ -1084,7 +1086,7 @@ def _run_agy_stop(world: _AgyWorld, watcher: _AgyStormWatcher, agent_info: Agent
         return True
 
     executor = AntigravityInterruptToComposer.build(agent_info)
-    block = executor.drain_to_composer(watcher, restart_process, lambda: None, press_chord, lambda: "")
+    block = executor.drain_to_composer(watcher, restart_process, lambda: None, press_chord, lambda: "", lambda: False)
     for text in _block_texts(block):
         world.ledger.returned.append(text)
 
@@ -1253,7 +1255,9 @@ def test_antigravity_interrupt_during_a_flush_conserves_every_message(tmp_path: 
         return True
 
     executor = AntigravityInterruptToComposer.build(agent_info)
-    returned = executor.drain_to_composer(watcher, restart_process, lambda: None, press_chord, lambda: "")
+    returned = executor.drain_to_composer(
+        watcher, restart_process, lambda: None, press_chord, lambda: "", lambda: False
+    )
     for text in _block_texts(returned):
         ledger.returned.append(text)
     in_flight.join()

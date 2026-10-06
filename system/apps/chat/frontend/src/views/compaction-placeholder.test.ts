@@ -16,9 +16,7 @@ vi.mock("../models/Chats", () => ({
 }));
 
 import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests, updateChatSettings } from "../models/ChatSettings";
-import { hasCompactionPillSince, renderCompactionPlaceholder } from "./compaction-placeholder";
-
-const NOW = Date.parse("2026-10-06T12:00:00Z");
+import { newestCompactionPillId, renderCompactionPlaceholder } from "./compaction-placeholder";
 
 const QUEUED: QueuedMessage = { queued_id: "q1", content: "and then this", timestamp: "2026-10-06T12:00:01Z" };
 
@@ -61,7 +59,7 @@ type PlaceholderVnode = m.Vnode<{ chatId: string; events: TranscriptEvent[] }>;
 function mount(events: TranscriptEvent[]): ((next: TranscriptEvent[]) => m.Vnode | null) | null {
   const vnode = renderCompactionPlaceholder("chat-1", events) as PlaceholderVnode | null;
   if (vnode === null) return null;
-  const component = (vnode.tag as () => m.Component<PlaceholderVnode["attrs"]>)();
+  const component = (vnode.tag as (initial: PlaceholderVnode) => m.Component<PlaceholderVnode["attrs"]>)(vnode);
   return (next) => component.view({ ...vnode, attrs: { ...vnode.attrs, events: next } } as never) as m.Vnode | null;
 }
 
@@ -80,7 +78,6 @@ describe("renderCompactionPlaceholder", () => {
   beforeEach(() => {
     resetChatSettingsForTests();
     vi.spyOn(m, "redraw").mockImplementation(() => undefined);
-    vi.spyOn(Date, "now").mockReturnValue(NOW);
     agentState.activity_state = "COMPACTING";
     agentState.queued_messages = [];
   });
@@ -127,12 +124,21 @@ describe("renderCompactionPlaceholder", () => {
     expect(render([pill("2026-10-06T09:00:00Z"), ...earlier])).not.toBeNull();
     expect(render([...earlier, pill("2026-10-06T12:00:31Z")])).toBeNull();
   });
+
+  // The agent's clock may run behind the browser's, so the new pill can carry any timestamp.
+  it("knows its pill by identity, whatever the pill's timestamp", async () => {
+    await usePresentation("both");
+    const earlier = [prompt("2026-10-06T11:00:00Z")];
+    const render = mount(earlier)!;
+    expect(render(earlier)).not.toBeNull();
+    expect(render([...earlier, pill("2001-01-01T00:00:00Z")])).toBeNull();
+  });
 });
 
-describe("hasCompactionPillSince", () => {
-  it("counts only status pills stamped at or after the time", () => {
-    const since = Date.parse("2026-10-06T12:00:00Z");
-    expect(hasCompactionPillSince([pill("2026-10-06T11:59:59Z"), prompt("2026-10-06T12:00:05Z")], since)).toBe(false);
-    expect(hasCompactionPillSince([pill("2026-10-06T12:00:00Z")], since)).toBe(true);
+describe("newestCompactionPillId", () => {
+  it("names the last status pill, skipping other messages after it", () => {
+    expect(newestCompactionPillId([pill("t1", "p1"), pill("t2", "p2"), prompt("t3")])).toBe("p2");
+    expect(newestCompactionPillId([prompt("t1")])).toBeNull();
+    expect(newestCompactionPillId([])).toBeNull();
   });
 });

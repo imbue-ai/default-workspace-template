@@ -34,6 +34,7 @@ from pydantic import Field
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
+from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
@@ -574,6 +575,7 @@ class HandoffRunner:
         accepted_at = self._deps.monotonic()
         deadline = accepted_at + self._deps.summary_timeout_seconds
         is_busy_seen = False
+        idle_grace_started_at = accepted_at
         outcome: SummaryOutcome | None = None
         while outcome is None:
             self._current(chat_id, handoff_id)
@@ -582,9 +584,14 @@ class HandoffRunner:
             is_dead = agent_state is None or is_lifecycle_dead(agent_state.state)
             now = self._deps.monotonic()
             is_busy = activity is not None and is_working_activity_state(activity)
-            is_busy_seen = is_busy_seen or is_busy
+            # Only a turn proves the summary request was taken up. A compaction queued ahead of it
+            # blocks the wait without counting, and the idle grace starts over once it ends, so
+            # the compaction's end is not mistaken for the summary turn's.
+            is_busy_seen = is_busy_seen or activity in (ActivityState.THINKING, ActivityState.TOOL_RUNNING)
+            if activity == ActivityState.COMPACTING:
+                idle_grace_started_at = now
             is_turn_over = not is_busy and (
-                is_dead or is_busy_seen or now - accepted_at >= self._deps.summary_idle_grace_seconds
+                is_dead or is_busy_seen or now - idle_grace_started_at >= self._deps.summary_idle_grace_seconds
             )
             if is_summary_written(_non_empty_mtime(path), stale_mtime):
                 outcome = SummaryOutcome.WRITTEN

@@ -4209,6 +4209,94 @@ def test_the_stop_button_clears_a_compaction_it_cancelled(tmp_path: Path) -> Non
     assert agent_id not in manager._compaction_pending_by_agent
 
 
+def test_a_compact_command_the_agent_refused_shows_no_compaction(tmp_path: Path) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=tmp_path / "state")
+    messenger = RecordingMngrMessenger(succeeds=False)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "/compact"})
+
+    assert response.status_code != 200
+    assert messenger.sent == [(agent_id, "/compact")]
+    assert agent_id not in manager._compaction_pending_by_agent
+
+
+def test_a_compact_command_sent_from_a_codex_composer_shows_no_compaction(tmp_path: Path) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _agent_info(agent_id=agent_id, harness=HarnessType.CODEX, agent_state_dir=tmp_path / "state")
+    manager, messenger = _manager_with_known_agents()
+    # A file session on the codex harness, so the send lands without a live codex daemon.
+    claude_deps = manager._build_session(agent_id, HarnessType.CLAUDE)._deps
+    manager._session_by_agent[agent_id] = FileHarnessSession.build(
+        claude_deps.model_copy_update(to_update(claude_deps.field_ref().harness, HarnessType.CODEX))
+    )
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "/compact"})
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "/compact")]
+    assert agent_id not in manager._compaction_pending_by_agent
+
+
+def _claude_stop_with_no_open_turn(tmp_path: Path) -> tuple[AgentInfo, Path]:
+    """A claude agent with an active chord binding and no turn in flight, returned with its state dir."""
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    (state_dir / "active").unlink()
+    agent_info = _agent_info(agent_id=f"agent-{uuid4().hex}", agent_state_dir=state_dir, claude_config_dir=config_dir)
+    return agent_info, state_dir
+
+
+def test_the_stop_button_cancels_a_compaction_with_no_turn_in_flight_and_clears_it(tmp_path: Path) -> None:
+    agent_info, state_dir = _claude_stop_with_no_open_turn(tmp_path)
+    marker = state_dir / COMPACTING_MARKER_FILENAME
+    marker.write_text(json.dumps({"trigger": "manual", "started_at": _utc_iso_now()}))
+    manager, messenger = _manager_with_known_agents()
+    manager.note_compaction_requested(agent_info.id, CompactionCause.IDLE, time.monotonic())
+    app = create_application(build_test_state(agent_manager=manager))
+    fake_watcher = _fake_claude_interrupt_watcher(block="", queued=[])
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = app.test_client().post(f"/api/chats/{agent_info.id}/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == ""
+    assert messenger.pressed == [(agent_info.id, "M-q")]
+    mock_run.assert_not_called()
+    assert not marker.exists()
+    assert agent_info.id not in manager._compaction_pending_by_agent
+
+
+def test_the_stop_button_with_no_turn_and_no_compaction_interrupts_and_clears_nothing(tmp_path: Path) -> None:
+    agent_info, state_dir = _claude_stop_with_no_open_turn(tmp_path)
+    # A marker past the stale timeout is not a compaction in flight, and the stop leaves it be.
+    stale_marker = state_dir / COMPACTING_MARKER_FILENAME
+    stale_marker.write_text(json.dumps({"trigger": "manual", "started_at": "2026-01-01T00:00:00Z"}))
+    manager, messenger = _manager_with_known_agents()
+    manager._compaction_cause_by_agent[agent_info.id] = CompactionCause.IDLE
+    app = create_application(build_test_state(agent_manager=manager))
+    fake_watcher = _fake_claude_interrupt_watcher(block="", queued=[])
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = app.test_client().post(f"/api/chats/{agent_info.id}/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == ""
+    assert messenger.pressed == []
+    mock_run.assert_not_called()
+    assert stale_marker.exists()
+    assert manager._compaction_cause_by_agent[agent_info.id] == CompactionCause.IDLE
+
+
 def test_the_interrupt_route_clears_a_compaction_its_restart_ended(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()

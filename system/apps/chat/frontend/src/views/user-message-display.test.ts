@@ -226,7 +226,7 @@ describe("user-message-display compaction pill why? popover", () => {
     };
   }
 
-  type WhyButtonVnode = m.Vnode<{ onclick: () => void; "aria-expanded": string }>;
+  type WhyButtonVnode = m.Vnode<{ onclick: () => void; "aria-expanded": string; "aria-label": string }>;
 
   /** The "why?" button's vnode (a Button component, so found by the marker in its `extra`). */
   function findWhyButton(node: unknown): WhyButtonVnode | null {
@@ -263,6 +263,9 @@ describe("user-message-display compaction pill why? popover", () => {
     expect(allText(closed)).toContain("why?");
     expect(allText(closed)).not.toContain(text);
     expect(findWhyButton(closed)?.attrs["aria-expanded"]).toBe("false");
+    // Read out of context, a bare "why?" says nothing; the accessible name carries the question.
+    expect(findWhyButton(closed)?.attrs["aria-label"]).toBe("Why was the context compacted?");
+    expect(findWhyButton(closed)?.children).toEqual(["why?"]);
 
     findWhyButton(closed)!.attrs.onclick();
     // The memoized row repaints for the toggle even though its event did not change.

@@ -735,6 +735,36 @@ def test_a_busy_agent_is_waited_for_until_it_goes_idle(tmp_path: Path) -> None:
     assert workspace.clock == pytest.approx(2.0)
 
 
+def test_a_compaction_ahead_of_the_summary_turn_is_waited_out_without_ending_the_wait(tmp_path: Path) -> None:
+    workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    workspace.is_summary_written_on_request = False
+    # A compaction longer than the idle grace, a moment idle before the summary turn starts, then
+    # the turn: the idle reading right after the compaction must not end the wait.
+    readings = iter(
+        [
+            ActivityState.COMPACTING,
+            ActivityState.COMPACTING,
+            ActivityState.COMPACTING,
+            ActivityState.COMPACTING,
+            ActivityState.IDLE,
+            ActivityState.THINKING,
+            ActivityState.IDLE,
+        ]
+    )
+
+    def get_agent_state(agent_id: str) -> AgentStateItem | None:
+        state = workspace.get_agent_state(agent_id)
+        if state is None or agent_id != first:
+            return state
+        return state.model_copy_update(to_update(state.field_ref().activity_state, next(readings, ActivityState.IDLE)))
+
+    runner = _runner(workspace, get_agent_state=get_agent_state)
+    runner.run(workspace.chat_id, "h-1")
+
+    assert workspace.record().handoff is None
+    assert workspace.clock == pytest.approx(6.0)
+
+
 def test_a_refused_summary_request_is_a_missing_summary_not_a_stuck_handoff(tmp_path: Path) -> None:
     workspace, _first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
     workspace.is_summary_request_refused = True

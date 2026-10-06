@@ -87,6 +87,42 @@ def test_delisted_agent_is_forgotten_so_a_relisted_one_is_rederived(tmp_path: Pa
     assert changed == ["agent-1", "agent-1"]
 
 
+class _FailingOnceCallbackError(Exception):
+    """The error the test callback raises on its first call."""
+
+
+def test_a_callback_that_raises_neither_stops_the_pass_nor_later_polls(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    failing_path = tmp_path / "failing" / "model_state.json"
+    other_path = tmp_path / "other" / "model_state.json"
+    for path in (failing_path, other_path):
+        path.parent.mkdir(parents=True)
+        path.write_text("{}")
+    changed: list[str] = []
+
+    def record_and_fail_the_first_time(agent_id: str) -> None:
+        changed.append(agent_id)
+        if changed == ["agent-failing"]:
+            raise _FailingOnceCallbackError("recompute failed")
+
+    poller = AgentFilePoller.build(
+        list_paths=lambda: {"agent-failing": failing_path, "agent-other": other_path},
+        on_file_changed=record_and_fail_the_first_time,
+        thread_name=_THREAD_NAME,
+    )
+
+    poller.poll_once()
+    assert changed == ["agent-failing", "agent-other"]
+    assert [record for record in loguru_records if record.startswith("ERROR ")] == [
+        f"ERROR {_THREAD_NAME}: the change callback failed for agent agent-failing"
+    ]
+
+    failing_path.write_text('{"model": "opus"}')
+    poller.poll_once()
+    assert changed == ["agent-failing", "agent-other", "agent-failing"]
+
+
 def test_poller_uses_one_thread_regardless_of_agent_count(tmp_path: Path) -> None:
     path_by_agent = {f"agent-{i}": tmp_path / f"agent-{i}" / "model_state.json" for i in range(20)}
     for path in path_by_agent.values():

@@ -78,6 +78,10 @@ SettleActivity = Callable[[], None]
 # ``message.lock``); returns success. Bound by the endpoint to the specific agent -- claude's
 # empty-queue chord path uses it; the base restart-drain and the other overrides ignore it.
 PressChord = Callable[[], bool]
+# Whether the agent is compacting its context (a fresh compacting marker, or a compaction the
+# chat asked for and has not seen finish). Bound by the endpoint to the specific agent -- claude's
+# stop cancels such a compaction with no turn in flight; the other implementations ignore it.
+IsCompactionInFlight = Callable[[], bool]
 
 
 @contextmanager
@@ -144,6 +148,7 @@ class InterruptToComposer(ABC):
         settle_activity: SettleActivity,
         press_chord: PressChord,
         get_in_flight_block: Callable[[], str],
+        is_compaction_in_flight: IsCompactionInFlight,
     ) -> str:
         """Interrupt the turn and return the queued messages as one block (``""`` = nothing queued).
 
@@ -153,6 +158,8 @@ class InterruptToComposer(ABC):
         ``get_in_flight_block`` reads the session's *Sending* records, so a send aborted
         mid-flight is folded into the returned block (contract A4/B) by the harnesses that
         guarantee ordering (claude, pi); the base restart-drain ignores it.
+        ``is_compaction_in_flight`` says whether the agent is compacting (claude cancels such a
+        compaction with no turn in flight; the others ignore it).
         Raises :class:`AgentRestartError` if a restart-based implementation cannot restart.
         """
 
@@ -232,7 +239,9 @@ class RestartDrainInterruptToComposer(InterruptToComposer):
         settle_activity: SettleActivity,
         press_chord: PressChord,
         get_in_flight_block: Callable[[], str],
+        is_compaction_in_flight: IsCompactionInFlight,
     ) -> str:
-        # The base restart-drain interrupts via SIGKILL-relaunch; it has no use for the chord
-        # or the in-flight fold (its bounded lock acquire is best-effort, not ordered).
+        # The base restart-drain interrupts via SIGKILL-relaunch, which ends a compaction too; it
+        # has no use for the chord or the in-flight fold (its bounded lock acquire is best-effort,
+        # not ordered).
         return restart_drain_under_message_lock(self._agent_info, watcher, restart_process, settle_activity)

@@ -84,11 +84,15 @@ from imbue.chat.chat_seed import seed_events
 from imbue.chat.chat_seed import write_seed_file
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.compaction_status import COMPACTION_CAUSE_FIELD
+from imbue.chat.compaction_status import COMPACTION_REQUEST_FILENAME
 from imbue.chat.compaction_status import CompactionSignal
 from imbue.chat.compaction_status import cause_of_compacting_marker
 from imbue.chat.compaction_status import cause_of_last_compaction
 from imbue.chat.compaction_status import is_context_compacted_event
+from imbue.chat.compaction_status import read_compaction_request
 from imbue.chat.compaction_status import read_compaction_signal
+from imbue.chat.compaction_status import shown_compaction_cause
+from imbue.chat.compaction_status import write_compaction_request
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.agent_file_poll import AgentFilePoller
@@ -242,6 +246,10 @@ FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO: Final[int] = 2
 # "running" after this is one whose completion never came (a cancelled compaction, a failed
 # summarization, a crash).
 PENDING_COMPACTION_TIMEOUT_SECONDS: Final[float] = 600.0
+
+# The same timeout for a request on an agent no session watcher reads: no compacted event can end
+# it, so unless ``last_compaction.json`` does (hooked Claude), only this does.
+UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS: Final[float] = 180.0
 
 # How recent a ``last_compaction.json`` must be to name the cause of a compacted event the chat
 # holds no record for: the event lands seconds after the hook writes the file, so an older file
@@ -566,6 +574,28 @@ def _is_current_compaction_event(event: dict[str, Any], now: float, pending_requ
     if now - event_at > PENDING_COMPACTION_TIMEOUT_SECONDS:
         return False
     return pending_requested_at is None or event_at >= pending_requested_at
+
+
+@pure
+def _latest_event_epoch(events: list[dict[str, Any]], now: float) -> float:
+    """The epoch time of the latest timestamped event, or ``now`` when none has a readable timestamp."""
+    event_times = [parse_iso_timestamp_to_epoch(event.get("timestamp")) for event in events]
+    return max((event_at for event_at in event_times if event_at is not None), default=now)
+
+
+class _LiveCompaction(FrozenModel):
+    """The compaction signals live for an agent at one read."""
+
+    marker_cause: CompactionCause | None = Field(description="The cause behind a fresh compacting marker, else None")
+    pending_cause: CompactionCause | None = Field(description="The cause of the chat's live request, else None")
+
+
+def _read_last_compaction_cause(state_dir: Path, now: float) -> CompactionCause | None:
+    """The cause ``last_compaction.json`` names, when it was written within the last few minutes."""
+    record = read_compaction_signal(state_dir / LAST_COMPACTION_FILENAME, now)
+    if record is None or now - record.written_at > LAST_COMPACTION_RECORD_MAX_AGE_SECONDS:
+        return None
+    return cause_of_last_compaction(record.trigger)
 
 
 def _read_mtime(path: Path) -> float | None:
@@ -952,7 +982,8 @@ class AgentManager:
     # (monotonic) and why. Counts as COMPACTING for at most ``PENDING_COMPACTION_TIMEOUT_SECONDS``.
     _compaction_pending_by_agent: dict[str, tuple[float, CompactionCause]]
     # Per agent, the cause of the compaction last seen in progress, kept until its compacted
-    # event arrives (which is stamped with it) or the compaction is abandoned.
+    # event arrives (which is stamped with it), its request expires, or the next compaction
+    # replaces it.
     _compaction_cause_by_agent: dict[str, CompactionCause]
     # Per agent, the recorded time of the stale ``compacting`` marker already logged, so a
     # stale marker is logged once rather than on every recompute.
@@ -1003,6 +1034,10 @@ class AgentManager:
     # Set once at composition (``set_unviewed_transcript_release``); the app state knows who
     # is streaming. ``None`` (tests) = no release.
     _unviewed_transcript_release: Callable[[], None] | None
+    # Whether a session watcher reads the agent's transcript (so a compacted event can end its
+    # compaction). Set once at composition (``set_session_watcher_check``); the app state holds
+    # the watchers. ``None`` (tests) = no agent is watched.
+    _session_watcher_check: Callable[[str], bool] | None
 
     @classmethod
     def build(
@@ -1096,6 +1131,7 @@ class AgentManager:
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
         manager._unviewed_transcript_release = None
+        manager._session_watcher_check = None
         manager._auto_open = (
             auto_open
             if auto_open is not None
@@ -2812,9 +2848,16 @@ class AgentManager:
 
     def _run_session_sweep(self) -> None:
         while not self._session_sweep_stop.is_set():
+            self._sweep_sessions_once()
+            self._session_sweep_stop.wait(timeout=_SESSION_SWEEP_INTERVAL_SECONDS)
+
+    def _sweep_sessions_once(self) -> None:
+        # The thread boundary: an escaping error would end the sweep thread for good.
+        try:
             self._reconnect_pending_sessions()
             self._recompute_compacting_agents()
-            self._session_sweep_stop.wait(timeout=_SESSION_SWEEP_INTERVAL_SECONDS)
+        except Exception as e:
+            _loguru_logger.opt(exception=e).error("The agent session sweep failed; retrying on its next pass")
 
     def _recompute_compacting_agents(self) -> None:
         """Re-derive every agent shown as COMPACTING, so one whose compaction outlived the timeout settles.
@@ -4072,6 +4115,17 @@ class AgentManager:
         rebuilds its transcript, and no further transition comes to evict it."""
         self._unviewed_transcript_release = callback
 
+    def set_session_watcher_check(self, callback: Callable[[str], bool]) -> None:
+        """Wire the check for whether an agent has a session watcher (the composition root calls this once).
+
+        A compaction request on an agent nobody watches gets the shorter
+        ``UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS``, since no compacted event can end it."""
+        self._session_watcher_check = callback
+
+    def _has_session_watcher(self, agent_id: str) -> bool:
+        callback = self._session_watcher_check
+        return callback is not None and callback(agent_id)
+
     def _evict_watcher(self, agent_id: str) -> None:
         callback = self._watcher_eviction_callback
         if callback is not None:
@@ -4232,11 +4286,24 @@ class AgentManager:
 
         ``requested_at`` is the monotonic time the request was made. A request while one is
         already pending replaces it (a fresh start time and cause) rather than adding another.
+        The request is also recorded in the agent's ``compaction_request.json``, so its cause
+        outlives this process's memory of it.
         """
         with self._lock:
             self._compaction_pending_by_agent[agent_id] = (requested_at, cause)
         _loguru_logger.info("autocompact: compaction pending agent={} cause={}", agent_id, cause.value)
+        self._record_compaction_request(agent_id, cause, _monotonic_to_epoch(requested_at, time.time()))
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
+
+    def _record_compaction_request(self, agent_id: str, cause: CompactionCause, requested_at: float) -> None:
+        state_dir = self._get_agent_state_dir(agent_id)
+        # An agent on another host has no local state dir, and nothing local would read the record.
+        if not state_dir.is_dir():
+            return
+        try:
+            write_compaction_request(state_dir / COMPACTION_REQUEST_FILENAME, cause, requested_at)
+        except OSError as e:
+            _loguru_logger.warning("Failed to record the compaction request of agent {}: {}", agent_id, e)
 
     def note_sweep_compaction_requested(self, agent_name: str) -> None:
         """The idle sweep asked mngr to compact the agent with this name: show it as COMPACTING.
@@ -4254,18 +4321,37 @@ class AgentManager:
             agent_id, CompactionCause.IDLE, time.monotonic() - RELAXED_CONFIRMATION_TIMEOUT_SECONDS
         )
 
+    def is_compaction_in_flight(self, agent_info: AgentInfo) -> bool:
+        """Whether the agent is compacting by a fresh ``compacting`` marker or a live request of this chat.
+
+        Read by the stop button, which cancels such a compaction even with no turn in flight.
+        """
+        with self._lock:
+            pending = self._compaction_pending_by_agent.get(agent_info.id)
+        live = self._resolve_live_compaction(
+            agent_info.id,
+            agent_info.agent_state_dir,
+            get_harness_spec(agent_info.harness).tracker_class.compacting_marker_filename,
+            pending,
+        )
+        return live.marker_cause is not None or live.pending_cause is not None
+
     def clear_compaction_after_interrupt(self, agent_info: AgentInfo) -> None:
-        """Forget the agent's compaction after the user interrupted it.
+        """Forget the agent's compaction after an interrupt actually ran (a cancel chord or a restart).
 
         A cancelled compaction fires no completion (no ``PostCompact``, no compacted event), so
-        the harness's ``compacting`` marker and this chat's pending request are dropped here.
+        the harness's ``compacting`` marker and this chat's pending request are dropped here. The
+        remembered cause stays: a compaction the interrupt came too late for still ends with its
+        compacted event, which consumes it, and the next compaction replaces it.
         """
         with self._lock:
             self._compaction_pending_by_agent.pop(agent_info.id, None)
-            self._compaction_cause_by_agent.pop(agent_info.id, None)
         marker_filename = get_harness_spec(agent_info.harness).tracker_class.compacting_marker_filename
         if marker_filename is not None:
-            (agent_info.agent_state_dir / marker_filename).unlink(missing_ok=True)
+            try:
+                (agent_info.agent_state_dir / marker_filename).unlink(missing_ok=True)
+            except OSError as e:
+                _loguru_logger.warning("Failed to remove the compacting marker of agent {}: {}", agent_info.id, e)
         self._recompute_activity_state(agent_info.id, broadcast_on_change=True)
 
     def stamp_compaction_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
@@ -4275,8 +4361,7 @@ class AgentManager:
         ones, so a reload sees the same cause). Only an event of the current compaction counts:
         one younger than ``PENDING_COMPACTION_TIMEOUT_SECONDS`` and, while a request is pending,
         not older than the request (a re-broadcast of an earlier compaction must not end this
-        one). The cause is the one remembered while the compaction ran, else the pending
-        request's, else what a recent ``last_compaction.json`` says, else None (unknown).
+        one).
         """
         compacted_events = [event for event in events if is_context_compacted_event(event)]
         if not compacted_events:
@@ -4291,73 +4376,102 @@ class AgentManager:
         ]
         if not current_events:
             return
-        if remembered_cause is not None:
-            cause = remembered_cause
-        elif pending is not None:
-            cause = pending[1]
-        else:
-            cause = self._read_last_compaction_cause(agent_id, now)
+        cause = self._resolve_finished_compaction_cause(agent_id, remembered_cause, pending, current_events, now)
         for event in current_events:
             event[COMPACTION_CAUSE_FIELD] = None if cause is None else cause.value
         with self._lock:
             is_pending_cleared = self._compaction_pending_by_agent.pop(agent_id, None) is not None
-            self._compaction_cause_by_agent.pop(agent_id, None)
-        _loguru_logger.info(
-            "autocompact: compaction finished agent={} cause={}", agent_id, "unknown" if cause is None else cause.value
-        )
+            is_cause_cleared = self._compaction_cause_by_agent.pop(agent_id, None) is not None
+        if is_pending_cleared or is_cause_cleared:
+            _loguru_logger.info(
+                "autocompact: compaction finished agent={} cause={}",
+                agent_id,
+                "unknown" if cause is None else cause.value,
+            )
         if is_pending_cleared:
             self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
-    def _read_last_compaction_cause(self, agent_id: str, now: float) -> CompactionCause | None:
-        """The cause ``last_compaction.json`` names, when it was written within the last few minutes."""
-        record = read_compaction_signal(self._get_agent_state_dir(agent_id) / LAST_COMPACTION_FILENAME)
-        if record is None or now - record.written_at > LAST_COMPACTION_RECORD_MAX_AGE_SECONDS:
-            return None
-        return cause_of_last_compaction(record.trigger)
-
-    def _resolve_live_compaction_cause(
-        self, agent_id: str, tracker: HarnessActivityTracker, pending: tuple[float, CompactionCause] | None
+    def _resolve_finished_compaction_cause(
+        self,
+        agent_id: str,
+        remembered_cause: CompactionCause | None,
+        pending: tuple[float, CompactionCause] | None,
+        events: list[dict[str, Any]],
+        now: float,
     ) -> CompactionCause | None:
-        """The cause of the compaction the agent is in right now, or None when it is not compacting.
+        """The cause a finished compaction's events carry, from the most to the least direct record of it.
+
+        The cause remembered while it ran, else the pending request's, else the request recorded
+        in ``compaction_request.json`` within ``PENDING_COMPACTION_TIMEOUT_SECONDS`` before it
+        finished, else what a recent ``last_compaction.json`` says, else None (unknown).
+        """
+        if remembered_cause is not None:
+            return remembered_cause
+        if pending is not None:
+            return pending[1]
+        state_dir = self._get_agent_state_dir(agent_id)
+        request = read_compaction_request(state_dir / COMPACTION_REQUEST_FILENAME, now)
+        if request is not None:
+            seconds_since_request = _latest_event_epoch(events, now) - request.requested_at
+            if 0.0 <= seconds_since_request <= PENDING_COMPACTION_TIMEOUT_SECONDS:
+                return request.cause
+        return _read_last_compaction_cause(state_dir, now)
+
+    def _resolve_live_compaction(
+        self,
+        agent_id: str,
+        state_dir: Path,
+        marker_filename: str | None,
+        pending: tuple[float, CompactionCause] | None,
+    ) -> _LiveCompaction:
+        """The compaction signals live for the agent right now: a fresh marker's cause and a live request's.
 
         A fresh ``compacting`` marker counts (its trigger names the cause, deferring to the
         chat's own request when the trigger is manual or unknown), and so does a pending
-        request younger than the timeout. A pending request expires here, and one that
+        request younger than its timeout. A pending request expires here, and one that
         ``last_compaction.json`` shows finished (written after the request, while no marker is
         up) is cleared here too. Runs outside the lock: it reads files.
         """
         now = time.time()
         live_pending = self._expire_pending_compaction(agent_id, pending)
         pending_cause = None if live_pending is None else live_pending[1]
-        marker_filename = tracker.compacting_marker_filename
         if marker_filename is None:
-            return pending_cause
-        state_dir = self._get_agent_state_dir(agent_id)
-        marker = read_compaction_signal(state_dir / marker_filename)
+            return _LiveCompaction(marker_cause=None, pending_cause=pending_cause)
+        marker = read_compaction_signal(state_dir / marker_filename, now)
         if marker is not None:
             marker_age_seconds = now - marker.written_at
             if marker_age_seconds < PENDING_COMPACTION_TIMEOUT_SECONDS:
-                return cause_of_compacting_marker(marker.trigger, pending_cause)
+                return _LiveCompaction(
+                    marker_cause=cause_of_compacting_marker(marker.trigger, pending_cause), pending_cause=pending_cause
+                )
             self._log_stale_compacting_marker_once(agent_id, marker, marker_age_seconds)
-            return pending_cause
+            return _LiveCompaction(marker_cause=None, pending_cause=pending_cause)
         if live_pending is None:
-            return None
+            return _LiveCompaction(marker_cause=None, pending_cause=None)
         record_modified_at = _read_mtime(state_dir / LAST_COMPACTION_FILENAME)
         if record_modified_at is not None and record_modified_at >= _monotonic_to_epoch(live_pending[0], now):
             with self._lock:
                 if self._compaction_pending_by_agent.get(agent_id) == live_pending:
                     del self._compaction_pending_by_agent[agent_id]
-            return None
-        return pending_cause
+            return _LiveCompaction(marker_cause=None, pending_cause=None)
+        return _LiveCompaction(marker_cause=None, pending_cause=pending_cause)
 
     def _expire_pending_compaction(
         self, agent_id: str, pending: tuple[float, CompactionCause] | None
     ) -> tuple[float, CompactionCause] | None:
-        """The pending request if it is younger than the timeout; an older one is dropped (with its cause)."""
+        """The pending request if it is younger than its timeout; an older one is dropped (with its cause).
+
+        The timeout is shorter for an agent no session watcher reads, since no compacted event can end it.
+        """
         if pending is None:
             return None
         requested_at, cause = pending
-        if time.monotonic() - requested_at < PENDING_COMPACTION_TIMEOUT_SECONDS:
+        timeout_seconds = (
+            PENDING_COMPACTION_TIMEOUT_SECONDS
+            if self._has_session_watcher(agent_id)
+            else UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
+        )
+        if time.monotonic() - requested_at < timeout_seconds:
             return pending
         with self._lock:
             if self._compaction_pending_by_agent.get(agent_id) == pending:
@@ -4507,7 +4621,9 @@ class AgentManager:
             active_marker_filename is not None
             and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
         )
-        compaction_cause = self._resolve_live_compaction_cause(agent_id, tracker, pending_compaction)
+        live_compaction = self._resolve_live_compaction(
+            agent_id, self._get_agent_state_dir(agent_id), tracker.compacting_marker_filename, pending_compaction
+        )
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
@@ -4522,8 +4638,12 @@ class AgentManager:
                 is_active_marker_present=is_active_marker_present,
                 process_started_at=process_started_at,
             )
-            # A compaction in progress wins over the derived turn state (a native compaction runs
-            # mid-turn), but never over a dead lifecycle: a dead process compacts nothing.
+            # A compaction in progress shows over the derived turn state (see
+            # ``shown_compaction_cause``), but never over a dead lifecycle: a dead process
+            # compacts nothing.
+            compaction_cause = shown_compaction_cause(
+                live_compaction.marker_cause, live_compaction.pending_cause, new_state
+            )
             if compaction_cause is not None and not is_lifecycle_dead(agent_state.state):
                 new_state = ActivityState.COMPACTING
                 self._compaction_cause_by_agent[agent_id] = compaction_cause

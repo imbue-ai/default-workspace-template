@@ -33,6 +33,7 @@ from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LE
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
+from imbue.chat.agent_manager import UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
@@ -63,6 +64,9 @@ from imbue.chat.chat_seed import seed_event_id
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_settings import ChatSettingsStore
 from imbue.chat.chat_settings import FastModeMode
+from imbue.chat.compaction_status import COMPACTION_REQUEST_FILENAME
+from imbue.chat.compaction_status import read_compaction_request
+from imbue.chat.compaction_status import write_compaction_request
 from imbue.chat.create_defaults import create_defaults_path
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
@@ -5654,10 +5658,228 @@ def test_an_interrupt_clears_the_compacting_marker_and_the_pending_request(
 
     assert not marker.exists()
     assert agent_id not in agent_manager._compaction_pending_by_agent
-    assert agent_id not in agent_manager._compaction_cause_by_agent
     assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
     # A second interrupt, with no marker left, is a quiet no-op.
     agent_manager.clear_compaction_after_interrupt(agent_info)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    # The cause survives: a compaction the interrupt came too late for still names it.
+    event = _compacted_event(seconds_ago=0.0)
+    agent_manager.stamp_compaction_events(agent_id, [event])
+    assert event["compaction_cause"] == "manual"
+
+
+def test_an_interrupt_that_cannot_remove_the_marker_still_clears_the_request(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+    agent_info = agent_manager.get_agent_info_by_id(agent_id)
+    assert agent_info is not None
+    # A directory where the marker file should be: unlinking it fails with an OSError.
+    blocked_state_dir = tmp_path / "blocked"
+    (blocked_state_dir / COMPACTING_MARKER_FILENAME).mkdir(parents=True)
+
+    agent_manager.clear_compaction_after_interrupt(
+        agent_info.model_copy_update(to_update(agent_info.field_ref().agent_state_dir, blocked_state_dir))
+    )
+
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    assert any(record.startswith("WARNING Failed to remove the compacting marker") for record in loguru_records)
+
+
+def test_a_compact_queued_behind_a_running_turn_shows_the_turn_until_it_ends(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.update_session_events(agent_id, [{"type": "user_message", "content": "go"}])
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+    agent_manager.update_session_events(
+        agent_id, [{"type": "assistant_message", "tool_calls": [{"tool_call_id": "call_q", "tool_name": "Bash"}]}]
+    )
+    assert _activity_of(agent_manager, agent_id) == ActivityState.TOOL_RUNNING
+
+    # The turn ends; the compaction queued behind it now shows.
+    agent_manager.update_session_events(
+        agent_id,
+        [
+            {"type": "tool_result", "tool_call_id": "call_q", "output": "ok"},
+            {"type": "assistant_message", "text": "done", "tool_calls": []},
+        ],
+    )
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+def test_a_compaction_request_is_recorded_beside_the_marker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    before = time.time()
+
+    agent_manager.note_sweep_compaction_requested(f"agent-{agent_id}")
+
+    request = read_compaction_request(state_dir / COMPACTION_REQUEST_FILENAME, time.time())
+    assert request is not None
+    assert request.cause == CompactionCause.IDLE
+    assert request.requested_at < before
+
+
+def test_a_sweep_compaction_stamped_after_the_managers_memory_is_gone_still_reads_idle(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    first_manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    agent_id, state_dir = _tracked_compaction_agent(first_manager, tmp_path)
+    first_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic() - 20.0)
+    # The sweep sends /compact as a manual command, so mngr's record says manual.
+    (state_dir / LAST_COMPACTION_FILENAME).write_text(
+        json.dumps({"trigger": "manual", "ended_at": _iso_seconds_ago(2.0)})
+    )
+
+    # The chat app restarted: a new manager, which never saw the request, reads the event.
+    second_manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    _seed_agent(second_manager, agent_id, harness=HarnessType.CLAUDE, state="RUNNING")
+    second_manager._ensure_activity_tracking(agent_id)
+    event = _compacted_event(seconds_ago=1.0)
+    second_manager.stamp_compaction_events(agent_id, [event])
+
+    assert event["compaction_cause"] == "idle"
+
+
+def test_a_compaction_request_from_before_the_window_does_not_name_a_later_compaction(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    write_compaction_request(
+        state_dir / COMPACTION_REQUEST_FILENAME,
+        CompactionCause.IDLE,
+        time.time() - PENDING_COMPACTION_TIMEOUT_SECONDS - 60,
+    )
+    (state_dir / LAST_COMPACTION_FILENAME).write_text(
+        json.dumps({"trigger": "manual", "ended_at": _iso_seconds_ago(2.0)})
+    )
+    event = _compacted_event(seconds_ago=1.0)
+
+    agent_manager.stamp_compaction_events(agent_id, [event])
+
+    assert event["compaction_cause"] == "manual"
+
+
+def test_a_compact_typed_in_the_terminal_reads_manual_and_logs_no_finish(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    (state_dir / LAST_COMPACTION_FILENAME).write_text(
+        json.dumps({"trigger": "manual", "ended_at": _iso_seconds_ago(2.0)})
+    )
+    event = _compacted_event(seconds_ago=1.0)
+
+    agent_manager.stamp_compaction_events(agent_id, [event])
+
+    assert not (state_dir / COMPACTION_REQUEST_FILENAME).exists()
+    assert event["compaction_cause"] == "manual"
+    # The chat held nothing to end, so there is no finish to log (a re-read of an old pill).
+    assert _log_lines_starting(loguru_records, "autocompact: compaction finished") == []
+
+
+def test_an_unwatched_agents_request_expires_after_the_shorter_timeout(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    requested_at = time.monotonic() - UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS - 1
+
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, requested_at)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+    # The same request on an agent a session watcher reads keeps showing, until the longer timeout.
+    agent_manager.set_session_watcher_check(lambda watched_agent_id: watched_agent_id == agent_id)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, requested_at)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+def test_is_compaction_in_flight_reads_a_fresh_marker_or_a_live_request(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_info = agent_manager.get_agent_info_by_id(agent_id)
+    assert agent_info is not None
+    assert not agent_manager.is_compaction_in_flight(agent_info)
+
+    stale_marker = _write_compacting_marker(
+        state_dir, "manual", started_seconds_ago=PENDING_COMPACTION_TIMEOUT_SECONDS + 5
+    )
+    assert not agent_manager.is_compaction_in_flight(agent_info)
+
+    stale_marker.unlink()
+    _write_compacting_marker(state_dir, "manual")
+    assert agent_manager.is_compaction_in_flight(agent_info)
+
+    (state_dir / COMPACTING_MARKER_FILENAME).unlink()
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+    assert agent_manager.is_compaction_in_flight(agent_info)
+
+
+def test_a_new_stale_marker_after_an_earlier_one_is_logged_again(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    _write_compacting_marker(state_dir, "manual", started_seconds_ago=PENDING_COMPACTION_TIMEOUT_SECONDS + 60)
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    _write_compacting_marker(state_dir, "manual", started_seconds_ago=PENDING_COMPACTION_TIMEOUT_SECONDS + 30)
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    stale_lines = _log_lines_starting(loguru_records, f"autocompact: stale compacting marker ignored agent={agent_id}")
+    assert len(stale_lines) == 2
+
+
+def test_a_compacting_marker_dated_in_the_future_goes_stale_by_its_file_time(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    marker = _write_compacting_marker(state_dir, "manual", started_seconds_ago=-3600.0)
+    # The file was written long ago; only the time recorded in it is skewed into the future.
+    written_at = time.time() - PENDING_COMPACTION_TIMEOUT_SECONDS - 60
+    os.utime(marker, (written_at, written_at))
+
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+
+class _SweepFailureError(Exception):
+    """The error a test session raises from its live-backend connect."""
+
+
+class _FailingConnectSession(FileHarnessSession):
+    """A file session whose live-backend connect fails."""
+
+    def ensure_live(self) -> None:
+        raise _SweepFailureError("connect failed")
+
+
+def test_a_failing_session_sweep_pass_does_not_stop_later_passes(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+    real_session = agent_manager._session_by_agent[agent_id]
+
+    with agent_manager._lock:
+        agent_manager._session_by_agent[agent_id] = _FailingConnectSession.build(real_session._deps)
+    agent_manager._sweep_sessions_once()
+    assert any(record.startswith("ERROR The agent session sweep failed") for record in loguru_records)
+
+    # The next pass runs, and its recompute settles a compaction that outlived the timeout.
+    with agent_manager._lock:
+        agent_manager._session_by_agent[agent_id] = real_session
+        agent_manager._compaction_pending_by_agent[agent_id] = (
+            time.monotonic() - PENDING_COMPACTION_TIMEOUT_SECONDS - 1,
+            CompactionCause.IDLE,
+        )
+    agent_manager._sweep_sessions_once()
     assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
 
 

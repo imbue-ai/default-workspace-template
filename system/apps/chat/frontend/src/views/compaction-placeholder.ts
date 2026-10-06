@@ -3,8 +3,11 @@
  * compacted: the pulse dot and "Compacting…" (or "Compacting, then replying…" once a message
  * is queued behind it), in the slot where the "Context was compacted" pill will land.
  *
- * It goes when the agent leaves COMPACTING, or as soon as a pill newer than the row arrives on
- * the transcript, which can land a moment before the chat list reports the state change.
+ * It goes when the agent leaves COMPACTING, or as soon as this compaction's pill arrives on the
+ * transcript, which can land a moment before the chat list reports the state change. The row
+ * tells its pill apart by identity, not time: it remembers the newest pill when it mounts, and
+ * any other pill becoming the newest is this compaction's. Older history loaded later never
+ * changes the newest pill.
  *
  * CLEANUP: the compaction-status design review removes the unpicked presentation and the
  * setting; if it picks the activity strip, this view goes with them.
@@ -18,15 +21,13 @@ import type { TranscriptEvent } from "../models/Response";
 import { COMPACTING_STATE, compactingLabel } from "./ActivityIndicator";
 import { isStatusUserMessage } from "./message-classification";
 
-/** Whether `events` hold a compaction pill stamped at or after `sinceMs`. */
-export function hasCompactionPillSince(events: readonly TranscriptEvent[], sinceMs: number): boolean {
+/** The event id of the newest compaction pill in `events`, or null when they hold none. */
+export function newestCompactionPillId(events: readonly TranscriptEvent[]): string | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
-    if (event.type === "user_message" && isStatusUserMessage(event) && Date.parse(event.timestamp) >= sinceMs) {
-      return true;
-    }
+    if (event.type === "user_message" && isStatusUserMessage(event)) return event.event_id;
   }
-  return false;
+  return null;
 }
 
 interface CompactionPlaceholderAttrs {
@@ -34,14 +35,14 @@ interface CompactionPlaceholderAttrs {
   events: readonly TranscriptEvent[];
 }
 
-function CompactionPlaceholder(): m.Component<CompactionPlaceholderAttrs> {
-  // When this page first saw the compaction. Mounted for as long as the agent stays COMPACTING,
-  // so a pill stamped after it is this compaction's own.
-  const shownSinceMs = Date.now();
+function CompactionPlaceholder(initial: m.Vnode<CompactionPlaceholderAttrs>): m.Component<CompactionPlaceholderAttrs> {
+  // Mounted for as long as the agent stays COMPACTING, so a different newest pill is this
+  // compaction's own.
+  const pillIdAtMount = newestCompactionPillId(initial.attrs.events);
   return {
     view(vnode) {
       const { chatId, events } = vnode.attrs;
-      if (hasCompactionPillSince(events, shownSinceMs)) return null;
+      if (newestCompactionPillId(events) !== pillIdAtMount) return null;
       const hasQueuedMessages = (getChatById(chatId)?.active_agent.queued_messages ?? []).length > 0;
       return m(
         "div",

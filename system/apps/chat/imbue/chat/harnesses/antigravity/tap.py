@@ -32,6 +32,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.antigravity.turn_state import TurnState
 from imbue.chat.harnesses.antigravity.turn_state import get_turn_state
 from imbue.chat.harnesses.interrupt import InterruptToComposer
+from imbue.chat.harnesses.interrupt import IsCompactionInFlight
 from imbue.chat.harnesses.interrupt import PressChord
 from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.interrupt import SettleActivity
@@ -128,6 +129,7 @@ class AntigravityInterruptToComposer(InterruptToComposer):
         settle_activity: SettleActivity,
         press_chord: PressChord,
         get_in_flight_block: Callable[[], str],
+        is_compaction_in_flight: IsCompactionInFlight,
     ) -> str:
         """End the live turn and return every message that was never delivered.
 

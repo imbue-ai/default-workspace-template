@@ -8,7 +8,7 @@ import type {
 } from "../models/Response";
 import type { HandoffNode, StepNode, TimelineItem } from "./turn-grouping";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
-import { buildSections, hasOpenHandoffRequest, hasUserTurn } from "./turn-grouping";
+import { buildSections, hasOpenHandoffRequest, hasUserTurn, isTailTurnSettled } from "./turn-grouping";
 import type { RequestResolution } from "./message-classification";
 
 // Event builders
@@ -582,6 +582,51 @@ describe("narration and close-time ejection", () => {
     expect(steps[0].is_frontier).toBe(false);
     expect(steps[0].narration).toBeNull();
     expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+  });
+
+  it("counts a compaction as settled, so the tail turn renders as it did when idle", () => {
+    expect(isTailTurnSettled("IDLE")).toBe(true);
+    expect(isTailTurnSettled("COMPACTING")).toBe(true);
+    expect(isTailTurnSettled("THINKING")).toBe(false);
+    expect(isTailTurnSettled("TOOL_RUNNING")).toBe(false);
+    expect(isTailTurnSettled(null)).toBe(false);
+    expect(isTailTurnSettled(undefined)).toBe(false);
+  });
+
+  // An idle compaction runs after the turn ended: the finished turn must not re-open with a
+  // spinning step and its closing prose demoted to narration.
+  it("keeps a finished turn settled while the agent compacts after it", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      assistantText("t3", "All done.", "reply"),
+    ];
+    const compacting = run(events, isTailTurnSettled("COMPACTING"));
+    expect(compacting).toEqual(run(events, isTailTurnSettled("IDLE")));
+    const steps = stepItems(compacting[0].items);
+    expect(steps[0].is_frontier).toBe(false);
+    expect(compacting[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+  });
+
+  // A compaction inside a running turn hides the frontier only until the turn resumes.
+  it("restores the live frontier once a mid-turn compaction gives way to work", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      assistantText("t2", "Looking into it now.", "narr"),
+    ];
+    const during = stepItems(run(events, isTailTurnSettled("COMPACTING"))[0].items);
+    expect(during).toHaveLength(1);
+    expect(during[0].is_frontier).toBe(false);
+    const resumed = run(events, isTailTurnSettled("TOOL_RUNNING"));
+    const steps = stepItems(resumed[0].items);
+    expect(steps[0].is_frontier).toBe(true);
+    expect(steps[0].narration).toBe("Looking into it now.");
+    expect(resumed[0].trailing_reply).toHaveLength(0);
   });
 
   it("treats prose before the first step as an ungrouped (leading) item", () => {

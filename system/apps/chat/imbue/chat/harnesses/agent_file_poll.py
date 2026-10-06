@@ -1,12 +1,10 @@
 """One shared poller over one small file per agent, replacing per-agent watchers.
 
-The manager runs two: one over every agent's ``model_state.json`` (the model bar's live input)
-and one over every Claude agent's ``compacting`` marker (the compaction status). Each is one
-tiny file per agent, rewritten rarely -- but the previous design spent a dedicated watchdog
-observer on each agent (its own poll thread, dispatcher, emitter, and inotify buffer: four OS
-threads per agent, for EVERY agent mngr reports, for as long as the agent exists). On a host
-with dozens of accumulated agents that machinery was the chat app's dominant thread count, and
-it grew without bound as agents were created over the process's life.
+Each agent's file is tiny and rewritten rarely -- but the previous design spent a dedicated
+watchdog observer on each agent (its own poll thread, dispatcher, emitter, and inotify buffer:
+four OS threads per agent, for EVERY agent mngr reports, for as long as the agent exists). On a
+host with dozens of accumulated agents that machinery was the chat app's dominant thread count,
+and it grew without bound as agents were created over the process's life.
 
 This poller is the bounded replacement: ONE thread stats every listed agent's file each
 interval and invokes ``on_file_changed`` only for agents whose file stamp (mtime + size)
@@ -23,7 +21,8 @@ remembered stamp. Consequences:
 - A missed wake needs no special handling: there are no wakes, only the next pass.
 
 The callback must be cheap and idempotent for spurious invocations (the manager's
-recomputes are no-op-guarded), exactly like ``PathWatcher.on_change``.
+recomputes are no-op-guarded), exactly like ``PathWatcher.on_change``. A callback that raises
+is logged and skipped, so one agent's failure neither stops the pass nor kills the thread.
 """
 
 from __future__ import annotations
@@ -33,6 +32,8 @@ from collections.abc import Callable
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
+
+from loguru import logger
 
 # One stat per agent per interval is trivial even under gVisor's elevated syscall cost;
 # 1s keeps a harness-driven write visible within a second, indistinguishable from the
@@ -107,7 +108,13 @@ class AgentFilePoller:
             if agent_id in self._stamp_by_agent and self._stamp_by_agent[agent_id] == stamp:
                 continue
             self._stamp_by_agent[agent_id] = stamp
-            self._on_file_changed(agent_id)
+            # The thread boundary: an escaping error would end the poll thread for good.
+            try:
+                self._on_file_changed(agent_id)
+            except Exception as e:
+                logger.opt(exception=e).error(
+                    "{}: the change callback failed for agent {}", self._thread_name, agent_id
+                )
 
     def _run(self) -> None:
         while not self._stop_event.wait(timeout=self._poll_interval_seconds):

@@ -44,6 +44,34 @@ class ChatAppStateError(RuntimeError):
 DEFAULT_STATIC_DIRECTORY = Path(__file__).parent / "static"
 
 
+class _SentInterrupts:
+    """Wraps a stop's restart and cancel-chord capabilities, noting whether either actually went out."""
+
+    _restart_process: Callable[[], tuple[bool, str]]
+    _press_cancel_chord: Callable[[], bool]
+    is_any_sent: bool
+
+    @classmethod
+    def build(
+        cls, restart_process: Callable[[], tuple[bool, str]], press_cancel_chord: Callable[[], bool]
+    ) -> "_SentInterrupts":
+        self = cls.__new__(cls)
+        self._restart_process = restart_process
+        self._press_cancel_chord = press_cancel_chord
+        self.is_any_sent = False
+        return self
+
+    def restart_process(self) -> tuple[bool, str]:
+        is_restarted, output = self._restart_process()
+        self.is_any_sent = self.is_any_sent or is_restarted
+        return is_restarted, output
+
+    def press_cancel_chord(self) -> bool:
+        is_pressed = self._press_cancel_chord()
+        self.is_any_sent = self.is_any_sent or is_pressed
+        return is_pressed
+
+
 class ChatAppState(MutableModel):
     """Holds every shared service handle and config for one chat app.
 
@@ -198,6 +226,14 @@ class ChatAppState(MutableModel):
                 watcher.stop()
         return watcher
 
+    def has_watcher(self, agent_id: str) -> bool:
+        """Whether a session watcher is resident for the agent.
+
+        Reads without the watchers lock (a dict membership test is atomic): the agent manager
+        asks this from recomputes that can run while ``get_or_create_watcher`` holds it.
+        """
+        return agent_id in self.watchers
+
     def get_or_create_loader(self, agent_info: AgentInfo) -> TranscriptLoader:
         """The loader over one archived agent's transcript, built on the first read that needs it.
 
@@ -240,21 +276,28 @@ class ChatAppState(MutableModel):
         Dispatches through the agent's session to the harness's registered interrupt (the
         base restart-drain, or a native override), binding the watcher, the restart the caller
         supplies, the activity settle, and the native cancel chord. Shared by the route and
-        the handoff's draining step. An interrupt also cancels a compaction in progress, which
-        reports no completion, so the agent's compaction status is cleared after it. Raises
+        the handoff's draining step. A cancel chord or a restart also ends a compaction in
+        progress, which then reports no completion, so the agent's compaction status is cleared
+        when either actually ran (a stop that found nothing to interrupt leaves it alone). Raises
         ``AgentRestartError`` when the restart fails.
         """
         watcher = self.get_or_create_watcher(agent_info)
-        block = self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
-            agent_info,
-            watcher,
+        interrupts = _SentInterrupts.build(
             restart_process,
-            lambda: self.agent_manager.reset_activity_state(agent_info.id),
             lambda: self.agent_manager.press_key_chord_on_agent(
                 AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
             ),
         )
-        self.agent_manager.clear_compaction_after_interrupt(agent_info)
+        block = self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
+            agent_info,
+            watcher,
+            interrupts.restart_process,
+            lambda: self.agent_manager.reset_activity_state(agent_info.id),
+            interrupts.press_cancel_chord,
+            lambda: self.agent_manager.is_compaction_in_flight(agent_info),
+        )
+        if interrupts.is_any_sent:
+            self.agent_manager.clear_compaction_after_interrupt(agent_info)
         return block
 
     def stop_and_remove_watcher(self, agent_id: str) -> None:

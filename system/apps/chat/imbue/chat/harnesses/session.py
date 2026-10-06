@@ -34,6 +34,7 @@ from uuid import uuid4
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import InterruptToComposer
+from imbue.chat.harnesses.interrupt import IsCompactionInFlight
 from imbue.chat.harnesses.interrupt import PressChord
 from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.interrupt import SettleActivity
@@ -205,6 +206,7 @@ class AgentHarnessSession(ABC):
         restart_process: RestartProcess,
         settle_activity: SettleActivity,
         press_chord: PressChord,
+        is_compaction_in_flight: IsCompactionInFlight,
     ) -> str:
         """Interrupt the running turn and return the queued block to the composer."""
 
@@ -299,6 +301,7 @@ class FileHarnessSession(AgentHarnessSession):
         restart_process: RestartProcess,
         settle_activity: SettleActivity,
         press_chord: PressChord,
+        is_compaction_in_flight: IsCompactionInFlight,
     ) -> str:
         interrupter = self._deps.build_interrupter(agent_info)
         return interrupter.drain_to_composer(
@@ -307,4 +310,5 @@ class FileHarnessSession(AgentHarnessSession):
             settle_activity,
             press_chord,
             self.in_flight_block,
+            is_compaction_in_flight,
         )

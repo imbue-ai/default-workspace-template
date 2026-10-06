@@ -383,7 +383,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _CLAUDE_FAST_MODE_LIMIT_POPUP,
         ),
         supports_compaction=True,
-        # Escape during a /compact cancels it (Claude Code puts /compact back into its input box).
+        # The stop button presses the cancel chord (M-q, ``chat:cancel``: the action Escape takes in
+        # the Chat context) even with no turn in flight, which should cancel a compaction; a live
+        # check that it does is still owed.
         can_interrupt_compaction=True,
         is_composer_compact_forwarded=True,
     ),

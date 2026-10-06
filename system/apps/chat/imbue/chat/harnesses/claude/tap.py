@@ -59,6 +59,7 @@ from imbue.chat.harnesses.claude.session_parser import INTERRUPT_SENTINEL_TEXT
 from imbue.chat.harnesses.claude.session_parser import extract_text_content
 from imbue.chat.harnesses.claude.session_parser import is_interrupt_sentinel_text
 from imbue.chat.harnesses.interrupt import InterruptToComposer
+from imbue.chat.harnesses.interrupt import IsCompactionInFlight
 from imbue.chat.harnesses.interrupt import PressChord
 from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.interrupt import SettleActivity
@@ -606,6 +607,11 @@ def _no_settle_activity() -> None:
     return None
 
 
+def _no_compaction_in_flight() -> bool:
+    """Default compaction check: nothing compacting (unit tests of the turn paths)."""
+    return False
+
+
 def _combine_return_block(queued_block: str, in_flight_block: str) -> str:
     """Concatenate the queued block and the in-flight (Sending) block, in send order.
 
@@ -648,6 +654,39 @@ def _drain_to_base_under_message_lock(
         return _combine_return_block(queued_block, get_in_flight_block())
 
 
+def _cancel_compaction_with_chord(
+    *,
+    agent_state_dir: Path,
+    keybindings_path: Path,
+    watcher: TapWatcher,
+    press_chord: Callable[[], bool],
+    restart_drain_to_base: Callable[[], str],
+    try_message_lock: Callable[[], AbstractContextManager[bool]],
+    get_in_flight_block: Callable[[], str],
+    now: Callable[[], float],
+) -> str:
+    """Cancel a compaction running with no turn in flight and an empty mirror; return the block.
+
+    The same bounded under-lock re-check as the turn's chord path: a message that parked while we
+    waited routes to the base (a chord would flush it into a new turn), and a lock held past the
+    wait takes the hammer with the in-flight send folded in.
+    """
+    process_marker = agent_state_dir / CLAUDE_PROCESS_STARTED_MARKER_FILENAME
+    if not is_tap_binding_active(keybindings_path, process_marker):
+        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock, get_in_flight_block)
+    with try_message_lock() as is_lock_held:
+        watcher.get_all_events()
+        if not is_lock_held:
+            logger.info("claude stop: message.lock still held past the bounded wait while compacting; restarting")
+            return _combine_return_block(restart_drain_to_base(), get_in_flight_block())
+        if len(watcher.get_queued_messages()) > 0:
+            return restart_drain_to_base()
+    _record_stop(str(agent_state_dir), now=now)
+    if not press_chord():
+        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock, get_in_flight_block)
+    return ""
+
+
 def execute_claude_stop_to_composer(
     *,
     agent_state_dir: Path,
@@ -659,6 +698,7 @@ def execute_claude_stop_to_composer(
     restart_drain_to_base: Callable[[], str],
     try_message_lock: Callable[[], AbstractContextManager[bool]],
     get_in_flight_block: Callable[[], str] = _no_in_flight_block,
+    is_compaction_in_flight: Callable[[], bool] = _no_compaction_in_flight,
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     watch_deadline_seconds: float = _INTERRUPT_WATCH_DEADLINE_SECONDS,
@@ -673,7 +713,12 @@ def execute_claude_stop_to_composer(
       mirror refreshed and the block captured under the bounded ``message.lock`` -- so a message
       an in-flight send parked since the pre-lock read rides the block instead of dying with the
       SIGKILL (U1); a lock still held past the wait hammers on a fresh best-effort re-capture.
-    - Mirror EMPTY, no ``active`` marker -> ``""``: no turn, nothing queued; composer untouched.
+    - Mirror EMPTY, no ``active`` marker, compacting -> the chord, which cancels the compaction
+      (a sweep's or a composer's /compact fires no ``UserPromptSubmit``, so no ``active`` marker
+      exists while it runs). Nothing on disk confirms a cancelled compaction, so the chord is
+      not watched; an inactive binding or a failed press falls back to the base, which ends it.
+    - Mirror EMPTY, no ``active`` marker, not compacting -> ``""``: no turn, nothing queued;
+      composer untouched.
     - Mirror EMPTY, a dialog / inactive binding / no live session -> the base (same bounded-lock
       capture): the Chat-only chord is inert or unobservable, but a blocked turn is still a turn.
     - Mirror EMPTY + open turn + bindable -> the chord: re-check under the bounded lock (a
@@ -709,7 +754,18 @@ def execute_claude_stop_to_composer(
 
     # Mirror is empty from here on.
     if not (agent_state_dir / ACTIVE_MARKER_FILENAME).exists():
-        # No turn in flight and nothing queued: a pure no-op.
+        if is_compaction_in_flight():
+            return _cancel_compaction_with_chord(
+                agent_state_dir=agent_state_dir,
+                keybindings_path=keybindings_path,
+                watcher=watcher,
+                press_chord=press_chord,
+                restart_drain_to_base=restart_drain_to_base,
+                try_message_lock=try_message_lock,
+                get_in_flight_block=get_in_flight_block,
+                now=now,
+            )
+        # No turn in flight, no compaction, and nothing queued: a pure no-op.
         return ""
 
     if (agent_state_dir / PERMISSIONS_WAITING_MARKER_FILENAME).exists():
@@ -830,6 +886,7 @@ class ClaudeInterruptToComposer(InterruptToComposer):
         settle_activity: SettleActivity,
         press_chord: PressChord,
         get_in_flight_block: Callable[[], str],
+        is_compaction_in_flight: IsCompactionInFlight,
     ) -> str:
         return execute_claude_stop_to_composer(
             agent_state_dir=self._agent_state_dir,
@@ -841,6 +898,7 @@ class ClaudeInterruptToComposer(InterruptToComposer):
             restart_drain_to_base=lambda: restart_drain(self._agent_info, watcher, restart_process, settle_activity),
             try_message_lock=lambda: try_hold_message_lock(self._agent_state_dir),
             get_in_flight_block=get_in_flight_block,
+            is_compaction_in_flight=is_compaction_in_flight,
         )
 
 

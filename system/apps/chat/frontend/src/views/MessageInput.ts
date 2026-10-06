@@ -1186,8 +1186,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       // above the input, read straight off the backend-derived activity state. While the
       // chat switches harness the turn in progress is the switch's own (the summary it asked
       // for), so the button is the switch's cancel instead, for as long as that is possible.
-      // A compaction counts as working, but its stop button shows only where the harness's
-      // interrupt cancels a compaction.
       const activityState = chat?.active_agent.activity_state ?? null;
       const isAgentWorking = isWorkingActivityState(activityState);
       const isUninterruptibleCompaction =
