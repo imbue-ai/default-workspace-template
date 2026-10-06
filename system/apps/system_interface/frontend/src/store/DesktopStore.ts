@@ -258,6 +258,9 @@ export interface StoreDependencies {
    *  backend retry) rather than opening it for a tear-out just now; absent means a tear-out, as an older chrome
    *  says. */
   readonly isSoloReopened?: boolean;
+  /** Whether every window opened on the desktop goes straight out into a desktop window of the chrome's, and
+   *  closing that desktop window closes the window rather than bringing it back; absent means off. */
+  readonly isAlwaysPoppingOut?: boolean;
 }
 
 /** A navigation this client asked for on its own page (the chooser's draft), which the live pages honour
@@ -384,6 +387,8 @@ export class DesktopStore {
   private isReportHeldForSave = false;
   /** A window an agent op showed this phone before the desktops update that brings it landed. */
   private pendingPhoneShowId: string | null = null;
+  /** A window an agent op opened on this desktop before the layout that places it landed, to pop out once it does. */
+  private pendingPopOutId: string | null = null;
   /** Whether the page was out of sight since the socket last connected: a reconnect then reloads the phone's page,
    *  whose own connection most likely went down with the shell's. */
   private isHiddenSinceConnect = false;
@@ -574,6 +579,7 @@ export class DesktopStore {
     if (isLayoutChanged && isLayoutDirty(next)) this.scheduleSave();
     this.notifyListeners();
     this.followShownWindow();
+    this.followPendingPopOut();
   }
 
   /** Whether this shell draws the phone layout: the phone mode, and not a solo shell (which shows its one window
@@ -1130,6 +1136,10 @@ export class DesktopStore {
         if (this.soloWindowId !== null || typeof windowId !== "string" || windowId === "") return;
         if (this.isPhoneLayout()) this.showOnPhoneWhenKnown(windowId);
         else if (event.op === "show" && event.args.is_detached === true) this.showDetachedWindow(windowId);
+        else if (event.op === "open" && this.deps.isAlwaysPoppingOut === true) {
+          this.pendingPopOutId = windowId;
+          this.followPendingPopOut();
+        }
         return;
       }
     }
@@ -1431,8 +1441,50 @@ export class DesktopStore {
   /** A window the shell opened or answered for this client, applied at once; the phone shows it. */
   private takeOpened(desktopId: string, window: WindowRecord, isNew: boolean, isMinimized: boolean): void {
     this.dispatch({ type: "window_opened_here", desktopId, window, isNew, isMinimized });
-    void this.refetchLayout();
+    const refetched = this.refetchLayout();
     if (this.isPhoneLayout()) this.showOnPhone({ kind: "window", windowId: window.id });
+    // The detach waits for the refetch, whose layout would otherwise land over it.
+    else if (this.isPoppingOutOnOpen(window)) void refetched.then(() => this.popOutOpened(window.id, isNew));
+  }
+
+  /** Whether an opened ``window`` goes out into a desktop window of its own (``isAlwaysPoppingOut``). A pinned
+   *  window keeps its place on the desktop. */
+  private isPoppingOutOnOpen(window: WindowRecord): boolean {
+    return this.deps.isAlwaysPoppingOut === true && this.canPopOut && !this.isPhoneLayout() && !window.is_pinned;
+  }
+
+  /** Put an opened window in its own desktop window: a new one is pulled out, one already out has its desktop
+   *  window raised, and one the user brought back onto the desktop stays there. A solo shell may not write
+   *  another window's detach, so it asks the chrome for the desktop window, whose own shell writes it. */
+  private async popOutOpened(windowId: string, isNew: boolean): Promise<void> {
+    if (findWindow(this.state, windowId) === null) return;
+    if (placementOf(this.state.layout, windowId).is_detached) {
+      this.showDetachedWindow(windowId);
+      return;
+    }
+    if (!isNew) return;
+    if (this.soloWindowId === null) await this.detachWindow(windowId);
+    else this.showDetachedWindow(windowId);
+  }
+
+  /** Pop out the window an agent op opened once the layout placing it has landed. */
+  private followPendingPopOut(): void {
+    const pending = this.pendingPopOutId;
+    if (pending === null || !this.state.layout.placements.some((placement) => placement.window_id === pending)) return;
+    this.pendingPopOutId = null;
+    const found = findWindow(this.state, pending);
+    if (found !== null && this.isPoppingOutOnOpen(found.window)) void this.popOutOpened(pending, true);
+  }
+
+  /** The chrome asked for a pulled-out window back (``minds:reattach-window``). With no ``frame`` its desktop
+   *  window is closing; when every window pops out, that closes the window rather than bringing it back. */
+  async takeReattachRequest(windowId: string, frame: Frame | null): Promise<void> {
+    const found = findWindow(this.state, windowId);
+    if (frame === null && found !== null && this.isPoppingOutOnOpen(found.window) && this.isPopOutVerbOwn(windowId)) {
+      await this.closeWindow(windowId);
+      return;
+    }
+    await this.reattachWindow(windowId, frame);
   }
 
   /** Run a launch path through the shell's launch route (post-launch-paths plan section 5.3): the shell resolves the

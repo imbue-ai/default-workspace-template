@@ -66,6 +66,9 @@ function frameFromMessage(value: unknown): Frame | null {
   );
 }
 
+/** Every window opened on the desktop goes straight into a desktop window of the chrome's (an experiment). */
+const IS_ALWAYS_POPPING_OUT = true;
+
 /** The shell's side of the pull-out conversation: every ask goes to the embedding chrome. */
 const popOutBridge: PopOutBridge = {
   requestPopOut: (request) => sendToEmbedder(POP_OUT_WINDOW, { ...request }),
@@ -99,6 +102,7 @@ function bootstrap(): void {
           popOut: popOutBridge,
           soloWindowId: solo?.windowId ?? null,
           isSoloReopened: solo?.isReopened ?? false,
+          isAlwaysPoppingOut: IS_ALWAYS_POPPING_OUT,
         });
       } else {
         store.setThemeMetrics(metrics, modes);
@@ -130,7 +134,7 @@ function bootstrap(): void {
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;
     if (typeof windowId !== "string" || windowId === "") return;
-    void desktopStore.reattachWindow(windowId, frameFromMessage(message.frame));
+    void desktopStore.takeReattachRequest(windowId, frameFromMessage(message.frame));
   });
   setEmbedderMessageHandler(TEAR_OUT, (message) => {
     const windowId = message.windowId;

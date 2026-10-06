@@ -42,7 +42,7 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened"> = {},
+  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "isAlwaysPoppingOut"> = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -1345,6 +1345,7 @@ describe("pulled-out windows", () => {
   function makePopOutStore(
     soloWindowId: string | null = null,
     isSoloReopened = false,
+    isAlwaysPoppingOut = false,
   ): {
     store: DesktopStore;
     calls: unknown[];
@@ -1358,7 +1359,11 @@ describe("pulled-out windows", () => {
       endWindowDrag: (windowId, isDetached, isCancelled) => calls.push(["ended", windowId, isDetached, isCancelled]),
       reportDetachedWindows: (windows) => reports.push(windows),
     };
-    return { store: makeStore(() => undefined, { popOut, soloWindowId, isSoloReopened }), calls, reports };
+    return {
+      store: makeStore(() => undefined, { popOut, soloWindowId, isSoloReopened, isAlwaysPoppingOut }),
+      calls,
+      reports,
+    };
   }
 
   const savedCalls = (): string[] => api.calls.filter((call) => call.startsWith("savePlacements"));
@@ -1625,6 +1630,69 @@ describe("pulled-out windows", () => {
       frame: { x: 0.2, y: 0.2, width: 0.5, height: 0.5 },
     });
     expect(savedCalls()).toHaveLength(2);
+  });
+
+  it("pulls every opened window out when every window pops out, and closes it when its desktop window closes", async () => {
+    const { store, calls } = makePopOutStore(null, false, true);
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+
+    const windowId = await store.openWindowAt("docs", "/new", "new");
+    await settle();
+
+    expect(windowId).not.toBeNull();
+    expect(placementOf(store.getState().layout, windowId as string).is_detached).toBe(true);
+    expect(storedPlacement(windowId as string)?.is_detached).toBe(true);
+    expect(calls).toEqual([["request", expect.objectContaining({ windowId })]]);
+    // A focus open of a window on the desktop leaves it there.
+    expect(await store.openWindowAt("notes", "/b", "focus")).toBe("win-2");
+    await settle();
+    expect(placementOf(store.getState().layout, "win-2").is_detached).toBe(false);
+    expect(calls).toHaveLength(1);
+    // A drop back onto the desktop still brings a window back; closing its desktop window closes it.
+    await store.takeReattachRequest(windowId as string, { x: 0.2, y: 0.2, width: 0.5, height: 0.5 });
+    expect(placementOf(store.getState().layout, windowId as string).is_detached).toBe(false);
+    await store.detachWindow(windowId as string);
+    await store.takeReattachRequest(windowId as string, null);
+    expect(api.calls).toContain(`closeWindow:home:${windowId as string}`);
+  });
+
+  it("leaves opened windows on the desktop and brings closing ones back unless every window pops out", async () => {
+    const { store, calls } = makePopOutStore();
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+
+    const windowId = await store.openWindowAt("docs", "/new", "new");
+    await settle();
+    expect(placementOf(store.getState().layout, windowId as string).is_detached).toBe(false);
+    expect(calls).toEqual([]);
+    await store.detachWindow(windowId as string);
+    await store.takeReattachRequest(windowId as string, null);
+    expect(placementOf(store.getState().layout, windowId as string).is_detached).toBe(false);
+    expect(api.calls.filter((call) => call.startsWith("closeWindow"))).toEqual([]);
+  });
+
+  it("pulls out the window an agent op opened once the layout placing it lands, when every window pops out", async () => {
+    const { store, calls } = makePopOutStore(null, false, true);
+    await store.start(NO_LINK);
+    store.setCanPopOut(true);
+    const opened = await api.openWindow("home", {
+      app: "docs",
+      path: "/agent",
+      clientId: CLIENT,
+      ifPresent: "new",
+      isMinimized: false,
+    });
+
+    socket.deliver().onLayoutOp({ op: "open", args: { window: opened.window.id }, requester: "chat" });
+    expect(calls).toEqual([]);
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    socket.deliver().onPlacementsUpdated({ desktopId: "home", clientId: CLIENT, saveId: "save-0000000000000000" });
+    await settle();
+
+    expect(placementOf(store.getState().layout, opened.window.id).is_detached).toBe(true);
+    expect(storedPlacement(opened.window.id)?.is_detached).toBe(true);
+    expect(calls).toEqual([["request", expect.objectContaining({ windowId: opened.window.id })]]);
   });
 
   it("shows a pulled-out window's own desktop window when a show op lands on it, leaving it out", async () => {
