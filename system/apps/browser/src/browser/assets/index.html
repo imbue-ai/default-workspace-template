@@ -1178,7 +1178,7 @@ registerProcessor('pb', PB);`;
 </script>
 <!-- A contract that cannot load (the shell's frontend not built) leaves nobody to say whether the
      pane is shown: stream as a page opened on its own does. -->
-<script type="module" onerror="document.dispatchEvent(new CustomEvent('browser:shell-visibility', { detail: { isShown: true } }))">
+<script type="module" onerror="console.warn('[browser] could not load the shell contract: streaming as a page on its own'); document.dispatchEvent(new CustomEvent('browser:shell-visibility', { detail: { isShown: true } }))">
   // The workspace shell's app contract (docs/system/blueprint/desktop-interface/contracts.md
   // section 7), imported from this page's own origin, which the daemon serves it from. The
   // window's path says WHICH browser this page shows and its title is that browser's name; what
