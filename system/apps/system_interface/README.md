@@ -171,7 +171,7 @@ modules it shares with the app pages live in `system/libs/workspace_ui`, and
 framed pages' `minds:` messages to the minds chrome unchanged).
 
 A message the shell's page receives, from the Imbue Studio chrome or from an
-app's page (`shell:message`, such as a chat link's `open:file` or `open:url`),
+app's page (`shell:message`, such as a chat file link's `open:file`),
 reaches every app whose manifest registers its type (`[[message_handlers]]`):
 the shell's page hands it once to the shell's backend (`POST
 /api/embedder-messages`, `shell/embedder_messages.py`), with the client whose
