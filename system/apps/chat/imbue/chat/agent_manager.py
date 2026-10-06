@@ -2543,8 +2543,9 @@ class AgentManager:
 
         self._stop_activity_tracking(agent_id)
         self._stop_model_tracking(agent_id)
-        # The agent is positively gone, so its resident transcript goes with it, and so does
-        # the codex live-user-turn record keyed by its id.
+        # The agent is positively gone, so what it held resident goes with it (the whole chat's
+        # transcripts when it was the chat's active agent), and so does the codex
+        # live-user-turn record keyed by its id.
         self._evict_chat_transcripts(agent_id)
         drop_live_user_turns(agent_id)
         self._broadcast_chats_updated()
