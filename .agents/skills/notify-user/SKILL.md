@@ -8,11 +8,10 @@ metadata:
 
 # Notify the user
 
-The Imbue Studio app keeps a notification feed: a bell in the titlebar, a badge on the
-dock icon, a toast card in every open window, and a system banner when the
-user is looking at something else. This skill posts a message from this chat
-into that feed. Clicking the notification lands the user in this chat. It is
-one-way: any answer comes back in this chat.
+The Imbue Studio app keeps a notification feed behind the bell in its
+titlebar. This skill posts a message from this chat into that feed. Clicking
+the notification lands the user in this chat. It is one-way: any answer comes
+back in this chat.
 
 ## When to use it
 
