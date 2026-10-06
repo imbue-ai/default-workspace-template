@@ -3064,12 +3064,11 @@ class AgentManager:
         """Mint a chat awaiting its first send, and say whether it reserved a spare. Lock held.
 
         With a spare on ``spare_account_id`` and the terms a new chat there gets (a ready one, else
-        one still being created), the chat takes the spare's id and name, and the spare is reserved
-        for it (``spare_chat.py``), and the chat is bound to the spare's account, the default when it
-        opened, so a later change of default leaves it as it would any chat; unless awaiting chats already
-        hold as many spares as the pool keeps;
-        otherwise both are minted fresh, and the next spare started is reserved for the chat when it
-        fits (``_record_new_spare_locked``).
+        one still being created), while awaiting chats hold fewer spares than the pool keeps, the chat
+        takes the spare's id, name, and account, and the spare is reserved for it (``spare_chat.py``):
+        a later change of default leaves the chat on that account, as it would any chat. Otherwise its
+        id and name are minted fresh, and the next spare started is reserved for the chat when it fits
+        (``_record_new_spare_locked``).
         """
         terms = None if spare_account_id is None else self._new_chat_terms_locked(spare_account_id, "")
         spare = (
