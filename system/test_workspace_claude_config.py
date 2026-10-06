@@ -8,9 +8,9 @@ chooser mints ``~/.minds/accounts/<id>/`` and ``mngr create`` binds the chat to 
 What survives the accounts work, and is what these tests actually check, is the AMBIENT default:
 anything that did not ask for an account -- a bare ``claude`` in a terminal, a supervisord
 service -- must still land on claude's own ``~/.claude`` (``claude_p.py`` picks the workspace's
-default account itself when nothing has set the variable). That holds only
-if nothing pins the variable at a level those inherit, which is exactly the two invariants below.
-They are spread across files that would otherwise drift silently:
+default account itself when nothing has set the variable). That holds only if nothing pins the
+variable at a level those inherit, which is exactly the two invariants below. They are spread
+across files that would otherwise drift silently:
 
 1. Nothing in ``.mngr/settings.toml`` may export ``CLAUDE_CONFIG_DIR`` -- an exported value
    there is inherited by EVERY agent, which would override the per-account binding a chat was
