@@ -410,13 +410,13 @@ def _sse_response(state: ChatAppState, generator: Iterator[str]) -> Response:
             "X-Accel-Buffering": "no",
         },
     )
-
-    def release_unless_shut_down() -> None:
-        if not state.event_queues.is_shutdown:
-            state.release_unviewed_stopped_transcripts()
-
-    response.call_on_close(release_unless_shut_down)
+    response.call_on_close(lambda: _release_unviewed_stopped_transcripts_unless_shut_down(state))
     return response
+
+
+def _release_unviewed_stopped_transcripts_unless_shut_down(state: ChatAppState) -> None:
+    if not state.event_queues.is_shutdown:
+        state.release_unviewed_stopped_transcripts()
 
 
 def _open_chat_stream(
