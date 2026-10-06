@@ -32,6 +32,10 @@ _CONTRACT_MODULE: Final[str] = (
     "  return { focused() {}, location() {} };\n"
     "}\n"
 )
+_STAGE_SIZE: Final[str] = (
+    "(() => { const box = document.getElementById('stage').getBoundingClientRect();"
+    " return [box.width, box.height]; })()"
+)
 
 
 def test_the_viewer_releases_the_stream_while_the_shell_hides_its_window_and_claims_it_when_shown(
@@ -71,17 +75,13 @@ def test_the_viewer_releases_the_stream_while_the_shell_hides_its_window_and_cla
         # A shown pane claims the stream as soon as its socket opens.
         wait_until(page, lambda: claims[-1:] == ["i"])
         wait_until(page, lambda: viewer.evaluate("window.shellHandlers !== undefined"))
+        shown_size = viewer.evaluate(_STAGE_SIZE)
 
         viewer.evaluate("window.shellHandlers.onHidden()")
         wait_until(page, lambda: claims[-1:] == ["h"])
         released_at = len(claims)
         # Its size is unchanged, so only the shell's word keeps it released past the viewer's 1.5s belt.
-        assert (
-            viewer.evaluate(
-                "document.getElementById('stage').getBoundingClientRect().width"
-            )
-            == 800
-        )
+        assert viewer.evaluate(_STAGE_SIZE) == shown_size
         page.wait_for_timeout(BELT_SETTLE_MS)
         assert claims[released_at:] == []
 
