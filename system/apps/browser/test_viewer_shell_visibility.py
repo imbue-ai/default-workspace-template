@@ -11,7 +11,7 @@ page opens and sends.
 import math
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 from browser.testing import (
@@ -78,7 +78,9 @@ class _Viewer:
 
 @contextmanager
 def _framed_viewer(
-    module_browser: Browser, visibility_at_load: str, is_contract_served: bool
+    module_browser: Browser,
+    visibility_at_load: Literal["shown", "hidden"],
+    is_contract_served: bool,
 ) -> Iterator[tuple[Page, Frame, _Viewer]]:
     viewer = _Viewer()
 
