@@ -4124,10 +4124,11 @@ def test_an_archived_members_removal_leaves_its_chats_records_and_transcripts_st
 
 def _resident_recorded_chat(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
-) -> tuple[AgentManager, ChatAppState, AgentDetails, str]:
+) -> tuple[AgentManager, ChatAppState, AgentDetails, AgentDetails, str]:
     """A recorded chat as the observer lists it, its archived segment loaded and its active agent watched.
 
-    Returns the manager, the state holding both resident, the active agent's details, and the chat id.
+    Returns the manager, the state holding both resident, the active agent's running and stopped details,
+    and the chat id.
     """
     manager, _store, first, second = _recorded_chat(broadcaster)
     state = build_test_state(agent_manager=manager)
@@ -4135,20 +4136,20 @@ def _resident_recorded_chat(
         f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first), state=AgentLifecycleState.STOPPED
     )
     active = _agent_details("Chat-1", agent_id=MngrAgentId(second), state=AgentLifecycleState.RUNNING)
+    stopped = active.model_copy_update(to_update(active.field_ref().state, AgentLifecycleState.STOPPED))
     manager._handle_observe_event(make_agent_state_event(archived))
     manager._handle_observe_event(make_agent_state_event(active))
     state.get_or_create_loader(make_agent_fixture(tmp_path, agent_id=first)[0])
     state.get_or_create_watcher(make_agent_fixture(tmp_path, agent_id=second)[0])
     assert (set(state.loaders), set(state.watchers)) == ({first}, {second})
-    return manager, state, active, first
+    return manager, state, active, stopped, first
 
 
 def test_a_chat_whose_active_agent_stops_unstreamed_drops_its_archived_segments_too(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    manager, state, active, _chat_id = _resident_recorded_chat(broadcaster, tmp_path)
+    manager, state, _active, stopped, _chat_id = _resident_recorded_chat(broadcaster, tmp_path)
     try:
-        stopped = active.model_copy_update(to_update(active.field_ref().state, AgentLifecycleState.STOPPED))
         manager._handle_observe_event(make_agent_state_event(stopped))
 
         assert (state.loaders, state.watchers) == ({}, {})
@@ -4156,19 +4157,22 @@ def test_a_chat_whose_active_agent_stops_unstreamed_drops_its_archived_segments_
         state.shutdown()
 
 
+@pytest.mark.parametrize("is_removed_by_the_observer", [True, False], ids=["observe-stream", "remove-agent"])
 def test_removing_a_chats_active_agent_drops_the_whole_chat_even_after_a_streamed_stop(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, is_removed_by_the_observer: bool
 ) -> None:
     """A stop while streamed leaves the chat resident, and once the active agent is gone the release can no
     longer tell the chat is stopped, so the removal has to drop the archived segments as well."""
-    manager, state, active, chat_id = _resident_recorded_chat(broadcaster, tmp_path)
+    manager, state, active, stopped, chat_id = _resident_recorded_chat(broadcaster, tmp_path)
     try:
         state.event_queues.register(chat_id)
-        stopped = active.model_copy_update(to_update(active.field_ref().state, AgentLifecycleState.STOPPED))
         manager._handle_observe_event(make_agent_state_event(stopped))
         assert (set(state.loaders), set(state.watchers)) == ({chat_id}, {str(active.id)})
 
-        manager._handle_observe_event(make_agent_removed_event(active.id, active.name, active.host.id))
+        if is_removed_by_the_observer:
+            manager._handle_observe_event(make_agent_removed_event(active.id, active.name, active.host.id))
+        else:
+            manager.remove_agent(str(active.id))
 
         assert (state.loaders, state.watchers) == ({}, {})
     finally:
