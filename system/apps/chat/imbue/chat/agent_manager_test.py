@@ -3771,8 +3771,8 @@ def test_a_chat_that_stops_while_streamed_is_released_at_the_first_observe_event
 def test_a_stopped_chat_read_after_its_stop_is_released_at_the_next_observe_event(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
-    """A read after the stop rebuilds the transcript the stop evicted, and no further
-    transition comes to evict it; the next observe event's release drops it."""
+    """A read after the stop rebuilds the stopped chat's transcript; with nobody streaming the
+    chat, the next observe event's release drops it again."""
     state = build_test_state(agent_manager=agent_manager)
     agent = _agent_details("read-after-stop")
     stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
