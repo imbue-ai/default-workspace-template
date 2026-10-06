@@ -827,21 +827,12 @@ def _move_placement(
 
 
 @pure
-def _placement_edit(op: LayoutOp, window_id: WindowId, is_detached: bool) -> _LayoutEdit:
-    """The edit ``minimize``, ``restore``, or ``maximize`` makes. A pulled-out window a ``minimize`` takes out of
-    sight comes back onto the desktop minimized, since minimizing it where it stands would only hide its ghost and
-    leave its own window up."""
-    match op:
-        case LayoutOp.MINIMIZE if is_detached:
-            return lambda current: with_window_minimized_on_desktop(current, window_id)
-        case LayoutOp.MINIMIZE:
-            return lambda current: with_window_minimized(current, window_id)
-        case LayoutOp.RESTORE:
-            return lambda current: with_window_restored(current, window_id)
-        case LayoutOp.MAXIMIZE:
-            return lambda current: with_window_state(current, window_id, WindowState.MAXIMIZED)
-        case _:
-            raise LayoutOpError(f"Op {op!r} sets no placement")
+def _minimize_edit(window_id: WindowId, is_detached: bool) -> _LayoutEdit:
+    """The edit ``minimize`` makes. A pulled-out window it takes out of sight comes back onto the desktop minimized,
+    since minimizing it where it stands would only hide its ghost and leave its own window up."""
+    if is_detached:
+        return lambda current: with_window_minimized_on_desktop(current, window_id)
+    return lambda current: with_window_minimized(current, window_id)
 
 
 def _op_window(
@@ -861,9 +852,29 @@ def _op_window(
                 desktop, target.client_id, lambda current: with_window_raised(current, window.id)
             )
             return window.id, _PopOutNotes(is_brought_back=is_detached)
-        case LayoutOp.MINIMIZE | LayoutOp.RESTORE | LayoutOp.MAXIMIZE:
-            edit = _placement_edit(op, window.id, is_detached)
+        case LayoutOp.MINIMIZE:
+            edit = _minimize_edit(window.id, is_detached)
             return window.id, _move_placement(shell, op, target, window.id, is_detached, edit, arguments.force)
+        case LayoutOp.RESTORE:
+            return window.id, _move_placement(
+                shell,
+                op,
+                target,
+                window.id,
+                is_detached,
+                lambda current: with_window_restored(current, window.id),
+                arguments.force,
+            )
+        case LayoutOp.MAXIMIZE:
+            return window.id, _move_placement(
+                shell,
+                op,
+                target,
+                window.id,
+                is_detached,
+                lambda current: with_window_state(current, window.id, WindowState.MAXIMIZED),
+                arguments.force,
+            )
         case LayoutOp.CLOSE:
             if window.is_pinned:
                 raise LayoutOpError(f"window {window.id} is pinned and cannot be closed; minimize it instead")
