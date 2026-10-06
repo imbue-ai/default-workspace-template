@@ -3692,8 +3692,7 @@ class AgentManager:
 
         # An archived member dying drops only its own transcript. A chat whose active agent died
         # is left to the release, which spares a chat whose stream is open: that stream is fed
-        # only by the chat's watcher, and a death the observer reports can be a moment in a
-        # live agent's rename.
+        # only by the chat's watcher, and a reported death can be momentary.
         with self._lock:
             dead_archived_member_ids = [
                 agent_id for agent_id in newly_dead_ids if self._is_archived_member_locked(agent_id)

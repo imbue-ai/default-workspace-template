@@ -3742,9 +3742,8 @@ def test_a_chat_nobody_streams_is_released_at_the_observe_event_reporting_its_st
 
 
 def test_a_streamed_chat_keeps_streaming_through_a_momentary_stop(agent_manager: AgentManager, tmp_path: Path) -> None:
-    """The observer can report a live agent dead for a moment (a rename moves its tmux session before its
-    data.json), and the open stream is fed only by the chat's watcher, so the watcher has to outlive the
-    report or the page silently stops receiving events."""
+    """The observer can report a live agent dead for a moment, and the open stream is fed only by the
+    chat's watcher, so the watcher has to outlive the report or the page silently stops receiving events."""
     state = build_test_state(agent_manager=agent_manager)
     agent = _agent_details("renamed-mid-turn")
     stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
