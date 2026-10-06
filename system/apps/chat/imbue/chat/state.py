@@ -93,7 +93,8 @@ class ChatAppState(MutableModel):
     secret_request_bridge: SecretRequestChatBridge | None = None
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
-    # one and dropped with the chat (``stop_and_remove_watcher``), so a chat that is not
+    # one and dropped with the chat (``stop_and_remove_watcher``, or
+    # ``release_unviewed_stopped_transcripts`` for a stopped one), so a chat that is not
     # being read holds none of its history resident.
     loaders: dict[str, TranscriptLoader] = {}
     latchkey_catalog_cache: dict[str, Any] = {}
@@ -198,7 +199,8 @@ class ChatAppState(MutableModel):
 
         The read side of the agent's watcher with nothing live: an archived segment of a chat
         is read through this (``chat_transcript.py``). Cached beside the watchers, under the
-        same lock, and dropped with the chat by ``stop_and_remove_watcher``.
+        same lock, and dropped with the chat by ``stop_and_remove_watcher`` or, for a stopped
+        chat, ``release_unviewed_stopped_transcripts``.
         """
         with self._watchers_lock:
             existing = self.loaders.get(agent_info.id)
