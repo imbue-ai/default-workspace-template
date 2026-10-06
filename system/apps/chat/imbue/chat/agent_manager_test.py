@@ -105,6 +105,7 @@ from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
+from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
@@ -3680,25 +3681,6 @@ def test_remove_agent_evicts_the_watcher(agent_manager: AgentManager) -> None:
     assert evicted == [str(agent.id)]
 
 
-def _claude_transcript_agent_info(tmp_path: Path, agent_id: str) -> tuple[AgentInfo, Path]:
-    """A claude agent whose transcript holds one user message, and the session file to append more to."""
-    agent_state_dir = tmp_path / agent_id / "agent_state"
-    agent_state_dir.mkdir(parents=True)
-    claude_config_dir = tmp_path / agent_id / "claude_config"
-    session_file = claude_config_dir / "projects" / "hash123" / "s1.jsonl"
-    session_file.parent.mkdir(parents=True)
-    _append_claude_user_message(session_file, "u1", "hello")
-    (agent_state_dir / "claude_session_id_history").write_text("s1\n")
-    agent_info = AgentInfo(
-        id=agent_id,
-        name=agent_id,
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=claude_config_dir,
-    )
-    return agent_info, session_file
-
-
 def _append_claude_user_message(session_file: Path, uuid: str, content: str) -> None:
     line = {
         "type": "user",
@@ -3730,7 +3712,7 @@ def test_a_chat_nobody_streams_is_released_at_the_observe_event_reporting_its_st
     agent = _agent_details("stoppable-agent")
     stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
     agent_manager._handle_observe_event(make_agent_state_event(agent))
-    agent_info, _session_file = _claude_transcript_agent_info(tmp_path, str(agent.id))
+    agent_info, _session_file = make_agent_fixture(tmp_path, agent_id=str(agent.id))
     try:
         state.get_or_create_watcher(agent_info)
 
@@ -3748,7 +3730,7 @@ def test_a_streamed_chat_keeps_streaming_through_a_momentary_stop(agent_manager:
     agent = _agent_details("renamed-mid-turn")
     stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
     agent_manager._handle_observe_event(make_agent_state_event(agent))
-    agent_info, session_file = _claude_transcript_agent_info(tmp_path, str(agent.id))
+    agent_info, session_file = make_agent_fixture(tmp_path, agent_id=str(agent.id))
     try:
         watcher = state.get_or_create_watcher(agent_info)
         stream = state.event_queues.register(str(agent.id))
@@ -3770,7 +3752,7 @@ def test_a_chat_that_stops_while_streamed_is_released_at_the_first_observe_event
     agent = _agent_details("stopped-while-viewed")
     stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
     agent_manager._handle_observe_event(make_agent_state_event(agent))
-    agent_info, _session_file = _claude_transcript_agent_info(tmp_path, str(agent.id))
+    agent_info, _session_file = make_agent_fixture(tmp_path, agent_id=str(agent.id))
     try:
         state.get_or_create_watcher(agent_info)
         stream = state.event_queues.register(str(agent.id))
@@ -4154,8 +4136,8 @@ def _resident_recorded_chat(
     active = _agent_details("Chat-1", agent_id=MngrAgentId(second), state=AgentLifecycleState.RUNNING)
     manager._handle_observe_event(make_agent_state_event(archived))
     manager._handle_observe_event(make_agent_state_event(active))
-    state.get_or_create_loader(_claude_transcript_agent_info(tmp_path, first)[0])
-    state.get_or_create_watcher(_claude_transcript_agent_info(tmp_path, second)[0])
+    state.get_or_create_loader(make_agent_fixture(tmp_path, agent_id=first)[0])
+    state.get_or_create_watcher(make_agent_fixture(tmp_path, agent_id=second)[0])
     assert (set(state.loaders), set(state.watchers)) == ({first}, {second})
     return manager, state, active, first
 
