@@ -246,14 +246,13 @@ and its first send before then creates the chat. The first send then takes a
 reserved spare as a create with no chat id would, at once when it is up, else
 by claiming it; a first send on another account or fast mode, or to a spare
 that died, aged out, or failed, has the spare destroyed and then creates the
-chat under its id.
-Discarding the chat returns the spare to the pool, and a restart, which drops
-the chat, destroys the spare, since a reservation writes nothing to disk. The
-pool is topped up one spare at a time; with a pool larger than one, while
-another spare is still ready, 30 seconds after a hand-over, so the next boot
-does not compete with the new chat's first turn. A
-sign-in starts the spares at once, and the session sweep keeps them current: one
-whose terms went stale, that has been ready for six hours
+chat under its id. Discarding the chat returns the spare to the pool, and a
+restart, which drops the chat, destroys the spare, since a reservation writes
+nothing to disk. The pool is topped up one spare at a time; with a pool larger
+than one, while another spare is still ready, 30 seconds after a hand-over, so
+the next boot does not compete with the new chat's first turn. A sign-in starts
+the spares at once, and the session sweep keeps them current: one whose terms
+went stale, that has been ready for six hours
 (`SPARE_CHAT_MAX_AGE_SECONDS`, since it carries the date and git state its
 harness loaded at start, and may predate a code update), or whose process died
 is destroyed and replaced, and after a failed create or destroy the spares wait
