@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -14,10 +15,15 @@ _SCRIPT = Path(__file__).parent / "claude_shed_notice_hook.py"
 _NOTICE_FRAGMENT = "memory-pressure"
 
 
-def _write_agent_labels(host_dir: Path, name: str, labels: dict[str, str]) -> None:
+def _write_agent_labels(
+    host_dir: Path, name: str, labels: dict[str, str], create_time: str | None = None
+) -> None:
     agent_dir = host_dir / "agents" / "agent-id"
     agent_dir.mkdir(parents=True, exist_ok=True)
-    (agent_dir / "data.json").write_text(json.dumps({"name": name, "labels": labels}))
+    record: dict[str, object] = {"name": name, "labels": labels}
+    if create_time is not None:
+        record["create_time"] = create_time
+    (agent_dir / "data.json").write_text(json.dumps(record))
 
 
 def _run_hook(tmp_path: Path, agent_name: str) -> str:
@@ -70,3 +76,21 @@ def test_a_spare_started_under_a_shed_agents_name_is_not_told(
     append_shed_record(pid=4244, comm="claude", agent_name="Chat-3", is_worker=False)
 
     assert _NOTICE_FRAGMENT in _run_hook(tmp_path, "Chat-3")
+
+
+def test_an_agent_created_after_a_shed_under_its_name_is_not_told(
+    tmp_path: Path, runtime: Path
+) -> None:
+    """A destroyed spare's name passes to the next agent minted under it, which may
+    be an ordinary chat; a record older than that agent is the earlier one's. A shed
+    of the agent itself, after its creation, is reported."""
+    append_shed_record(pid=4245, comm="claude", agent_name="Chat-4", is_worker=False)
+    created = datetime.now(timezone.utc).isoformat()
+    _write_agent_labels(tmp_path / "host", "Chat-4", {"user_created": "true"}, created)
+
+    assert _run_hook(tmp_path, "Chat-4") == ""
+    assert not has_pending_shed("Chat-4")
+
+    append_shed_record(pid=4246, comm="claude", agent_name="Chat-4", is_worker=False)
+
+    assert _NOTICE_FRAGMENT in _run_hook(tmp_path, "Chat-4")

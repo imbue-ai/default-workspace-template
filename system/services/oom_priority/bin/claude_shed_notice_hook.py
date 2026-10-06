@@ -8,11 +8,12 @@ records naming this agent that have not yet been acknowledged, prints a notice
 (SessionStart stdout becomes session context), and appends a delivery marker so
 the same notice is not injected again.
 
-An agent still labelled a spare chat agent (``chat_spare=true``) is never a
-revived one: the chat app destroys a spare whose process died and starts a new
-one, often under the same name (the first free "Chat N", or the name of the chat
-it is reserved for). Records under its name belong to an earlier agent, so they
-are acknowledged without the notice.
+Records name an agent, and a name outlives its agent: the chat app destroys a
+shed spare chat agent, and the next agent minted under its "Chat N" (a new chat,
+or the spare's replacement) inherits the name. A record older than the agent's
+own creation is an earlier agent's, and so is every record under an agent still
+labelled a spare (``chat_spare=true``), which is never a revived one; those are
+acknowledged without the notice.
 
 Self-contained beyond the stdlib-only ``oom_priority`` package (imported via a
 ``sys.path`` insert), since claude runs SessionStart hooks under a plain
@@ -25,12 +26,24 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from oom_priority.agent_identity import is_spare_agent
+from oom_priority.agent_identity import agent_created_at, is_spare_agent
 from oom_priority.ledger import (
     append_notice_delivered,
+    format_timestamp,
     pending_shed_timestamps,
     read_records,
 )
+
+
+def _is_own_shed_pending(agent_name: str, pending: list[str]) -> bool:
+    """Whether any of ``pending`` is a shed of the agent now under ``agent_name``,
+    rather than of an earlier agent that had the name."""
+    if is_spare_agent(agent_name):
+        return False
+    created_at = agent_created_at(agent_name)
+    if created_at is None:
+        return True
+    return max(pending) >= format_timestamp(created_at)
 
 
 def main() -> None:
@@ -40,7 +53,7 @@ def main() -> None:
     pending = pending_shed_timestamps(read_records(), agent_name)
     if not pending:
         return
-    if is_spare_agent(agent_name):
+    if not _is_own_shed_pending(agent_name, pending):
         append_notice_delivered(agent_name, max(pending))
         return
 

@@ -290,9 +290,11 @@ a protected one.
   inputs, which also leaves `badness_kib` null; null when earlyoom did not
   report them). Read by the revival-notice hook
   (`system/services/oom_priority/bin/claude_shed_notice_hook.py`) and the launch-task report poll.
-  The hook tells an agent still labelled a spare chat agent nothing: the chat
-  app replaces a shed spare with a new one, often under the same name, so a
-  record under that name is an earlier agent's. It marks the record delivered.
+  Records go by name, and the chat app destroys a shed spare chat agent and
+  mints the next agent (a new chat, or the spare's replacement) under its name,
+  so the hook tells an agent nothing of a record older than its own
+  `create_time`, or of any record while it is still labelled a spare: those are
+  an earlier agent's. It marks them delivered.
 - **Agent-pid registry** (`data/.state/oom_priority/agent_pids/<pid>.json`): written
   by the launch wrapper (`system/services/oom_priority/bin/agent_oom_launch.py`), read by the kill hook.
 

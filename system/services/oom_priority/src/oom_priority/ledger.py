@@ -34,9 +34,14 @@ RECORD_TYPE_PROCESS_SHED: Final[str] = "process_shed"
 RECORD_TYPE_NOTICE_DELIVERED: Final[str] = "notice_delivered"
 
 
+def format_timestamp(moment: datetime) -> str:
+    """``moment`` as the ledger's sortable UTC ISO 8601 string (microsecond precision)."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def now_timestamp() -> str:
     """Current UTC time as a sortable ISO 8601 string (microsecond precision)."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return format_timestamp(datetime.now(timezone.utc))
 
 
 def _append(record: dict) -> None:

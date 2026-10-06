@@ -22,6 +22,7 @@ plain ``python3``.
 import json
 import os
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 
@@ -32,13 +33,9 @@ WORKER_LABEL: Final[str] = "agent_created"
 SPARE_LABEL: Final[str] = "chat_spare"
 
 
-def _labels_for_agent(agent_name: str) -> dict | None:
-    """Return the ``labels`` dict recorded for ``agent_name``, or None.
-
-    None when the host records are unavailable, the agent is not found, or its
-    record carries no ``labels`` dict -- callers treat that as "unclassified" and
-    fall back to the protected user-agent band.
-    """
+def _record_for_agent(agent_name: str) -> dict | None:
+    """Return the ``data.json`` record mngr keeps for ``agent_name``, or None when
+    the host records are unavailable or the agent is not found."""
     host_dir = os.environ.get("MNGR_HOST_DIR", "")
     if not host_dir:
         return None
@@ -53,11 +50,37 @@ def _labels_for_agent(agent_name: str) -> dict | None:
             data = json.loads(data_path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        if data.get("name") != agent_name:
-            continue
-        labels = data.get("labels")
-        return labels if isinstance(labels, dict) else None
+        if isinstance(data, dict) and data.get("name") == agent_name:
+            return data
     return None
+
+
+def _labels_for_agent(agent_name: str) -> dict | None:
+    """Return the ``labels`` dict recorded for ``agent_name``, or None.
+
+    None when the host records are unavailable, the agent is not found, or its
+    record carries no ``labels`` dict -- callers treat that as "unclassified" and
+    fall back to the protected user-agent band.
+    """
+    data = _record_for_agent(agent_name)
+    labels = None if data is None else data.get("labels")
+    return labels if isinstance(labels, dict) else None
+
+
+def agent_created_at(agent_name: str) -> datetime | None:
+    """When mngr created the agent now named ``agent_name`` (its ``create_time``).
+
+    None when the record is unavailable, or carries no parseable time. Tells a
+    record about an earlier agent of the same name from one about this agent.
+    """
+    data = _record_for_agent(agent_name)
+    create_time = None if data is None else data.get("create_time")
+    if not isinstance(create_time, str):
+        return None
+    try:
+        return datetime.fromisoformat(create_time)
+    except ValueError:
+        return None
 
 
 def is_label_true(labels: Mapping[str, object], label: str) -> bool:

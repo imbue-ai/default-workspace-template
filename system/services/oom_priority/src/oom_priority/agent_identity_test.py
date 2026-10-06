@@ -1,9 +1,11 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from oom_priority.agent_identity import (
+    agent_created_at,
     is_chat_agent,
     is_primary_agent,
     is_spare_agent,
@@ -118,3 +120,23 @@ def test_chat_spare_label_is_a_spare(
     _write_agent(tmp_path, "id-3", "chat-5", {"user_created": "true"})
     assert is_spare_agent("chat-5") is False
     assert is_spare_agent("missing") is False
+
+
+def test_agent_created_at_reads_mngrs_create_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    agent_dir = tmp_path / "agents" / "id-1"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "data.json").write_text(
+        json.dumps(
+            {"name": "chat-6", "create_time": "2026-10-06T21:54:10.123456+00:00"}
+        )
+    )
+    assert agent_created_at("chat-6") == datetime(
+        2026, 10, 6, 21, 54, 10, 123456, tzinfo=timezone.utc
+    )
+    # No record, or one with no time, says nothing about when the agent began.
+    _write_agent(tmp_path, "id-2", "chat-7", {"user_created": "true"})
+    assert agent_created_at("chat-7") is None
+    assert agent_created_at("missing") is None
