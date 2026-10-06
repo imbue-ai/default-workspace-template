@@ -85,7 +85,7 @@ background agent, which is its own chat -- or the human).
   output, not the tab. The daemon serves the shell's app contract module from
   its own origin (`/_static/app_contract.js`, the shell's build output; a
   cross-origin module import carries no cookie and the forwarder refuses it),
-  which the viewer, when framed, imports to report `/?session=<name>` and
+  which the viewer imports and, when framed, uses to report `/?session=<name>` and
   `Browser N` as its location; it declares no navigation capability, since a
   session switch is a whole new stream, so the shell reloads the frame to move it.
   Every viewer shares the browser's one stream and its size, so a framed viewer
