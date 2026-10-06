@@ -26,6 +26,7 @@ from imbue.mngr.api.list import list_agents
 from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.message import send_key_chord_to_agents
 from imbue.mngr.api.message import send_message_to_agents
+from imbue.mngr.api.providers import close_provider_instances_for_context
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.data_types import PluginConfigT
 from imbue.mngr.config.loader import load_config
@@ -35,6 +36,7 @@ from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.utils.env_utils import parse_env_file
+from imbue.mngr_autocompact.manager import compact_stale_agents_by_name
 
 logger = _loguru_logger
 
@@ -92,6 +94,26 @@ def read_plugin_config(name: str, config_type: type[PluginConfigT]) -> PluginCon
         return mngr_ctx.get_plugin_config(name, config_type)
     finally:
         cg.__exit__(None, None, None)
+
+
+def compact_stale_agents_named(names: Sequence[str]) -> list[str]:
+    """Ask mngr's autocompact plugin to compact whichever of the named agents are stale; returns the names it compacted.
+
+    A name that no longer resolves to a running agent with compaction support is skipped by the
+    plugin rather than raised, since a chat can stop between being listed and this call.
+
+    mngr caches provider instances per context, and this builds a fresh context on every call (the
+    sweep's once a minute), so the context's instances are closed before it is dropped.
+    """
+    mngr_ctx, cg = _get_mngr_context()
+    try:
+        compacted = compact_stale_agents_by_name(mngr_ctx, [AgentName(name) for name in names])
+    finally:
+        try:
+            close_provider_instances_for_context(mngr_ctx)
+        finally:
+            cg.__exit__(None, None, None)
+    return [str(name) for name in compacted]
 
 
 def _read_claude_config_dir_from_env(env_file: Path) -> Path | None:

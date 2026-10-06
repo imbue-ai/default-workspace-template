@@ -1,0 +1,11 @@
+Turn on idle compaction for chats, with a per-chat and per-workspace toggle, and run its sweep in process.
+
+- **Idle compaction on by default:** The template's `.mngr/settings.toml` sets `[plugins.autocompact] mode = "proactive_timer"`, so an opted-in, idle chat above the plugin's token threshold is compacted just before its prompt cache expires. The plugin's other keys stay at their defaults. One workspace can turn it off with `mngr config set --scope local plugins.autocompact.mode disabled`; the sweep re-reads the mode every tick.
+
+- **Per-chat toggle:** Each chat keeps its setting in its folder (`autocompact.json`), copied from the workspace default (`autocompact_default` in `/api/settings`, initially on) at its first launch, so it travels across handoffs and rebinds like fast mode. A chat created before this change reads the workspace default until its toggle is changed. `GET` and `PUT /api/chats/<chat_id>/autocompact` read and replace it (`{"is_enabled": true}`), answering 404 for an unknown chat and 400 for a bad body.
+
+- **`autocompact` agent label:** A chat's agents carry `autocompact=on|off`, stamped at create and handoff and rewritten by `mngr label` when the toggle changes (a stopped agent is relabeled too), so `mngr list` shows the setting. `autocompact` is now a label only the app sets.
+
+- **In-process sweep:** The 60-second sweep calls the autocompact plugin's `compact_stale_agents_by_name` in process instead of launching `mngr autocompact run`, passing only the running chats that have the toggle on. With none opted in it does no work at all (no config read, no plugin call). A failed config read or plugin call is logged as a warning, an unexpected error is logged without stopping the sweep, a tick is skipped while the previous sweep still runs, and a sweep slower than 30 seconds logs a warning. Each compaction request and toggle change writes one `autocompact: ...` line to the chat service log.
+
+- **Settings and catalog for the UI:** `/api/settings` gains `autocompact_default`, `is_autocompact_notice_shown`, and `compaction_status_presentation` (`strip`, `placeholder` or `both`, a temporary switch for the compaction-status design review). Each `/api/harnesses` entry gains `supports_compaction` (Claude, Codex, Pi) and `can_interrupt_compaction` (Claude only).

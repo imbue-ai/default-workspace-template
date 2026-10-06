@@ -43,6 +43,9 @@ from imbue.chat.agent_manager import launch_role_templates
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.chat_autocompact import ChatAutocompactState
+from imbue.chat.chat_autocompact import read_autocompact_state
+from imbue.chat.chat_autocompact import write_autocompact_state
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
@@ -465,6 +468,40 @@ def test_a_new_chat_takes_the_workspaces_default_fast_mode_and_keeps_it_in_its_f
     assert manager.get_fast_mode_state(ChatId(created.chat_id)).mode is FastModeMode.OFF
 
 
+@pytest.mark.parametrize(("is_default_on", "expected_label"), [(True, "autocompact=on"), (False, "autocompact=off")])
+def test_a_new_chat_is_labeled_with_the_workspaces_default_idle_compaction_and_keeps_it_in_its_folder(
+    is_default_on: bool,
+    expected_label: str,
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    settings = ChatSettingsStore(path=None)
+    settings.write(ChatSettings(autocompact_default=is_default_on))
+    manager = AgentManager.build(
+        broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats", chat_settings=settings
+    )
+    try:
+        created = manager.create_chat("", message="hello")
+        wait_until_true(
+            lambda: manager.get_provisional_chat(created.chat_id) is None, 10, "the provisional chat's completion"
+        )
+        # A later change of the default leaves this chat where it was.
+        settings.write(ChatSettings(autocompact_default=not is_default_on))
+        state = manager.get_autocompact_state(ChatId(created.chat_id))
+        agent = manager.get_agent_by_id(created.chat_id)
+    finally:
+        manager.stop()
+
+    (argv_line,) = argv_log.read_text().splitlines()
+    assert f"--label {expected_label}" in argv_line
+    assert state == ChatAutocompactState(is_enabled=is_default_on)
+    assert agent is not None and f"autocompact={agent.labels['autocompact']}" == expected_label
+
+
 def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -486,6 +523,33 @@ def test_a_handoffs_successor_starts_fast_only_when_the_chats_mode_calls_for_it(
         assert "fast" not in manager._build_successor_create_command(spec)
         manager.set_fast_mode_state(chat_id, ChatFastModeState(mode=FastModeMode.ON))
         assert "fast" in manager._build_successor_create_command(spec)
+    finally:
+        manager.stop()
+
+
+def test_a_handoffs_successor_is_labeled_with_the_chats_idle_compaction_setting(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    try:
+        chat_id = ChatId("agent-compactchat")
+        spec = SuccessorCreateSpec(
+            name="Chat 1",
+            chat_id=chat_id,
+            agent_id="agent-next",
+            harness=HarnessType.CLAUDE,
+            project_id="",
+            account_id="acct-1",
+            extra_labels=("chat_id=agent-compactchat", "chat_seq=2"),
+        )
+        # No setting of its own: the workspace default (on).
+        argv = manager._build_successor_create_command(spec)
+        assert_mngr_argv_valid(argv)
+        labels = [argv[i + 1] for i, token in enumerate(argv) if token == "--label"]
+        assert labels[-3:] == ["chat_id=agent-compactchat", "chat_seq=2", "autocompact=on"]
+        manager.set_autocompact_state(chat_id, ChatAutocompactState(is_enabled=False))
+        argv = manager._build_successor_create_command(spec)
+        assert argv[-2:] == ["--label", "autocompact=off"]
     finally:
         manager.stop()
 
@@ -992,6 +1056,12 @@ def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
     assert pushed["labels"] == {"auto_open": "true"}
     assert pushed["is_installation_check_skipped"] is True
     assert pushed["message"] == "/update-self"
+
+
+def test_create_chat_refuses_a_callers_autocompact_label(agent_manager: AgentManager) -> None:
+    """The chat's idle compaction setting is the app's to label, from the chat's folder."""
+    with pytest.raises(AgentCreationError, match="autocompact"):
+        agent_manager.create_chat("", labels={"autocompact": "off"})
 
 
 def test_create_chat_refuses_a_label_the_app_sets_itself(agent_manager: AgentManager) -> None:
@@ -2272,23 +2342,125 @@ def _events_status_detail(manager: AgentManager) -> str:
     return manager.get_agent_events_status().detail
 
 
-def test_get_running_chat_agent_names_excludes_dead_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:
-    """Only running chats are autocompacted: workers, primary, and dead chats are excluded."""
-    manager = AgentManager.build(broadcaster)
+def _seed_sweep_candidates(manager: AgentManager) -> None:
+    for agent_id, state, labels in (
+        ("chat-running", "RUNNING", {"user_created": "true"}),
+        ("chat-waiting", "WAITING", {"user_created": "true"}),
+        ("chat-dead", "DEAD", {"user_created": "true"}),
+        ("chat-stopped", "STOPPED", {"user_created": "true"}),
+        ("worker-running", "RUNNING", {"agent_created": "true"}),
+        ("primary-running", "RUNNING", {"is_primary": "true"}),
+    ):
+        seed_agent_state(manager, agent_id, name=f"{agent_id}-name", state=state, labels=labels)
+
+
+def test_opted_in_chat_agents_exclude_dead_workers_primary_and_opted_out_chats(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """Only running chats with idle compaction on are swept; a chat with no setting reads the default (on)."""
+    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
     try:
+        _seed_sweep_candidates(manager)
+        assert manager.get_opted_in_running_chat_agent_names() == ["chat-running-name", "chat-waiting-name"]
+
+        manager.set_autocompact_state(ChatId("chat-waiting"), ChatAutocompactState(is_enabled=False))
+
+        assert manager.get_opted_in_running_chat_agent_names() == ["chat-running-name"]
+    finally:
+        manager.stop()
+
+
+def test_with_the_default_off_only_chats_that_turned_idle_compaction_on_are_swept(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    settings = ChatSettingsStore(path=None)
+    settings.write(ChatSettings(autocompact_default=False))
+    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats", chat_settings=settings)
+    try:
+        _seed_sweep_candidates(manager)
+        assert manager.get_opted_in_running_chat_agent_names() == []
+
+        write_autocompact_state(tmp_path / "chats" / "chat-running", ChatAutocompactState(is_enabled=True))
+
+        assert manager.get_opted_in_running_chat_agent_names() == ["chat-running-name"]
+    finally:
+        manager.stop()
+
+
+def test_a_successors_agent_is_swept_by_its_chats_setting(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """A successor's setting is its chat's (the folder is the chat's), not one of its own id."""
+    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    try:
+        record = make_two_member_chat_record("agent-first", "agent-second")
         with manager._lock:
-            for agent_id, state, labels in (
-                ("chat-running", "RUNNING", {"user_created": "true"}),
-                ("chat-waiting", "WAITING", {"user_created": "true"}),
-                ("chat-dead", "DEAD", {"user_created": "true"}),
-                ("chat-stopped", "STOPPED", {"user_created": "true"}),
-                ("worker-running", "RUNNING", {"agent_created": "true"}),
-                ("primary-running", "RUNNING", {"is_primary": "true"}),
-            ):
-                manager._agents[agent_id] = AgentStateItem(
-                    id=agent_id, name=f"{agent_id}-name", state=state, labels=labels, work_dir=None
-                )
-        assert manager.get_running_chat_agent_names() == ["chat-running-name", "chat-waiting-name"]
+            manager._chat_record_by_id[record.chat_id] = record
+        seed_agent_state(manager, "agent-second", name="Chat-1-next", labels={"user_created": "true"})
+        write_autocompact_state(tmp_path / "chats" / record.chat_id, ChatAutocompactState(is_enabled=False))
+
+        assert manager.get_opted_in_running_chat_agent_names() == []
+        assert manager.get_harness_of_agent_named("Chat-1-next") == "claude"
+        assert manager.get_harness_of_agent_named("Chat-nobody") is None
+    finally:
+        manager.stop()
+
+
+def test_toggling_idle_compaction_relabels_the_chats_agent_whether_running_or_stopped(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    """A label is a metadata write, so a stopped agent is relabeled too; the file is the setting either way."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        seed_agent_state(manager, "agent-alive", name="Chat-1", state="RUNNING")
+        seed_agent_state(manager, "agent-stopped", name="Chat-2", state="STOPPED")
+
+        manager.set_autocompact_state(ChatId("agent-alive"), ChatAutocompactState(is_enabled=False))
+        manager.set_autocompact_state(ChatId("agent-stopped"), ChatAutocompactState(is_enabled=True))
+
+        assert argv_log.read_text().splitlines() == [
+            "label agent-alive --label autocompact=off",
+            "label agent-stopped --label autocompact=on",
+        ]
+        assert manager.get_autocompact_state(ChatId("agent-alive")) == ChatAutocompactState(is_enabled=False)
+        alive = manager.get_agent_by_id("agent-alive")
+        assert alive is not None and alive.labels["autocompact"] == "off"
+        toggle_logs = [record for record in loguru_records if "autocompact: toggle" in record]
+        assert toggle_logs == [
+            "INFO autocompact: toggle chat=agent-alive enabled=False",
+            "INFO autocompact: toggle chat=agent-stopped enabled=True",
+        ]
+    finally:
+        manager.stop()
+
+
+def test_toggling_a_chat_with_no_tracked_agent_writes_the_setting_and_runs_no_label(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A destroyed (untracked) agent has nothing to relabel; its next create stamps the label."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        manager.set_autocompact_state(ChatId("agent-destroyed"), ChatAutocompactState(is_enabled=False))
+
+        assert not argv_log.exists()
+        assert read_autocompact_state(tmp_path / "chats" / "agent-destroyed") == ChatAutocompactState(is_enabled=False)
+    finally:
+        manager.stop()
+
+
+def test_a_failed_relabel_is_logged_and_keeps_the_setting(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, false_binary: str, loguru_records: list[str]
+) -> None:
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary, chat_files_root=tmp_path / "chats")
+    try:
+        seed_agent_state(manager, "agent-alive", name="Chat-1", state="RUNNING")
+
+        manager.set_autocompact_state(ChatId("agent-alive"), ChatAutocompactState(is_enabled=False))
+
+        assert manager.get_autocompact_state(ChatId("agent-alive")) == ChatAutocompactState(is_enabled=False)
+        alive = manager.get_agent_by_id("agent-alive")
+        assert alive is not None and "autocompact" not in alive.labels
+        assert any(record.startswith("WARNING autocompact: could not relabel") for record in loguru_records)
     finally:
         manager.stop()
 
@@ -2296,12 +2468,7 @@ def test_get_running_chat_agent_names_excludes_dead_workers_and_primary(broadcas
 def test_agent_manager_autocompactor_custom_injection_and_lifecycle(
     broadcaster: WebSocketBroadcaster,
 ) -> None:
-    custom_compactor = ChatAutoCompactor.build(
-        list_running_chat_agent_names=lambda: [],
-        runner=lambda *args, **kwargs: FinishedProcess(
-            command=(), returncode=0, stdout="", stderr="", is_timed_out=False, is_output_already_logged=False
-        ),
-    )
+    custom_compactor = ChatAutoCompactor.build(list_opted_in_chat_agent_names=list, compact=lambda names: [])
     manager = AgentManager.build(broadcaster, autocompactor=custom_compactor)
     assert manager._autocompactor is custom_compactor
     assert manager._autocompactor._thread is None

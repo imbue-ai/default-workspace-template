@@ -342,6 +342,12 @@ class HarnessSpec(FrozenModel):
     # How the chat app asks this harness one question on a chat's account, outside the chat (a new
     # chat's name). None for a harness that cannot yet: its chats keep the name they were minted with.
     one_shot_completion_class: type[OneShotCompletion] | None = None
+    # Whether mngr can compact this harness's context (the autocompact plugin's request), which is
+    # what makes the chat's idle compaction setting meaningful for it. Shipped on the catalog.
+    supports_compaction: bool = False
+    # Whether the harness's interrupt (the stop button) cancels a compaction in progress. Where it
+    # does not, the page hides the stop button while the chat is compacting. Shipped on the catalog.
+    can_interrupt_compaction: bool = False
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -373,6 +379,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _CLAUDE_FAST_MODE_LIMIT_POPUP,
         ),
+        supports_compaction=True,
+        # Escape during a /compact cancels it (Claude Code puts /compact back into its input box).
+        can_interrupt_compaction=True,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
@@ -410,6 +419,8 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_LIMIT_POPUP,
         ),
+        supports_compaction=True,
+        can_interrupt_compaction=False,
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
@@ -437,6 +448,8 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             ),
             _MODEL_BAR_POPUP,
         ),
+        supports_compaction=True,
+        can_interrupt_compaction=False,
     ),
     # opencode is LAUNCH-ONLY: its mngr plugin can create and run an agent, but it has no
     # transcript watcher, activity tracker, model resolver or catalog of its own. It is

@@ -40,7 +40,14 @@ const getFastModeStateMock = vi.mocked(getFastModeState);
 const ensureFastModeStateMock = vi.mocked(ensureFastModeState);
 const updateFastModeStateMock = vi.mocked(updateFastModeState);
 
-const SETTINGS = { fast_mode_default: "auto" as const, fast_mode_turn_limit: 3, is_fast_mode_notice_shown: false };
+const SETTINGS = {
+  fast_mode_default: "auto" as const,
+  fast_mode_turn_limit: 3,
+  is_fast_mode_notice_shown: false,
+  autocompact_default: true,
+  compaction_status_presentation: "both" as const,
+  is_autocompact_notice_shown: false,
+};
 
 function userMsg(content: string, id: string, extra: Partial<UserMessageEvent> = {}): UserMessageEvent {
   return {

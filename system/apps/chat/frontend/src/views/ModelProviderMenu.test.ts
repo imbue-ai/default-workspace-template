@@ -41,9 +41,16 @@ vi.mock("../models/ModelSettings", () => ({
 }));
 
 // The workspace's chat settings as the page has them (null before the load), and every write
-// the fast-limit row asked for.
+// the fast-limit row and the default switches asked for.
 const { DEFAULT_CHAT_SETTINGS, chatSettingsState, settingsWrites } = vi.hoisted(() => {
-  const defaults = { fast_mode_default: "auto", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false };
+  const defaults = {
+    fast_mode_default: "auto",
+    fast_mode_turn_limit: 2,
+    is_fast_mode_notice_shown: false,
+    autocompact_default: true,
+    compaction_status_presentation: "both",
+    is_autocompact_notice_shown: false,
+  };
   return {
     DEFAULT_CHAT_SETTINGS: defaults,
     chatSettingsState: { settings: defaults as typeof defaults | null, loads: 0 },
@@ -86,6 +93,26 @@ vi.mock("./fast-mode-limit", () => ({
   },
 }));
 vi.mock("../models/Response", () => ({ getEventsForChat: () => [] }));
+
+// The chat's auto-compact setting as the page has it (null before the load), the loads asked for,
+// and every write the submenu made.
+const { autocompactState, autocompactLoads, autocompactWrites } = vi.hoisted(() => ({
+  autocompactState: { state: null as { is_enabled: boolean } | null },
+  autocompactLoads: [] as string[],
+  autocompactWrites: [] as [string, { is_enabled: boolean }][],
+}));
+vi.mock("../models/Autocompact", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Autocompact")>()),
+  getAutocompactState: () => autocompactState.state,
+  ensureAutocompactState: (chatId: string) => {
+    autocompactLoads.push(chatId);
+    return Promise.resolve(autocompactState.state);
+  },
+  setAutocompactState: (chatId: string, next: { is_enabled: boolean }) => {
+    autocompactWrites.push([chatId, next]);
+    return Promise.resolve(next);
+  },
+}));
 
 const providerState: { accounts: unknown[]; defaultId: string | null; isLoaded: boolean } = {
   accounts: [],
@@ -193,6 +220,8 @@ function catalogOf(overrides: Record<string, unknown> = {}): Record<string, unkn
     picker_mode: "list",
     options: [OPUS],
     native_atomic_shoulder_tap_possible: true,
+    supports_compaction: false,
+    can_interrupt_compaction: false,
     popups: [],
     ...overrides,
   };
@@ -214,6 +243,9 @@ beforeEach(() => {
   fastModeState.state = { mode: "auto", is_switched: false };
   fastModeLoads.length = 0;
   fastModeChoices.length = 0;
+  autocompactState.state = { is_enabled: true };
+  autocompactLoads.length = 0;
+  autocompactWrites.length = 0;
   picks.length = 0;
   started.length = 0;
   begun.length = 0;
@@ -790,7 +822,7 @@ describe("the combo card", () => {
     // limit lives.
     withFastModel();
     chatSettingsState.settings = {
-      fast_mode_default: "auto",
+      ...DEFAULT_CHAT_SETTINGS,
       fast_mode_turn_limit: 3,
       is_fast_mode_notice_shown: true,
     };
@@ -836,9 +868,7 @@ describe("the combo card", () => {
     // The field keeps what is being typed across the redraws every keystroke causes.
     expect(limit.value).toBe("3");
     limit.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(settingsWrites).toEqual([
-      { fast_mode_default: "auto", fast_mode_turn_limit: 3, is_fast_mode_notice_shown: false },
-    ]);
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, fast_mode_turn_limit: 3 }]);
 
     // An emptied field or a zero is not a limit.
     limit.value = "";
@@ -903,9 +933,7 @@ describe("the combo card", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(toggle.disabled).toBe(false);
     click("[data-fast-mode-default]");
-    expect(settingsWrites).toEqual([
-      { fast_mode_default: "on", fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false },
-    ]);
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, fast_mode_default: "on" }]);
 
     // Auto is the settings' default, so its toggle is on and has nothing left to do -- but it is
     // NOT natively disabled, which would fade the setting out at the moment it reads as set.
@@ -931,6 +959,110 @@ describe("the combo card", () => {
     if (row === null) throw new Error("no fast row");
     expect(row.textContent).toContain("...");
     expect(fastModeLoads).toContain("a1");
+  });
+
+  it("offers Auto-compact after the fast row for a harness that can be compacted, and not for one that cannot", () => {
+    withFastModel();
+    render();
+    click(".model-selector-trigger");
+    expect(document.querySelector('[data-menu-row="autocompact"]')).toBeNull();
+
+    catalogState.catalog = { ...(catalogState.catalog as Record<string, unknown>), supports_compaction: true };
+    render();
+    const row = document.querySelector<HTMLElement>('[data-menu-row="autocompact"]');
+    if (row === null) throw new Error("no auto-compact row");
+    expect(row.textContent).toContain("Auto-compact");
+    expect(row.textContent).toContain("On");
+    const rowKeys = [...document.querySelectorAll("[data-menu-row]")].map((each) =>
+      each.getAttribute("data-menu-row"),
+    );
+    expect(rowKeys.indexOf("autocompact")).toBe(rowKeys.indexOf("fast") + 1);
+
+    // It belongs to the harness, not the model: a model with no fast mode still has it.
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
+    render();
+    expect(document.querySelector('[data-menu-row="fast"]')).toBeNull();
+    expect(document.querySelector('[data-menu-row="autocompact"]')).not.toBeNull();
+  });
+
+  it("turns auto-compact off for the chat from its submenu, which stays up", () => {
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="autocompact"]');
+    const submenu = document.querySelector<HTMLElement>('[data-menu-part="submenu"]');
+    if (submenu === null) throw new Error("no auto-compact submenu");
+    expect(submenu.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Auto-compact");
+    expect(submenu.querySelector('[data-autocompact="on"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(submenu.querySelector('[data-autocompact="off"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(submenu.querySelector(".autocompact-help")?.textContent).toBe(
+      "Saves ~50% by compacting right before the cache expires.",
+    );
+
+    click('[data-autocompact="on"]');
+    expect(autocompactWrites).toEqual([]);
+    click('[data-autocompact="off"]');
+    expect(autocompactWrites).toEqual([["a1", { is_enabled: false }]]);
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).not.toBeNull();
+  });
+
+  it("makes the chat's auto-compact choice the one new chats start with, and says when it already is", () => {
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    autocompactState.state = { is_enabled: false };
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="autocompact"]');
+    expect(document.querySelector(".autocompact-default")?.textContent).toContain("Use Off for new chats");
+    const toggle = document.querySelector<HTMLButtonElement>("[data-autocompact-default]");
+    if (toggle === null) throw new Error("no default toggle");
+    expect(toggle.getAttribute("aria-label")).toBe("Use Off for new chats");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.disabled).toBe(false);
+    click("[data-autocompact-default]");
+    expect(settingsWrites).toEqual([{ ...DEFAULT_CHAT_SETTINGS, autocompact_default: false }]);
+
+    // On is the settings' default, so its toggle is on and inert, but not natively disabled.
+    autocompactState.state = { is_enabled: true };
+    render();
+    expect(document.querySelector(".autocompact-default")?.textContent).toContain("Use On for new chats");
+    const already = document.querySelector<HTMLButtonElement>("[data-autocompact-default]");
+    if (already === null) throw new Error("no default toggle");
+    expect(already.getAttribute("aria-checked")).toBe("true");
+    expect(already.getAttribute("aria-disabled")).toBe("true");
+    expect(already.disabled).toBe(false);
+    click("[data-autocompact-default]");
+    expect(settingsWrites).toHaveLength(1);
+  });
+
+  it("asks for the chat's auto-compact setting and shows the row unresolved until it is known", () => {
+    catalogState.catalog = catalogOf({ supports_compaction: true });
+    autocompactState.state = null;
+    render();
+    click(".model-selector-trigger");
+    const row = document.querySelector<HTMLElement>('[data-menu-row="autocompact"]');
+    if (row === null) throw new Error("no auto-compact row");
+    expect(row.textContent).toContain("...");
+    expect(autocompactLoads).toContain("a1");
+
+    // The submenu reads the workspace default until the chat's own setting arrives.
+    chatSettingsState.settings = { ...DEFAULT_CHAT_SETTINGS, autocompact_default: false };
+    click('[data-menu-row="autocompact"]');
+    expect(document.querySelector('[data-autocompact="off"]')?.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("states auto-compact on a read-only harness without a submenu to open", () => {
+    catalogState.catalog = catalogOf({ switch_mode: "read_only", supports_compaction: true });
+    autocompactState.state = { is_enabled: false };
+    render();
+    click(".model-selector-trigger");
+    const row = document.querySelector<HTMLElement>('[data-menu-row="autocompact"]');
+    if (row === null) throw new Error("no auto-compact row");
+    expect(row.textContent).toContain("Off");
+    expect(row.querySelector("svg")).toBeNull();
+    click('[data-menu-row="autocompact"]');
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
   it("gives a read-only harness no model list to open", () => {

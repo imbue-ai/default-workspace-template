@@ -7,6 +7,7 @@ from pydantic import SecretStr
 
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_settings import ChatSettings
@@ -162,6 +163,12 @@ class FastModeStateResponse(FrozenModel):
     """Response from GET and PUT /api/chats/<chat_id>/fast-mode: the chat's fast mode."""
 
     state: ChatFastModeState = Field(description="The chat's fast mode")
+
+
+class AutocompactStateResponse(FrozenModel):
+    """Response from GET and PUT /api/chats/<chat_id>/autocompact: the chat's idle compaction setting."""
+
+    state: ChatAutocompactState = Field(description="The chat's idle compaction setting")
 
 
 class AttachmentUploadResponse(FrozenModel):
@@ -594,7 +601,7 @@ class CreateChatRequest(FrozenModel):
         default_factory=dict,
         description="Extra labels for the chat's agent (an ``auto_open`` that surfaces its window, say); "
         "the labels the app sets itself (``APP_OWNED_LABEL_KEYS``: ``user_created``, ``display_name``, "
-        "``account``, ``project``, ``chat_id``, ``chat_seq``) are refused, and a chat minted "
+        "``account``, ``project``, ``chat_id``, ``chat_seq``, ``autocompact``) are refused, and a chat minted "
         "earlier keeps the ones it was minted with",
     )
     is_installation_check_skipped: bool = Field(

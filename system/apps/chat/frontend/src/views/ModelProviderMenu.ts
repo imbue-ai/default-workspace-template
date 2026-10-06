@@ -21,6 +21,9 @@
  * (`components/menu`), not this file's. What this file owns is the rows and the data behind
  * them.
  *
+ * Auto-compact is the one row that belongs to the HARNESS rather than the model: shown whenever
+ * the chat's harness can be compacted while idle, whatever model it runs.
+ *
  * In the phone layout (`isCompact`) the same menu opens from a settings button at the left of
  * the composer instead of the chip under it, and draws the same rows on a sliding track
  * (`slidingMenuTrack.ts`): submenus slide in over the card instead of flying out beside it,
@@ -43,6 +46,13 @@ import {
   fastModeLabel,
   getFastModeState,
 } from "../models/FastMode";
+import type { ChatAutocompactState } from "../models/Autocompact";
+import {
+  autocompactLabel,
+  ensureAutocompactState,
+  getAutocompactState,
+  setAutocompactState,
+} from "../models/Autocompact";
 import {
   DEFAULT_CHAT_SETTINGS,
   ensureChatSettings,
@@ -643,6 +653,94 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     ];
   }
 
+  /** What the Auto-compact row reads, loading the chat's setting the first time it is asked for. */
+  function autocompactValue(chatId: string): string {
+    const state = getAutocompactState(chatId);
+    if (state === null) {
+      void ensureAutocompactState(chatId);
+      return "...";
+    }
+    return autocompactLabel(state.is_enabled);
+  }
+
+  /** The Auto-compact row's submenu: on or off for this chat, what it is for, and a way to make
+   *  the chat's choice what new chats start with. Laid out as the Fast Mode submenu is, and for the
+   *  same reasons: a choice applies at once and the submenu stays up. */
+  function autocompactSubmenu(chatId: string): m.Children {
+    const settings = getChatSettings();
+    if (settings === null) void ensureChatSettings();
+    const known = getAutocompactState(chatId);
+    if (known === null) void ensureAutocompactState(chatId);
+    const effective = settings ?? DEFAULT_CHAT_SETTINGS;
+    const state: ChatAutocompactState = known ?? { is_enabled: effective.autocompact_default };
+    const isDefault = effective.autocompact_default === state.is_enabled;
+    const defaultLabel = `Use ${autocompactLabel(state.is_enabled)} for new chats`;
+    return [
+      m(
+        "div",
+        { class: "autocompact-options", role: "radiogroup", "aria-label": "Auto-compact" },
+        [true, false].map((isEnabled) => {
+          const isCurrent = state.is_enabled === isEnabled;
+          return m(
+            "button",
+            {
+              type: "button",
+              key: String(isEnabled),
+              role: "radio",
+              "aria-checked": isCurrent ? "true" : "false",
+              "data-autocompact": isEnabled ? "on" : "off",
+              class: isCurrent ? css.SUBMENU_ROW_SELECTED : css.SUBMENU_ROW,
+              onclick: () => {
+                if (isCurrent) return;
+                void setAutocompactState(chatId, { is_enabled: isEnabled });
+              },
+            },
+            [
+              m("span", { class: css.SUBMENU_ROW_NAME }, autocompactLabel(isEnabled)),
+              isCurrent
+                ? m("span", { class: css.SUBMENU_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+                : null,
+            ],
+          );
+        }),
+      ),
+      m(
+        "p",
+        { class: "autocompact-help px-3 py-1.5 type-helper text-faint" },
+        "Saves ~50% by compacting right before the cache expires.",
+      ),
+      m("div", { role: "separator", class: menuDividerClass() }),
+      // The same switch as the Fast Mode submenu's: it reads "new chats start with the choice I am
+      // looking at", so on the choice already holding the setting it goes inert.
+      m("div", { class: `autocompact-default ${css.ROW_STATIC}` }, [
+        m("span", { class: css.ROW_LABEL }, defaultLabel),
+        m(
+          "span",
+          { class: css.ROW_VALUE_STATIC },
+          m(
+            "button",
+            {
+              type: "button",
+              role: "switch",
+              class: `${css.switchClass("sm", isDefault)} ${isDefault ? css.SWITCH_ON : css.SWITCH_OFF}`,
+              "data-autocompact-default": state.is_enabled ? "on" : "off",
+              "aria-label": defaultLabel,
+              "aria-checked": isDefault ? "true" : "false",
+              "aria-disabled": isDefault ? "true" : undefined,
+              disabled: settings === null,
+              onclick: () => {
+                const current = getChatSettings();
+                if (current === null || current.autocompact_default === state.is_enabled) return;
+                void updateChatSettings({ ...current, autocompact_default: state.is_enabled });
+              },
+            },
+            m("span", { class: css.switchKnobClass("sm", isDefault) }),
+          ),
+        ),
+      ]),
+    ];
+  }
+
   /** File a changed turn limit on the workspace's settings. An emptied field, a word, or a
    *  number below one is not a limit, and leaves the stored one alone. */
   function applyTurnLimit(typed: string): void {
@@ -1040,6 +1138,19 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                   },
             );
           }
+        }
+        if (catalog?.supports_compaction === true) {
+          rows.push(
+            readOnly
+              ? { kind: "value", key: "autocompact", label: "Auto-compact", value: autocompactValue(chatId) }
+              : {
+                  kind: "submenu",
+                  key: "autocompact",
+                  label: "Auto-compact",
+                  value: autocompactValue(chatId),
+                  content: () => autocompactSubmenu(chatId),
+                },
+          );
         }
       }
       if (isCompact && sourceView !== null) {

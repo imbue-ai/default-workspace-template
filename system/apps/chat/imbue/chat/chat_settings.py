@@ -1,4 +1,4 @@
-"""The chat app's workspace-wide settings: the fast mode a new chat starts in, and whether the user has been told.
+"""The chat app's workspace-wide settings: the fast mode and idle compaction a new chat starts with, and the notices shown.
 
 One small JSON file beside the chat app's other state (``data/.apps/chat/settings.json``),
 read on every use so an edit from another process lands without a restart, and written whole.
@@ -40,6 +40,17 @@ class FastModeMode(LowerCaseStrEnum):
     ON = auto()
 
 
+class CompactionStatusPresentation(LowerCaseStrEnum):
+    """Where the chat shows that a compaction is in progress."""
+
+    # The activity strip above the composer.
+    STRIP = auto()
+    # An inline placeholder row at the end of the conversation.
+    PLACEHOLDER = auto()
+    # Both at once.
+    BOTH = auto()
+
+
 class ChatSettings(FrozenModel):
     """What the settings file holds. Every field has a default, so an older file reads whole."""
 
@@ -55,6 +66,21 @@ class ChatSettings(FrozenModel):
     is_fast_mode_notice_shown: bool = Field(
         default=False,
         description="Whether the one-time notice explaining the first automatic switch to standard speed has been shown",
+    )
+    autocompact_default: bool = Field(
+        default=True,
+        description="Whether a new chat starts with idle compaction on",
+    )
+    # CLEANUP: this field exists so the compaction-status design review can compare the
+    # presentations; once the review picks one, remove the field, its enum, and the
+    # presentation the review did not pick.
+    compaction_status_presentation: CompactionStatusPresentation = Field(
+        default=CompactionStatusPresentation.BOTH,
+        description="Where the chat shows that a compaction is in progress",
+    )
+    is_autocompact_notice_shown: bool = Field(
+        default=False,
+        description="Whether the one-time notice explaining idle compaction has been shown",
     )
 
 

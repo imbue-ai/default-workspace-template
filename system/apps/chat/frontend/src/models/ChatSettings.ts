@@ -1,13 +1,20 @@
 /**
  * The workspace-wide chat settings (the backend's ``ChatSettings``, at ``/api/settings``): the fast
- * mode a new chat starts in, how many of the user's turns a chat in auto mode runs fast for, and
- * whether the user has been told about the first automatic switch to standard speed. One copy
- * per page, loaded on demand and replaced whole by every write.
+ * mode a new chat starts in, how many of the user's turns a chat in auto mode runs fast for,
+ * whether the user has been told about the first automatic switch to standard speed, whether a
+ * new chat is compacted while idle, how a compaction in progress is shown, and whether the user
+ * has been told about idle compaction. One copy per page, loaded on demand and replaced whole by
+ * every write.
  */
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import type { FastModeMode } from "./FastMode";
+
+// CLEANUP: remove with the presentation the design review does not pick, and the setting with it.
+/** Where a compaction in progress is shown: the activity strip, an inline placeholder row in the
+ *  conversation, or both. */
+export type CompactionStatusPresentation = "strip" | "placeholder" | "both";
 
 export interface ChatSettings {
   // The fast mode a new chat starts in.
@@ -15,6 +22,10 @@ export interface ChatSettings {
   // User turns a chat in auto mode runs fast for before it is switched to standard speed.
   fast_mode_turn_limit: number;
   is_fast_mode_notice_shown: boolean;
+  // Whether a new chat starts with auto-compact on.
+  autocompact_default: boolean;
+  compaction_status_presentation: CompactionStatusPresentation;
+  is_autocompact_notice_shown: boolean;
 }
 
 /** The backend's defaults, so a page that has not loaded yet behaves as a fresh workspace would. */
@@ -22,6 +33,9 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   fast_mode_default: "auto",
   fast_mode_turn_limit: 2,
   is_fast_mode_notice_shown: false,
+  autocompact_default: true,
+  compaction_status_presentation: "both",
+  is_autocompact_notice_shown: false,
 };
 
 let settings: ChatSettings | null = null;

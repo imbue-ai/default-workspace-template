@@ -60,6 +60,12 @@ export interface HarnessCatalog {
   // pi via its inbox sentinel, codex via its live ledger); a false harness would fall back
   // to the restart-based flush.
   native_atomic_shoulder_tap_possible: boolean;
+  // Whether the chat's idle sweep can compact this harness's agents (claude, codex, pi), which is
+  // what puts the Auto-compact row in the model menu.
+  supports_compaction: boolean;
+  // Whether the stop button's interrupt cancels a compaction in progress; where it does not, the
+  // button is hidden while the agent is compacting.
+  can_interrupt_compaction: boolean;
   // The harness's declared popups plus its agent-auth surface, merged into the
   // payload from the backend HarnessSpec.
   popups: HarnessPopup[];

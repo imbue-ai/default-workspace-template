@@ -6,7 +6,14 @@ const { mockRequest, mockRedraw } = vi.hoisted(() => ({ mockRequest: vi.fn(), mo
 vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: mockRedraw } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 
-const STORED = { fast_mode_default: "auto" as const, fast_mode_turn_limit: 5, is_fast_mode_notice_shown: false };
+const STORED = {
+  fast_mode_default: "auto" as const,
+  fast_mode_turn_limit: 5,
+  is_fast_mode_notice_shown: false,
+  autocompact_default: true,
+  compaction_status_presentation: "both" as const,
+  is_autocompact_notice_shown: false,
+};
 
 /** A fresh copy of the module, its settings already loaded as STORED. */
 async function loadWithSettings(): Promise<typeof import("./ChatSettings")> {
@@ -72,7 +79,7 @@ describe("ensureChatSettings", () => {
 describe("updateChatSettings", () => {
   it("shows the new settings at once and keeps what the backend answers", async () => {
     const chatSettings = await loadWithSettings();
-    const answered = { fast_mode_default: "auto" as const, fast_mode_turn_limit: 2, is_fast_mode_notice_shown: false };
+    const answered = { ...STORED, fast_mode_turn_limit: 2 };
     mockRequest.mockResolvedValueOnce({ settings: answered });
 
     const pending = chatSettings.updateChatSettings({ ...STORED, fast_mode_turn_limit: 2 });

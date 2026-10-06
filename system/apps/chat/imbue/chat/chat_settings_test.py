@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_settings import ChatSettingsStore
+from imbue.chat.chat_settings import CompactionStatusPresentation
 from imbue.chat.chat_settings import DEFAULT_FAST_MODE_TURN_LIMIT
 from imbue.chat.chat_settings import FastModeMode
 
@@ -15,6 +16,9 @@ def test_an_absent_settings_file_reads_as_the_defaults(tmp_path: Path) -> None:
         fast_mode_default=FastModeMode.AUTO,
         fast_mode_turn_limit=DEFAULT_FAST_MODE_TURN_LIMIT,
         is_fast_mode_notice_shown=False,
+        autocompact_default=True,
+        compaction_status_presentation=CompactionStatusPresentation.BOTH,
+        is_autocompact_notice_shown=False,
     )
 
 
@@ -37,12 +41,28 @@ def test_an_unreadable_settings_file_reads_as_the_defaults(tmp_path: Path) -> No
     assert ChatSettingsStore(path=path).read() == ChatSettings()
     path.write_text('{"fast_mode_default": "sometimes"}')
     assert ChatSettingsStore(path=path).read() == ChatSettings()
+    # A presentation this build does not know (one from a newer build) reads as the defaults too.
+    path.write_text('{"autocompact_default": false, "compaction_status_presentation": "toast"}')
+    assert ChatSettingsStore(path=path).read() == ChatSettings()
 
 
 def test_an_older_file_missing_a_field_takes_that_fields_default(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     path.write_text('{"fast_mode_turn_limit": 2}')
     assert ChatSettingsStore(path=path).read() == ChatSettings(fast_mode_turn_limit=2, is_fast_mode_notice_shown=False)
+
+
+def test_a_file_from_before_idle_compaction_reads_with_it_on_and_its_notice_unshown(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text('{"fast_mode_default": "off", "fast_mode_turn_limit": 3, "is_fast_mode_notice_shown": true}')
+
+    settings = ChatSettingsStore(path=path).read()
+
+    assert settings.fast_mode_default is FastModeMode.OFF
+    assert settings.fast_mode_turn_limit == 3
+    assert settings.autocompact_default is True
+    assert settings.compaction_status_presentation is CompactionStatusPresentation.BOTH
+    assert settings.is_autocompact_notice_shown is False
 
 
 def test_a_turn_limit_below_one_is_refused() -> None:

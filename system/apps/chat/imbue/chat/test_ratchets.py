@@ -70,7 +70,7 @@ def test_prevent_broad_exception_catch() -> None:
     # same thread-boundary shape. The worker is the ONLY thing that ever delivers
     # a held message, so an escaping exception would strand every queued message
     # for the life of the process; it logs and keeps looping instead.
-    rc.check_broad_exception_catch(_DIR, snapshot(3))
+    rc.check_broad_exception_catch(_DIR, snapshot(4))
 
 
 def test_prevent_base_exception_catch() -> None:

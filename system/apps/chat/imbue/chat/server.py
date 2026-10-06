@@ -52,6 +52,7 @@ from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
+from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
@@ -99,6 +100,7 @@ from imbue.chat.models import AgentRestartError
 from imbue.chat.models import AgentStopError
 from imbue.chat.models import AttachmentError
 from imbue.chat.models import AttachmentUploadResponse
+from imbue.chat.models import AutocompactStateResponse
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatListResponse
 from imbue.chat.models import ChatSegmentInfo
@@ -720,7 +722,8 @@ def _get_harnesses_endpoint() -> Response:
 
     One response covers every harness (each catalog dumped verbatim: options,
     switch mode, picker mode, powered-by label, shoulder-tap capability, plus the
-    harness's popups and user-facing name); the frontend keys in by an agent's harness.
+    harness's popups, compaction capabilities and user-facing name); the frontend keys in
+    by an agent's harness.
 
     Every harness is always included, deliberately: what the user has signed in to
     decides what they can LAUNCH, not what the app can render. A codex or pi agent that
@@ -737,11 +740,13 @@ def _get_harnesses_endpoint() -> Response:
         except (OSError, ValueError) as e:
             logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
             continue
-        # The catalog model is the wire shape for the model bar; the popup declarations
+        # The catalog model is the wire shape for the model bar; the popup and compaction declarations
         # live on the HarnessSpec and are merged in here so one response carries
         # everything the frontend keys by harness.
         spec = get_harness_spec(harness)
         catalog["popups"] = [popup.model_dump() for popup in spec.popups]
+        catalog["supports_compaction"] = spec.supports_compaction
+        catalog["can_interrupt_compaction"] = spec.can_interrupt_compaction
         # The harness's user-facing name, from the same table the account labels and the
         # handoff prompt use, so the page names a harness the way the backend does.
         catalog["label"] = HARNESS_LABEL[harness]
@@ -855,7 +860,7 @@ def _get_powered_by_endpoint(chat_id: str) -> Response:
 
 
 def _get_settings_endpoint() -> Response:
-    """``GET /api/settings``: the workspace-wide chat settings (the fast mode a new chat starts in, its turn limit, the notice flag)."""
+    """``GET /api/settings``: the workspace-wide chat settings (what a new chat starts with, the fast-mode turn limit, the notice flags)."""
     return json_response(ChatSettingsResponse(settings=get_state().chat_settings.read()).model_dump(mode="json"))
 
 
@@ -892,11 +897,36 @@ def _put_fast_mode_endpoint(chat_id: str) -> Response:
     return json_response(FastModeStateResponse(state=state).model_dump(mode="json"))
 
 
+def _get_autocompact_endpoint(chat_id: str) -> Response:
+    """``GET /api/chats/<chat_id>/autocompact``: the chat's idle compaction setting (its own, else the workspace default)."""
+    parsed = _known_chat_or_not_found(chat_id)
+    if isinstance(parsed, Response):
+        return parsed
+    state = get_state().agent_manager.get_autocompact_state(parsed)
+    return json_response(AutocompactStateResponse(state=state).model_dump(mode="json"))
+
+
+def _put_autocompact_endpoint(chat_id: str) -> Response:
+    """``PUT /api/chats/<chat_id>/autocompact``: record the chat's idle compaction setting whole; 400 for a body that is not one."""
+    parsed = _known_chat_or_not_found(chat_id)
+    if isinstance(parsed, Response):
+        return parsed
+    body = parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    try:
+        state = ChatAutocompactState.model_validate(body)
+    except ValueError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    get_state().agent_manager.set_autocompact_state(parsed, state)
+    return json_response(AutocompactStateResponse(state=state).model_dump(mode="json"))
+
+
 def _put_settings_endpoint() -> Response:
     """``PUT /api/settings``: replace the workspace-wide chat settings whole.
 
     The body is the settings object; a field left out takes its default, and an out-of-range
-    value (a turn limit below one, an unknown fast mode) answers 400.
+    value (a turn limit below one, an unknown fast mode or compaction status presentation) answers 400.
     """
     body = parse_json_object_body()
     if isinstance(body, Response):
@@ -2149,6 +2179,13 @@ def create_application(state: ChatAppState) -> Flask:
         view_func=_put_fast_mode_endpoint,
         methods=["PUT"],
         endpoint="_put_fast_mode_endpoint",
+    )
+    application.add_url_rule("/api/chats/<chat_id>/autocompact", view_func=_get_autocompact_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/chats/<chat_id>/autocompact",
+        view_func=_put_autocompact_endpoint,
+        methods=["PUT"],
+        endpoint="_put_autocompact_endpoint",
     )
     application.add_url_rule("/api/settings", view_func=_get_settings_endpoint, methods=["GET"])
     application.add_url_rule(

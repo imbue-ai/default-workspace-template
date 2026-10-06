@@ -7,6 +7,7 @@ import pytest
 
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import _first_failure
+from imbue.chat.agent_discovery import compact_stale_agents_named
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.mngr.api.find import AgentMatch
@@ -312,3 +313,18 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     # the unknown field was reported rather than swallowed silently.
     assert agents == []
     assert any("field_from_a_newer_mngr" in record for record in loguru_records)
+
+
+def test_compacting_agents_that_no_longer_exist_compacts_nothing_and_raises_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The sweep lists its chats a moment before this call, so a name may already be gone."""
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "settings.toml").write_text(
+        'is_allowed_in_pytest = true\n[plugins.autocompact]\nmode = "proactive_timer"\n'
+    )
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
+
+    assert compact_stale_agents_named(["chat-that-was-destroyed"]) == []

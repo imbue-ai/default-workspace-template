@@ -41,6 +41,9 @@ from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.chat_autocompact import ChatAutocompactState
+from imbue.chat.chat_autocompact import read_autocompact_state
+from imbue.chat.chat_autocompact import write_autocompact_state
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
 from imbue.chat.chat_fast_mode import write_fast_mode_state
@@ -55,10 +58,12 @@ from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_handoffs import has_user_turn
+from imbue.chat.chat_handoffs import mngr_failure_reason
 from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_rebinds import RebindDeps
 from imbue.chat.chat_rebinds import RebindRunner
 from imbue.chat.chat_rebinds import rebind_cancel_refused_detail
+from imbue.chat.chat_rebinds import relabel_autocompact_command
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
 from imbue.chat.chat_records import ChatRebindRecord
@@ -182,7 +187,7 @@ SKIP_CLAUDE_INSTALLATION_CHECK_SETTING: Final[str] = "agent_types.claude.check_i
 # The labels a chat create sets from what it knows (``_build_chat_create_command`` and the
 # handoff's successor labels); a caller's extra labels may not restate them.
 APP_OWNED_LABEL_KEYS: Final[frozenset[str]] = frozenset(
-    {"user_created", "display_name", "account", "project", "chat_id", "chat_seq"}
+    {"user_created", "display_name", "account", "project", "chat_id", "chat_seq", "autocompact"}
 )
 
 # How long a create the caller waits on may run before the wait answers on its own. A
@@ -897,7 +902,7 @@ class AgentManager:
     # is protected while engaged and climbs past the worker band once it has been
     # left alone long enough.
     _oom_prioritizer: ChatOomPrioritizer
-    # Runs periodic context compaction checks (mngr autocompact run) for active chats.
+    # Runs periodic idle compaction (mngr's autocompact plugin, in process) for the opted-in chats.
     _autocompactor: ChatAutoCompactor
     # Surfaces the window of a chat created from outside with an auto-open label (the Imbue
     # Studio app's update and help chats): fed the agents that appear and go, seeded once with the
@@ -1043,8 +1048,8 @@ class AgentManager:
             autocompactor
             if autocompactor is not None
             else ChatAutoCompactor.build(
-                list_running_chat_agent_names=manager.get_running_chat_agent_names,
-                mngr_binary=mngr_binary,
+                list_opted_in_chat_agent_names=manager.get_opted_in_running_chat_agent_names,
+                harness_of_agent=manager.get_harness_of_agent_named,
             )
         )
         return manager
@@ -1510,20 +1515,35 @@ class AgentManager:
                 return False
             return bool(self._pending_permission_ids_by_agent.get(chat.active_agent_id))
 
-    def get_running_chat_agent_names(self) -> list[str]:
-        """Names of chat agents that currently have a running agent process.
+    def get_opted_in_running_chat_agent_names(self) -> list[str]:
+        """Names of the running chat agents whose chat has idle compaction on (``chat_autocompact.py``).
 
         Excludes workers (``agent_created=true``), the primary services agent
-        (``is_primary=true``), and dead/stopped agent processes.
+        (``is_primary=true``), dead/stopped agent processes, and agents whose chat
+        has idle compaction off (a chat with no setting of its own reads the workspace default).
         """
         with self._lock:
-            return [
-                agent.name
+            chat_id_by_agent_name = {
+                agent.name: self._chat_id_of_agent_locked(agent.id)
                 for agent in self._agents.values()
                 if agent.labels.get("agent_created") != "true"
                 and agent.labels.get("is_primary") != "true"
                 and not is_lifecycle_dead(agent.state)
-            ]
+            }
+        if not chat_id_by_agent_name:
+            return []
+        default_state = ChatAutocompactState(is_enabled=self._chat_settings.read().autocompact_default)
+        return [
+            name
+            for name, chat_id in chat_id_by_agent_name.items()
+            if (read_autocompact_state(self._chat_files_root / chat_id) or default_state).is_enabled
+        ]
+
+    def get_harness_of_agent_named(self, agent_name: str) -> str | None:
+        """The harness a tracked agent runs, by its name; None for a name no tracked agent has."""
+        with self._lock:
+            agent = next((agent for agent in self._agents.values() if agent.name == agent_name), None)
+        return None if agent is None else agent.harness.value
 
     # Chat-level: switches (moving a chat to another harness or account; ``chat_handoffs.py`` and
     # ``chat_rebinds.py`` run the steps).
@@ -2289,8 +2309,10 @@ class AgentManager:
         with self._lock:
             primary = self._agents.get(self._own_agent_id)
             primary_labels = dict(primary.labels) if primary else {}
-        # The chat's fast mode travels with it: a successor starts fast when the chat would.
+        # The chat's fast mode travels with it: a successor starts fast when the chat would. Its
+        # idle compaction setting is labeled on the successor the same way.
         role_templates = launch_role_templates(self.get_fast_mode_state(spec.chat_id).launches_fast)
+        autocompact_label = self.get_autocompact_state(spec.chat_id).label
         return _build_chat_create_command(
             self._mngr_binary,
             spec.name,
@@ -2301,7 +2323,7 @@ class AgentManager:
             role_templates,
             spec.project_id,
             _account_binding_args(spec.harness, spec.account_id, self._get_agent_state_dir(spec.agent_id)),
-            extra_labels=spec.extra_labels,
+            extra_labels=(*spec.extra_labels, autocompact_label),
         )
 
     def _broadcast_chat_events(self, chat_id: ChatId, events: list[dict[str, Any]]) -> None:
@@ -2920,6 +2942,45 @@ class AgentManager:
         """Record the chat's fast mode; the page applies the speed itself through the model switch."""
         write_fast_mode_state(self._chat_files_root / chat_id, state)
 
+    def get_autocompact_state(self, chat_id: ChatId) -> ChatAutocompactState:
+        """The chat's idle compaction setting (``chat_autocompact.py``): what it chose, else the workspace's default."""
+        state = read_autocompact_state(self._chat_files_root / chat_id)
+        if state is not None:
+            return state
+        return ChatAutocompactState(is_enabled=self._chat_settings.read().autocompact_default)
+
+    def set_autocompact_state(self, chat_id: ChatId, state: ChatAutocompactState) -> None:
+        """Record the chat's idle compaction setting, and relabel the chat's agent to match.
+
+        The file is what the sweep reads; the ``autocompact`` label only shows the setting in
+        ``mngr list``. A label is a metadata write, so a stopped agent is relabeled too; a chat
+        whose agent is destroyed or not yet created has nothing to relabel, and its next create
+        stamps the label. A relabel that fails is logged and leaves the setting recorded.
+        """
+        write_autocompact_state(self._chat_files_root / chat_id, state)
+        _loguru_logger.info("autocompact: toggle chat={} enabled={}", chat_id, state.is_enabled)
+        with self._lock:
+            chat = self._resolve_chat_locked(chat_id)
+            agent_id = chat.active_agent_id if chat is not None and chat.active_agent_id in self._agents else None
+        if agent_id is None:
+            return
+        try:
+            result = run_local_command_modern_version(
+                command=relabel_autocompact_command(self._mngr_binary, agent_id, state),
+                cwd=None,
+                is_checked=False,
+                timeout=_RENAME_TIMEOUT_SECONDS,
+            )
+        except (OSError, ConcurrencyGroupError) as e:
+            _loguru_logger.warning("autocompact: could not relabel agent {} of chat {}: {}", agent_id, chat_id, e)
+            return
+        if result.returncode != 0:
+            reason = mngr_failure_reason("label", result, _RENAME_TIMEOUT_SECONDS)
+            _loguru_logger.warning("autocompact: could not relabel agent {} of chat {}: {}", agent_id, chat_id, reason)
+            return
+        key, _separator, value = state.label.partition("=")
+        self._note_agent_relabeled(agent_id, {key: value})
+
     def knows_chat(self, chat_id: ChatId) -> bool:
         """Whether the id names a chat this manager lists: a running one, a recorded one, or a provisional one."""
         with self._lock:
@@ -2934,6 +2995,14 @@ class AgentManager:
         if state is None:
             state = ChatFastModeState(mode=self._chat_settings.read().fast_mode_default)
             write_fast_mode_state(self._chat_files_root / chat_id, state)
+        return state
+
+    def _autocompact_for_launch_locked(self, chat_id: ChatId) -> ChatAutocompactState:
+        """The idle compaction setting a launch labels the agent with, written to the chat's folder at first. Lock held."""
+        state = read_autocompact_state(self._chat_files_root / chat_id)
+        if state is None:
+            state = ChatAutocompactState(is_enabled=self._chat_settings.read().autocompact_default)
+            write_autocompact_state(self._chat_files_root / chat_id, state)
         return state
 
     def discard_provisional_chat(self, chat_id: str) -> bool:
@@ -3108,6 +3177,7 @@ class AgentManager:
             )
             self._provisional_chats[launched_chat_id] = provisional
             fast_mode = self._fast_mode_for_launch_locked(launched_chat_id)
+            autocompact = self._autocompact_for_launch_locked(launched_chat_id)
         agent_id = str(launched_chat_id) if record_entry is None else record_entry.agent_id
         membership_labels = (
             () if record_entry is None else (f"chat_id={launched_chat_id}", f"chat_seq={record_entry.seq}")
@@ -3149,7 +3219,11 @@ class AgentManager:
             project_id,
             account_args,
             initial_message="" if deferred_message else launch_message,
-            extra_labels=[*membership_labels, *(f"{key}={value}" for key, value in extra_labels.items())],
+            extra_labels=[
+                *membership_labels,
+                autocompact.label,
+                *(f"{key}={value}" for key, value in extra_labels.items()),
+            ],
             settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING] if is_installation_check_skipped else [],
         )
 
@@ -3163,7 +3237,7 @@ class AgentManager:
         if project_label:
             labels["project"] = project_label
         labels["account"] = account.id
-        for label in membership_labels:
+        for label in (*membership_labels, autocompact.label):
             key, _separator, value = label.partition("=")
             labels[key] = value
         canonical_name = canonical_agent_name(display_name)

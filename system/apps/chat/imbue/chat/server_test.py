@@ -1302,6 +1302,20 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     assert claude["powered_by_text"] == ""
 
 
+def test_get_harnesses_says_which_harnesses_compact_and_whose_interrupt_cancels_a_compaction(
+    client: FlaskClient,
+) -> None:
+    catalog = client.get("/api/harnesses").get_json()
+    capabilities = {
+        name: (entry["supports_compaction"], entry["can_interrupt_compaction"]) for name, entry in catalog.items()
+    }
+    assert capabilities.pop("claude") == (True, True)
+    assert capabilities.pop("codex") == (True, False)
+    assert capabilities.pop("pi-coding") == (True, False)
+    assert capabilities
+    assert set(capabilities.values()) == {(False, False)}
+
+
 def test_get_harnesses_includes_every_harness(client: FlaskClient) -> None:
     """Every harness is in the catalog, whatever the user has signed in to.
 
@@ -2676,24 +2690,62 @@ def test_an_empty_chat_list_chat_is_refused_until_the_agent_list_is_known() -> N
 
 def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: FlaskClient) -> None:
     assert client.get("/api/settings").get_json() == {
-        "settings": {"fast_mode_default": "auto", "fast_mode_turn_limit": 2, "is_fast_mode_notice_shown": False}
+        "settings": {
+            "fast_mode_default": "auto",
+            "fast_mode_turn_limit": 2,
+            "is_fast_mode_notice_shown": False,
+            "autocompact_default": True,
+            "compaction_status_presentation": "both",
+            "is_autocompact_notice_shown": False,
+        }
     }
 
-    response = client.put(
-        "/api/settings",
-        json={"fast_mode_default": "on", "fast_mode_turn_limit": 2, "is_fast_mode_notice_shown": True},
-    )
+    replacement = {
+        "fast_mode_default": "on",
+        "fast_mode_turn_limit": 2,
+        "is_fast_mode_notice_shown": True,
+        "autocompact_default": False,
+        "compaction_status_presentation": "placeholder",
+        "is_autocompact_notice_shown": True,
+    }
+    response = client.put("/api/settings", json=replacement)
 
     assert response.status_code == 200
-    assert client.get("/api/settings").get_json() == {
-        "settings": {"fast_mode_default": "on", "fast_mode_turn_limit": 2, "is_fast_mode_notice_shown": True}
-    }
+    assert client.get("/api/settings").get_json() == {"settings": replacement}
 
 
 def test_the_chat_settings_refuse_a_turn_limit_below_one_and_an_unknown_mode(client: FlaskClient) -> None:
     assert client.put("/api/settings", json={"fast_mode_turn_limit": 0}).status_code == 400
     assert client.put("/api/settings", json={"fast_mode_default": "sometimes"}).status_code == 400
+    assert client.put("/api/settings", json={"compaction_status_presentation": "toast"}).status_code == 400
     assert client.get("/api/settings").get_json()["settings"]["fast_mode_turn_limit"] == 2
+    assert client.get("/api/settings").get_json()["settings"]["compaction_status_presentation"] == "both"
+
+
+def test_a_chats_idle_compaction_defaults_to_the_workspaces_and_is_replaced_whole(
+    tmp_path: Path, true_binary: str
+) -> None:
+    """A chat with no setting of its own reads as a new chat would start; a write is the chat's from then on."""
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path, mngr_binary=true_binary)
+    agent_manager.note_agent_list_known()
+    app = create_application(build_test_state(agent_manager=agent_manager))
+    client = app.test_client()
+    _register_agent(app, "agent-compact", "Chat-1", "RUNNING")
+
+    assert client.get("/api/chats/agent-compact/autocompact").get_json() == {"state": {"is_enabled": True}}
+
+    response = client.put("/api/chats/agent-compact/autocompact", json={"is_enabled": False})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"state": {"is_enabled": False}}
+    assert client.get("/api/chats/agent-compact/autocompact").get_json() == {"state": {"is_enabled": False}}
+    relabeled = agent_manager.get_agent_by_id("agent-compact")
+    assert relabeled is not None and relabeled.labels["autocompact"] == "off"
+    assert client.put("/api/chats/agent-compact/autocompact", json={"is_enabled": "sometimes"}).status_code == 400
+    assert client.put("/api/chats/agent-compact/autocompact", json={}).status_code == 400
+    assert client.put("/api/chats/agent-compact/autocompact", data="not json").status_code == 400
+    assert client.get("/api/chats/agent-unknown/autocompact").status_code == 404
+    assert client.put("/api/chats/agent-unknown/autocompact", json={"is_enabled": True}).status_code == 404
 
 
 def test_a_chats_fast_mode_defaults_to_the_workspaces_and_is_replaced_whole(tmp_path: Path) -> None:
