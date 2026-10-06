@@ -135,6 +135,9 @@ class ChatAppState(MutableModel):
                 return existing
 
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
+                # A compacted event carries its cause on the wire. The events are the watcher's
+                # stored ones, so stamping them before the fan-out also serves later reads.
+                self.agent_manager.stamp_compaction_events(agent_id, events)
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
                 # via the REST /events endpoint, so nothing is buffered for replay. The
                 # fan-out is keyed by chat, so a page's stream follows the chat across a
@@ -182,7 +185,10 @@ class ChatAppState(MutableModel):
         # connect. Done outside the watchers lock to avoid holding it across the
         # agent manager's own lock.
         try:
-            self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
+            backlog = watcher.get_all_events()
+            # A compaction that finished while no watcher ran (a chat nobody had open) ends here.
+            self.agent_manager.stamp_compaction_events(agent_info.id, backlog)
+            self.agent_manager.update_session_events(agent_info.id, backlog)
             watcher.start()
         finally:
             with self._watchers_lock:
@@ -234,10 +240,12 @@ class ChatAppState(MutableModel):
         Dispatches through the agent's session to the harness's registered interrupt (the
         base restart-drain, or a native override), binding the watcher, the restart the caller
         supplies, the activity settle, and the native cancel chord. Shared by the route and
-        the handoff's draining step. Raises ``AgentRestartError`` when the restart fails.
+        the handoff's draining step. An interrupt also cancels a compaction in progress, which
+        reports no completion, so the agent's compaction status is cleared after it. Raises
+        ``AgentRestartError`` when the restart fails.
         """
         watcher = self.get_or_create_watcher(agent_info)
-        return self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
+        block = self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
             agent_info,
             watcher,
             restart_process,
@@ -246,6 +254,8 @@ class ChatAppState(MutableModel):
                 AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
             ),
         )
+        self.agent_manager.clear_compaction_after_interrupt(agent_info)
+        return block
 
     def stop_and_remove_watcher(self, agent_id: str) -> None:
         """Evict everything resident for one agent: its watcher (the resident transcript, thread,

@@ -6,10 +6,13 @@ import io
 import json
 import os
 import threading
+import time
 from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -31,6 +34,7 @@ from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_manager import AgentManager
@@ -82,6 +86,7 @@ from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
+from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_chat_rebind_record
@@ -98,6 +103,7 @@ from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.polling import wait_for
+from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
 
@@ -4141,3 +4147,136 @@ def test_intake_apply_for_a_chat_destroyed_meanwhile_is_not_found(
 
     assert client.post(f"/api/chats/intakes/{token}/apply", json={}).status_code == 404
     assert client.get(f"/api/chats/intakes/{token}").status_code == 404
+
+
+# Compaction status: the composer's /compact, the stop button, and the compacted event's cause.
+
+
+def _manager_with_known_agents() -> tuple[AgentManager, RecordingMngrMessenger]:
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    return manager, messenger
+
+
+@pytest.mark.parametrize(
+    ("harness", "message", "is_compaction_shown"),
+    [
+        pytest.param(HarnessType.CLAUDE, "/compact", True, id="claude_bare"),
+        pytest.param(HarnessType.CLAUDE, "/compact keep the test plan", True, id="claude_with_instructions"),
+        pytest.param(HarnessType.CLAUDE, "please compact", False, id="claude_prose"),
+        pytest.param(HarnessType.PI_CODING, "/compact", False, id="pi_does_not_run_it"),
+    ],
+)
+def test_a_compact_command_sent_from_the_composer_shows_the_compaction_it_starts(
+    tmp_path: Path, harness: HarnessType, message: str, is_compaction_shown: bool
+) -> None:
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _agent_info(agent_id=agent_id, harness=harness, agent_state_dir=tmp_path / "state")
+    manager, messenger = _manager_with_known_agents()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": message})
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, message)]
+    if is_compaction_shown:
+        assert manager._compaction_pending_by_agent[agent_id][1] == CompactionCause.MANUAL
+    else:
+        assert agent_id not in manager._compaction_pending_by_agent
+
+
+def test_the_stop_button_clears_a_compaction_it_cancelled(tmp_path: Path) -> None:
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
+    marker = state_dir / COMPACTING_MARKER_FILENAME
+    marker.write_text(json.dumps({"trigger": "manual", "started_at": "2026-10-06T21:14:07.000000000Z"}))
+    manager, _ = _manager_with_known_agents()
+    manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, 0.0)
+    app = create_application(build_test_state(agent_manager=manager))
+    fake_watcher = _fake_claude_interrupt_watcher(block="queued behind it", queued=[{"queued_id": "q1"}])
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
+    ):
+        response = app.test_client().post(f"/api/chats/{agent_id}/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "queued behind it"
+    assert not marker.exists()
+    assert agent_id not in manager._compaction_pending_by_agent
+
+
+def test_the_interrupt_route_clears_a_compaction_its_restart_ended(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    marker = state_dir / COMPACTING_MARKER_FILENAME
+    marker.write_text(json.dumps({"trigger": "auto", "started_at": "2026-10-06T21:14:07.000000000Z"}))
+    agent_id = f"agent-{uuid4().hex}"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir)
+    manager, _ = _manager_with_known_agents()
+    manager.note_compaction_requested(agent_id, CompactionCause.IDLE, 0.0)
+    app = create_application(build_test_state(agent_manager=manager))
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
+    ):
+        response = app.test_client().post(f"/api/chats/{agent_id}/interrupt")
+
+    assert response.status_code == 200
+    assert not marker.exists()
+    assert agent_id not in manager._compaction_pending_by_agent
+
+
+def _compact_summary_record(uuid: str, timestamp: str) -> dict[str, Any]:
+    return {
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "isCompactSummary": True,
+        "message": {"role": "user", "content": [{"type": "text", "text": "The conversation so far, summarized."}]},
+    }
+
+
+def _utc_iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def test_a_live_compacted_event_reaches_the_stream_and_later_reads_with_its_cause(tmp_path: Path) -> None:
+    agent_info, session_file = make_agent_fixture(tmp_path, agent_id=f"agent-{uuid4().hex}")
+    manager, _ = _manager_with_known_agents()
+    state = build_test_state(agent_manager=manager)
+    watcher = state.get_or_create_watcher(agent_info)
+    stream = state.event_queues.register(agent_info.id)
+    manager.note_compaction_requested(agent_info.id, CompactionCause.IDLE, time.monotonic() - 5.0)
+    try:
+        with session_file.open("a") as handle:
+            handle.write(json.dumps(_compact_summary_record(f"uuid-{uuid4().hex}", _utc_iso_now())) + "\n")
+
+        # The running watcher picks the line up (a file event, or its one-second poll at worst).
+        streamed = stream.get(timeout=10.0)
+        assert streamed is not None
+        assert streamed["content"] == "Context was compacted"
+        assert streamed["compaction_cause"] == "idle"
+        stored = [event for event in watcher.get_all_events() if event.get("content") == "Context was compacted"]
+        assert [event["compaction_cause"] for event in stored] == ["idle"]
+        assert agent_info.id not in manager._compaction_pending_by_agent
+    finally:
+        state.shutdown()
+
+
+def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_opened(tmp_path: Path) -> None:
+    events = [_compact_summary_record("uuid-compacted-while-closed", _utc_iso_now())]
+    agent_info, _ = make_agent_fixture(tmp_path, agent_id=f"agent-{uuid4().hex}", session_events=events)
+    manager, _ = _manager_with_known_agents()
+    manager.note_compaction_requested(agent_info.id, CompactionCause.IDLE, time.monotonic() - 30.0)
+    state = build_test_state(agent_manager=manager)
+    try:
+        watcher = state.get_or_create_watcher(agent_info)
+
+        assert [event.get("compaction_cause") for event in watcher.get_all_events()] == ["idle"]
+        assert agent_info.id not in manager._compaction_pending_by_agent
+    finally:
+        state.shutdown()

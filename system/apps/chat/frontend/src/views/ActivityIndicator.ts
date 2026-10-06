@@ -2,11 +2,14 @@
  * Activity strip that sits just above the message input -- the harness-common shell.
  *
  * The backend (the chat app) is the source of truth for *which* state the agent
- * is in -- IDLE / THINKING / TOOL_RUNNING -- delivered on ``activity_state`` via the
- * ``chats_updated`` WS payload. This component's job is to render a label:
+ * is in -- IDLE / THINKING / TOOL_RUNNING / COMPACTING -- delivered on ``activity_state`` via
+ * the ``chats_updated`` WS payload. This component's job is to render a label:
  *   - IDLE / null      -> hidden
  *   - THINKING         -> "Thinking…"
  *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness
+ *   - COMPACTING       -> "Compacting…", or "Compacting, then replying…" once a message is
+ *                         queued behind it; shown only under the presentation settings that put
+ *                         the compaction status on the strip
  *
  * The TOOL_RUNNING caption is read straight off the tool call: the harness's own
  * parser labelled it, so this view needs no notion of which harness is running.
@@ -27,6 +30,7 @@ import m from "mithril";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
 import { getChatById } from "../models/Chats";
+import { isCompactionStatusShownIn } from "../models/ChatSettings";
 import { handoffPhaseText } from "./handoff-phase";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
@@ -56,12 +60,16 @@ function pendingToolCall(events: TranscriptEvent[]): ToolCall | null {
   return null;
 }
 
-// Activity states in which the agent has an interruptible turn in progress.
-const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING"]);
+/** The activity state of an agent whose context is being compacted. */
+export const COMPACTING_STATE = "COMPACTING";
+
+// Activity states in which the agent is busy: a turn or a compaction is in progress.
+const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING", COMPACTING_STATE]);
 
 /**
- * Whether the given server-derived activity state means the agent is in the
- * middle of an interruptible turn. Drives the visibility of the stop button.
+ * Whether the given server-derived activity state means the agent is busy with a
+ * turn or a compaction. Drives the visibility of the stop button and the
+ * composer's queueing placeholder.
  */
 export function isWorkingActivityState(state: string | null | undefined): boolean {
   return state !== null && state !== undefined && WORKING_ACTIVITY_STATES.has(state);
@@ -72,15 +80,25 @@ function labelForToolCall(tc: ToolCall): string {
   return tc.caption_label || "Running tool…";
 }
 
+/** What a compaction in progress is called, on the strip and in the placeholder row alike. */
+export function compactingLabel(hasQueuedMessages: boolean): string {
+  return hasQueuedMessages ? "Compacting, then replying…" : "Compacting…";
+}
+
 /**
  * Pick the user-facing label for a server-derived activity state. For TOOL_RUNNING
- * we consult the transcript for the in-flight tool and use its label; every other
- * state is fixed (or null = hide).
+ * we consult the transcript for the in-flight tool and use its label; COMPACTING
+ * says whether a queued message waits on it; every other state is fixed (or null = hide).
  */
-export function labelForActivityState(state: string | null | undefined, events: TranscriptEvent[]): string | null {
+export function labelForActivityState(
+  state: string | null | undefined,
+  events: TranscriptEvent[],
+  hasQueuedMessages = false,
+): string | null {
   if (state === null || state === undefined) return null;
   if (state === "IDLE") return null;
   if (state === "THINKING") return "Thinking…";
+  if (state === COMPACTING_STATE) return compactingLabel(hasQueuedMessages);
   if (state === "TOOL_RUNNING") {
     const pending = pendingToolCall(events);
     if (pending !== null) return labelForToolCall(pending);
@@ -233,7 +251,16 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
         return renderStrip(handoffPhaseText(chat.handoff, chat.active_agent.harness), `HANDOFF_${chat.handoff.phase}`);
       }
       const state = chat?.active_agent.activity_state ?? null;
-      const label = labelForActivityState(state, events);
+      const label = labelForActivityState(state, events, (chat?.active_agent.queued_messages ?? []).length > 0);
+
+      if (state === COMPACTING_STATE) {
+        cancelRelease();
+        cancelWake();
+        heldToolCaption = null;
+        // CLEANUP: the compaction-status design review removes the unpicked presentation and the
+        // setting; this branch then either always renders the strip or never does.
+        return label !== null && isCompactionStatusShownIn("strip") ? renderStrip(label, state) : null;
+      }
 
       const now = Date.now();
       if (state === "TOOL_RUNNING" && label !== null) {

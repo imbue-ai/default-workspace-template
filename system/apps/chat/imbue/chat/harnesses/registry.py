@@ -348,6 +348,10 @@ class HarnessSpec(FrozenModel):
     # Whether the harness's interrupt (the stop button) cancels a compaction in progress. Where it
     # does not, the page hides the stop button while the chat is compacting. Shipped on the catalog.
     can_interrupt_compaction: bool = False
+    # Whether a /compact sent from the composer reaches the agent as its own compact command
+    # (claude types it into its pane), so the chat shows the compaction it starts. False where
+    # it would reach the model as prose (codex) or the composer declines it (pi). Backend-only.
+    is_composer_compact_forwarded: bool = False
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -382,6 +386,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         supports_compaction=True,
         # Escape during a /compact cancels it (Claude Code puts /compact back into its input box).
         can_interrupt_compaction=True,
+        is_composer_compact_forwarded=True,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,

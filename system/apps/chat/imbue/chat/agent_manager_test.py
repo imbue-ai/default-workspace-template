@@ -25,11 +25,13 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
+from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
@@ -138,6 +140,8 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import wait_for
+from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
+from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 from imbue.mngr_codex.app_server_client import CodexModel
 
 # Several tests in this module spin up real watchdog FSEvents observers
@@ -5136,6 +5140,7 @@ def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
     [
         ("RUNNING", ActivityState.THINKING, False, ChatStatus.WORKING),
         ("RUNNING", ActivityState.TOOL_RUNNING, False, ChatStatus.WORKING),
+        ("WAITING", ActivityState.COMPACTING, False, ChatStatus.WORKING),
         ("RUNNING", ActivityState.IDLE, False, ChatStatus.IDLE),
         ("WAITING", None, False, ChatStatus.IDLE),
         ("UNKNOWN", ActivityState.THINKING, False, ChatStatus.WORKING),
@@ -5282,3 +5287,351 @@ def test_a_send_that_fails_while_connecting_still_clears_the_mark(agent_manager:
             raise SendFailedError("the agent is in shell mode")
 
     assert not is_chat_connecting(agent_manager, agent_id)
+
+
+# Compaction status: the COMPACTING overlay, the pending request, and the compacted event's cause.
+
+
+def _tracked_compaction_agent(
+    manager: AgentManager, tmp_path: Path, harness: HarnessType = HarnessType.CLAUDE, state: str = "RUNNING"
+) -> tuple[str, Path]:
+    """A tracked agent with a local state dir, returned as its id and that dir."""
+    agent_id = f"agent-{uuid4().hex}"
+    state_dir = tmp_path / "agents" / agent_id
+    state_dir.mkdir(parents=True)
+    _seed_agent(manager, agent_id, harness=harness, state=state)
+    manager._ensure_activity_tracking(agent_id)
+    return agent_id, state_dir
+
+
+def _iso_seconds_ago(seconds: float) -> str:
+    return datetime.fromtimestamp(time.time() - seconds, tz=timezone.utc).isoformat()
+
+
+def _write_compacting_marker(state_dir: Path, trigger: str | None, started_seconds_ago: float = 2.0) -> Path:
+    payload: dict[str, str] = {"started_at": _iso_seconds_ago(started_seconds_ago)}
+    if trigger is not None:
+        payload["trigger"] = trigger
+    marker = state_dir / COMPACTING_MARKER_FILENAME
+    marker.write_text(json.dumps(payload))
+    return marker
+
+
+def _compacted_event(seconds_ago: float = 1.0) -> dict[str, Any]:
+    return {
+        "type": "user_message",
+        "event_id": f"evt-{uuid4().hex}",
+        "timestamp": _iso_seconds_ago(seconds_ago),
+        "role": "system",
+        "content": "Context was compacted",
+        "display": DisplayKind.STATUS,
+        "non_turn_tail": True,
+    }
+
+
+def _activity_of(manager: AgentManager, agent_id: str) -> ActivityState | None:
+    with manager._lock:
+        return manager._activity_state_by_agent.get(agent_id)
+
+
+def _log_lines_starting(records: list[str], prefix: str) -> list[str]:
+    return [record for record in records if record.split(" ", 1)[1].startswith(prefix)]
+
+
+def test_a_fresh_compacting_marker_wins_over_thinking_and_tool_running(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.update_session_events(agent_id, [{"type": "user_message", "content": "go"}])
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+
+    marker = _write_compacting_marker(state_dir, "auto")
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    agent_manager.update_session_events(
+        agent_id, [{"type": "assistant_message", "tool_calls": [{"tool_call_id": "call_c", "tool_name": "Bash"}]}]
+    )
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    # The previous label resumes once the compaction ends.
+    marker.unlink()
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.TOOL_RUNNING
+
+
+def test_a_pending_compaction_request_shows_compacting_and_broadcasts_it(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    listener = broadcaster.register()
+
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    latest = _last_chats_updated(_drain(listener))
+    assert latest is not None
+    assert latest["chats"][0]["active_agent"]["activity_state"] == "COMPACTING"
+    assert latest["chats"][0]["status"] == ChatStatus.WORKING.value
+    assert _log_lines_starting(loguru_records, f"autocompact: compaction pending agent={agent_id} cause=manual")
+
+
+def test_a_repeated_compaction_request_refreshes_the_pending_entry_rather_than_adding_one(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    first_requested_at = time.monotonic() - 30.0
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, first_requested_at)
+
+    second_requested_at = time.monotonic()
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, second_requested_at)
+
+    assert agent_manager._compaction_pending_by_agent == {agent_id: (second_requested_at, CompactionCause.MANUAL)}
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+def test_an_expired_compaction_request_settles_to_the_previous_state(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.update_session_events(agent_id, [{"type": "user_message", "content": "go"}])
+
+    agent_manager.note_compaction_requested(
+        agent_id, CompactionCause.IDLE, time.monotonic() - PENDING_COMPACTION_TIMEOUT_SECONDS - 1
+    )
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    assert len(_log_lines_starting(loguru_records, f"autocompact: compaction pending expired agent={agent_id}")) == 1
+
+
+def test_the_session_sweep_recompute_expires_a_compaction_that_never_finished(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    # Time passes with no file change and no event; only the sweep's recompute notices.
+    with agent_manager._lock:
+        agent_manager._compaction_pending_by_agent[agent_id] = (
+            time.monotonic() - PENDING_COMPACTION_TIMEOUT_SECONDS - 1,
+            CompactionCause.IDLE,
+        )
+    agent_manager._recompute_compacting_agents()
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+
+def test_a_stale_compacting_marker_is_ignored_and_logged_once(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.update_session_events(agent_id, [{"type": "user_message", "content": "go"}])
+    _write_compacting_marker(state_dir, "manual", started_seconds_ago=PENDING_COMPACTION_TIMEOUT_SECONDS + 60)
+
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.THINKING
+    stale_lines = _log_lines_starting(loguru_records, f"autocompact: stale compacting marker ignored agent={agent_id}")
+    assert len(stale_lines) == 1
+
+
+def test_a_compacting_marker_without_a_readable_time_counts_by_its_mtime(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    (state_dir / COMPACTING_MARKER_FILENAME).write_text(json.dumps({"trigger": "auto"}))
+
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+def test_a_dead_lifecycle_wins_over_a_compacting_marker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path, state="STOPPED")
+    _write_compacting_marker(state_dir, "auto")
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+
+def test_a_compacted_event_ends_the_pending_compaction_and_carries_its_cause(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic() - 5.0)
+    listener = broadcaster.register()
+    event = _compacted_event()
+    other_event = {"type": "assistant_message", "timestamp": _iso_seconds_ago(0.5), "tool_calls": []}
+
+    agent_manager.stamp_compaction_events(agent_id, [event, other_event])
+
+    assert event["compaction_cause"] == "idle"
+    assert "compaction_cause" not in other_event
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    assert agent_id not in agent_manager._compaction_cause_by_agent
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    latest = _last_chats_updated(_drain(listener))
+    assert latest is not None
+    assert latest["chats"][0]["active_agent"]["activity_state"] == "IDLE"
+    assert _log_lines_starting(loguru_records, f"autocompact: compaction finished agent={agent_id} cause=idle")
+
+
+@pytest.mark.parametrize(
+    ("marker_trigger", "pending_cause", "expected_cause"),
+    [
+        pytest.param("auto", None, "native", id="claude_auto_compaction"),
+        pytest.param("manual", CompactionCause.IDLE, "idle", id="manual_with_a_sweep_record"),
+        pytest.param("manual", None, "manual", id="manual_without_a_sweep_record"),
+        pytest.param(None, None, "manual", id="missing_trigger"),
+        pytest.param(None, CompactionCause.IDLE, "idle", id="missing_trigger_with_a_sweep_record"),
+    ],
+)
+def test_the_compacted_event_names_the_cause_the_marker_and_the_chats_request_give(
+    agent_manager: AgentManager,
+    tmp_path: Path,
+    marker_trigger: str | None,
+    pending_cause: CompactionCause | None,
+    expected_cause: str,
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    marker = _write_compacting_marker(state_dir, marker_trigger, started_seconds_ago=3.0)
+    if pending_cause is not None:
+        agent_manager.note_compaction_requested(agent_id, pending_cause, time.monotonic() - 4.0)
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    # PostCompact removes the marker before the transcript's compacted event is parsed.
+    marker.unlink()
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    event = _compacted_event()
+    agent_manager.stamp_compaction_events(agent_id, [event])
+
+    assert event["compaction_cause"] == expected_cause
+
+
+@pytest.mark.parametrize(
+    ("record_trigger", "record_seconds_ago", "expected_cause"),
+    [
+        pytest.param("auto", 2.0, "native", id="recent_auto"),
+        pytest.param("manual", 2.0, "manual", id="recent_manual"),
+        pytest.param("unknown", 2.0, None, id="recent_unknown"),
+        pytest.param("auto", 3600.0, None, id="an_hour_old"),
+    ],
+)
+def test_a_compacted_event_the_chat_holds_no_cause_for_reads_last_compaction_json(
+    agent_manager: AgentManager,
+    tmp_path: Path,
+    record_trigger: str,
+    record_seconds_ago: float,
+    expected_cause: str | None,
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    (state_dir / LAST_COMPACTION_FILENAME).write_text(
+        json.dumps({"trigger": record_trigger, "ended_at": _iso_seconds_ago(record_seconds_ago)})
+    )
+    event = _compacted_event()
+
+    agent_manager.stamp_compaction_events(agent_id, [event])
+
+    assert "compaction_cause" in event
+    assert event["compaction_cause"] == expected_cause
+
+
+def test_a_compacted_event_older_than_the_request_does_not_end_it(agent_manager: AgentManager, tmp_path: Path) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+    earlier_event = _compacted_event(seconds_ago=120.0)
+
+    agent_manager.stamp_compaction_events(agent_id, [earlier_event])
+
+    assert "compaction_cause" not in earlier_event
+    assert agent_id in agent_manager._compaction_pending_by_agent
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+
+def test_last_compaction_json_written_after_the_request_ends_it_before_the_event_lands(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic() - 10.0)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    (state_dir / LAST_COMPACTION_FILENAME).write_text(
+        json.dumps({"trigger": "manual", "ended_at": _iso_seconds_ago(0.0)})
+    )
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    # The cause survives until the compacted event arrives (in a chat nobody had open, later).
+    event = _compacted_event(seconds_ago=0.0)
+    agent_manager.stamp_compaction_events(agent_id, [event])
+    assert event["compaction_cause"] == "idle"
+
+
+def test_the_compacting_marker_poller_recomputes_when_the_marker_appears_and_goes(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    codex_agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.CODEX)
+    # Only the harnesses whose tracker declares a marker are polled for one.
+    assert set(agent_manager._list_compacting_marker_paths()) == {agent_id}
+    assert codex_agent_id not in agent_manager._list_compacting_marker_paths()
+    agent_manager._compacting_marker_poller.poll_once()
+    listener = broadcaster.register()
+
+    marker = _write_compacting_marker(state_dir, "manual")
+    agent_manager._compacting_marker_poller.poll_once()
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    appeared = _last_chats_updated(_drain(listener))
+    assert appeared is not None
+    activity_by_agent = {
+        chat["active_agent"]["agent_id"]: chat["active_agent"]["activity_state"] for chat in appeared["chats"]
+    }
+    assert activity_by_agent[agent_id] == "COMPACTING"
+
+    marker.unlink()
+    agent_manager._compacting_marker_poller.poll_once()
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    assert _last_chats_updated(_drain(listener)) is not None
+
+
+def test_an_interrupt_clears_the_compacting_marker_and_the_pending_request(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    marker = _write_compacting_marker(state_dir, "manual")
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    agent_info = agent_manager.get_agent_info_by_id(agent_id)
+    assert agent_info is not None
+
+    agent_manager.clear_compaction_after_interrupt(agent_info)
+
+    assert not marker.exists()
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    assert agent_id not in agent_manager._compaction_cause_by_agent
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    # A second interrupt, with no marker left, is a quiet no-op.
+    agent_manager.clear_compaction_after_interrupt(agent_info)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+
+
+def test_the_sweep_callback_maps_the_agent_name_to_its_id_and_marks_the_compaction_idle(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
+    # The manager's own sweep reports through this callback.
+    assert agent_manager._autocompactor._on_compaction_requested == agent_manager.note_sweep_compaction_requested
+
+    agent_manager.note_sweep_compaction_requested(f"agent-{agent_id}")
+    agent_manager.note_sweep_compaction_requested("a-chat-destroyed-since-the-sweep-listed-it")
+
+    assert set(agent_manager._compaction_pending_by_agent) == {agent_id}
+    requested_at, cause = agent_manager._compaction_pending_by_agent[agent_id]
+    assert cause == CompactionCause.IDLE
+    assert requested_at < time.monotonic()
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING

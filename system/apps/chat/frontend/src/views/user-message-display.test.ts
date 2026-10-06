@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 import m from "mithril";
-import type { UserMessageEvent } from "../models/Response";
-import { renderUserMessage, StableUserMessage } from "./user-message-display";
+import type { CompactionCause, UserMessageEvent } from "../models/Response";
+import { AutocompactNotice } from "./AutocompactNotice";
+import { compactionWhyKey, renderUserMessage, StableUserMessage } from "./user-message-display";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 
 function collectClasses(node: unknown): string[] {
@@ -139,7 +140,9 @@ describe("user-message-display status messages", () => {
     };
 
     const inner = renderInner(event);
-    const children = Array.isArray(inner.children) ? inner.children : [];
+    // The pill is the first thing on the status line, ahead of its "why?" button.
+    const statusLine = (Array.isArray(inner.children) ? inner.children : [])[0] as m.Vnode;
+    const children = Array.isArray(statusLine.children) ? statusLine.children : [];
     const toggleChild = children[0] as m.Vnode<{
       onclick?: (e: { currentTarget: HTMLElement }) => void;
       onkeydown?: (e: { key: string; preventDefault: () => void; currentTarget: HTMLElement }) => void;
@@ -203,5 +206,91 @@ describe("user-message-display prompt bubbles", () => {
 
     expect(allText(inner)).toBe("here you go");
     expect(markdownContents(inner)).toEqual([ATTACHMENT]);
+  });
+});
+
+describe("user-message-display compaction pill why? popover", () => {
+  const EVENT_ID = "evt-compacted";
+
+  function compactionEvent(cause?: CompactionCause | null): UserMessageEvent {
+    return {
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: EVENT_ID,
+      source: "claude",
+      role: "system",
+      content: "Context was compacted",
+      display: "status",
+      non_turn_tail: true,
+      ...(cause === undefined ? {} : { compaction_cause: cause }),
+    };
+  }
+
+  type WhyButtonVnode = m.Vnode<{ onclick: () => void; "aria-expanded": string }>;
+
+  /** The "why?" button's vnode (a Button component, so found by the marker in its `extra`). */
+  function findWhyButton(node: unknown): WhyButtonVnode | null {
+    if (node == null || typeof node !== "object") return null;
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const found = findWhyButton(child);
+        if (found !== null) return found;
+      }
+      return null;
+    }
+    const v = node as { attrs?: { extra?: unknown }; children?: unknown };
+    if (typeof v.attrs?.extra === "string" && v.attrs.extra.includes("compaction-why-button")) {
+      return v as WhyButtonVnode;
+    }
+    return findWhyButton(v.children);
+  }
+
+  beforeEach(() => {
+    setBlockExpanded(compactionWhyKey(EVENT_ID), false);
+  });
+
+  it.each([
+    ["idle", "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu."],
+    ["manual", "Compacted because you asked (/compact)."],
+    ["native", "Your agent triggered compaction. You can ask it about its current setting, or tell it to change it."],
+    [null, "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu."],
+    [undefined, "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu."],
+  ] as const)("opens on why? with the sentence for cause %s, and closes again", (cause, text) => {
+    const event = compactionEvent(cause);
+    const component = StableUserMessage();
+    const vnode = m(StableUserMessage, { event }) as unknown as Parameters<typeof component.view>[0];
+    const closed = component.view(vnode);
+    expect(allText(closed)).toContain("why?");
+    expect(allText(closed)).not.toContain(text);
+    expect(findWhyButton(closed)?.attrs["aria-expanded"]).toBe("false");
+
+    findWhyButton(closed)!.attrs.onclick();
+    // The memoized row repaints for the toggle even though its event did not change.
+    expect(component.onbeforeupdate!.call(component, vnode, vnode as never)).toBe(true);
+    const open = component.view(vnode);
+    expect(allText(open)).toContain(text);
+    expect(collectClasses(open).some((c) => c.includes("compaction-why-popover"))).toBe(true);
+    expect(findWhyButton(open)?.attrs["aria-expanded"]).toBe("true");
+    expect(component.onbeforeupdate!.call(component, vnode, vnode as never)).toBe(false);
+
+    findWhyButton(open)!.attrs.onclick();
+    expect(allText(component.view(vnode))).not.toContain(text);
+  });
+
+  it("offers why? beside a pill that also carries a summary", () => {
+    const inner = renderInner({ ...compactionEvent("manual"), display_body: "Summary text" });
+    expect(findWhyButton(inner)).not.toBeNull();
+    expect(collectClasses(inner)).toContain("message-system-status message-system-status--toggleable");
+  });
+
+  it("puts the one-time notice under the anchor pill only", () => {
+    const hasNotice = (row: m.Vnode | null): boolean =>
+      ((row?.children ?? []) as unknown[]).some(
+        (child) => (child as { tag?: unknown } | null)?.tag === AutocompactNotice,
+      );
+    expect(hasNotice(renderUserMessage(compactionEvent("idle"), true))).toBe(true);
+    expect(hasNotice(renderUserMessage(compactionEvent("idle")))).toBe(false);
+    const prompt: UserMessageEvent = { ...compactionEvent(), display: undefined, content: "hello" };
+    expect(hasNotice(renderUserMessage(prompt, true))).toBe(false);
   });
 });

@@ -1,15 +1,16 @@
 import threading
 from pathlib import Path
 
-from imbue.chat.harnesses.model_state_poll import ModelStatePoller
+from imbue.chat.harnesses.agent_file_poll import AgentFilePoller
+
+_THREAD_NAME = "agent-file-poll-test-4417"
 
 
-def _build_poller_over(
-    path_by_agent: dict[str, Path], changed_agent_ids: list[str]
-) -> ModelStatePoller:
-    return ModelStatePoller.build(
-        list_model_state_paths=lambda: dict(path_by_agent),
-        on_model_state_changed=changed_agent_ids.append,
+def _build_poller_over(path_by_agent: dict[str, Path], changed_agent_ids: list[str]) -> AgentFilePoller:
+    return AgentFilePoller.build(
+        list_paths=lambda: dict(path_by_agent),
+        on_file_changed=changed_agent_ids.append,
+        thread_name=_THREAD_NAME,
     )
 
 
@@ -99,7 +100,7 @@ def test_poller_uses_one_thread_regardless_of_agent_count(tmp_path: Path) -> Non
     new_threads = set(threading.enumerate()) - threads_before
     try:
         assert len(new_threads) == 1
-        assert next(iter(new_threads)).name == "model-state-poll"
+        assert next(iter(new_threads)).name == _THREAD_NAME
     finally:
         poller.stop()
     # The join in stop() has completed, so the poller thread is gone again.

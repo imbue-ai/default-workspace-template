@@ -138,10 +138,15 @@ vi.mock("../models/HarnessCatalog", async () => {
   const { harnessCatalogFixture } = await import("../models/harnessCatalogFixture");
   const catalogs: Record<
     string,
-    { label: string; popups: { trigger: string; commands: string[]; action: string }[] }
+    {
+      label: string;
+      can_interrupt_compaction: boolean;
+      popups: { trigger: string; commands: string[]; action: string }[];
+    }
   > = {
     claude: {
       label: harnessCatalogFixture("claude")!.label,
+      can_interrupt_compaction: harnessCatalogFixture("claude")!.can_interrupt_compaction,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/status", "/exit"], action: "notice" },
@@ -149,6 +154,7 @@ vi.mock("../models/HarnessCatalog", async () => {
     },
     codex: {
       label: harnessCatalogFixture("codex")!.label,
+      can_interrupt_compaction: harnessCatalogFixture("codex")!.can_interrupt_compaction,
       popups: [
         { trigger: "composer_command", commands: ["/login", "/logout"], action: "open_auth" },
         { trigger: "composer_command", commands: ["/new", "/fast"], action: "notice" },
@@ -447,6 +453,39 @@ describe("MessageInput placeholder", () => {
     mocks.agent.activity_state = "THINKING";
     const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+
+  it("teaches queueing while the agent compacts its context", () => {
+    mocks.agent.activity_state = "COMPACTING";
+    const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+});
+
+describe("MessageInput stop button during a compaction", () => {
+  beforeEach(() => {
+    mocks.agent.activity_state = "COMPACTING";
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+  });
+
+  it("shows for a harness whose interrupt cancels a compaction", () => {
+    mocks.agent.harness = "claude";
+    const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(rendered, "aria-label", "Interrupt agent")).toBeDefined();
+  });
+
+  it("is hidden for a harness whose interrupt does not, and back once its turn runs", () => {
+    mocks.agent.harness = "codex";
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(render(), "aria-label", "Interrupt agent")).toBeUndefined();
+    mocks.agent.activity_state = "THINKING";
+    expect(findByAttr(render(), "aria-label", "Interrupt agent")).toBeDefined();
   });
 });
 

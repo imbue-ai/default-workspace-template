@@ -6,7 +6,8 @@ timestamp parser, and the ``is_transcript_tail_stale`` restart guard. The actual
 IDLE / THINKING / TOOL_RUNNING *derivation* lives in the two harness peers --
 :mod:`claude_activity_state` (lifecycle + transcript tail) and
 :mod:`codex_activity_state` (the ``task_started`` / ``task_complete`` turn latch) --
-and the harness dispatch is in ``agent_manager._recompute_activity_state``.
+and the harness dispatch is in ``agent_manager._recompute_activity_state``, which also
+lays COMPACTING over the derived state (see :mod:`imbue.chat.compaction_status`).
 
 The ``*_process_started`` marker (touched by mngr on every startup/resume) is the
 boundary the stale-tail guard compares against: a transcript tail older than the
@@ -17,7 +18,10 @@ current process is left over from a turn this process never ran and must not sho
 from datetime import datetime
 from enum import auto
 from typing import Any
+from typing import Final
+from typing import assert_never
 
+from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.pure import pure
 
@@ -28,6 +32,41 @@ class ActivityState(UpperCaseStrEnum):
     IDLE = auto()
     THINKING = auto()
     TOOL_RUNNING = auto()
+    # The agent's context is being compacted. Wins over THINKING and TOOL_RUNNING while it lasts.
+    COMPACTING = auto()
+
+
+class CompactionCause(LowerCaseStrEnum):
+    """Why a chat's context was compacted, as the ``compaction_cause`` of its compacted event."""
+
+    # The chat app's idle sweep asked for it (mngr's autocompact plugin).
+    IDLE = auto()
+    # The user asked for it (a /compact typed in the composer or the terminal).
+    MANUAL = auto()
+    # The harness compacted on its own (Claude's context-limit auto-compaction).
+    NATIVE = auto()
+
+
+# The command a user types to compact a chat's context; it may carry instructions after a space.
+COMPACT_COMMAND: Final[str] = "/compact"
+
+
+@pure
+def is_working_activity_state(activity_state: ActivityState) -> bool:
+    """Whether the agent is busy in this state: a turn in flight or a compaction."""
+    match activity_state:
+        case ActivityState.THINKING | ActivityState.TOOL_RUNNING | ActivityState.COMPACTING:
+            return True
+        case ActivityState.IDLE:
+            return False
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def is_compact_command(text: str) -> bool:
+    """Whether an outgoing message is the compact command: exactly ``/compact``, or ``/compact <instructions>``."""
+    return text == COMPACT_COMMAND or text.startswith(f"{COMPACT_COMMAND} ")
 
 
 @pure

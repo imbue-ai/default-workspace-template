@@ -314,8 +314,8 @@ class AgentStateItem(FrozenModel):
         default=None,
         description=(
             "Per-agent chat activity state value (THINKING / TOOL_RUNNING / "
-            "IDLE), or None when no activity tracking is available for this "
-            "agent."
+            "COMPACTING / IDLE), or None when no activity tracking is available "
+            "for this agent."
         ),
     )
     model_choice: ModelChoice | None = Field(
@@ -519,7 +519,9 @@ class ActiveAgentSnapshot(FrozenModel):
     harness: HarnessType = Field(description="The harness the active agent runs")
     account_id: str | None = Field(description="The account the active agent is bound to (its ``account`` label)")
     state: str = Field(description="The active agent's mngr lifecycle state")
-    activity_state: ActivityState | None = Field(description="THINKING / TOOL_RUNNING / IDLE, or None when untracked")
+    activity_state: ActivityState | None = Field(
+        description="THINKING / TOOL_RUNNING / COMPACTING / IDLE, or None when untracked; COMPACTING wins over a turn"
+    )
     model_choice: ModelChoice | None = Field(description="The live model/effort/fast selection, or None")
     queued_messages: tuple[QueuedMessageState, ...] = Field(description="The harness queue, in enqueue order")
     shoulder_tap_available: bool = Field(description="Whether something is queued and no send is in flight")

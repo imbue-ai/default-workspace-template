@@ -33,8 +33,8 @@ from pydantic import Field
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
-from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import is_lifecycle_dead
+from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
@@ -576,8 +576,9 @@ class HandoffRunner:
             activity = agent_state.activity_state if agent_state is not None else None
             is_dead = agent_state is None or is_lifecycle_dead(agent_state.state)
             now = self._deps.monotonic()
-            is_busy_seen = is_busy_seen or activity in (ActivityState.THINKING, ActivityState.TOOL_RUNNING)
-            is_turn_over = activity not in (ActivityState.THINKING, ActivityState.TOOL_RUNNING) and (
+            is_busy = activity is not None and is_working_activity_state(activity)
+            is_busy_seen = is_busy_seen or is_busy
+            is_turn_over = not is_busy and (
                 is_dead or is_busy_seen or now - accepted_at >= self._deps.summary_idle_grace_seconds
             )
             if is_summary_written(_non_empty_mtime(path), stale_mtime):

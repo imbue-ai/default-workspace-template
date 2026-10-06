@@ -40,6 +40,8 @@ from imbue.chat import latchkey_endpoints
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_exists
+from imbue.chat.activity_state import CompactionCause
+from imbue.chat.activity_state import is_compact_command
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
@@ -492,6 +494,9 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     # only as the correlation token the committed item echoes back.
     agent_manager = state.agent_manager
     session = agent_manager.get_or_create_session(agent_info)
+    # Taken before the send, which can wait out mngr's confirmation window while the compaction
+    # it starts is already running.
+    requested_at = time.monotonic()
     # A send that has to wait for the agent to come up -- a stopped agent the send starts, or a
     # harness still starting -- reads as Connecting on the chat until it resolves.
     with agent_manager.track_connecting_send(agent_info.id, message_id) as mark_connecting:
@@ -512,6 +517,12 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
         # which would let the stopped-chat release drop the watcher of the chat it revived.
         if outcome is SendOutcome.OK:
             agent_manager.note_agent_alive(agent_info.id)
+    if (
+        outcome is SendOutcome.OK
+        and get_harness_spec(agent_info.harness).is_composer_compact_forwarded
+        and is_compact_command(text)
+    ):
+        agent_manager.note_compaction_requested(agent_info.id, CompactionCause.MANUAL, requested_at)
     return outcome
 
 
@@ -1024,8 +1035,10 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
     # The restart abandons the session transcript mid-turn, so the
     # transcript-derived activity state would stay pinned at THINKING /
     # TOOL_RUNNING until the user sends another message. Reset it to IDLE
-    # now so the activity indicator clears immediately after the stop.
+    # now so the activity indicator clears immediately after the stop. The
+    # restart also ended any compaction, which reports no completion.
     get_state().agent_manager.reset_activity_state(agent_info.id)
+    get_state().agent_manager.clear_compaction_after_interrupt(agent_info)
 
     return json_response(InterruptAgentResponse(status="ok").model_dump())
 

@@ -14,9 +14,11 @@ import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
-import type { UserMessageEvent } from "../models/Response";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import type { CompactionCause, UserMessageEvent } from "../models/Response";
+import { AutocompactNotice } from "./AutocompactNotice";
 import { classifyUserMessage, isHiddenUserMessage } from "./message-classification";
-import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
+import { isBlockExpanded, setBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
 
@@ -43,49 +45,113 @@ function renderSystemChip(label: string, body: string, expansionKey: string): m.
   return renderToolBlock({ headerText: label, inputText: body, extra: "max-w-[80%]", expansionKey });
 }
 
+/** What the "why?" popover beside a compaction pill says, for who started the compaction. */
+export function compactionCauseText(cause: CompactionCause | null | undefined): string {
+  switch (cause) {
+    case "idle":
+      return "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu.";
+    case "manual":
+      return "Compacted because you asked (/compact).";
+    case "native":
+      return "Your agent triggered compaction. You can ask it about its current setting, or tell it to change it.";
+    default:
+      return "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu.";
+  }
+}
+
+/** The expansion key the "why?" popover of the compaction pill for `eventId` is open under. */
+export function compactionWhyKey(eventId: string): string {
+  return `compaction-why:${eventId}`;
+}
+
+/** The trailing "why?" button of a compaction pill and, while it is open, the popover it toggles.
+ *  The open state lives in the expansion store, so it survives the row leaving the virtualized
+ *  window and coming back. */
+function renderCompactionWhy(event: UserMessageEvent): { button: m.Vnode; popover: m.Vnode | null } {
+  const key = compactionWhyKey(event.event_id);
+  const isOpen = isBlockExpanded(key);
+  const popoverId = `${key}-popover`;
+  return {
+    button: m(
+      Button,
+      {
+        variant: "ghost",
+        sm: true,
+        quiet: true,
+        extra: "compaction-why-button",
+        "aria-expanded": isOpen ? "true" : "false",
+        "aria-controls": popoverId,
+        onclick: () => {
+          toggleBlockExpanded(key);
+        },
+      },
+      "why?",
+    ),
+    popover: isOpen
+      ? m(
+          "div",
+          {
+            id: popoverId,
+            class:
+              "compaction-why-popover mt-1.5 max-w-[360px] rounded-lg border border-default bg-surface px-3 py-2 " +
+              "text-left text-(length:--font-size-helper) text-secondary shadow-md",
+            role: "note",
+          },
+          compactionCauseText(event.compaction_cause),
+        )
+      : null,
+  };
+}
+
 /**
- * Render a status message (e.g. "Context was compacted").
+ * Render a status message (e.g. "Context was compacted"), followed by its "why?" button.
  * When body text is present, renders an expandable toggle on the status pill
  * to show/hide the summary contents.
  */
-function renderStatusMessage(label: string, body: string, expansionKey: string): m.Vnode {
+function renderStatusMessage(label: string, body: string, expansionKey: string, event: UserMessageEvent): m.Vnode {
+  const why = renderCompactionWhy(event);
+  const statusLine = (pill: m.Vnode): m.Vnode =>
+    m("div", { class: "message-system-status-line flex items-center gap-1" }, [pill, why.button]);
   if (!body) {
-    return m("div", { class: "message-system-status" }, label);
+    return m("div", { class: "message-system-status-container" }, [
+      statusLine(m("div", { class: "message-system-status" }, label)),
+      why.popover,
+    ]);
   }
   const expanded = isBlockExpanded(expansionKey);
+  const toggleDetails = (pill: HTMLElement): void => {
+    const container = pill.closest(".message-system-status-container");
+    if (container) {
+      setBlockExpanded(expansionKey, container.classList.toggle("message-system-status-container--expanded"));
+    }
+  };
   return m(
     "div",
     {
       class: `message-system-status-container${expanded ? " message-system-status-container--expanded" : ""}`,
     },
     [
-      m(
-        "div",
-        {
-          class: "message-system-status message-system-status--toggleable",
-          role: "button",
-          tabindex: 0,
-          onclick(e: Event) {
-            const container = (e.currentTarget as HTMLElement).parentElement;
-            if (container) {
-              setBlockExpanded(expansionKey, container.classList.toggle("message-system-status-container--expanded"));
-            }
-          },
-          onkeydown(e: KeyboardEvent) {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              const container = (e.currentTarget as HTMLElement).parentElement;
-              if (container) {
-                setBlockExpanded(
-                  expansionKey,
-                  container.classList.toggle("message-system-status-container--expanded"),
-                );
+      statusLine(
+        m(
+          "div",
+          {
+            class: "message-system-status message-system-status--toggleable",
+            role: "button",
+            tabindex: 0,
+            onclick(e: Event) {
+              toggleDetails(e.currentTarget as HTMLElement);
+            },
+            onkeydown(e: KeyboardEvent) {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleDetails(e.currentTarget as HTMLElement);
               }
-            }
+            },
           },
-        },
-        [m("span", { class: "tool-call-chevron" }, "▸"), m("span", label)],
+          [m("span", { class: "tool-call-chevron" }, "▸"), m("span", label)],
+        ),
       ),
+      why.popover,
       m("div", { class: "message-system-status-details" }, [m("div", { class: "message-system-status-body" }, body)]),
     ],
   );
@@ -112,13 +178,18 @@ export function renderNotice(label: string, body: string): m.Vnode {
 
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
   let renderedEventId: string | null = null;
+  // Whether the compaction pill's "why?" popover was open at the last render: toggling it is the
+  // one change to an unchanged event that has to repaint.
+  let renderedWhyOpen = false;
   return {
     onbeforeupdate(vnode) {
-      return vnode.attrs.event.event_id !== renderedEventId;
+      const eventId = vnode.attrs.event.event_id;
+      return eventId !== renderedEventId || isBlockExpanded(compactionWhyKey(eventId)) !== renderedWhyOpen;
     },
     view(vnode) {
       const event = vnode.attrs.event;
       renderedEventId = event.event_id;
+      renderedWhyOpen = isBlockExpanded(compactionWhyKey(event.event_id));
       const cls = classifyUserMessage(event);
       // Every branch below draws the classification's body, never the raw content: for a
       // message the backend wrapped, the two differ and the bubble owes the user their words.
@@ -140,7 +211,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (cls.kind === UserMessageKind.StatusMessage) {
         const label = cls.label ?? (cls.body || "Context was compacted");
         const body = cls.body && cls.body !== label ? cls.body : "";
-        return renderStatusMessage(label, body, `status:${event.event_id}`);
+        return renderStatusMessage(label, body, `status:${event.event_id}`, event);
       }
 
       const bubbleChildren: m.Children[] = [];
@@ -160,8 +231,11 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
  * (hidden `/welcome`, or a skill expansion folded into its Skill tool block). A `SystemChip`
  * row gets the collapsed-system class; a genuine prompt gets the user-bubble class; a status
  * message gets the status-row class; a notice sits on the agent's rail instead.
+ *
+ * `isAutocompactNoticeAnchor` puts the one-time idle-compaction notice under a status row (the
+ * conversation's latest compaction pill), which shows it until the user dismisses it.
  */
-export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
+export function renderUserMessage(event: UserMessageEvent, isAutocompactNoticeAnchor = false): m.Vnode | null {
   const kind = classifyUserMessage(event).kind;
   if (isHiddenUserMessage(event)) {
     return null;
@@ -176,5 +250,8 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
           : `${USER_MESSAGE_ROW_CLASS} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
-  return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [m(StableUserMessage, { event })]);
+  return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [
+    m(StableUserMessage, { event }),
+    isAutocompactNoticeAnchor && kind === UserMessageKind.StatusMessage ? m(AutocompactNotice) : null,
+  ]);
 }

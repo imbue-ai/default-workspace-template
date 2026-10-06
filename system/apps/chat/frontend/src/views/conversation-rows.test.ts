@@ -12,6 +12,7 @@ import {
   ESTIMATED_ASSISTANT_HEIGHT_PX,
   ESTIMATED_CHIP_ROW_HEIGHT_PX,
 } from "./conversation-rows";
+import { AutocompactNotice } from "./AutocompactNotice";
 
 // --- Event builders (mirroring turn-grouping.test.ts) ---
 
@@ -142,6 +143,33 @@ describe("buildConversationRows", () => {
     // The raw tk Bash calls are folded into the progress block, not surfaced as
     // their own rows.
     expect(rows.some((r) => r.key === "a-c1" || r.key === "a-c2")).toBe(false);
+  });
+
+  it("puts the one-time idle-compaction notice under the latest compaction pill only", () => {
+    const compacted = (ts: string, id: string): UserMessageEvent => ({
+      ...userMsg(ts, "Context was compacted", id),
+      role: "system",
+      display: "status",
+      non_turn_tail: true,
+    });
+    const rows = buildConversationRows(
+      "agent-1",
+      [
+        userMsg("t1", "hello"),
+        assistantText("t2", "hi there", "end_turn"),
+        compacted("t3", "cs1"),
+        userMsg("t4", "more"),
+        compacted("t5", "cs2"),
+        assistantText("t6", "still here", "end_turn"),
+      ],
+      true,
+    );
+    const hasNotice = (key: string): boolean => {
+      const row = rows.find((r) => r.key === key)!.render() as { children?: unknown[] };
+      return (row.children ?? []).some((child) => (child as { tag?: unknown } | null)?.tag === AutocompactNotice);
+    };
+    expect(hasNotice("cs1")).toBe(false);
+    expect(hasNotice("cs2")).toBe(true);
   });
 
   it("renders a turn with no steps as plain user/assistant rows", () => {

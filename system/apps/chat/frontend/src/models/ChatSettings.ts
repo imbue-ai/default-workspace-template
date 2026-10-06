@@ -78,6 +78,16 @@ export function ensureChatSettings(): Promise<ChatSettings> {
   return loading;
 }
 
+// CLEANUP: remove with the presentation the design review does not pick, and the setting with it.
+/** Whether a compaction in progress is shown on `surface` under the workspace's presentation
+ *  setting. Before the settings load it answers for the defaults, and asks for them. */
+export function isCompactionStatusShownIn(surface: "strip" | "placeholder"): boolean {
+  const current = getChatSettings();
+  if (current === null) void ensureChatSettings();
+  const presentation = (current ?? DEFAULT_CHAT_SETTINGS).compaction_status_presentation;
+  return presentation === "both" || presentation === surface;
+}
+
 /**
  * Replace the settings, on the page at once and on the backend; the backend's answer is what
  * stays. A write the backend refuses or never receives puts the previous settings back, so the

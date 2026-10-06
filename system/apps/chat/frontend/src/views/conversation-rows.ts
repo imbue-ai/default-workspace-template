@@ -17,7 +17,7 @@
  */
 
 import m from "mithril";
-import type { TranscriptEvent, ToolResultEvent } from "../models/Response";
+import type { TranscriptEvent, ToolResultEvent, UserMessageEvent } from "../models/Response";
 import {
   renderUserMessage,
   renderAssistantMessage,
@@ -107,6 +107,18 @@ function buildRows(
   toolResults: Map<string, ToolResultEvent>,
 ): RowDescriptor[] {
   const rows: RowDescriptor[] = [];
+  // The latest compaction pill with a row of its own, which carries the one-time idle-compaction
+  // notice. Read by the render closures, so it is the final value once every row is built.
+  let autocompactNoticeAnchorId: string | null = null;
+  const pushStatusRow = (statusEvent: UserMessageEvent): void => {
+    autocompactNoticeAnchorId = statusEvent.event_id;
+    rows.push({
+      key: statusEvent.event_id,
+      estimate: ESTIMATED_USER_HEIGHT_PX,
+      anchorEventId: statusEvent.event_id,
+      render: () => renderUserMessage(statusEvent, statusEvent.event_id === autocompactNoticeAnchorId) as m.Vnode,
+    });
+  };
   for (const section of sections) {
     const userEvent = section.user_event;
     if (userEvent !== null && !isHiddenUserMessage(userEvent)) {
@@ -136,12 +148,7 @@ function buildRows(
           }),
       });
       for (const statusEvent of section.trailing_status) {
-        rows.push({
-          key: statusEvent.event_id,
-          estimate: ESTIMATED_USER_HEIGHT_PX,
-          anchorEventId: statusEvent.event_id,
-          render: () => renderUserMessage(statusEvent) as m.Vnode,
-        });
+        pushStatusRow(statusEvent);
       }
       continue;
     }
@@ -211,7 +218,11 @@ function buildRows(
               secretNotesByRequestId,
             ),
         });
-      } else if (item.kind === "chip" || item.kind === "status") {
+      } else if (item.kind === "status") {
+        if (!isHiddenUserMessage(item.event)) {
+          pushStatusRow(item.event);
+        }
+      } else if (item.kind === "chip") {
         const chipEvent = item.event;
         if (!isHiddenUserMessage(chipEvent)) {
           rows.push({
@@ -258,12 +269,7 @@ function buildRows(
       });
     }
     for (const statusEvent of section.trailing_status) {
-      rows.push({
-        key: statusEvent.event_id,
-        estimate: ESTIMATED_USER_HEIGHT_PX,
-        anchorEventId: statusEvent.event_id,
-        render: () => renderUserMessage(statusEvent) as m.Vnode,
-      });
+      pushStatusRow(statusEvent);
     }
   }
   return rows;

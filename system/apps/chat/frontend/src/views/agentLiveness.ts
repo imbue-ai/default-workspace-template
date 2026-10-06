@@ -8,7 +8,7 @@
  *   - "dormant" -> the process isn't running                 (grey)
  *
  * This is distinct from the chat's activity indicator (THINKING / TOOL_RUNNING /
- * IDLE), which only describes work *within* a running process. The liveness dot
+ * COMPACTING / IDLE), which only describes work *within* a running process. The liveness dot
  * describes the process itself.
  *
  * In this all-local deployment every non-running state is equally recoverable --
@@ -27,8 +27,8 @@ const ACTIVE_STATES: ReadonlySet<string> = new Set(["RUNNING", "RUNNING_UNKNOWN_
 // (RUNNING) or idle (WAITING). Outside this set the process is not running.
 const ALIVE_STATES: ReadonlySet<string> = new Set(["RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE", "WAITING"]);
 
-// Activity states that mean the agent is mid-turn (see ActivityIndicator).
-const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING"]);
+// Activity states that mean the agent is busy with a turn or a compaction (see ActivityIndicator).
+const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING", "COMPACTING"]);
 
 /** True iff ``state`` POSITIVELY says the agent process is dead.
 

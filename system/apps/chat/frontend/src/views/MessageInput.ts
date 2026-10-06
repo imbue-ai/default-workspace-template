@@ -43,7 +43,7 @@ import {
   launchChat,
   whenChatRegistered,
 } from "../models/Chats";
-import { isWorkingActivityState } from "./ActivityIndicator";
+import { COMPACTING_STATE, isWorkingActivityState } from "./ActivityIndicator";
 import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -1186,8 +1186,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       // above the input, read straight off the backend-derived activity state. While the
       // chat switches harness the turn in progress is the switch's own (the summary it asked
       // for), so the button is the switch's cancel instead, for as long as that is possible.
-      const isAgentWorking = isWorkingActivityState(chat?.active_agent.activity_state ?? null);
-      const isStopButtonVisible = isAgentWorking && !isInterruptInFlight && handoff === null;
+      // A compaction counts as working, but its stop button shows only where the harness's
+      // interrupt cancels a compaction.
+      const activityState = chat?.active_agent.activity_state ?? null;
+      const isAgentWorking = isWorkingActivityState(activityState);
+      const isUninterruptibleCompaction =
+        activityState === COMPACTING_STATE &&
+        getHarnessCatalog(chat?.active_agent.harness)?.can_interrupt_compaction === false;
+      const isStopButtonVisible =
+        isAgentWorking && !isInterruptInFlight && handoff === null && !isUninterruptibleCompaction;
       const isCancelSwitchVisible = handoff !== null && isHandoffCancellable(handoff);
       // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
       const hasQueuedMessages = (chat?.active_agent.queued_messages ?? []).length > 0;

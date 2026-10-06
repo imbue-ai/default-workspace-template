@@ -481,8 +481,10 @@
 /* Subtle inline status messages (e.g. "Context was compacted") */
 .message-system-status-row {
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
+  gap: 8px;
   margin: 12px 0;
 }
 

@@ -26,7 +26,7 @@ export interface ActiveAgent {
   account_id: string | null;
   // The agent's mngr lifecycle state.
   state: string;
-  // THINKING/TOOL_RUNNING/IDLE, or null when the chat app has no activity tracking for it.
+  // THINKING/TOOL_RUNNING/COMPACTING/IDLE, or null when the chat app has no activity tracking for it.
   activity_state: string | null;
   // The live model/effort/fast selection plus the catalog option it matched. Null when no
   // model resolution is available.
