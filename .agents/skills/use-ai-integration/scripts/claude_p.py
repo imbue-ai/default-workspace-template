@@ -16,19 +16,18 @@ Workspace credentials live in the ``env`` block of a provider account's
 ``$CLAUDE_CONFIG_DIR`` names inside an agent, else the workspace's default
 account; written by the provider chooser), NOT in the process environment --
 long-lived services inherit a frozen env from supervisord, so an env-var check
-would go stale the moment the user changes auth. Keyed (API key) integrations additionally snapshot
-the key + base URL into ``data/.secrets/anthropic.env`` at setup time
-(``write_anthropic_env_snapshot``): the workspace's sign-in can change
-after a service is built, and a keyed service keeps billing against the
+would go stale the moment the user changes auth. Keyed (API key) integrations
+additionally snapshot the key + base URL into ``data/.secrets/anthropic.env`` at
+setup time (``write_anthropic_env_snapshot``): the workspace's sign-in can
+change after a service is built, and a keyed service keeps billing against the
 key it was set up with rather than silently switching. The user removes or
 re-snapshots that file (via the agent) to change an integration's key.
 ``read_workspace_ai_credentials`` resolves the snapshot first, then the
 settings file, then the process env (the last for non-workspace contexts);
 every fresh ``claude -p`` subprocess runs on that same account and reads its
 settings itself, so the keyless path always uses current auth with no service
-restarts. The
-subscription ``CLAUDE_CODE_OAUTH_TOKEN`` is never snapshotted -- it cannot
-authenticate direct API (litellm) calls.
+restarts. The subscription ``CLAUDE_CODE_OAUTH_TOKEN`` is never snapshotted --
+it cannot authenticate direct API (litellm) calls.
 
 Two entry points cover the two non-agent scenarios; both share one core that
 handles the things that are easy to get wrong by hand:
@@ -130,11 +129,13 @@ def _default_account_dir() -> str:
 def _account_config_dir() -> str:
     """The account folder claude runs on, or "" when there is none.
 
-    ``$CLAUDE_CONFIG_DIR`` when set, else the workspace's default account. Inside an agent the var IS set -- mngr sources the agent's env file into every
-    process in its tmux session, so a skill script, a worker, and the agent itself all
-    see the account the chat is bound to. Outside one -- a supervisord service, a cron
-    job -- nothing sets it and ~/.claude holds no credential, so fall back to the
-    workspace's default account rather than to nothing.
+    ``$CLAUDE_CONFIG_DIR`` when set, else the workspace's default account. Inside
+    an agent the var IS set -- mngr sources the agent's env file into every
+    process in its tmux session, so a skill script, a worker, and the agent
+    itself all see the account the chat is bound to. Outside one -- a
+    supervisord service, a cron job -- nothing sets it and ~/.claude holds no
+    credential, so fall back to the workspace's default account rather than to
+    nothing.
     """
     return os.environ.get("CLAUDE_CONFIG_DIR", "") or _default_account_dir()
 
