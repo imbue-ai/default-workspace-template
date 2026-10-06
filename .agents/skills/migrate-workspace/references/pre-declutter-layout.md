@@ -266,7 +266,7 @@ broken" without checking the events log.
 - **The AI-integration helper moved *and* changed shape.** `claude_p.py` now lives
   at `.agents/skills/use-ai-integration/scripts/claude_p.py`. More importantly,
   credentials now resolve through `read_workspace_ai_credentials()` -- the
-  `data/.secrets/anthropic.env` snapshot first, then the shared Claude settings,
+  `data/.secrets/anthropic.env` snapshot first, then the Claude account's settings,
   then the process env -- rather than from the process environment. A migrated call
   site that read `os.environ["ANTHROPIC_API_KEY"]` will silently find nothing,
   because services inherit a frozen env from supervisord.
