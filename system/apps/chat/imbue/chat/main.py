@@ -183,9 +183,10 @@ def build_production_state(
             requests_directory=data_dir / SECRET_REQUESTS_DIRNAME, secrets_directory=DEFAULT_SECRETS_DIRECTORY
         ),
     )
-    # Eviction wiring: when the manager sees an agent destroyed or its lifecycle
-    # transition into a dead state, the state drops that agent's watcher -- the
-    # resident transcript, watch thread, and inotify watches go with it.
+    # Eviction wiring: the state drops what an agent holds resident -- the transcript,
+    # watch thread, and inotify watches -- when the manager sees it destroyed (the whole
+    # chat's when it was the active agent) or an archived member die, and after every
+    # observe event releases each stopped chat nobody is streaming.
     agent_manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
     agent_manager.set_unviewed_transcript_release(state.release_unviewed_stopped_transcripts)
     return state
