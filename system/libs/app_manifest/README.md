@@ -256,8 +256,9 @@ import the shell's built modules (`_static/app_contract.js` and
 `_static/context_menu.js`, in the shell's gitignored `static/`), so when the
 tree lacks them, as a fresh worktree does, the full root suite and every
 root-collected run of an app come after the build too. A tree that has them,
-like the live workspace, is not rebuilt: the build rewrites the bundles the
-running shell serves.
+like the live workspace, gets no build for those runs: the modules change only
+when a frontend does, which selects the build itself, and a build in the live
+workspace rewrites the bundles the running shell serves.
 
 Every change that is not entirely documentation (README and changelog files
 anywhere, and other markdown outside `.agents/` and
