@@ -57,6 +57,7 @@ import {
   getPendingPick,
   isSwitchTarget,
   nextSendSwitchTarget,
+  pendingSwitchTarget,
   switchKind,
   underwaySwitchTarget,
 } from "../models/PendingLane";
