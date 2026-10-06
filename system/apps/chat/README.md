@@ -186,7 +186,12 @@ opens the dialog's rebind variant, whose picker starts from "Keep the current
 model", for changing account and model in one switch. A chat that has had no
 user turn skips the dialog too: it switches at once, with no summary and no
 handoff prompt, since there is nothing to hand over. Only a switch that will
-write a summary asks.
+write a summary asks. A press that lands before a new chat's transcript has
+loaded waits for that load before deciding. The strip, the "Switch and send"
+button and the model bar's "next" mark show only while the next send is what
+carries the switch out: once its message is sent the chip names the target,
+unmarked, until the new agent reports its model, and a failed switch leaves it
+on the agent the chat still runs on.
 While the chat converges the held messages render from the snapshot's
 `handoff.held_sends` (the message the user switched with stands down once the
 `agent_switch` marker carrying it is on the transcript, where it renders as the
