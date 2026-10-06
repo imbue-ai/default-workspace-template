@@ -526,6 +526,28 @@ def test_a_watcher_released_before_it_starts_leaves_no_watch_thread_running(tmp_
         state.shutdown()
 
 
+def test_opening_a_stopped_chats_stream_keeps_the_watcher_through_a_release_while_it_is_built(
+    tmp_path: Path,
+) -> None:
+    """The release spares only a chat with an open stream, so a release landing while the stream's watcher
+    is built must already count the stream, or the stream opens with nothing feeding it."""
+    manager = _ReleasingWhileSeedingAgentManager.build(WebSocketBroadcaster())
+    state = build_test_state(agent_manager=manager)
+    manager.note_agent_list_known()
+    seed_agent_state(manager, "stopped-agent", name="stopped-agent", state="STOPPED")
+    manager.release = state.release_unviewed_stopped_transcripts
+    client = create_application(state).test_client()
+    try:
+        response = client.get("/api/chats/stopped-agent/stream", buffered=False)
+
+        assert response.status_code == 200
+        assert manager.release is None
+        assert set(state.watchers) == {"stopped-agent"}
+        response.close()
+    finally:
+        state.shutdown()
+
+
 def _fake_watcher(
     get_all_events: Callable[[], list[dict[str, Any]]],
     start: Callable[[], None],

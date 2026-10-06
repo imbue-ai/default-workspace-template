@@ -405,6 +405,27 @@ def _sse_response(generator: Iterator[str]) -> Response:
     )
 
 
+def _open_chat_stream(
+    state: ChatAppState, chat_id: str, build_feed: Callable[[], object]
+) -> "queue.Queue[dict[str, Any] | None]":
+    """Register a stream of the chat, then build the reader that feeds it.
+
+    Registered first because the release of stopped chats spares only a chat with an open
+    stream: a feed built before the registration could be released by an observe event in
+    between, leaving the stream with nothing feeding it. A build that raises unregisters the
+    stream, which would otherwise keep the chat resident for good.
+    """
+    event_queue = state.event_queues.register(chat_id)
+    is_fed = False
+    try:
+        build_feed()
+        is_fed = True
+    finally:
+        if not is_fed:
+            state.event_queues.unregister(chat_id, event_queue)
+    return event_queue
+
+
 def _stream_events(chat_id: str) -> Response:
     """SSE stream for a chat's new events.
 
@@ -416,12 +437,11 @@ def _stream_events(chat_id: str) -> Response:
         return _chat_not_found_response(chat_id)
 
     state = get_state()
-    state.get_or_create_watcher(agent_info)
+    event_queue = _open_chat_stream(state, chat_id, lambda: state.get_or_create_watcher(agent_info))
 
-    event_queues = state.event_queues
-    event_queue = event_queues.register(chat_id)
-
-    return _sse_response(_stream_filtered_events(chat_id, event_queues, event_queue, state.is_main_session_event))
+    return _sse_response(
+        _stream_filtered_events(chat_id, state.event_queues, event_queue, state.is_main_session_event)
+    )
 
 
 # A NOT_READY send's revive budget. ``start_agent`` returns once mngr has launched the
@@ -1334,15 +1354,12 @@ def _stream_subagent_events(chat_id: str, agent_id: str, subagent_session_id: st
         return segment
 
     state = get_state()
-    _segment_reader(state, segment)
-
-    event_queues = state.event_queues
-    event_queue = event_queues.register(chat_id)
+    event_queue = _open_chat_stream(state, chat_id, lambda: _segment_reader(state, segment))
 
     return _sse_response(
         _stream_filtered_events(
             chat_id,
-            event_queues,
+            state.event_queues,
             event_queue,
             lambda event: event.get("agent_id") == segment.agent.id and event.get("session_id") == subagent_session_id,
         )
