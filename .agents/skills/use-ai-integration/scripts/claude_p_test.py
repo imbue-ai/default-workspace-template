@@ -198,20 +198,33 @@ def test_child_env_strips_mngr_vars_when_requested(
     assert os.environ.get("MNGR_AGENT_NAME") == "lead"
 
 
+def _write_claude_accounts(
+    home: Path,
+    account_ids: tuple[str, ...],
+    *,
+    mru: str,
+    default_account: str | None = None,
+) -> Path:
+    """Give ``home`` these claude accounts, in index order; return the accounts root."""
+    accounts = home / ".minds" / "accounts"
+    for account_id in account_ids:
+        (accounts / account_id).mkdir(parents=True)
+    index: dict[str, object] = {
+        "accounts": [{"id": a, "lane": "anthropic"} for a in account_ids],
+        "mru": mru,
+    }
+    if default_account is not None:
+        index["default_account"] = default_account
+    (accounts / "index.json").write_text(json.dumps(index))
+    return accounts
+
+
 def _make_default_account(home: Path) -> Path:
     """Give ``home`` one claude account, recorded as the most recently used; return its folder."""
-    accounts = home / ".minds" / "accounts"
-    account_dir = accounts / "acct-claude"
-    account_dir.mkdir(parents=True)
-    (accounts / "index.json").write_text(
-        json.dumps(
-            {
-                "accounts": [{"id": "acct-claude", "lane": "anthropic"}],
-                "mru": "acct-claude",
-            }
-        )
+    return (
+        _write_claude_accounts(home, ("acct-claude",), mru="acct-claude")
+        / "acct-claude"
     )
-    return account_dir
 
 
 def test_child_env_keeps_the_agents_own_account(
@@ -231,20 +244,11 @@ def test_child_env_prefers_the_pinned_default_account_over_the_most_recent(
     """Outside an agent, the child runs on the account a chat created now would get."""
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    accounts = tmp_path / ".minds" / "accounts"
-    for account_id in ("acct-pinned", "acct-recent"):
-        (accounts / account_id).mkdir(parents=True)
-    (accounts / "index.json").write_text(
-        json.dumps(
-            {
-                "accounts": [
-                    {"id": "acct-pinned", "lane": "anthropic"},
-                    {"id": "acct-recent", "lane": "anthropic"},
-                ],
-                "default_account": "acct-pinned",
-                "mru": "acct-recent",
-            }
-        )
+    accounts = _write_claude_accounts(
+        tmp_path,
+        ("acct-pinned", "acct-recent"),
+        mru="acct-recent",
+        default_account="acct-pinned",
     )
 
     assert claude_p._child_env()["CLAUDE_CONFIG_DIR"] == str(accounts / "acct-pinned")
