@@ -8,6 +8,7 @@
  * derivation is unit-testable without a DOM.
  */
 
+import { LOCAL_HOSTNAMES } from "@imbue/workspace-ui/src/links";
 import { deriveAppOrigin, workspaceHostCoordinate } from "@imbue/workspace-ui/src/origin";
 import type { AppRecord } from "./records";
 
@@ -33,9 +34,6 @@ export function windowPageUrl(
   return `${appOrigin(app, host, protocol)}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
-/** The host names a backend URL's loopback host may be written as. */
-const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
-
 function loopbackUrl(url: string): URL | null {
   let parsed: URL;
   try {
@@ -43,7 +41,7 @@ function loopbackUrl(url: string): URL | null {
   } catch {
     return null;
   }
-  return LOOPBACK_HOSTNAMES.has(parsed.hostname) ? parsed : null;
+  return LOCAL_HOSTNAMES.has(parsed.hostname) ? parsed : null;
 }
 
 /** The window a local URL is a page of: the openable app whose registered backend URL has the URL's scheme and

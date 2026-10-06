@@ -32,7 +32,8 @@ export type LinkTarget =
 export const OPEN_FILE_MESSAGE = "open:file";
 export const OPEN_URL_MESSAGE = "open:url";
 
-const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+/** The bare host names of this machine (a ``*.localhost`` host is local too). */
+export const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const LOCAL_HOSTNAME_SUFFIX = ".localhost";
 const EXTERNAL_SCHEMES: ReadonlySet<string> = new Set(["mailto:", "tel:"]);
 const WEB_SCHEMES: ReadonlySet<string> = new Set(["http:", "https:"]);
