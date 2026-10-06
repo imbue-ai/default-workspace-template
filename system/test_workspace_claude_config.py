@@ -6,8 +6,9 @@ chooser mints ``~/.minds/accounts/<id>/`` and ``mngr create`` binds the chat to 
 ``~/.claude``" is no longer the contract, and this file no longer claims it.
 
 What survives the accounts work, and is what these tests actually check, is the AMBIENT default:
-anything that did not ask for an account -- a bare ``claude`` in a terminal, the ``claude_p.py``
-resolver, a supervisord service -- must still land on claude's own ``~/.claude``. That holds only
+anything that did not ask for an account -- a bare ``claude`` in a terminal, a supervisord
+service -- must still land on claude's own ``~/.claude`` (``claude_p.py`` picks the workspace's
+default account itself when nothing has set the variable). That holds only
 if nothing pins the variable at a level those inherit, which is exactly the two invariants below.
 They are spread across files that would otherwise drift silently:
 
