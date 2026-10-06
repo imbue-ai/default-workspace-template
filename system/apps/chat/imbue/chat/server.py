@@ -397,10 +397,10 @@ def _sse_response(
     state: ChatAppState,
     chat_id: str,
     event_queue: "queue.Queue[dict[str, Any] | None]",
-    generator: Iterator[str],
+    should_forward: Callable[[dict[str, Any]], bool],
 ) -> Response:
-    """Stream ``generator``, unregistering its stream and releasing stopped chats nobody streams once the
-    server closes the response.
+    """Stream the events queued on ``event_queue`` that pass ``should_forward``, unregistering the stream
+    and releasing stopped chats nobody streams once the server closes the response.
 
     The release runs from the response's close, which the server calls on the request thread,
     rather than from the generator's ``finally``: a GC sweep can finalize an abandoned generator on
@@ -409,7 +409,7 @@ def _sse_response(
     ``finally``.
     """
     response = Response(
-        generator,
+        _stream_filtered_events(chat_id, state.event_queues, event_queue, should_forward),
         mimetype="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -461,12 +461,7 @@ def _stream_events(chat_id: str) -> Response:
     state = get_state()
     event_queue = _open_chat_stream(state, chat_id, lambda: state.get_or_create_watcher(agent_info))
 
-    return _sse_response(
-        state,
-        chat_id,
-        event_queue,
-        _stream_filtered_events(chat_id, state.event_queues, event_queue, state.is_main_session_event),
-    )
+    return _sse_response(state, chat_id, event_queue, state.is_main_session_event)
 
 
 # A NOT_READY send's revive budget. ``start_agent`` returns once mngr has launched the
@@ -1385,12 +1380,7 @@ def _stream_subagent_events(chat_id: str, agent_id: str, subagent_session_id: st
         state,
         chat_id,
         event_queue,
-        _stream_filtered_events(
-            chat_id,
-            state.event_queues,
-            event_queue,
-            lambda event: event.get("agent_id") == segment.agent.id and event.get("session_id") == subagent_session_id,
-        ),
+        lambda event: event.get("agent_id") == segment.agent.id and event.get("session_id") == subagent_session_id,
     )
 
 
