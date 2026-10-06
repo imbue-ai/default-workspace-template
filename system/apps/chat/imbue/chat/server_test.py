@@ -552,16 +552,24 @@ def test_opening_a_stopped_chats_stream_keeps_the_watcher_through_a_release_whil
 
 
 def test_a_stopped_chat_is_released_as_soon_as_its_last_stream_closes() -> None:
-    """Waiting for the next observe event would keep a stopped chat nobody is viewing resident for minutes."""
+    """Waiting for the next observe event would keep a stopped chat nobody is viewing resident for minutes.
+
+    The release waits for the response's close: closing the generator alone is what a GC sweep does to an
+    abandoned one, on whatever thread it lands, so it unregisters the stream but releases nothing."""
     state = build_test_state()
     state.agent_manager.note_agent_list_known()
     seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
     try:
         with create_application(state).app_context():
             response = _stream_events("stopped-agent")
-        frames = iter(response.response)
+        frames = response.response
+        assert isinstance(frames, Generator)
         state.event_queues.broadcast("stopped-agent", {"type": "probe"})
         next(frames)
+        assert set(state.watchers) == {"stopped-agent"}
+
+        frames.close()
+        assert not state.event_queues.has_consumers("stopped-agent")
         assert set(state.watchers) == {"stopped-agent"}
 
         response.close()
@@ -3070,7 +3078,7 @@ def test_stream_filtered_events_forwards_only_matching_events() -> None:
         session_id = event.get("session_id")
         return session_id is None or session_id == "main-1"
 
-    frames = list(_stream_filtered_events("agent-1", event_queues, event_queue, is_main_session_event, lambda: None))
+    frames = list(_stream_filtered_events("agent-1", event_queues, event_queue, is_main_session_event))
     forwarded_ids = [json.loads(frame[len("data: ") :])["event_id"] for frame in frames if frame.startswith("data: ")]
 
     assert forwarded_ids == ["main-evt", "no-session"]
