@@ -84,7 +84,7 @@ describe("renderCompactionPlaceholder", () => {
     resetChatSettingsForTests();
   });
 
-  it("holds the conversation's last slot while compacting, under both presentations", () => {
+  it("holds the conversation's last slot while compacting, under the `both` presentation", () => {
     usePresentation("both");
     const render = mount([prompt("2026-10-06T11:59:00Z")]);
     expect(allText(render?.([prompt("2026-10-06T11:59:00Z")]))).toBe("Compacting…");

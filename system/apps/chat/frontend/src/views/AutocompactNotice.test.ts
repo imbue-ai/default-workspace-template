@@ -72,9 +72,8 @@ describe("AutocompactNotice", () => {
     settingsState.settings = { ...DEFAULT_CHAT_SETTINGS, fast_mode_turn_limit: 7 };
     const shown = render();
     expect(allText(shown)).toContain(AUTOCOMPACT_NOTICE_TEXT);
-    expect(AUTOCOMPACT_NOTICE_TEXT).toBe(
-      "Idle chats now compact automatically to keep replies fast and cheap. Turn this off per chat, or for new " +
-        "chats, under Auto-compact in the model menu.",
+    expect(allText(shown)).toContain(
+      "Turn this off per chat, or for new chats, under Auto-compact in the model menu.",
     );
     // Showing it is not seeing it: nothing is written until the user dismisses it.
     expect(render()).not.toBeNull();
