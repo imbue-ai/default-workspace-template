@@ -1,0 +1,46 @@
+[project]
+name = "workspace-themes"
+version = "0.1.0"
+description = "Workspace themes: the theme folder's models, discovery, validation, serving, and icon tools"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "app-manifest",
+    "click>=8.1",
+    "flask>=3.0",
+    "imbue-common",
+    "loguru>=0.7",
+    # Icon fitting and checking: scaling, quantizing, and reading the pixels of an icon a model drew.
+    "pillow>=12.1",
+    "pydantic>=2.0",
+    # Parsing a theme's style files to check them against the contract.
+    "tinycss2>=1.2",
+]
+
+[project.scripts]
+workspace-themes = "workspace_themes.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/workspace_themes"]
+
+[tool.importlinter]
+root_packages = ["workspace_themes"]
+
+[[tool.importlinter.contracts]]
+name = "workspace_themes layers"
+type = "layers"
+layers = [
+    "workspace_themes.cli",
+    "workspace_themes.flask_routes",
+    "workspace_themes.serving | workspace_themes.icons | workspace_themes.lint",
+    "workspace_themes.catalog",
+    "workspace_themes.interfaces | workspace_themes.validation",
+    "workspace_themes.contract",
+    "workspace_themes.data_types",
+    "workspace_themes.primitives",
+    "workspace_themes.errors",
+]

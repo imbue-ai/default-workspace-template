@@ -20,6 +20,9 @@ dependencies = [
     "tomlkit>=0.12",
     "playwright==1.58.0",
     "litellm>=1.88.1",
+    # The make-theme-icon skill's image-model providers (.agents/skills/make-theme-icon/providers/).
+    "httpx>=0.28",
+    "pillow>=12.1",
 ]
 
 [dependency-groups]
@@ -107,6 +110,7 @@ pytest-workspace-env = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
+workspace-themes = { workspace = true }
 # Apps that other members depend on (their test suites boot each other).
 system-interface = { workspace = true }
 chat = { workspace = true }
