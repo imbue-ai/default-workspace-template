@@ -14,7 +14,8 @@ what could be freed and let them choose; you never stop anything on your own.
    ```
 
    It prints the workspace's free memory, the chats and background agents that
-   have sat idle (with when each was last active and how much memory it holds),
+   have sat idle with nothing pending (with when each was last active and how
+   much memory it holds; one waiting on a background command is never listed),
    and the browsers no window is showing. It only reads; it stops nothing. A
    section it could not read says so: that means "unknown", not "nothing to
    stop". `system/services/oom_priority/README.md` ("Memory candidates") has

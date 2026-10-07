@@ -331,9 +331,10 @@ ARCHIVE="archive/update-self-$(date +%Y%m%d-%H%M%S)"
 git branch -m mngr/update-self "$ARCHIVE" && echo "$ARCHIVE"
 ```
 
-Launch with the plain `worker` template, record the hand-off (from here until
-the worker reports this chat is idle, and naming the worker lets the Imbue Studio app
-read the worker's liveness instead of "waiting for you"), then background-poll
+Launch with the plain `worker` template, record the hand-off (the background poll
+below keeps this chat busy until the worker reports, and naming the worker lets the
+Imbue Studio app read the worker's liveness too, where the busy flag is not
+reported), then background-poll
 through `run_in_background.py`, which delivers `await`'s result to this chat as
 a message that starts your next turn, whatever your harness. Run the staged
 skill's copy of it: this workspace's own tree may predate the script.

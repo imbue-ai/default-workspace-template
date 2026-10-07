@@ -48,8 +48,9 @@ Once the poll is armed, **end your turn**: its message wakes you with the
 report in seconds, while a `sleep N` is a guess at someone else's finishing time
 and every second between the report landing and the sleep expiring is dead time
 on the critical path. Ending your turn is safe -- a worker with a live
-sub-worker of its own never counts as idle, so the liveness check below will not
-mistake you for a wedged one.
+sub-worker of its own, or one waiting on a `run_in_background.py` command of
+its own (mngr reports it busy until the command's report wakes it), never counts
+as idle, so the liveness check below will not mistake you for a wedged one.
 
 **A worker's report is never polled.** Sleeping on a `find` over its reports
 directory, on `mngr list`, or on `tmux capture-pane` against its pane is the
@@ -59,12 +60,6 @@ only sanctioned wait on a sibling.
 With several workers out, arm one poll per worker before ending the turn. Each
 poll's message wakes you separately, so you act on whichever reports first and
 merge it while the others are still running.
-
-Your own backgrounded commands are the one exception. Nothing else holds your
-turn open there, so a worker that ends its turn waiting on its own command is
-declared wedged after three idle polls -- about fifteen seconds. Wait on those
-with `sleep 60`, repeated until the output lands: it stays clear of that
-threshold and bounds the overshoot.
 
 `await` also returns **milestone** reports: any file under
 `<REPORTS_DIR>/milestones/` with no same-named entry in `<REPORTS_DIR>/consumed/`.
@@ -106,11 +101,14 @@ extended period, or output has been static.
 
 `await` makes the same call for you in the clearest case: exit code **76** means
 it watched the worker's agent end its turn on several consecutive polls with no
-report -- finished or wedged without reporting, worth surfacing immediately
-rather than waiting out the timeout. That check never fires while the worker has
-a live sub-worker of its own: an agent labelled `lead_agent=<worker>` in state
-RUNNING or WAITING with no pending shed counts as the worker being busy, so an
-intermediate lead waiting on its own child is never mistaken for a dead one.
+report and nothing pending -- finished or wedged without reporting, worth
+surfacing immediately rather than waiting out the timeout. That check never
+fires while the worker is busy: either mngr reports it busy (`is_busy`, a
+command it started with `run_in_background.py` or a Claude Code background
+shell is still running and will wake it), or it has a live sub-worker of its
+own (an agent labelled `lead_agent=<worker>` in state RUNNING or WAITING with
+no pending shed). So neither a worker parked on its own command nor an
+intermediate lead waiting on its own child is mistaken for a dead one.
 
 ## Do not interrupt more recent user work
 

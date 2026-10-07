@@ -1913,6 +1913,31 @@ def test_a_worker_is_idle_only_once_its_own_children_are_finished(
     assert is_idle is expected_idle
 
 
+@pytest.mark.parametrize(
+    "is_busy,expected_idle",
+    [(True, False), (False, True), (None, True)],
+    ids=["parked-on-its-own-command", "nothing-pending", "mngr-without-is_busy"],
+)
+def test_a_waiting_worker_is_idle_only_when_mngr_does_not_report_it_busy(
+    is_busy: bool | None, expected_idle: bool
+) -> None:
+    """A worker that ended its turn to wait on a background command of its own is
+    WAITING but busy: the command's report wakes it, so the lead must keep waiting
+    rather than exit 76. A record from an mngr without ``is_busy`` reads as idle."""
+    worker = _unique("worker")
+    own_record = _agent_record(worker, "WAITING")
+    if is_busy is not None:
+        own_record["is_busy"] = is_busy
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(own_record))
+
+    is_idle = create_worker_mod._worker_is_idle(
+        worker, runner, pending_shed_check=lambda _name: False
+    )
+
+    assert is_idle is expected_idle
+
+
 def test_a_shed_child_does_not_hold_its_parent_open() -> None:
     """A child shed by the OOM daemon keeps a live-looking state forever without
     doing any work, so it must not keep its parent counted as busy -- otherwise

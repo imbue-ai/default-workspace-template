@@ -4,4 +4,8 @@ A chat whose agent ended its turn to wait on a background task no longer looks f
 
 - Above the composer, a second line under the activity line reads "Waiting on N background tasks" with how long the oldest has run. Pressing it lists each task's description and how long it has run.
 
-- The switch dialog warns that the agent wraps up what it is doing when the chat is waiting on a background task, since switching stops the agent and its pending commands.
+- The chat reads the agent's pending tasks itself, so the status flips as soon as a task is recorded or its report lands, and `/api/agents` reports `is_busy` and `background_tasks`.
+
+- Switching a chat's agent carries its pending commands to the new agent, whose status starts out waiting on them; the switch dialog warns when the chat is busy, since switching stops the old agent.
+
+- A busy chat counts as mid-turn for memory prioritization.

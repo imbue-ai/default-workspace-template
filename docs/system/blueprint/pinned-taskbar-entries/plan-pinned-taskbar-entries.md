@@ -224,6 +224,8 @@ From each remaining agent it reads only `id`, `state`, and `labels`; unknown fie
 
 The mood is `working` when any remaining agent's state is `RUNNING` or `RUNNING_UNKNOWN_AGENT_TYPE`, and `idle` otherwise, including when there are no agents and when the file does not exist.
 
+Later, the background-task busy-state plan (mngr's `is_busy`): the mood is also `working` when any non-primary agent is busy, i.e. waiting on a background task that will wake it.
+
 Staleness is the age of the newest line's timestamp.
 Past ten minutes (twice the snapshot interval) the status is marked stale; the image keeps its mood and the entry's tooltip says the status may be out of date.
 A missing file is stale from the start.

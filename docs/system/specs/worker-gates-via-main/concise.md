@@ -14,6 +14,7 @@
 - A crystallize / heal / update flow kicked off by the user results in main launching a worker, then main (not the user) shepherds it to completion.
 - When the worker reaches a gate, its response begins with `## GATE: <gate-name>` (e.g. `## GATE: outline-approval`, `## GATE: final-artifact`). When the worker is terminal, its response begins with `## STATUS: <status>` (e.g. `## STATUS: done`, `## STATUS: stuck`, `## STATUS: no-update-needed`).
 - `mngr wait <worker> DONE STOPPED WAITING` run in the background notifies main when the worker transitions. Main grabs the latest transcript message, looks for a leading `## GATE:` or `## STATUS:` line, and branches on the result.
+- Later, the background-task busy-state plan (mngr's `is_busy`): `mngr wait` matches WAITING only once the worker is not busy, so a worker waiting on a background command of its own does not wake main.
 - For `## GATE:` responses, main decides:
   - If the question is answerable from code / docs / conventions / prior context main already has: main answers it via `mngr message <worker> -m "<answer>"`, phrased as if it were the user. Main then re-launches `mngr wait` in the background and continues with whatever else it was doing.
   - Otherwise: main surfaces the question to the user via `send-user-message` (which dispatches to telegram or inline as configured), waits for the user's reply on its own channel, forwards the reply via `mngr message`, and re-launches `mngr wait`.

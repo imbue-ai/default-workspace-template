@@ -245,7 +245,8 @@ _AWAIT_TIMEOUT_RC = 124
 # from "still running, just slow".
 _AWAIT_SHED_RC = 75
 # Distinct exit code for an await that stopped early because the worker's agent
-# went idle (ended its turn) without the report ever appearing -- a finished or
+# went idle (ended its turn, with nothing pending that will wake it) without the
+# report ever appearing -- a finished or
 # stalled worker whose delivery failed will never report, so waiting out the
 # full timeout only hides the problem. The message points at the worker's own
 # worktree, where an undelivered report usually sits.
@@ -1277,8 +1278,8 @@ def _worker_has_pending_shed(worker_name: str) -> bool:
 
 # The lifecycle state mngr reports after ``mngr stop``.
 _STOPPED_STATE = "STOPPED"
-# The states in which an agent has ended its turn and is doing no further work
-# on its own -- what "idle" means for a worker the lead is waiting on.
+# The states in which an agent has ended its turn -- idle for a worker the lead is
+# waiting on, unless mngr reports it busy (see ``_worker_is_idle``).
 _IDLE_STATES = ("WAITING", _STOPPED_STATE)
 # The states in which an agent is still a live piece of work: RUNNING is
 # mid-turn, WAITING has ended a turn but is still a resumable agent its own
@@ -1417,7 +1418,13 @@ def _worker_is_idle(
     runner: Runner,
     pending_shed_check: Callable[[str], bool] = _worker_has_pending_shed,
 ) -> bool:
-    """Whether the worker has ended its turn *and* has no sub-worker still alive.
+    """Whether the worker has ended its turn, is not busy, *and* has no sub-worker still alive.
+
+    A worker that ends its turn to wait on a background task of its own (a
+    ``run_in_background.py`` command, a Claude Code background shell) is WAITING
+    but busy (``is_busy`` in ``mngr list``): the task's completion wakes it, so it
+    is not idle. A record without the field, from an mngr that predates it, reads
+    as not busy.
 
     A worker may itself be a lead. While it waits on a sub-worker it has ended
     its own turn, so its state alone reads as idle -- and a lead that trusted
@@ -1439,6 +1446,8 @@ def _worker_is_idle(
     records = _agent_records(runner)
     own = _record_named(records, worker_name)
     if own is None or _record_field(own, "state") not in _IDLE_STATES:
+        return False
+    if own.get("is_busy") is True:
         return False
     own_id = _record_field(own, "id")
     for record in records:
@@ -1727,11 +1736,13 @@ def await_report(
             )
             if consecutive_idle_count >= _IDLE_POLLS_BEFORE_GIVING_UP:
                 print(
-                    f"create_worker: worker '{worker_name}' has ended its turn "
-                    f"(idle for {consecutive_idle_count} consecutive polls) but no "
+                    f"create_worker: worker '{worker_name}' has ended its turn and is "
+                    "no longer busy (idle for "
+                    f"{consecutive_idle_count} consecutive polls) but no "
                     f"report has appeared at {report_path}. A worker still waiting "
-                    "on a live sub-worker of its own does NOT count as idle, so "
-                    "this is not a nested dispatch in flight. Either it finished "
+                    "on a live sub-worker or on a background command of its own "
+                    "does NOT count as idle, so this is neither a nested dispatch "
+                    "nor a pending command in flight. Either it finished "
                     "and the report delivery failed (look for the report inside the "
                     "worker's own worktree -- its `work_dir` in `mngr list "
                     f"--format jsonl` for {worker_name} -- under the report's "
