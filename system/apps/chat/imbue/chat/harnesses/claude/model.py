@@ -10,7 +10,7 @@ parses; this resolver never reads it.
 
 Claude Code exposes no stable programmatic model list, so the catalog is
 maintained by hand to match the aliases ``claude --model`` accepts. Read out of the
-pinned 2.1.280 binary, the full alias set is ``sonnet``, ``opus``, ``haiku``, ``fable``,
+pinned 2.1.285 binary, the full alias set is ``sonnet``, ``opus``, ``haiku``, ``fable``,
 ``best``, ``sonnet[1m]``, ``opus[1m]``, ``fable[1m]``, ``opusplan``; the catalog offers
 four of them, leaving ``best``, ``opusplan`` and the redundant bare variants out on
 purpose (``best`` and ``opusplan`` name a policy rather than a model, so neither can carry
@@ -27,16 +27,16 @@ of the model, and this is a property of the harness. Haiku has no ``[1m]`` varia
 
 The switch alias and the reported id are different strings, and the suffix shows up in
 both: an agent launched as ``opus[1m]`` reports ``claude-opus-5-5[1m]``. Fast mode is an
-Opus-only capability (in 2.1.280 the ``fast_mode`` capability is carried by Opus 5.5, Opus 5
+Opus-only capability (in 2.1.285 the ``fast_mode`` capability is carried by Opus 5.5, Opus 5
 and Opus 4.8, and by nothing else) -- notably NOT a property of the most capable model, so
 do not infer it from rank.
 
-The picker offers exactly four models -- Fable 5.1, Opus 5.5, Sonnet 5, Haiku 4.5. Every
+The picker offers exactly four models -- Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 4.5. Every
 other option is declared with ``in_picker=False``: matchable if a live read reports it,
 never offered. That set is defined by what the four do NOT cover, so an agent sitting on
 a model the picker cannot reach still shows a name instead of falling through to the
 shrug case. Three ways in: an approved org launching Mythos, a chat that was created on
-an older pin and is still sitting on Opus 5 or Fable 5, and a user typing ``/model opus-4-8``
+an older pin and is still sitting on Opus 5, Sonnet 5 or Fable 5, and a user typing ``/model opus-4-8``
 straight into the underlying Claude Code session, which the picker neither offers nor
 prevents. The ``ultra`` effort (ultracode) is declared-but-hidden the same way.
 
@@ -47,9 +47,9 @@ suffix reports it too (``claude-opus-5-5[1m]``), which reaches the same option t
 walks the options in catalog order and takes the first key the reported id starts with,
 so the catalog is ordered such that no key precedes a longer key it prefixes: a point
 release comes before its family (``claude-opus-5-5`` before ``claude-opus-5``,
-``claude-fable-5-1`` before ``claude-fable-5``), and the bare family catch-alls
-(``claude-opus-4``) that would swallow their dated siblings come last. A test pins that
-no earlier key shadows a later one.
+``claude-sonnet-5-5`` before ``claude-sonnet-5``, ``claude-fable-5-1`` before
+``claude-fable-5``), and the bare family catch-alls (``claude-opus-4``) that would swallow
+their dated siblings come last. A test pins that no earlier key shadows a later one.
 
 Hidden options are not decoration: they make the catalog complete against what the
 harness can report, and each says what its model actually does. ``supports_fast`` follows
@@ -111,10 +111,10 @@ _OFFERED_MODELS: tuple[ModelOption, ...] = (
     ),
     ModelOption(
         id="sonnet[1m]",
-        label="Sonnet 5",
+        label="Sonnet 5.5",
         efforts=_CLAUDE_EFFORTS,
         supports_fast=False,
-        harness_reported_model_id="claude-sonnet-5",
+        harness_reported_model_id="claude-sonnet-5-5",
     ),
     ModelOption(
         id="haiku",
@@ -127,12 +127,12 @@ _OFFERED_MODELS: tuple[ModelOption, ...] = (
 
 # Everything the four offered models do NOT match, so the catalog is complete against
 # what the harness can report: Mythos (approved orgs only) and every previous-generation
-# model 2.1.280 still carries. These are not offered, but they are not decoration either
+# model 2.1.285 still carries. These are not offered, but they are not decoration either
 # -- they exist so the catalog describes the whole model surface, and each one should say
 # what its model actually does.
 #
 # supports_fast therefore follows the binary rather than being set permissively. In
-# 2.1.280's baked-in model catalog the fast_mode capability is carried by Opus 5.5, Opus 5
+# 2.1.285's baked-in model catalog the fast_mode capability is carried by Opus 5.5, Opus 5
 # and Opus 4.8 and by nothing else, so of the hidden entries only Opus 5 and Opus 4.8
 # declare it -- 4.7 and 4.6 had fast removed, which is also why their legacy
 # claude-opus-4-*-fast ids are dead and cannot arrive with fast on. The field is not
@@ -174,6 +174,9 @@ _HIDDEN_MODELS: tuple[ModelOption, ...] = tuple(
         # opus[1m] entry: claude-opus-5 prefixes claude-opus-5-5, so putting it first would
         # label every Opus 5.5 read as "Opus 5".
         ("claude-opus-5", "Opus 5", True),
+        # The previous Sonnet, for the same reasons, and likewise after the offered sonnet[1m]
+        # entry, since claude-sonnet-5 prefixes claude-sonnet-5-5.
+        ("claude-sonnet-5", "Sonnet 5", False),
         # Like Opus 5 above, Opus 4.8 really has fast, per the binary's fast_mode capability.
         ("claude-opus-4-8", "Opus 4.8", True),
         ("claude-opus-4-7", "Opus 4.7", False),

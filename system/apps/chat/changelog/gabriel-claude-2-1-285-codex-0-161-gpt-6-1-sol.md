@@ -1,0 +1,3 @@
+The Claude model picker's Sonnet entry now selects Claude Sonnet 5.5. On the new Claude Code 2.1.285 pin, the `sonnet[1m]` alias the entry switches with resolves to `claude-sonnet-5-5`, so the entry is labelled "Sonnet 5.5" and its `harness_reported_model_id` moves to `claude-sonnet-5-5`. Sonnet 5 (`claude-sonnet-5`) stays in the catalog as a hidden option, so a chat created on the previous pin still shows its name. It is ordered after the offered Sonnet 5.5 key because `claude-sonnet-5` is a prefix of `claude-sonnet-5-5`.
+
+The baked model catalog fixture (now `baked_model_catalog_v2_1_285.json`) and the list of model ids the binary carries were regenerated from the 2.1.285 executable.

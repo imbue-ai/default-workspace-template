@@ -67,6 +67,25 @@
       ]
     },
     {
+      "id": "claude-sonnet-5-5",
+      "family": "sonnet",
+      "display_name": "Sonnet 5.5",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "mid_conv_system",
+        "context_management",
+        "rejects_disabled_thinking",
+        "per_turn_effort",
+        "lean_prompt",
+        "refusal_fallback",
+        "silent_turn_reminder",
+        "org_locked_thinking"
+      ]
+    },
+    {
       "id": "claude-opus-4-0",
       "family": "opus",
       "display_name": "Opus 4",
@@ -236,7 +255,7 @@
   ],
   "aliases": {
     "opus": "claude-opus-5-5",
-    "sonnet": "claude-sonnet-5",
+    "sonnet": "claude-sonnet-5-5",
     "haiku": "claude-haiku-4-5",
     "fable": "claude-fable-5-1"
   }
