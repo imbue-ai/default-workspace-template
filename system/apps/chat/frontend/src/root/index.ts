@@ -196,6 +196,20 @@ async function startNewChat(): Promise<void> {
   openProviderChooser({ onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId) });
 }
 
+/** With nothing signed in, the chooser opens as the root loads: no chat can start without a provider, so it comes
+ *  before anything is typed. */
+async function offerChooserWhenNothingSignedIn(): Promise<void> {
+  await whenAccountsReadyToChoose();
+  if (getSelectedAccount() === null) openProviderChooser();
+}
+
+/** Close the root's chooser. A sign-in made in it does not reach the chat pages' own account lists, so they read
+ *  theirs again. */
+function dismissProviderChooser(): void {
+  closeProviderChooser();
+  pool?.accountsChanged();
+}
+
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
  *  reported before the token path: the shell holds that path as this window's location until the root reports
  *  another. */
@@ -394,7 +408,7 @@ const ChatRoot: m.Component = {
               },
             })
           : null,
-        isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
+        isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: dismissProviderChooser }) : null,
         pendingPick === null
           ? null
           : m(SendPicker, {
@@ -512,7 +526,9 @@ function bootstrap(): void {
   installCursorHidingWhileTyping(document);
   reportLocation();
   const token = pendingToken;
+  // An intake that launches a chat offers the chooser itself, with its message riding the sign-in.
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));
+  else void offerChooserWhenNothingSignedIn();
 }
 
 window.addEventListener("load", bootstrap);

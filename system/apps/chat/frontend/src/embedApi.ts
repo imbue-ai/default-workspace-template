@@ -21,6 +21,8 @@ export interface ChatPageEmbedApi {
   prependDraft(text: string): void;
   /** Whether the root draws its phone layout, which the page's composer follows (``compactLayout.ts``). */
   setCompact(isCompact: boolean): void;
+  /** The root's provider chooser closed: re-read the account list, which a sign-in there does not reach. */
+  accountsChanged(): void;
 }
 
 declare global {

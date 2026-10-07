@@ -17,6 +17,7 @@ import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/ap
 import { currentPresenceState, reportPresence, startPresenceReporting } from "./presence";
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
+import { loadAccounts } from "./models/Providers";
 import { rootPathFor } from "./root/selection";
 import { prependToComposer } from "./views/MessageInput";
 
@@ -99,6 +100,12 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
       setCompact: (isCompact) => {
         setCompactFromRoot(isCompact);
         m.redraw();
+      },
+      accountsChanged: () => {
+        loadAccounts().then(
+          () => m.redraw(),
+          (error: unknown) => console.warn("Could not re-read the account list", error),
+        );
       },
     };
     window.chatPageEmbed = embedApi;

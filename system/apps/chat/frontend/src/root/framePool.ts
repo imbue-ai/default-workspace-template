@@ -73,6 +73,12 @@ export class InnerFramePool {
     for (const chatId of this.held.keys()) this.api(chatId)?.setCompact(isCompact);
   }
 
+  /** The root's provider chooser closed, so every loaded page re-reads its accounts; a page still loading reads
+   *  them fresh. */
+  accountsChanged(): void {
+    for (const chatId of this.held.keys()) this.api(chatId)?.accountsChanged();
+  }
+
   /** The handshake the shell gave the root, handed to every page (now and as each loads). */
   setHandshake(handshake: ShellHandshake): void {
     this.handshake = handshake;

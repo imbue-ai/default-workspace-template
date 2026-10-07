@@ -24,7 +24,12 @@ observe`, its own supervised service) writes, and serves:
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title. Loading the page sends and writes nothing. With nothing selected it
   shows the most recent chat, and with no chats one awaiting its first send
-  (`POST /api/chats/awaiting`, held in memory until that send launches it). At
+  (`POST /api/chats/awaiting`, held in memory until that send launches it). With
+  nothing signed in the root opens the provider chooser as it loads, since no
+  chat can start without a provider; a chat awaiting its first send shows
+  "Connect an AI provider to start chatting." and a "Choose a provider" button
+  in place of its composer until one is signed in, and the root's chooser tells
+  its chat pages to re-read their account lists when it closes. At
   700px wide or less (a phone, or a narrow window) the root takes its phone
   layout (`frontend/src/compactLayout.ts`, docs/system/blueprint/desktop-interface/plan-phone-interface.md):
   a 44px header with a list button, the chat's title and a kebab of its verbs,
@@ -296,7 +301,8 @@ pseudo-harness like any archived segment), the record names the seed as its
 first member, and the chat is listed as a provisional chat in the
 `awaiting_first_send` phase, its transcript on the page with a composer under
 it. The user's first message is what launches the chat's first real agent
-(the provider chooser opens then if nothing is signed in), which joins the
+(with nothing signed in, the composer offers the provider chooser in its place
+until a sign-in), which joins the
 record as the seed's successor with the `chat_id` and `chat_seq` labels a
 handoff's successor carries. That agent is launched with the seeded
 conversation ahead of the user's message, as one message: the seed is a segment

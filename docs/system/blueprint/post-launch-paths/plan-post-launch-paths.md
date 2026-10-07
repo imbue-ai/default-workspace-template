@@ -173,7 +173,7 @@ The token is consumed before the answer, so a second apply is a `404`.
 
 `ProvisionalChat`'s `awaiting_first_send` phase, which a seeded chat has used since the welcome chat landed, now covers a chat with no seed: one minted by an intake that could not launch at once.
 Such a chat has a display name minted like a create's ("Chat N"), the account the intake resolved (or none), no message, and `is_seeded` false.
-It is listed among the chats as a provisional chat is, its page shows an empty conversation with the composer under it, and the user's first send launches it, on the signed-in account (the provisional chat's own when it names one, else the selected one) or through the provider chooser when nothing is signed in, exactly as a seeded chat's first send does.
+It is listed among the chats as a provisional chat is, its page shows an empty conversation with the composer under it, and the user's first send launches it on the signed-in account (the provisional chat's own when it names one, else the selected one), exactly as a seeded chat's first send does; with nothing signed in the composer is replaced by a sentence and a button that opens the provider chooser, so no message is typed before a provider exists.
 A launch by `chat_id` of an unseeded awaiting chat brings the message, as a seeded one's does.
 Discarding it before its first send drops it; it has no record, so a chat-app restart drops it too, which is accepted (its draft was the page's alone).
 
@@ -231,7 +231,7 @@ A shortcut in `new` mode launches with target `new`; in `focus` mode it raises t
 ### 4.6 No account signed in
 
 A `new_chat` intake with nothing signed in mints an unseeded provisional chat and holds the intake.
-The window lands on `/?chat=<id>&intake=<token>`; the root applies the intake and receives `first_message`, so it opens the provider chooser over the chat; signing in launches the chat's first agent with the text as its first message, and dismissing the chooser puts the text into the composer instead, where the next send offers the chooser again.
+The window lands on `/?chat=<id>&intake=<token>`; the root applies the intake and receives `first_message`, so it opens the provider chooser over the chat; signing in launches the chat's first agent with the text as its first message, and dismissing the chooser puts the text into the composer's draft instead, which shows once a provider is signed in from the button that stands in for the composer until then.
 A `chat_selector` or `current_chat` intake never asks for an account: it reaches an existing chat, which has one, or falls into `new_chat`.
 
 ### 4.7 Reloads and other clients

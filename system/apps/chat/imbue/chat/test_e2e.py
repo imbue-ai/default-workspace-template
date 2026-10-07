@@ -882,6 +882,40 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
         expect(_chat_root(page).locator(".chat-root")).to_be_visible(timeout=15000)
 
 
+@pytest.mark.timeout(120, func_only=False)
+def test_the_chat_list_opened_with_nothing_signed_in_offers_the_provider_chooser_at_once(
+    tmp_path: Path, page: Page
+) -> None:
+    """No chat can start without a provider, so the root offers the chooser as it loads rather than after a message
+    has been typed."""
+    with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
+        _open_fixture_chat_root(page, server)
+        root = _chat_root(page)
+        expect(root.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(root.locator('[data-e2e="provider-chooser"]')).to_contain_text("Pick your AI provider")
+        root.locator('[data-e2e="provider-chooser"] [aria-label="Close"]').click()
+        expect(root.locator('[data-e2e="provider-chooser"]')).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_chat_awaiting_its_first_send_with_nothing_signed_in_offers_a_provider_in_place_of_the_composer(
+    tmp_path: Path, page: Page
+) -> None:
+    """A message typed before a provider is connected could not be sent, so with the chooser dismissed the composer
+    is a sentence and a button that opens the chooser again."""
+    with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
+        chat_frame = _start_new_chat(page, server)
+        root = _chat_root(page)
+        expect(root.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        root.locator('[data-e2e="provider-chooser"] [aria-label="Close"]').click()
+        expect(chat_frame.locator(".message-input-no-provider")).to_contain_text(
+            "Connect an AI provider to start chatting.", timeout=15000
+        )
+        expect(chat_frame.locator(".message-input-textbox")).to_have_count(0)
+        chat_frame.locator(".message-input-choose-provider").click()
+        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+
+
 # Installed in every frame before its scripts run: records each placeholder screen or text the chat page ever
 # draws, however briefly, into ``window.__placeholdersSeen``.
 _RECORD_PLACEHOLDERS_SEEN_SCRIPT = """

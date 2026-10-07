@@ -29,6 +29,7 @@ import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from ".
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
+  areAccountsLoaded,
   isAccountSignedOut,
   loadAccounts,
   openProviderChooser,
@@ -245,7 +246,7 @@ export interface MessageInputAttrs {
 
 /** The composer's box, beside ``leading`` when there is one. The row is there either way, so the box (and the
  *  textarea in it, with its focus and the soft keyboard) is kept when ``leading`` comes or goes. With no box (a
- *  chat whose account was signed out) the row holds ``leading`` alone, so the phone keeps its settings button. */
+ *  chat with no provider to run on) the row holds ``leading`` alone, so the phone keeps its settings button. */
 function composeRow(leading: m.Children | undefined, boxChildren: m.Children[] | null): m.Vnode {
   return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
     leading ?? null,
@@ -1234,6 +1235,32 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
+      /** In place of the composer while nothing is signed in that a new chat could start on: a message typed
+       *  now could not be sent until a provider is connected, so the provider comes first. */
+      function renderNoProviderNotice(): m.Children {
+        return m(
+          "div",
+          {
+            class:
+              "message-input-no-provider flex flex-row items-center justify-between gap-3 rounded-xl border " +
+              "border-default bg-surface-secondary py-3 pr-3 pl-5 text-(length:--font-size-body) text-secondary",
+          },
+          [
+            m("span", "Connect an AI provider to start chatting."),
+            m(
+              Button,
+              {
+                variant: "primary",
+                sm: true,
+                extra: "message-input-choose-provider shrink-0",
+                onclick: () => openProviderChooser(),
+              },
+              "Choose a provider",
+            ),
+          ],
+        );
+      }
+
       const attachments = getComposerAttachments(chatId);
       const hasMessageText = messageText.trim().length > 0;
       const canSend = hasMessageText || hasReadyAttachments(chatId);
@@ -1252,6 +1279,18 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         switchTarget === null &&
         !isSendHeldForSwitch &&
         isAccountSignedOut(chat?.active_agent.account_id);
+      // A chat awaiting its first send launches on that send, which needs an account. Until the list has loaded the
+      // composer shows as usual, since most pages have one.
+      const awaitingFirstSend = chat === undefined ? getProvisionalChat(chatId) : undefined;
+      const isBlockedByNoProvider =
+        awaitingFirstSend?.phase === "awaiting_first_send" &&
+        areAccountsLoaded() &&
+        accountForFirstSend(awaitingFirstSend.account_id) === null;
+      const blockingNotice = isBlockedBySignedOutAccount
+        ? renderSignedOutAccountNotice(chatId)
+        : isBlockedByNoProvider
+          ? renderNoProviderNotice()
+          : null;
 
       // The stop button is only meaningful while the agent has an interruptible
       // turn in progress -- the same condition that drives the activity indicator
@@ -1275,7 +1314,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           declinedSlashCommand !== null ? renderDeclinedCommandNotice(declinedSlashCommand) : null,
           actionFailureDetail !== null ? renderActionFailureNotice(actionFailureDetail) : null,
           switchTarget !== null ? renderSwitchStrip(switchTarget) : null,
-          isBlockedBySignedOutAccount && chatId !== null ? renderSignedOutAccountNotice(chatId) : null,
+          blockingNotice,
           m("input", {
             type: "file",
             multiple: true,
@@ -1294,7 +1333,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           }),
           composeRow(
             vnode.attrs.leading,
-            isBlockedBySignedOutAccount
+            blockingNotice !== null
               ? null
               : [
                   attachments.length > 0
