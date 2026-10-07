@@ -29,7 +29,10 @@ const state: {
   flow: unknown;
 } = { lanes: [], accounts: [], loaded: true, flow: null };
 
-const startFlow = vi.hoisted(() => vi.fn(async () => undefined));
+const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
+
+vi.mock("../models/providerRelay", () => ({ requestProviderRelay }));
 
 // The real module under the view's data sources, so the chooser's open/pick/close state is the
 // production code rather than a stand-in for it.
@@ -53,7 +56,7 @@ import m from "mithril";
 
 import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from "../models/Providers";
 import type { UnpickableReason } from "../models/Providers";
-import { ProviderChooserModal } from "./ProviderChooserModal";
+import { PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
 import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
@@ -79,6 +82,7 @@ function lane(overrides: Partial<Lane> = {}): Lane {
         label: "Claude subscription",
         description: "Sign in with your Claude account.",
         signup_url: "",
+        note: "",
         shape: "url_then_code",
         is_primary: true,
       },
@@ -98,6 +102,7 @@ const PI_KEY_LANE = lane({
       label: "Paste a key",
       description: "Pick the provider, then paste its key.",
       signup_url: "",
+      note: "",
       shape: "paste",
       is_primary: true,
     },
@@ -109,12 +114,24 @@ const PI_KEY_LANE = lane({
 });
 
 function account(id: string, laneId: string, label: string): ProviderAccount {
-  return { id, lane: laneId, harness: "claude", provider: label, harness_label: "", seq: 1, name: "", label };
+  return {
+    id,
+    lane: laneId,
+    harness: "claude",
+    provider: label,
+    harness_label: "",
+    seq: 1,
+    name: "",
+    label,
+    reauth_method: "subscription",
+  };
 }
 
 beforeEach(() => {
   closeProviderChooser();
   startFlow.mockClear();
+  requestProviderRelay.mockReset();
+  requestProviderRelay.mockResolvedValue(true);
   state.lanes = [lane()];
   state.accounts = [];
   state.loaded = true;
@@ -142,6 +159,7 @@ describe("the provider chooser", () => {
         seq: 1,
         name: "",
         label: "Anthropic (Claude Code)",
+        reauth_method: "subscription",
       },
       {
         id: "a2",
@@ -154,6 +172,7 @@ describe("the provider chooser", () => {
         seq: 2,
         name: "",
         label: "Anthropic 2 (Claude Code)",
+        reauth_method: "subscription",
       },
     ];
     const text = render();
@@ -183,6 +202,7 @@ describe("the provider chooser", () => {
         seq: 1,
         name: "",
         label: "Anthropic (Claude Code)",
+        reauth_method: "subscription",
       },
     ];
     const root = document.createElement("div");
@@ -193,7 +213,7 @@ describe("the provider chooser", () => {
     (root.querySelector('[aria-label="Remove Anthropic (Claude Code)"]') as HTMLElement).click();
     draw();
     expect(root.textContent).toContain("Remove account");
-    expect(root.textContent).toContain("New chats can't be started on it.");
+    expect(root.textContent).toContain("chats running on it stop taking messages");
     expect(root.querySelector(".destroy-dialog-btn-destroy")?.textContent).toBe("Remove");
 
     (root.querySelector(".destroy-dialog-btn-cancel") as HTMLElement).click();
@@ -326,5 +346,309 @@ describe("picking a signed-in account", () => {
 
     expect(root.textContent).toContain("Anthropic (Claude Code)");
     expect(root.querySelector('[data-e2e^="pick-account-"]')).toBeNull();
+  });
+});
+
+describe("a sign-in finished in the browser", () => {
+  const CLAUDE_RELAY_URL = "https://claude.ai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A54871%2Fcallback";
+  const CHATGPT = lane({
+    id: "openai",
+    provider_name: "OpenAI",
+    harness: "codex",
+    methods: [
+      {
+        id: "chatgpt",
+        label: "Use your ChatGPT plan (runs on Codex)",
+        description: "",
+        signup_url: "",
+        note: "",
+        shape: "browser",
+        is_primary: true,
+      },
+      {
+        id: "device",
+        label: "ChatGPT with a code",
+        description: "",
+        signup_url: "",
+        note: "",
+        shape: "code_then_wait",
+        is_primary: false,
+      },
+    ],
+  });
+
+  /** The Anthropic lane with its API-key method offered under the browser sign-in. */
+  function anthropicWithApiKey(): Lane {
+    return lane({
+      methods: [
+        ...lane().methods,
+        {
+          id: "api_key",
+          label: "Use an API key",
+          description: "",
+          signup_url: "",
+          note: "",
+          shape: "paste",
+          is_primary: false,
+        },
+      ],
+    });
+  }
+
+  async function settled(): Promise<void> {
+    for (let index = 0; index < 5; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  async function clickLane(laneId: string): Promise<HTMLElement> {
+    const root = document.createElement("div");
+    const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    draw();
+    (root.querySelector(`[data-e2e="lane-${laneId}"]`) as HTMLElement).click();
+    await settled();
+    draw();
+    return root;
+  }
+
+  function startedFlow(shape: string, relayUrl: string | null): unknown {
+    return {
+      flow_id: "flow-1",
+      shape,
+      url: "https://claude.ai/manual",
+      code: null,
+      relay_url: relayUrl,
+      laneId: "anthropic",
+      methodId: "subscription",
+      accountId: null,
+      status: { state: "pending", detail: null, account_id: null },
+    };
+  }
+
+  it("hands the page to the desktop app and waits on the browser", async () => {
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+
+    const root = await clickLane("anthropic");
+
+    expect(requestProviderRelay).toHaveBeenCalledExactlyOnceWith(CLAUDE_RELAY_URL, "flow-1");
+    expect(root.textContent).toContain("Finish signing in to Anthropic in your browser.");
+    expect(root.querySelector('[data-e2e="open-sign-in-again"]')?.textContent).toBe("Try again");
+  });
+
+  it("offers reopening the page and another way in side by side while the browser is out", async () => {
+    state.lanes = [anthropicWithApiKey()];
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+
+    const root = await clickLane("anthropic");
+
+    expect(root.querySelector('[data-e2e="open-sign-in-again"]')?.textContent).toBe("Try again");
+    expect(root.querySelector('[data-e2e="sign-in-another-way"]')?.textContent).toBe("Try another way");
+    expect(root.textContent).not.toContain(PASTE_STEP_LABEL);
+  });
+
+  it("shows Claude's paste-the-code steps when nothing relays", async () => {
+    requestProviderRelay.mockResolvedValue(false);
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+
+    const root = await clickLane("anthropic");
+
+    expect(root.textContent).toContain(PASTE_STEP_LABEL);
+    expect(root.textContent).not.toContain("Finish signing in to Anthropic in your browser.");
+  });
+
+  it("falls back to ChatGPT's one-time code when nothing relays", async () => {
+    requestProviderRelay.mockResolvedValue(false);
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+
+    await clickLane("openai");
+
+    expect(startFlow).toHaveBeenCalledWith("openai", "chatgpt", undefined);
+    expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
+  });
+
+  it("goes straight to ChatGPT's one-time code once nothing relays, rather than starting the browser login again", async () => {
+    requestProviderRelay.mockResolvedValue(false);
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+    const root = await clickLane("openai");
+
+    (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    (root.querySelector('[data-e2e="lane-openai"]') as HTMLElement).click();
+    await settled();
+
+    expect(startFlow.mock.calls.map((call) => call[1])).toEqual(["chatgpt", "device", "device"]);
+  });
+
+  it("starts no sign-in until a row is clicked, so opening the chooser never displaces one", async () => {
+    openProviderChooser();
+    const root = document.createElement("div");
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    await settled();
+
+    expect(startFlow).not.toHaveBeenCalled();
+  });
+
+  it("keeps Claude's code steps one click from the browser wait, on the same sign-in", async () => {
+    state.lanes = [anthropicWithApiKey()];
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    const root = await clickLane("anthropic");
+
+    (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    expect(root.textContent).toContain(PASTE_STEP_LABEL);
+    expect(root.textContent).toContain("Use an API key");
+    expect(startFlow).toHaveBeenCalledOnce();
+  });
+
+  const CHATGPT_WITH_NOTE = lane({
+    ...CHATGPT,
+    methods: CHATGPT.methods.map((each) =>
+      each.id === "chatgpt"
+        ? { ...each, note: "Turn on *the setting* in [the settings](https://example.com/settings)." }
+        : each,
+    ),
+  });
+
+  it("shows the browser sign-in's note while it waits on the browser", async () => {
+    state.lanes = [CHATGPT_WITH_NOTE];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+
+    const root = await clickLane("openai");
+
+    expect(root.textContent).toContain("Finish signing in to OpenAI in your browser.");
+    const note = root.querySelector('[data-e2e="method-note"]');
+    expect(note?.textContent?.trim()).toBe("Turn on the setting in the settings.");
+    expect(note?.querySelector("em")?.textContent).toBe("the setting");
+    expect(note?.querySelector("a")?.getAttribute("href")).toBe("https://example.com/settings");
+  });
+
+  it("shows no note on the one-time code, which does not need the setting", async () => {
+    requestProviderRelay.mockResolvedValue(false);
+    state.lanes = [CHATGPT_WITH_NOTE];
+    state.flow = { ...(startedFlow("code_then_wait", null) as object), code: "ABCD-1234" };
+
+    const root = await clickLane("openai");
+
+    expect(root.textContent).toContain("ABCD-1234");
+    expect(root.querySelector('[data-e2e="method-note"]')).toBeNull();
+  });
+
+  it("moves ChatGPT to its one-time code when the browser is not coming back", async () => {
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+    const root = await clickLane("openai");
+
+    (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();
+    await settled();
+
+    expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
+  });
+
+  it("moves to another way in when the desktop app can no longer open the page", async () => {
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    const root = await clickLane("anthropic");
+    requestProviderRelay.mockResolvedValue(false);
+
+    (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
+    await settled();
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    expect(root.textContent).toContain("Imbue Studio couldn't open the sign-in page.");
+    expect(root.textContent).toContain(PASTE_STEP_LABEL);
+  });
+
+  it("starts nothing when the desktop app's late answer to Try again comes after the user went back", async () => {
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    const root = await clickLane("anthropic");
+    let answer: (isRelaying: boolean) => void = () => undefined;
+    requestProviderRelay.mockImplementationOnce(() => new Promise<boolean>((resolve) => (answer = resolve)));
+
+    (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
+    (root.querySelector('[aria-label="Back"]') as HTMLElement).click();
+    // What the real abortFlow does to the live flow.
+    state.flow = null;
+    answer(false);
+    await settled();
+
+    expect(startFlow).toHaveBeenCalledOnce();
+  });
+
+  it("keeps waiting on the browser when Try again is clicked twice and the first ask is cut short", async () => {
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+    const root = await clickLane("openai");
+    let cutShort: (isRelaying: boolean) => void = () => undefined;
+    requestProviderRelay.mockImplementationOnce(() => new Promise<boolean>((resolve) => (cutShort = resolve)));
+
+    const tryAgain = root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement;
+    tryAgain.click();
+    tryAgain.click();
+    // What the real requestProviderRelay does to an ask a newer one replaced.
+    cutShort(false);
+    await settled();
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    expect(startFlow).toHaveBeenCalledOnce();
+    expect(root.textContent).toContain("Finish signing in to OpenAI in your browser.");
+  });
+
+  it("stops offering ChatGPT's browser sign-in once the desktop app can no longer open the page", async () => {
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+    const root = await clickLane("openai");
+    requestProviderRelay.mockResolvedValue(false);
+
+    (root.querySelector('[data-e2e="open-sign-in-again"]') as HTMLElement).click();
+    await settled();
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
+    expect(root.textContent).not.toContain("Use your ChatGPT plan (runs on Codex)");
+  });
+
+  it("offers another way in after a sign-in fails", async () => {
+    state.lanes = [CHATGPT];
+    state.flow = startedFlow("browser", "https://auth.openai.com/oauth/authorize?state=s");
+    const root = await clickLane("openai");
+    state.flow = { ...(state.flow as object), status: { state: "failed", detail: "Denied.", account_id: null } };
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();
+    await settled();
+
+    expect(startFlow).toHaveBeenLastCalledWith("openai", "device", undefined);
+  });
+
+  it("offers Claude's code steps after a sign-in fails, rather than the browser again", async () => {
+    state.lanes = [anthropicWithApiKey()];
+    state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    const root = await clickLane("anthropic");
+    state.flow = { ...(state.flow as object), status: { state: "failed", detail: "Denied.", account_id: null } };
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    requestProviderRelay.mockClear();
+    startFlow.mockImplementationOnce(async () => {
+      state.flow = startedFlow("url_then_code", CLAUDE_RELAY_URL);
+    });
+
+    (root.querySelector('[data-e2e="sign-in-another-way"]') as HTMLElement).click();
+    await settled();
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    expect(startFlow).toHaveBeenLastCalledWith("anthropic", "subscription", undefined);
+    expect(requestProviderRelay).not.toHaveBeenCalled();
+    expect(root.textContent).toContain(PASTE_STEP_LABEL);
+  });
+
+  it("signs an API-key account in again with a key, not a browser sign-in", () => {
+    state.lanes = [anthropicWithApiKey()];
+    state.accounts = [{ ...account("a1", "anthropic", "Anthropic (Claude Code)"), reauth_method: "api_key" }];
+    const root = document.createElement("div");
+    m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+
+    [...root.querySelectorAll("button")].find((b) => b.textContent === "Sign in again")!.click();
+
+    expect(startFlow).toHaveBeenCalledExactlyOnceWith("anthropic", "api_key", "a1");
   });
 });

@@ -12,7 +12,6 @@ function render(overrides: Partial<LauncherFieldAttrs> = {}): { root: HTMLElemen
   const attrs: LauncherFieldAttrs = {
     query: "",
     isOpen: true,
-    isCompact: false,
     onOpen: vi.fn(),
     onClose: vi.fn(),
     onQuery: vi.fn(),
@@ -97,18 +96,13 @@ describe("the launcher field", () => {
     expect(lined.attrs.onClose).not.toHaveBeenCalled();
   });
 
-  it("grows out of a one-row slot, in the taskbar's flow and over the entries in compact mode alike", () => {
+  it("grows out of a one-row slot in the taskbar's flow", () => {
     const { root, attrs } = render({ query: "plan\nthe launch" });
     const slot = root.querySelector(".launcher-field-slot") as HTMLElement;
     expect(slot).not.toBeNull();
     expect(slot.querySelector("[data-launcher-field] textarea")).not.toBeNull();
     // Without layout nothing stands above one row, so no rise is told.
     expect(attrs.onRise).not.toHaveBeenCalled();
-    unmountViews();
-    const compact = render({ isCompact: true, isOpen: true });
-    const compactSlot = compact.root.querySelector(".launcher-field-slot") as HTMLElement;
-    expect(compactSlot).not.toBeNull();
-    expect(compactSlot.querySelector("[data-launcher-field] textarea")).not.toBeNull();
   });
 
   it("typing reports the query and opens the menu", () => {
@@ -136,14 +130,5 @@ describe("the launcher field", () => {
     } finally {
       document.removeEventListener("keydown", onDocumentKeyDown);
     }
-  });
-
-  it("in compact mode with the menu closed it is a button that opens the menu", () => {
-    const { root, attrs } = render({ isCompact: true, isOpen: false });
-    expect(root.querySelector("[data-launcher-field] textarea")).toBeNull();
-    const toggle = root.querySelector("[data-launcher-field]") as HTMLElement;
-    expect(toggle.tagName).toBe("BUTTON");
-    toggle.click();
-    expect(attrs.onOpen).toHaveBeenCalledTimes(1);
   });
 });

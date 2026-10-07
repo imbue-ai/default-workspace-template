@@ -17,6 +17,8 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from imbue.system_interface.app_context import state_of
+from imbue.system_interface.avatar.primitives import DesignId
+from imbue.system_interface.avatar.testing import png_size
 from imbue.system_interface.config import Config
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
 from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
@@ -35,6 +37,7 @@ from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
+from imbue.system_interface.ws_broadcaster import ConnectionRegistration
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Generous: the first receive occasionally exceeded the previous 5.0s cap on a
@@ -74,6 +77,110 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
     # Both the app and the placeholder are HTTP 200 HTML, so the header is
     # the only thing that distinguishes them to a health check.
     assert response.headers[FRONTEND_BUILT_HEADER] == "true"
+
+
+_AGENT_ID = "agent-0123456789abcdef0123456789abcdef"
+
+
+def _named_workspace_app(tmp_path: Path, index_html: str, display_name: str) -> Flask:
+    """A shell over a built page and a mngr host directory whose services agent is labelled ``display_name``."""
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text(index_html)
+    agent_record = tmp_path / "host" / "agents" / _AGENT_ID / "data.json"
+    agent_record.parent.mkdir(parents=True)
+    agent_record.write_text(json.dumps({"labels": {"workspace_display_name": display_name}}))
+    state = build_test_state(
+        static_directory=static_dir,
+        workspace_environ={"MNGR_HOST_DIR": str(tmp_path / "host"), "MNGR_AGENT_ID": _AGENT_ID},
+    )
+    return create_application(state)
+
+
+# The shape the frontend build's page has, with the tags the build itself carries.
+_BUILT_INDEX = (
+    "<!doctype html><html><head>"
+    '<meta charset="UTF-8" />'
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'
+    "<title>System Interface</title>"
+    "</head><body></body></html>"
+)
+
+
+def test_the_page_carries_the_workspaces_name_and_what_a_phone_saves_to_its_home_screen(tmp_path: Path) -> None:
+    app = _named_workspace_app(tmp_path, _BUILT_INDEX, 'Tom & Jerry\'s <"Lab">')
+    client = app.test_client()
+
+    page = client.get("/").text
+    prefixed = client.get("/", base_url="http://localhost/shell").text
+
+    escaped = html.escape('Tom & Jerry\'s <"Lab">', quote=True)
+    assert '<title>Tom &amp; Jerry\'s &lt;"Lab"&gt;</title>' in page
+    assert page.count("<title>") == 1
+    assert f'<meta name="apple-mobile-web-app-title" content="{escaped}">' in page
+    assert '<meta name="theme-color" content="#fafaf8">' in page
+    assert '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">' in page
+    assert page.count('name="viewport"') == 1
+    assert '<link rel="apple-touch-icon" href="/apple-touch-icon.png">' in page
+    assert '<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">' in page
+    assert '<link rel="apple-touch-icon" href="/shell/apple-touch-icon.png">' in prefixed
+    assert '<link rel="manifest" href="/shell/manifest.webmanifest" crossorigin="use-credentials">' in prefixed
+    assert client.get("/api/inventory").get_json()["workspace_name"] == 'Tom & Jerry\'s <"Lab">'
+
+
+def test_tags_the_build_already_carries_are_replaced_rather_than_repeated(tmp_path: Path) -> None:
+    built = (
+        "<html><head>"
+        '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
+        '<meta name="theme-color" content="#000000">'
+        '<link rel="manifest" href="/stale.webmanifest">'
+        "</head><body></body></html>"
+    )
+    page = _named_workspace_app(tmp_path, built, "Lab").test_client().get("/").text
+
+    assert page.count('name="viewport"') == 1
+    assert "width=device-width, initial-scale=1, viewport-fit=cover" in page
+    assert page.count('name="theme-color"') == 1 and "#000000" not in page
+    assert page.count('rel="manifest"') == 1 and "stale" not in page
+    assert page.count("<title>") == 1 and "<title>Lab</title>" in page
+
+
+def test_the_touch_icon_and_the_manifest_follow_the_selected_avatar_and_the_workspaces_name(tmp_path: Path) -> None:
+    app = _named_workspace_app(tmp_path, _BUILT_INDEX, "Research Lab")
+    client = app.test_client()
+    shell = state_of(app).shell
+
+    default_icon = client.get("/apple-touch-icon.png")
+    assert default_icon.status_code == 200 and default_icon.mimetype == "image/png"
+    assert png_size(default_icon.data) == (180, 180)
+    assert default_icon.data == client.get("/api/avatars/imbue-character/icon.png?size=180").data
+    shell.avatar_selection.write(DesignId("jelly-cat"))
+    assert client.get("/apple-touch-icon.png").data == client.get("/api/avatars/jelly-cat/icon.png").data
+    # A selection naming a design the catalog no longer holds shows the default, as the avatar does.
+    shell.avatar_selection.write(DesignId("gone"))
+    assert client.get("/apple-touch-icon.png").data == default_icon.data
+
+    shell.avatar_selection.write(DesignId("jelly-cat"))
+    response = client.get("/manifest.webmanifest", base_url="http://localhost/shell")
+    assert response.status_code == 200 and response.mimetype == "application/manifest+json"
+    assert json.loads(response.data) == {
+        "name": "Research Lab",
+        "short_name": "Research Lab",
+        "start_url": "/shell/",
+        "scope": "/shell/",
+        "display": "standalone",
+        "background_color": "#fafaf8",
+        "theme_color": "#fafaf8",
+        "icons": [
+            {
+                "src": f"/shell/api/avatars/jelly-cat/icon.png?size={size}",
+                "sizes": f"{size}x{size}",
+                "type": "image/png",
+            }
+            for size in (180, 192, 512)
+        ],
+    }
+    assert json.loads(client.get("/manifest.webmanifest").data)["start_url"] == "/"
 
 
 @pytest.mark.parametrize("basename", ["app_contract.js", "context_menu.js"])
@@ -608,7 +715,9 @@ def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> 
         assert _handle_client_state_message(json.dumps(report), client_queue, shell, is_first_report=True) is True
         switched = {**report, "active_desktop": "alpha", "previous_desktop": "home"}
         assert _handle_client_state_message(json.dumps(switched), client_queue, shell, is_first_report=False) is True
-        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "alpha"}
+        assert shell.broadcaster.get_client_info(client_queue) == ConnectionRegistration(
+            client_id="c1", active_desktop="alpha", is_pop_out=False
+        )
     finally:
         shell.broadcaster.unregister(client_queue)
 
@@ -621,7 +730,9 @@ def test_client_state_reports_register_the_client_and_log_only_real_desktop_swit
     try:
         first = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
         assert _handle_client_state_message(first, client_queue, shell, is_first_report=True) is True
-        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "home"}
+        assert shell.broadcaster.get_client_info(client_queue) == ConnectionRegistration(
+            client_id="c1", active_desktop="home", is_pop_out=False
+        )
         recorded = shell.clients.get_client("c1")
         assert recorded is not None
         assert recorded.active_desktop == "home"
@@ -642,9 +753,41 @@ def test_client_state_reports_register_the_client_and_log_only_real_desktop_swit
 
         for malformed in ("{", json.dumps({"type": "other"}), json.dumps({"type": "client_state", "client_id": "c1"})):
             assert _handle_client_state_message(malformed, client_queue, shell, is_first_report=False) is False
-        assert shell.broadcaster.get_client_info(client_queue) == {"client_id": "c1", "active_desktop": "home"}
+        assert shell.broadcaster.get_client_info(client_queue) == ConnectionRegistration(
+            client_id="c1", active_desktop="home", is_pop_out=False
+        )
     finally:
         shell.broadcaster.unregister(client_queue)
+
+
+def test_a_pop_out_report_registers_its_connection_and_touches_neither_the_record_nor_the_log(app: Flask) -> None:
+    """A pop-out's report makes its connection reachable by ops aimed at its client, and leaves the client's record,
+    active desktop, and desktop switches to its main window."""
+    shell = state_of(app).shell
+    main_queue = shell.broadcaster.register()
+    pop_out_queue = shell.broadcaster.register()
+    try:
+        main_report = json.dumps({"type": "client_state", "client_id": "c1", "active_desktop": "home"})
+        assert _handle_client_state_message(main_report, main_queue, shell, is_first_report=True) is True
+        pop_out_report = json.dumps({"type": "client_state", "client_id": "c1", "is_pop_out": True})
+        assert _handle_client_state_message(pop_out_report, pop_out_queue, shell, is_first_report=True) is True
+        assert _handle_client_state_message(pop_out_report, pop_out_queue, shell, is_first_report=False) is True
+
+        assert shell.broadcaster.get_client_info(pop_out_queue) == ConnectionRegistration(
+            client_id="c1", active_desktop="", is_pop_out=True
+        )
+        recorded = shell.clients.get_client("c1")
+        assert recorded is not None and recorded.active_desktop == "home"
+        assert shell.activity.read_events() == []
+
+        # A pop-out report carrying a desktop is not a pop-out's.
+        with_desktop = json.dumps(
+            {"type": "client_state", "client_id": "c1", "is_pop_out": True, "active_desktop": "x"}
+        )
+        assert _handle_client_state_message(with_desktop, pop_out_queue, shell, is_first_report=False) is False
+    finally:
+        shell.broadcaster.unregister(main_queue)
+        shell.broadcaster.unregister(pop_out_queue)
 
 
 @pytest.mark.frontend

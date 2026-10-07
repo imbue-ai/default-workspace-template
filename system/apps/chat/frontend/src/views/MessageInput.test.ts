@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
-import type m from "mithril";
+import m from "mithril";
 import { installLocalStoragePolyfill } from "@imbue/workspace-ui/src/testing/localStorage";
 
 // The composer persists its draft in localStorage, which the node test env lacks.
@@ -30,9 +30,10 @@ const mocks = vi.hoisted(() => {
   // working/idle branch (stop button, placeholder) on the agent's activity state --
   // both driven through this mutable holder (reset in beforeEach; an undefined
   // activity_state means "not working").
-  const agent: { harness: string | undefined; activity_state: string | undefined } = {
+  const agent: { harness: string | undefined; activity_state: string | undefined; account_id: string | null } = {
     harness: "claude",
     activity_state: undefined,
+    account_id: null,
   };
   // The chat's in-progress switch, the account its next send switches it to, and the model
   // picked for it, all null at rest.
@@ -52,12 +53,19 @@ const mocks = vi.hoisted(() => {
     switchChat: vi.fn(async () => ({ kind: "handoff", phase: "summarizing", returned_block: "" })),
     setPendingAccount: vi.fn(),
     openSwitchDialog: vi.fn(),
+    beginSwitchToAccountId: vi.fn(),
+    // The account ids that read as signed out; empty at rest.
+    signedOutAccountIds: new Set<string>(),
+    loadAccounts: vi.fn(async () => {}),
     cancelHandoff: vi.fn(async () => ({ returned_block: "" })),
     switching,
     drainToComposer: vi.fn(async () => ({ block: "" })),
     getComposerAttachments: vi.fn(() => [] as unknown[]),
     clearComposerAttachments: vi.fn(),
     uploadDescribedFileToComposer: vi.fn(),
+    // Resolved at once by default: no upload in flight. A test of a send waiting on one swaps in a
+    // deferred promise.
+    waitForComposerUploads: vi.fn(async (_chatId: string) => {}),
     interruptAgent: vi.fn(async () => {}),
     openProviderChooser: vi.fn(),
     // Resolved at once by default: the agent exists. A test of a chat still being created
@@ -82,13 +90,23 @@ vi.mock("../models/Response", () => ({
   mintMessageId: () => `m-${Math.random().toString(36).slice(2)}`,
 }));
 vi.mock("../models/Handoffs", () => ({ switchChat: mocks.switchChat, cancelHandoff: mocks.cancelHandoff }));
-vi.mock("../models/PendingLane", () => ({
-  pendingSwitchTarget: () => mocks.switching.target,
-  getPendingPick: () => mocks.switching.pick,
-  setPendingAccount: mocks.setPendingAccount,
-  switchKind: () => mocks.switching.kind,
+// The armed choice is served from here; whether a switch request is out is the real module's.
+vi.mock("../models/PendingLane", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../models/PendingLane")>();
+  return {
+    isSwitchSending: actual.isSwitchSending,
+    setSwitchSending: actual.setSwitchSending,
+    nextSendSwitchTarget: (chatId: string) =>
+      mocks.switching.handoff !== null || actual.isSwitchSending(chatId) ? null : mocks.switching.target,
+    getPendingPick: () => mocks.switching.pick,
+    setPendingAccount: mocks.setPendingAccount,
+    switchKind: () => mocks.switching.kind,
+  };
+});
+vi.mock("./SwitchDialog", () => ({
+  openSwitchDialog: mocks.openSwitchDialog,
+  beginSwitchToAccountId: mocks.beginSwitchToAccountId,
 }));
-vi.mock("./SwitchDialog", () => ({ openSwitchDialog: mocks.openSwitchDialog }));
 vi.mock("./fast-mode-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./fast-mode-limit")>()),
   chooseFastMode: mocks.chooseFastMode,
@@ -105,7 +123,7 @@ vi.mock("../models/ComposerAttachments", () => ({
   restoreComposerAttachments: vi.fn(),
   uploadDescribedFileToComposer: mocks.uploadDescribedFileToComposer,
   uploadFilesToComposer: vi.fn(),
-  waitForComposerUploads: vi.fn(async () => {}),
+  waitForComposerUploads: (chatId: string) => mocks.waitForComposerUploads(chatId),
 }));
 vi.mock("../models/attachments", () => ({
   buildMessageWithAttachments: (text: string, paths: readonly string[]) =>
@@ -176,6 +194,9 @@ vi.mock("../models/Providers", () => ({
   openProviderChooser: mocks.openProviderChooser,
   // The seeded chats these tests launch name no account of their own, so the selected one decides.
   accountForFirstSend: () => mocks.selectedAccount,
+  isAccountSignedOut: (accountId: string | null | undefined) =>
+    !!accountId && mocks.signedOutAccountIds.has(accountId),
+  loadAccounts: () => mocks.loadAccounts(),
   whenAccountsReadyToChoose: () => Promise.resolve(),
 }));
 
@@ -285,6 +306,17 @@ function findByTag(node: unknown, tag: string): AnyVnode | undefined {
 /** Find a vnode by an exact attribute value (e.g. a stable aria-label). */
 function findByAttr(node: unknown, attr: string, value: string): AnyVnode | undefined {
   return flatten(node).find((vnode) => (vnode.attrs ?? {})[attr] === value);
+}
+
+/** Hold the next send's upload wait open; the returned function lets it finish. */
+function holdComposerUploads(): () => void {
+  let uploaded: () => void = () => undefined;
+  mocks.waitForComposerUploads.mockReturnValueOnce(
+    new Promise<void>((resolve) => {
+      uploaded = resolve;
+    }),
+  );
+  return () => uploaded();
 }
 
 /** Render the composer for one agent, type `text`, then press the send button. */
@@ -436,6 +468,35 @@ describe("MessageInput placeholder", () => {
     mocks.agent.activity_state = "THINKING";
     const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+});
+
+/** The element tags and child positions from ``node`` down to the first ``tag``: what mithril matches an
+ *  unkeyed element by from one render to the next. */
+function elementPathTo(node: unknown, tag: string): string[] | null {
+  if (node === null || node === undefined || typeof node !== "object" || Array.isArray(node)) return null;
+  const vnode = node as AnyVnode;
+  if (vnode.tag === tag) return [tag];
+  if (!Array.isArray(vnode.children)) return null;
+  for (const [index, child] of (vnode.children as unknown[]).entries()) {
+    const below = elementPathTo(child, tag);
+    if (below !== null) return [`${String(vnode.tag)}[${index}]`, ...below];
+  }
+  return null;
+}
+
+describe("MessageInput leading control", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("keeps the textarea where it was when a leading control comes or goes", () => {
+    const component = MessageInput();
+    const render = (leading: m.Children | undefined) =>
+      component.view!({ attrs: { chatId: "agent-1", leading } } as never);
+    const bare = elementPathTo(render(undefined), "textarea");
+    expect(bare).not.toBeNull();
+    expect(elementPathTo(render(m("button")), "textarea")).toEqual(bare);
   });
 });
 
@@ -939,6 +1000,92 @@ describe("MessageInput switching harness", () => {
     expect(pick).toEqual({ model_id: "haiku", effort: "low", fast: false });
   });
 
+  it("says nothing more about the switch once its message has gone, and holds a second send until it is answered", async () => {
+    mocks.switching.target = TARGET;
+    let answer: (value: { kind: string; phase: string; returned_block: string }) => void = () => undefined;
+    mocks.switchChat.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const component = MessageInput();
+    press(findByAttr(typeDraft(component, "agent-1", "Carry on in Codex"), "aria-label", "Switch and send"));
+    await flushAsync();
+    expect(mocks.switchChat).toHaveBeenCalledTimes(1);
+
+    // The message is on its way: "your next message switches" would now be about the one after it.
+    const sending = typeDraft(component, "agent-1", "And one more thing");
+    expect(findByClass(sending, "message-input-switch-strip")).toBeUndefined();
+    expect(findByAttr(sending, "aria-label", "Switch and send")).toBeUndefined();
+    const heldSend = findByAttr(sending, "aria-label", "Send message");
+    expect(heldSend?.attrs?.["aria-disabled"]).toBe("true");
+    press(heldSend);
+    await flushAsync();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.switchChat).toHaveBeenCalledTimes(1);
+    expect(findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea")?.attrs?.value).toBe(
+      "And one more thing",
+    );
+
+    answer({ kind: "handoff", phase: "summarizing", returned_block: "" });
+    await flushAsync();
+    mocks.switching.handoff = handoffStateFixture({ phase: "summarizing" });
+    const running = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByClass(running, "message-input-switch-strip")).toBeUndefined();
+  });
+
+  it("keeps the switch the next send's while its message waits on an upload", async () => {
+    mocks.switching.target = TARGET;
+    const release = holdComposerUploads();
+    const component = MessageInput();
+    press(findByAttr(typeDraft(component, "agent-1", "Carry on in Codex"), "aria-label", "Switch and send"));
+    await flushAsync();
+
+    // Nothing has gone yet: the draft is still the message that switches the chat.
+    const waiting = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByClass(waiting, "message-input-switch-strip")).toBeDefined();
+    press(findByAttr(waiting, "aria-label", "Switch and send"));
+    await flushAsync();
+    expect(mocks.switchChat).not.toHaveBeenCalled();
+
+    release();
+    await flushAsync();
+    expect(mocks.switchChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries out the choice as it stands once the message is ready, and none if it was taken back", async () => {
+    const component = MessageInput();
+
+    // Changed while the message waited: the account and its pick go out together.
+    mocks.switching.target = TARGET;
+    let release = holdComposerUploads();
+    press(findByAttr(typeDraft(component, "agent-1", "Carry on"), "aria-label", "Switch and send"));
+    await flushAsync();
+    const other = { id: "acct-anthropic-2", harness: "claude", label: "Anthropic 2 (Claude Code)" };
+    mocks.switching.target = other;
+    mocks.switching.pick = { identity: { model_id: "haiku", effort: "low", fast: false }, label: "Haiku 4.5 · Low" };
+    release();
+    await flushAsync();
+    const [, accountId, , , pick] = mocks.switchChat.mock.calls[0] as unknown as unknown[];
+    expect(accountId).toBe("acct-anthropic-2");
+    expect(pick).toEqual({ model_id: "haiku", effort: "low", fast: false });
+
+    // Taken back while the message waited: nothing goes, and the message is the user's again.
+    mocks.switchChat.mockClear();
+    mocks.switching.target = TARGET;
+    release = holdComposerUploads();
+    press(findByAttr(typeDraft(component, "agent-1", "Never mind"), "aria-label", "Switch and send"));
+    await flushAsync();
+    mocks.switching.target = null;
+    release();
+    await flushAsync();
+    expect(mocks.switchChat).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea")?.attrs?.value).toBe(
+      "Never mind",
+    );
+  });
+
   it("shows no strip while the switch is already running", () => {
     mocks.switching.target = TARGET;
     mocks.switching.handoff = handoffStateFixture({ phase: "summarizing" });
@@ -1075,5 +1222,119 @@ describe("prependToComposer with an element reference", () => {
     prependToComposer("agent-1", BLOCK);
     expect(localStorage.getItem("message-text:agent-1")).toBe("my draft");
     expect(stagedFile().file.name).toBe(`${REFERENCE_ID}.json`);
+  });
+});
+
+describe("MessageInput on a chat whose account was signed out", () => {
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.openProviderChooser.mockClear();
+    mocks.beginSwitchToAccountId.mockClear();
+    mocks.loadAccounts.mockClear();
+    mocks.agent.harness = "codex";
+    mocks.agent.activity_state = undefined;
+    mocks.agent.account_id = "account-signed-out-5521";
+    mocks.signedOutAccountIds.clear();
+    mocks.signedOutAccountIds.add("account-signed-out-5521");
+    mocks.switching.target = null;
+    mocks.switching.handoff = null;
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.agent.account_id = null;
+    mocks.signedOutAccountIds.clear();
+  });
+
+  it("replaces the composer with the reason and a way to choose another provider", () => {
+    const component = MessageInput();
+    const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
+
+    expect(renderedText(tree)).toContain("You signed out of the account this chat runs on.");
+    expect(findByTag(tree, "textarea")).toBeUndefined();
+    const chooseButton = findButton(tree, "Choose a provider");
+    expect(chooseButton).toBeDefined();
+
+    (chooseButton!.attrs!.onclick as () => void)();
+    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onSignedIn: (accountId: string) => void };
+    intent.onSignedIn("account-chosen-5522");
+    expect(mocks.beginSwitchToAccountId).toHaveBeenCalledWith("agent-signed-out", "account-chosen-5522");
+  });
+
+  it("keeps the phone's leading settings button under the signed-out notice", () => {
+    const component = MessageInput();
+    const leading = m("button", { "aria-label": "Chat settings" });
+    const tree = component.view!({ attrs: { chatId: "agent-signed-out", leading } } as never);
+
+    expect(findByAttr(tree, "aria-label", "Chat settings")).toBeDefined();
+    expect(findByTag(tree, "textarea")).toBeUndefined();
+    expect(findButton(tree, "Choose a provider")).toBeDefined();
+  });
+
+  it("gives the composer back once a switch to another provider is armed", () => {
+    mocks.switching.target = { id: "account-chosen-5522", harness: "claude", label: "Claude" };
+    const component = MessageInput();
+    const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
+
+    expect(findByTag(tree, "textarea")).toBeDefined();
+    expect(renderedText(tree)).not.toContain("You signed out of the account this chat runs on.");
+  });
+
+  it("keeps the composer while the switch away from it is being sent", async () => {
+    mocks.switching.target = { id: "account-chosen-5522", harness: "claude", label: "Claude" };
+    let answer: (value: { kind: string; phase: string; returned_block: string }) => void = () => undefined;
+    mocks.switchChat.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
+    const textarea = findByTag(render(), "textarea");
+    (textarea?.attrs?.oninput as (event: unknown) => void)({
+      target: { value: "Carry on in Claude", style: {}, scrollHeight: 10 },
+    });
+    (findByAttr(render(), "aria-label", "Switch and send")!.attrs!.onclick as () => void)();
+    await vi.waitFor(() => expect(mocks.switchChat).toHaveBeenCalledTimes(1));
+
+    const sending = render();
+    expect(findByTag(sending, "textarea")).toBeDefined();
+    expect(renderedText(sending)).not.toContain("You signed out of the account this chat runs on.");
+
+    answer({ kind: "handoff", phase: "summarizing", returned_block: "" });
+    await flushAsync();
+  });
+
+  it("catches up with a sign-out made in another window when the send is refused for it", async () => {
+    // This page's list still has the account, so the composer is there to send from.
+    mocks.signedOutAccountIds.clear();
+    mocks.loadAccounts.mockImplementationOnce(async () => {
+      mocks.signedOutAccountIds.add("account-signed-out-5521");
+    });
+    mocks.sendMessage.mockRejectedValueOnce({
+      response: { kind: "account_signed_out" },
+      toString: () => "You signed out of the account this chat runs on.",
+    });
+    const component = MessageInput();
+
+    await typeAndSend(component, "agent-signed-out", "are you still there?");
+
+    await vi.waitFor(() => expect(mocks.loadAccounts).toHaveBeenCalledTimes(1));
+    const tree = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);
+    expect(findButton(tree, "Choose a provider")).toBeDefined();
+    expect(findByTag(tree, "textarea")).toBeUndefined();
+  });
+
+  it("leaves the account list alone when a send fails for any other reason", async () => {
+    mocks.signedOutAccountIds.clear();
+    mocks.sendMessage.mockRejectedValueOnce({
+      response: { kind: "input_blocked" },
+      toString: () => "a dialog is open",
+    });
+
+    await typeAndSend(MessageInput(), "agent-signed-out", "hello");
+
+    expect(mocks.loadAccounts).not.toHaveBeenCalled();
   });
 });

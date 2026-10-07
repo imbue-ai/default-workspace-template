@@ -52,6 +52,9 @@ import {
   whenAccountsReadyToChoose,
 } from "../models/Providers";
 import { ProviderChooserModal } from "../views/ProviderChooserModal";
+import { COMPACT_MEDIA_QUERY } from "../compactLayout";
+import { ChatDrawer } from "./ChatDrawer";
+import { ChatHeader } from "./ChatHeader";
 import { ChatRail } from "./ChatRail";
 import type { ChatRailAttrs } from "./ChatRail";
 import { SendPicker } from "./SendPicker";
@@ -64,9 +67,6 @@ import { intakeTokenFromSearch, rootPathFor, selectionFromSearch, slotFill } fro
 import type { SlotFill } from "./selection";
 import { prependToComposer } from "../views/MessageInput";
 
-// The desktop shell's compact breakpoint (desktop-interface contracts.md section 11): under
-// it the list starts collapsed beside the chat, and fills the root while nothing is selected.
-const COMPACT_MAX_WIDTH_PX = 700;
 const ROOT_TITLE = "Chats";
 
 let selectedChatId: string | null = null;
@@ -85,7 +85,10 @@ const startedHere = new Set<string>();
 // The chats this root created that no push has named yet. The socket's connect-time replay can land after the create
 // returned, with a chat list from before it, and the chat's provisional record only follows that replay.
 const awaitingListing = new Set<string>();
-const compactQuery = window.matchMedia(`(max-width: ${COMPACT_MAX_WIDTH_PX}px)`);
+// The phone layout (compactLayout.ts): a header over the chat, and the list in a drawer over it.
+const compactQuery = window.matchMedia(COMPACT_MEDIA_QUERY);
+// Whether the phone layout's drawer is open. It opens whenever nothing is selected, and closes when a chat is picked.
+let isDrawerOpen = false;
 
 function selectedTitle(): string {
   if (selectedChatId === null) return "";
@@ -138,6 +141,7 @@ function select(chatId: string | null): void {
   const fill = slotFillFor(chatId);
   const shown = fill.kind === "select" ? fill.chatId : chatId;
   selectedChatId = shown;
+  isDrawerOpen = shown === null;
   history.replaceState(null, "", `${getBasePath()}${rootPathFor(shown)}`);
   pool?.show(shown);
   if (shown !== null && isRootShown) markRead(shown);
@@ -333,48 +337,63 @@ const ChatRoot: m.Component = {
   view() {
     const rows = railRows();
     const isCompact = compactQuery.matches;
-    // On a phone with nothing selected, the list is the whole page.
-    const isListOnly = isCompact && selectedChatId === null;
+    const rail = railAttrs(rows, isCompact);
     return m(
       "div",
       {
-        class: "chat-root flex h-screen w-screen overflow-hidden bg-page",
+        class: ["chat-root relative flex h-screen w-screen overflow-hidden bg-page", isCompact ? "flex-col" : ""].join(
+          " ",
+        ),
         "data-compact": isCompact ? "true" : "false",
       },
       [
-        isListOnly
-          ? m("div", { class: "flex-1 min-w-0" }, m(ChatRail, railAttrs(rows, isCompact)))
-          : m(ChatRail, railAttrs(rows, isCompact)),
-        isListOnly
-          ? null
-          : m("div", { class: "chat-root-slot relative min-w-0 flex-1" }, [
-              m("div", {
-                class: "chat-root-frames absolute inset-0",
-                // The frames are the pool's DOM, not mithril's: never reconciled.
-                oncreate: ({ dom }: m.VnodeDOM) => {
-                  pool = new InnerFramePool(dom as HTMLElement);
-                  if (handshake !== null) pool.setHandshake(handshake);
-                  pool.setRootShown(isRootShown);
-                  pool.show(selectedChatId);
+        // The slot stays the second child in both layouts, so its frames outlive a change between them.
+        isCompact
+          ? m(ChatHeader, {
+              row: rows.find((row) => row.chatId === selectedChatId) ?? null,
+              context: rail,
+              isListOpen: isDrawerOpen,
+              onOpenList: () => {
+                isDrawerOpen = true;
+              },
+            })
+          : m(ChatRail, rail),
+        m("div", { class: "chat-root-slot relative min-h-0 min-w-0 flex-1" }, [
+          m("div", {
+            class: "chat-root-frames absolute inset-0",
+            // The frames are the pool's DOM, not mithril's: never reconciled.
+            oncreate: ({ dom }: m.VnodeDOM) => {
+              pool = new InnerFramePool(dom as HTMLElement);
+              pool.setCompact(isCompact);
+              if (handshake !== null) pool.setHandshake(handshake);
+              pool.setRootShown(isRootShown);
+              pool.show(selectedChatId);
+            },
+            onremove: () => {
+              pool = null;
+            },
+            onbeforeupdate: () => false,
+          }),
+          selectedChatId === null
+            ? m(
+                "div",
+                {
+                  class:
+                    "chat-root-empty absolute inset-0 flex items-center justify-center text-(length:--font-size-body) text-secondary",
                 },
-                // The frames go with the container (the list alone on a phone); a new pool
-                // is made when it comes back.
-                onremove: () => {
-                  pool = null;
-                },
-                onbeforeupdate: () => false,
-              }),
-              selectedChatId === null
-                ? m(
-                    "div",
-                    {
-                      class:
-                        "chat-root-empty absolute inset-0 flex items-center justify-center text-(length:--font-size-body) text-secondary",
-                    },
-                    "Pick a chat, or start a new one.",
-                  )
-                : null,
-            ]),
+                "Pick a chat, or start a new one.",
+              )
+            : null,
+        ]),
+        isCompact && isDrawerOpen
+          ? m(ChatDrawer, {
+              rail,
+              isCovered: isProviderChooserOpen() || pendingPick !== null,
+              onDismiss: () => {
+                isDrawerOpen = false;
+              },
+            })
+          : null,
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
         pendingPick === null
           ? null
@@ -464,17 +483,20 @@ function bootstrap(): void {
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
   compactQuery.addEventListener("change", () => {
+    pool?.setCompact(compactQuery.matches);
     fillSlot();
     m.redraw();
   });
   const shell = connectRootToShell(accountsLoaded);
   startInnerFrameRelay(
     (source) => pool?.isInnerWindow(source) ?? false,
+    () => pool?.innerWindows() ?? [],
     (chatId) => select(chatId),
   );
   const rootElement = document.getElementById("app");
   if (rootElement === null) return;
   selectedChatId = selectionFromSearch(window.location.search);
+  isDrawerOpen = selectedChatId === null;
   pendingToken = intakeTokenFromSearch(window.location.search);
   m.mount(rootElement, ChatRoot);
   // The element menu over the root's own chrome (element-reference-menu plan section 7.3); the rail's rows append

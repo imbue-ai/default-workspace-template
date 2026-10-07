@@ -31,6 +31,7 @@ export class InnerFramePool {
   private shownChatId: string | null = null;
   private handshake: ShellHandshake | null = null;
   private isRootShown = false;
+  private isCompact = false;
 
   constructor(private readonly container: HTMLElement) {}
 
@@ -41,6 +42,15 @@ export class InnerFramePool {
       if (frame.contentWindow === source) return true;
     }
     return false;
+  }
+
+  /** The windows of this pool's frames. */
+  innerWindows(): Window[] {
+    const windows: Window[] = [];
+    for (const { frame } of this.held.values()) {
+      if (frame.contentWindow !== null) windows.push(frame.contentWindow);
+    }
+    return windows;
   }
 
   /** Show ``chatId`` (creating its frame on first sight), hiding whatever was shown; null shows nothing. */
@@ -64,6 +74,12 @@ export class InnerFramePool {
   setRootShown(isShown: boolean): void {
     this.isRootShown = isShown;
     if (this.shownChatId !== null) this.tell(this.shownChatId, isShown ? "shown" : "hidden");
+  }
+
+  /** Whether the root draws its phone layout, passed to every page (now and as each loads). */
+  setCompact(isCompact: boolean): void {
+    this.isCompact = isCompact;
+    for (const chatId of this.held.keys()) this.api(chatId)?.setCompact(isCompact);
   }
 
   /** The handshake the shell gave the root, handed to every page (now and as each loads). */
@@ -97,6 +113,7 @@ export class InnerFramePool {
     const held: HeldFrame = { frame, lastShownAt: Date.now(), isLoaded: false };
     frame.addEventListener("load", () => {
       held.isLoaded = true;
+      this.api(chatId)?.setCompact(this.isCompact);
       this.introduce(chatId);
       this.tell(chatId, this.isRootShown && this.shownChatId === chatId ? "shown" : "hidden");
     });

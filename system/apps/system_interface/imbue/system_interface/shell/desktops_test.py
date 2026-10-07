@@ -9,6 +9,7 @@ from app_manifest.manifest import ShortcutMode
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
+from app_manifest.registry import read_registry
 
 from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.shell.data_types import AppPin
@@ -47,12 +48,16 @@ from imbue.system_interface.shell.primitives import WindowPath
 from imbue.system_interface.shell.primitives import WindowTitle
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_WITH_CHAT
 from imbue.system_interface.shell.testing import TEST_NOW
+from imbue.system_interface.shell.testing import builtin_chat_row_toml
 from imbue.system_interface.shell.testing import builtin_registry_rows
+from imbue.system_interface.shell.testing import builtin_rows_toml_before_chat
 from imbue.system_interface.shell.testing import read_default_shortcuts_offered
 from imbue.system_interface.shell.testing import read_desktops_file_in_its_released_shape
+from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shortcut_apps_on
 from imbue.system_interface.shell.testing import window_record
 from imbue.system_interface.shell.testing import write_desktops_file
+from imbue.system_interface.shell.testing import write_registry
 
 # The frontend's glyph palette, which ``DESKTOP_GLYPH_COLORS`` restates for the desktops the shell names itself.
 _SQUIGGLES_PATH = Path(__file__).resolve().parents[3] / "frontend" / "src" / "views" / "squiggles.ts"
@@ -113,6 +118,39 @@ def test_a_late_apps_default_shortcut_is_offered_once_on_every_desktop_and_a_rem
     for rows in (with_chat, before_chat, with_chat):
         assert store.ensure_default_shortcuts_offered(rows).is_written is False
     assert "chat" not in shortcut_apps_on(store.list_desktops()[0])
+
+
+def test_a_workspaces_own_apps_are_added_once_to_every_desktop_and_a_removal_sticks(tmp_path: Path) -> None:
+    """A workspace whose desktops were made before its user-built apps had shortcuts: each app a program runs is
+    added once to every desktop, a preview frame is not, and a shortcut the user then removes stays removed."""
+    _, with_chat = builtin_registry_rows(tmp_path / "registry")
+    with_own_apps = read_registry(
+        write_registry(
+            tmp_path / "registry" / "with_own_apps.toml",
+            *builtin_rows_toml_before_chat(),
+            builtin_chat_row_toml(),
+            registry_row_toml("notes", "http://localhost:8100", program="notes"),
+            # An app from before manifests: registered with ``--name --icon-file --program``, no display name.
+            registry_row_toml("recipes", "http://localhost:8200", program="recipes"),
+            registry_row_toml("preview-1", "http://localhost:8300", display_name="Notes (preview)"),
+        )
+    )
+    store = DesktopStore(state_directory=tmp_path / "state")
+    store.ensure_default(lambda: seed_desktop_shortcuts(with_chat))
+    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(with_chat), ())
+
+    offered = store.ensure_default_shortcuts_offered(with_own_apps)
+
+    assert offered.is_written is True
+    for desktop in offered.desktops:
+        assert shortcut_apps_on(desktop) == (*BUILTIN_SHORTCUT_APPS_WITH_CHAT, "notes", "recipes")
+    assert read_default_shortcuts_offered(tmp_path / "state")["apps"] == sorted(
+        (*BUILTIN_SHORTCUT_APPS_WITH_CHAT, "notes", "recipes")
+    )
+
+    store.remove_shortcut("home", AppName("notes"), LaunchPathId("open"))
+    assert store.ensure_default_shortcuts_offered(with_own_apps).is_written is False
+    assert "notes" not in shortcut_apps_on(store.list_desktops()[0])
 
 
 @pytest.mark.parametrize("offered_record_text", [None, '{"version": 2, "apps": []}', '{"version": 1}', "not json"])

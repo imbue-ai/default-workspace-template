@@ -6,7 +6,7 @@ from defusedxml.ElementTree import fromstring
 from imbue.system_interface.avatar.designs import ANIMATION_CSS
 from imbue.system_interface.avatar.designs import AvatarMood
 from imbue.system_interface.avatar.designs import BUNDLED_DESIGNS
-from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
+from imbue.system_interface.avatar.designs import GUMMY_SEAL_DESIGN_ID
 from imbue.system_interface.avatar.designs import SVG_NAMESPACE
 from imbue.system_interface.avatar.designs import bundled_design
 from imbue.system_interface.avatar.designs import bundled_design_source
@@ -20,7 +20,7 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 def test_every_bundled_design_parses_and_is_unique() -> None:
     ids = [design.id for design in BUNDLED_DESIGNS]
     assert len(set(ids)) == len(ids)
-    assert bundled_design(DEFAULT_DESIGN_ID) is not None
+    assert bundled_design(GUMMY_SEAL_DESIGN_ID) is not None
     for design in BUNDLED_DESIGNS:
         parse_design_svg(bundled_design_source(design))
 
@@ -83,11 +83,13 @@ def test_a_rendered_image_wears_the_mood_and_the_current_stylesheet() -> None:
 
 
 def test_a_bundled_design_wakes_when_working_and_rests_when_idle() -> None:
-    design = bundled_design(DEFAULT_DESIGN_ID)
+    design = bundled_design(GUMMY_SEAL_DESIGN_ID)
     assert design is not None
     source = bundled_design_source(design)
-    idle = fromstring(render_design_svg(source, AvatarMood.IDLE, is_preview=False, design_id=DEFAULT_DESIGN_ID))
-    working = fromstring(render_design_svg(source, AvatarMood.WORKING, is_preview=False, design_id=DEFAULT_DESIGN_ID))
+    idle = fromstring(render_design_svg(source, AvatarMood.IDLE, is_preview=False, design_id=GUMMY_SEAL_DESIGN_ID))
+    working = fromstring(
+        render_design_svg(source, AvatarMood.WORKING, is_preview=False, design_id=GUMMY_SEAL_DESIGN_ID)
+    )
     eyes_path = f".//{{{SVG_NAMESPACE}}}g[@class='jelly-eyes']"
     assert idle.find(eyes_path).find(f"{{{SVG_NAMESPACE}}}ellipse") is None
     assert working.find(eyes_path).find(f"{{{SVG_NAMESPACE}}}ellipse") is not None

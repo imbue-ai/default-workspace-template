@@ -68,11 +68,15 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `/api/clients/<client>/arrive` a page posts first), client activity
   (`/api/client-activity`), the inventory (`/api/inventory`), each client's
   pinned-entry presentation
-  (`/api/clients/<client>/entries/<app>`), the avatar (`/api/avatars`,
-  `/api/avatars/<id>/image.svg|source.svg`, `/api/avatar-selection`; the
+  (`/api/clients/<client>/entries/<app>`), what a client's phone shows
+  (`/api/clients/<client>/shown`), the avatar (`/api/avatars`,
+  `/api/avatars/<id>/image.svg|source.svg|icon.png`, `/api/avatar-selection`; the
   registration `POST /api/avatars` is loopback-only), the embedder-message
   relay (`/api/embedder-messages`), and the loopback-only op route
   (`/api/layout/broadcast`).
+- The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
+  from the selected avatar design and the workspace's name, which also titles
+  the page.
 - Presence (`/api/presence`, `/api/presence/heartbeat`): who is connected
   right now, with their identity and profile (see "Who is here").
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
@@ -115,10 +119,12 @@ and the profile cache.
   which folds mngr's agents event file into a mood (working when any agent
   but the services agent is running) and pushes `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
-  every registered app's `default_shortcut` on the first read after the
-  registry has been read. An app that registers later has its default
-  shortcut added to every desktop once, on the registry change and on every
-  read; `default_shortcuts_offered.json` lists the apps offered so far, so a
+  every registered app's default shortcut (its `default_shortcut`, else, for
+  an app a program runs, its first launch path taking no text, or its first
+  when every one takes text) on the first read after the registry has been read.
+  An app that registers later has its default shortcut added to every
+  desktop once, on the registry change and on every read;
+  `default_shortcuts_offered.json` lists the apps offered so far, so a
   shortcut the user removed stays removed. A client record holds the client's
   active desktop, when it was last seen, and the user it last arrived as;
   clients unseen for a while are pruned with their placement files.
@@ -198,12 +204,17 @@ reported (under gVisor and on lima, a change made outside the sandbox raises no
 inotify event in it).
 
 Every registry read is also announced to the minds desktop (`app_announcements.py`):
-one `service_registered` event per app whose URL, label, or icon differs from
-the last announced, and one `service_deregistered` per app that left, appended
+one `service_registered` event per app whose URL, label, icon, or display name
+differs from the last announced, and one `service_deregistered` per app that left, appended
 to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
 event envelope; the first read after the shell starts announces every app. The
-stream is what `mngr forward` and the desktop resolve app origins from. A
-preview shell announces nothing, since its registry is a copy.
+stream is what `mngr forward` and the desktop resolve app origins from, and
+they replay it whole each time they attach, so a stream over 5 MiB at that
+first read is renamed aside before it and gzipped to
+`events.jsonl.<timestamp>.gz` (a name mngr does not replay) on a thread of its
+own; the newest three archives are kept. Streams that large were left by the
+retired `app-watcher` service, which re-announced every app on each registry
+rewrite. A preview shell announces nothing, since its registry is a copy.
 
 The shell also owns each stoppable app's process (`shell/app_lifecycle.py`,
 the stop-when-no-windows spec): an app whose manifest declares
@@ -301,7 +312,7 @@ opens the avatar chooser. Desktops are created, renamed, recoloured,
 re-wallpapered, and deleted from the switcher; shortcuts are added, moved, and
 removed on the backdrop.
 
-The launcher is a text field ("Start app or send message...") and the menu it
+The launcher is a text field ("Open an app or send a message") and the menu it
 opens above itself (`frontend/src/views/LauncherMenu.ts`, its rows computed by
 `reducers/launcherRows.ts`). The rows: one per launch path of every
 non-internal app, the apps that declare a `launcher_rank` in their manifest
@@ -330,6 +341,24 @@ dialog's "Design your own..." does (the element context menu's "Explain..."
 uses it). The shell names no app in any of this. A
 fresh install lands on its `Home` desktop with the Getting Started window
 open, placed there once by that app for the first client that connects.
+
+A refused operation (an open, a close, a shortcut move) says so in a toast at
+the foot of the screen (`views/Toast.ts`) rather than a browser alert.
+
+### The phone layout
+
+A phone-sized viewport (at most 500px one way and 1000px the other) gets the phone layout
+(`frontend/src/views/phone/`, `docs/system/blueprint/desktop-interface/plan-phone-interface.md`)
+over the same store: a bar of home, a pill naming what is on screen, and plus; a
+home grid of the apps on the first desktop's wallpaper; a windows sheet listing
+every desktop's windows, what this phone showed first; and a start sheet that is
+the launcher's menu made tappable. It shows one window at a time and writes no
+placement for it, so a laptop sees nothing move: what it shows is recorded as the
+client's `shown_history`, where a reload lands. Every window it opens goes on the
+first desktop, placed minimized for itself alone, and it follows the `show`,
+`open`, and `focus` ops an agent aims at it. Only the shown window's page and
+the pinned chat window's are mounted (`pages/livePages.ts`, the `shown` mount
+policy).
 
 ## Running and developing
 
@@ -382,9 +411,11 @@ The document ops are applied by the shell to the desktop and to the target
 client's placements and announced as `desktops_updated` and
 `placements_updated`, so an op lands whether or not a browser is connected.
 Every op targets exactly one client (`--client <id>`, else the client that last
-messaged the requesting agent, else the one connected client; refused with the
-clients listed otherwise); `--desktop` edits that desktop and switches the
-client to it; `open` opens a window at `--path` or at a launch path
+messaged the requesting agent while it is connected, else the one connected
+client (when a client messaged, only if it is the same user's), else that
+messaging client though it is not connected; refused with the clients listed
+otherwise); `--desktop` edits that desktop and switches the client to it; `open`
+opens a window at `--path` or at a launch path
 (`--launch`, `--param`; a bare URL is the browser's `new`; a POST launch path
 is posted the params for the page it answers), minimized with
 `--minimized` or beside a window (`--beside [window]`, bare the caller's own

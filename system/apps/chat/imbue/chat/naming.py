@@ -9,9 +9,12 @@ kept matched on rename, so no surface ever shows a machine-minted coolname.
 For chat agents the display name lives on the mngr agent itself, as its
 ``display_name`` label, with the canonical form as the agent's mngr name.
 Display names are minted here, server-side, as the first free "Chat N", so two
-clients creating at the same time cannot both mint "Chat 1".
+clients creating at the same time cannot both mint "Chat 1". A chat still wearing
+its minted name (or a seeded chat still wearing its seed title) is given a
+descriptive one from its first message (``chat_naming.py``).
 """
 
+import re
 from collections.abc import Iterable
 from typing import Final
 
@@ -24,6 +27,8 @@ from imbue.imbue_common.pure import pure
 # chat starts on: a chat can switch harness (docs/system/blueprint/chat-agent-split/),
 # so a name that said "Codex" would be wrong the moment it moved to claude.
 AUTO_NAME_WORD: Final[str] = "Chat"
+
+_MINTED_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(rf"{AUTO_NAME_WORD} [1-9][0-9]*")
 
 
 @pure
@@ -69,6 +74,12 @@ def first_free_numbered_name(word: str, taken_names: Iterable[str]) -> str:
     while _canonical_name_key(f"{word} {n}") in taken_keys:
         n += 1
     return f"{word} {n}"
+
+
+@pure
+def is_minted_chat_name(name: str) -> bool:
+    """Whether ``name`` is exactly a name :func:`first_free_numbered_name` mints ("Chat 3", not "chat 3" or "Chat 3 notes")."""
+    return _MINTED_NAME_PATTERN.fullmatch(name) is not None
 
 
 @pure

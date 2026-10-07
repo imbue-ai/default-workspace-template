@@ -290,7 +290,7 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
     ]
 
     document = client.get("/api/inventory").get_json()
-    assert set(document) == {"is_preview", "desktops", "apps", "clients"}
+    assert set(document) == {"is_preview", "workspace_name", "desktops", "apps", "clients"}
     assert document["is_preview"] is False
     assert [desktop["id"] for desktop in document["desktops"]] == ["home"]
     assert [window["id"] for window in document["desktops"][0]["windows"]] == [window["id"]]
@@ -343,6 +343,105 @@ def test_a_client_stored_on_a_desktop_that_does_not_exist_is_listed_on_the_first
 
 
 # Section 8: the op route
+
+
+def _record_shown(client: FlaskClient, client_id: str, window_id: str | None) -> Any:
+    # From an address other than loopback: the phone's own page posts it.
+    return client.post(f"/api/clients/{client_id}/shown", json={"window_id": window_id}, environ_base=_NOT_LOOPBACK)
+
+
+def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_it(
+    client: FlaskClient, app: Flask
+) -> None:
+    _register_client(app, "c1", "home")
+    _record_client(app, "c2", "home")
+    first = _open_window(client, "terminal", "/?session=terminal-1").get_json()["window"]["id"]
+    second = _open_window(client, "files", "/notes/").get_json()["window"]["id"]
+
+    assert _record_shown(client, "c1", first).status_code == 200
+    assert _record_shown(client, "c1", None).status_code == 200
+    answer = _record_shown(client, "c1", second)
+
+    assert answer.status_code == 200
+    record = answer.get_json()
+    assert set(record) == {"id", "active_desktop", "last_seen", "is_connected", "user_id", "entries", "shown_history"}
+    assert (record["id"], record["is_connected"], record["shown_history"]) == ("c1", True, [first, "home", second])
+    document = client.get("/api/inventory").get_json()
+    assert document["workspace_name"] == "Workspace"
+    by_id = {entry["id"]: entry for entry in document["clients"]}
+    assert by_id["c1"]["shown_history"] == [first, "home", second]
+    assert by_id["c2"]["shown_history"] == []
+    listed = {entry["id"]: entry for entry in client.get("/api/clients").get_json()["clients"]}
+    assert listed["c1"]["shown_history"] == [first, "home", second]
+
+
+def test_recording_a_window_no_desktop_holds_or_an_unknown_client_is_a_404_and_records_nothing(
+    client: FlaskClient, app: Flask
+) -> None:
+    _register_client(app, "c1", "home")
+    window = _open_window(client, "terminal", "/?session=terminal-1").get_json()["window"]["id"]
+    client.post(f"/api/desktops/home/windows/{window}/close")
+
+    assert _record_shown(client, "c1", window).status_code == 404
+    assert _record_shown(client, "c1", "win-00000000000000ff").status_code == 404
+    assert _record_shown(client, "nobody", None).status_code == 404
+    assert _record_shown(client, "c1", "not-a-window").status_code == 400
+    assert client.post("/api/clients/c1/shown", json={}).status_code == 400
+    recorded = _shell(app).clients.get_client("c1")
+    assert recorded is not None and recorded.shown_history == ()
+
+
+def test_every_way_a_window_closes_drops_it_from_every_clients_shown_history(
+    client: FlaskClient, app: Flask, fake_supervisor: FakeSupervisorServer
+) -> None:
+    """A window leaves the histories by the close route, the close op, its app's quit, and its desktop's deletion;
+    the rest of each history stays in its order."""
+    fake_supervisor.statename_by_program["files"] = "RUNNING"
+    _register_client(app, "c1", "home")
+    _register_client(app, "c2", "home")
+    assert client.post("/api/desktops", json={"name": "Work", "color": "#123456", "glyph": 1}).status_code == 201
+    by_route = _open_window(client, "terminal", "/?session=terminal-1").get_json()["window"]["id"]
+    by_op = _open_window(client, "terminal", "/?session=terminal-2").get_json()["window"]["id"]
+    by_quit = _open_window(client, "files", "/notes/").get_json()["window"]["id"]
+    on_work = client.post(
+        "/api/desktops/work/windows", json={"app": "terminal", "path": "/?session=terminal-3", "client_id": "c1"}
+    ).get_json()["window"]["id"]
+    kept = _open_window(client, "terminal", "/?session=terminal-4").get_json()["window"]["id"]
+    for client_id in ("c1", "c2"):
+        for window_id in (kept, by_route, by_op, None, by_quit, on_work):
+            assert _record_shown(client, client_id, window_id).status_code == 200
+
+    assert client.post(f"/api/desktops/home/windows/{by_route}/close").status_code == 204
+    assert _op(client, "close", {"window": by_op, "client": "c1"}, None).status_code == 200
+    assert client.post("/api/apps/files/quit").status_code == 200
+    assert client.post("/api/desktops/work/delete").status_code == 200
+
+    histories = {record.id: record.shown_history for record in _shell(app).clients.list_clients()}
+    assert histories == {"c1": (kept, "home"), "c2": (kept, "home")}
+
+
+def test_a_window_opened_minimized_is_placed_out_of_sight_for_its_client_and_nowhere_else(
+    client: FlaskClient, app: Flask
+) -> None:
+    """The phone opens with ``minimized``: the window exists for everyone, the opening client holds it minimized on top
+    of its stack, and every other client's layout is left without it, so it reads as minimized there too."""
+    _register_client(app, "c1", "home")
+    _register_client(app, "c2", "home")
+    laptops_window = _open_window(client, "terminal", "/?session=terminal-1", client_id="c2").get_json()["window"][
+        "id"
+    ]
+
+    opened = _open_window(client, "files", "/notes/", client_id="c1", minimized=True)
+
+    assert opened.status_code == 201
+    window_id = opened.get_json()["window"]["id"]
+    assert [window["id"] for window in _desktop_windows(client)] == [laptops_window, window_id]
+    assert [(placement["window_id"], placement["is_minimized"]) for placement in _placements(client, "c1")] == [
+        (window_id, True)
+    ]
+    assert [placement["window_id"] for placement in _placements(client, "c2")] == [laptops_window]
+    shown = {entry["id"]: entry["shown"] for entry in client.get("/api/inventory").get_json()["clients"]}
+    assert shown == {"c1": [], "c2": [laptops_window]}
 
 
 def test_the_op_route_validates_its_input(client: FlaskClient) -> None:
@@ -407,6 +506,44 @@ def test_an_op_is_attributed_to_the_client_that_last_messaged_the_requesting_age
     # A client id names a layout file, so one outside the id's alphabet is refused before any read.
     assert _op(client, "open", {"app": "files", "client": "../c1"}, requester).status_code == 400
     assert _op(client, "open", {"app": "files", "client": "ghost"}, requester).status_code == 404
+
+
+def test_an_op_goes_to_the_one_connected_client_once_the_messaging_client_has_gone(
+    client: FlaskClient, app: Flask
+) -> None:
+    """A user who messages a chat from one browser and then carries on in another (a phone's Safari tab and its
+    home-screen app are two clients) sees the agent's window in the one they are using: the messaging client is
+    passed over while it is not connected and one other client is, and targeted when no client, or several others,
+    are connected."""
+    shell = _shell(app)
+    requester = {"app": "chat", "marker": "agent-1"}
+    messaging_window = _register_client(app, "c7", "home")
+    shell.activity.append_message("c7", "home", "chat", "agent-1", "build me a calculator")
+    shell.broadcaster.unregister(messaging_window)
+
+    assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] == "c7"
+
+    _register_client(app, "c1", "home")
+    assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] == "c1"
+
+    _register_client(app, "c2", "home")
+    assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] == "c7"
+
+
+def test_a_gone_messaging_client_keeps_its_op_from_another_users_connected_client(
+    client: FlaskClient, app: Flask
+) -> None:
+    """The owner messages a chat and leaves while a visitor is the only one connected: the visitor's screen is not
+    where the owner is looking, so the op stays with the owner's client."""
+    shell = _shell(app)
+    requester = {"app": "chat", "marker": "agent-1"}
+    owner_window = _register_client(app, "c7", "home")
+    shell.activity.append_message("c7", "home", "chat", "agent-1", "build me a calculator")
+    shell.broadcaster.unregister(owner_window)
+    _arrive(client, "c-alice", _ALICE)
+    _register_client(app, "c-alice", "alice")
+
+    assert _op(client, "open", {"app": "files"}, requester).get_json()["client_id"] == "c7"
 
 
 def test_a_bare_app_requester_is_attributed_to_no_client(app: Flask) -> None:
@@ -1036,7 +1173,7 @@ def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskCli
     listed = _op(client, "desktops", {}, requester)
     assert listed.status_code == 200 and [desktop["id"] for desktop in listed.get_json()["desktops"]] == ["home"]
     # The read ops answer the whole inventory document, apps and clients included.
-    assert set(listed.get_json()) == {"ok", "is_preview", "desktops", "apps", "clients"}
+    assert set(listed.get_json()) == {"ok", "is_preview", "workspace_name", "desktops", "apps", "clients"}
     assert [entry["id"] for entry in listed.get_json()["clients"]] == ["c1"]
 
     # An open at a launch path with params, and one at an explicit path.
@@ -1209,6 +1346,45 @@ def test_an_open_asked_for_minimized_places_the_window_out_of_sight_and_leaves_a
     _op(client, "minimize", {"window": window_id}, requester)
     _op(client, "open", {"app": "terminal", "path": "/?session=terminal-1"}, requester)
     assert [placement["is_minimized"] for placement in _placements(client, "c1")] == [False]
+
+
+def _layout_ops(client_queue: "queue.Queue[str | None]") -> list[tuple[Any, Any, Any, Any]]:
+    return [
+        (message["op"], message["args"], message["target_client_id"], message["requester"])
+        for message in drain_messages(client_queue)
+        if message["type"] == "layout_op"
+    ]
+
+
+def test_a_targeted_open_or_focus_names_the_window_to_its_client_alone(client: FlaskClient, app: Flask) -> None:
+    """A phone shows one window at a time, so an op that puts a window in front of a client tells that client which;
+    an open asked for minimized puts nothing in front, and an open with no client to target tells nobody."""
+    target_queue = _register_client(app, "c1", "home")
+    other_queue = _register_client(app, "c2", "home")
+    requester = _TERMINAL_REQUESTER
+    drain_messages(target_queue)
+    drain_messages(other_queue)
+
+    opened = _op(client, "open", {"app": "terminal", "path": "/?session=terminal-1", "client": "c1"}, requester)
+    second = _op(client, "open", {"app": "files", "path": "/notes/", "client": "c1"}, requester)
+    focused = _op(client, "focus", {"window": opened.get_json()["window_id"], "client": "c1"}, requester)
+
+    first_id, second_id = opened.get_json()["window_id"], second.get_json()["window_id"]
+    assert focused.status_code == 200
+    assert _layout_ops(target_queue) == [
+        ("open", {"window": first_id}, "c1", "terminal:terminal-7"),
+        ("open", {"window": second_id}, "c1", "terminal:terminal-7"),
+        ("focus", {"window": first_id}, "c1", "terminal:terminal-7"),
+    ]
+    assert _layout_ops(other_queue) == []
+
+    minimized = _op(
+        client, "open", {"app": "files", "path": "/minimized/", "client": "c1", "minimized": True}, requester
+    )
+    unplaced = _op(client, "open", {"app": "files", "path": "/unplaced/"}, None)
+    assert minimized.status_code == 200 and unplaced.status_code == 200
+    assert unplaced.get_json()["client_id"] is None
+    assert _layout_ops(target_queue) == [] and _layout_ops(other_queue) == []
 
 
 def test_an_open_asked_to_sit_beside_a_window_with_room_leaves_that_window_alone(
@@ -1431,7 +1607,7 @@ def test_show_raises_the_frontmost_window_already_showing_the_path_on_the_active
     assert answer["layout"]["placements"][-1]["window_id"] == at_path
     assert _placement_of(client, at_showing_path)["is_minimized"] is False
     assert _paths_by_window(client) == paths_before
-    assert _shown_pulled_out_windows(client_queue) == []
+    assert _show_messages(client_queue) == [({"window": at_path, "is_detached": False}, "c1", "buddy")]
 
 
 def test_show_switches_the_client_to_another_desktop_already_showing_the_path(
@@ -1459,7 +1635,11 @@ def test_show_switches_the_client_to_another_desktop_already_showing_the_path(
     assert (answer["shown"], answer["window_id"], answer["desktop_id"]) == ("raised", elsewhere, "research")
     recorded = _shell(app).clients.get_client("c1")
     assert recorded is not None and recorded.active_desktop == "research"
-    assert "active_desktop_changed" in [message["type"] for message in drain_messages(client_queue)]
+    messages = drain_messages(client_queue)
+    assert "active_desktop_changed" in [message["type"] for message in messages]
+    assert [message["args"] for message in messages if message["type"] == "layout_op"] == [
+        {"window": elsewhere, "is_detached": False}
+    ]
     assert _placement_of(client, elsewhere, desktop_id="research")["is_minimized"] is False
     assert client.get("/api/placements/home?client=c1").get_json()["window_paths"] == {}
 
@@ -1582,7 +1762,7 @@ def test_show_opens_a_window_at_the_path_when_the_app_has_no_pinned_window(
         broadcaster,
     )
     client = app.test_client()
-    _register_client(app, "c1", "home")
+    client_queue = _register_client(app, "c1", "home")
     minimized = _window_id_at(client, "buddy", "/?doc=agent-2")
     assert _op(client, "minimize", {"window": minimized, "client": "c1"}, None).status_code == 200
 
@@ -1595,6 +1775,7 @@ def test_show_opens_a_window_at_the_path_when_the_app_has_no_pinned_window(
     assert _paths_by_window(client) == {minimized: "/?doc=agent-2", answer["window_id"]: _SHOW_PATH}
     on_top = answer["layout"]["placements"][-1]
     assert (on_top["window_id"], on_top["is_minimized"]) == (answer["window_id"], False)
+    assert _show_messages(client_queue) == [({"window": answer["window_id"], "is_detached": False}, "c1", "buddy")]
 
 
 def _pull_out(
@@ -1620,12 +1801,8 @@ def _pull_out(
     assert saved.status_code == 200
 
 
-def _shown_pulled_out_windows(client_queue: "queue.Queue[str | None]") -> list[tuple[Any, Any, Any]]:
-    return [
-        (message["args"], message["target_client_id"], message["requester"])
-        for message in drain_messages(client_queue)
-        if message["type"] == "layout_op" and message["op"] == "show"
-    ]
+def _show_messages(client_queue: "queue.Queue[str | None]") -> list[tuple[Any, Any, Any]]:
+    return [(args, target, requester) for op, args, target, requester in _layout_ops(client_queue) if op == "show"]
 
 
 def test_show_leaves_a_pulled_out_window_already_showing_the_path_out_and_asks_its_client_to_show_it(
@@ -1651,8 +1828,8 @@ def test_show_leaves_a_pulled_out_window_already_showing_the_path_out_and_asks_i
     answer = shown.get_json()
     assert (answer["shown"], answer["window_id"], answer["desktop_id"]) == ("raised", pulled_out, "home")
     assert _placements(client, "c1") == placements_before
-    assert _shown_pulled_out_windows(client_queue) == [({"window": pulled_out}, "c1", "buddy")]
-    assert _shown_pulled_out_windows(other_queue) == []
+    assert _show_messages(client_queue) == [({"window": pulled_out, "is_detached": True}, "c1", "buddy")]
+    assert _show_messages(other_queue) == []
 
 
 def test_show_leaves_the_client_on_its_desktop_for_a_pulled_out_window_on_another(
@@ -1678,7 +1855,9 @@ def test_show_leaves_the_client_on_its_desktop_for_a_pulled_out_window_on_anothe
     assert _placement_of(client, elsewhere, desktop_id="research")["is_detached"] is True
     messages = drain_messages(client_queue)
     assert "active_desktop_changed" not in [message["type"] for message in messages]
-    assert [message["args"] for message in messages if message["type"] == "layout_op"] == [{"window": elsewhere}]
+    assert [message["args"] for message in messages if message["type"] == "layout_op"] == [
+        {"window": elsewhere, "is_detached": True}
+    ]
 
 
 def test_show_repoints_a_pulled_out_window_with_its_ghost_hidden_and_leaves_it_out(
@@ -1701,7 +1880,7 @@ def test_show_repoints_a_pulled_out_window_with_its_ghost_hidden_and_leaves_it_o
     assert _paths_by_window(client)[pulled_out] == _SHOW_PATH
     placement = _placement_of(client, pulled_out)
     assert (placement["is_detached"], placement["is_minimized"]) == (True, True)
-    assert _shown_pulled_out_windows(client_queue) == [({"window": pulled_out}, "c1", "buddy")]
+    assert _show_messages(client_queue) == [({"window": pulled_out, "is_detached": True}, "c1", "buddy")]
 
 
 @pytest.mark.parametrize(
