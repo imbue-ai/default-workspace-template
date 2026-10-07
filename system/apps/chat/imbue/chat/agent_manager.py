@@ -1462,10 +1462,10 @@ class AgentManager:
         created: a worker, an automation, or a chat the Imbue Studio app started on the workspace's
         default account gets it from the create defaults (`create_defaults`), so they restart too.
 
-        Only agents whose process is alive are restarted. A stopped one reads the new
-        credentials whenever it next starts, and starting every old chat on the account at once
-        (an account can carry dozens, which earlyoom may have shed to make room) can push the
-        workspace past its memory limit.
+        Only agents not known to be stopped are restarted (an unobserved one counts as live). A
+        stopped one reads the new credentials whenever it next starts, and starting every old chat
+        on the account at once (an account can carry dozens, which earlyoom may have shed to make
+        room) can push the workspace past its memory limit.
 
         `--no-resume` for the same reason the queue actions use it: the agent's transcript is
         preserved by the harness itself, and a resume prompt would tell an agent that has not
