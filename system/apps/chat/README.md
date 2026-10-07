@@ -393,17 +393,16 @@ Off segments show and set the workspace default, independent of the chat's own
 choice; a read-only menu shows the value alone. The setting is kept in the
 chat's folder as `autocompact.json` (`chat_autocompact.py`,
 `GET`/`PUT /api/chats/<chat-id>/autocompact` with `{"is_enabled": true}`). A
-new chat copies the workspace default
-(`autocompact_default` in `GET`/`PUT /api/settings`, stored at
-`data/.apps/chat/settings.json`; on unless changed) into that file at its first
-launch, so a later change of the default leaves existing chats alone, and the
-setting travels across handoffs and rebinds as fast mode does. A chat created
-before the setting existed has no file and follows the default until its toggle
-is changed. The chat's agent carries the setting as the label
-`autocompact=on|off`, stamped at create and handoff and rewritten by `mngr
-label` when the toggle changes (a stopped agent included), so `mngr list` shows
-it. The label is for display: the sweep reads the file, and a create request may
-not set the label.
+new chat copies the workspace default (`autocompact_default` in
+`GET`/`PUT /api/settings`, stored at `data/.apps/chat/settings.json`; on unless
+changed) into that file at its first launch, so a later change of the default
+leaves existing chats alone, and the setting travels across handoffs and
+rebinds as fast mode does. A chat created before the setting existed has no
+file and follows the default until its toggle is changed. The chat's agent
+carries the setting as the label `autocompact=on|off`, stamped at create and
+handoff and rewritten by `mngr label` when the toggle changes (a stopped agent
+included), so `mngr list` shows it. The label is for display: the sweep reads
+the file, and a create request may not set the label.
 
 The setting controls idle compaction only. A chat with Auto-compact off is still
 compacted when its harness reaches its own context limit (Claude's
