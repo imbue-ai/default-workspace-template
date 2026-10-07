@@ -203,13 +203,6 @@ async function offerChooserWhenNothingSignedIn(): Promise<void> {
   if (getSelectedAccount() === null) openProviderChooser();
 }
 
-/** Close the root's chooser. A sign-in made in it does not reach the chat pages' own account lists, so they read
- *  theirs again. */
-function dismissProviderChooser(): void {
-  closeProviderChooser();
-  pool?.accountsChanged();
-}
-
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
  *  reported before the token path: the shell holds that path as this window's location until the root reports
  *  another. */
@@ -417,7 +410,14 @@ const ChatRoot: m.Component = {
               },
             })
           : null,
-        isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: dismissProviderChooser }) : null,
+        isProviderChooserOpen()
+          ? m(ProviderChooserModal, {
+              onDismiss: closeProviderChooser,
+              // However the chooser closes (dismissed, done, or an account picked), a sign-in made in it does not
+              // reach the chat pages' own account lists, so they read theirs again.
+              onremove: () => pool?.accountsChanged(),
+            })
+          : null,
         pendingPick === null
           ? null
           : m(SendPicker, {
