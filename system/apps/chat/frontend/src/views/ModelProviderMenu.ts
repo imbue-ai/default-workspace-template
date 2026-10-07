@@ -653,7 +653,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               key: choice.label,
               role: "radio",
               "aria-checked": isSelected ? "true" : "false",
-              "data-selected": isSelected ? "true" : undefined,
               ...choice.marker,
               class: isSelected ? css.DEFAULT_SEGMENT_ON : css.DEFAULT_SEGMENT,
               disabled: opts.selected === null,
