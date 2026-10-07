@@ -455,8 +455,9 @@ the versioned Antigravity installer (`system/scripts/agy_install-*.sh`), and
 code a harness loads into its process at start (`.pi/extensions/**`). When
 `needed` is `true`, the verdict is `needed`, and its triggers are the
 evidence. When it is `false`, read the rest of the diff (`git diff
---name-only "$LIVE" HEAD`) for what the command cannot see, which also
-makes a restart **needed**:
+--name-only "$(jq -r .update_base data/.tasks/update-self/footprint-ranges.json)"
+HEAD`) for what the command cannot see, which also makes a restart
+**needed**:
 
 - **A harness extension or plugin tree the update adds**, like
   `.pi/extensions/`, that a harness loads when it starts. Name it for the
