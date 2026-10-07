@@ -520,7 +520,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     return fastModeLabel(state);
   }
 
-  /** The Fast Mode row's submenu: the chat's three modes, the limit auto runs to, and the mode
+  /** The Fast mode row's submenu: the chat's three modes, the limit auto runs to, and the mode
    *  new chats start in.
    *
    * Choosing applies at once (views/fast-mode-limit.ts), so there is nothing to confirm and the
@@ -1156,14 +1156,14 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                 ? {
                     kind: "submenu",
                     key: "fast",
-                    label: "Fast Mode",
+                    label: "Fast mode",
                     value: fastModeValue(chatId),
                     content: () => fastModeSubmenu(chatId),
                   }
                 : {
                     kind: "value",
                     key: "fast",
-                    label: "Fast Mode",
+                    label: "Fast mode",
                     value: fastModeValue(chatId),
                     tooltip: readOnlyTooltip ?? undefined,
                   },

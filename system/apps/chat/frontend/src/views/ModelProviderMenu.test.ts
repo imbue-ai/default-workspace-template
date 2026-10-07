@@ -230,7 +230,7 @@ function catalogOf(overrides: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
-/** Put the chat on a model that supports fast mode, so the menu offers its Fast Mode row. */
+/** Put the chat on a model that supports fast mode, so the menu offers its Fast mode row. */
 function withFastModel(): void {
   const model = { ...OPUS, supports_fast: true };
   catalogState.catalog = catalogOf({ options: [model] });
@@ -691,7 +691,7 @@ describe("the combo card", () => {
     expect(document.querySelector('[data-menu-row="model"]')?.textContent).toContain("Gemini · High");
     // The current agent's effort and fast rows are not the target's: they are not offered.
     expect(document.querySelector('[data-menu-row="effort"]')).toBeNull();
-    expect(document.querySelector('[data-menu-part="menu"]')?.textContent).not.toContain("Fast Mode");
+    expect(document.querySelector('[data-menu-part="menu"]')?.textContent).not.toContain("Fast mode");
     click('[data-menu-row="model"] button');
     expect(reopened).toEqual(["acct-2"]);
     expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
@@ -910,7 +910,7 @@ describe("the combo card", () => {
     click(".model-selector-trigger");
     const row = document.querySelector<HTMLElement>('[data-menu-row="fast"]');
     if (row === null) throw new Error("no fast row");
-    expect(row.textContent).toContain("Fast Mode");
+    expect(row.textContent).toContain("Fast mode");
     expect(row.textContent).toContain("Auto (off now)");
     expect(document.querySelector(".fast-limit-input")).toBeNull();
 
