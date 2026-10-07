@@ -29,11 +29,10 @@ from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.utils.file_utils import atomic_write
+from imbue.mngr_claude.dialogs import COMPACT_COMMAND
 
 # The content every harness's parser gives its compacted event.
 CONTEXT_COMPACTED_CONTENT: Final[str] = "Context was compacted"
-
-COMPACT_COMMAND: Final[str] = "/compact"
 
 COMPACTION_CAUSE_FIELD: Final[str] = "compaction_cause"
 
@@ -157,7 +156,7 @@ def read_compaction_request(path: Path, now: float) -> CompactionRequest | None:
 
 @pure
 def is_compact_command(text: str) -> bool:
-    """Whether composer text is a ``/compact`` command, bare or with instructions."""
+    """Whether composer text is the ``/compact`` command mngr's Claude harness forwards, bare or with instructions."""
     return text == COMPACT_COMMAND or text.startswith(f"{COMPACT_COMMAND} ")
 
 
