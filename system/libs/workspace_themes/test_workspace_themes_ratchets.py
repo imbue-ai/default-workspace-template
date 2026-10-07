@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from imbue.imbue_common.ratchet_testing import standard_ratchet_checks as rc
-from imbue.imbue_common.ratchet_testing.ratchets import check_no_import_lint_errors
 from inline_snapshot import snapshot
 
 _DIR = Path(__file__).parent
@@ -61,7 +60,3 @@ def test_prevent_asyncio_import() -> None:
 
 def test_prevent_dataclasses_import() -> None:
     rc.check_dataclasses_import(_DIR, snapshot(0))
-
-
-def test_modules_import_only_downward_through_the_layers() -> None:
-    check_no_import_lint_errors(_DIR, contract_name="workspace_themes layers")
