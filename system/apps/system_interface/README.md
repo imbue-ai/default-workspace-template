@@ -183,7 +183,8 @@ route's `show` below, in-process. A message some app did not take becomes a
 notice carrying that app's reason. The shell's page also opens links itself:
 it announces `opensLinks` to the chrome and opens a `minds:open-link` (a popup
 Imbue Studio turned back into the workspace) or a page's `shell:open-link` by
-the shared link classifier (`workspace_ui`'s `links.ts`): a local URL at an
+the shared link classifier (`workspace_ui`'s `links.ts`): a `file:` URL as
+`open:file`, a local URL at an
 openable app's registered backend port as that app's window
 (`windowAtBackendUrl` in `frontend/src/model/pageUrl.ts`), any other local URL
 as `open:url`, and one of this workspace's app addresses as that app's window. An

@@ -25,7 +25,9 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   (contracts.md section 10 of the workspace app model, extended by section 7
   of the desktop interface's contracts.md), which the shell's frontend also
   builds into the module every app serves at `/_static/app_contract.js` from
-  its own origin; `src/element_reference.ts`, `src/context_menu_rows.ts`, and
+  its own origin, and which follows a framed page's link clicks by one rule
+  (desktop-interface contracts.md section 7, "Link rule"), so no app carries
+  link code of its own; `src/element_reference.ts`, `src/context_menu_rows.ts`, and
   `src/context_menu.ts`: the element context menu
   (`docs/system/blueprint/element-reference-menu/`): the JSON description of
   a right-clicked element under a random `REF-<id>`, the menu's rows (the
@@ -37,20 +39,14 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `src/embed-contract.d.ts`: the Imbue Studio embed contract (the vendored source is
   aliased by each app's vite config); `src/terminalFocus.ts`: the focus grant
   the shell sends a framed page.
-- `src/links.ts`: where a clicked link goes (`blueprint/workspace-link-routing/`
-  in the mngr repo): `classifyLink` calls a link external, a file, a local URL,
-  one of this workspace's app addresses, another workspace's, or unroutable;
-  `routeLink` and `routeLinkElement` act on it through the page's shell
-  connection (`open:file` as a `shell:message`, `openPath`, `shell:open-link`
-  for a local URL or another app's address, or a new browser tab), with a
-  download or a new tab when no shell frames the page; `installLinkRouting`
-  routes a page's plain, modified, and middle clicks. An absolute path is a file
-  only in a link the page routes that way (a chat message's): `routeLinkElement`
-  takes one in any other link for a page of the page's own app, as a click on it
-  would load. The chat's message links, the element menu's "Open link", and the
-  shell's handling of the links handed to it all go through it, and its test
-  holds its external rule to the desktop app's (the vendored
-  `link-externality-vectors.json`).
+- `src/links.ts`: what a link means in the workspace
+  (`blueprint/workspace-link-routing/` in the mngr repo): `classifyLink` calls a
+  link external, a file (a `file:` URL on this machine, or an absolute path as a
+  chat message writes it), a local URL, one of this workspace's app addresses,
+  another workspace's, or unroutable. The shell classifies every link handed to
+  it with it, and the chat every link of a message it renders; its test holds
+  its external rule (the app contract's `isExternalUrl`) to the desktop app's
+  (the vendored `link-externality-vectors.json`).
 - `src/search.ts`: `matchesQuery`, the one text match of the workspace's
   typeaheads (every whitespace token of the query occurring in one of the given
   texts, case-insensitively), which the desktop's launcher, the Getting Started

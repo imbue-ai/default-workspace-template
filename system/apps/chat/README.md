@@ -79,8 +79,7 @@ observe`, its own supervised service) writes, and serves:
   whether lifecycle events are actually reaching this instance; `status` stays
   `ok` either way.
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
-  chat's markdown can show an image the agent wrote, and a chat opened on its
-  own can download a file a message links.
+  chat's markdown can show an image the agent wrote.
 
 ## The agent observer
 
@@ -99,17 +98,19 @@ The chat page talks to the shell only through the browser-side contract
 `shell:message` or `shell:open-link`); the shell calls the chat only to post the
 messages its manifest registers for (`minds:focus-chat`).
 
-A link in a message keeps its real address, and the page routes every click on
-it (plain, modified, or middle) through `workspace_ui`'s `links.ts`, as the
-element menu's "Open link" does: an absolute path opens the file or folder in
-the File Viewer (`open:file`), a local address (`localhost`, `127.0.0.1`,
-`[::1]`, `*.localhost`) through the shell (`shell:open-link`), which opens it as
-the window of the app registered at its port (for `localhost`, `127.0.0.1`, or
-`[::1]`) or else in the workspace's browser, another app's address of the
-workspace as that app's window (`shell:open-link`), and an external link in the
-user's own browser. A chat opened on its own, with no shell above its root
-(`isShellAbove` in `frontend/src/shell.ts`), downloads a linked file and opens a
-local link in a new tab instead.
+The chat has no link code of its own: a click on a message's link follows the
+app contract's link rule, as a click in any app does. Rendering a message
+(`frontend/src/markdown.ts`) only says what each link names: an absolute path
+becomes the file's `file:` URL, which the shell opens in the File Viewer
+(`open:file`); a local address (`localhost`, `127.0.0.1`, `[::1]`,
+`*.localhost`) the shell opens as the window of the app registered at its port,
+or else in the workspace's browser; an external link opens in the user's own
+browser; and a relative path, a fragment, or another scheme is unwrapped to its
+text. A chat opened on its own opens a web link in a new tab, and does nothing
+for a file link: a browser does not follow a `file:` link from a web page. The
+chat root relays its chat page's `shell:open-link` to the shell, and opened on
+its own (`isShellAbove` in `frontend/src/shell.ts`) opens a web one in a new tab
+itself.
 Sends are reported to the shell's client-activity route so agents can
 attribute a request to a client, and the app asks the shell for windows,
 through one client of the `workspace_layout` library that asks as the chat app

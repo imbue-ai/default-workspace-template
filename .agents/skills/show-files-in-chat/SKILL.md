@@ -61,8 +61,8 @@ folder opens that folder's listing the same way:
 [the project folder](/home/user/workspace/data/my-project)
 ```
 
-Use a clear label that says what the file is. A chat opened on its own, outside
-the workspace, downloads a linked file instead.
+A `file:///` URL (`[the plan](file:///home/user/workspace/data/plan.md)`) is the
+same link. Use a clear label that says what the file is.
 
 ## Embed an image from a public URL
 
