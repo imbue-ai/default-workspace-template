@@ -16,7 +16,7 @@
  * UNKNOWN -- because sending the agent a message revives it. So they all read as
  * "dormant" rather than as an error; the dot has no "dead"/red category.
  */
-import { COMPACTING_STATE } from "../models/activityState";
+import { isWorkingActivityState } from "../models/activityState";
 
 export type AgentLivenessCategory = "active" | "waiting" | "dormant";
 
@@ -28,9 +28,6 @@ const ACTIVE_STATES: ReadonlySet<string> = new Set(["RUNNING", "RUNNING_UNKNOWN_
 // Lifecycle states in which the claude process is alive, whether working
 // (RUNNING) or idle (WAITING). Outside this set the process is not running.
 const ALIVE_STATES: ReadonlySet<string> = new Set(["RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE", "WAITING"]);
-
-// Activity states that mean the agent is busy (see ActivityIndicator).
-const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING", COMPACTING_STATE]);
 
 /** True iff ``state`` POSITIVELY says the agent process is dead.
 
@@ -77,5 +74,5 @@ export function effectiveLifecycleState(state: string, activity: string | null):
   if (activity === null) {
     return state;
   }
-  return WORKING_ACTIVITY_STATES.has(activity) ? "RUNNING" : "WAITING";
+  return isWorkingActivityState(activity) ? "RUNNING" : "WAITING";
 }

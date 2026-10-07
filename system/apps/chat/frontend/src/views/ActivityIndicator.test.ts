@@ -5,12 +5,7 @@ import type { TranscriptEvent } from "../models/Response";
 import type { QueuedMessage } from "../models/Chats";
 import type { CompactionStatusPresentation } from "../models/ChatSettings";
 import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests, setChatSettingsForTests } from "../models/ChatSettings";
-import {
-  ActivityIndicator,
-  isWorkingActivityState,
-  labelForActivityState,
-  wakeUpSpinnerDeadline,
-} from "./ActivityIndicator";
+import { ActivityIndicator, labelForActivityState, wakeUpSpinnerDeadline } from "./ActivityIndicator";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 
@@ -355,29 +350,5 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     resolveReq1();
     const strip = render();
     expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("THINKING");
-  });
-});
-
-describe("isWorkingActivityState — stop-button visibility gate", () => {
-  it("treats THINKING / TOOL_RUNNING as an interruptible turn", () => {
-    expect(isWorkingActivityState("THINKING")).toBe(true);
-    expect(isWorkingActivityState("TOOL_RUNNING")).toBe(true);
-  });
-
-  it("treats COMPACTING as working", () => {
-    expect(isWorkingActivityState("COMPACTING")).toBe(true);
-  });
-
-  it("treats IDLE as not working (nothing to interrupt)", () => {
-    expect(isWorkingActivityState("IDLE")).toBe(false);
-  });
-
-  it("treats null / undefined (no activity tracking) as not working", () => {
-    expect(isWorkingActivityState(null)).toBe(false);
-    expect(isWorkingActivityState(undefined)).toBe(false);
-  });
-
-  it("treats an unknown / future state value as not working", () => {
-    expect(isWorkingActivityState("SOMETHING_NEW")).toBe(false);
   });
 });

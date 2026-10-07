@@ -61,16 +61,6 @@ function pendingToolCall(events: TranscriptEvent[]): ToolCall | null {
   return null;
 }
 
-const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING", COMPACTING_STATE]);
-
-/**
- * Whether the given server-derived activity state means the agent is busy with a
- * turn or a compaction.
- */
-export function isWorkingActivityState(state: string | null | undefined): boolean {
-  return state !== null && state !== undefined && WORKING_ACTIVITY_STATES.has(state);
-}
-
 /** The in-flight tool caption, as labelled by the harness that produced the call. */
 function labelForToolCall(tc: ToolCall): string {
   return tc.caption_label || "Running tool…";
