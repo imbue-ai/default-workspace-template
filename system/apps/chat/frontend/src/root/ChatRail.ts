@@ -25,6 +25,7 @@ import { isUnread } from "./chatUnread";
 import { destroyChat, renameChat, startChat, stopChat } from "./verbs";
 import { isAgentStarted } from "./rows";
 import type { ChatRow } from "./rows";
+import { LIST_ROW_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 export interface ChatRailAttrs {
   /** The rows in display order. */
@@ -336,6 +337,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       "data-chat-id": row.chatId,
       "data-status": status,
       "aria-current": isSelected ? "true" : undefined,
+      ...LIST_ROW_PART,
       "aria-disabled": isDeleting ? "true" : undefined,
       // In the drawer the chat on screen is picked again to close it.
       onclick: () => {

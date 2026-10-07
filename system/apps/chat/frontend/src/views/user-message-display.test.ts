@@ -47,6 +47,26 @@ function renderInner(event: UserMessageEvent): m.Vnode {
   return comp.view(m(StableUserMessage, { event })) as m.Vnode;
 }
 
+describe("user-message-display system chips", () => {
+  it("draws a system chip without the tool-call part: it is not a tool the agent called", () => {
+    const event: UserMessageEvent = {
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: "evt-stop-hook",
+      source: "claude",
+      role: "user",
+      content: "Stop hook feedback:\nlint failed",
+      display: "chip",
+      display_label: "Stop hook feedback",
+    };
+    const root = document.createElement("div");
+    m.render(root, renderInner(event));
+
+    expect(root.textContent).toContain("Stop hook feedback");
+    expect(root.querySelector('[data-part="chat.tool-call"]')).toBeNull();
+  });
+});
+
 describe("user-message-display status messages", () => {
   beforeEach(() => {
     setBlockExpanded("status:evt-status-summary", false);

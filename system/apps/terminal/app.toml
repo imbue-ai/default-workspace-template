@@ -35,3 +35,8 @@ command = [
 env = {MINDS_APPS_FILE = "{registry}"}
 copies = {store = "data/.apps/terminal"}
 health_path = "/api/health"
+
+# A terminal shows a program's output in xterm, whose look is not the workspace's; the window around it is themed,
+# and the theme's terminal palette reaches xterm (docs/system/blueprint/workspace-themes/, section 4.1).
+[theming]
+mode = "none"

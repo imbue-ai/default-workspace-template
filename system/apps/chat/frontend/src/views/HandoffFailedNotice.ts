@@ -18,6 +18,7 @@ import { getAccounts } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
 import { harnessLabel } from "./harness-labels";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The accounts a failed switch may be retried on: any for a handoff, the agent's own harness and lane for a rebind. */
 export function retryableAccounts(chat: ChatSnapshot, handoff: HandoffState): ProviderAccount[] {
@@ -97,6 +98,7 @@ export function HandoffFailedNotice(): m.Component<{ chatId: string }> {
               "select",
               {
                 class: inputClass({ extra: "handoff-retry-account" }),
+                ...partAttrs("select"),
                 "aria-label": "Account to try",
                 value: selectedId,
                 onchange: (event: Event) => {

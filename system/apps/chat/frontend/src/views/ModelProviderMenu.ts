@@ -87,6 +87,7 @@ import { accountRow, emptyAccountRowState } from "./accountRow";
 import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import * as css from "./modelProviderMenuStyles";
 import { createSlidingMenuTrack } from "./slidingMenuTrack";
+import { FIELD_PART, MENU_ITEM_PART, MENU_SEPARATOR_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
  *  scriptable form, so the menu cannot drive it -- and says where the user can. */
@@ -452,6 +453,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         role: "switch",
         "aria-checked": sourceView.on ? "true" : "false",
         class: menuRowClass({ extra: "text-primary" }),
+        ...MENU_ITEM_PART,
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           menu.close();
@@ -479,6 +481,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       {
         type: "button",
         class: menuRowClass({ extra: "text-primary" }),
+        ...MENU_ITEM_PART,
         ...hoverTooltipAttrs(opts.tooltip, "above"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
@@ -575,7 +578,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       ),
       // The shared menu's own rule, role and all: this submenu's content is free-form, so it
       // borrows the chrome instead of getting a `divider` row.
-      m("div", { role: "separator", class: menuDividerClass() }),
+      m("div", { role: "separator", class: menuDividerClass(), ...MENU_SEPARATOR_PART }),
       state.mode === "auto"
         ? m("label", { class: css.FAST_LIMIT_ROW }, [
             "Turn off after",
@@ -587,6 +590,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                 min: 1,
                 step: 1,
                 class: inputClass({ extra: css.FAST_LIMIT_INPUT_EXTRA }),
+                ...FIELD_PART,
                 "aria-label": "Fast mode turn limit",
                 value: limitDraft ?? String(limit),
                 disabled: settings === null,
@@ -772,6 +776,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
             m("span", { class: css.SEARCH_ICON }, m.trust(icon("search", { size: 13 }))),
             m("input", {
               class: inputClass({ extra: css.SEARCH_INPUT_EXTRA }),
+              ...FIELD_PART,
               type: "text",
               placeholder: "Search models",
               value: modelQuery,

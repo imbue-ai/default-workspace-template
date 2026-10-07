@@ -14,3 +14,7 @@ program = "terminal-pty"
 [preview]
 command = ["terminal-pty", "--no-register", "--app-url", "http://127.0.0.1:{port:main}", "--state-dir", "{scratch}/state"]
 health_path = "/"
+
+# The pty origin's page is the terminal's xterm; the terminal app hands it the theme's palette.
+[theming]
+mode = "none"

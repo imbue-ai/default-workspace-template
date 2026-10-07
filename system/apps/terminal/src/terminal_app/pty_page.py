@@ -6,6 +6,8 @@ this script, inserted into that client when it is installed, listens for the wra
 
 - ``{type: "terminal:key", key, ctrl}`` sends ``key`` (``Escape``, ``Tab``, or an arrow) as the escape sequence
   xterm itself sends for it, honoring the application cursor mode for arrows and ``ctrl`` as xterm's Ctrl modifier.
+- ``{type: "terminal:theme", theme}`` sets xterm's colors to the workspace theme's palette (null puts back xterm's
+  own), applied once ``window.term`` exists.
 - ``{type: "terminal:ctrl", armed}`` arms (or disarms) a one-shot Ctrl for the next key typed on the keyboard.
   Every way xterm turns typing into input (keydown, keypress, the input event, IME composition, and the textarea
   diffing a soft keyboard's keyCode 229 goes through) ends in the core service's ``triggerDataEvent``, so the
@@ -87,9 +89,40 @@ PTY_PAGE_SCRIPT: Final[str] = r"""
     wrappedService = service;
   }
 
+  // The workspace theme's palette (``{type: "terminal:theme", theme}``, null for xterm's own colors). xterm may
+  // not exist yet when the wrapper sends it, so it is kept and applied once ``window.term`` appears.
+  const THEME_RETRY_MS = 200;
+  const THEME_RETRY_LIMIT = 50;
+  let ownTheme = null;
+  // The newest palette asked for; one retry chain at a time applies it, so an older one never lands after it.
+  let pendingTheme = null;
+  let themeTimer = null;
+  let themeRetries = 0;
+  function applyTheme(theme) {
+    pendingTheme = theme;
+    if (themeTimer === null) applyPendingTheme();
+  }
+  function applyPendingTheme() {
+    themeTimer = null;
+    const term = window.term;
+    if (term === undefined) {
+      if (themeRetries >= THEME_RETRY_LIMIT) return;
+      themeRetries += 1;
+      themeTimer = setTimeout(applyPendingTheme, THEME_RETRY_MS);
+      return;
+    }
+    themeRetries = 0;
+    if (ownTheme === null) ownTheme = { ...(term.options.theme ?? {}) };
+    term.options.theme = pendingTheme === null ? ownTheme : { ...ownTheme, ...pendingTheme };
+  }
+
   window.addEventListener("message", (event) => {
     if (!isFramed || event.source !== window.parent) return;
     const data = event.data;
+    if (data !== null && typeof data === "object" && data.type === "terminal:theme") {
+      applyTheme(data.theme !== null && typeof data.theme === "object" ? data.theme : null);
+      return;
+    }
     const term = window.term;
     if (data === null || typeof data !== "object" || term === undefined) return;
     if (data.type === "terminal:ctrl") {

@@ -11,7 +11,7 @@
 import m from "mithril";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import type { OutgoingMessage } from "../models/OutgoingMessages";
-import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
+import { USER_BUBBLE_CLASS, USER_MESSAGE_PART, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
 
 // The user rail's own recipes; the extra classes are bare markers for tests.
 const OUTGOING_ROW_CLASS = `${USER_MESSAGE_ROW_CLASS} outgoing-message outgoing-message--sending`;
@@ -43,7 +43,7 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
     .filter((part) => part !== null)
     .join(" ");
   return m("div", { class: rowClass, key: bubble.key }, [
-    m("div", { class: USER_BUBBLE_CLASS }, [
+    m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
     ]),
   ]);

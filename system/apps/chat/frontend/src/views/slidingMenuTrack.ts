@@ -21,6 +21,7 @@ import {
   type MenuRow,
   type SubmenuRow,
 } from "@imbue/workspace-ui/src/components/menu";
+import { MENU_ITEM_PART, MENU_SEPARATOR_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The shared menu's own cap on a submenu, ten 32px rows inside the card's border and padding, for a submenu row
  *  that sets none. */
@@ -76,6 +77,7 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
               tightGap: row.tightGap,
               extra: `${isDisabled ? "text-faint cursor-default" : TONE_CLASS[row.tone ?? "default"]} ${row.extraClass ?? ""}`,
             }),
+            ...MENU_ITEM_PART,
             "aria-disabled": isDisabled ? "true" : undefined,
             ...keyAttrs(row.key, row.tooltip),
             onclick: (event: MouseEvent) => {
@@ -105,6 +107,7 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
             type: "button",
             role: "menuitem",
             class: menuRowClass({ extra: TONE_CLASS.default }),
+            ...MENU_ITEM_PART,
             "aria-haspopup": "true",
             "aria-expanded": shownKey === row.key ? "true" : "false",
             ...keyAttrs(row.key, row.tooltip),
@@ -130,6 +133,7 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
             role: "menuitem",
             "aria-disabled": "true",
             class: menuRowClass({ inert: true, extra: TONE_CLASS.default }),
+            ...MENU_ITEM_PART,
             ...keyAttrs(row.key, row.tooltip),
           },
           [
@@ -141,12 +145,13 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
           ],
         );
       case "check":
-        return m("label", { class: menuRowClass({ extra: TONE_CLASS.default }), ...keyAttrs(row.key, row.tooltip) }, [
-          m("input", { type: "checkbox", checked: row.isChecked, onchange: () => row.onToggle() }),
-          row.label,
-        ]);
+        return m(
+          "label",
+          { class: menuRowClass({ extra: TONE_CLASS.default }), ...MENU_ITEM_PART, ...keyAttrs(row.key, row.tooltip) },
+          [m("input", { type: "checkbox", checked: row.isChecked, onchange: () => row.onToggle() }), row.label],
+        );
       case "divider":
-        return m("div", { role: "separator", class: menuDividerClass() });
+        return m("div", { role: "separator", class: menuDividerClass(), ...MENU_SEPARATOR_PART });
       case "custom":
         return m("div", { [MENU_ROW_ATTR]: row.key }, row.render());
     }
@@ -162,6 +167,7 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
         {
           type: "button",
           class: menuRowClass({ tightGap: true, extra: "text-secondary" }),
+          ...MENU_ITEM_PART,
           "data-menu-track-back": "",
           onclick: (event: MouseEvent) => {
             event.stopPropagation();
@@ -170,7 +176,7 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
         },
         [m("span", { class: "flex shrink-0" }, m.trust(icon("chevron-left", { size: 14 }))), row.label],
       ),
-      m("div", { role: "separator", class: menuDividerClass() }),
+      m("div", { role: "separator", class: menuDividerClass(), ...MENU_SEPARATOR_PART }),
       m(
         "div",
         {
