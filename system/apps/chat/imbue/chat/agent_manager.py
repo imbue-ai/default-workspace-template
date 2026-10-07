@@ -1640,12 +1640,13 @@ class AgentManager:
             }
         if not chat_id_by_agent_name:
             return []
-        default_state = ChatAutocompactState(is_enabled=self._chat_settings.read().autocompact_default)
-        return [
-            name
-            for name, chat_id in chat_id_by_agent_name.items()
-            if (read_autocompact_state(self._chat_files_root / chat_id) or default_state).is_enabled
-        ]
+        default_state = self._default_autocompact_state()
+        opted_in_names: list[str] = []
+        for name, chat_id in chat_id_by_agent_name.items():
+            state = read_autocompact_state(self._chat_files_root / chat_id)
+            if (default_state if state is None else state).is_enabled:
+                opted_in_names.append(name)
+        return opted_in_names
 
     def get_harness_of_agent_named(self, agent_name: str) -> str | None:
         """The harness a tracked agent runs, by its name; None for a name no tracked agent has."""
@@ -3077,6 +3078,10 @@ class AgentManager:
         state = read_autocompact_state(self._chat_files_root / chat_id)
         if state is not None:
             return state
+        return self._default_autocompact_state()
+
+    def _default_autocompact_state(self) -> ChatAutocompactState:
+        """What a chat with no setting of its own reads: the workspace's ``autocompact_default``."""
         return ChatAutocompactState(is_enabled=self._chat_settings.read().autocompact_default)
 
     def set_autocompact_state(self, chat_id: ChatId, state: ChatAutocompactState) -> None:
@@ -3132,7 +3137,7 @@ class AgentManager:
         """The idle compaction setting a launch labels the agent with, written to the chat's folder at first. Lock held."""
         state = read_autocompact_state(self._chat_files_root / chat_id)
         if state is None:
-            state = ChatAutocompactState(is_enabled=self._chat_settings.read().autocompact_default)
+            state = self._default_autocompact_state()
             write_autocompact_state(self._chat_files_root / chat_id, state)
         return state
 
