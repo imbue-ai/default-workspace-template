@@ -866,6 +866,8 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             queued_messages=(),
             shoulder_tap_available=False,
             is_connecting=False,
+            background_tasks=(),
+            is_busy=False,
         ),
         last_messaged_at=last_messaged_at,
     )
