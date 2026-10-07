@@ -14,6 +14,7 @@ from app_manifest.manifest import (
     PinStyle,
     PreviewSpec,
     ShortcutMode,
+    ThemingMode,
     load_manifest,
     manifest_icon_path,
     scaffold_preview_spec,
@@ -968,3 +969,45 @@ def test_secret_declarations_round_trip_and_reject_a_repeated_file_or_an_empty_v
     ):
         with pytest.raises(ValidationError):
             AppManifest.model_validate({**_full_manifest_data(), "secrets": bad})
+
+
+def test_theming_defaults_to_tokens_with_no_parts() -> None:
+    manifest = AppManifest.model_validate(_full_manifest_data())
+
+    assert manifest.theming.mode == ThemingMode.TOKENS
+    assert manifest.theming.parts == ()
+
+
+def test_theming_parts_declare_the_elements_a_theme_may_style() -> None:
+    data = {
+        **_full_manifest_data(),
+        "theming": {
+            "mode": "parts",
+            "parts": [
+                {"name": "user-message", "description": "A message the user sent"},
+                {"name": "composer", "description": "The box a message is typed in"},
+            ],
+        },
+    }
+
+    manifest = AppManifest.model_validate(data)
+
+    assert manifest.theming.mode == ThemingMode.PARTS
+    assert [str(part.name) for part in manifest.theming.parts] == ["user-message", "composer"]
+
+
+@pytest.mark.parametrize(
+    ("theming", "match"),
+    [
+        ({"mode": "tokens", "parts": [{"name": "row", "description": "A row"}]}, "only with mode"),
+        ({"mode": "parts", "parts": [{"name": "Row", "description": "A row"}]}, "lowercase"),
+        (
+            {"mode": "parts", "parts": [{"name": "row", "description": "A"}, {"name": "row", "description": "B"}]},
+            "unique",
+        ),
+        ({"mode": "skins"}, "mode"),
+    ],
+)
+def test_theming_refuses_misdeclared_parts_and_unknown_modes(theming: dict[str, object], match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        AppManifest.model_validate({**_full_manifest_data(), "theming": theming})

@@ -50,6 +50,14 @@ SHELL_CONTEXT_MENU_PATH: Final[Path] = Path(
     "system/apps/system_interface/imbue/system_interface/static/_static/context_menu.js"
 )
 CONTEXT_MENU_ROUTE: Final[str] = "/_static/context_menu.js"
+# The page kit (the workspace-themes plan, section 5.3), built beside the contract and served by every app the same
+# way: the classic script that wears the workspace's theme, and the standard look for a page built as plain HTML.
+SHELL_THEME_SCRIPT_PATH: Final[Path] = Path(
+    "system/apps/system_interface/imbue/system_interface/static/_static/workspace_theme.js"
+)
+SHELL_THEME_STYLESHEET_PATH: Final[Path] = Path(
+    "system/apps/system_interface/imbue/system_interface/static/_static/workspace_theme.css"
+)
 
 # The registration script, relative to the repo root every supervised program runs from.
 FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")

@@ -40,7 +40,11 @@ The models behind a workspace app's two descriptions:
   a throwaway instance boots, with named free ports, a scratch copy of the
   directories it names, and placeholders in its command, args, and env;
   absent, it is `scaffold_preview_spec(name)`, the build-app convention, so
-  every app previews by construction), `load_manifest(path, repo_root=None)`
+  every app previews by construction), `AppTheming` (the optional `[theming]`
+  table: how far the app takes part in workspace themes, a `ThemingMode` of
+  `tokens` (the default), `parts`, or `none`, and for `parts` the `AppPart`s
+  a theme may style, each an `AppPartName` unique within the app and a
+  description), `load_manifest(path, repo_root=None)`
   (reads, validates, checks the icon file exists beside the manifest, and --
   against the repo root, given or derived from a `system/apps/<package>/app.toml`
   layout -- that every reference exists, sits neither in the app's own
@@ -66,7 +70,10 @@ The models behind a workspace app's two descriptions:
   the app contract module, which every app serves at `APP_CONTRACT_ROUTE` from
   its own origin (a cross-origin module import carries no cookie, and the
   forwarder refuses it); `SHELL_CONTEXT_MENU_PATH` and `CONTEXT_MENU_ROUTE` are
-  the same for the element context menu module built beside it.
+  the same for the element context menu module built beside it, and
+  `SHELL_THEME_SCRIPT_PATH` and `SHELL_THEME_STYLESHEET_PATH` for the page kit
+  (`/_static/workspace_theme.js` and `/_static/workspace_theme.css`), which a
+  page built as plain HTML loads to wear the workspace's theme.
 - `app_manifest.scope`: the footprint computation. `compute_app_scope`,
   `compute_skill_scope`, `with_diff_against_base`, and `render_scope_file` build
   the scope file described below; `find_wiring_sections` reads the app's own
