@@ -344,7 +344,8 @@ export function SwitchDialog(): m.Component<{ chatId: string }> {
       const isRebind = current.kind === "rebind";
       const handoffBody = isAccountSignedOut(chat?.active_agent.account_id)
         ? `This conversation moves to ${target.label}, starting with your next message.`
-        : chat?.status === "working"
+        : // A switch stops the agent, killing the commands it left running, so a pending one counts as work too.
+          chat?.status === "working" || chat?.active_agent.is_busy === true
           ? `${from} wraps up what it is doing and hands the conversation to ${target.label}, ` +
             "starting with your next message."
           : `${from} hands the conversation to ${target.label}, starting with your next message.`;

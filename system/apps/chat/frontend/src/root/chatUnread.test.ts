@@ -76,6 +76,32 @@ describe("noteStatuses", () => {
     expect(isUnread("agent-b")).toBe(false);
   });
 
+  it("marks a chat that waited on a background task only once it goes idle, not when its turn ends", async () => {
+    const { noteStatuses, isUnread } = await loadChatUnread();
+    noteStatuses(statuses({ "agent-a": "working" }), null);
+
+    noteStatuses(statuses({ "agent-a": "background" }), null);
+    expect(isUnread("agent-a")).toBe(false);
+
+    noteStatuses(statuses({ "agent-a": "working" }), null);
+    noteStatuses(statuses({ "agent-a": "background" }), null);
+    expect(isUnread("agent-a")).toBe(false);
+
+    noteStatuses(statuses({ "agent-a": "idle" }), null);
+    expect(isUnread("agent-a")).toBe(true);
+  });
+
+  it("drops the mark when the chat goes back to waiting on a background task", async () => {
+    const { noteStatuses, isUnread } = await loadChatUnread();
+    noteStatuses(statuses({ "agent-a": "background" }), null);
+    noteStatuses(statuses({ "agent-a": "idle" }), null);
+    expect(isUnread("agent-a")).toBe(true);
+
+    noteStatuses(statuses({ "agent-a": "background" }), null);
+
+    expect(isUnread("agent-a")).toBe(false);
+  });
+
   it("keeps the marks in storage, so a reload reads them back and another root's write is followed", async () => {
     const { noteStatuses } = await loadChatUnread();
     noteStatuses(statuses({ "agent-a": "working" }), null);

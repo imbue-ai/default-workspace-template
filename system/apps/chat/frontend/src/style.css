@@ -13,7 +13,9 @@
 @source "./**/*.ts";
 
 /* The chat root's list (root/ChatRail.ts): a chat that is working wears a dot that breathes,
-   so the eye finds the live one without reading. Reduced motion holds it steady. */
+   so the eye finds the live one without reading, and one waiting on a background task wears a
+   dashed ring that turns slowly, as does the wait line above its composer
+   (views/BackgroundTasksLine.ts). Reduced motion holds them steady. */
 @keyframes chat-rail-pulse {
   0%,
   100% {
@@ -28,8 +30,21 @@
   animation: chat-rail-pulse 1.6s ease-in-out infinite;
 }
 
+@keyframes chat-rail-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.chat-rail-dot--dashed,
+.background-tasks-line__ring {
+  animation: chat-rail-spin 6s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .chat-rail-dot--pulse {
+  .chat-rail-dot--pulse,
+  .chat-rail-dot--dashed,
+  .background-tasks-line__ring {
     animation: none;
   }
 }

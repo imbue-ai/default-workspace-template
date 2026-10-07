@@ -42,9 +42,10 @@ export interface ChatRailAttrs {
   isReferenceDraftAvailable: boolean;
 }
 
-/** The status each dot stands for: working is the accent and breathes; done (a finished turn
- *  the user has not looked at, see ``chatUnread``) is a green check; attention is amber; idle
- *  is a hollow grey ring; error is red; stopped wears a pause mark. */
+/** The status each dot stands for: working is the accent and breathes; background (no turn
+ *  running, but a pending task will wake the agent) is a dashed accent ring that turns slowly;
+ *  done (a finished turn the user has not looked at, see ``chatUnread``) is a green check;
+ *  attention is amber; idle is a hollow grey ring; error is red; stopped wears a pause mark. */
 const DOT_CLASS_BY_STATUS: Readonly<Record<string, string>> = {
   working: "chat-rail-dot--pulse bg-accent",
   attention: "bg-warning",
@@ -199,6 +200,15 @@ function statusDot(row: ChatRow, extraClass: string): m.Vnode {
       { class: `chat-rail-dot -mx-0.5 flex size-3 items-center text-success ${extraClass}`, "data-status": status },
       m.trust(icon("check", { size: 12, strokeWidth: 3 })),
     );
+  }
+  if (status === "background") {
+    // A notch wider than the other dots so the dashes read; the negative margin keeps the title aligned.
+    return m("span", {
+      class:
+        "chat-rail-dot chat-rail-dot--dashed -mx-px size-2.5 rounded-full border-[1.5px] border-dashed " +
+        `border-accent bg-transparent ${extraClass}`,
+      "data-status": status,
+    });
   }
   if (status === "stopped") {
     return m(

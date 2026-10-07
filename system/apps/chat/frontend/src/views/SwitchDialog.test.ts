@@ -319,6 +319,26 @@ describe("the switch dialog", () => {
     expect(ROOT().textContent).toBe("");
   });
 
+  it("says an agent waiting on a background task wraps up what it is doing", () => {
+    state.chat = chatSnapshotFixture("agent-1", {
+      status: "background",
+      active_agent: {
+        harness: "claude",
+        account_id: OWN.id,
+        state: "WAITING",
+        is_busy: true,
+        background_tasks: [
+          { id: "task-1", description: "Rebuild the worker image", started_at: "2026-10-06T12:00:00Z" },
+        ],
+      },
+    });
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    render();
+    expect(ROOT().textContent).toContain(
+      "Claude Code wraps up what it is doing and hands the conversation to OpenAI (Codex)",
+    );
+  });
+
   it("does not say an idle agent wraps up what it is doing", async () => {
     beginSwitchTo("agent-1", CODEX as ProviderAccount);
     render();

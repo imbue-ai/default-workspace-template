@@ -8,12 +8,18 @@ import {
   labelForActivityState,
   wakeUpSpinnerDeadline,
 } from "./ActivityIndicator";
+import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
+import type { BackgroundTask } from "../models/Chats";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 
 // The component reads the agent's server-derived state through the chats model; the
 // mock factory is hoisted, so the state it serves lives in a mutable holder.
-const agentState: { activity_state: string | null; harness: string } = { activity_state: null, harness: "claude" };
+const agentState: { activity_state: string | null; harness: string; background_tasks: BackgroundTask[] } = {
+  activity_state: null,
+  harness: "claude",
+  background_tasks: [],
+};
 const handoffState: { handoff: unknown } = { handoff: null };
 vi.mock("../models/Chats", () => ({
   getChatById: () => ({ active_agent: agentState, handoff: handoffState.handoff }),
@@ -250,6 +256,7 @@ describe("ActivityIndicator — what the strip actually renders", () => {
   beforeEach(() => {
     resetShellPermissionResolutionsForTesting();
     agentState.activity_state = null;
+    agentState.background_tasks = [];
     vi.spyOn(m, "redraw").mockImplementation(() => undefined);
     vi.spyOn(Date, "now").mockReturnValue(NOW);
   });
@@ -306,6 +313,31 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     expect(strip).not.toBeNull();
     expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("WAKING");
     expect(labelTextOf(strip)).toBe("Confirming permission changes…");
+  });
+
+  it("puts the wait line under the activity line while a turn runs with tasks pending", () => {
+    const task = { id: "t-1", description: "Rebuild the worker image", started_at: "2026-10-06T12:00:00Z" };
+    agentState.activity_state = "THINKING";
+    agentState.background_tasks = [task];
+
+    const [activity, wait] = (render()?.children ?? []) as m.Vnode[];
+
+    expect((activity.attrs as Record<string, unknown>)["data-state"]).toBe("THINKING");
+    expect(labelTextOf(activity)).toBe("Thinking…");
+    expect(wait.tag).toBe(BackgroundTasksLine);
+    expect((wait.attrs as { tasks: BackgroundTask[] }).tasks).toEqual([task]);
+  });
+
+  it("shows the wait line alone when no turn runs but tasks are pending", () => {
+    agentState.activity_state = "IDLE";
+    agentState.background_tasks = [
+      { id: "t-1", description: "Rebuild the worker image", started_at: "2026-10-06T12:00:00Z" },
+    ];
+
+    const [activity, wait] = (render()?.children ?? []) as (m.Vnode | null)[];
+
+    expect(activity).toBeNull();
+    expect(wait?.tag).toBe(BackgroundTasksLine);
   });
 
   it("lets a real turn outrank the wake-up caption", () => {
