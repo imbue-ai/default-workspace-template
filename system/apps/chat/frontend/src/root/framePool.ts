@@ -11,7 +11,6 @@
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { getBasePath } from "@imbue/workspace-ui/src/base-path";
 import type { ChatPageEmbedApi } from "../embedApi";
-import type { Lane } from "../models/Providers";
 
 export const MAX_HELD_FRAMES = 4;
 
@@ -33,7 +32,6 @@ export class InnerFramePool {
   private handshake: ShellHandshake | null = null;
   private isRootShown = false;
   private isCompact = false;
-  private lanes: Lane[] | null = null;
 
   constructor(private readonly container: HTMLElement) {}
 
@@ -75,18 +73,6 @@ export class InnerFramePool {
     for (const chatId of this.held.keys()) this.api(chatId)?.setCompact(isCompact);
   }
 
-  /** The root's provider chooser closed, so every loaded page re-reads its accounts; a page still loading reads
-   *  them fresh. */
-  accountsChanged(): void {
-    for (const chatId of this.held.keys()) this.api(chatId)?.accountsChanged();
-  }
-
-  /** The provider list the root fetched, handed to every page (now and as each loads). */
-  setLanes(lanes: Lane[]): void {
-    this.lanes = lanes;
-    for (const chatId of this.held.keys()) this.api(chatId)?.adoptLanes(lanes);
-  }
-
   /** The handshake the shell gave the root, handed to every page (now and as each loads). */
   setHandshake(handshake: ShellHandshake): void {
     this.handshake = handshake;
@@ -119,7 +105,6 @@ export class InnerFramePool {
     frame.addEventListener("load", () => {
       held.isLoaded = true;
       this.api(chatId)?.setCompact(this.isCompact);
-      if (this.lanes !== null) this.api(chatId)?.adoptLanes(this.lanes);
       this.introduce(chatId);
       this.tell(chatId, this.isRootShown && this.shownChatId === chatId ? "shown" : "hidden");
     });

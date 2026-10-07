@@ -8,7 +8,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import type { ChatPageEmbedApi } from "../embedApi";
-import type { Lane } from "../models/Providers";
 import { InnerFramePool, MAX_HELD_FRAMES } from "./framePool";
 
 const HANDSHAKE: ShellHandshake = {
@@ -41,15 +40,7 @@ function visibleChatIds(): string[] {
 
 /** Stand in for the page loading: install its embed API on the frame's window, then fire ``load``. */
 function loadPage(chatId: string): { [K in keyof ChatPageEmbedApi]: ReturnType<typeof vi.fn> } {
-  const api = {
-    handshake: vi.fn(),
-    shown: vi.fn(),
-    hidden: vi.fn(),
-    prependDraft: vi.fn(),
-    setCompact: vi.fn(),
-    accountsChanged: vi.fn(),
-    adoptLanes: vi.fn(),
-  };
+  const api = { handshake: vi.fn(), shown: vi.fn(), hidden: vi.fn(), prependDraft: vi.fn(), setCompact: vi.fn() };
   const frame = frameOf(chatId);
   const contentWindow = frame.contentWindow;
   if (contentWindow === null) throw new Error(`frame ${chatId} has no window`);
@@ -163,31 +154,5 @@ describe("InnerFramePool", () => {
     pool.setCompact(false);
     expect(pageA.setCompact).toHaveBeenLastCalledWith(false);
     expect(pageB.setCompact).toHaveBeenLastCalledWith(false);
-  });
-
-  it("tells every loaded page to re-read its accounts, and skips one still loading", () => {
-    pool.show("agent-a");
-    const pageA = loadPage("agent-a");
-    pool.show("agent-b");
-    pool.show("agent-c");
-    const pageC = loadPage("agent-c");
-
-    pool.accountsChanged();
-
-    expect(pageA.accountsChanged).toHaveBeenCalledTimes(1);
-    expect(pageC.accountsChanged).toHaveBeenCalledTimes(1);
-  });
-
-  it("hands the root's provider list to every loaded page, and to a page when it loads", () => {
-    const lanes = [{ id: "claude" }] as unknown as Lane[];
-    pool.show("agent-a");
-    const pageA = loadPage("agent-a");
-
-    pool.setLanes(lanes);
-    pool.show("agent-b");
-    const pageB = loadPage("agent-b");
-
-    expect(pageA.adoptLanes).toHaveBeenCalledWith(lanes);
-    expect(pageB.adoptLanes).toHaveBeenCalledWith(lanes);
   });
 });

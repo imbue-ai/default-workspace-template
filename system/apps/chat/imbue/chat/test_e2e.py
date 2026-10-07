@@ -856,17 +856,17 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
     tmp_path: Path, page: Page
 ) -> None:
     """The window opens either way: with no account the chat app mints a chat that waits for its first send and
-    holds the intake, and the chat root offers the provider chooser over it, so signing in happens where the chat
-    will be rather than on the shell; no agent is created until an account is chosen (post-launch-paths plan
+    holds the intake, and that chat's page offers the provider chooser, so signing in happens where the chat will be
+    rather than on the shell or the chat list; no agent is created until an account is chosen (post-launch-paths plan
     section 4.6)."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         chat_frame = _start_new_chat(page, server)
-        root = _chat_root(page)
-        expect(root.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         # Under the chooser, the composer's provider row already says there is no provider to start on.
         expect(chat_frame.locator(".model-selector-not-connected")).to_have_text("Not connected", timeout=15000)
-        # The shell itself renders no chooser: the sign-in lives in the chat's page.
+        # Neither the shell nor the chat list draws a chooser of its own: the chat's page is the one place it opens.
         assert page.locator('[data-e2e="provider-chooser"]').count() == 0
+        assert _chat_root(page).locator('[data-e2e="provider-chooser"]').count() == 0
         assert [str(chat.chat_id) for chat in server.chat_state.agent_manager.get_chat_snapshots()] == [
             FIXTURE_AGENT_ID
         ]
@@ -880,21 +880,22 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
         page.reload()
         expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
         expect(_chat_root(page).locator(".chat-root")).to_be_visible(timeout=15000)
+        expect(_shown_chat(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_the_chat_list_opened_with_nothing_signed_in_offers_the_provider_chooser_at_once(
+def test_the_new_chat_button_with_nothing_signed_in_opens_a_chat_that_asks_for_a_provider(
     tmp_path: Path, page: Page
 ) -> None:
-    """No chat can start without a provider, so the root offers the chooser as it loads rather than after a message
-    has been typed."""
+    """With nothing signed in the New chat button opens the chat awaiting its first send, and that chat's page asks
+    for a provider, the same as any chat with none to start on."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         _open_fixture_chat_root(page, server)
         root = _chat_root(page)
-        expect(root.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
-        expect(root.locator('[data-e2e="provider-chooser"]')).to_contain_text("Pick your AI provider")
-        root.locator('[data-e2e="provider-chooser"] [aria-label="Close"]').click()
-        expect(root.locator('[data-e2e="provider-chooser"]')).to_have_count(0)
+        root.locator(".chat-rail-new").first.click()
+        expect(_shown_chat(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        awaiting = server.chat_state.agent_manager.get_provisional_chats()
+        assert [chat.phase.value for chat in awaiting] == ["awaiting_first_send"]
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -902,12 +903,11 @@ def test_a_chat_awaiting_its_first_send_with_nothing_signed_in_offers_a_provider
     tmp_path: Path, page: Page
 ) -> None:
     """A message typed before a provider is connected could not be sent, so with the chooser dismissed the composer
-    is a sentence and a button that opens the chooser again."""
+    is a sentence and a button that opens the same chooser again."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         chat_frame = _start_new_chat(page, server)
-        root = _chat_root(page)
-        expect(root.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
-        root.locator('[data-e2e="provider-chooser"] [aria-label="Close"]').click()
+        expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
+        chat_frame.locator('[data-e2e="provider-chooser"] [aria-label="Close"]').click()
         expect(chat_frame.locator(".message-input-no-provider")).to_contain_text(
             "Connect an AI provider to start chatting.", timeout=15000
         )

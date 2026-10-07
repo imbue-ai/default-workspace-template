@@ -1,1 +1,1 @@
-The post-launch-paths plan now says a chat with nothing signed in asks for a provider before a message can be typed: the composer is replaced by a button that opens the provider chooser until one is signed in.
+The post-launch-paths plan now says a chat with nothing signed in asks for a provider itself: a first message from an intake waits in the chat's composer, and the chat's page opens the provider chooser.

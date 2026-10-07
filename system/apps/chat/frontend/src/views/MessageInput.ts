@@ -246,10 +246,11 @@ export interface MessageInputAttrs {
 
 /** A notice that stands in for the composer while the chat has no provider to run on: why, and a button that opens
  *  the provider chooser. ``markerClass`` names which notice it is. */
-function providerNotice(markerClass: string, sentence: string, onChoose: () => void): m.Vnode {
+function providerNotice(markerClass: string, sentence: string, onChoose: () => void, onShown?: () => void): m.Vnode {
   return m(
     "div",
     {
+      oncreate: onShown,
       class:
         `${markerClass} flex flex-row items-center justify-between gap-3 rounded-xl border ` +
         "border-default bg-surface-secondary py-3 pr-3 pl-5 text-(length:--font-size-body) text-secondary",
@@ -1239,10 +1240,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
-      /** In place of the composer while nothing is signed in that a new chat could start on. */
+      /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
+       *  notice appears, and its button opens it again once dismissed. */
       function renderNoProviderNotice(): m.Children {
-        return providerNotice("message-input-no-provider", "Connect an AI provider to start chatting.", () =>
-          openProviderChooser(),
+        return providerNotice(
+          "message-input-no-provider",
+          "Connect an AI provider to start chatting.",
+          () => openProviderChooser(),
+          () => openProviderChooser(),
         );
       }
 

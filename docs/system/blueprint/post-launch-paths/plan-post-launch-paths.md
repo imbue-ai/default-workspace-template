@@ -164,7 +164,7 @@ Three routes, all for the chat root:
 Exactly one of these holds:
 
 - `composer_text` is the text and `first_message` is null: a draft. The root puts the text into that chat's composer, unsent.
-- `first_message` is the text and `composer_text` is null: a send to a provisional chat awaiting its first send, with no account signed in when the intake arrived. The root launches the chat with it (section 4.6): the provider chooser opens, and the sign-in launches the chat's first agent with the text as its first message.
+- `first_message` is the text and `composer_text` is null: a send to a provisional chat awaiting its first send, with no account signed in when the intake arrived. The root launches the chat with it on an account that has appeared meanwhile, else drafts it into the chat's composer, whose page asks for a provider (section 4.6).
 - Both null: a send to a chat that is an agent, delivered by the server on apply through the ordinary send path (on a background thread), so a picked chat is messaged the way one named in the intake is.
 
 The token is consumed before the answer, so a second apply is a `404`.
@@ -185,7 +185,7 @@ Discarding it before its first send drops it; it has no record, so a chat-app re
 | Making the POST, validating the params, reading the path, opening or navigating the window | The shell backend, in its launch route and the op route's `open` |
 | Which chat receives a text, whether it is sent or drafted, and when a choice is the user's | The chat app, in its intake route |
 | Holding a draft or a choice until the page can act on it | The chat app, in its pending intakes |
-| Putting a draft into a composer, offering the picker, opening the chooser for a first message | The chat root, on applying a pending intake |
+| Putting a draft into a composer, offering the picker, launching or drafting a first message | The chat root, on applying a pending intake |
 | Creating a tmux session or a browser and naming its page | The terminal and browser apps, in their `POST /new` |
 
 ### 3.9 Invariants
@@ -231,7 +231,7 @@ A shortcut in `new` mode launches with target `new`; in `focus` mode it raises t
 ### 4.6 No account signed in
 
 A `new_chat` intake with nothing signed in mints an unseeded provisional chat and holds the intake.
-The window lands on `/?chat=<id>&intake=<token>`; the root applies the intake and receives `first_message`, so it opens the provider chooser over the chat; signing in launches the chat's first agent with the text as its first message, and dismissing the chooser puts the text into the composer's draft instead, which shows once a provider is signed in from the button that stands in for the composer until then.
+The window lands on `/?chat=<id>&intake=<token>`; the root applies the intake and receives `first_message`, which goes into the chat's composer as a draft; the chat's page, having no provider to start on, opens the provider chooser, and once a provider is signed in the draft is there to send.
 A `chat_selector` or `current_chat` intake never asks for an account: it reaches an existing chat, which has one, or falls into `new_chat`.
 
 ### 4.7 Reloads and other clients
@@ -303,7 +303,7 @@ The op route's `open` uses the same resolution (`_open_target` returns the answe
 ### 7.2 Frontend
 
 - `root/selection.ts`: `intakeTokenFromSearch`; the `/new`, `/send`, `message`, `account_id`, and `draft` readers go.
-- `root/index.ts`: on load and on `shell:navigate`, a token is fetched and applied (section 3.6): the picker over the agent chats for a choice (Escape deletes the token), else apply at once; the answer selects the chat, drafts `composer_text`, or launches with `first_message` through the chooser (dismissal drafts it); then the root reports the selection alone.
+- `root/index.ts`: on load and on `shell:navigate`, a token is fetched and applied (section 3.6): the picker over the agent chats for a choice (Escape deletes the token), else apply at once; the answer selects the chat, drafts `composer_text`, or launches with `first_message` (drafting it when nothing is signed in); then the root reports the selection alone.
   `startNewChat` stays for the New chat button.
 - `root/SendPicker.ts`: unchanged in shape; its `onPick` applies the token.
 - `models/Chats.ts`: `fetchPendingIntake`, `applyPendingIntake`, `discardPendingIntake`.

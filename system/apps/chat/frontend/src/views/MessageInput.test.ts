@@ -1266,6 +1266,15 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
     expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
   });
 
+  it("opens the provider chooser as the notice appears", () => {
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+
+    const notice = findByClass(tree, "message-input-no-provider");
+    (notice!.attrs!.oncreate as () => void)();
+
+    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the phone's leading settings button beside the notice", () => {
     const leading = m("button", { "aria-label": "Chat settings" });
     const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731", leading } } as never);

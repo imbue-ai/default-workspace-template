@@ -158,13 +158,6 @@ export function areLanesLoaded(): boolean {
   return lanesLoaded;
 }
 
-/** Take a lane list another page of this app already fetched, so this page need not fetch it again. */
-export function adoptLanes(given: Lane[]): void {
-  if (lanesLoaded) return;
-  lanes = given;
-  lanesLoaded = true;
-}
-
 export async function loadLanes(): Promise<void> {
   if (lanesLoaded) return;
   const body = await m.request<{ lanes: Lane[] }>({ method: "GET", url: apiUrl("/api/lanes") });
@@ -187,8 +180,8 @@ export async function loadAccounts(): Promise<void> {
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.
  *
  * The boot-time caller races the backend coming up: the page can be served before the API
- * answers, and a decision made off one silently failed fetch (the provider chooser the chat
- * root offers foremost) would be wrong for the whole page load. Never rejects.
+ * answers, and a decision made off one silently failed fetch (whether the composer asks for a
+ * provider) would be wrong for the whole page load. Never rejects.
  */
 export async function loadAccountsWithRetry(): Promise<void> {
   const backoff = new ReconnectBackoff();
@@ -365,7 +358,7 @@ export function clearFlow(): void {
  * The account the user pinned as the default wins; otherwise the one just signed in to;
  * otherwise the most recently used, which the server bumps on every launch -- so "start
  * another one like the last" needs no click. Null means there is nothing to launch on yet: the
- * chat root then offers the chooser before it creates anything. The server's
+ * chat then asks for a provider before anything is typed. The server's
  * `resolve_binding` follows the same order, so a launch the page decides and one it leaves to
  * the server land on the same account.
  */

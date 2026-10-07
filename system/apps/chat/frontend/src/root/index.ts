@@ -6,8 +6,7 @@
  * The root owns the shell connection: it reports ``/?chat=<id>`` and the selected chat's
  * title as its location, handles ``shell:navigate`` by changing the selection, applies the
  * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
- * chat through the picker, or a first message that launches a chat through the provider
- * chooser) exactly once and then reports the selection alone, and drives its inner pages
+ * chat through the picker, or a first message that launches a chat) exactly once and then reports the selection alone, and drives its inner pages
  * directly (they share an origin) with the shell's handshake and its shown and hidden states,
  * so each page's presence reports key on the chat it shows. The inner pages' own ``minds:``,
  * ``shell:focused``, and sub-agent ``shell:open`` messages go up through ``relay.ts``; a page
@@ -44,16 +43,10 @@ import {
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
   accountForFirstSend,
-  areLanesLoaded,
-  closeProviderChooser,
-  getLanes,
   getSelectedAccount,
-  isProviderChooserOpen,
   loadAccountsWithRetry,
-  openProviderChooser,
   whenAccountsReadyToChoose,
 } from "../models/Providers";
-import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
 import { ChatDrawer } from "./ChatDrawer";
 import { ChatHeader } from "./ChatHeader";
@@ -187,7 +180,8 @@ async function createAndSelect(accountId: string): Promise<void> {
   }
 }
 
-/** The New chat button: a chat on the selected account, or after a sign-in when nothing is signed in. */
+/** The New chat button: a chat on the selected account, or with nothing signed in the chat awaiting its first
+ *  send, whose page asks for a provider. */
 async function startNewChat(): Promise<void> {
   await whenAccountsReadyToChoose();
   const account = getSelectedAccount();
@@ -195,14 +189,13 @@ async function startNewChat(): Promise<void> {
     await createAndSelect(account.id);
     return;
   }
-  openProviderChooser({ onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId) });
-}
-
-/** With nothing signed in, the chooser opens as the root loads (or as its intake settles), before anything can be
- *  typed. */
-async function offerChooserWhenNothingSignedIn(): Promise<void> {
-  await whenAccountsReadyToChoose();
-  if (getSelectedAccount() === null) openProviderChooser();
+  try {
+    const chatId = await awaitingChatForEmptyList();
+    awaitingListing.add(chatId);
+    select(chatId);
+  } catch (error) {
+    alert(`Failed to create chat: ${(error as Error).message}`);
+  }
 }
 
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
@@ -214,13 +207,6 @@ function settleIntake(chatId: string | null): void {
   select(chatId);
 }
 
-/** Settle an intake that launches nothing, so no chooser of its own opens: with nothing signed in the root offers
- *  one, as on a load with no intake. */
-function settleIntakeWithoutLaunch(chatId: string | null): void {
-  settleIntake(chatId);
-  void offerChooserWhenNothingSignedIn();
-}
-
 /** Put ``text`` in a chat's composer, unsent: the live page's when it is loaded, else where the composer reads
  *  its persisted draft on mount. Either way an element reference in it is attached as a file (the page's
  *  ``prependToComposer`` does it, and so does this document's, which the page's store reads on load). */
@@ -230,11 +216,8 @@ function draftInto(chatId: string, text: string): void {
 }
 
 /** Launch a chat awaiting its first send with ``text`` (an intake that could not launch it at once): on the account
- *  the chat was minted for when it names one, else the signed-in account when one has appeared meanwhile, else
- *  through the provider chooser; a dismissed chooser leaves the text in the composer's draft, which shows once a
- *  provider is signed in from the button that stands in for the composer until then. A chooser already open (the
- *  one the root opened as it loaded, or the New chat button's) takes no second intent, so the text goes to the
- *  composer at once. */
+ *  the chat was minted for when it names one, else the signed-in account when one has appeared meanwhile. With
+ *  nothing signed in the text goes into the chat's composer, whose page asks for a provider. */
 async function launchWithFirstMessage(chatId: string, text: string): Promise<void> {
   const launchOrDraft = (accountId: string): void => {
     launchChat(chatId, accountId, text).catch((error: unknown) => {
@@ -249,11 +232,7 @@ async function launchWithFirstMessage(chatId: string, text: string): Promise<voi
     launchOrDraft(account.id);
     return;
   }
-  if (isProviderChooserOpen()) {
-    draftInto(chatId, text);
-    return;
-  }
-  openProviderChooser({ onSignedIn: launchOrDraft, onDismissed: () => draftInto(chatId, text) });
+  draftInto(chatId, text);
 }
 
 /** A reference drafted from the root's own chrome (the rail, the empty slot): into the selected chat's composer,
@@ -275,8 +254,7 @@ function isReferenceDraftAvailable(): boolean {
  *  goes into its composer, a first message launches it. */
 function takeApplied(applied: AppliedIntake): void {
   startedHere.add(applied.chatId);
-  if (applied.firstMessage === null) settleIntakeWithoutLaunch(applied.chatId);
-  else settleIntake(applied.chatId);
+  settleIntake(applied.chatId);
   if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
   if (applied.firstMessage !== null) void launchWithFirstMessage(applied.chatId, applied.firstMessage);
 }
@@ -289,7 +267,7 @@ async function applyIntake(token: string, pickedChatId: string | null): Promise<
     takeApplied(await applyPendingIntake(token, pickedChatId));
   } catch (error) {
     if (!(error instanceof PendingIntakeGoneError)) alert(`Could not take the message: ${(error as Error).message}`);
-    settleIntakeWithoutLaunch(selectedChatId);
+    settleIntake(selectedChatId);
   }
 }
 
@@ -303,7 +281,7 @@ async function takeIntake(token: string): Promise<void> {
     intake = await fetchPendingIntake(token);
   } catch (error) {
     if (!(error instanceof PendingIntakeGoneError)) alert(`Could not read the message: ${(error as Error).message}`);
-    settleIntakeWithoutLaunch(selectedChatId);
+    settleIntake(selectedChatId);
     return;
   }
   if (intake.needsPick) {
@@ -325,7 +303,7 @@ function dismissPick(): void {
   const pick = pendingPick;
   pendingPick = null;
   if (pick !== null) void discardPendingIntake(pick.token);
-  settleIntakeWithoutLaunch(selectedChatId);
+  settleIntake(selectedChatId);
 }
 
 function onChatsUpdated(): void {
@@ -406,21 +384,9 @@ const ChatRoot: m.Component = {
         isCompact && isDrawerOpen
           ? m(ChatDrawer, {
               rail,
-              isCovered: isProviderChooserOpen() || pendingPick !== null,
+              isCovered: pendingPick !== null,
               onDismiss: () => {
                 isDrawerOpen = false;
-              },
-            })
-          : null,
-        isProviderChooserOpen()
-          ? m(ProviderChooserModal, {
-              onDismiss: closeProviderChooser,
-              // However the chooser closes (dismissed, done, or an account picked), a sign-in made in it does not
-              // reach the chat pages' own account lists, so they read theirs again; the provider list it fetched
-              // goes to them as is.
-              onremove: () => {
-                if (areLanesLoaded()) pool?.setLanes(getLanes());
-                pool?.accountsChanged();
               },
             })
           : null,
@@ -541,10 +507,7 @@ function bootstrap(): void {
   installCursorHidingWhileTyping(document);
   reportLocation();
   const token = pendingToken;
-  // With an intake the chooser waits for it: one that launches a chat opens its own, with the message riding the
-  // sign-in, and one that launches nothing offers it once settled.
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));
-  else void offerChooserWhenNothingSignedIn();
 }
 
 window.addEventListener("load", bootstrap);
