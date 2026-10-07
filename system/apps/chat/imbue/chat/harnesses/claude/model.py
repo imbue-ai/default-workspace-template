@@ -36,9 +36,10 @@ other option is declared with ``in_picker=False``: matchable if a live read repo
 never offered. That set is defined by what the four do NOT cover, so an agent sitting on
 a model the picker cannot reach still shows a name instead of falling through to the
 shrug case. Three ways in: an approved org launching Mythos, a chat that was created on
-an older pin and is still sitting on Opus 5, Sonnet 5 or Fable 5, and a user typing ``/model opus-4-8``
-straight into the underlying Claude Code session, which the picker neither offers nor
-prevents. The ``ultra`` effort (ultracode) is declared-but-hidden the same way.
+an older pin and is still sitting on Opus 5, Sonnet 5 or Fable 5, and a user typing
+``/model opus-4-8`` straight into the underlying Claude Code session, which the picker
+neither offers nor prevents. The ``ultra`` effort (ultracode) is declared-but-hidden the
+same way.
 
 Each option's ``harness_reported_model_id`` is the suffix-free API id
 (``claude-opus-5-5``), matched against a live read. An option launched with the ``[1m]``

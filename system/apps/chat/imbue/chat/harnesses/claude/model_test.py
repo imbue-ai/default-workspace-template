@@ -55,9 +55,9 @@ def test_picker_offers_exactly_four_models() -> None:
 
 def test_hidden_options_are_the_models_the_picker_cannot_reach() -> None:
     # The hidden set is defined by what the four offered models do NOT match: an agent
-    # sitting on one of these (a chat still on the previous Opus, Sonnet or Fable, an approved org
-    # on Mythos, or a user who typed /model opus-4-8 into the underlying session) still
-    # shows a name instead of shrugging.
+    # sitting on one of these (a chat still on the previous Opus, Sonnet or Fable, an
+    # approved org on Mythos, or a user who typed /model opus-4-8 into the underlying
+    # session) still shows a name instead of shrugging.
     hidden = [option.id for option in CLAUDE_CATALOG.options if not option.in_picker]
     assert hidden == [
         "claude-fable-5",
