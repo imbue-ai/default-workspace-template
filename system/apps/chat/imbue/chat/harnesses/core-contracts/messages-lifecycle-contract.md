@@ -190,6 +190,13 @@ computed or timed by the frontend.
 - On interrupt, the backend emits the state change so the dot clears immediately and the
   transcript shows the correct interruption marker (`[Request interrupted by user]`,
   `[Request interrupted for tool call]`, etc.).
+- **A turn that ends waiting on a background task is done, but the chat is not idle.** An agent
+  that ended its turn with a pending task that will wake it (a `run_in_background.py` command, a
+  Claude-native background shell) is **busy**: the dot clears as for any finished turn, and the
+  chat's status is `background`, not `idle`, until the task's report turn has run and ended. The
+  status precedence is stopped, attention, working, background, idle. The backend decides busy
+  and lists the pending tasks on the snapshot (`active_agent.is_busy`,
+  `active_agent.background_tasks`); the frontend renders them and decides nothing.
 
 **Known violations to eliminate (codex, today):** (1) "Thinking…" begins before "Sending…"
 disappears (send/commit ordering not honored → overlap); (2) the dot lingers ~2s after the

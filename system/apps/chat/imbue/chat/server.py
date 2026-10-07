@@ -92,6 +92,7 @@ from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentListItem
+from imbue.chat.models import background_task_snapshots
 from imbue.chat.models import AgentListResponse
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
@@ -1768,7 +1769,16 @@ def _discover_with_filters() -> list[AgentInfo]:
 def _list_agents_endpoint() -> Response:
     """List all mngr-managed agents (the loopback callers' listing: the evals bridge, the deployment tests)."""
     agents = _discover_with_filters()
-    items = [AgentListItem(id=agent.id, name=agent.name, state=agent.state) for agent in agents]
+    items = [
+        AgentListItem(
+            id=agent.id,
+            name=agent.name,
+            state=agent.state,
+            is_busy=agent.is_busy,
+            background_tasks=background_task_snapshots(agent.background_tasks),
+        )
+        for agent in agents
+    ]
     return json_response(AgentListResponse(agents=items).model_dump())
 
 

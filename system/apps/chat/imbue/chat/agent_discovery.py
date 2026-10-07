@@ -30,6 +30,7 @@ from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.data_types import PluginConfigT
 from imbue.mngr.config.loader import load_config
 from imbue.mngr.errors import SendFailureKind
+from imbue.mngr.interfaces.data_types import BackgroundTask
 from imbue.mngr.main import get_or_create_plugin_manager
 from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
@@ -64,6 +65,12 @@ class AgentInfo(FrozenModel):
         description="The agent's harness, narrowed from mngr's AgentDetails.type. Resolved here and nowhere else.",
     )
     create_time: datetime | None = Field(default=None, description="When the agent was created, if known")
+    background_tasks: tuple[BackgroundTask, ...] = Field(
+        default=(), description="The pending tasks that will wake the agent, oldest first"
+    )
+    is_busy: bool = Field(
+        default=False, description="Whether the agent will resume on its own (a turn in flight, or a pending task)"
+    )
 
 
 def _get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
@@ -195,6 +202,8 @@ def discover_agents(
                 work_dir=str(agent_details.work_dir),
                 harness=parse_harness(str(agent_details.type)),
                 create_time=agent_details.create_time,
+                background_tasks=agent_details.background_tasks,
+                is_busy=agent_details.is_busy,
             )
         )
 

@@ -53,9 +53,11 @@ def _agent_record(
     last_activity: datetime,
     pid: int | None = None,
     provider: str = "local",
+    is_busy: bool = False,
 ) -> dict[str, Any]:
     """One agent as mngr holds it (``AgentDetails``' shape, for the fields the template names)."""
     return {
+        "is_busy": is_busy,
         "id": f"agent-{uuid4().hex}",
         "name": name,
         "type": "claude",
@@ -225,6 +227,8 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
     old = _NOW - timedelta(days=2)
     records = [
         _agent_record("busy-chat", "RUNNING", {"user_created": "true"}, old, 10),
+        # Its turn ended long ago, but a background task it started will wake it.
+        _agent_record("parked-worker", "WAITING", {"agent_created": "true"}, old, 15, is_busy=True),
         _agent_record("just-answered", "WAITING", {"user_created": "true"}, _NOW - timedelta(minutes=5), 11),
         _agent_record("services", "WAITING", {"is_primary": "true", "user_created": "true"}, old, 12),
         _agent_record("caretaker", "WAITING", {"automation": "caretaker"}, old, 13),
@@ -240,8 +244,19 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
     assert report.agents.candidates == ()
     assert report.browsers.candidates == ()
     table = memory_candidates.render_table(report)
-    assert "(waiting, no activity for 15m or more):\n  none" in table
+    assert "(waiting, not busy, no activity for 15m or more):\n  none" in table
     assert "Browsers no window shows (running):\n  none" in table
+
+
+def test_an_mngr_older_than_the_busy_field_still_lists_its_idle_agents(tmp_path: Path, runtime_dir: Path) -> None:
+    chat = _agent_record("chat-a", "WAITING", {"user_created": "true"}, _NOW - timedelta(hours=1), 100)
+    del chat["is_busy"]
+
+    report = memory_candidates.collect_report(
+        _sources(tmp_path / "proc", _FakeMngr([chat]), _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}))
+    )
+
+    assert [agent.name for agent in report.agents.candidates] == ["chat-a"]
 
 
 def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(tmp_path: Path, runtime_dir: Path) -> None:
@@ -291,7 +306,7 @@ def test_a_failed_mngr_list_reports_agents_as_unknown_and_still_lists_browsers(t
     assert len(report.agents.notes) == 1
     assert report.agents.notes[0].startswith("could not run `mngr list`: ")
     assert [b.name for b in report.browsers.candidates] == ["browser-1"]
-    assert "Idle chats and workers (waiting, no activity for 15m or more):\n  unknown\n  note: could not run" in (
+    assert "Idle chats and workers (waiting, not busy, no activity for 15m or more):\n  unknown\n  note: could not run" in (
         memory_candidates.render_table(report)
     )
 

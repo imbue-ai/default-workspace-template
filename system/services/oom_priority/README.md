@@ -243,11 +243,14 @@ delivering), so the only cost is a slower next message. Shedding a running worke
 destroys in-flight work. So a chat nobody has touched in hours is genuinely worth
 less than the worker a live chat just spawned.
 
-The exception is a chat that is **mid-turn** (a running lifecycle state): it is
-doing work right now that a shed would destroy rather than defer, so its
-staleness climb is suspended for the duration of the turn and it stays below the
-worker band. Both edges of the turn count as engagement, so a chat that ran for
-three days starts aging from when its turn *ended*, not when it began.
+The exception is a chat that is **mid-turn** (a running lifecycle state) or
+**busy** (its turn ended waiting on a background task, such as a command
+`run_in_background.py` runs for it, that will start its next turn): it is doing
+work right now, or is about to resume it, and a shed would destroy rather than
+defer that, so its staleness climb is suspended for as long as it lasts and it
+stays below the worker band. Both edges count as engagement, so a chat that ran
+for three days starts aging from when it last stopped being busy, not when it
+began.
 
 Idle time is measured from the most recent of: a message sent through the UI, the
 moment its tab was switched to, either edge of a turn, or -- as a floor -- its own
@@ -320,8 +323,10 @@ It lists:
   - is a chat (`user_created=true`) or a worker (`agent_created=true`). The
     primary services agent and any agent with neither label (an automation, for
     example) are never listed;
-  - is `WAITING`, meaning its turn has ended. A `RUNNING` agent is mid-turn, and
-    a `STOPPED` or `DONE` agent holds no memory to free;
+  - is `WAITING`, meaning its turn has ended, and not busy (mngr's `is_busy`): a
+    `WAITING` agent that is busy is waiting on a background task that will start
+    its next turn, not on the user. A `RUNNING` agent is mid-turn, and a
+    `STOPPED` or `DONE` agent holds no memory to free;
   - has had no activity for `IDLE_AFTER_SECONDS` (15 minutes). Its last
     activity is the latest of mngr's `user_activity_time`, `agent_activity_time`
     and `start_time`. mngr's own `idle_seconds` is not used, because it also

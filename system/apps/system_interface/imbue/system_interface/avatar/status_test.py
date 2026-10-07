@@ -29,9 +29,10 @@ def _stamp(offset: timedelta = timedelta()) -> str:
     return (_NOW + offset).strftime("%Y-%m-%dT%H:%M:%S.%f000Z")
 
 
-def _agent(agent_id: str, state: str, is_primary: bool = False) -> dict[str, Any]:
+def _agent(agent_id: str, state: str, is_primary: bool = False, is_busy: bool | None = None) -> dict[str, Any]:
     labels = {"is_primary": "true"} if is_primary else {}
-    return {"id": agent_id, "state": state, "labels": labels}
+    details: dict[str, Any] = {"id": agent_id, "state": state, "labels": labels}
+    return details if is_busy is None else {**details, "is_busy": is_busy}
 
 
 def _event(event_type: str, offset: timedelta = timedelta(), **fields: Any) -> str:
@@ -55,6 +56,19 @@ def test_the_primary_agent_never_counts_as_working() -> None:
     assert fold_agent_events(lines, _NOW).mood is AvatarMood.IDLE
     lines.append(_event("AGENT_STATE", agent=_agent("worker", "RUNNING")))
     assert fold_agent_events(lines, _NOW).mood is AvatarMood.WORKING
+
+
+def test_an_agent_waiting_on_its_own_background_task_counts_as_working() -> None:
+    lines = [_event("AGENTS_FULL_STATE", agents=[_agent("a", "WAITING", is_busy=False)])]
+    assert fold_agent_events(lines, _NOW).mood is AvatarMood.IDLE
+    lines.append(_event("AGENT_STATE", agent=_agent("a", "WAITING", is_busy=True)))
+    assert fold_agent_events(lines, _NOW).mood is AvatarMood.WORKING
+    # The report's turn ran and ended with nothing left pending.
+    lines.append(_event("AGENT_STATE", agent=_agent("a", "WAITING", is_busy=False)))
+    assert fold_agent_events(lines, _NOW).mood is AvatarMood.IDLE
+    # A busy services agent is still the services agent.
+    lines.append(_event("AGENT_STATE", agent=_agent("services", "WAITING", is_primary=True, is_busy=True)))
+    assert fold_agent_events(lines, _NOW).mood is AvatarMood.IDLE
 
 
 def test_a_malformed_line_is_skipped_and_the_rest_still_folds() -> None:

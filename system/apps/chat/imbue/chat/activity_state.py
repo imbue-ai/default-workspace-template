@@ -12,6 +12,16 @@ The ``*_process_started`` marker (touched by mngr on every startup/resume) is th
 boundary the stale-tail guard compares against: a transcript tail older than the
 current process is left over from a turn this process never ran and must not show
 "Thinking..." indefinitely after a mid-turn restart.
+
+Beside the lifecycle sits **busy**: the agent will resume on its own. That is a turn in
+flight (RUNNING), or a pending background task whose completion starts one -- a command
+``run_in_background.py`` is running for it, or a Claude-native background shell -- each
+recorded as a marker in the agent's ``background_tasks`` dir. A WAITING agent that is busy
+is parked on its own work, not waiting for the user; a permission prompt is not busy. The
+lifecycle does not change for it (RUNNING still means a turn is in flight), and mngr's rule
+decides it (``compute_is_busy``). The chat takes the tasks from the fresher of the observe
+event and its own read of the marker dir (``agent_manager.resolve_busy_state``), and shows a
+busy agent with no turn in flight as the ``background`` status.
 """
 
 from datetime import datetime
@@ -70,7 +80,8 @@ ACTIVE_MARKER_FILENAME: str = "active"
 # The lifecycle state of an alive-but-idle agent (between turns). This is the ONLY state where
 # the observe-reported state can trail the real turn: a quick turn sets and clears the `active`
 # marker before the observe stream reports RUNNING, leaving the reported state at WAITING the
-# whole time.
+# whole time. Between turns does not mean waiting for the user: a busy WAITING agent (see the
+# module docstring) will start its next turn on its own.
 WAITING_LIFECYCLE_STATE: str = "WAITING"
 
 # The lifecycle verdict meaning "could not observe", not "dead": mngr maps provider and probe

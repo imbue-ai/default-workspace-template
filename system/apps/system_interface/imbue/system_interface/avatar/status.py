@@ -4,7 +4,8 @@ from the agents event file the mngr observer writes, with plain JSON parsing and
 The file is append-only JSONL under the standard event envelope: a full snapshot of every agent every five
 minutes, one agent's state whenever its host shows activity, and a removal when an agent is destroyed. The fold
 reads from the end of the file back to the most recent snapshot, applies every later state and removal on top,
-drops the workspace's own services agent (labelled primary), and asks whether any remaining agent is running.
+drops the workspace's own services agent (labelled primary), and asks whether any remaining agent is running or
+busy (parked on a pending task that will start its next turn).
 Every convention relied on is a constant below; a change to one shows up as a stale or idle avatar, never as an
 error. Past ten minutes (twice the snapshot interval) the status is stale; a missing file is stale from the start.
 """
@@ -39,13 +40,15 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # mngr's conventions, duplicated rather than imported: the host directory's environment variable and fallback,
 # the observer's event file under it, the three event types the fold reads, the label that marks the workspace's
-# services agent, and the two lifecycle states that mean an agent is working. Reading that file is the one
+# services agent, the two lifecycle states that mean an agent is working, and the details field that says it will
+# resume on its own (``AgentDetails.is_busy``; absent from an older mngr's events). Reading that file is the one
 # exception to the workspace's rule of reaching mngr through its CLI alone; the Imbue Studio design document records it.
 ENV_MNGR_HOST_DIR: Final[str] = "MNGR_HOST_DIR"
 DEFAULT_MNGR_HOST_DIRNAME: Final[str] = ".mngr"
 AGENT_EVENTS_RELATIVE_PATH: Final[Path] = Path("events") / "mngr" / "agents" / "events.jsonl"
 PRIMARY_LABEL_KEY: Final[str] = "is_primary"
 WORKING_AGENT_STATES: Final[frozenset[str]] = frozenset({"RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE"})
+BUSY_FIELD: Final[str] = "is_busy"
 # Twice the observer's snapshot interval.
 STALE_AFTER: Final[timedelta] = timedelta(minutes=10)
 
@@ -73,7 +76,7 @@ class AgentEventType(UpperCaseStrEnum):
 class AvatarStatus(FrozenModel):
     """What the avatar wears: the mood, and whether the file it came from may be out of date."""
 
-    mood: AvatarMood = Field(description="Working when any agent but the services agent is running")
+    mood: AvatarMood = Field(description="Working when any agent but the services agent is running or busy")
     is_stale: bool = Field(description="Whether the newest event is older than the stale threshold, or absent")
 
 
@@ -124,21 +127,23 @@ def _is_primary(agent: Mapping[str, Any]) -> bool:
 
 
 @pure
-def _agent_id_and_state(agent: Any) -> tuple[str, str] | None:
-    """An agent's id and lifecycle state from its details, or None for details without them."""
+def _agent_id_and_is_working(agent: Any) -> tuple[str, bool] | None:
+    """An agent's id and whether it is working (running, or busy on work that will wake it) from its details, or
+    None for details without an id."""
     if not isinstance(agent, Mapping) or not isinstance(agent.get("id"), str):
         return None
-    state = agent.get("state")
-    return (agent["id"], state if isinstance(state, str) else "")
+    is_working = agent.get("state") in WORKING_AGENT_STATES or agent.get(BUSY_FIELD) is True
+    return (agent["id"], is_working)
 
 
-def _take_agent(state_by_id: dict[str, str], primary_ids: set[str], agent: Any) -> None:
-    """Record one agent's state in the fold, and whether it is the primary one; details without an id are skipped."""
-    identified = _agent_id_and_state(agent)
+def _take_agent(is_working_by_id: dict[str, bool], primary_ids: set[str], agent: Any) -> None:
+    """Record whether one agent is working in the fold, and whether it is the primary one; details without an id
+    are skipped."""
+    identified = _agent_id_and_is_working(agent)
     if identified is None:
         return
-    agent_id, state = identified
-    state_by_id[agent_id] = state
+    agent_id, is_working = identified
+    is_working_by_id[agent_id] = is_working
     if _is_primary(agent):
         primary_ids.add(agent_id)
     else:
@@ -167,7 +172,8 @@ def _parsed_events(lines: Sequence[str]) -> list[dict[str, Any]]:
 @pure
 def fold_agent_events(lines: Sequence[str], now: datetime) -> AvatarStatus:
     """The status the event lines fold to: the last full snapshot with every later state and removal applied, the
-    primary agent dropped, working when any remaining agent runs; stale past the threshold or with no timestamp."""
+    primary agent dropped, working when any remaining agent runs or is busy; stale past the threshold or with no
+    timestamp."""
     events = _parsed_events(lines)
     snapshot_index = next(
         (
@@ -177,27 +183,27 @@ def fold_agent_events(lines: Sequence[str], now: datetime) -> AvatarStatus:
         ),
         None,
     )
-    state_by_id: dict[str, str] = {}
+    is_working_by_id: dict[str, bool] = {}
     primary_ids: set[str] = set()
     for event in events[snapshot_index if snapshot_index is not None else 0 :]:
         match event.get("type"):
             case AgentEventType.AGENTS_FULL_STATE:
-                state_by_id.clear()
+                is_working_by_id.clear()
                 primary_ids.clear()
                 agents = event.get("agents")
                 for agent in agents if isinstance(agents, list) else []:
-                    _take_agent(state_by_id, primary_ids, agent)
+                    _take_agent(is_working_by_id, primary_ids, agent)
             case AgentEventType.AGENT_STATE:
-                _take_agent(state_by_id, primary_ids, event.get("agent"))
+                _take_agent(is_working_by_id, primary_ids, event.get("agent"))
             case AgentEventType.AGENT_REMOVED:
                 agent_id = event.get("agent_id")
                 if isinstance(agent_id, str):
-                    state_by_id.pop(agent_id, None)
+                    is_working_by_id.pop(agent_id, None)
                     primary_ids.discard(agent_id)
             case _:
                 pass
     is_working = any(
-        state in WORKING_AGENT_STATES for agent_id, state in state_by_id.items() if agent_id not in primary_ids
+        is_agent_working for agent_id, is_agent_working in is_working_by_id.items() if agent_id not in primary_ids
     )
     newest = next(
         (

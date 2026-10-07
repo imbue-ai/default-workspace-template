@@ -99,6 +99,8 @@ class _FakeWorkspace(MutableModel):
     broadcasts: list[tuple[str, list[dict[str, Any]]]] = Field(default_factory=list)
     drained: list[str] = Field(default_factory=list)
     stopped: list[str] = Field(default_factory=list)
+    # Each marker move, with how many agents the record named when it ran.
+    marker_moves: list[tuple[str, str, int]] = Field(default_factory=list)
     drain_block: str = ""
     # What ``deliver`` does with the summary request: write the file, or nothing.
     is_summary_written_on_request: bool = True
@@ -214,6 +216,9 @@ class _FakeWorkspace(MutableModel):
 
     def note_agent_created(self, agent_state: AgentStateItem) -> None:
         self.agents[agent_state.id] = agent_state
+
+    def move_background_markers(self, from_agent_id: str, to_agent_id: str) -> None:
+        self.marker_moves.append((from_agent_id, to_agent_id, len(self.record().agents)))
 
     def build_create_command(self, spec: SuccessorCreateSpec) -> list[str]:
         return _build_chat_create_command(
@@ -348,6 +353,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
         destroy_agent=workspace.destroy_agent,
         note_agent_renamed=workspace.note_agent_renamed,
         note_agent_created=workspace.note_agent_created,
+        move_background_markers=workspace.move_background_markers,
         build_create_command=workspace.build_create_command,
         broadcast_transcript_events=workspace.broadcast,
         now=lambda: _NOW,
@@ -480,6 +486,9 @@ def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path)
     assert "<predecessor-summary>\n# Summary\n\nThe user wants the tests green.\n</predecessor-summary>" in prompt
     assert "${" not in prompt
     assert successor in workspace.agents and workspace.agents[successor].labels["chat_seq"] == "2"
+    # The retiring agent's pending commands moved to the successor once, before the record named it,
+    # so a resume after a crash in between still moves them.
+    assert workspace.marker_moves == [(first, successor, 1)]
     # The chip went out on the chat's stream, and the held send followed the prompt to the successor.
     assert [(chat, [event["type"] for event in events]) for chat, events in workspace.broadcasts] == [
         (str(chat_id), [AGENT_SWITCH_EVENT_TYPE])
@@ -883,6 +892,8 @@ def test_a_refused_model_pick_fails_the_switch_at_that_step_and_a_retry_adopts_t
     assert [entry.agent_id for entry in record.agents] == [first]
     assert [message_id for _agent, _text, message_id in workspace.delivered] == ["handoff-summary-h-1"]
     assert workspace.broadcasts == []
+    # A successor that is not the chat's yet inherits no pending commands.
+    assert workspace.marker_moves == []
 
     workspace.is_model_apply_refused = False
     workspace.update_record(
@@ -910,6 +921,7 @@ def test_a_refused_model_pick_fails_the_switch_at_that_step_and_a_retry_adopts_t
     assert workspace.argv_lines() == argv_before
     assert workspace.applied == [(successor, _PICK)]
     assert workspace.delivered[-1] == (successor, workspace.delivered_prompt(), prompt_message_id("h-1"))
+    assert workspace.marker_moves == [(first, successor, 1)]
 
 
 def test_a_fresh_start_asks_for_no_summary_and_hands_the_successor_the_message_as_is(tmp_path: Path) -> None:
@@ -1132,6 +1144,7 @@ def test_a_resume_mid_delivery_delivers_what_is_still_held_and_touches_neither_a
     assert finished.handoff is None
     assert finished.agents == mid_delivery.agents
     assert workspace.stopped == [] and workspace.argv_lines() == [] and workspace.broadcasts == []
+    assert workspace.marker_moves == []
     assert (workspace.agents[successor].state, workspace.agents[successor].name) == ("RUNNING", "Chat-1")
     assert workspace.delivered == [(successor, "one more", "m-late")]
 

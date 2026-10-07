@@ -9,8 +9,9 @@ It joins three sources, each read independently so one failing leaves the others
 
 - free memory, from ``/proc/meminfo`` (``MemAvailable``, else ``MemFree``; the field read is named);
 - agents, from ``mngr list --provider local`` rendered through a ``--format`` template: a chat
-  (``user_created``) or worker (``agent_created``) whose state is ``WAITING`` and whose latest
-  activity is at least ``IDLE_AFTER_SECONDS`` old. Its memory is the summed RSS of its process trees, rooted at the pid
+  (``user_created``) or worker (``agent_created``) whose state is ``WAITING``, that is not busy
+  (waiting on a background task that will start its next turn), and whose latest activity is at
+  least ``IDLE_AFTER_SECONDS`` old. Its memory is the summed RSS of its process trees, rooted at the pid
   mngr reports plus every live pid the agent-pid registry holds for it;
 - browsers, from the browser service's ``GET /browsers``: a ``running`` browser that no desktop
   window shows, per the shell's ``GET /api/desktops``. Its memory is the summed RSS of every
@@ -51,13 +52,18 @@ from oom_priority.agent_identity import (
 from oom_priority.proctree import list_descendant_pids
 from oom_priority.registry import live_pids_by_agent_id
 
-# An agent counts as idle once its turn has ended (``WAITING``) and nothing -- a message to it,
-# its own work, a restart -- has happened for this long. Shorter than this, the user is likely
-# still reading its reply.
+# An agent counts as idle once its turn has ended (``WAITING``), it is not busy (no pending
+# background task will start its next turn), and nothing -- a message to it, its own work, a
+# restart -- has happened for this long. Shorter than this, the user is likely still reading its
+# reply.
 IDLE_AFTER_SECONDS: Final[float] = 15 * 60
 IDLE_AGENT_STATE: Final[str] = "WAITING"
 CHAT_KIND: Final[str] = "chat"
 WORKER_KIND: Final[str] = "worker"
+
+# How mngr renders a true boolean field in a template. An mngr older than the busy field renders
+# it empty, which reads as not busy.
+MNGR_TRUE_FIELD_VALUE: Final[str] = "True"
 
 # The fields each listed agent is rendered with, in column order. The display name goes last because
 # it is the one free-text value, so a separator inside it cannot shift the other columns.
@@ -69,6 +75,7 @@ MNGR_LIST_FIELDS: Final[tuple[str, ...]] = (
     "user_activity_time",
     "agent_activity_time",
     "start_time",
+    "is_busy",
     f"labels.{PRIMARY_LABEL}",
     f"labels.{CHAT_LABEL}",
     f"labels.{WORKER_LABEL}",
@@ -139,6 +146,7 @@ class ListedAgent(NamedTuple):
     state: str
     pid: int | None
     last_activity: datetime | None
+    is_busy: bool
     labels: Mapping[str, str]
     display_name: str | None
 
@@ -280,6 +288,7 @@ def parse_listed_agent(line: str) -> ListedAgent | None:
         state=values["state"],
         pid=int(values["pid"]) if values["pid"].isdigit() else None,
         last_activity=max(activity_times) if activity_times else None,
+        is_busy=values["is_busy"] == MNGR_TRUE_FIELD_VALUE,
         labels={
             field.removeprefix(label_prefix): value
             for field, value in values.items()
@@ -353,7 +362,7 @@ def idle_agent_candidates(
     candidates: list[AgentCandidate] = []
     for agent in agents:
         kind = agent_kind(agent.labels)
-        if kind is None or agent.state != IDLE_AGENT_STATE or agent.last_activity is None:
+        if kind is None or agent.state != IDLE_AGENT_STATE or agent.is_busy or agent.last_activity is None:
             continue
         idle_seconds = (now - agent.last_activity).total_seconds()
         if idle_seconds < IDLE_AFTER_SECONDS:
@@ -613,7 +622,7 @@ def render_table(report: Report) -> str:
         total = "" if free.total_kib is None else f"; {MEMINFO_TOTAL_FIELD} {_mib(free.total_kib)}"
         lines.append(f"Free memory: {_mib(free.free_kib)} ({free.field} from /proc/meminfo{total})")
 
-    lines += ["", f"Idle chats and workers (waiting, no activity for {_duration(IDLE_AFTER_SECONDS)} or more):"]
+    lines += ["", f"Idle chats and workers (waiting, not busy, no activity for {_duration(IDLE_AFTER_SECONDS)} or more):"]
     agents = report.agents.candidates
     if agents is None:
         lines.append("  unknown")

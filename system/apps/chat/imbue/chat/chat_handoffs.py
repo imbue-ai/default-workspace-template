@@ -367,6 +367,9 @@ class HandoffDeps(FrozenModel):
     destroy_agent: Callable[[str], None]
     note_agent_renamed: Callable[[str, str, Mapping[str, str]], None]
     note_agent_created: Callable[[AgentStateItem], None]
+    # Move the retiring agent's ``run_in_background`` markers (its pending commands) into the
+    # successor's marker dir, given the two agent ids; best-effort, never raises.
+    move_background_markers: Callable[[str, str], None]
     build_create_command: Callable[[SuccessorCreateSpec], list[str]]
     broadcast_transcript_events: Callable[[ChatId, list[dict[str, Any]]], None]
     now: Callable[[], datetime]
@@ -846,12 +849,17 @@ class HandoffRunner:
     def _adopt_successor(
         self, chat_id: ChatId, handoff_id: str, retiring: ChatAgentEntry, handoff: ChatHandoffRecord
     ) -> None:
-        """Make the tracked successor the chat's agent: append its entry to the record and emit the chip.
+        """Make the tracked successor the chat's agent: hand it the retiring agent's pending commands,
+        append its entry to the record, and emit the chip.
 
-        The entry keeps the message the user switched with when a prompt was built, which is
-        what folded it in (a fresh start builds none and delivers the message as a turn of its
-        own), so the chip can show it.
+        The pending commands' reports are held for the chat and land on the successor, so it
+        starts out waiting on them; their markers move before the record names it, so a resume
+        after a crash in between moves whatever is left rather than skipping the move. The entry
+        keeps the message the user switched with when a prompt was built, which is what folded
+        it in (a fresh start builds none and delivers the message as a turn of its own), so the
+        chip can show it.
         """
+        self._deps.move_background_markers(retiring.agent_id, handoff.next_agent_id)
         is_message_folded = handoff.prompt is not None and bool(handoff.trigger_text)
         successor = ChatAgentEntry(
             seq=handoff.next_seq,

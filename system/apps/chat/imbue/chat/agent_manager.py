@@ -3,6 +3,7 @@ import shlex
 import threading
 import time
 from collections.abc import Callable
+from collections.abc import Hashable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -38,9 +39,16 @@ from imbue.chat.agent_discovery import delivered_or_raise
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.chat.agent_state_poll import AgentStatePoller
+from imbue.chat.agent_state_poll import AgentStateWatch
+from imbue.chat.agent_state_poll import read_file_stamp
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.background_tasks import background_tasks_dir
+from imbue.chat.background_tasks import is_process_alive
+from imbue.chat.background_tasks import move_run_in_background_markers
+from imbue.chat.background_tasks import read_live_background_tasks
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
 from imbue.chat.chat_fast_mode import write_fast_mode_state
@@ -96,7 +104,6 @@ from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.model import resolve_model_choice
 from imbue.chat.harnesses.model import validate_model_pick
-from imbue.chat.harnesses.model_state_poll import ModelStatePoller
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_resolver
@@ -119,6 +126,7 @@ from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
+from imbue.chat.models import background_task_snapshots
 from imbue.chat.models import ChatAccountBinding
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatCreationOutcome
@@ -155,6 +163,7 @@ from imbue.concurrency_group.errors import ConcurrencyGroupError
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.imbue_common.event_envelope import parse_iso_timestamp
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
@@ -166,7 +175,11 @@ from imbue.mngr.api.observe import ObserveEventFollower
 from imbue.mngr.api.observe import parse_observe_event_line
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
+from imbue.mngr.interfaces.data_types import BackgroundTask
+from imbue.mngr.interfaces.data_types import compute_is_busy
+from imbue.mngr.interfaces.data_types import is_lifecycle_state_able_to_resume
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import HostName
 
 # The role template every UI-created agent gets. The harness is chosen separately via
@@ -507,16 +520,65 @@ def _build_agent_match(agent: AgentDetails) -> AgentMatch:
 
 @pure
 def chat_status_for_agent(
-    lifecycle_state: str, activity_state: ActivityState | None, is_permission_pending: bool
+    lifecycle_state: str, activity_state: ActivityState | None, is_permission_pending: bool, is_busy: bool
 ) -> ChatStatus:
-    """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn."""
+    """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn, then busy."""
     if is_lifecycle_dead(lifecycle_state):
         return ChatStatus.STOPPED
     if is_permission_pending:
         return ChatStatus.ATTENTION
     if activity_state in (ActivityState.THINKING, ActivityState.TOOL_RUNNING):
         return ChatStatus.WORKING
+    if is_busy:
+        return ChatStatus.BACKGROUND
     return ChatStatus.IDLE
+
+
+class _BackgroundTaskReading(FrozenModel):
+    """The chat's own read of one agent's marker dir: the live tasks, and when the read began."""
+
+    tasks: tuple[BackgroundTask, ...] = Field(description="The live tasks, oldest first")
+    read_at: datetime = Field(description="When the read began, compared against the observe event's timestamp")
+
+
+@pure
+def busy_state_from_tasks(
+    lifecycle_state: str, live_tasks: tuple[BackgroundTask, ...]
+) -> tuple[tuple[BackgroundTask, ...], bool]:
+    """An agent's pending tasks and busy flag from its lifecycle and a direct read, by mngr's own rule.
+
+    As in ``mngr list``, only an agent that can still resume carries tasks (a stopped one's
+    markers will wake nothing), and busy is RUNNING or any carried task.
+    """
+    try:
+        lifecycle = AgentLifecycleState(lifecycle_state)
+    except ValueError:
+        return (), False
+    carried_tasks = live_tasks if is_lifecycle_state_able_to_resume(lifecycle) else ()
+    return carried_tasks, compute_is_busy(lifecycle, carried_tasks)
+
+
+@pure
+def resolve_busy_state(
+    details: AgentDetails, observed_at: datetime | None, reading: _BackgroundTaskReading | None
+) -> tuple[tuple[BackgroundTask, ...], bool]:
+    """An observed agent's pending tasks and busy flag, from whichever source is fresher.
+
+    The observe event carries both, as mngr computed them when it probed the agent. The chat's
+    direct read of the marker dir (``_on_background_tasks_changed``) wins when it began no
+    earlier than the event was written, since the stream re-probes an agent only when its host
+    shows activity; busy is then recomputed by mngr's rule over the event's lifecycle. Either way
+    the lifecycle is the stream's.
+    """
+    if reading is not None and (observed_at is None or reading.read_at >= observed_at):
+        return busy_state_from_tasks(details.state.value, reading.tasks)
+    return details.background_tasks, details.is_busy
+
+
+@pure
+def _is_mid_turn_for_oom(agent: AgentStateItem) -> bool:
+    """Whether the OOM prioritizer holds the chat's staleness climb: a running turn, or busy (it will resume)."""
+    return agent.state in RUNNING_LIFECYCLE_STATES or agent.is_busy
 
 
 class _ResolvedChat(FrozenModel):
@@ -702,7 +764,7 @@ def chat_snapshot_for_active_agent(
         project=agent.labels.get("project"),
         status=_converging_status(transition.phase)
         if transition is not None
-        else chat_status_for_agent(agent.state, agent.activity_state, is_permission_pending),
+        else chat_status_for_agent(agent.state, agent.activity_state, is_permission_pending, agent.is_busy),
         labels=agent.labels,
         agent_ids=chat.member_agent_ids,
         handoff=_transition_state_of(chat.record),
@@ -717,6 +779,8 @@ def chat_snapshot_for_active_agent(
             queued_messages=agent.queued_messages,
             shoulder_tap_available=shoulder_tap_available,
             is_connecting=is_connecting,
+            background_tasks=background_task_snapshots(agent.background_tasks),
+            is_busy=agent.is_busy,
         ),
         last_messaged_at=last_messaged_at,
     )
@@ -801,6 +865,9 @@ class AgentManager:
     # ``_match_by_agent_id`` are rebuilt from it after each event, and its
     # before/after key diff starts and stops the per-agent tracking.
     _agent_details_by_id: dict[str, AgentDetails]
+    # When the stream last reported each agent in ``_agent_details_by_id``: the timestamp of the
+    # event that carried its details, which the background-task freshness rule compares against.
+    _agent_details_observed_at_by_id: dict[str, datetime]
     _agents: dict[str, AgentStateItem]
     # Agents this server created that the observe stream has not reported yet, with the number of
     # its full snapshots that have omitted each. A rebuild keeps them (observe reports a new agent
@@ -881,11 +948,15 @@ class AgentManager:
     # resolver to cache -- the switch endpoint builds one inline. None = the harness has
     # recorded no model yet -> the bar renders no slots.
     _model_choice_by_agent: dict[str, ModelChoice | None]
-    # The ONE model-state poller for every tracked agent: re-derives an agent's choice
-    # whenever its ``model_state.json`` stamp changes. One thread total -- per-agent
-    # watchers cost four OS threads per agent and grew without bound with the host's
-    # agent count (see :mod:`imbue.chat.harnesses.model_state_poll`).
-    _model_state_poller: ModelStatePoller
+    # The ONE poller for every tracked agent's small state files: re-derives an agent's model
+    # choice whenever its ``model_state.json`` stamp changes, and its pending background tasks
+    # whenever its marker dir changes or one of their processes dies. One thread total --
+    # per-agent watchers cost four OS threads per agent and grew without bound with the host's
+    # agent count (see :mod:`imbue.chat.agent_state_poll`).
+    _agent_state_poller: AgentStatePoller
+    # Per agent, the chat's own latest read of its background-task marker dir. Busy is taken
+    # from it or from the observe stream, whichever is fresher (``resolve_busy_state``).
+    _background_reading_by_agent: dict[str, _BackgroundTaskReading]
     # When each chat was last messaged from the UI, kept on disk so a restart seeds the OOM
     # prioritizer's recency ranking from real history.
     _message_stamps: MessageStampStore
@@ -977,6 +1048,7 @@ class AgentManager:
         manager._session_sweep_stop = threading.Event()
         manager._session_sweep_thread = None
         manager._agent_details_by_id = {}
+        manager._agent_details_observed_at_by_id = {}
         manager._agents = {}
         manager._created_unobserved_by_id = {}
         manager._match_by_agent_id = {}
@@ -1007,9 +1079,18 @@ class AgentManager:
         manager._queue_busy_handler_by_agent = {}
         manager._session_by_agent = {}
         manager._model_choice_by_agent = {}
-        manager._model_state_poller = ModelStatePoller.build(
-            list_model_state_paths=manager._list_model_state_paths,
-            on_model_state_changed=manager._on_model_state_changed,
+        manager._background_reading_by_agent = {}
+        manager._agent_state_poller = AgentStatePoller.build(
+            watches=(
+                AgentStateWatch(
+                    read_stamp_by_agent=manager._read_model_state_stamps,
+                    on_changed=manager._on_model_state_changed,
+                ),
+                AgentStateWatch(
+                    read_stamp_by_agent=manager._read_background_task_stamps,
+                    on_changed=manager._on_background_tasks_changed,
+                ),
+            )
         )
         manager._message_stamps = message_stamps if message_stamps is not None else MessageStampStore(path=None)
         manager._transcript_broadcaster = None
@@ -1078,7 +1159,7 @@ class AgentManager:
         self._auto_open.start()
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
-        self._model_state_poller.start()
+        self._agent_state_poller.start()
         if not self._is_secondary:
             self._autocompactor.start()
         self._start_session_sweep()
@@ -1096,7 +1177,7 @@ class AgentManager:
         self._oom_prioritizer.stop()
         self._autocompactor.stop()
         self._auto_open.stop()
-        self._model_state_poller.stop()
+        self._agent_state_poller.stop()
 
         self._session_sweep_stop.set()
         if self._session_sweep_thread is not None:
@@ -2035,6 +2116,9 @@ class AgentManager:
             destroy_agent=self.destroy_agent_process,
             note_agent_renamed=self._note_agent_renamed,
             note_agent_created=self._note_agent_created,
+            move_background_markers=lambda from_agent_id, to_agent_id: move_run_in_background_markers(
+                self._host_dir, from_agent_id, to_agent_id
+            ),
             build_create_command=self._build_successor_create_command,
             broadcast_transcript_events=self._broadcast_chat_events,
             now=lambda: datetime.now(timezone.utc),
@@ -2427,6 +2511,8 @@ class AgentManager:
             labels=agent_state.labels,
             work_dir=agent_state.work_dir,
             harness=agent_state.harness,
+            background_tasks=agent_state.background_tasks,
+            is_busy=agent_state.is_busy,
         )
 
     def get_agent_matches_by_id(self, agent_id: str) -> list[AgentMatch]:
@@ -3431,6 +3517,8 @@ class AgentManager:
                         labels=agent_info.labels,
                         work_dir=agent_info.work_dir,
                         harness=agent_info.harness,
+                        background_tasks=agent_info.background_tasks,
+                        is_busy=agent_info.is_busy,
                     )
                     self._agents[agent_info.id] = agent_state
                 self._is_agent_list_known = True
@@ -3460,6 +3548,8 @@ class AgentManager:
                     labels=agent_info.labels,
                     work_dir=agent_info.work_dir,
                     harness=agent_info.harness,
+                    background_tasks=agent_info.background_tasks,
+                    is_busy=agent_info.is_busy,
                 )
 
             with self._lock:
@@ -3551,6 +3641,8 @@ class AgentManager:
         watcher).
         """
         is_full_snapshot = isinstance(event, FullAgentStateEvent)
+        # An envelope whose timestamp does not parse counts as written now, so its details win.
+        observed_at = parse_iso_timestamp(event.timestamp) or datetime.now(timezone.utc)
         with self._lock:
             self._has_received_lifecycle_event = True
             before_details = dict(self._agent_details_by_id)
@@ -3558,12 +3650,17 @@ class AgentManager:
             match event:
                 case FullAgentStateEvent():
                     self._agent_details_by_id = {str(agent.id): agent for agent in event.agents}
+                    self._agent_details_observed_at_by_id = {str(agent.id): observed_at for agent in event.agents}
                     self._is_agent_list_known = True
                 case AgentStateEvent():
                     self._agent_details_by_id[str(event.agent.id)] = event.agent
+                    self._agent_details_observed_at_by_id[str(event.agent.id)] = observed_at
                 case AgentRemovedEvent():
                     self._agent_details_by_id.pop(str(event.agent_id), None)
+                    self._agent_details_observed_at_by_id.pop(str(event.agent_id), None)
             details_by_id = dict(self._agent_details_by_id)
+            observed_at_by_id = dict(self._agent_details_observed_at_by_id)
+            background_reading_by_agent = dict(self._background_reading_by_agent)
 
         before_ids = set(before_details)
         after_ids = set(details_by_id)
@@ -3589,6 +3686,9 @@ class AgentManager:
         new_agents: dict[str, AgentStateItem] = {}
         new_matches: dict[str, AgentMatch] = {}
         for agent_id, agent in details_by_id.items():
+            background_tasks, is_busy = resolve_busy_state(
+                agent, observed_at_by_id.get(agent_id), background_reading_by_agent.get(agent_id)
+            )
             new_agents[agent_id] = AgentStateItem(
                 id=agent_id,
                 name=str(agent.name),
@@ -3596,6 +3696,8 @@ class AgentManager:
                 labels=dict(agent.labels),
                 work_dir=str(agent.work_dir),
                 harness=parse_harness(str(agent.type)),
+                background_tasks=background_tasks,
+                is_busy=is_busy,
             )
             new_matches[agent_id] = _build_agent_match(agent)
 
@@ -3705,15 +3807,12 @@ class AgentManager:
         # of a chat messaged outside the workspace UI (by mngr or another agent):
         # entering a running state is the observable consequence of such a message,
         # and it keeps a chat exempt from its staleness climb for the turn's
-        # duration. After the broadcast because it writes to /proc, which the UI
-        # update should not wait on.
-        self._oom_prioritizer.record_running_chats(
-            [
-                chat_id_by_agent_id[agent_id]
-                for agent_id, agent in new_agents.items()
-                if agent.state in RUNNING_LIFECYCLE_STATES and agent_id in chat_id_by_agent_id
-            ]
-        )
+        # duration, and for as long as it is busy on work that will wake it. After
+        # the broadcast because it writes to /proc, which the UI update should not
+        # wait on.
+        with self._lock:
+            mid_turn_chat_ids = self._oom_mid_turn_chat_ids_locked()
+        self._oom_prioritizer.record_running_chats(mid_turn_chat_ids)
 
     def _evict_chat_transcripts(self, agent_id: str) -> None:
         """Drop what a dead agent held resident: the whole chat's transcripts when it was the
@@ -4001,7 +4100,7 @@ class AgentManager:
 
         The live read is harness-neutral -- the shared reader over the harness's
         registered ``model_state.json`` -- so there is nothing to build per agent.
-        Later recomputes are driven by the ONE shared :class:`ModelStatePoller`
+        Later recomputes are driven by the ONE shared :class:`AgentStatePoller`
         (started in ``start``), which re-lists every agent's state-file path from
         ground truth each pass; nothing per-agent is installed here. Idempotent.
         """
@@ -4026,6 +4125,9 @@ class AgentManager:
                 for agent_id, agent in self._agents.items()
             }
 
+    def _read_model_state_stamps(self) -> dict[str, Hashable]:
+        return {agent_id: read_file_stamp(path) for agent_id, path in self._list_model_state_paths().items()}
+
     def _on_model_state_changed(self, agent_id: str) -> None:
         """One agent's model-state file changed: re-derive and broadcast on change.
 
@@ -4034,6 +4136,65 @@ class AgentManager:
         agents and suppresses unchanged broadcasts.
         """
         self._recompute_model_choice(agent_id, broadcast_on_change=True)
+
+    def _read_background_task_stamps(self) -> dict[str, Hashable]:
+        """Per tracked agent, its marker dir's stamp and whether each task it carries is still alive.
+
+        The dir's stamp moves when a marker is written or removed; the liveness part moves when
+        a task's process dies without removing its marker (a runner the OOM daemon shed), which
+        the observe stream would otherwise report only at its next full snapshot. Also drops
+        the reading of every agent no longer tracked.
+        """
+        with self._lock:
+            for agent_id in [agent_id for agent_id in self._background_reading_by_agent if agent_id not in self._agents]:
+                del self._background_reading_by_agent[agent_id]
+            pids_by_agent = {
+                agent_id: tuple(task.pid for task in agent.background_tasks) for agent_id, agent in self._agents.items()
+            }
+        return {
+            agent_id: (
+                read_file_stamp(background_tasks_dir(self._host_dir, agent_id)),
+                tuple(is_process_alive(pid) for pid in pids),
+            )
+            for agent_id, pids in pids_by_agent.items()
+        }
+
+    def _on_background_tasks_changed(self, agent_id: str) -> None:
+        """Re-read one agent's marker dir, and broadcast if its tasks or its busy flag changed.
+
+        Runs on the poller thread; the read stays outside the lock. A fresh read is newer than
+        any observe event already folded, so it replaces whatever the agent carried.
+        """
+        read_at = datetime.now(timezone.utc)
+        tasks = read_live_background_tasks(background_tasks_dir(self._host_dir, agent_id))
+        with self._lock:
+            agent_state = self._agents.get(agent_id)
+            if agent_state is None:
+                return
+            self._background_reading_by_agent[agent_id] = _BackgroundTaskReading(tasks=tasks, read_at=read_at)
+            carried_tasks, is_busy = busy_state_from_tasks(agent_state.state, tasks)
+            if agent_state.background_tasks == carried_tasks and agent_state.is_busy == is_busy:
+                return
+            self._agents[agent_id] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().background_tasks, carried_tasks),
+                to_update(agent_state.field_ref().is_busy, is_busy),
+            )
+            busy_chat_ids = self._oom_mid_turn_chat_ids_locked()
+        self._broadcast_chats_updated()
+        self._oom_prioritizer.record_running_chats(busy_chat_ids)
+
+    def _oom_mid_turn_chat_ids_locked(self) -> list[ChatId]:
+        """The chats the OOM prioritizer counts as mid-turn: observed, unarchived agents running or busy.
+
+        Must be called with the lock held.
+        """
+        return [
+            self._chat_id_of_agent_locked(agent_id)
+            for agent_id, agent in self._agents.items()
+            if agent_id in self._agent_details_by_id
+            and not self._is_archived_member_locked(agent_id)
+            and _is_mid_turn_for_oom(agent)
+        ]
 
     def _recompute_model_choice(self, agent_id: str, *, broadcast_on_change: bool, force: bool = False) -> None:
         """Recompute an agent's model choice from its live state file, then cache/broadcast it.

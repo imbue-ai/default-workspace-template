@@ -99,10 +99,22 @@ Sends are reported to the shell's client-activity route (`shell_client.py`) so
 agents can attribute a request to a client, and the app asks the shell for
 windows through the one layout client there (`ShellLayoutClient`), which the
 auto-open reactor and the focus-chat route share. A chat's status (`ChatStatus` in
-`primitives.py`: working, idle, attention, stopped, or error) comes from its
-active agent's activity state, a pending permission request, and the lifecycle,
-and rides the `chats_updated` snapshots the chat root's list draws its status
-dots from.
+`primitives.py`: working, background, idle, attention, stopped, or error) comes from its
+active agent's activity state, a pending permission request, the lifecycle, and
+whether the agent is busy, and rides the `chats_updated` snapshots the chat root's
+list draws its status dots from. The precedence is stopped (a dead lifecycle),
+attention (a pending permission), working (a turn in flight), background, idle;
+a converging chat is working, or error once its switch failed. Background means
+busy with no turn in flight: the agent ended its turn waiting on something that
+will start its next one, a command `system/scripts/run_in_background.py` runs for
+it or a Claude-native background shell, each a marker in its `background_tasks`
+dir. The snapshot's `active_agent` carries those tasks (`background_tasks`, oldest
+first) and `is_busy`. The chat reads the marker dir itself on the shared state
+poller (`agent_state_poll.py`) as well as taking mngr's reading from the observe
+stream, keeping whichever is fresher, so the status flips within a second of a
+marker being written or removed (`activity_state.py` defines busy). A handoff moves
+the retiring agent's `run_in_background` markers to the successor, whose status
+starts out background; the report lands on it.
 
 A chat is a sequence of agent transcripts run by one agent at a time
 (`docs/system/blueprint/chat-agent-split/`); its id is its first agent's id, a
