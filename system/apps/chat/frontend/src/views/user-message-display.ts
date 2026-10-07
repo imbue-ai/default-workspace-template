@@ -12,7 +12,7 @@
 
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { MarkdownContent } from "../markdown";
+import { MarkdownContent, renderMarkdown } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import type { CompactionCause, UserMessageEvent } from "../models/Response";
@@ -45,13 +45,13 @@ function renderSystemChip(label: string, body: string, expansionKey: string): m.
   return renderToolBlock({ headerText: label, inputText: body, extra: "max-w-[80%]", expansionKey });
 }
 
-/** What the "why?" popover beside a compaction pill says, for who started the compaction. */
+/** What the "Why?" popover beside a compaction pill says, as markdown, for who started the compaction. */
 function compactionCauseText(cause: CompactionCause | null | undefined): string {
   switch (cause) {
     case "idle":
       return "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu.";
     case "manual":
-      return "Compacted because you asked (/compact).";
+      return "Compacted because you asked (`/compact`).";
     case "native":
       return "Your agent triggered compaction. You can ask it about its current setting, or tell it to change it.";
     default:
@@ -63,7 +63,7 @@ export function compactionWhyKey(eventId: string): string {
   return `compaction-why:${eventId}`;
 }
 
-/** The trailing "why?" button of a compaction pill and, while it is open, the popover it toggles.
+/** The trailing "Why?" button of a compaction pill and, while it is open, the popover it toggles.
  *  The open state lives in the expansion store, so it survives the row leaving the virtualized
  *  window and coming back. */
 function renderCompactionWhy(event: UserMessageEvent): { button: m.Vnode; popover: m.Vnode | null } {
@@ -85,7 +85,7 @@ function renderCompactionWhy(event: UserMessageEvent): { button: m.Vnode; popove
           toggleBlockExpanded(key);
         },
       },
-      "why?",
+      "Why?",
     ),
     popover: isOpen
       ? m(
@@ -93,18 +93,24 @@ function renderCompactionWhy(event: UserMessageEvent): { button: m.Vnode; popove
           {
             id: popoverId,
             class:
-              "compaction-why-popover mt-1.5 max-w-[360px] rounded-lg border border-default bg-surface px-3 py-2 " +
-              "text-left text-(length:--font-size-helper) text-secondary shadow-md",
+              "compaction-why-popover markdown-content mt-1.5 max-w-[360px] rounded-lg border border-default " +
+              "bg-surface px-3 py-2 text-left shadow-md",
             role: "note",
           },
-          compactionCauseText(event.compaction_cause),
+          // The text classes sit on an inner element: .markdown-content is unlayered CSS, so on the
+          // same element it would beat these utilities with its body size and primary colour.
+          m(
+            "div",
+            { class: "text-(length:--font-size-helper) leading-normal text-secondary" },
+            m.trust(renderMarkdown(compactionCauseText(event.compaction_cause))),
+          ),
         )
       : null,
   };
 }
 
 /**
- * Render a status message (e.g. "Context was compacted"), followed by its "why?" button.
+ * Render a status message (e.g. "Context was compacted"), followed by its "Why?" button.
  * When body text is present, renders an expandable toggle on the status pill
  * to show/hide the summary contents.
  */
@@ -178,7 +184,7 @@ export function renderNotice(label: string, body: string): m.Vnode {
 
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
   let renderedEventId: string | null = null;
-  // Whether the compaction pill's "why?" popover was open at the last render: toggling it is the
+  // Whether the compaction pill's "Why?" popover was open at the last render: toggling it is the
   // one change to an unchanged event that has to repaint.
   let renderedWhyOpen = false;
   return {

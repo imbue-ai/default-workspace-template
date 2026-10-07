@@ -459,12 +459,13 @@ only after its `PreCompact` hook had written the marker; a `/compact` Claude
 Code refuses for any other reason leaves the status up until the 10-minute
 timeout or the stop button clears it.
 
-**Why a chat was compacted.** The "Context was compacted" pill has a "why?"
+**Why a chat was compacted.** The "Context was compacted" pill has a "Why?"
 button whose popover reads the event's `compaction_cause`:
 
 - `idle` (the sweep): "Compacted while idle to keep replies fast and cheap.
   Change this under Auto-compact in the model menu."
-- `manual` (a `/compact`): "Compacted because you asked (/compact)."
+- `manual` (a `/compact`): "Compacted because you asked (`/compact`).", with
+  `/compact` in the chat's inline-code style
 - `native` (Claude's own compaction, from the hook's recorded trigger): "Your
   agent triggered compaction. You can ask it about its current setting, or tell
   it to change it."

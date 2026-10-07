@@ -26,7 +26,7 @@ Turn on idle compaction for chats, with a per-chat and per-workspace toggle, and
 
 - **"Compacting…" status:** While a chat is compacting, the activity strip above the composer reads "Compacting…" ("Compacting, then replying…" once a message is queued behind it), and an inline placeholder row with the same label sits at the end of the conversation until the compaction's pill arrives. `compaction_status_presentation` in `/api/settings` picks which of the two show (`strip`, `placeholder`, or `both`, the default); it is temporary, for the design review below.
 
-- **"why?" on the compaction pill:** Each "Context was compacted" pill has a "why?" button whose popover names the cause: "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu." (idle sweep), "Compacted because you asked (/compact)." (manual), "Your agent triggered compaction. You can ask it about its current setting, or tell it to change it." (native), and "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu." when the cause is unknown.
+- **"Why?" on the compaction pill:** Each "Context was compacted" pill has a "Why?" button whose popover names the cause: "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu." (idle sweep), "Compacted because you asked (`/compact`)." (manual, with `/compact` in the chat's inline-code style), "Your agent triggered compaction. You can ask it about its current setting, or tell it to change it." (native), and "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu." when the cause is unknown.
 
 - **One-time notice:** The latest compaction pill carries a dismissible notice, "Idle chats now compact automatically to keep replies fast and cheap. Turn this off per chat, or for new chats, under Auto-compact in the model menu.", until the user dismisses it once for the workspace (`is_autocompact_notice_shown`).
 
@@ -47,7 +47,7 @@ The review compares the two ways of showing a compaction in progress and picks o
 
 - **What each looks like:** `strip` shows only the activity strip above the composer, with its pulsing dot and "Compacting…" label in the place "Thinking…" normally takes. `placeholder` shows only a small centred pill-shaped row with a pulsing dot and the same label at the end of the conversation, where the "Context was compacted" pill will land; the row goes when that pill arrives or the chat stops compacting. `both` shows the two at once.
 
-- **Triggering a compaction:** Type `/compact` in a Claude chat's composer; the status shows at once and ends with the pill and its "why?" reading the manual cause. To see an idle-sweep compaction, add to `.mngr/settings.local.toml`:
+- **Triggering a compaction:** Type `/compact` in a Claude chat's composer; the status shows at once and ends with the pill and its "Why?" reading the manual cause. To see an idle-sweep compaction, add to `.mngr/settings.local.toml`:
 
   ```toml
   [plugins.autocompact]
@@ -56,6 +56,6 @@ The review compares the two ways of showing a compaction in progress and picks o
   epsilon_offset_minutes = 60
   ```
 
-  With the chat's Auto-compact on, the next sweep (within a minute) compacts any idle chat that has had a turn, and the pill's "why?" reads the idle cause. Remove the lines afterwards.
+  With the chat's Auto-compact on, the next sweep (within a minute) compacts any idle chat that has had a turn, and the pill's "Why?" reads the idle cause. Remove the lines afterwards.
 
 - **What to compare:** whether the status is noticed when the user is reading the conversation versus typing; whether the placeholder row reads as a message or as status, and how its handoff to the "Context was compacted" pill looks; whether `both` feels redundant; and how each behaves with a message queued behind the compaction ("Compacting, then replying…") and on a Codex or Pi chat, where there is no stop button during an idle compaction.
