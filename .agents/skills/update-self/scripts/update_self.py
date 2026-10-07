@@ -1027,13 +1027,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     restart_verdict_parser.add_argument(
         "--before",
-        default="HEAD^1",
-        help="The tree the running agents started from (default HEAD^1, the pre-merge local).",
+        required=True,
+        help="The tree the running agents started from: the one the live workspace runs "
+        "(footprint-ranges' update_base).",
     )
     restart_verdict_parser.add_argument(
         "--after",
         default="HEAD",
-        help="The tree the apply lands (default HEAD, the merge).",
+        help="The tree the apply lands (default HEAD).",
     )
     restart_verdict_parser.set_defaults(func=_cmd_agent_restart_verdict)
 
