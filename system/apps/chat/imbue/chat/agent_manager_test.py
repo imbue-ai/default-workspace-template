@@ -2400,7 +2400,16 @@ def test_a_successors_agent_is_swept_by_its_chats_setting(broadcaster: WebSocket
         write_autocompact_state(tmp_path / "chats" / record.chat_id, ChatAutocompactState(is_enabled=False))
 
         assert manager.get_opted_in_running_chat_agent_names() == []
-        assert manager.get_harness_of_agent_named("Chat-1-next") == "claude"
+    finally:
+        manager.stop()
+
+
+def test_the_harness_of_a_tracked_agent_is_found_by_its_name(broadcaster: WebSocketBroadcaster) -> None:
+    manager = AgentManager.build(broadcaster)
+    try:
+        seed_agent_state(manager, "agent-named", name="Chat-named", labels={"user_created": "true"})
+
+        assert manager.get_harness_of_agent_named("Chat-named") == "claude"
         assert manager.get_harness_of_agent_named("Chat-nobody") is None
     finally:
         manager.stop()
