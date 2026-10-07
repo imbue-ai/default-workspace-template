@@ -1,7 +1,6 @@
 /**
- * What a link means inside the workspace (the workspace link routing plan): the one classifier the shell uses for every
- * link handed to it (an app page's ``shell:open-link``, a popup Imbue Studio turned back), and the chat uses to render
- * the links of a message.
+ * What a link means inside the workspace (the workspace link routing plan), so every place that decides where a link
+ * goes agrees.
  *
  * - A web link off this machine (and ``mailto:``, ``tel:``) is **external**: it opens in the user's own browser, by
  *   the app contract's ``isExternalUrl``, which a shared fixture holds to the Imbue Studio desktop app's rule.
