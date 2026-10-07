@@ -10,7 +10,7 @@ parses; this resolver never reads it.
 
 Claude Code exposes no stable programmatic model list, so the catalog is
 maintained by hand to match the aliases ``claude --model`` accepts. Read out of the
-pinned 2.1.285 binary, the full alias set is ``sonnet``, ``opus``, ``haiku``, ``fable``,
+pinned 2.1.293 binary, the full alias set is ``sonnet``, ``opus``, ``haiku``, ``fable``,
 ``best``, ``sonnet[1m]``, ``opus[1m]``, ``fable[1m]``, ``opusplan``; the catalog offers
 four of them, leaving ``best``, ``opusplan`` and the redundant bare variants out on
 purpose (``best`` and ``opusplan`` name a policy rather than a model, so neither can carry
@@ -27,19 +27,19 @@ of the model, and this is a property of the harness. Haiku has no ``[1m]`` varia
 
 The switch alias and the reported id are different strings, and the suffix shows up in
 both: an agent launched as ``opus[1m]`` reports ``claude-opus-5-5[1m]``. Fast mode is an
-Opus-only capability (in 2.1.285 the ``fast_mode`` capability is carried by Opus 5.5, Opus 5
+Opus-only capability (in 2.1.293 the ``fast_mode`` capability is carried by Opus 5.5, Opus 5
 and Opus 4.8, and by nothing else) -- notably NOT a property of the most capable model, so
 do not infer it from rank.
 
-The picker offers exactly four models -- Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 4.5. Every
+The picker offers exactly four models -- Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5. Every
 other option is declared with ``in_picker=False``: matchable if a live read reports it,
 never offered. That set is defined by what the four do NOT cover, so an agent sitting on
 a model the picker cannot reach still shows a name instead of falling through to the
 shrug case. Three ways in: an approved org launching Mythos, a chat that was created on
-an older pin and is still sitting on Opus 5, Sonnet 5 or Fable 5, and a user typing
-``/model opus-4-8`` straight into the underlying Claude Code session, which the picker
-neither offers nor prevents. The ``ultra`` effort (ultracode) is declared-but-hidden the
-same way.
+an older pin and is still sitting on Opus 5, Sonnet 5, Haiku 4.5 or Fable 5, and a user
+typing ``/model opus-4-8`` straight into the underlying Claude Code session, which the
+picker neither offers nor prevents. The ``ultra`` effort (ultracode) is declared-but-hidden
+the same way.
 
 Each option's ``harness_reported_model_id`` is the suffix-free API id
 (``claude-opus-5-5``), matched against a live read. An option launched with the ``[1m]``
@@ -119,21 +119,21 @@ _OFFERED_MODELS: tuple[ModelOption, ...] = (
     ),
     ModelOption(
         id="haiku",
-        label="Haiku 4.5",
+        label="Haiku 5.5",
         efforts=_CLAUDE_EFFORTS,
         supports_fast=False,
-        harness_reported_model_id="claude-haiku-4-5",
+        harness_reported_model_id="claude-haiku-5-5",
     ),
 )
 
 # Everything the four offered models do NOT match, so the catalog is complete against
 # what the harness can report: Mythos (approved orgs only) and every previous-generation
-# model 2.1.285 still carries. These are not offered, but they are not decoration either
+# model 2.1.293 still carries. These are not offered, but they are not decoration either
 # -- they exist so the catalog describes the whole model surface, and each one should say
 # what its model actually does.
 #
 # supports_fast therefore follows the binary rather than being set permissively. In
-# 2.1.285's baked-in model catalog the fast_mode capability is carried by Opus 5.5, Opus 5
+# 2.1.293's baked-in model catalog the fast_mode capability is carried by Opus 5.5, Opus 5
 # and Opus 4.8 and by nothing else, so of the hidden entries only Opus 5 and Opus 4.8
 # declare it -- 4.7 and 4.6 had fast removed, which is also why their legacy
 # claude-opus-4-*-fast ids are dead and cannot arrive with fast on. The field is not
@@ -178,6 +178,8 @@ _HIDDEN_MODELS: tuple[ModelOption, ...] = tuple(
         # The previous Sonnet, for the same reasons, and likewise after the offered sonnet[1m]
         # entry, since claude-sonnet-5 prefixes claude-sonnet-5-5.
         ("claude-sonnet-5", "Sonnet 5", False),
+        # The previous Haiku. It must stay ahead of the claude-haiku-4 catch-all below.
+        ("claude-haiku-4-5", "Haiku 4.5", False),
         # Like Opus 5 above, Opus 4.8 really has fast, per the binary's fast_mode capability.
         ("claude-opus-4-8", "Opus 4.8", True),
         ("claude-opus-4-7", "Opus 4.7", False),

@@ -37,19 +37,19 @@ def test_offered_options_carry_suffix_free_reported_ids() -> None:
         "fable[1m]": "claude-fable-5-1",
         "opus[1m]": "claude-opus-5-5",
         "sonnet[1m]": "claude-sonnet-5-5",
-        "haiku": "claude-haiku-4-5",
+        "haiku": "claude-haiku-5-5",
     }
 
 
 def test_picker_offers_exactly_four_models() -> None:
-    # Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 4.5 -- in the order claude 2.1.280's own /model
+    # Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5 -- in the order claude 2.1.280's own /model
     # picker ranks them. Everything else in the catalog is display-only.
     offered = [(option.id, option.label) for option in CLAUDE_CATALOG.options if option.in_picker]
     assert offered == [
         ("fable[1m]", "Fable 5.1"),
         ("opus[1m]", "Opus 5.5"),
         ("sonnet[1m]", "Sonnet 5.5"),
-        ("haiku", "Haiku 4.5"),
+        ("haiku", "Haiku 5.5"),
     ]
 
 
@@ -66,6 +66,7 @@ def test_hidden_options_are_the_models_the_picker_cannot_reach() -> None:
         "claude-mythos-preview",
         "claude-opus-5",
         "claude-sonnet-5",
+        "claude-haiku-4-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",
@@ -99,7 +100,7 @@ def test_no_catalog_key_shadows_another_in_the_prefix_pass() -> None:
 
 
 def test_fast_mode_follows_the_binary_not_model_rank() -> None:
-    # Claude 2.1.285's baked-in catalog gives fast_mode to Opus 5.5, Opus 5 and Opus 4.8:
+    # Claude 2.1.293's baked-in catalog gives fast_mode to Opus 5.5, Opus 5 and Opus 4.8:
     # 4.7 and 4.6 had it removed, and Fable does not have it at all despite outranking Opus
     # in capability. resolve_model_choice drops a live read's fast flag on a model that does
     # not declare it, so a missing flag here shows fast off on a session that is running --
@@ -124,7 +125,7 @@ def test_every_option_declares_the_full_effort_set() -> None:
 # and metadata" -- so the display name, the fast-mode capability and the alias targets do not
 # have to be inferred from release notes. The fixture beside this file is the id / family /
 # display_name / capabilities of every entry in it plus the alias table, lifted from the pinned
-# 2.1.285 executable. The table sits on a single JS line, found by:
+# 2.1.293 executable. The table sits on a single JS line, found by:
 #
 #     strings -n 4 claude | grep "Hand-maintained baked-in model catalog"
 #
@@ -134,7 +135,7 @@ def test_every_option_declares_the_full_effort_set() -> None:
 # Regenerate it whenever CLAUDE_CODE_VERSION moves. Everything below reads it rather than
 # restating it: the warning above CLAUDE_CATALOG in model.py about never hand-copying the
 # catalog applies to this file too.
-_BAKED_CATALOG_FIXTURE = Path(__file__).parent / "baked_model_catalog_v2_1_285.json"
+_BAKED_CATALOG_FIXTURE = Path(__file__).parent / "baked_model_catalog_v2_1_293.json"
 
 
 def _baked_catalog() -> dict[str, Any]:
@@ -185,7 +186,7 @@ def test_supports_fast_is_the_binarys_fast_mode_capability() -> None:
         assert option.supports_fast == ("fast_mode" in entry["capabilities"]), entry["id"]
 
 
-# Every claude model id the pinned 2.1.285 binary carries, extracted from its strings
+# Every claude model id the pinned 2.1.293 binary carries, extracted from its strings
 # rather than transcribed from docs:
 #
 #     strings -n 8 claude | grep -oE "claude-(opus|sonnet|haiku|fable|mythos)[a-z0-9._-]*(\\[[12]m\\])?"
@@ -202,6 +203,7 @@ _BINARY_MODEL_IDS: tuple[str, ...] = (
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
     "claude-haiku-4-5-20251001-v1",
+    "claude-haiku-5-5",
     "claude-mythos-5",
     "claude-mythos-5-1",
     "claude-mythos-preview",
@@ -219,7 +221,6 @@ _BINARY_MODEL_IDS: tuple[str, ...] = (
     "claude-opus-4-6-v1",
     "claude-opus-4-6[1m]",
     "claude-opus-4-7",
-    "claude-opus-4-7[1m]",
     "claude-opus-4-8",
     "claude-opus-4-8[1m]",
     "claude-opus-5",
@@ -271,17 +272,18 @@ def test_binary_model_ids_resolve_to_their_own_family() -> None:
 def test_live_statusline_model_ids_match_their_catalog_option() -> None:
     # The model ids a live claude statusline actually reports, captured from a binary
     # launched exactly as the workspace launches it (settings.json model="opus[1m]", then
-    # /model sonnet, /model haiku). None of them is a bare catalog key any more: opus and
-    # sonnet keep their [1m] launch suffix and haiku reports a dated id, so all three reach
-    # their option through match_option's prefix pass rather than an exact key hit.
-    # claude-opus-5-5[1m] (2.1.280) and claude-sonnet-5-5[1m] (2.1.285) are live captures,
-    # and each sits next to its predecessor because that pair is the shadowing trap this
-    # catalog is ordered against: claude-opus-5 prefixes claude-opus-5-5, so a catalog that
-    # put the older key first would label every Opus 5.5 read "Opus 5" (likewise Sonnet).
-    # The two Fable 5.1 ids are NOT captured live -- they are what the fable[1m] switch must
-    # report given the [1m] suffix survives into the reported id, and are pinned so the
-    # prefix pass is exercised for them too. The Opus 5, Sonnet 5 and Fable 5 ids stay
-    # because a chat created on a previous pin still reports them.
+    # /model sonnet, /model haiku). Opus and sonnet keep their [1m] launch suffix, so they
+    # reach their option through match_option's prefix pass rather than an exact key hit;
+    # haiku, which has no [1m] variant, reports its bare key.
+    # claude-opus-5-5[1m] (2.1.280), claude-sonnet-5-5[1m] (2.1.285) and claude-haiku-5-5
+    # (2.1.293) are live captures, and the Opus and Sonnet ones sit next to their
+    # predecessors because that pair is the shadowing trap this catalog is ordered against:
+    # claude-opus-5 prefixes claude-opus-5-5, so a catalog that put the older key first would
+    # label every Opus 5.5 read "Opus 5" (likewise Sonnet). The two Fable 5.1 ids are NOT
+    # captured live -- they are what the fable[1m] switch must report given the [1m] suffix
+    # survives into the reported id, and are pinned so the prefix pass is exercised for them
+    # too. The Opus 5, Sonnet 5, Haiku 4.5 and Fable 5 ids stay because a chat created on a
+    # previous pin still reports them.
     for reported_id, expected_label in (
         ("claude-fable-5-1", "Fable 5.1"),
         ("claude-fable-5-1[1m]", "Fable 5.1"),
@@ -295,6 +297,7 @@ def test_live_statusline_model_ids_match_their_catalog_option() -> None:
         ("claude-sonnet-5-5[1m]", "Sonnet 5.5"),
         ("claude-sonnet-5", "Sonnet 5"),
         ("claude-sonnet-5[1m]", "Sonnet 5"),
+        ("claude-haiku-5-5", "Haiku 5.5"),
         ("claude-haiku-4-5-20251001", "Haiku 4.5"),
         # A dated legacy id reaches its hidden option the same way.
         ("claude-opus-4-5-20251101", "Opus 4.5"),

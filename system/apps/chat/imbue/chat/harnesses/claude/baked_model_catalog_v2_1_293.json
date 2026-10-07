@@ -15,6 +15,24 @@
       ]
     },
     {
+      "id": "claude-haiku-5-5",
+      "family": "haiku",
+      "display_name": "Haiku 5.5",
+      "capabilities": [
+        "effort",
+        "max_effort",
+        "xhigh_effort",
+        "adaptive_thinking",
+        "mid_conv_tool_change",
+        "context_management",
+        "rejects_disabled_thinking",
+        "per_turn_effort",
+        "lean_prompt",
+        "org_locked_thinking",
+        "haiku_5_5_early_stopping_guidance"
+      ]
+    },
+    {
       "id": "claude-3-5-sonnet",
       "family": "sonnet",
       "display_name": "Sonnet 3.5",
@@ -62,7 +80,6 @@
         "max_effort",
         "xhigh_effort",
         "adaptive_thinking",
-        "mid_conv_system",
         "context_management"
       ]
     },
@@ -75,10 +92,11 @@
         "max_effort",
         "xhigh_effort",
         "adaptive_thinking",
-        "mid_conv_system",
+        "mid_conv_tool_change",
         "context_management",
         "rejects_disabled_thinking",
         "per_turn_effort",
+        "per_turn_timing",
         "lean_prompt",
         "refusal_fallback",
         "silent_turn_reminder",
@@ -141,7 +159,6 @@
         "max_effort",
         "xhigh_effort",
         "adaptive_thinking",
-        "mid_conv_system",
         "mid_conv_tool_change",
         "context_management",
         "fast_mode",
@@ -157,7 +174,6 @@
         "max_effort",
         "xhigh_effort",
         "adaptive_thinking",
-        "mid_conv_system",
         "mid_conv_tool_change",
         "context_management",
         "thinking_disabled_effort_cap",
@@ -177,7 +193,6 @@
         "xhigh_effort",
         "adaptive_thinking",
         "rejects_disabled_thinking",
-        "mid_conv_system",
         "mid_conv_tool_change",
         "per_turn_effort",
         "per_turn_timing",
@@ -198,7 +213,6 @@
         "xhigh_effort",
         "adaptive_thinking",
         "rejects_disabled_thinking",
-        "mid_conv_system",
         "mid_conv_tool_change",
         "context_management",
         "lean_prompt",
@@ -216,7 +230,6 @@
         "xhigh_effort",
         "adaptive_thinking",
         "rejects_disabled_thinking",
-        "mid_conv_system",
         "mid_conv_tool_change",
         "per_turn_effort",
         "per_turn_timing",
@@ -243,7 +256,6 @@
         "xhigh_effort",
         "adaptive_thinking",
         "rejects_disabled_thinking",
-        "mid_conv_system",
         "mid_conv_tool_change",
         "per_turn_timing",
         "context_management",
@@ -256,7 +268,7 @@
   "aliases": {
     "opus": "claude-opus-5-5",
     "sonnet": "claude-sonnet-5-5",
-    "haiku": "claude-haiku-4-5",
+    "haiku": "claude-haiku-5-5",
     "fable": "claude-fable-5-1"
   }
 }
