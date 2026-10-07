@@ -7,6 +7,7 @@ import pytest
 
 from imbue.chat.autocompact import ChatAutoCompactor
 from imbue.chat.autocompact import SLOW_SWEEP_WARNING_SECONDS
+from imbue.chat.testing import use_mngr_settings
 from imbue.mngr.errors import ConfigParseError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.polling import poll_until
@@ -150,21 +151,13 @@ def test_an_invalid_mode_in_the_settings_file_logs_and_requests_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, loguru_records: list[str]
 ) -> None:
     """mngr's loader rejects an unknown mode with a pydantic error, which must not end the sweep thread."""
-    _use_mngr_settings('[plugins.autocompact]\nmode = "bogus"\n', tmp_path, monkeypatch)
+    use_mngr_settings('[plugins.autocompact]\nmode = "bogus"\n', tmp_path, monkeypatch)
 
     compactor = ChatAutoCompactor.build(list_opted_in_chat_agent_names=lambda: ["chat-alpha"])
 
     assert compactor.sweep() == []
     warning_logs = [log for log in loguru_records if log.startswith("WARNING") and "chat-alpha" in log]
     assert len(warning_logs) == 1
-
-
-def _use_mngr_settings(settings: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_dir = tmp_path / ".mngr"
-    config_dir.mkdir()
-    (config_dir / "settings.toml").write_text("is_allowed_in_pytest = true\n" + settings)
-    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
 
 
 def test_start_and_stop_lifecycle() -> None:

@@ -10,6 +10,7 @@ from imbue.chat.agent_discovery import _first_failure
 from imbue.chat.agent_discovery import compact_stale_agents_if_enabled
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.chat.testing import use_mngr_settings
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.message import AgentSendFailure
 from imbue.mngr.api.message import MessageResult
@@ -316,19 +317,11 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     assert any("field_from_a_newer_mngr" in record for record in loguru_records)
 
 
-def _use_mngr_settings(settings: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_dir = tmp_path / "cfg"
-    config_dir.mkdir()
-    (config_dir / "settings.toml").write_text("is_allowed_in_pytest = true\n" + settings)
-    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
-
-
 def test_compacting_agents_that_no_longer_exist_compacts_nothing_and_raises_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The sweep lists its chats a moment before this call, so a name may already be gone."""
-    _use_mngr_settings('[plugins.autocompact]\nmode = "proactive_timer"\n', tmp_path, monkeypatch)
+    use_mngr_settings('[plugins.autocompact]\nmode = "proactive_timer"\n', tmp_path, monkeypatch)
 
     assert compact_stale_agents_if_enabled(["chat-that-was-destroyed"], compact_stale_agents_by_name) == []
 
@@ -349,7 +342,7 @@ def test_the_plugin_is_called_only_when_the_workspace_mngr_config_has_proactive_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The mode is loaded through mngr's own loader, so the sweep acts exactly when the plugin would."""
-    _use_mngr_settings(settings, tmp_path, monkeypatch)
+    use_mngr_settings(settings, tmp_path, monkeypatch)
     recorded_batches: list[list[str]] = []
 
     def compact_by_name(mngr_ctx: MngrContext, names: Sequence[AgentName]) -> Sequence[AgentName]:

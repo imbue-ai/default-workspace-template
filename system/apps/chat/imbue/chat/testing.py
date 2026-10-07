@@ -942,6 +942,15 @@ def make_session_file(projects_dir: Path, session_id: str, events: Sequence[Mapp
     return session_file
 
 
+def use_mngr_settings(settings: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point mngr's config loader at a project settings file holding ``settings``, with a host dir under tmp_path."""
+    config_dir = tmp_path / ".mngr"
+    config_dir.mkdir()
+    (config_dir / "settings.toml").write_text("is_allowed_in_pytest = true\n" + settings)
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
+
+
 def utc_iso_seconds_ago(seconds: float = 0.0) -> str:
     """A UTC ISO timestamp this many seconds before now, as the hook files and transcript records carry."""
     return datetime.fromtimestamp(time.time() - seconds, tz=timezone.utc).isoformat()
