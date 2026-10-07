@@ -204,7 +204,7 @@ reported (under gVisor and on lima, a change made outside the sandbox raises no
 inotify event in it).
 
 Every registry read is also announced to the minds desktop (`app_announcements.py`):
-one `service_registered` event per app whose URL, label, icon, or shareability
+one `service_registered` event per app whose URL, label, icon, display name, or shareability
 (whether the minds Share tab may offer it on its own: never for an internal app)
 differs from the last announced, and one `service_deregistered` per app that
 left, appended to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the

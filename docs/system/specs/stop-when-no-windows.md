@@ -236,7 +236,7 @@ The stopped placeholder loses its Start button: a stoppable app's window never s
 
 ## 8. Part F: the app watcher moves into the shell
 
-`imbue/system_interface/app_announcements.py` holds `AppAnnouncementWriter`: given the rows of a registry read, it writes one `service_registered` event per row whose registered fields (URL, label, icon) differ from the last announced, and one `service_deregistered` per row that left, to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`, in the event envelope the watcher wrote (`EventEnvelope` from `imbue_common`, source `services`, nanosecond ISO timestamps, `evt-<uuid>` ids).
+`imbue/system_interface/app_announcements.py` holds `AppAnnouncementWriter`: given the rows of a registry read, it writes one `service_registered` event per row whose registered fields (URL, label, icon, display name) differ from the last announced, and one `service_deregistered` per row that left, to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`, in the event envelope the watcher wrote (`EventEnvelope` from `imbue_common`, source `services`, nanosecond ISO timestamps, `evt-<uuid>` ids).
 The first read after the shell starts remembers nothing and announces every row, which is what a consumer reading the stream from its start needs.
 With `MNGR_AGENT_STATE_DIR` unset it logs one warning at start and writes nothing.
 
