@@ -1,0 +1,3 @@
+`update-self` knows the new System Monitor app's frontend: its `package.json` counts as an npm manifest, a change under it rebuilds the bundles, and its bundle is built, snapshotted, verified and passed as a worker bundle (`--worker-bundle activity=<path>`) with the others. The list of frontend directories that trigger a rebuild is now derived from the bundle list, so a new frontend cannot be left out of it, and the update-self and worker docs no longer count the bundles.
+
+`build-app` tells agents picking a port by hand to avoid System Monitor's 8040, and the freeing-memory reference points agents at its figures, so an answer to a question drafted from the app reads the same numbers the user sees.

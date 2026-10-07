@@ -271,6 +271,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The file viewer: dufs, the tiny static file server the program runs
     # directly. It holds little memory and supervisord restarts it if shed.
     "files": 75,
+    # The Activity app: one page that reads memory when asked and holds nothing.
+    # It is the page a user opens when memory is tight, so it is shed after
+    # Getting Started rather than before it.
+    "activity": 78,
     # The Getting Started page: one static page and a cached catalog. A shed costs
     # one reload of a window that shows nothing of the user's, so this is the most
     # expendable built-in service of all.
