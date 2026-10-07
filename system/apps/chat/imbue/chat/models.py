@@ -1,4 +1,6 @@
+from collections.abc import Sequence
 from datetime import datetime
+from datetime import timezone
 from enum import auto
 from pathlib import Path
 
@@ -23,6 +25,7 @@ from imbue.chat.primitives import SUBAGENT_KEY_SEPARATOR
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.mngr.interfaces.data_types import BackgroundTask
 
 
 class AgentCreationError(ValueError):
@@ -72,12 +75,39 @@ class AttachmentError(ValueError):
     ...
 
 
+class BackgroundTaskSnapshot(FrozenModel):
+    """One pending task that will wake its agent, as the chat pages render it: descriptions only."""
+
+    id: str = Field(description="The task's id, unique within the agent's pending tasks")
+    description: str = Field(description="What the task is, in the words of whoever started it")
+    started_at: str = Field(description="When the task was started (ISO 8601, UTC)")
+
+
+@pure
+def background_task_snapshots(tasks: Sequence[BackgroundTask]) -> tuple[BackgroundTaskSnapshot, ...]:
+    """The wire form of an agent's pending tasks, in the order given (mngr's is oldest first)."""
+    return tuple(
+        BackgroundTaskSnapshot(
+            id=task.id,
+            description=task.description,
+            started_at=task.started_at.astimezone(timezone.utc).isoformat(),
+        )
+        for task in tasks
+    )
+
+
 class AgentListItem(FrozenModel):
     """An agent entry in the agent list response."""
 
     id: str = Field(description="The agent's unique identifier")
     name: str = Field(description="The agent's human-readable name")
     state: str = Field(description="The agent's lifecycle state")
+    is_busy: bool = Field(
+        default=False, description="Whether the agent will resume on its own (mngr's ``AgentDetails.is_busy``)"
+    )
+    background_tasks: tuple[BackgroundTaskSnapshot, ...] = Field(
+        default=(), description="The pending tasks that will wake the agent, oldest first"
+    )
 
 
 class AgentListResponse(FrozenModel):
@@ -328,6 +358,17 @@ class AgentStateItem(FrozenModel):
             "live state pushed on the agents WebSocket, replaced wholesale each push."
         ),
     )
+    background_tasks: tuple[BackgroundTask, ...] = Field(
+        default=(),
+        description=(
+            "The pending tasks that will wake the agent, oldest first, from the freshest of the "
+            "observe stream and the chat's own read of the agent's marker dir"
+        ),
+    )
+    is_busy: bool = Field(
+        default=False,
+        description="Whether the agent will resume on its own: mngr's rule over the lifecycle and ``background_tasks``",
+    )
 
 
 class HandoffFailedStep(LowerCaseStrEnum):
@@ -522,6 +563,12 @@ class ActiveAgentSnapshot(FrozenModel):
             "harness had not finished starting. The Connecting sub-state of Sending (contract A1)."
         )
     )
+    background_tasks: tuple[BackgroundTaskSnapshot, ...] = Field(
+        description="The pending tasks that will wake the agent, oldest first; empty when none"
+    )
+    is_busy: bool = Field(
+        description="Whether the agent will resume on its own: a turn in flight, or a pending task that will start one"
+    )
 
 
 class ChatSnapshot(FrozenModel):
@@ -531,7 +578,9 @@ class ChatSnapshot(FrozenModel):
     title: str = Field(description="The name the user sees (the ``display_name`` label, else the mngr name)")
     name: str = Field(description="The chat's canonical mngr name")
     project: str | None = Field(description="The project the chat was created in, or None")
-    status: ChatStatus = Field(description="The chat's status: working, idle, attention, stopped, or error")
+    status: ChatStatus = Field(
+        description="The chat's status: working, background, idle, attention, stopped, or error"
+    )
     labels: dict[str, str] = Field(description="The active agent's mngr labels")
     agent_ids: tuple[str, ...] = Field(description="Every agent of the chat, in order; the last is the active one")
     handoff: HandoffState | None = Field(

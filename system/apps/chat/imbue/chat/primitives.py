@@ -34,6 +34,9 @@ class ChatStatus(LowerCaseStrEnum):
     """What a chat is doing, as its snapshot reports it and the chat root's rail draws it (a wire value)."""
 
     WORKING = auto()
+    # Alive with no turn in flight and no permission pending, but busy: something it is waiting on
+    # will start its next turn on its own (``activity_state.py`` defines busy).
+    BACKGROUND = auto()
     IDLE = auto()
     ATTENTION = auto()
     STOPPED = auto()
