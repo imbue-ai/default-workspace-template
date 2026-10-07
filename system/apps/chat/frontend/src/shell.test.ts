@@ -8,12 +8,18 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
+const redraw = vi.fn();
+vi.mock("mithril", () => ({ default: { redraw } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 const createChat = vi.fn();
 const getChatById = vi.fn();
 const addChatsUpdatedListener = vi.fn();
 vi.mock("./models/Chats", () => ({ createChat, getChatById, addChatsUpdatedListener }));
+const loadAccounts = vi.fn(async () => {});
+vi.mock("./models/Providers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models/Providers")>()),
+  loadAccounts,
+}));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),
@@ -172,6 +178,18 @@ describe("the embed API", () => {
 
     expect(presence.startPresenceReporting.mock.calls).toEqual([["agent-1", "client-2", "hidden"]]);
     expect(presence.reportPresence.mock.calls).toEqual([["visible"], ["hidden"]]);
+  });
+
+  it("re-reads the account list and redraws when the root says the accounts changed", async () => {
+    framed();
+    const { connectChatToShell } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: true, path: "/agent-1" });
+    redraw.mockClear();
+
+    window.chatPageEmbed?.accountsChanged();
+
+    expect(loadAccounts).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(redraw).toHaveBeenCalled());
   });
 
   it("is absent on a top-level visit, which no root drives", async () => {
