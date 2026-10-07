@@ -4,13 +4,14 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from imbue.chat.autocompact import ChatAutoCompactor
 from imbue.chat.autocompact import SLOW_SWEEP_WARNING_SECONDS
 from imbue.chat.testing import use_mngr_settings
-from imbue.mngr.errors import ConfigParseError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.polling import poll_until
+from imbue.mngr_autocompact.config import AutoCompactPluginConfig
 
 
 def _recording_compact(
@@ -67,14 +68,17 @@ def test_each_compacted_agent_is_reported_once_and_logged(loguru_records: list[s
     ]
 
 
+def _invalid_mode_error() -> ValidationError:
+    """The pydantic error mngr's config raises for an unknown autocompact mode."""
+    with pytest.raises(ValidationError) as raised:
+        AutoCompactPluginConfig.model_validate({"mode": "bogus"})
+    return raised.value
+
+
 @pytest.mark.parametrize(
     "compact_error",
-    [
-        MngrError("host offline"),
-        OSError("disk gone"),
-        ConfigParseError("Invalid config for 'plugins.autocompact'"),
-        PermissionError("settings.toml"),
-    ],
+    [MngrError("host offline"), OSError("disk gone"), _invalid_mode_error()],
+    ids=["mngr_error", "os_error", "validation_error"],
 )
 def test_a_failed_plugin_call_logs_and_reports_nothing(compact_error: Exception, loguru_records: list[str]) -> None:
     reported: list[str] = []
