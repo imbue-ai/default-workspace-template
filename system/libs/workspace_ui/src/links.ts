@@ -8,9 +8,9 @@
  * - An absolute path is a **file** of the workspace, opened in the File Viewer (``open:file``).
  * - A URL on a local host (``localhost``, ``127.0.0.1``, ``[::1]``, ``*.localhost``) is a **local URL**, which the
  *   shell opens (``shell:open-link``): on a bare host name, as the window of the app registered at its port, else
- *   in the workspace's browser (``open:url``). That is unless it is the address of an app of a workspace: one of this workspace's apps
- *   (an **app address**, opened as that app's window: by the page itself for its own app, by the shell through
- *   ``shell:open-link`` for another) or another workspace's (which the shell refuses).
+ *   in the workspace's browser (``open:url``). That is unless it is the address of an app of a workspace: one of
+ *   this workspace's apps (an **app address**, opened as that app's window: by the page itself for its own app, by
+ *   the shell through ``shell:open-link`` for another) or another workspace's (which the shell refuses).
  * - Anything else (a relative path, a fragment, another scheme) is **unroutable**.
  *
  * This module touches no message primitive: it acts through the page's app-contract connection.

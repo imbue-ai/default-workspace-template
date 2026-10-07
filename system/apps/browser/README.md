@@ -71,7 +71,8 @@ background agent, which is its own chat -- or the human).
   not running).
 - **Opening a link for the human** (`POST /api/open-url`, the manifest's `open:url` message handler; the
   workspace link routing plan): the shell posts `{"type", "client_id", "url"}` when a link to a local address no
-  app is registered at is clicked in the workspace (a chat's `http://localhost:3000/` link, or a page's popup Imbue Studio hands back).
+  app is registered at is clicked in the workspace (a chat's `http://localhost:3000/` link, or a page's popup
+  Imbue Studio hands back).
   The URL must be an absolute `http(s)` URL on this machine (`localhost`, `127.0.0.1`, `[::1]`, or a
   `*.localhost` host); anything else is refused with a reason under `detail`, which the shell shows the user, as
   is a Chromium still installing (503). The one browser then opens it the way the launch path opens a start page
