@@ -3,7 +3,7 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { desktopRecord } from "../testing/records";
+import { desktopRecord, themeCatalog, themeRecord } from "../testing/records";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
 import type { DesktopSettingsDialogAttrs } from "./DesktopSettingsDialog";
 
@@ -17,6 +17,13 @@ function render(overrides: Partial<DesktopSettingsDialogAttrs> = {}): DesktopSet
     onSave: vi.fn(async () => undefined),
     onDelete: vi.fn(async () => undefined),
     onCancel: vi.fn(),
+    onPreviewTheme: vi.fn(),
+    onClearPreview: vi.fn(),
+    themes: themeCatalog(
+      themeRecord("mac-classic", { name: "Classic Mac" }),
+      themeRecord("windows-2000", { name: "Windows 2000" }),
+      themeRecord("broken", { available: false, problems: ["parts.css:1: .x is a class"] }),
+    ),
     ...overrides,
   };
   mountView(() => m(DesktopSettingsDialog, attrs));
@@ -49,10 +56,13 @@ describe("DesktopSettingsDialog", () => {
     const attrs = render();
     pressEnterInNameField();
     await settled();
-    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), null);
+    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), null, {
+      theme: null,
+      isWorkspaceDefault: false,
+    });
   });
 
-  it("saves every edited field: the typed name, the picked colour, glyph, and wallpaper", async () => {
+  it("saves every edited field: the typed name, the picked colour, glyph, wallpaper, and theme", async () => {
     const attrs = render({ wallpapers: [{ kind: "bundled", name: "dawn", url: "/wallpapers/bundled/dawn" }] });
     const input = card().querySelector(".desktop-settings-name") as HTMLInputElement;
     input.value = "  Studio ";
@@ -61,10 +71,66 @@ describe("DesktopSettingsDialog", () => {
     swatches[swatches.length - 1].click();
     (card().querySelector('[aria-label="Squiggle 3"]') as HTMLButtonElement).click();
     (card().querySelector('[data-wallpaper="bundled:dawn"]') as HTMLButtonElement).click();
+    (card().querySelector('[data-theme="windows-2000"]') as HTMLButtonElement).click();
     (card().querySelector(".desktop-settings-save") as HTMLButtonElement).click();
     await settled();
     const pickedColor = swatches[swatches.length - 1].getAttribute("aria-label")?.replace("Color ", "");
-    expect(attrs.onSave).toHaveBeenCalledWith("Studio", pickedColor, 2, { kind: "bundled", name: "dawn" });
+    expect(attrs.onSave).toHaveBeenCalledWith(
+      "Studio",
+      pickedColor,
+      2,
+      { kind: "bundled", name: "dawn" },
+      { theme: "windows-2000", isWorkspaceDefault: false },
+    );
+  });
+
+  it("previews a picked theme at once and drops the preview when the dialog closes", () => {
+    const attrs = render();
+    (card().querySelector('[data-theme="mac-classic"]') as HTMLButtonElement).click();
+    expect(attrs.onPreviewTheme).toHaveBeenLastCalledWith("mac-classic");
+    expect(attrs.onSave).not.toHaveBeenCalled();
+    unmountViews();
+    expect(attrs.onClearPreview).toHaveBeenCalledOnce();
+  });
+
+  it("lists the workspace default by the theme it is, and a theme that fails its checks as unavailable", () => {
+    render({
+      themes: { ...themeCatalog(themeRecord("mac-classic", { name: "Classic Mac" })), default: "mac-classic" },
+    });
+    const defaultTile = card().querySelector('[data-theme="workspace-default"]') as HTMLButtonElement;
+    expect(defaultTile.textContent).toContain("Workspace default (Classic Mac)");
+    expect(defaultTile.getAttribute("aria-pressed")).toBe("true");
+    const brokenAttrs = render({
+      themes: themeCatalog(themeRecord("broken", { available: false, problems: ["no icons"] })),
+    });
+    const broken = document.querySelectorAll('[data-theme="broken"]');
+    const brokenTile = broken[broken.length - 1] as HTMLButtonElement;
+    expect(brokenTile.getAttribute("aria-disabled")).toBe("true");
+    expect(brokenTile.title).toBe("Unavailable: no icons");
+    brokenTile.click();
+    expect(brokenAttrs.onPreviewTheme).not.toHaveBeenCalled();
+  });
+
+  it("pictures an unavailable theme without loading its icons, which are not served", () => {
+    render({ themes: themeCatalog(themeRecord("broken", { available: false, problems: ["no icons"] })) });
+    const brokenTile = card().querySelector('[data-theme="broken"]') as HTMLButtonElement;
+    expect(brokenTile.querySelector("img")).toBeNull();
+    expect(brokenTile.querySelector("svg")).not.toBeNull();
+  });
+
+  it("makes a picked theme the workspace default when that box is checked", async () => {
+    const attrs = render();
+    (card().querySelector('[data-theme="mac-classic"]') as HTMLButtonElement).click();
+    m.redraw.sync();
+    const asDefault = card().querySelector("[data-theme-as-workspace-default]") as HTMLInputElement;
+    asDefault.checked = true;
+    asDefault.dispatchEvent(new Event("change", { bubbles: true }));
+    (card().querySelector(".desktop-settings-save") as HTMLButtonElement).click();
+    await settled();
+    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), 0, null, {
+      theme: "mac-classic",
+      isWorkspaceDefault: true,
+    });
   });
 
   it("does not save a blank name: Save is disabled and Enter posts nothing", async () => {
@@ -150,7 +216,10 @@ describe("a wallpaper the workspace no longer offers", () => {
     });
     (card().querySelector(".desktop-settings-save") as HTMLButtonElement).click();
     await settled();
-    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), null);
+    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), null, {
+      theme: null,
+      isWorkspaceDefault: false,
+    });
   });
 
   it("leaves a wallpaper that is still on offer selected and saved as itself", async () => {
@@ -161,9 +230,12 @@ describe("a wallpaper the workspace no longer offers", () => {
     expect(pressed()).toEqual(["bundled:arcs"]);
     (card().querySelector(".desktop-settings-save") as HTMLButtonElement).click();
     await settled();
-    expect(attrs.onSave).toHaveBeenCalledWith("Home", expect.any(String), expect.any(Number), {
-      kind: "bundled",
-      name: "arcs",
-    });
+    expect(attrs.onSave).toHaveBeenCalledWith(
+      "Home",
+      expect.any(String),
+      expect.any(Number),
+      { kind: "bundled", name: "arcs" },
+      { theme: null, isWorkspaceDefault: false },
+    );
   });
 });

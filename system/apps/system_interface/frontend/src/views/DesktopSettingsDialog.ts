@@ -1,5 +1,5 @@
 /**
- * The dialog for one desktop's settings (plan section 4.8): its name, colour, glyph, and wallpaper,
+ * The dialog for one desktop's settings (plan section 4.8): its name, colour, glyph, wallpaper, and theme,
  * plus the one place a desktop can be deleted. Deleting is confirm-gated in
  * place (a second, red button inside this same dialog) rather than a second stacked dialog. The
  * last desktop cannot be deleted; the shell refuses with a 409 the dialog shows.
@@ -10,7 +10,9 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
 import type { Desktop, Wallpaper, WallpaperListing } from "../model/records";
+import { resolveDesktopTheme, type ThemeCatalog, type ThemeRecord } from "../model/themes";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
+import { FIELD_PART, TILE_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 // The palette is exactly the glyphs' own signature colors, so every desktop colour belongs to
 // the family the squiggles were drawn in.
@@ -25,10 +27,31 @@ export interface DesktopSettingsDialogAttrs {
   readonly wallpapers: readonly WallpaperListing[] | null;
   /** Whether the dialog opens straight into the delete confirmation. */
   readonly isDeleting: boolean;
-  readonly onSave: (name: string, color: string, glyph: number, wallpaper: Wallpaper | null) => Promise<void>;
+  readonly onSave: (
+    name: string,
+    color: string,
+    glyph: number,
+    wallpaper: Wallpaper | null,
+    themeChoice: ThemeChoice,
+  ) => Promise<void>;
   readonly onDelete: () => Promise<void>;
   readonly onCancel: () => void;
+  /** The workspace's themes, for the Theme row. */
+  readonly themes: ThemeCatalog;
+  /** Show a picked theme (a theme id, or null for the workspace's default) before it is saved. */
+  readonly onPreviewTheme: (choice: string | null) => void;
+  /** The dialog closed: put back whatever the desktop has saved by then. */
+  readonly onClearPreview: () => void;
 }
+
+/** What the Theme row saves: the desktop's own theme (null wears the workspace's default), and whether that theme
+ *  becomes the workspace's default instead, worn by every desktop without a theme of its own. */
+export interface ThemeChoice {
+  readonly theme: string | null;
+  readonly isWorkspaceDefault: boolean;
+}
+
+const THEME_PREVIEW_APP = "files";
 
 function normalizedGlyphIndex(glyph: number): number {
   const count = SQUIGGLE_GLYPHS.length;
@@ -45,6 +68,8 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
   let color = SQUIGGLE_GLYPHS[0].color;
   let glyphIndex = 0;
   let wallpaper: Wallpaper | null = null;
+  let theme: string | null = null;
+  let isWorkspaceDefault = false;
   let isSaving = false;
   let isDeleting = false;
   let isConfirmingDelete = false;
@@ -58,7 +83,10 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     error = null;
     m.redraw();
     try {
-      await attrs.onSave(chosen, color, glyphIndex, resolvedWallpaper(attrs.wallpapers));
+      await attrs.onSave(chosen, color, glyphIndex, resolvedWallpaper(attrs.wallpapers), {
+        theme,
+        isWorkspaceDefault: isWorkspaceDefault && theme !== null,
+      });
     } catch (e) {
       error = (e as Error).message;
       isSaving = false;
@@ -170,6 +198,92 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
     ]);
   }
 
+  /** A theme's picture in its tile: the icon it draws for the File Viewer, or the desktop's own squiggle for a
+   *  theme without pixel icons (the standard look) and for an unavailable one, whose files are not served. */
+  function themePicture(record: ThemeRecord): m.Children {
+    const icons = record.available ? record.icons : null;
+    const url = icons === null ? null : (icons.apps[THEME_PREVIEW_APP] ?? icons.fallback_url);
+    if (url === null || icons === null) {
+      return m(
+        "span",
+        { class: "flex h-8 w-8 items-center justify-center" },
+        m.trust(squiggleMarkup(glyphIndex, color, 28)),
+      );
+    }
+    return m("img", {
+      class: "h-8 w-8",
+      src: url,
+      alt: "",
+      style: icons.rendering === "pixelated" ? "image-rendering: pixelated" : undefined,
+    });
+  }
+
+  /** One choice in the Theme row: a theme, or (`value` null) the workspace's default, named after the theme it is. */
+  function themeTile(
+    attrs: DesktopSettingsDialogAttrs,
+    value: string | null,
+    label: string,
+    record: ThemeRecord,
+    unavailableReason: string | null,
+  ): m.Vnode {
+    const isSelected = value === theme;
+    const isDisabled = unavailableReason !== null;
+    return m(
+      "button",
+      {
+        type: "button",
+        "data-theme": value ?? "workspace-default",
+        ...TILE_PART,
+        class:
+          "flex w-28 shrink-0 flex-col items-center gap-1 rounded-md border bg-transparent p-2 " +
+          (isDisabled ? "cursor-not-allowed opacity-50 " : "cursor-pointer ") +
+          (isSelected ? "border-accent ring-2 ring-accent" : "border-default"),
+        "aria-pressed": isSelected ? "true" : "false",
+        "aria-disabled": isDisabled ? "true" : undefined,
+        title: unavailableReason ?? undefined,
+        onclick() {
+          if (isDisabled) return;
+          theme = value;
+          attrs.onPreviewTheme(theme);
+        },
+      },
+      [themePicture(record), m("span", { class: "type-helper text-center text-primary" }, label)],
+    );
+  }
+
+  function themeRow(attrs: DesktopSettingsDialogAttrs): m.Children {
+    const catalog = attrs.themes;
+    const defaultTheme = resolveDesktopTheme(catalog, null);
+    const tiles = [
+      themeTile(attrs, null, `Workspace default (${defaultTheme.name})`, defaultTheme, null),
+      ...catalog.themes.map((record) =>
+        themeTile(
+          attrs,
+          record.id,
+          record.name,
+          record,
+          record.available ? null : `Unavailable: ${record.problems.join("; ")}`,
+        ),
+      ),
+    ];
+    return [
+      m("div", { class: "mb-2 flex flex-wrap gap-2" }, tiles),
+      theme === null
+        ? null
+        : m("label", { class: "mb-3 flex items-center gap-2 type-helper text-primary" }, [
+            m("input", {
+              type: "checkbox",
+              "data-theme-as-workspace-default": "",
+              checked: isWorkspaceDefault,
+              onchange(event: Event) {
+                isWorkspaceDefault = (event.target as HTMLInputElement).checked;
+              },
+            }),
+            "Make this the workspace default",
+          ]),
+    ];
+  }
+
   function deleteConfirmationActions(attrs: DesktopSettingsDialogAttrs): m.Children {
     return [
       m(
@@ -229,7 +343,11 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
       color = desktop.color;
       glyphIndex = normalizedGlyphIndex(desktop.glyph);
       wallpaper = desktop.wallpaper;
+      theme = desktop.theme;
       isConfirmingDelete = vnode.attrs.isDeleting;
+    },
+    onremove(vnode) {
+      vnode.attrs.onClearPreview();
     },
     view(vnode) {
       const attrs = vnode.attrs;
@@ -258,6 +376,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
           m("label", { class: MODAL_LABEL_CLASS }, "Name"),
           m("input", {
             class: inputClass({ extra: "mb-3 desktop-settings-name" }),
+            ...FIELD_PART,
             type: "text",
             value: name,
             placeholder: "desktop name",
@@ -280,6 +399,8 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
           ),
           m("label", { class: MODAL_LABEL_CLASS }, "Wallpaper"),
           m("div", { class: "mb-3" }, wallpaperPicker(attrs)),
+          m("label", { class: MODAL_LABEL_CLASS }, "Theme"),
+          themeRow(attrs),
           error ? m("p", { class: "type-helper mt-1 text-danger" }, error) : null,
           isConfirmingDelete
             ? m("p", { class: MODAL_MESSAGE_CLASS }, [

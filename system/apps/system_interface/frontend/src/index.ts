@@ -29,8 +29,11 @@ import { initEmbedderRelay } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
-import { followRenderModes } from "./theme/metrics";
+import { type ThemeRef, wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
+import { themeRefOf } from "./model/themes";
+import { currentRenderModes, followRenderModes, readThemeMetrics } from "./theme/metrics";
 import { App, BACKDROP_AREA_ATTRIBUTE } from "./views/App";
+import { setIconTheme } from "./views/themeIcons";
 
 /** Rewrite the page's URL with its query string put through ``strip``, leaving the path, the hash, and the
  *  history entry as they are: how a boot-time parameter is removed once it has been read. */
@@ -75,6 +78,13 @@ const popOutBridge: PopOutBridge = {
   reportDetachedWindows: (windows) => sendToEmbedder(DETACHED_WINDOWS, { windows: [...windows] }),
 };
 
+/** Settles once the page's load event has fired: every stylesheet in `<head>`, script-inserted ones included,
+ *  has then loaded. */
+function afterPageLoad(): Promise<void> {
+  if (document.readyState === "complete") return Promise.resolve();
+  return new Promise((resolve) => window.addEventListener("load", () => resolve(), { once: true }));
+}
+
 function bootstrap(): void {
   const clientId = getClientId();
   // Read and left in the URL, unlike the deep link: a reload of a pulled-out window's page must come back as it.
@@ -107,6 +117,25 @@ function bootstrap(): void {
   );
   if (store === null) throw new Error("the render modes never reported");
   const desktopStore: DesktopStore = store;
+  // The page wears the theme of the desktop on screen (Desktop settings). A theme can redeclare
+  // metric tokens (the title bar height), so the metrics the geometry reads are taken again under it.
+  // Until the store knows that theme, the page keeps the one the boot script put on.
+  let metricsTheme: ThemeRef | null = null;
+  desktopStore.onShownThemeChanged(({ record, isPreview }) => {
+    setIconTheme(record);
+    const shown = themeRefOf(record);
+    // A preview is worn and not remembered, so a reload while Desktop settings is open comes back in the saved
+    // theme; the saved one is remembered again when the preview ends.
+    const worn = wearTheme(shown, document, { isRemembered: !isPreview });
+    if (metricsTheme !== null && shown.id === metricsTheme.id && shown.revision === metricsTheme.revision) return;
+    metricsTheme = shown;
+    // The metrics are read once the theme's stylesheet has loaded, since that is when its tokens apply; a theme
+    // the boot script put on is already worn, and the page's load event is what waits for its stylesheet.
+    void worn.then(afterPageLoad).then(() => {
+      desktopStore.setThemeMetrics(readThemeMetrics(readStyle(root)), currentRenderModes(root));
+      m.redraw();
+    });
+  });
   const gestures = new PointerGestureSource();
   // Say this window is here (and learn who it is) for as long as it stays visible.
   startPresenceHeartbeat();

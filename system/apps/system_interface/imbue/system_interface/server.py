@@ -428,6 +428,15 @@ def _frontend_not_built_response() -> Response:
     return document_response(render_frontend_not_built_page(_terminal_origin_label()), is_frontend_built=False)
 
 
+def _theme_gallery() -> Response:
+    """The theme gallery page (workspace-themes plan section 8.2), a second page of the shell's build."""
+    gallery_path = get_state().static_directory / THEME_GALLERY_FILENAME
+    if not gallery_path.exists():
+        return _frontend_not_built_response()
+    html_content = inject_base_path_meta_tag(gallery_path.read_text(), _root_path())
+    return document_response(html_content, is_frontend_built=True)
+
+
 def _index_catch_all(path: str) -> Response:
     # Every other path is a client-side route and renders the app shell -- except an
     # unknown API path, whose caller wants an answer it can parse, not a page.
@@ -441,6 +450,9 @@ def _health_endpoint() -> Response:
     is_frontend_built = (get_state().static_directory / "index.html").exists()
     return json_response({"status": "ok", "is_frontend_built": is_frontend_built})
 
+
+THEME_GALLERY_ROUTE: Final[str] = "/theme-gallery"
+THEME_GALLERY_FILENAME: Final[str] = "theme-gallery.html"
 
 # Every route the shell answers as JSON lives under it; an unknown path under it is a JSON 404.
 API_PREFIX: Final[str] = "api/"
@@ -753,6 +765,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(TOUCH_ICON_PATH, view_func=_touch_icon, methods=["GET"])
     application.add_url_rule(MANIFEST_PATH, view_func=_web_manifest, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
+    application.add_url_rule(THEME_GALLERY_ROUTE, view_func=_theme_gallery, methods=["GET"])
     application.add_url_rule(APP_CONTRACT_ROUTE, view_func=_serve_app_contract, methods=["GET"])
     application.add_url_rule(CONTEXT_MENU_ROUTE, view_func=_serve_context_menu, methods=["GET"])
     application.add_url_rule(PRESENCE_PATH, view_func=_presence_endpoint, methods=["GET"])

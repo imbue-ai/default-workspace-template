@@ -13,10 +13,14 @@ import {
   placementRecord,
   presentUserRecord,
   shortcutRecord,
+  themeCatalog,
   themeMetricsRecord,
+  themeRecord,
   windowRecord,
 } from "../testing/records";
 import type { GridCell } from "../model/records";
+import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
+import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import { DesktopStore, chooseInitialDesktopId } from "./DesktopStore";
 import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
 
@@ -2169,5 +2173,124 @@ describe("the phone layout", () => {
     store.onVisibilityChange(false);
     socket.deliver().onConnected();
     expect(reloaded).toEqual(["win-1"]);
+  });
+});
+
+describe("themes", () => {
+  const INK_CHROME: ThemeChrome = {
+    title_align: "center",
+    leading: ["close", "title", "refresh", "menu"],
+    trailing: ["minimize", "maximize"],
+  };
+
+  beforeEach(() => {
+    api.themeCatalog = {
+      ...themeCatalog(
+        themeRecord("paper"),
+        themeRecord("ink", { chrome: INK_CHROME }),
+        themeRecord("broken", { available: false }),
+      ),
+      default: "ink",
+    };
+  });
+
+  it("reads the catalog at start and wears the workspace default on a desktop with no theme of its own", async () => {
+    const store = await startedStore();
+    await settle();
+
+    expect(api.calls).toContain("fetchThemes");
+    expect(store.shownTheme().id).toBe("ink");
+  });
+
+  it("knows the theme to wear only once the catalog has arrived and a desktop is on screen", async () => {
+    const store = makeStore();
+    // Before either, shownTheme() is the standard look, which a themed workspace must not be switched to.
+    expect(store.isShownThemeKnown()).toBe(false);
+    expect(store.shownTheme().id).toBe("standard");
+
+    await store.start(NO_LINK);
+    await settle();
+
+    expect(store.isShownThemeKnown()).toBe(true);
+    expect(store.shownTheme().id).toBe("ink");
+  });
+
+  it("previews a choice on the desktop on screen until the preview is cleared, without saving it", async () => {
+    const store = await startedStore();
+    await settle();
+
+    store.previewDesktopTheme("home", "paper");
+    expect(store.shownTheme().id).toBe("paper");
+    store.previewDesktopTheme("work", "paper");
+    // A preview of another desktop leaves this one as it is.
+    expect(store.shownTheme().id).toBe("ink");
+    store.previewDesktopTheme("home", "broken");
+    expect(store.shownTheme().id).toBe("standard");
+    store.clearThemePreview();
+    expect(store.shownTheme().id).toBe("ink");
+    expect(api.calls.some((call) => call.startsWith("setDesktopTheme"))).toBe(false);
+  });
+
+  it("a catalog pushed while the catalog is read stands over the read's older answer", async () => {
+    const answerReads = api.holdReads();
+    const store = makeStore();
+    const starting = store.start(NO_LINK);
+    await settle();
+    socket.deliver().onThemesChanged({ ...api.themeCatalog, default: "paper" });
+    answerReads();
+    await starting;
+    await settle();
+    expect(store.shownTheme().id).toBe("paper");
+  });
+
+  it("tells its shown-theme listeners when the theme or a preview changes, and only then", async () => {
+    const store = makeStore();
+    const heard: string[] = [];
+    store.onShownThemeChanged(({ record, isPreview }) => heard.push(`${record.id}${isPreview ? " (preview)" : ""}`));
+    await store.start(NO_LINK);
+    await settle();
+    store.dispatch({ type: "window_raised", windowId: "win-2" });
+
+    store.previewDesktopTheme("home", "paper");
+    store.previewDesktopTheme("home", "paper");
+    store.clearThemePreview();
+    await store.setDesktopTheme("home", "ink");
+
+    expect(heard).toEqual(["ink", "paper (preview)", "ink"]);
+  });
+
+  it("takes a new workspace default at once, without reading the catalog again", async () => {
+    const store = await startedStore();
+    await settle();
+    const readsBefore = api.calls.filter((call) => call === "fetchThemes").length;
+
+    await store.setDefaultTheme("paper");
+
+    expect(store.shownTheme().id).toBe("paper");
+    expect(api.calls.filter((call) => call === "fetchThemes").length).toBe(readsBefore);
+  });
+
+  it("reads the catalog again, after a pause, when the first read fails", async () => {
+    api.themeReadFailures = 1;
+    const store = await startedStore();
+    await settle();
+    expect(store.isShownThemeKnown()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS * 2);
+
+    expect(api.calls.filter((call) => call === "fetchThemes")).toHaveLength(2);
+    expect(store.shownTheme().id).toBe("ink");
+  });
+
+  it("takes a pushed catalog, and a saved desktop theme over the default", async () => {
+    const store = await startedStore();
+    await settle();
+
+    socket.handlers?.onThemesChanged({ ...api.themeCatalog, default: "paper" });
+    expect(store.shownTheme().id).toBe("paper");
+    expect(store.shownChrome()).toEqual(STANDARD_CHROME);
+    await store.setDesktopTheme("home", "ink");
+    expect(store.shownTheme().id).toBe("ink");
+    expect(store.shownChrome()).toEqual(INK_CHROME);
   });
 });

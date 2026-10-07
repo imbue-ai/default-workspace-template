@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import { configDefaults } from "vitest/config";
 import path from "path";
+import { themeBoot } from "@imbue/workspace-ui/src/themes/themeBoot";
 
 export default defineConfig({
   // `dist/` is not part of this project's output -- the bundle goes to
@@ -19,7 +20,8 @@ export default defineConfig({
   test: {
     exclude: [...configDefaults.exclude, "dist/**"],
   },
-  plugins: [tailwindcss()],
+  // themeBoot wears the theme this origin last wore before the first paint (workspace-themes plan section 5.3).
+  plugins: [tailwindcss(), themeBoot()],
   publicDir: "media",
   root: ".",
   resolve: {
@@ -43,6 +45,8 @@ export default defineConfig({
       // (vite.contract.config.ts); the chat page is the chat app's own build.
       input: {
         index: path.resolve(__dirname, "index.html"),
+        // The theme gallery (workspace-themes plan section 8.2), served at /theme-gallery.
+        gallery: path.resolve(__dirname, "theme-gallery.html"),
       },
     },
   },

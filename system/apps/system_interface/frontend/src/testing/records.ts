@@ -21,6 +21,7 @@ import type {
 import { cascadeFrame } from "../geometry/frames";
 import type { ThemeMetrics } from "../theme/metrics";
 import type { AvatarState } from "../reducers/desktopState";
+import { STANDARD_CHROME, type ThemeCatalog, type ThemeRecord } from "../model/themes";
 
 function capitalized(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
@@ -143,10 +144,46 @@ export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Des
     color: "#2f6b4f",
     glyph: 0,
     wallpaper: null,
+    theme: null,
     shortcuts: [],
     windows: [],
     ...overrides,
   };
+}
+
+/** An available theme with the standard chrome and pixel icons for `files`, unless the overrides say otherwise. */
+export function themeRecord(id: string, overrides: Partial<ThemeRecord> = {}): ThemeRecord {
+  return {
+    id,
+    name: capitalized(id),
+    description: `The ${id} theme.`,
+    base: id === "standard" ? null : "standard",
+    source: "builtin",
+    available: true,
+    problems: [],
+    revision: `rev-${id}`,
+    chrome: STANDARD_CHROME,
+    icons:
+      id === "standard"
+        ? null
+        : {
+            format: "png",
+            size: 32,
+            rendering: "pixelated",
+            background: "transparent",
+            palette: [],
+            max_colors: null,
+            derive: "none",
+            fallback_url: `/api/themes/${id}/icons/app.png?v=rev-${id}`,
+            apps: { files: `/api/themes/${id}/icons/files.png?v=rev-${id}` },
+          },
+    ...overrides,
+  };
+}
+
+/** A catalog of the standard theme and the named ones, with no workspace default. */
+export function themeCatalog(...records: ThemeRecord[]): ThemeCatalog {
+  return { default: null, themes: [themeRecord("standard"), ...records] };
 }
 
 /** A focus-mode shortcut for an app's ``new`` launch path, in the cell given. */

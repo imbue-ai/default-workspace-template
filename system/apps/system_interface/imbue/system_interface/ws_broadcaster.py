@@ -189,6 +189,11 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast every desktop after a write of ``desktops.json`` (desktop contracts.md section 6)."""
         self.broadcast({"type": "desktops_updated", "desktops": desktops})
 
+    def broadcast_themes_changed(self, catalog: Mapping[str, Any]) -> None:
+        """The theme catalog or the workspace's default theme changed (workspace-themes plan section 5.2); every
+        window takes the catalog, and the pages it frames wear the new revision."""
+        self.broadcast({"type": "themes_changed", "catalog": dict(catalog)})
+
     def broadcast_presence_updated(self, users: Sequence[Mapping[str, Any]]) -> None:
         """Broadcast the connected users whenever someone joins or leaves (one entry per user)."""
         self.broadcast({"type": "presence_updated", "users": users})

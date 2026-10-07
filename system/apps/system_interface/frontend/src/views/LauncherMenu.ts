@@ -28,6 +28,7 @@ import { shortcutKey } from "../model/records";
 import type { LauncherMenuRows, LauncherRow, TextRow } from "../reducers/launcherRows";
 import { isRowEnabled } from "../reducers/launcherRows";
 import { appGlyph, glyph } from "./glyphs";
+import { MENU_PART, MENU_SEPARATOR_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 /** An app's icon in a row, filling the cell that holds it, so its tile reads as the tile it wears
  *  everywhere else. */
@@ -214,14 +215,14 @@ function launcherSections(attrs: LauncherSectionsAttrs): m.Children {
     windowRows.length === 0
       ? null
       : m("div", { "data-section": "windows" }, [
-          launchRows.length === 0 ? null : m("div", { class: menuDividerClass() }),
+          launchRows.length === 0 ? null : m("div", { class: menuDividerClass(), ...MENU_SEPARATOR_PART }),
           windowRows.map((row, index) => rowView(row, windowsFrom + index, attrs)),
         ]),
     textRows.length === 0
       ? null
       : m("div", { "data-section": "text" }, [
           isNoMatch ? m("p", { class: NO_MATCH_CLASS }, NO_MATCH_MESSAGE) : null,
-          textFrom === 0 && !isNoMatch ? null : m("div", { class: menuDividerClass() }),
+          textFrom === 0 && !isNoMatch ? null : m("div", { class: menuDividerClass(), ...MENU_SEPARATOR_PART }),
           textRows.map((row, index) => rowView(row, textFrom + index, attrs)),
         ]),
     rows.length === 0
@@ -247,6 +248,7 @@ export function LauncherMenu(): m.Component<LauncherMenuAttrs> {
           class: menuCardClass(
             "launcher-menu absolute left-2 w-(--desk-launcher-menu-width) max-h-[85%] overflow-y-auto",
           ),
+          ...MENU_PART,
           // Anchored above the field (plan section 4.2): the card rises with a field that grew past one row.
           style: { bottom: `${attrs.bottomOffsetPx}px` },
         },

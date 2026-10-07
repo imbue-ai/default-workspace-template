@@ -22,6 +22,8 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import field_validator
+from workspace_themes.catalog import CachingThemeCatalogLoader
+from workspace_themes.interfaces import ThemeCatalogLoaderInterface
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -113,6 +115,8 @@ from imbue.system_interface.shell.primitives import mint_window_id
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
+from imbue.system_interface.shell.theme_watch import ThemeCatalogWatch
+from imbue.system_interface.shell.theme_wire import theme_catalog_wire_json
 from imbue.system_interface.shell.update_notice import UpdateNoticeWatch
 from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
@@ -163,6 +167,10 @@ class ShellState(MutableModel):
     update_notice: UpdateNoticeWatch = Field(
         frozen=True, description="The kept rollback point of the last careful-flow apply, watched for the windows"
     )
+    themes: ThemeCatalogLoaderInterface = Field(
+        frozen=True, description="The workspace's themes (docs/system/blueprint/workspace-themes/)"
+    )
+    repo_root: Path = Field(frozen=True, description="The workspace's repo root, whose theme folders are watched")
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
     )
@@ -178,6 +186,7 @@ class ShellState(MutableModel):
     )
 
     _prune_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _theme_watch: ThemeCatalogWatch | None = PrivateAttr(default=None)
     _prune_thread: threading.Thread | None = PrivateAttr(default=None)
 
     @field_validator("wallpaper_files_directory")
@@ -199,6 +208,11 @@ class ShellState(MutableModel):
         self.lifecycle.start()
         self.update_notice.start()
         self.avatar_status.start()
+        theme_watch = ThemeCatalogWatch(
+            repo_root=self.repo_root, loader=self.themes, on_catalog_changed=self.broadcast_themes_changed
+        )
+        theme_watch.start()
+        self._theme_watch = theme_watch
 
     def stop(self) -> None:
         self.update_notice.stop()
@@ -209,6 +223,9 @@ class ShellState(MutableModel):
         self.lifecycle.stop()
         self.inventory.stop()
         self.avatar_status.stop()
+        if self._theme_watch is not None:
+            self._theme_watch.stop()
+            self._theme_watch = None
 
     def prune_unseen_clients(self) -> None:
         """Drop every client unseen for the retention period, together with the layouts it owns (desktop contracts.md section 4.3)."""
@@ -376,6 +393,12 @@ class ShellState(MutableModel):
     def broadcast_desktops_updated(self) -> None:
         self.broadcaster.broadcast_desktops_updated(self.desktops_wire_json(self.list_desktops()))
 
+    def broadcast_themes_changed(self) -> None:
+        """Send every window the theme catalog and the workspace's default, after either changed."""
+        self.broadcaster.broadcast_themes_changed(
+            theme_catalog_wire_json(self.themes.load(), self.desktops.read_theme_choices())
+        )
+
     def desktops_wire_json(self, desktops: Sequence[Desktop]) -> list[dict[str, Any]]:
         """The ``desktops`` of a listing or a ``desktops_updated``: every client's stored path for each independent
         window rides on the window, read once for the whole list."""
@@ -384,7 +407,8 @@ class ShellState(MutableModel):
         for client_id, paths in by_client.items():
             for window_id, stored in paths.items():
                 by_window.setdefault(window_id, {})[client_id] = stored.path
-        return [desktop_wire_json(desktop, by_window) for desktop in desktops]
+        by_desktop = self.desktops.read_theme_choices().by_desktop
+        return [desktop_wire_json(desktop, by_window, by_desktop.get(desktop.id)) for desktop in desktops]
 
     def desktop_wire_json(self, desktop: Desktop) -> dict[str, Any]:
         (wire,) = self.desktops_wire_json((desktop,))
@@ -853,6 +877,8 @@ def build_shell_state(
             broadcaster=broadcaster,
         ),
         update_notice=UpdateNoticeWatch(repo_root=repo_root, broadcaster=broadcaster),
+        themes=CachingThemeCatalogLoader(repo_root=repo_root.resolve()),
+        repo_root=repo_root.resolve(),
         launch_poster=launch_poster if launch_poster is not None else post_launch,
     )
     resolved_inventory.add_registry_change_listener(shell.reconcile_desktops_with_registry)

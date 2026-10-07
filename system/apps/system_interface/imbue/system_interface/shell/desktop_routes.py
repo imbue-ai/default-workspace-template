@@ -93,6 +93,8 @@ from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.route_helpers import require_client
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.theme_routes import ThemeChoiceRequest
+from imbue.system_interface.shell.theme_routes import require_available_theme
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
 from imbue.system_interface.shell.wallpapers import WALLPAPER_ROUTE_PREFIX
 from imbue.system_interface.shell.wallpapers import WallpaperDirectories
@@ -205,6 +207,14 @@ def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
     body = parse_request_body(DesktopWallpaperRequest)
     shell = _shell()
     desktop = shell.desktops.set_wallpaper(desktop_id, _existing_wallpaper(body.wallpaper))
+    shell.broadcast_desktops_updated()
+    return jsonify(shell.desktop_wire_json(desktop))
+
+
+def set_desktop_theme(desktop_id: str) -> ResponseReturnValue:
+    body = parse_request_body(ThemeChoiceRequest)
+    shell = _shell()
+    desktop = shell.desktops.set_theme(desktop_id, require_available_theme(shell.themes.load(), body.theme))
     shell.broadcast_desktops_updated()
     return jsonify(shell.desktop_wire_json(desktop))
 
@@ -399,6 +409,9 @@ def register_desktop_routes(application: Flask) -> None:
         view_func=set_desktop_wallpaper,
         methods=["POST"],
         endpoint="set_desktop_wallpaper",
+    )
+    application.add_url_rule(
+        "/api/desktops/<desktop_id>/theme", view_func=set_desktop_theme, methods=["POST"], endpoint="set_desktop_theme"
     )
     application.add_url_rule(
         "/api/desktops/<desktop_id>/delete", view_func=delete_desktop, methods=["POST"], endpoint="delete_desktop"

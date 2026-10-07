@@ -16,7 +16,9 @@ import {
   desktopRecord,
   launchPathRecord,
   placementRecord,
+  themeCatalog,
   themeMetricsRecord,
+  themeRecord,
   windowRecord,
 } from "../testing/records";
 import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
@@ -525,6 +527,46 @@ describe("the element menu", () => {
     expect(launch).toContain('\\"data-taskbar-entry\\":\\"win-1\\"');
     expect(launch).toContain('\\"app\\":\\"system_interface\\"');
     expect(launch.endsWith(":window:win-9")).toBe(true);
+  });
+});
+
+describe("the desktop settings' theme row", () => {
+  beforeEach(() => {
+    api.themeCatalog = themeCatalog(themeRecord("paper"), themeRecord("ink"));
+    socket.deliver().onThemesChanged(api.themeCatalog);
+  });
+
+  async function saveSettingsWithTheme(theme: string | null, isWorkspaceDefault: boolean): Promise<void> {
+    (document.querySelector("[data-desktops-menu]") as HTMLElement).click();
+    m.redraw.sync();
+    const row = document.querySelector('[data-menu-part="menu"] [data-menu-row="settings"]') as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+    m.redraw.sync();
+    if (theme !== null) {
+      (document.querySelector(`[data-theme="${theme}"]`) as HTMLButtonElement).click();
+      m.redraw.sync();
+    }
+    if (isWorkspaceDefault) {
+      const asDefault = document.querySelector("[data-theme-as-workspace-default]") as HTMLInputElement;
+      asDefault.checked = true;
+      asDefault.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    (document.querySelector(".desktop-settings-save") as HTMLButtonElement).click();
+    await settle();
+  }
+
+  const themeCalls = (): string[] => api.calls.filter((call) => /^set(Desktop|Default)Theme/.test(call));
+
+  it("saves a desktop's own theme, a workspace default in its place, and nothing when unchanged", async () => {
+    await saveSettingsWithTheme("paper", false);
+    expect(themeCalls()).toEqual(["setDesktopTheme:home:paper"]);
+
+    await saveSettingsWithTheme("ink", true);
+    expect(themeCalls()).toEqual(["setDesktopTheme:home:paper", "setDefaultTheme:ink", "setDesktopTheme:home:null"]);
+
+    await saveSettingsWithTheme(null, false);
+    expect(themeCalls()).toHaveLength(3);
   });
 });
 

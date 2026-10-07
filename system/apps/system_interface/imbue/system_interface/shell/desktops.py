@@ -15,6 +15,7 @@ from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryRow
 from loguru import logger
 from pydantic import Field
+from workspace_themes.primitives import ThemeId
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -26,9 +27,11 @@ from imbue.system_interface.shell.data_types import Desktop
 from imbue.system_interface.shell.data_types import DesktopChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
 from imbue.system_interface.shell.data_types import DesktopShortcut
+from imbue.system_interface.shell.data_types import DesktopThemesDocument
 from imbue.system_interface.shell.data_types import DesktopsChangeOutcome
 from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.data_types import GridCell
+from imbue.system_interface.shell.data_types import ThemeChoices
 from imbue.system_interface.shell.data_types import Wallpaper
 from imbue.system_interface.shell.data_types import Window
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
@@ -59,6 +62,9 @@ from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
 DESKTOPS_FILENAME: Final[str] = "desktops.json"
+# The workspace's default theme and each desktop's own (workspace-themes plan section 5.2).
+DESKTOP_THEMES_FILENAME: Final[str] = "desktop_themes.json"
+DESKTOP_THEMES_FILE_VERSION: Final[int] = 1
 # The apps whose default shortcut the shell has offered (desktop plan section 3.2).
 DEFAULT_SHORTCUTS_OFFERED_FILENAME: Final[str] = "default_shortcuts_offered.json"
 DEFAULT_SHORTCUTS_OFFERED_FILE_VERSION: Final[int] = 1
@@ -259,7 +265,8 @@ def find_desktop_by_name_or_id(desktops: Sequence[Desktop], requested: str) -> D
 
 
 class DesktopStore(MutableModel):
-    """Reads and writes ``desktops.json`` and ``default_shortcuts_offered.json`` under the shell's state lock."""
+    """Reads and writes ``desktops.json``, ``desktop_themes.json`` and ``default_shortcuts_offered.json`` under the
+    shell's state lock."""
 
     state_directory: Path = Field(frozen=True, description="The shell's state directory")
 
@@ -278,6 +285,27 @@ class DesktopStore(MutableModel):
 
     def _write_unlocked(self, document: DesktopsDocument) -> None:
         write_json_atomic(self._path(), document.model_dump(mode="json"))
+
+    def _themes_path(self) -> Path:
+        return self.state_directory / DESKTOP_THEMES_FILENAME
+
+    def _read_themes_unlocked(self) -> ThemeChoices:
+        """The recorded choices; none made when the file is absent, unreadable, or of another version (logged)."""
+        document = parse_versioned_document(
+            read_json_object(self._themes_path()),
+            DesktopThemesDocument,
+            DESKTOP_THEMES_FILE_VERSION,
+            self._themes_path(),
+        )
+        if document is None:
+            return ThemeChoices(default=None, by_desktop={})
+        return ThemeChoices(default=document.default, by_desktop=dict(document.desktops))
+
+    def _write_themes_unlocked(self, choices: ThemeChoices) -> None:
+        document = DesktopThemesDocument(
+            version=DESKTOP_THEMES_FILE_VERSION, default=choices.default, desktops=dict(choices.by_desktop)
+        )
+        write_json_atomic(self._themes_path(), document.model_dump(mode="json"))
 
     def _offered_path(self) -> Path:
         return self.state_directory / DEFAULT_SHORTCUTS_OFFERED_FILENAME
@@ -423,6 +451,41 @@ class DesktopStore(MutableModel):
             desktop_id, lambda desktop: desktop.model_copy_update(to_update(desktop.field_ref().wallpaper, wallpaper))
         )
 
+    def read_theme_choices(self) -> ThemeChoices:
+        """The workspace's default theme and each desktop's own; a desktop missing from them wears the default."""
+        with STATE_FILES_LOCK:
+            return self._read_themes_unlocked()
+
+    def set_default_theme(self, theme: ThemeId | None) -> ThemeChoices:
+        """Record the workspace's default theme; none wears the standard one."""
+        with STATE_FILES_LOCK:
+            choices = self._read_themes_unlocked()
+            updated = ThemeChoices(default=theme, by_desktop=choices.by_desktop)
+            self._write_themes_unlocked(updated)
+        return updated
+
+    def set_theme(self, desktop_id: str, theme: ThemeId | None) -> Desktop:
+        """Record the theme a desktop wears, or (none) that it wears the default; raises DesktopNotFoundError for a
+        desktop there is not."""
+        with STATE_FILES_LOCK:
+            document = self._read_unlocked()
+            desktop = next(
+                (
+                    candidate
+                    for candidate in (document.desktops if document is not None else ())
+                    if candidate.id == desktop_id
+                ),
+                None,
+            )
+            if desktop is None:
+                raise DesktopNotFoundError(desktop_id)
+            choices = self._read_themes_unlocked()
+            by_desktop = {key: value for key, value in choices.by_desktop.items() if key != desktop.id}
+            if theme is not None:
+                by_desktop[desktop.id] = theme
+            self._write_themes_unlocked(ThemeChoices(default=choices.default, by_desktop=by_desktop))
+        return desktop
+
     def delete_desktop(self, desktop_id: str) -> DesktopDeleteOutcome:
         """Delete a desktop (its windows with it) and name the desktop its clients fall back to; the last one is refused."""
         with STATE_FILES_LOCK:
@@ -435,6 +498,10 @@ class DesktopStore(MutableModel):
             if not remaining:
                 raise LastDesktopError(f"Desktop {doomed.name!r} is the last one and cannot be deleted")
             self._write_unlocked(DesktopsDocument(version=DESKTOPS_FILE_VERSION, desktops=remaining))
+            choices = self._read_themes_unlocked()
+            if doomed.id in choices.by_desktop:
+                by_desktop = {key: value for key, value in choices.by_desktop.items() if key != doomed.id}
+                self._write_themes_unlocked(ThemeChoices(default=choices.default, by_desktop=by_desktop))
         return DesktopDeleteOutcome(deleted=doomed, fallback_desktop_id=remaining[0].id)
 
     def set_shortcut(self, desktop_id: str, shortcut: DesktopShortcut) -> Desktop:
