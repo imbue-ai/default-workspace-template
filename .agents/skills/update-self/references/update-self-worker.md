@@ -430,14 +430,21 @@ the harness process it had, which loaded its binary and some of its config
 once, when it started. After a successful apply the lead restarts them all
 (itself last) when the update changes what those processes loaded. **Whether
 that happens is decided by rule**; record the verdict and its evidence in your
-report. The mechanical half is a command, run from the pre-merge local tree (the
-first parent of Step 3's merge, wherever 4c's fix commits left `HEAD`) to
-`HEAD`:
+report. The mechanical half is a command, run from the tree the live workspace
+runs (`footprint-ranges`' `update_base`, the same base Step 4's update range
+reads from) to `HEAD`, wherever 4c's fix commits left it. After a rolled-back
+update that tree is not the first parent of Step 3's merge, which is the last
+of Step 1's rollback reverts and already carries the release the running
+agents never loaded:
 
 ```bash
-MERGE=$(git log -1 --merges --format=%H --grep='^update-self: merge upstream template')
+eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+RANGES=data/.tasks/update-self/footprint-ranges.json
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    agent-restart-verdict --before "$MERGE^1" --after HEAD
+    footprint-ranges --target "$TARGET_REF" > "$RANGES" || exit 1
+LIVE=$(jq -r .update_base "$RANGES")
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    agent-restart-verdict --before "$LIVE" --after HEAD
 ```
 
 Its `triggers` name every change it knows makes a restart **needed**: a
@@ -448,7 +455,7 @@ the versioned Antigravity installer (`system/scripts/agy_install-*.sh`), and
 code a harness loads into its process at start (`.pi/extensions/**`). When
 `needed` is `true`, the verdict is `needed`, and its triggers are the
 evidence. When it is `false`, read the rest of the diff (`git diff
---name-only "$MERGE^1" HEAD`) for what the command cannot see, which also
+--name-only "$LIVE" HEAD`) for what the command cannot see, which also
 makes a restart **needed**:
 
 - **A harness extension or plugin tree the update adds**, like
