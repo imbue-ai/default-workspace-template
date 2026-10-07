@@ -70,14 +70,6 @@ def test_prevent_broad_exception_catch() -> None:
     # same thread-boundary shape. The worker is the ONLY thing that ever delivers
     # a held message, so an escaping exception would strand every queued message
     # for the life of the process; it logs and keeps looping instead.
-    # Three more of that thread-boundary shape: the idle-compaction sweep
-    # (autocompact.ChatAutoCompactor._run_sweep), the session sweep
-    # (agent_manager.AgentManager._sweep_sessions_once, which also settles a
-    # compaction that never finished), and the shared per-agent file poller
-    # (harnesses.agent_file_poll.AgentFilePoller.poll_once, behind the model
-    # state and the compacting marker). Each logs the traceback and keeps going,
-    # because an escaping exception would silently end that background thread
-    # for the life of the process.
     rc.check_broad_exception_catch(_DIR, snapshot(6))
 
 
