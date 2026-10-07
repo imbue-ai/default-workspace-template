@@ -41,7 +41,7 @@ vi.mock("../models/ModelSettings", () => ({
 }));
 
 // The workspace's chat settings as the page has them (null before the load), and every write
-// the fast-limit row and the default switches asked for.
+// the fast-limit row and the "New chats start with" segments asked for.
 const { DEFAULT_CHAT_SETTINGS, chatSettingsState, settingsWrites } = vi.hoisted(() => {
   const defaults = {
     fast_mode_default: "auto",
