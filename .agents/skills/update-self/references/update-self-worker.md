@@ -433,9 +433,9 @@ that happens is decided by rule**; record the verdict and its evidence in your
 report. The mechanical half is a command, run from the tree the live workspace
 runs (`footprint-ranges`' `update_base`, the same base Step 4's update range
 reads from) to `HEAD`, wherever 4c's fix commits left it. After a rolled-back
-update that tree is not the first parent of Step 3's merge, which is the last
-of Step 1's rollback reverts and already carries the release the running
-agents never loaded:
+update that tree is the commit under Step 1's rollback reverts: the reverts,
+and a merge made on top of them, already carry a release the running agents
+never loaded:
 
 ```bash
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
