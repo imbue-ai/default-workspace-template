@@ -254,6 +254,20 @@ is offline. If the user appears to be actively using the app or chatting with
 you, but the latchkey gateway is unreachable, ask them to try restarting the
 Imbue Studio app.
 
+## Proxying requests through the user's desktop
+
+When needed (e.g. when remote services reject requests because they
+originate from a datacenter), `latchkey curl` calls can be routed
+through the user's desktop. This happens automatically once the user
+enables desktop proxying in the settings of the relevant connector.
+
+You can also explicitly ask the user to enable it by setting the
+optional `proxy` parameter to `true` when creating a permission
+request (by POSTing to `/permission-requests` as described above).
+Once the user approves the request, the necessary permissions and
+proxy rules are set up so that traffic flows through the user's
+desktop whenever possible.
+
 ## Notes
 
 - All curl arguments are passed through unchanged; return code, stdout and
