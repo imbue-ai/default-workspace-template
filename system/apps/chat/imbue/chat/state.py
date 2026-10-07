@@ -19,6 +19,8 @@ from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
+from imbue.chat.harnesses.interrupt import PressChord
+from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.registry import build_loader
 from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
@@ -44,30 +46,20 @@ class ChatAppStateError(RuntimeError):
 DEFAULT_STATIC_DIRECTORY = Path(__file__).parent / "static"
 
 
-class _SentInterrupts:
+class _SentInterrupts(MutableModel):
     """Wraps a stop's restart and cancel-chord capabilities, noting whether either actually went out."""
 
-    _restart_process: Callable[[], tuple[bool, str]]
-    _press_cancel_chord: Callable[[], bool]
-    is_any_sent: bool
-
-    @classmethod
-    def build(
-        cls, restart_process: Callable[[], tuple[bool, str]], press_cancel_chord: Callable[[], bool]
-    ) -> "_SentInterrupts":
-        self = cls.__new__(cls)
-        self._restart_process = restart_process
-        self._press_cancel_chord = press_cancel_chord
-        self.is_any_sent = False
-        return self
+    restart: RestartProcess = Field(frozen=True, description="The restart the caller supplied")
+    press_chord: PressChord = Field(frozen=True, description="The native cancel chord, bound to the agent")
+    is_any_sent: bool = Field(default=False, description="Whether a restart or a chord actually went out")
 
     def restart_process(self) -> tuple[bool, str]:
-        is_restarted, output = self._restart_process()
+        is_restarted, output = self.restart()
         self.is_any_sent = self.is_any_sent or is_restarted
         return is_restarted, output
 
     def press_cancel_chord(self) -> bool:
-        is_pressed = self._press_cancel_chord()
+        is_pressed = self.press_chord()
         self.is_any_sent = self.is_any_sent or is_pressed
         return is_pressed
 
@@ -278,9 +270,9 @@ class ChatAppState(MutableModel):
         or a restart actually ran. Raises ``AgentRestartError`` when the restart fails.
         """
         watcher = self.get_or_create_watcher(agent_info)
-        interrupts = _SentInterrupts.build(
-            restart_process,
-            lambda: self.agent_manager.press_key_chord_on_agent(
+        interrupts = _SentInterrupts(
+            restart=restart_process,
+            press_chord=lambda: self.agent_manager.press_key_chord_on_agent(
                 AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
             ),
         )
