@@ -365,7 +365,7 @@ export function clearFlow(): void {
 let selectedAccountId: string | null = null;
 
 /** The account a chat with no agent yet starts on: the one it was minted for, else the selected
- *  one. Null when neither exists, and its first send has to ask for a sign-in. */
+ *  one. Null when neither exists: the composer then offers the provider chooser in its place. */
 export function accountForFirstSend(accountId: string | undefined): ProviderAccount | null {
   return accountForAgent(accountId) ?? getSelectedAccount();
 }
