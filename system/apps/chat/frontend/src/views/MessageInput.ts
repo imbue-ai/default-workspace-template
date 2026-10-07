@@ -244,6 +244,27 @@ export interface MessageInputAttrs {
   leading?: m.Children;
 }
 
+/** A notice that stands in for the composer while the chat has no provider to run on: why, and a button that opens
+ *  the provider chooser. ``markerClass`` names which notice it is. */
+function providerNotice(markerClass: string, sentence: string, onChoose: () => void): m.Vnode {
+  return m(
+    "div",
+    {
+      class:
+        `${markerClass} flex flex-row items-center justify-between gap-3 rounded-xl border ` +
+        "border-default bg-surface-secondary py-3 pr-3 pl-5 text-(length:--font-size-body) text-secondary",
+    },
+    [
+      m("span", sentence),
+      m(
+        Button,
+        { variant: "primary", sm: true, extra: "message-input-choose-provider shrink-0", onclick: onChoose },
+        "Choose a provider",
+      ),
+    ],
+  );
+}
+
 /** The composer's box, beside ``leading`` when there is one. The row is there either way, so the box (and the
  *  textarea in it, with its focus and the soft keyboard) is kept when ``leading`` comes or goes. With no box (a
  *  chat with no provider to run on) the row holds ``leading`` alone, so the phone keeps its settings button. */
@@ -1211,52 +1232,17 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
       /** In place of the composer while the chat's account is signed out: nothing more goes to it. */
       function renderSignedOutAccountNotice(signedOutChatId: string): m.Children {
-        return m(
-          "div",
-          {
-            class:
-              "message-input-signed-out flex flex-row items-center justify-between gap-3 rounded-xl border " +
-              "border-default bg-surface-secondary py-3 pr-3 pl-5 text-(length:--font-size-body) text-secondary",
-          },
-          [
-            m("span", "You signed out of the account this chat runs on. Choose a provider to continue it on."),
-            m(
-              Button,
-              {
-                variant: "primary",
-                sm: true,
-                extra: "message-input-choose-provider shrink-0",
-                onclick: () =>
-                  openProviderChooser({ onSignedIn: (chosen) => beginSwitchToAccountId(signedOutChatId, chosen) }),
-              },
-              "Choose a provider",
-            ),
-          ],
+        return providerNotice(
+          "message-input-signed-out",
+          "You signed out of the account this chat runs on. Choose a provider to continue it on.",
+          () => openProviderChooser({ onSignedIn: (chosen) => beginSwitchToAccountId(signedOutChatId, chosen) }),
         );
       }
 
       /** In place of the composer while nothing is signed in that a new chat could start on. */
       function renderNoProviderNotice(): m.Children {
-        return m(
-          "div",
-          {
-            class:
-              "message-input-no-provider flex flex-row items-center justify-between gap-3 rounded-xl border " +
-              "border-default bg-surface-secondary py-3 pr-3 pl-5 text-(length:--font-size-body) text-secondary",
-          },
-          [
-            m("span", "Connect an AI provider to start chatting."),
-            m(
-              Button,
-              {
-                variant: "primary",
-                sm: true,
-                extra: "message-input-choose-provider shrink-0",
-                onclick: () => openProviderChooser(),
-              },
-              "Choose a provider",
-            ),
-          ],
+        return providerNotice("message-input-no-provider", "Connect an AI provider to start chatting.", () =>
+          openProviderChooser(),
         );
       }
 
