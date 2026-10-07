@@ -2,7 +2,7 @@ from pathlib import Path
 
 from share_gateway.caddyfile import build_frame_ancestors_policy
 from share_gateway.caddyfile import build_label_to_name
-from share_gateway.caddyfile import build_shareable_service_names
+from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.caddyfile import parse_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 
@@ -85,7 +85,7 @@ label = "orphan-99999999"
     assert parse_registered_apps("not toml [[") == []
 
 
-def test_only_a_non_internal_row_not_opted_out_is_shareable() -> None:
+def test_every_registered_row_but_an_internal_one_is_grantable() -> None:
     apps = parse_registered_apps(
         """
 [[apps]]
@@ -97,7 +97,7 @@ label = "notes-11111111"
 name = "chat"
 url = "http://localhost:5002"
 label = "chat-22222222"
-shareable = false
+system = true
 
 [[apps]]
 name = "terminal-pty"
@@ -109,10 +109,10 @@ internal = true
 name = "odd"
 url = "http://localhost:5004"
 label = "odd-44444444"
-shareable = "yes"
+internal = "no"
 """
     )
-    assert build_shareable_service_names(apps) == frozenset({"notes"})
+    assert build_grantable_service_names(apps) == frozenset({"notes", "chat"})
 
 
 def test_build_label_to_name_maps_labels_back_to_names() -> None:

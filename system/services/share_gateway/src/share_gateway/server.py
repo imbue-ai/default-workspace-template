@@ -28,7 +28,7 @@ from flask import request
 
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_label_to_name
-from share_gateway.caddyfile import build_shareable_service_names
+from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.grants import Grants
 from share_gateway.grants import GrantsError
 from share_gateway.grants import load_grants
@@ -300,7 +300,7 @@ def build_gateway_app(
                 _log_denied(f"grants file is missing or malformed (failing closed): {exc}", host)
                 return _misconfigured()
             if not grants.allows(
-                identity.user_id, identity.email, service_name, build_shareable_service_names(registered_apps)
+                identity.user_id, identity.email, service_name, build_grantable_service_names(registered_apps)
             ):
                 _log_denied("session identity has no grant admitting it to this service", host)
                 return _forbidden()
@@ -348,7 +348,7 @@ def build_gateway_app(
         # vouched for ownership by user id, so an owner never needs an explicit
         # grant to reach their own workspace). Non-owners still need a grant.
         if not handoff.is_owner and not grants.allows_any(
-            handoff.user_id, handoff.email, build_shareable_service_names(get_registered_apps())
+            handoff.user_id, handoff.email, build_grantable_service_names(get_registered_apps())
         ):
             _log_denied(
                 f"signed-in account {handoff.user_id} has no grant admitting it anywhere on this workspace", auth_host

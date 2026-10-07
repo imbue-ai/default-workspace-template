@@ -27,15 +27,14 @@ from urllib.parse import urlsplit
 class RegisteredApp:
     """One ``[[apps]]`` row from ``data/.state/apps.toml``."""
 
-    def __init__(self, name: str, label: str, backend_host: str, backend_port: int, is_shareable: bool) -> None:
+    def __init__(self, name: str, label: str, backend_host: str, backend_port: int, is_grantable: bool) -> None:
         self.name = name
         self.label = label
         self.backend_host = backend_host
         self.backend_port = backend_port
-        # Whether a per-service grant may admit a visitor to this app; an internal
-        # app or one whose manifest says ``shareable = false`` is reachable only
-        # through a workspace-level grant.
-        self.is_shareable = is_shareable
+        # Whether a per-service grant may admit a visitor to this app; an
+        # internal app is reachable only through a workspace-level grant.
+        self.is_grantable = is_grantable
 
 
 def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
@@ -58,15 +57,15 @@ def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
         parsed = urlsplit(url)
         if not parsed.hostname or not parsed.port:
             continue
-        # Anything but a literal boolean in either key reads as unshareable.
-        is_shareable = entry.get("shareable", True) is True and entry.get("internal", False) is False
+        # Anything but a literal ``false`` (or no key at all) reads as internal.
+        is_grantable = entry.get("internal", False) is False
         apps.append(
             RegisteredApp(
                 name=name,
                 label=label,
                 backend_host=parsed.hostname,
                 backend_port=parsed.port,
-                is_shareable=is_shareable,
+                is_grantable=is_grantable,
             )
         )
     return apps
@@ -77,9 +76,9 @@ def build_label_to_name(apps: Sequence[RegisteredApp]) -> dict[str, str]:
     return {app.label: app.name for app in apps}
 
 
-def build_shareable_service_names(apps: Sequence[RegisteredApp]) -> frozenset[str]:
+def build_grantable_service_names(apps: Sequence[RegisteredApp]) -> frozenset[str]:
     """The names of the registered services a per-service grant may admit a visitor to."""
-    return frozenset(app.name for app in apps if app.is_shareable)
+    return frozenset(app.name for app in apps if app.is_grantable)
 
 
 def read_registered_apps(apps_toml_path: Path) -> list[RegisteredApp]:
