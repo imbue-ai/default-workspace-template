@@ -309,6 +309,11 @@ def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
     (profile_dir / "tmux_onboarding_shown").write_text("")
 
 
+def is_chat_frontend_built() -> bool:
+    """True when the chat page's bundle (``static/chat.html``) exists, which the browser tests serve."""
+    return (Path(__file__).parent / "static" / "chat.html").is_file()
+
+
 def is_e2e_browser_installed() -> bool:
     """True when a Chromium the e2e suite can launch is present on this host.
 

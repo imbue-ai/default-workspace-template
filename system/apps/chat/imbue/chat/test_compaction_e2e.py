@@ -39,6 +39,7 @@ from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_AGENT_NAME
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import get_json
+from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
@@ -47,16 +48,11 @@ from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 from imbue.system_interface.testing import find_free_port
 
-
-def _frontend_built() -> bool:
-    return (Path(__file__).parent / "static" / "chat.html").is_file()
-
-
 pytestmark = [
     pytest.mark.browser,
     pytest.mark.skipif(not is_e2e_browser_installed(), reason="Playwright browsers not installed"),
     pytest.mark.skipif(
-        not _frontend_built(),
+        not is_chat_frontend_built(),
         reason="The chat frontend is not built (run `npm run build` in system/); skipping e2e.",
     ),
 ]

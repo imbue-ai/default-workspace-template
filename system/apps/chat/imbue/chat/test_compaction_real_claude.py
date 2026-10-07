@@ -33,6 +33,7 @@ from imbue.chat.server import create_application
 from imbue.chat.testing import ServedApp
 from imbue.chat.testing import StandInAnthropicApi
 from imbue.chat.testing import build_test_state
+from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import prepare_isolated_mngr_host_dir
 from imbue.chat.testing import seed_agent_state
@@ -48,7 +49,7 @@ pytestmark = [
     pytest.mark.browser,
     pytest.mark.skipif(not is_e2e_browser_installed(), reason="Playwright browsers not installed"),
     pytest.mark.skipif(
-        not (Path(__file__).parent / "static" / "chat.html").is_file(),
+        not is_chat_frontend_built(),
         reason="The chat frontend is not built (run `npm run build` in system/); skipping e2e.",
     ),
 ]
