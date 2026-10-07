@@ -33,3 +33,5 @@ Turn on idle compaction for chats, with a per-chat and per-workspace toggle, and
 - **One-time notice:** The latest compaction pill carries a dismissible notice, "Idle chats now compact automatically to keep replies fast and cheap. Turn this off per chat, or for new chats, under Auto-compact in the model menu.", until the user dismisses it once for the workspace (`is_autocompact_notice_shown`).
 
 - **Stop button during compaction:** The stop button stays hidden while a chat compacts on a harness whose interrupt cannot cancel a compaction (`can_interrupt_compaction` false: Codex and Pi). On Claude it shows and cancels the compaction (see "Cleared on interrupt").
+
+- **A stuck sweep is logged:** Each sweep now runs on its own thread while the sweep loop waits on it. One still in flight after 2 minutes, and again every 5 minutes after that, logs an `autocompact: sweep still running after <N>s` warning carrying the stack it is blocked in, so the chat service log shows where it hangs. No other sweep starts until it returns. A sweep that does return but takes over 30 seconds still gets the existing slow-sweep warning.

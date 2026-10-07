@@ -187,3 +187,68 @@ def test_start_and_stop_lifecycle() -> None:
 
     compactor.stop()
     assert compactor._thread is None
+
+
+def _stuck_sweep_warnings(loguru_records: list[str]) -> list[str]:
+    return [log for log in loguru_records if log.startswith("WARNING autocompact: sweep still running")]
+
+
+def test_a_stuck_sweep_is_logged_with_its_stack_and_no_second_sweep_starts_until_it_returns(
+    loguru_records: list[str],
+) -> None:
+    release_stuck_sweep = threading.Event()
+    calls: list[list[str]] = []
+
+    def compact_blocked_until_released(names: Sequence[str]) -> Sequence[str]:
+        calls.append(list(names))
+        if len(calls) == 1:
+            release_stuck_sweep.wait(timeout=30.0)
+        return []
+
+    compactor = ChatAutoCompactor.build(
+        list_opted_in_chat_agent_names=lambda: ["chat-alpha"],
+        compact=compact_blocked_until_released,
+        interval_seconds=0.01,
+        stuck_sweep_first_warning_seconds=0.05,
+        stuck_sweep_repeat_warning_seconds=0.05,
+    )
+    compactor.start()
+    try:
+        is_warned_twice = poll_until(lambda: len(_stuck_sweep_warnings(loguru_records)) >= 2, timeout=10.0)
+        calls_while_stuck = len(calls)
+        release_stuck_sweep.set()
+        is_next_sweep_run = poll_until(lambda: len(calls) >= 2, timeout=10.0)
+    finally:
+        release_stuck_sweep.set()
+        compactor.stop()
+
+    assert is_warned_twice is True
+    assert calls_while_stuck == 1
+    assert is_next_sweep_run is True
+    first_warning = _stuck_sweep_warnings(loguru_records)[0]
+    assert "after 0s" in first_warning
+    assert "in compact_blocked_until_released" in first_warning
+    assert "release_stuck_sweep.wait(timeout=30.0)" in first_warning
+
+
+def test_a_sweep_that_returns_in_time_logs_no_stuck_warning(loguru_records: list[str]) -> None:
+    sweep_returned = threading.Event()
+
+    def compact(names: Sequence[str]) -> Sequence[str]:
+        sweep_returned.set()
+        return []
+
+    compactor = ChatAutoCompactor.build(
+        list_opted_in_chat_agent_names=lambda: ["chat-alpha"],
+        compact=compact,
+        interval_seconds=0.01,
+        stuck_sweep_first_warning_seconds=5.0,
+    )
+    compactor.start()
+    try:
+        is_swept = poll_until(sweep_returned.is_set, timeout=5.0)
+    finally:
+        compactor.stop()
+
+    assert is_swept is True
+    assert _stuck_sweep_warnings(loguru_records) == []

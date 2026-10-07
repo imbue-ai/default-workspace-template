@@ -1,5 +1,7 @@
+import sys
 import threading
 import time
+import traceback
 from collections.abc import Callable
 from collections.abc import Sequence
 from typing import Final
@@ -16,6 +18,10 @@ _DEFAULT_SWEEP_INTERVAL_SECONDS: Final[float] = 60.0
 SLOW_SWEEP_WARNING_SECONDS: Final[float] = 30.0
 # The plugin call has no timeout, so ``stop`` does not wait out a sweep in flight; the thread is a daemon.
 _STOP_JOIN_TIMEOUT_SECONDS: Final[float] = 5.0
+# A sweep still in flight this long is logged with the stack it is blocked in, and again each repeat
+# interval it stays in flight, since no other sweep starts until it returns.
+_STUCK_SWEEP_FIRST_WARNING_SECONDS: Final[float] = 120.0
+_STUCK_SWEEP_REPEAT_WARNING_SECONDS: Final[float] = 300.0
 
 
 def _compact_stale_opted_in_agents(names: Sequence[str]) -> list[str]:
@@ -30,6 +36,13 @@ def _no_harness_known(agent_name: str) -> str | None:
     return None
 
 
+def _format_thread_stack(thread: threading.Thread) -> str:
+    frame = sys._current_frames().get(thread.ident) if thread.ident is not None else None
+    if frame is None:
+        return "(the thread has finished)"
+    return "".join(traceback.format_stack(frame)).rstrip("\n")
+
+
 class ChatAutoCompactor:
     """Schedules periodic idle compaction for the chats that have it on, through mngr's autocompact plugin in process."""
 
@@ -39,8 +52,11 @@ class ChatAutoCompactor:
     _harness_of_agent: Callable[[str], str | None]
     _monotonic: Callable[[], float]
     _interval_seconds: float
+    _stuck_sweep_first_warning_seconds: float
+    _stuck_sweep_repeat_warning_seconds: float
     _stop_event: threading.Event
     _thread: threading.Thread | None
+    _sweep_worker: threading.Thread | None
 
     @classmethod
     def build(
@@ -54,6 +70,8 @@ class ChatAutoCompactor:
         harness_of_agent: Callable[[str], str | None] = _no_harness_known,
         monotonic: Callable[[], float] = time.monotonic,
         interval_seconds: float = _DEFAULT_SWEEP_INTERVAL_SECONDS,
+        stuck_sweep_first_warning_seconds: float = _STUCK_SWEEP_FIRST_WARNING_SECONDS,
+        stuck_sweep_repeat_warning_seconds: float = _STUCK_SWEEP_REPEAT_WARNING_SECONDS,
     ) -> "ChatAutoCompactor":
         instance = cls.__new__(cls)
         instance._list_opted_in_chat_agent_names = list_opted_in_chat_agent_names
@@ -62,8 +80,11 @@ class ChatAutoCompactor:
         instance._harness_of_agent = harness_of_agent
         instance._monotonic = monotonic
         instance._interval_seconds = interval_seconds
+        instance._stuck_sweep_first_warning_seconds = stuck_sweep_first_warning_seconds
+        instance._stuck_sweep_repeat_warning_seconds = stuck_sweep_repeat_warning_seconds
         instance._stop_event = threading.Event()
         instance._thread = None
+        instance._sweep_worker = None
         return instance
 
     def start(self) -> None:
@@ -120,8 +141,35 @@ class ChatAutoCompactor:
     def _run_sweep(self) -> None:
         """Background loop executing sweeps on interval until stopped."""
         while not self._stop_event.wait(self._interval_seconds):
-            # An exception escaping here would end idle compaction for the life of the process.
-            try:
-                self.sweep()
-            except Exception as e:
-                logger.opt(exception=e).error("autocompact: sweep failed unexpectedly")
+            self._run_watched_sweep()
+
+    def _run_watched_sweep(self) -> None:
+        """Run one sweep on its own thread and wait for it, logging where it is blocked while it stays in flight."""
+        previous_worker = self._sweep_worker
+        if previous_worker is not None and previous_worker.is_alive():
+            logger.debug("autocompact: skipped a tick; the previous sweep is still running")
+            return
+        worker = threading.Thread(
+            target=self._sweep_logging_unexpected_errors,
+            daemon=True,
+            name="chat-autocompact-sweep-worker",
+        )
+        self._sweep_worker = worker
+        worker.start()
+        worker.join(timeout=self._stuck_sweep_first_warning_seconds)
+        in_flight_seconds = self._stuck_sweep_first_warning_seconds
+        while worker.is_alive() and not self._stop_event.is_set():
+            logger.warning(
+                "autocompact: sweep still running after {:.0f}s; no other sweep starts until it returns. It is at:\n{}",
+                in_flight_seconds,
+                _format_thread_stack(worker),
+            )
+            worker.join(timeout=self._stuck_sweep_repeat_warning_seconds)
+            in_flight_seconds += self._stuck_sweep_repeat_warning_seconds
+
+    def _sweep_logging_unexpected_errors(self) -> None:
+        # An exception escaping a thread reaches only stderr, not the chat service log.
+        try:
+            self.sweep()
+        except Exception as e:
+            logger.opt(exception=e).error("autocompact: sweep failed unexpectedly")
