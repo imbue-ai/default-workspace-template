@@ -276,13 +276,12 @@ def test_live_statusline_model_ids_match_their_catalog_option() -> None:
     # their option through match_option's prefix pass rather than an exact key hit.
     # claude-opus-5-5[1m] (2.1.280) and claude-sonnet-5-5[1m] (2.1.285) are live captures,
     # and each sits next to its predecessor because that pair is the shadowing trap this
-    # catalog is ordered against:
-    # claude-opus-5 prefixes claude-opus-5-5, so a catalog that put the older key first would
-    # label every Opus 5.5 read "Opus 5" (likewise Sonnet). The two Fable 5.1 ids are NOT
-    # captured live -- they are what the fable[1m] switch must report given the [1m] suffix
-    # survives into the reported id, and are pinned so the prefix pass is exercised for them
-    # too. The Opus 5, Sonnet 5 and Fable 5 ids stay because a chat created on a previous pin
-    # still reports them.
+    # catalog is ordered against: claude-opus-5 prefixes claude-opus-5-5, so a catalog that
+    # put the older key first would label every Opus 5.5 read "Opus 5" (likewise Sonnet).
+    # The two Fable 5.1 ids are NOT captured live -- they are what the fable[1m] switch must
+    # report given the [1m] suffix survives into the reported id, and are pinned so the
+    # prefix pass is exercised for them too. The Opus 5, Sonnet 5 and Fable 5 ids stay
+    # because a chat created on a previous pin still reports them.
     for reported_id, expected_label in (
         ("claude-fable-5-1", "Fable 5.1"),
         ("claude-fable-5-1[1m]", "Fable 5.1"),
