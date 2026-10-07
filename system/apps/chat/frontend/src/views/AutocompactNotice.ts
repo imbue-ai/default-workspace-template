@@ -4,9 +4,9 @@
  */
 
 import m from "mithril";
-import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { ensureChatSettings, getChatSettings, updateChatSettings } from "../models/ChatSettings";
+import { renderDismissibleNotice } from "./dismissible-notice";
 
 export const AUTOCOMPACT_NOTICE_TEXT =
   "Idle chats now compact automatically to keep replies fast and cheap. Turn this off per chat, or " +
@@ -29,31 +29,13 @@ export function AutocompactNotice(): m.Component {
         return null;
       }
       if (settings.is_autocompact_notice_shown) return null;
-      return m(
-        "div",
-        {
-          class:
-            "autocompact-notice flex max-w-[360px] items-start gap-2 rounded-lg border border-default bg-surface " +
-            "px-3 py-2 text-(length:--font-size-helper) text-secondary shadow-md",
-          role: "status",
-        },
-        [
-          m("span", { class: "mt-0.5 shrink-0 text-accent" }, m.trust(icon("sparkle", { size: 14 }))),
-          m("span", { class: "min-w-0" }, AUTOCOMPACT_NOTICE_TEXT),
-          m(
-            Button,
-            {
-              variant: "ghost",
-              icon: true,
-              xs: true,
-              extra: "autocompact-notice-dismiss shrink-0",
-              "aria-label": "Dismiss",
-              onclick: dismissAutocompactNotice,
-            },
-            m.trust(icon("close", { size: 12, strokeWidth: 2.5 })),
-          ),
-        ],
-      );
+      return renderDismissibleNotice({
+        extraClass: "autocompact-notice",
+        iconHtml: icon("sparkle", { size: 14 }),
+        text: AUTOCOMPACT_NOTICE_TEXT,
+        dismissExtra: "autocompact-notice-dismiss",
+        onDismiss: dismissAutocompactNotice,
+      });
     },
   };
 }
