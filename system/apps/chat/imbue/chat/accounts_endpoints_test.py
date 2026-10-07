@@ -8,7 +8,7 @@ about the WIRE -- the key sets and the status codes -- which is the part nothing
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -32,12 +32,12 @@ from imbue.mngr_codex.app_server_client import ReasoningEffortOption
 
 
 @contextmanager
-def _client(auth_flows: AuthFlowService | None = None) -> Iterator[FlaskClient]:
+def _client(auth_flows: AuthFlowService | None = None) -> Generator[FlaskClient, None, None]:
     yield create_application(build_test_state(auth_flows=auth_flows)).test_client()
 
 
 @contextmanager
-def _client_for(state: ChatAppState) -> Iterator[FlaskClient]:
+def _client_for(state: ChatAppState) -> Generator[FlaskClient, None, None]:
     yield create_application(state).test_client()
 
 

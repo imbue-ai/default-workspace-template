@@ -8,7 +8,6 @@ import os
 import threading
 from collections.abc import Callable
 from collections.abc import Generator
-from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +23,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
+from pydantic import Field
 
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
@@ -43,6 +43,7 @@ from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
+from imbue.chat.harnesses.codex.ledger import CodexMessageLedger
 from imbue.chat.harnesses.codex.ledger import ShoulderTapResult
 from imbue.chat.harnesses.codex.live_connection import CodexLiveConnection
 from imbue.chat.harnesses.codex.model import codex_models_to_options
@@ -818,7 +819,7 @@ class _ReleasingAsEachSendEndsAgentManager(AgentManager):
     release: Callable[[], None] | None = None
 
     @contextmanager
-    def track_connecting_send(self, agent_id: str, message_id: str) -> Iterator[Callable[[], None]]:
+    def track_connecting_send(self, agent_id: str, message_id: str) -> Generator[Callable[[], None], None, None]:
         with super().track_connecting_send(agent_id, message_id) as mark_connecting:
             yield mark_connecting
         if self.release is not None:
@@ -897,42 +898,46 @@ def test_a_send_to_a_stopped_agent_reads_as_connecting_while_the_send_starts_it(
     assert connecting_pushes[-1] is False
 
 
-class _FakeCodexLedger:
+class _FakeCodexLedger(CodexMessageLedger):
     """A stand-in for the live codex ledger the endpoints reach through the agent manager."""
 
-    def __init__(
-        self,
-        *,
-        sending: bool = False,
-        tap: bool = False,
-        interrupt_block: str = "",
-        tap_status: str = "tapped",
-        tap_returned_block: str = "",
-    ) -> None:
-        self._sending = sending
-        self._tap = tap
-        self._interrupt_block = interrupt_block
-        self._tap_status = tap_status
-        self._tap_returned_block = tap_returned_block
-        self.sent: list[tuple[str, str | None]] = []
-        self.tap_calls = 0
+    client: Any = None
+    sending: bool = False
+    tap: bool = False
+    interrupt_block: str = ""
+    tap_status: str = "tapped"
+    tap_returned_block: str = ""
+    sent: list[tuple[str, str | None]] = Field(default_factory=list)
+    tap_calls: int = 0
 
     def send(self, text: str, client_id: str | None = None) -> str:
         self.sent.append((text, client_id))
         return client_id or "cid"
 
     def is_sending(self) -> bool:
-        return self._sending
+        return self.sending
 
     def is_tap_available(self) -> bool:
-        return self._tap
+        return self.tap
 
     def shoulder_tap(self) -> ShoulderTapResult:
         self.tap_calls += 1
-        return ShoulderTapResult(status=self._tap_status, returned_block=self._tap_returned_block)
+        return ShoulderTapResult(status=self.tap_status, returned_block=self.tap_returned_block)
 
     def interrupt(self) -> str:
-        return self._interrupt_block
+        return self.interrupt_block
+
+
+class _CodexSessionOverFakeLedger(CodexHarnessSession):
+    """A codex session whose live ledger is a fake (None = daemon down/starting)."""
+
+    _fake_ledger: _FakeCodexLedger | None
+
+    def ensure_live(self) -> None:
+        return None
+
+    def _live_ledger(self) -> CodexMessageLedger | None:
+        return self._fake_ledger
 
 
 def _codex_client(agent_info: AgentInfo) -> FlaskClient:
@@ -965,21 +970,22 @@ def _file_session_for(agent_info: AgentInfo, in_flight: str = "") -> FileHarness
     return file_session
 
 
-def _codex_session_over(ledger: "_FakeCodexLedger | None") -> CodexHarnessSession:
+def _codex_session_over(ledger: _FakeCodexLedger | None) -> CodexHarnessSession:
     """A codex session whose live ledger is the given fake (None = daemon down/starting)."""
-    session = CodexHarnessSession.__new__(CodexHarnessSession)
-    session.ensure_live = lambda: None
-    session._live_ledger = lambda: ledger
+    session = _CodexSessionOverFakeLedger.__new__(_CodexSessionOverFakeLedger)
+    session._fake_ledger = ledger
     return session
 
 
-def _codex_session_down_until_started(ledger: "_FakeCodexLedger") -> tuple[CodexHarnessSession, Callable[[], None]]:
+def _codex_session_down_until_started(ledger: _FakeCodexLedger) -> tuple[CodexHarnessSession, Callable[[], None]]:
     """A codex session whose daemon is down until the returned ``bring_up`` runs (a revive's start)."""
-    session = CodexHarnessSession.__new__(CodexHarnessSession)
-    session.ensure_live = lambda: None
-    live: list[_FakeCodexLedger] = []
-    session._live_ledger = lambda: live[0] if live else None
-    return session, lambda: live.append(ledger)
+    session = _CodexSessionOverFakeLedger.__new__(_CodexSessionOverFakeLedger)
+    session._fake_ledger = None
+
+    def bring_up() -> None:
+        session._fake_ledger = ledger
+
+    return session, bring_up
 
 
 def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:

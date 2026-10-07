@@ -29,7 +29,7 @@ import signal
 import threading
 import uuid
 from collections.abc import Callable
-from collections.abc import Iterator
+from collections.abc import Generator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from enum import StrEnum
@@ -915,7 +915,7 @@ def _restore_credentials(before: Mapping[Path, bytes | None]) -> None:
 
 
 @contextlib.contextmanager
-def _credentials_restored_on_error(paths: Sequence[Path]) -> Iterator[Mapping[Path, bytes | None]]:
+def _credentials_restored_on_error(paths: Sequence[Path]) -> Generator[Mapping[Path, bytes | None], None, None]:
     """Write inside this, and an exception leaves the previous credential in place.
 
     The probe cannot judge a file that is not there, so the write has to land first -- and on
