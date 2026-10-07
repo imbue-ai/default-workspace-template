@@ -52,7 +52,7 @@ belong in tested code rather than agent prose:
     validation.
 
 ``agent-restart-verdict``
-    Whether the merge changes what a running agent's harness loaded when it started (a
+    Whether the update changes what a running agent's harness loaded when it started (a
     harness version pin, the Antigravity installer, a harness extension tree), so the
     lead must restart the agents after the apply, and which changes say so. The
     worker's §4d rule reads it.
@@ -1022,7 +1022,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     restart_verdict_parser = sub.add_parser(
         "agent-restart-verdict",
-        help="Whether the merge changes what running agents' harnesses loaded at start, and what does.",
+        help="Whether the update changes what running agents' harnesses loaded at start, and what does.",
         parents=[common],
     )
     restart_verdict_parser.add_argument(
