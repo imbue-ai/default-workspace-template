@@ -13,7 +13,7 @@ describe("requestedAtUrl", () => {
     );
   });
 
-  it("works for download-link paths too", () => {
+  it("works for an on-disk path of any file type", () => {
     expect(requestedAtUrl("/home/user/workspace/data/documents/report.pdf", "ts-1")).toBe(
       "/home/user/workspace/data/documents/report.pdf?requested_at=ts-1",
     );
