@@ -107,6 +107,7 @@ from imbue.mngr.api.observe import release_observe_lock
 from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
+from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config as ShellConfig
 from imbue.system_interface.server import create_application as create_shell_application
@@ -939,6 +940,32 @@ def make_session_file(projects_dir: Path, session_id: str, events: Sequence[Mapp
         for event in events:
             handle.write(json.dumps(event) + "\n")
     return session_file
+
+
+def utc_iso_seconds_ago(seconds: float = 0.0) -> str:
+    """A UTC ISO timestamp this many seconds before now, as the hook files and transcript records carry."""
+    return datetime.fromtimestamp(time.time() - seconds, tz=timezone.utc).isoformat()
+
+
+def write_compacting_marker(state_dir: Path, trigger: str | None = "manual", started_seconds_ago: float = 0.0) -> Path:
+    """Write the ``compacting`` marker mngr's Claude ``PreCompact`` hook writes; a None trigger leaves the field out."""
+    payload: dict[str, str] = {"started_at": utc_iso_seconds_ago(started_seconds_ago)}
+    if trigger is not None:
+        payload["trigger"] = trigger
+    marker = state_dir / COMPACTING_MARKER_FILENAME
+    marker.write_text(json.dumps(payload))
+    return marker
+
+
+def compact_summary_record(uuid: str, timestamp: str) -> dict[str, Any]:
+    """The transcript record Claude Code writes when a compaction finishes, which the parser turns into the pill."""
+    return {
+        "type": "user",
+        "uuid": uuid,
+        "timestamp": timestamp,
+        "isCompactSummary": True,
+        "message": {"role": "user", "content": [{"type": "text", "text": "The conversation so far, summarized."}]},
+    }
 
 
 def make_agent_fixture(

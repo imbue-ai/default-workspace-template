@@ -17,9 +17,6 @@ from collections.abc import Iterator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import contextmanager
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,13 +35,15 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_AGENT_NAME
 from imbue.chat.testing import RunningWorkspace
+from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import get_json
 from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import utc_iso_seconds_ago
+from imbue.chat.testing import write_compacting_marker
 from imbue.mngr.utils.polling import wait_for
-from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 from imbue.system_interface.testing import find_free_port
 
@@ -108,10 +107,6 @@ _QUEUED_SESSION_EVENTS: list[dict[str, Any]] = [
         "content": "actually also update the changelog",
     },
 ]
-
-
-def _utc_iso(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).isoformat()
 
 
 @contextmanager
@@ -179,27 +174,9 @@ def _stop_button(chat: FrameLocator) -> Locator:
     return chat.locator(".message-input-stop-button")
 
 
-def _write_compacting_marker(server: RunningWorkspace) -> Path:
-    """Write the ``compacting`` marker mngr's ``PreCompact`` hook writes for a compaction the user started."""
-    marker = server.agent_info.agent_state_dir / COMPACTING_MARKER_FILENAME
-    marker.write_text(json.dumps({"trigger": "manual", "started_at": _utc_iso(datetime.now(timezone.utc))}))
-    return marker
-
-
 def _append_compact_summary(server: RunningWorkspace, uuid: str) -> None:
-    """Append the record Claude Code writes when a compaction finishes, which the parser turns into the pill."""
-    record = {
-        "type": "user",
-        "uuid": uuid,
-        "timestamp": _utc_iso(datetime.now(timezone.utc)),
-        "isCompactSummary": True,
-        "message": {
-            "role": "user",
-            "content": "This session is being continued from a previous conversation. Summary: the user said hello.",
-        },
-    }
     with open(server.session_file, "a") as handle:
-        handle.write(json.dumps(record) + "\n")
+        handle.write(json.dumps(compact_summary_record(uuid, utc_iso_seconds_ago())) + "\n")
 
 
 def _pill(chat: FrameLocator) -> Locator:
@@ -284,7 +261,7 @@ def test_a_compacting_marker_shows_the_status_where_the_presentation_puts_it_unt
     expect(_rail_row(page)).not_to_have_attribute("data-status", "working")
     expect(_stop_button(chat)).to_have_count(0)
 
-    marker = _write_compacting_marker(server)
+    marker = write_compacting_marker(server.agent_info.agent_state_dir)
 
     expect(_rail_row(page)).to_have_attribute("data-status", "working", timeout=15000)
     expect(_stop_button(chat)).to_be_visible()
@@ -308,7 +285,7 @@ def test_a_compacting_marker_shows_the_status_where_the_presentation_puts_it_unt
 @pytest.mark.timeout(60, func_only=False)
 def test_a_message_queued_behind_a_compaction_changes_the_label(tmp_path: Path, page: Page) -> None:
     with _compaction_workspace(tmp_path, session_events=_QUEUED_SESSION_EVENTS) as server:
-        _write_compacting_marker(server)
+        write_compacting_marker(server.agent_info.agent_state_dir)
         chat = _open_chat(page, server)
 
         expect(chat.locator(".queued-group")).to_be_visible(timeout=15000)
@@ -342,14 +319,15 @@ def _record_compaction_cause(server: RunningWorkspace, cause: str | None) -> Non
     """Leave the record each cause is read from: the chat's own request for an idle compaction, mngr's
     ``last_compaction.json`` (manual, or Claude Code's own ``auto``) for the others, and nothing for an unknown one."""
     state_dir = server.agent_info.agent_state_dir
-    now = datetime.now(timezone.utc)
     if cause == "idle":
         (state_dir / COMPACTION_REQUEST_FILENAME).write_text(
-            json.dumps({"cause": "idle", "requested_at": _utc_iso(now - timedelta(seconds=5))})
+            json.dumps({"cause": "idle", "requested_at": utc_iso_seconds_ago(5.0)})
         )
     elif cause in ("manual", "native"):
         trigger = "manual" if cause == "manual" else "auto"
-        (state_dir / LAST_COMPACTION_FILENAME).write_text(json.dumps({"trigger": trigger, "ended_at": _utc_iso(now)}))
+        (state_dir / LAST_COMPACTION_FILENAME).write_text(
+            json.dumps({"trigger": trigger, "ended_at": utc_iso_seconds_ago()})
+        )
     else:
         assert cause is None
 

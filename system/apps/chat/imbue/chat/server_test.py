@@ -11,8 +11,6 @@ from collections.abc import Callable
 from collections.abc import Generator
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -38,6 +36,7 @@ from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
@@ -84,6 +83,7 @@ from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import VanishedAgentMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
+from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
 from imbue.chat.testing import make_agent_fixture
@@ -95,6 +95,8 @@ from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import serve_app
+from imbue.chat.testing import utc_iso_seconds_ago
+from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
@@ -103,7 +105,6 @@ from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.polling import wait_for
-from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
 
@@ -4201,12 +4202,15 @@ def test_a_compact_command_before_the_first_reply_is_declined_and_not_sent(
         state.shutdown()
 
 
+# Older than the compaction status timeout: a marker or request this old is no compaction in flight.
+_STALE_COMPACTION_SECONDS = PENDING_COMPACTION_TIMEOUT_SECONDS + 60.0
+
+
 def test_the_stop_button_clears_a_compaction_it_cancelled(tmp_path: Path) -> None:
     state_dir, config_dir = _claude_tap_dirs(tmp_path)
     agent_id = f"agent-{uuid4().hex}"
     agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
-    marker = state_dir / COMPACTING_MARKER_FILENAME
-    marker.write_text(json.dumps({"trigger": "manual", "started_at": "2026-10-06T21:14:07.000000000Z"}))
+    marker = write_compacting_marker(state_dir, "manual", started_seconds_ago=_STALE_COMPACTION_SECONDS)
     manager, _ = _manager_with_known_agents()
     manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, 0.0)
     app = create_application(build_test_state(agent_manager=manager))
@@ -4274,8 +4278,7 @@ def _claude_stop_with_no_open_turn(tmp_path: Path) -> tuple[AgentInfo, Path]:
 
 def test_the_stop_button_cancels_a_compaction_with_no_turn_in_flight_and_clears_it(tmp_path: Path) -> None:
     agent_info, state_dir = _claude_stop_with_no_open_turn(tmp_path)
-    marker = state_dir / COMPACTING_MARKER_FILENAME
-    marker.write_text(json.dumps({"trigger": "manual", "started_at": _utc_iso_now()}))
+    marker = write_compacting_marker(state_dir, "manual")
     manager, messenger = _manager_with_known_agents()
     manager.note_compaction_requested(agent_info.id, CompactionCause.IDLE, time.monotonic())
     app = create_application(build_test_state(agent_manager=manager))
@@ -4298,8 +4301,7 @@ def test_the_stop_button_cancels_a_compaction_with_no_turn_in_flight_and_clears_
 def test_the_stop_button_with_no_turn_and_no_compaction_interrupts_and_clears_nothing(tmp_path: Path) -> None:
     agent_info, state_dir = _claude_stop_with_no_open_turn(tmp_path)
     # A marker past the stale timeout is not a compaction in flight, and the stop leaves it be.
-    stale_marker = state_dir / COMPACTING_MARKER_FILENAME
-    stale_marker.write_text(json.dumps({"trigger": "manual", "started_at": "2026-01-01T00:00:00Z"}))
+    stale_marker = write_compacting_marker(state_dir, "manual", started_seconds_ago=_STALE_COMPACTION_SECONDS)
     manager, messenger = _manager_with_known_agents()
     manager._compaction_cause_by_agent[agent_info.id] = CompactionCause.IDLE
     app = create_application(build_test_state(agent_manager=manager))
@@ -4322,8 +4324,7 @@ def test_the_stop_button_with_no_turn_and_no_compaction_interrupts_and_clears_no
 def test_the_interrupt_route_clears_a_compaction_its_restart_ended(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    marker = state_dir / COMPACTING_MARKER_FILENAME
-    marker.write_text(json.dumps({"trigger": "auto", "started_at": "2026-10-06T21:14:07.000000000Z"}))
+    marker = write_compacting_marker(state_dir, "auto", started_seconds_ago=_STALE_COMPACTION_SECONDS)
     agent_id = f"agent-{uuid4().hex}"
     agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir)
     manager, _ = _manager_with_known_agents()
@@ -4340,20 +4341,6 @@ def test_the_interrupt_route_clears_a_compaction_its_restart_ended(tmp_path: Pat
     assert agent_id not in manager._compaction_pending_by_agent
 
 
-def _compact_summary_record(uuid: str, timestamp: str) -> dict[str, Any]:
-    return {
-        "type": "user",
-        "uuid": uuid,
-        "timestamp": timestamp,
-        "isCompactSummary": True,
-        "message": {"role": "user", "content": [{"type": "text", "text": "The conversation so far, summarized."}]},
-    }
-
-
-def _utc_iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def test_a_live_compacted_event_reaches_the_stream_and_later_reads_with_its_cause(tmp_path: Path) -> None:
     agent_info, session_file = make_agent_fixture(tmp_path, agent_id=f"agent-{uuid4().hex}")
     manager, _ = _manager_with_known_agents()
@@ -4363,7 +4350,7 @@ def test_a_live_compacted_event_reaches_the_stream_and_later_reads_with_its_caus
     manager.note_compaction_requested(agent_info.id, CompactionCause.IDLE, time.monotonic() - 5.0)
     try:
         with session_file.open("a") as handle:
-            handle.write(json.dumps(_compact_summary_record(f"uuid-{uuid4().hex}", _utc_iso_now())) + "\n")
+            handle.write(json.dumps(compact_summary_record(f"uuid-{uuid4().hex}", utc_iso_seconds_ago())) + "\n")
 
         streamed = stream.get(timeout=10.0)
         assert streamed is not None
@@ -4377,7 +4364,7 @@ def test_a_live_compacted_event_reaches_the_stream_and_later_reads_with_its_caus
 
 
 def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_opened(tmp_path: Path) -> None:
-    events = [_compact_summary_record("uuid-compacted-while-closed", _utc_iso_now())]
+    events = [compact_summary_record("uuid-compacted-while-closed", utc_iso_seconds_ago())]
     agent_info, _ = make_agent_fixture(tmp_path, agent_id=f"agent-{uuid4().hex}", session_events=events)
     manager, _ = _manager_with_known_agents()
     manager.note_compaction_requested(agent_info.id, CompactionCause.IDLE, time.monotonic() - 30.0)
