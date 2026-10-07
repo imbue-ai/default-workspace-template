@@ -1,10 +1,8 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import m from "mithril";
-import type { CompactionCause, UserMessageEvent } from "../models/Response";
-import { AutocompactNotice } from "./AutocompactNotice";
+import type { UserMessageEvent } from "../models/Response";
 import { renderUserMessage, StableUserMessage } from "./user-message-display";
-import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 
 function collectClasses(node: unknown): string[] {
   if (node == null) return [];
@@ -49,35 +47,9 @@ function renderInner(event: UserMessageEvent): m.Vnode {
 }
 
 describe("user-message-display status messages", () => {
-  beforeEach(() => {
-    setBlockExpanded("status:evt-status-summary", false);
-  });
-
-  it("renders a toggleable pill whose details hold only the explanation when there is no summary body", () => {
-    const event: UserMessageEvent = {
-      timestamp: "2026-01-01T00:00:00Z",
-      type: "user_message",
-      event_id: "evt-status-plain",
-      source: "claude",
-      role: "system",
-      content: "Context was compacted",
-      display: "status",
-      non_turn_tail: true,
-    };
-
-    const row = renderUserMessage(event);
-    expect(row).not.toBeNull();
-    expect(collectClasses(row)).toContain("message message-system-status-row");
-
-    const inner = renderInner(event);
-    const classes = collectClasses(inner);
-    expect(classes).toContain("message-system-status message-system-status--toggleable");
-    expect(classes).toContain("message-system-status-details");
-    expect(classes).not.toContain("message-system-status-body");
-    expect(allText(inner)).toContain("Context was compacted");
-  });
-
-  it("renders an expandable toggle and summary details when display_body is present", () => {
+  // A compaction renders as chips in the agent's chip rows (compaction-chips.ts), which the
+  // transcript walk places; it has no row of its own here.
+  it("renders no row for a compaction, with or without a summary", () => {
     const event: UserMessageEvent = {
       timestamp: "2026-01-01T00:00:00Z",
       type: "user_message",
@@ -85,94 +57,26 @@ describe("user-message-display status messages", () => {
       source: "claude",
       role: "system",
       content: "Context was compacted",
-      display_body: "Summary of earlier conversation across 12 turns.",
       display: "status",
       non_turn_tail: true,
+      compaction_cause: "idle",
     };
-
-    const row = renderUserMessage(event);
-    expect(row).not.toBeNull();
-    expect(collectClasses(row)).toContain("message message-system-status-row");
-
-    const inner = renderInner(event);
-    const classes = collectClasses(inner);
-    expect(classes).toContain("message-system-status-container");
-    expect(classes).toContain("message-system-status message-system-status--toggleable");
-    expect(classes).toContain("tool-call-chevron");
-    expect(classes).toContain("message-system-status-details");
-    expect(classes).toContain("message-system-status-body");
-    expect(allText(inner)).toContain("Context was compacted");
-    expect(allText(inner)).toContain("Summary of earlier conversation across 12 turns.");
-
-    // Initial state is collapsed
-    expect(classes).not.toContain("message-system-status-container message-system-status-container--expanded");
+    expect(renderUserMessage(event)).toBeNull();
+    expect(renderUserMessage({ ...event, display_body: "Summary of earlier conversation." })).toBeNull();
   });
 
-  it("renders with expanded container class when isBlockExpanded is true", () => {
-    setBlockExpanded("status:evt-status-summary", true);
+  it("renders a typed /compact as the user's own bubble", () => {
     const event: UserMessageEvent = {
       timestamp: "2026-01-01T00:00:00Z",
       type: "user_message",
-      event_id: "evt-status-summary",
+      event_id: "evt-compact-command",
       source: "claude",
-      role: "system",
-      content: "Context was compacted",
-      display_body: "Summary of earlier conversation across 12 turns.",
-      display: "status",
+      role: "user",
+      content: "/compact",
       non_turn_tail: true,
     };
-
-    const inner = renderInner(event);
-    const classes = collectClasses(inner);
-    expect(classes).toContain("message-system-status-container message-system-status-container--expanded");
-  });
-
-  it("toggles expansion state when clicked", () => {
-    const event: UserMessageEvent = {
-      timestamp: "2026-01-01T00:00:00Z",
-      type: "user_message",
-      event_id: "evt-status-summary",
-      source: "claude",
-      role: "system",
-      content: "Context was compacted",
-      display_body: "Summary text",
-      display: "status",
-      non_turn_tail: true,
-    };
-
-    const inner = renderInner(event);
-    const children = Array.isArray(inner.children) ? inner.children : [];
-    const toggleChild = children[0] as m.Vnode<{
-      onclick?: (e: { currentTarget: HTMLElement }) => void;
-      onkeydown?: (e: { key: string; preventDefault: () => void; currentTarget: HTMLElement }) => void;
-    }>;
-    const containerEl = document.createElement("div");
-    containerEl.className = "message-system-status-container";
-    const toggleEl = document.createElement("div");
-    containerEl.appendChild(toggleEl);
-
-    // Call onclick
-    toggleChild.attrs.onclick?.({ currentTarget: toggleEl });
-    expect(containerEl.classList.contains("message-system-status-container--expanded")).toBe(true);
-    expect(isBlockExpanded("status:evt-status-summary")).toBe(true);
-
-    // Click again to collapse
-    toggleChild.attrs.onclick?.({ currentTarget: toggleEl });
-    expect(containerEl.classList.contains("message-system-status-container--expanded")).toBe(false);
-    expect(isBlockExpanded("status:evt-status-summary")).toBe(false);
-
-    // Keyboard Enter key expands
-    let prevented = false;
-    toggleChild.attrs.onkeydown?.({
-      key: "Enter",
-      preventDefault: () => {
-        prevented = true;
-      },
-      currentTarget: toggleEl,
-    });
-    expect(prevented).toBe(true);
-    expect(containerEl.classList.contains("message-system-status-container--expanded")).toBe(true);
-    expect(isBlockExpanded("status:evt-status-summary")).toBe(true);
+    expect(collectClasses(renderUserMessage(event))).toContain("message message-user flex flex-col items-end mb-5");
+    expect(allText(renderInner(event))).toBe("/compact");
   });
 });
 
@@ -205,97 +109,5 @@ describe("user-message-display prompt bubbles", () => {
 
     expect(allText(inner)).toBe("here you go");
     expect(markdownContents(inner)).toEqual([ATTACHMENT]);
-  });
-});
-
-describe("user-message-display compaction pill causes", () => {
-  const EVENT_ID = "evt-compacted";
-  const SUMMARY = "Summary of earlier conversation across 12 turns.";
-
-  function compactionEvent(cause?: CompactionCause | null): UserMessageEvent {
-    return {
-      timestamp: "2026-01-01T00:00:00Z",
-      type: "user_message",
-      event_id: EVENT_ID,
-      source: "claude",
-      role: "system",
-      content: "Context was compacted",
-      display: "status",
-      non_turn_tail: true,
-      ...(cause === undefined ? {} : { compaction_cause: cause }),
-    };
-  }
-
-  /** The pill's details mounted into a detached element, since the explanation is trusted markdown HTML. */
-  function mountDetails(event: UserMessageEvent): HTMLElement {
-    const container = document.createElement("div");
-    m.render(container, renderInner(event));
-    const details = container.querySelector(".message-system-status-details");
-    expect(details).not.toBeNull();
-    return details as HTMLElement;
-  }
-
-  beforeEach(() => {
-    setBlockExpanded(`status:${EVENT_ID}`, false);
-  });
-
-  it.each([
-    ["manual", "Compacted as requested"],
-    ["idle", "Compacted while idle"],
-    ["native", "Compacted to free up context"],
-    [null, "Context was compacted"],
-    [undefined, "Context was compacted"],
-  ] as const)("labels the pill for cause %s", (cause, label) => {
-    const container = document.createElement("div");
-    m.render(container, renderInner(compactionEvent(cause)));
-    expect(container.querySelector(".message-system-status")?.textContent).toBe(`▸${label}`);
-  });
-
-  it.each([
-    ["idle", "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu."],
-    ["manual", "Compacted because you asked (/compact)."],
-    ["native", "Your agent triggered compaction. You can ask it about its current setting, or tell it to change it."],
-    [null, "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu."],
-    [undefined, "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu."],
-  ] as const)("opens its details on the explanation for cause %s, then the summary", (cause, text) => {
-    const details = mountDetails({ ...compactionEvent(cause), display_body: SUMMARY });
-    const [first, second, ...rest] = Array.from(details.children);
-    expect(first.classList.contains("compaction-explanation")).toBe(true);
-    expect(first.querySelector("p")?.textContent).toBe(text);
-    expect(second.classList.contains("message-system-status-body")).toBe(true);
-    expect(second.textContent).toBe(SUMMARY);
-    expect(rest).toEqual([]);
-  });
-
-  it("sets the explanation apart from the summary in the helper text style, with /compact as an inline-code chip", () => {
-    const explanation = mountDetails({ ...compactionEvent("manual"), display_body: SUMMARY }).querySelector(
-      ".compaction-explanation",
-    );
-    expect(explanation?.classList.contains("markdown-content")).toBe(true);
-    expect(explanation?.classList.contains("border-b")).toBe(true);
-    const code = explanation?.querySelector("p > code");
-    expect(code?.textContent).toBe("/compact");
-    const textStyle = code?.closest("p")?.parentElement;
-    expect(textStyle?.classList.contains("text-faint")).toBe(true);
-    expect(textStyle?.classList.contains("text-(length:--font-size-helper)")).toBe(true);
-  });
-
-  it("has no Why? button", () => {
-    const container = document.createElement("div");
-    m.render(container, renderInner({ ...compactionEvent("idle"), display_body: SUMMARY }));
-    expect(container.querySelector("button")).toBeNull();
-    expect(container.querySelector("[class*='compaction-why']")).toBeNull();
-    expect(container.textContent).not.toContain("Why?");
-  });
-
-  it("puts the one-time notice under the anchor pill only", () => {
-    const hasNotice = (row: m.Vnode | null): boolean =>
-      ((row?.children ?? []) as unknown[]).some(
-        (child) => (child as { tag?: unknown } | null)?.tag === AutocompactNotice,
-      );
-    expect(hasNotice(renderUserMessage(compactionEvent("idle"), true))).toBe(true);
-    expect(hasNotice(renderUserMessage(compactionEvent("idle")))).toBe(false);
-    const prompt: UserMessageEvent = { ...compactionEvent(), display: undefined, content: "hello" };
-    expect(hasNotice(renderUserMessage(prompt, true))).toBe(false);
   });
 });

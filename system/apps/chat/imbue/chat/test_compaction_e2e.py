@@ -1,5 +1,5 @@
 """End-to-end tests for the compaction UX in the chat page: the Auto-compact toggle, the COMPACTING status, and the
-compaction pill.
+compaction's chips.
 
 The chat app is served over fakes (``running_workspace``) and its page is opened at the chat app's own URL, so the
 chat root's rail and the chat's page are both in reach without the shell. The compaction signals are the files and
@@ -59,15 +59,22 @@ pytestmark = [
 
 _SUMMARY_TEXT = "The conversation so far, summarized."
 
-_PILL_LABEL_BY_CAUSE: Mapping[str | None, str] = {
+_STARTED_LABEL_BY_CAUSE: Mapping[str | None, str] = {
+    "idle": "Compacting while idle…",
+    "manual": "Compacting as requested…",
+    "native": "Compacting to free up context…",
+    None: "Compacting…",
+}
+
+_FINISHED_LABEL_BY_CAUSE: Mapping[str | None, str] = {
     "idle": "Compacted while idle",
     "manual": "Compacted as requested",
     "native": "Compacted to free up context",
     None: "Context was compacted",
 }
 
-# The first line of an expanded pill for each cause as the page renders it: the markdown ``compactionExplanation``
-# in ``user-message-display.ts`` returns, with its inline code read as plain text.
+# The first part of a compaction chip's panel for each cause as the page renders it: the markdown
+# ``compactionExplanation`` in ``compaction-chips.ts`` returns, with its inline code read as plain text.
 _EXPLANATION_BY_CAUSE: Mapping[str | None, str] = {
     "idle": "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu.",
     "manual": "Compacted because you asked (/compact).",
@@ -174,8 +181,28 @@ def _append_compact_summary(server: RunningWorkspace, uuid: str) -> None:
         handle.write(json.dumps(compact_summary_record(uuid, utc_iso_seconds_ago())) + "\n")
 
 
-def _pill(chat: FrameLocator) -> Locator:
-    return chat.locator(".message-system-status-container")
+def _append_typed_compact(server: RunningWorkspace) -> None:
+    """The record Claude Code writes as a ``/compact`` is submitted, which the page shows as the user's bubble."""
+    record = {
+        "type": "user",
+        "uuid": "uuid-typed-compact",
+        "timestamp": utc_iso_seconds_ago(),
+        "message": {"role": "user", "content": "/compact"},
+    }
+    with open(server.session_file, "a") as handle:
+        handle.write(json.dumps(record) + "\n")
+
+
+def _started_chip(chat: FrameLocator) -> Locator:
+    return chat.locator(".tool-chip.compaction-chip--started")
+
+
+def _finished_chip(chat: FrameLocator) -> Locator:
+    return chat.locator(".tool-chip.compaction-chip--finished")
+
+
+def _compaction_panel(chat: FrameLocator) -> Locator:
+    return chat.locator(".tool-chip-detail.compaction-detail")
 
 
 def _open_autocompact_submenu(chat: FrameLocator) -> Locator:
@@ -322,7 +349,7 @@ def _record_compaction_cause(server: RunningWorkspace, cause: str | None) -> Non
 
 @pytest.mark.parametrize("cause", ["idle", "manual", "native", None])
 @pytest.mark.timeout(60, func_only=False)
-def test_the_compacted_pill_is_named_for_its_cause_and_its_summary_opens_on_why(
+def test_a_compaction_is_two_chips_named_for_its_cause_that_open_on_why_then_the_summary(
     compaction_server: RunningWorkspace, page: Page, cause: str | None
 ) -> None:
     server = compaction_server
@@ -332,25 +359,91 @@ def test_the_compacted_pill_is_named_for_its_cause_and_its_summary_opens_on_why(
     _record_compaction_cause(server, cause)
     _append_compact_summary(server, "uuid-compact-1")
 
-    pill = _pill(chat)
-    expect(pill.locator(".message-system-status")).to_have_text(f"▸{_PILL_LABEL_BY_CAUSE[cause]}", timeout=15000)
-    details = pill.locator(".message-system-status-details")
-    expect(details).to_be_hidden()
-    expect(pill.locator("button")).to_have_count(0)
+    started = _started_chip(chat)
+    finished = _finished_chip(chat)
+    expect(finished.locator(".tool-chip-label")).to_have_text(_FINISHED_LABEL_BY_CAUSE[cause], timeout=15000)
+    expect(started.locator(".tool-chip-label")).to_have_text(_STARTED_LABEL_BY_CAUSE[cause])
+    # One chip row of the two, on the agent's rail.
+    row = chat.locator(".tool-chip-row", has=finished)
+    expect(row.locator(".tool-chip")).to_have_count(2)
+    expect(chat.locator(".message-assistant", has=row)).to_have_count(1)
+    panel = _compaction_panel(chat)
+    expect(panel).to_have_count(0)
 
-    pill.locator(".message-system-status--toggleable").click()
+    finished.click()
 
-    expect(details).to_be_visible()
-    expect(details.locator(":scope > :first-child")).to_have_class(re.compile(r"\bcompaction-explanation\b"))
-    expect(details.locator(":scope > .compaction-explanation")).to_have_text(_EXPLANATION_BY_CAUSE[cause])
-    expect(details.locator(":scope > .message-system-status-body")).to_have_text(_SUMMARY_TEXT)
+    expect(panel).to_be_visible()
+    expect(panel.locator(".tool-chip-detail-title")).to_have_text(_FINISHED_LABEL_BY_CAUSE[cause])
+    body = panel.locator(":scope > :not(.tool-chip-detail-header)")
+    expect(body).to_have_count(2)
+    expect(body.nth(0)).to_have_class(re.compile(r"\bcompaction-explanation\b"))
+    expect(body.nth(0)).to_have_text(_EXPLANATION_BY_CAUSE[cause])
+    expect(body.nth(1)).to_have_class(re.compile(r"\bborder-dashed\b"))
+    expect(body.nth(1).locator(".compaction-summary")).to_have_text(_SUMMARY_TEXT)
+
+    # The start chip opens the same panel under its own title, and one panel is open at a time.
+    started.click()
+    expect(panel).to_have_count(1)
+    expect(panel.locator(".tool-chip-detail-title")).to_have_text(_STARTED_LABEL_BY_CAUSE[cause])
+    expect(panel.locator(".compaction-summary")).to_have_text(_SUMMARY_TEXT)
     # The explanation is the page's own: what the agent and the events API read is the summary alone.
     events = get_json(f"{server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/events")["events"]
     assert _EXPLANATION_BY_CAUSE[cause] not in json.dumps(events)
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_the_auto_compact_notice_shows_under_the_pill_until_it_is_dismissed(
+def test_a_typed_compact_shows_as_a_bubble_with_the_start_chip_under_it_until_the_pair_lands(
+    compaction_server: RunningWorkspace, page: Page
+) -> None:
+    server = compaction_server
+    chat = _open_chat(page, server)
+    expect(chat.locator(".message-user").first).to_contain_text("Hello agent!")
+
+    _append_typed_compact(server)
+    marker = write_compacting_marker(server.agent_info.agent_state_dir, "manual")
+
+    bubble = chat.locator(".message-user", has_text="/compact")
+    expect(bubble).to_be_visible(timeout=15000)
+    started = _started_chip(chat)
+    expect(started.locator(".tool-chip-label")).to_have_text(_STARTED_LABEL_BY_CAUSE["manual"], timeout=15000)
+    expect(_finished_chip(chat)).to_have_count(0)
+    # The chip row stands right under the bubble.
+    expect(bubble.locator("xpath=following-sibling::*[1]").locator(".compaction-chip--started")).to_have_count(1)
+    started.click()
+    expect(_compaction_panel(chat).locator(".compaction-explanation")).to_have_text(_EXPLANATION_BY_CAUSE["manual"])
+    expect(_compaction_panel(chat).locator(".compaction-summary")).to_have_count(0)
+
+    write_last_compaction_record(server.agent_info.agent_state_dir, "manual")
+    _append_compact_summary(server, "uuid-compact-1")
+    marker.unlink()
+
+    expect(_finished_chip(chat).locator(".tool-chip-label")).to_have_text(
+        _FINISHED_LABEL_BY_CAUSE["manual"], timeout=15000
+    )
+    expect(_strip(chat)).to_have_count(0, timeout=15000)
+    expect(started).to_have_count(1)
+    expect(chat.locator(".message-user", has_text="/compact")).to_have_count(1)
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_start_chip_follows_the_last_reply_while_an_idle_compaction_runs(
+    compaction_server: RunningWorkspace, page: Page
+) -> None:
+    server = compaction_server
+    chat = _open_chat(page, server)
+    reply = chat.locator(".message-assistant", has_text="Hello! How can I help you?")
+    expect(reply).to_be_visible(timeout=15000)
+
+    server.chat_state.agent_manager.note_compaction_requested(FIXTURE_AGENT_ID, CompactionCause.IDLE, time.monotonic())
+
+    started = _started_chip(chat)
+    expect(started.locator(".tool-chip-label")).to_have_text(_STARTED_LABEL_BY_CAUSE["idle"], timeout=15000)
+    expect(reply.locator("xpath=following-sibling::*[1]").locator(".compaction-chip--started")).to_have_count(1)
+    expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text("Compacting while idle…")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_auto_compact_notice_shows_under_the_compactions_chip_row_until_it_is_dismissed(
     compaction_server: RunningWorkspace, page: Page
 ) -> None:
     server = compaction_server
@@ -360,8 +453,10 @@ def test_the_auto_compact_notice_shows_under_the_pill_until_it_is_dismissed(
     _record_compaction_cause(server, "idle")
     _append_compact_summary(server, "uuid-compact-1")
 
-    notice = _pill(chat).locator("xpath=..").locator(".autocompact-notice")
-    expect(notice).to_have_text(_AUTOCOMPACT_NOTICE_TEXT, timeout=15000)
+    chip_group = chat.locator(".tool-chip-group", has=_finished_chip(chat))
+    notice = chip_group.locator("xpath=following-sibling::*[1]")
+    expect(notice).to_have_class(re.compile(r"\bautocompact-notice\b"), timeout=15000)
+    expect(notice).to_have_text(_AUTOCOMPACT_NOTICE_TEXT)
     notice.locator(".autocompact-notice-dismiss").click()
     expect(chat.locator(".autocompact-notice")).to_have_count(0)
     wait_for(
@@ -372,5 +467,5 @@ def test_the_auto_compact_notice_shows_under_the_pill_until_it_is_dismissed(
 
     page.reload()
     chat = page.frame_locator(f'iframe.chat-root-frame[data-chat-id="{FIXTURE_AGENT_ID}"]')
-    expect(_pill(chat)).to_be_visible(timeout=15000)
+    expect(_finished_chip(chat)).to_be_visible(timeout=15000)
     expect(chat.locator(".autocompact-notice")).to_have_count(0)

@@ -1,4 +1,4 @@
-"""A real Claude chat compacted from the composer: the status while it runs, then the pill and mngr's record.
+"""A real Claude chat compacted from the composer: the status while it runs, then the chips and mngr's record.
 
 Unlike the browser suite's synthetic markers (``test_compaction_e2e.py``), the agent here is real: ``mngr create``
 starts the pinned ``claude`` in an isolated host dir on a private tmux server, mngr's ``PreCompact``/``PostCompact``
@@ -212,7 +212,7 @@ def _chat_app_over(agent: AgentInfo, chats_root: Path) -> Iterator[ServedApp]:
 
 
 @pytest.mark.timeout(900, func_only=False)
-def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_pill(
+def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_chips(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _skip_unless_runnable()
@@ -250,6 +250,14 @@ def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_p
                 expect(strip.locator(".agent-activity-indicator__label")).to_have_text(
                     "Compacting as requested…", timeout=30_000
                 )
+                # The typed /compact is the user's bubble, with the start chip under it while the compaction runs.
+                bubble = chat.locator(".message-user", has_text="/compact")
+                expect(bubble).to_have_count(1)
+                started = chat.locator(".tool-chip.compaction-chip--started")
+                expect(started.locator(".tool-chip-label")).to_have_text("Compacting as requested…")
+                expect(
+                    bubble.locator("xpath=following-sibling::*[1]").locator(".compaction-chip--started")
+                ).to_have_count(1)
                 marker = agent.agent_state_dir / COMPACTING_MARKER_FILENAME
                 wait_for(
                     lambda: replies.compaction_requested.is_set() and marker.is_file(),
@@ -259,17 +267,19 @@ def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_p
                 expect(strip).to_be_visible()
                 replies.release.set()
 
-                pill = chat.locator(".message-system-status-container")
-                expect(pill.locator(".message-system-status")).to_have_text(
-                    "▸Compacted as requested", timeout=_TURN_TIMEOUT_MS
+                finished = chat.locator(".tool-chip.compaction-chip--finished")
+                expect(finished.locator(".tool-chip-label")).to_have_text(
+                    "Compacted as requested", timeout=_TURN_TIMEOUT_MS
                 )
                 expect(strip).to_have_count(0, timeout=60_000)
-                pill.locator(".message-system-status--toggleable").click()
-                details = pill.locator(".message-system-status-details")
-                expect(details.locator(":scope > .compaction-explanation")).to_have_text(
+                expect(started).to_have_count(1)
+                expect(bubble).to_have_count(1)
+                finished.click()
+                panel = chat.locator(".tool-chip-detail.compaction-detail")
+                expect(panel.locator(".compaction-explanation")).to_have_text(
                     "Compacted because you asked (/compact)."
                 )
-                expect(details.locator(":scope > .message-system-status-body")).to_contain_text(_SUMMARY_TEXT)
+                expect(panel.locator(".compaction-summary")).to_contain_text(_SUMMARY_TEXT)
 
                 last_compaction = agent.agent_state_dir / LAST_COMPACTION_FILENAME
                 wait_for(

@@ -62,6 +62,12 @@
  * before Imbue Studio embedded ids) attributes nothing here -- an embedded page
  * recovers such verdicts from the response log via the card's hydration query.
  *
+ * A compaction ("Context was compacted") breaks nothing. It joins the inline
+ * stream at its transcript position, where its chips share a chip row with the
+ * tool calls beside it, or follows the wrap-up reply when it landed after one
+ * (`trailing_status`). While the agent compacts, the compaction running now is
+ * placed the same way, at the end of the transcript, until its event lands.
+ *
  * This module reads no timestamps. Pending placeholders are ordered by
  * transcript position; grouping and the positioning of any transitioned step
  * read transcript order alone.
@@ -74,8 +80,11 @@ import type {
   UserMessageEvent,
   ToolResultEvent,
   ToolCall,
+  CompactionCause,
 } from "../models/Response";
 import type { HandoffState } from "../models/Chats";
+import { landedCompaction, runningCompaction, type CompactionPart } from "./compaction-chips";
+import type { RunPart } from "./message-renderers";
 import { COMPACTING_STATE } from "../models/activityState";
 import { SEED_HARNESS } from "../models/Response";
 import { isHandoffPromptChip } from "../models/handoffPrompt";
@@ -151,8 +160,9 @@ export function isFreshStartNode(node: HandoffNode): boolean {
 export type TimelineItem =
   | { kind: "step"; step: StepNode }
   /** Real work and/or prose with no step open: pre-step work, or a step's
-   *  ejected closing prose. Rendered inline, exactly like a no-steps turn. */
-  | { kind: "ungrouped"; key: string; events: AssistantMessageEvent[] }
+   *  ejected closing prose, and any compaction among it. Rendered inline,
+   *  exactly like a no-steps turn. */
+  | { kind: "ungrouped"; key: string; events: RunPart[] }
   /** An agent permission request, lifted out of any open step so it always
    *  renders inline as a thread-breaking block. The user must be able to see and
    *  act on it without expanding a step. `event` may carry more than one
@@ -170,8 +180,6 @@ export type TimelineItem =
   /** A system chip or notice that landed inside an open handoff node, shown inline after it.
    *  Anywhere else a chip heads a section of its own (SectionView.user_event). */
   | { kind: "chip"; event: UserMessageEvent }
-  /** An inline status line (e.g. context compaction that happened mid-turn). */
-  | { kind: "status"; event: UserMessageEvent }
   /** The chat's handoff to another agent, at the point its summary was asked for (or, with no
    *  request in the window, at the switch itself, when its prompt reached it). */
   | { kind: "handoff"; node: HandoffNode };
@@ -188,9 +196,8 @@ export interface SectionView {
   /** The final run of ungrouped prose: the user-facing reply, rendered below
    *  the timeline. */
   trailing_reply: AssistantMessageEvent[];
-  /** Status messages that arrived after the trailing reply (or after the reply boundary),
-   *  rendered below the timeline and reply. */
-  trailing_status: UserMessageEvent[];
+  /** Compactions that landed after the trailing reply, rendered below the timeline and reply. */
+  trailing_status: CompactionPart[];
 }
 
 /** A status transition line printed by tk on every state change:
@@ -441,8 +448,8 @@ type SectionEntry =
   | { kind: "permission"; event: AssistantMessageEvent }
   /** A system chip or notice that landed inside an open handoff node. */
   | { kind: "chip"; event: UserMessageEvent }
-  /** A status message (e.g. context compaction). */
-  | { kind: "status"; event: UserMessageEvent }
+  /** A compaction, landed or running. */
+  | { kind: "status"; part: CompactionPart }
   /** The handoff node, at the summary request that opened it or at a switch with no request. */
   | { kind: "handoff"; node: HandoffNode }
   | { kind: "event"; event: AssistantMessageEvent; step_id: string | null };
@@ -539,16 +546,56 @@ export function isTailTurnSettled(activityState: string | null | undefined): boo
   return activityState === "IDLE" || activityState === COMPACTING_STATE;
 }
 
+/** A compaction the agent is running now, by who started it. */
+export interface LiveCompaction {
+  cause: CompactionCause | null;
+}
+
+/** The compaction an agent in this activity state is running, or null when it is not compacting. */
+export function liveCompactionOf(
+  activityState: string | null | undefined,
+  cause: CompactionCause | null | undefined,
+): LiveCompaction | null {
+  return activityState === COMPACTING_STATE ? { cause: cause ?? null } : null;
+}
+
+/** Whether the transcript ends on a compaction that landed: nothing after it but lines that
+ *  render nowhere. The running compaction's event is then on the transcript already, so the
+ *  walk places no running one beside it. */
+function endsOnLandedCompaction(events: readonly TranscriptEvent[]): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.type !== "user_message") return false;
+    if (isStatusUserMessage(event)) return true;
+    if (!isNonBoundaryUserMessage(event)) return false;
+  }
+  return false;
+}
+
+/** The latest idle compaction's event id, which the one-time Auto-compact notice sits under. */
+function autocompactNoticeAnchorId(events: readonly TranscriptEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.type === "user_message" && isStatusUserMessage(event) && event.compaction_cause === "idle") {
+      return event.event_id;
+    }
+  }
+  return null;
+}
+
 /** Walk the visible transcript into ordered sections. `toolResults` resolves tk
  *  command outputs (and is reused by the renderer). `isTailSettled` (see
- *  `isTailTurnSettled`) settles the spinner on the tail section. All decoration is derived from the transcript;
- *  there is no enrichment argument. */
+ *  `isTailTurnSettled`) settles the spinner on the tail section. `liveCompaction` (see
+ *  `liveCompactionOf`) places the compaction running now where its event will land.
+ *  All decoration is derived from the transcript; there is no enrichment argument. */
 export function buildSections(
   events: TranscriptEvent[],
   toolResults: Map<string, ToolResultEvent>,
   isTailSettled: boolean,
+  liveCompaction: LiveCompaction | null = null,
 ): SectionView[] {
   const { deco, knownSteps, createdOrder } = buildDecorationMap(events, toolResults);
+  const noticeAnchorId = autocompactNoticeAnchorId(events);
 
   const builders: SectionBuilder[] = [];
   let current: SectionBuilder | null = null;
@@ -675,7 +722,7 @@ export function buildSections(
       }
       if (isStatusUserMessage(e)) {
         if (current === null) current = ensureSection(null, "section-pre");
-        current.entries.push({ kind: "status", event: e });
+        current.entries.push({ kind: "status", part: landedCompaction(e, e.event_id === noticeAnchorId) });
         continue;
       }
       if (isNonBoundaryUserMessage(e)) {
@@ -735,6 +782,12 @@ export function buildSections(
       continue;
     }
     // tool_result events are resolved by id via toolResults; no routing needed.
+  }
+
+  // The compaction running now goes where its event will land: at the end of the transcript.
+  if (liveCompaction !== null && !endsOnLandedCompaction(events)) {
+    if (current === null) current = ensureSection(null, "section-pre");
+    current.entries.push({ kind: "status", part: runningCompaction(liveCompaction.cause) });
   }
 
   // Pending roster: created steps that never transitioned anywhere, in
@@ -929,12 +982,14 @@ function finalizeSection(
     lastTrailingReplyEntryIdx = i;
   }
 
-  const trailing_status: UserMessageEvent[] = [];
+  // A compaction after the reply follows it below the timeline. With no reply to follow, it
+  // stays in the inline stream, where its chips join the turn's last chip row.
+  const trailing_status: CompactionPart[] = [];
   const trailingStatusIndices = new Set<number>();
-  for (let i = lastTrailingReplyEntryIdx + 1; i < section.entries.length; i++) {
+  for (let i = lastTrailingReplyEntryIdx + 1; i < section.entries.length && trailing_reply.length > 0; i++) {
     const en = section.entries[i];
     if (en.kind === "status") {
-      trailing_status.push(en.event);
+      trailing_status.push(en.part);
       trailingStatusIndices.add(i);
     }
   }
@@ -974,7 +1029,7 @@ function finalizeSection(
   //    lead the timeline.
   const items: TimelineItem[] = [];
   const emittedSteps = new Set<string>();
-  let ungrouped: AssistantMessageEvent[] = [];
+  let ungrouped: RunPart[] = [];
   let ungroupedKey = 0;
   const flushUngrouped = (): void => {
     if (ungrouped.length > 0) {
@@ -1003,10 +1058,8 @@ function finalizeSection(
       flushUngrouped();
       items.push({ kind: "chip", event: entry.event });
     } else if (entry.kind === "status") {
-      if (!trailingStatusIndices.has(i)) {
-        flushUngrouped();
-        items.push({ kind: "status", event: entry.event });
-      }
+      // A compaction joins the inline run, so its chips share a row with the calls beside it.
+      if (!trailingStatusIndices.has(i)) ungrouped.push(entry.part);
     } else if (entry.kind === "handoff") {
       flushUngrouped();
       items.push({ kind: "handoff", node: entry.node });

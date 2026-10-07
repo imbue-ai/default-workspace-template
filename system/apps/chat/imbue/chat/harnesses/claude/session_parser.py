@@ -488,13 +488,16 @@ def _parse_user_message(
                         "message_uuid": uuid,
                     }
                     if is_compaction_command:
-                        # Claude Code runs /compact itself and no reply follows, so it renders
-                        # nowhere and is not a turn tail. It is still emitted: it is the transcript
-                        # arrival that retires the page's "Sending..." bubble for the /compact, which
-                        # would otherwise take the arrival of the next message and leave that
-                        # message showing twice.
-                        event["display"] = DisplayKind.HIDDEN
+                        # Claude Code runs /compact itself and no reply follows, so it is not a turn
+                        # tail. It records the command twice: the typed "/compact" as it is
+                        # submitted, which renders as the user's bubble, and the command's expansion
+                        # once the compaction ends, which repeats it and renders nowhere. The typed
+                        # one is the transcript arrival that retires the page's "Sending..." bubble
+                        # for the /compact, which would otherwise take the arrival of the next
+                        # message and leave that message showing twice.
                         event["non_turn_tail"] = True
+                        if _COMMAND_NAME_PATTERN.search(raw_text) is not None:
+                            event["display"] = DisplayKind.HIDDEN
                     else:
                         # Claude Code's own markers (``isMeta`` for framework-injected,
                         # model-only messages) are read HERE and become the shared render decision;

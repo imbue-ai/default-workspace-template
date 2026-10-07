@@ -5,19 +5,21 @@
  * (buildSections) into turn sections, flattened into the virtualized list's
  * top-level rows (buildRows) -- a user message, a whole ProgressBlock for a turn
  * that has tk steps, an ungrouped assistant message, a stop-hook chip, a handoff
- * node, or a trailing wrap-up reply. Sharing it here means a subagent's "View conversation"
+ * node, a trailing wrap-up reply, or the chip row of a compaction that followed
+ * it. Sharing it here means a subagent's "View conversation"
  * gets the real progress view -- step timeline, statuses, summaries -- and the
  * same windowed virtualization as the main chat, with zero rendering drift.
  *
  * Structure and decoration both come from the transcript walk (tk prints its
  * step decoration on stdout, which buildSections parses); there is no
  * side-channel enrichment. `isTailSettled` settles the frontier spinner on the
- * tail turn (see `isTailTurnSettled`). The pre-login auth-error prefix is hidden here (a no-op for a
+ * tail turn (see `isTailTurnSettled`), and `liveCompaction` places the start
+ * chip of a compaction still running (see `liveCompactionOf`). The pre-login auth-error prefix is hidden here (a no-op for a
  * subagent, which never has one) so the two views stay byte-identical.
  */
 
 import m from "mithril";
-import type { TranscriptEvent, ToolResultEvent, UserMessageEvent } from "../models/Response";
+import type { TranscriptEvent, ToolResultEvent } from "../models/Response";
 import {
   renderUserMessage,
   renderAssistantMessage,
@@ -26,9 +28,11 @@ import {
   renderPermissionItem,
   buildToolResultsWithSkillExpansions,
   computeAuthErrorHiddenEventIds,
+  type RunPart,
 } from "./message-renderers";
 import { isHiddenUserMessage } from "./message-classification";
-import { buildSections, type SectionView } from "./turn-grouping";
+import type { CompactionPart } from "./compaction-chips";
+import { buildSections, type LiveCompaction, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
 import { renderHandoffNode } from "./handoff-node";
 
@@ -107,16 +111,14 @@ function buildRows(
   toolResults: Map<string, ToolResultEvent>,
 ): RowDescriptor[] {
   const rows: RowDescriptor[] = [];
-  // The latest compaction pill with a row of its own, which carries the one-time idle-compaction
-  // notice. Read by the render closures, so it is the final value once every row is built.
-  let autocompactNoticeAnchorId: string | null = null;
-  const pushStatusRow = (statusEvent: UserMessageEvent): void => {
-    autocompactNoticeAnchorId = statusEvent.event_id;
+  // The compactions that landed after a turn's reply: one chip row of their own below it.
+  const pushTrailingCompactionRow = (parts: CompactionPart[]): void => {
+    if (parts.length === 0) return;
     rows.push({
-      key: statusEvent.event_id,
-      estimate: ESTIMATED_USER_HEIGHT_PX,
-      anchorEventId: statusEvent.event_id,
-      render: () => renderUserMessage(statusEvent, statusEvent.event_id === autocompactNoticeAnchorId) as m.Vnode,
+      key: parts[0].event_id,
+      estimate: ESTIMATED_CHIP_ROW_HEIGHT_PX,
+      anchorEventId: runAnchorEventId(parts[0]),
+      render: () => renderAssistantRunRow(parts, toolResults, chatId),
     });
   };
   for (const section of sections) {
@@ -147,9 +149,7 @@ function buildRows(
             chatId,
           }),
       });
-      for (const statusEvent of section.trailing_status) {
-        pushStatusRow(statusEvent);
-      }
+      pushTrailingCompactionRow(section.trailing_status);
       continue;
     }
 
@@ -174,7 +174,7 @@ function buildRows(
           // A lone event that is not a chip run keeps the memoized single-message
           // renderer -- nothing was merged, so there is nothing to gain by
           // giving up the memo.
-          if (run.length === 1 && !isChipOnlyEvent(head, toolResults)) {
+          if (run.length === 1 && head.type === "assistant_message" && !isChipOnlyEvent(head, toolResults)) {
             rows.push({
               key: head.event_id,
               estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
@@ -191,7 +191,7 @@ function buildRows(
             estimate: isChipOnlyEvent(head, toolResults)
               ? ESTIMATED_CHIP_ROW_HEIGHT_PX
               : ESTIMATED_ASSISTANT_HEIGHT_PX,
-            anchorEventId: head.event_id,
+            anchorEventId: runAnchorEventId(head),
             render: () => renderAssistantRunRow(run, toolResults, chatId),
           });
         }
@@ -218,10 +218,6 @@ function buildRows(
               secretNotesByRequestId,
             ),
         });
-      } else if (item.kind === "status") {
-        if (!isHiddenUserMessage(item.event)) {
-          pushStatusRow(item.event);
-        }
       } else if (item.kind === "chip") {
         const chipEvent = item.event;
         if (!isHiddenUserMessage(chipEvent)) {
@@ -268,11 +264,15 @@ function buildRows(
         render: () => renderAssistantMessage(event, toolResults, chatId),
       });
     }
-    for (const statusEvent of section.trailing_status) {
-      pushStatusRow(statusEvent);
-    }
+    pushTrailingCompactionRow(section.trailing_status);
   }
   return rows;
+}
+
+/** The transcript event a run's row stands at: its head's, or none for the compaction
+ *  running now, which has no event yet (the row then resolves by the row before it). */
+function runAnchorEventId(head: RunPart): string | null {
+  return head.type === "compaction" && head.event === null ? null : head.event_id;
 }
 
 /**
@@ -286,11 +286,12 @@ export function buildConversationRows(
   chatId: string,
   events: TranscriptEvent[],
   isTailSettled: boolean,
+  liveCompaction: LiveCompaction | null = null,
 ): RowDescriptor[] {
   const toolResults = buildToolResultsWithSkillExpansions(events);
   const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
   const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
-  const sections = buildSections(visibleEvents, toolResults, isTailSettled);
+  const sections = buildSections(visibleEvents, toolResults, isTailSettled, liveCompaction);
   return buildRows(chatId, sections, toolResults);
 }
 

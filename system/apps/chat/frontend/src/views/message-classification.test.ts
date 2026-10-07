@@ -16,7 +16,7 @@ import {
   isSecretRequestCall,
 } from "./message-classification";
 
-import { UserMessageKind } from "./message-kinds";
+import { KIND_SPEC, Rail, UserMessageKind } from "./message-kinds";
 
 // The DETECTION cases (which content becomes which decision) live backend-side now, in
 // `harnesses/message_display_test.py` -- the detector table moved there. These tests pin
@@ -156,6 +156,16 @@ describe("semantic helpers", () => {
     expect(isStatusUserMessage({ content: "Context was compacted", display: "status" })).toBe(true);
     expect(isStatusUserMessage({ content: "x", display: "chip", display_label: "Background task" })).toBe(false);
     expect(isStatusUserMessage({ content: "a normal message" })).toBe(false);
+  });
+
+  // A compaction's chips sit in the agent's chip rows, and it breaks no turn.
+  it("places a compaction on the agent's rail, off the turn structure", () => {
+    expect(KIND_SPEC[UserMessageKind.StatusMessage]).toMatchObject({
+      rail: Rail.Assistant,
+      boundary: false,
+      isTurn: false,
+    });
+    expect(isTurnUserMessage({ content: "Context was compacted", display: "status" })).toBe(false);
   });
 
   it("isHiddenUserMessage covers hidden and relocated kinds (no user-rail row)", () => {

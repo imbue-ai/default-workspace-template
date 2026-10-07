@@ -1327,7 +1327,8 @@ def test_a_message_sent_during_a_compact_arrives_once_after_the_compacts_own_arr
     """Replays a live /compact-then-"hello" session (Claude Code 2.1.292). The page retires its
     "Sending..." bubbles oldest-first, one per user-message arrival or new queued entry, so the
     /compact must arrive on the transcript before "hello" is queued: otherwise the queued "hello"
-    retires the /compact's bubble and "hello" shows as a queued chip and a bubble at once."""
+    retires the /compact's bubble and "hello" shows as a queued chip and a bubble at once. The typed /compact
+    is the user's own bubble from then on."""
     agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
     order_log: list[str] = []
     watcher = ClaudeSessionWatcher(
@@ -1358,7 +1359,7 @@ def test_a_message_sent_during_a_compact_arrives_once_after_the_compacts_own_arr
         }
     )
     append(_queue_enqueue_record("hello", "test-session", "2026-10-07T19:53:42.615Z"))
-    assert order_log == ["turn:/compact:hidden", "queue:['hello']"]
+    assert order_log == ["turn:/compact:shown", "queue:['hello']"]
     assert _queued_contents(watcher) == ["hello"]
 
     order_log.clear()
@@ -1375,6 +1376,7 @@ def test_a_message_sent_during_a_compact_arrives_once_after_the_compacts_own_arr
         },
         _user_event(1, "hello") | {"timestamp": "2026-10-07T19:54:00.077Z"},
     )
+    # The command's expansion, written once the compaction ends, repeats the typed /compact and renders nowhere.
     assert order_log == ["queue:[]", "turn:/compact:hidden", "turn:hello:shown"]
 
 

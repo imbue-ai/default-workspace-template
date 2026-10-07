@@ -8,6 +8,10 @@
  * Runs merge across assistant events, so the chips carry the id of the event
  * each call came from -- that event is where the call's input is fetched from
  * (see tool-payloads).
+ *
+ * A row can also hold status chips, for something that happened to the agent
+ * rather than a call it made (a compaction of its context). They wear the same
+ * chrome and open the same panel, filled with what the page composes for them.
  */
 
 import m from "mithril";
@@ -18,9 +22,37 @@ import { resolveToolPayloads } from "./tool-payloads";
 
 /** One call in a run, with the assistant event that issued it. */
 export interface ChipCall {
+  kind: "tool";
   call: ToolCall;
   /** The issuing assistant message's event_id -- the handle its input is fetched by. */
   eventId: string;
+}
+
+/** One part of a status chip's panel: content the page renders (only once the panel
+ *  opens), or text set like a tool's output (the same pane, clamped the same way when
+ *  it is long). */
+export type StatusChipSection =
+  { kind: "content"; render: () => m.Vnode } | { kind: "output"; marker: string; text: string };
+
+/** A chip for something that happened to the agent. Everything its panel shows is
+ *  composed by the page, so nothing is fetched when it opens. */
+export interface StatusChip {
+  kind: "status";
+  /** Unique across the transcript: the chip's open/closed state and its key in the
+   *  row derive from it. */
+  id: string;
+  label: string;
+  icon: IconName;
+  /** Bare markers on the chip and on its panel, for the tests and the e2e suite. */
+  chipClass: string;
+  detailClass: string;
+  sections: StatusChipSection[];
+}
+
+export type ChipEntry = ChipCall | StatusChip;
+
+function entryId(entry: ChipEntry): string {
+  return entry.kind === "tool" ? entry.call.tool_call_id : entry.id;
 }
 
 /** The glyph for a tool. The names an agent's tools go by are the harness's, so
@@ -88,11 +120,12 @@ function chipTitle(text: ChipText): string {
   return text.kind === "note" ? text.text : `${text.verb} ${text.target}`.trim();
 }
 
-/** Where a chip's open/closed state lives. Keyed by the call, so it survives
- *  the row unmounting and remounting (virtualization) or re-rendering
- *  (streaming) -- the same store the step bodies and blocks use. */
-function chipKey(call: ToolCall): string {
-  return `chip:${call.tool_call_id}`;
+/** Where a chip's open/closed state lives. Keyed by the call (or the status
+ *  chip's own id), so it survives the row unmounting and remounting
+ *  (virtualization) or re-rendering (streaming) -- the same store the step
+ *  bodies and blocks use. */
+function chipKey(entry: ChipEntry): string {
+  return `chip:${entryId(entry)}`;
 }
 
 /** The group's own margins separate it from its SIBLINGS inside a message, and
@@ -270,16 +303,16 @@ const OUTPUT_CLAMP_CHARS = 2000;
 /** Where the "showing all of it" state lives. Its own key rather than the chip's,
  *  so unfolding a log does not also count as opening the chip -- and cleared with
  *  the chip (see {@link closeChip}), so reopening one starts clamped again. */
-function outputKey(call: ToolCall): string {
-  return `chip-output:${call.tool_call_id}`;
+function outputKey(entry: ChipEntry): string {
+  return `chip-output:${entryId(entry)}`;
 }
 
 /** Close a chip. The unfolded-output state is a second key, and the expansion store
  *  is never swept, so without clearing it here "showing all" would outlive the panel
  *  it belongs to and a reopened chip would dump its whole log again. */
-function closeChip(call: ToolCall): void {
-  setBlockExpanded(chipKey(call), false);
-  setBlockExpanded(outputKey(call), false);
+function closeChip(entry: ChipEntry): void {
+  setBlockExpanded(chipKey(entry), false);
+  setBlockExpanded(outputKey(entry), false);
 }
 
 /** A text button under the clamped pane; sized and toned like a chip, since it is
@@ -313,31 +346,35 @@ function clampedOutput(text: string): { shown: string; label: string } | null {
 }
 
 /** The output pane, clamped when it is long enough to be worth asking about. */
-function renderOutput(call: ToolCall, text: string): m.Vnode {
+function renderOutput(entry: ChipEntry, marker: string, text: string): m.Vnode {
   const clamped = clampedOutput(text);
-  if (clamped === null) return renderPane("tool-call-output", text);
-  const showingAll = isBlockExpanded(outputKey(call));
+  if (clamped === null) return renderPane(marker, text);
+  const showingAll = isBlockExpanded(outputKey(entry));
   return m("div", [
-    renderPane("tool-call-output", showingAll ? text : clamped.shown),
+    renderPane(marker, showingAll ? text : clamped.shown),
     m(
       "button",
       {
         type: "button",
         class: OUTPUT_TOGGLE_CLASS,
-        onclick: () => setBlockExpanded(outputKey(call), !showingAll),
+        onclick: () => setBlockExpanded(outputKey(entry), !showingAll),
       },
       showingAll ? "Show less" : clamped.label,
     ),
   ]);
 }
 
+function entryIcon(entry: ChipEntry): IconName {
+  return entry.kind === "tool" ? toolIcon(entry.call.tool_name) : entry.icon;
+}
+
 /** The panel's own title bar: which call this is, and the way out of it. */
-function renderDetailHeader(chip: ChipCall): m.Vnode {
+function renderDetailHeader(entry: ChipEntry): m.Vnode {
   return m("div", { class: DETAIL_HEADER_CLASS }, [
     m.trust(
       // `mt-[3px]` centres a 13px glyph on the first line of a ~19px line box, which
       // matters only once the title wraps and `items-start` stops doing it.
-      icon(toolIcon(chip.call.tool_name), {
+      icon(entryIcon(entry), {
         size: 13,
         strokeWidth: 1.75,
         className: "tool-chip-icon mt-[3px] shrink-0",
@@ -347,8 +384,11 @@ function renderDetailHeader(chip: ChipCall): m.Vnode {
     // is the one place with the width to say it in full.
     m(
       "span",
-      { class: "tool-chip-detail-title min-w-0 text-secondary", title: chip.call.tool_name },
-      chipTitle(chipText(chip.call)),
+      {
+        class: "tool-chip-detail-title min-w-0 text-secondary",
+        title: entry.kind === "tool" ? entry.call.tool_name : undefined,
+      },
+      entry.kind === "tool" ? chipTitle(chipText(entry.call)) : entry.label,
     ),
     m(
       "button",
@@ -357,14 +397,14 @@ function renderDetailHeader(chip: ChipCall): m.Vnode {
         class: DETAIL_CLOSE_CLASS,
         "aria-label": "Close",
         title: "Close",
-        onclick: () => closeChip(chip.call),
+        onclick: () => closeChip(entry),
       },
       m.trust(icon("close", { size: 14, strokeWidth: 1.75 })),
     ),
   ]);
 }
 
-function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId: string): m.Vnode {
+function toolDetailSections(chip: ChipCall, toolResult: ToolResultEvent | null, chatId: string): m.Vnode[] {
   const { inputText, inputState, outputText, outputState, requestPayloads } = resolveToolPayloads(
     chip.call,
     toolResult,
@@ -396,7 +436,7 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
     sections.push(renderPaneNote("tool-call-input", inputState));
   }
   if (outputState === "loaded") {
-    if (outputText) sections.push(renderOutput(chip.call, outputText));
+    if (outputText) sections.push(renderOutput(chip, "tool-call-output", outputText));
   } else {
     sections.push(renderPaneNote("tool-call-output", outputState));
   }
@@ -412,16 +452,32 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
       ),
     );
   }
+  return sections;
+}
 
+function statusDetailSections(chip: StatusChip): m.Vnode[] {
+  return chip.sections.map((section) =>
+    section.kind === "content" ? section.render() : renderOutput(chip, section.marker, section.text),
+  );
+}
+
+function renderDetail(entry: ChipEntry, toolResults: Map<string, ToolResultEvent>, chatId: string): m.Vnode {
+  const sections =
+    entry.kind === "tool"
+      ? toolDetailSections(entry, toolResults.get(entry.call.tool_call_id) ?? null, chatId)
+      : statusDetailSections(entry);
   // A hairline between whatever sections there turned out to be, rather than a
   // rule pinned to one pair: which of the three exist depends on the call.
   return m(
     "div",
     // Keyed because its siblings in the row are: mithril rejects a fragment
     // that mixes keyed and unkeyed children.
-    { class: DETAIL_CLASS, key: `detail-${chip.call.tool_call_id}` },
+    {
+      class: entry.kind === "tool" ? DETAIL_CLASS : `${DETAIL_CLASS} ${entry.detailClass}`,
+      key: `detail-${entryId(entry)}`,
+    },
     [
-      renderDetailHeader(chip),
+      renderDetailHeader(entry),
       // Dashed: the rule between the panes separates two parts of one call, which is
       // a lighter claim than the solid one under the header (that divides the panel's
       // chrome from its contents).
@@ -432,8 +488,18 @@ function renderDetail(chip: ChipCall, toolResult: ToolResultEvent | null, chatId
   );
 }
 
+function renderChipLabel(text: ChipText): m.Vnode {
+  return text.kind === "note"
+    ? m("span", { class: CHIP_LABEL_CLASS }, text.text)
+    : m("span", { class: CHIP_LABEL_CLASS }, [
+        m("span", { class: "tool-chip-verb" }, text.verb),
+        text.target ? " " : null,
+        text.target ? m("span", { class: "tool-chip-target" }, text.target) : null,
+      ]);
+}
+
 interface ToolChipGroupAttrs {
-  chips: ChipCall[];
+  chips: ChipEntry[];
   toolResults: Map<string, ToolResultEvent>;
   chatId: string;
 }
@@ -441,7 +507,7 @@ interface ToolChipGroupAttrs {
 export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
   view(vnode) {
     const { chips, toolResults, chatId } = vnode.attrs;
-    const open = chips.find((chip) => isBlockExpanded(chipKey(chip.call))) ?? null;
+    const open = chips.find((chip) => isBlockExpanded(chipKey(chip))) ?? null;
 
     // The panel goes INSIDE the row, immediately after the chip that opened it,
     // because a long run wraps and a panel hung below the whole row would sit
@@ -454,8 +520,8 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
         "div",
         { class: ROW_CLASS },
         chips.flatMap((chip) => {
-          const isOpen = open !== null && open.call.tool_call_id === chip.call.tool_call_id;
-          const text = chipText(chip.call);
+          const id = entryId(chip);
+          const isOpen = open !== null && entryId(open) === id;
           // A failed call is NOT marked here: the agent says what it means, in
           // prose, a line or two below, which is the form a reader can act on.
           // Colour is left to say the one thing nothing else does -- which chip
@@ -466,37 +532,36 @@ export const ToolChipGroup: m.Component<ToolChipGroupAttrs> = {
             "button",
             {
               type: "button",
-              class: `${CHIP_BASE} ${tone} ${fill}`,
+              class:
+                chip.kind === "tool"
+                  ? `${CHIP_BASE} ${tone} ${fill}`
+                  : `${CHIP_BASE} ${chip.chipClass} ${tone} ${fill}`,
               "aria-pressed": isOpen ? "true" : "false",
               // The untruncated phrase, plus the tool it came from, which the
               // chip itself does not say anywhere.
-              title: `${chipTitle(text)}\n${chip.call.tool_name}`,
-              key: chip.call.tool_call_id,
+              title: chip.kind === "tool" ? `${chipTitle(chipText(chip.call))}\n${chip.call.tool_name}` : chip.label,
+              key: id,
               onclick: () => {
                 // One open at a time: opening a chip closes whichever was open.
-                if (open !== null) closeChip(open.call);
-                if (!isOpen) setBlockExpanded(chipKey(chip.call), true);
+                if (open !== null) closeChip(open);
+                if (!isOpen) setBlockExpanded(chipKey(chip), true);
               },
             },
             [
               m.trust(
-                icon(toolIcon(chip.call.tool_name), {
+                icon(entryIcon(chip), {
                   size: 13,
                   strokeWidth: 1.75,
                   className: "tool-chip-icon shrink-0",
                 }),
               ),
-              text.kind === "note"
-                ? m("span", { class: CHIP_LABEL_CLASS }, text.text)
-                : m("span", { class: CHIP_LABEL_CLASS }, [
-                    m("span", { class: "tool-chip-verb" }, text.verb),
-                    text.target ? " " : null,
-                    text.target ? m("span", { class: "tool-chip-target" }, text.target) : null,
-                  ]),
+              chip.kind === "tool"
+                ? renderChipLabel(chipText(chip.call))
+                : m("span", { class: CHIP_LABEL_CLASS }, chip.label),
             ],
           );
           if (!isOpen) return [button];
-          return [button, renderDetail(chip, toolResults.get(chip.call.tool_call_id) ?? null, chatId)];
+          return [button, renderDetail(chip, toolResults, chatId)];
         }),
       ),
     ]);

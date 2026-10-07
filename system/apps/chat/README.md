@@ -361,7 +361,8 @@ secondary chat names nothing.
 
 Compaction replaces a chat's conversation context with a summary the agent
 carries on from. The chat app compacts idle chats on its own, shows a compaction
-while it runs, and says on each compaction pill why it happened.
+while it runs, and shows each one in the transcript as two chips that say why it
+happened.
 
 **Idle compaction.** A provider caches the prompt a chat sends, so a message sent
 while the cache is warm pays a fraction of the price for the context it repeats.
@@ -409,7 +410,12 @@ compacted when its harness reaches its own context limit (Claude's
 auto-compaction, for one) and when the user types `/compact`. A `/compact` sent
 from a Claude chat's composer reaches Claude as its own command; a Codex chat
 sends it to the model as an ordinary message, and Pi's composer declines it with
-a notice pointing at the terminal.
+a notice pointing at the terminal. In a Claude chat the typed `/compact` shows
+as the user's own bubble: Claude Code records it as it is submitted, and records
+it again, as the command's expansion, once the compaction ends; the session
+parser emits the first as an ordinary user message and the second hidden, both
+marked `non_turn_tail`. The first one's arrival is what retires the composer's
+"Sending…" bubble for it, so a message queued behind the compaction shows once.
 
 **The "Compacting…" status.** While a chat's context is being compacted its
 activity state is `COMPACTING` (`compaction_status.py`, applied in
@@ -425,7 +431,10 @@ the snapshot's `active_agent.compaction_cause` (set only while the state is
 as requested…" (`manual`), "Compacting while idle…" (`idle`), "Compacting to
 free up context…" (`native`), or "Compacting…" when the cause is unknown. Once a
 message is queued, ", then replying…" takes the place of the ellipsis
-("Compacting while idle, then replying…"). The state comes from two signals:
+("Compacting while idle, then replying…"). The transcript shows the compaction's
+start chip (below) where its chips will land, named as the strip names it
+without the queued suffix, until the "Context was compacted" event arrives and
+the pair replaces it. The state comes from two signals:
 
 - mngr's Claude hooks: `PreCompact` writes a `compacting` marker in the agent's
   state dir, and `PostCompact` removes it and writes `last_compaction.json`. The
@@ -462,23 +471,44 @@ only after its `PreCompact` hook had written the marker; a `/compact` Claude
 Code refuses for any other reason leaves the status up until the 10-minute
 timeout or the stop button clears it.
 
-**Why a chat was compacted.** The compaction pill is named for the event's
-`compaction_cause`, and expanding it shows a sentence saying why, set apart
-above the summary:
+**The compaction chips.** Each "Context was compacted" event shows as two chips
+in the same chip rows the agent's tool calls use (`compaction-chips.ts`): one for
+the start (lucide `package-open`), named as the activity strip names the running
+compaction, and one for the finish (lucide `package`), named for its cause.
+Where they land depends on who started it:
 
-- `idle` (the sweep): "Compacted while idle"; "Compacted while idle to keep
-  replies fast and cheap. Change this under Auto-compact in the model menu."
-- `manual` (a `/compact`): "Compacted as requested"; "Compacted because you
-  asked (`/compact`).", with `/compact` in the chat's inline-code style
+- `native` (Claude's own compaction, mid-turn): at the event's position in the
+  turn, appended to the chip run beside it, or as a chip row of their own when
+  nothing chips beside them.
+- `manual` (a `/compact`): directly below the `/compact` bubble.
+- `idle` (the sweep): after the last turn, below its reply, or appended to its
+  last chip run when it ended with no reply.
+
+The event never opens a turn of its own. Either chip opens the tool chips'
+detail panel, titled with that chip's label and glyph: first a sentence saying
+why it ran, then, under a dashed rule, the summary in an output pane, clamped
+like a long tool output.
+
+**Why a chat was compacted.** The chips are named for the event's
+`compaction_cause`, and the panel's sentence says why:
+
+- `idle` (the sweep): "Compacting while idle…" and "Compacted while idle";
+  "Compacted while idle to keep replies fast and cheap. Change this under
+  Auto-compact in the model menu."
+- `manual` (a `/compact`): "Compacting as requested…" and "Compacted as
+  requested"; "Compacted because you asked (`/compact`).", with `/compact` in the
+  chat's inline-code style
 - `native` (Claude's own compaction, from the hook's recorded trigger):
-  "Compacted to free up context"; "Your agent triggered compaction. You can ask
-  it about its current setting, or tell it to change it."
-- unknown: "Context was compacted"; "Compacted to keep replies fast and cheap.
-  Idle compaction is under Auto-compact in the model menu."
+  "Compacting to free up context…" and "Compacted to free up context"; "Your
+  agent triggered compaction. You can ask it about its current setting, or tell
+  it to change it."
+- unknown: "Compacting…" and "Context was compacted"; "Compacted to keep replies
+  fast and cheap. Idle compaction is under Auto-compact in the model menu."
 
 The sentence is composed by the page from the cause. It is not part of the
-event, so the transcript, the events API, and the agent never see it. A pill
-whose event carries no summary still expands, to the sentence alone.
+event, so the transcript, the events API, and the agent never see it. A
+compaction whose event carries no summary, or one still running, opens on the
+sentence alone.
 
 The cause is what the app saw while the compaction ran, else what it asked for,
 else the request it recorded in the agent's `compaction_request.json` within the
@@ -486,11 +516,12 @@ else the request it recorded in the agent's `compaction_request.json` within the
 written in the last five minutes says. The request file is what keeps a sweep's
 compaction reading `idle` after the app restarts, since the sweep's `/compact`
 leaves `last_compaction.json` saying manual. The cause is attached in memory as
-the event is stored and streamed, so a page reload keeps it, but a pill older
-than 10 minutes when the app first reads it has no cause and shows the unknown
-text.
+the event is stored and streamed, so a page reload keeps it, but a compaction
+older than 10 minutes when the app first reads it has no cause and shows the
+unknown text.
 
-Under the latest pill of whichever chat is open, a notice says "Idle chats now
+Under the chip row holding the latest idle compaction of whichever chat is open,
+a notice says "Idle chats now
 compact automatically to keep replies fast and cheap. Turn this off per chat, or
 for new chats, under Auto-compact in the model menu." It shows until dismissed
 once, which records `is_autocompact_notice_shown` in the workspace settings.

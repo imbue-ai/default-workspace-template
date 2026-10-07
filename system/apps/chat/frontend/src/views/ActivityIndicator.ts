@@ -77,7 +77,8 @@ function compactingLead(cause: CompactionCause | null): string {
   }
 }
 
-function compactingLabel(cause: CompactionCause | null, hasQueuedMessages: boolean): string {
+/** What a running compaction is called, on the strip and on the transcript's chip for its start. */
+export function compactingLabel(cause: CompactionCause | null, hasQueuedMessages: boolean): string {
   const lead = compactingLead(cause);
   return hasQueuedMessages ? `${lead}, then replying…` : `${lead}…`;
 }

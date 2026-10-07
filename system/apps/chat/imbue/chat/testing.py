@@ -975,7 +975,7 @@ def write_last_compaction_record(state_dir: Path, trigger: str = "manual", ended
 
 
 def compact_summary_record(uuid: str, timestamp: str) -> dict[str, Any]:
-    """The transcript record Claude Code writes when a compaction finishes, which the parser turns into the pill."""
+    """The transcript record Claude Code writes when a compaction finishes, shown as the compaction's chips."""
     return {
         "type": "user",
         "uuid": uuid,
