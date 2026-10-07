@@ -46,7 +46,8 @@ function ChatDocument(chatId: string, agentId: string, sessionId: string): m.Com
           ? m(ChatPanel, { chatId, isVisible: isFrameRendered(), isCompact: isCompactLayout() })
           : m(SubagentView, { chatId, agentId, subagentSessionId: sessionId }),
         // The provider chooser: the chat root offers it when nothing is signed in, and the model
-        // bar's "+ Add a provider" and a provider-fault notice open it from inside a chat.
+        // bar's "+ Add a provider", a provider-fault notice, and the composer's no-provider notice
+        // open it from inside a chat.
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
       ]);
     },

@@ -635,7 +635,8 @@ class ProvisionalChatPhase(LowerCaseStrEnum):
     """Where a chat that is not an agent yet stands."""
 
     # A seeded chat (``chat_seed.py``) whose transcript is on the page with a composer: the
-    # user's first send is what picks the account (the chooser opens then) and launches it.
+    # user's first send launches it on the signed-in account (with nothing signed in, the page
+    # asks for a provider in the composer's place).
     AWAITING_FIRST_SEND = auto()
     # Its ``mngr create`` is running.
     CREATING = auto()
