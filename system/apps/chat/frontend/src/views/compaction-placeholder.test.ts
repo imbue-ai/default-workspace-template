@@ -16,7 +16,7 @@ vi.mock("../models/Chats", () => ({
   getQueuedMessagesForChat: () => agentState.queued_messages,
 }));
 
-import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests, updateChatSettings } from "../models/ChatSettings";
+import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests, setChatSettingsForTests } from "../models/ChatSettings";
 import { newestCompactionPillId, renderCompactionPlaceholder } from "./compaction-placeholder";
 
 const QUEUED: QueuedMessage = { queued_id: "q1", content: "and then this", timestamp: "2026-10-06T12:00:01Z" };
@@ -45,12 +45,8 @@ function prompt(timestamp: string): TranscriptEvent {
   };
 }
 
-/** Save the workspace's presentation setting the way the page does, the backend agreeing. */
-async function usePresentation(presentation: CompactionStatusPresentation): Promise<void> {
-  vi.spyOn(m, "request").mockImplementation((async (options: { body: unknown }) => ({
-    settings: options.body,
-  })) as never);
-  await updateChatSettings({ ...DEFAULT_CHAT_SETTINGS, compaction_status_presentation: presentation });
+function usePresentation(presentation: CompactionStatusPresentation): void {
+  setChatSettingsForTests({ ...DEFAULT_CHAT_SETTINGS, compaction_status_presentation: presentation });
 }
 
 type PlaceholderVnode = m.Vnode<{ chatId: string; events: TranscriptEvent[] }>;
@@ -88,35 +84,35 @@ describe("renderCompactionPlaceholder", () => {
     resetChatSettingsForTests();
   });
 
-  it("holds the conversation's last slot while compacting, under both presentations", async () => {
-    await usePresentation("both");
+  it("holds the conversation's last slot while compacting, under both presentations", () => {
+    usePresentation("both");
     const render = mount([prompt("2026-10-06T11:59:00Z")]);
     expect(allText(render?.([prompt("2026-10-06T11:59:00Z")]))).toBe("Compacting…");
   });
 
-  it("is shown under the placeholder presentation and not under the strip one", async () => {
-    await usePresentation("placeholder");
+  it("is shown under the placeholder presentation and not under the strip one", () => {
+    usePresentation("placeholder");
     expect(mount([])).not.toBeNull();
-    await usePresentation("strip");
+    usePresentation("strip");
     expect(mount([])).toBeNull();
   });
 
-  it("says a queued message waits on the compaction", async () => {
-    await usePresentation("both");
+  it("says a queued message waits on the compaction", () => {
+    usePresentation("both");
     agentState.queued_messages = [QUEUED];
     expect(allText(mount([])?.([]))).toBe("Compacting, then replying…");
   });
 
-  it("is gone once the agent leaves COMPACTING, and never there for another state", async () => {
-    await usePresentation("both");
+  it("is gone once the agent leaves COMPACTING, and never there for another state", () => {
+    usePresentation("both");
     for (const state of ["THINKING", "TOOL_RUNNING", "IDLE", null]) {
       agentState.activity_state = state;
       expect(mount([])).toBeNull();
     }
   });
 
-  it("gives the slot to the pill as soon as this compaction's pill lands", async () => {
-    await usePresentation("both");
+  it("gives the slot to the pill as soon as this compaction's pill lands", () => {
+    usePresentation("both");
     // An earlier compaction's pill is already on the transcript, and history loaded later can
     // add older ones still: neither is this compaction's.
     const earlier = [pill("2026-10-06T10:00:00Z"), prompt("2026-10-06T11:00:00Z")];
@@ -127,8 +123,8 @@ describe("renderCompactionPlaceholder", () => {
   });
 
   // The agent's clock may run behind the browser's, so the new pill can carry any timestamp.
-  it("knows its pill by identity, whatever the pill's timestamp", async () => {
-    await usePresentation("both");
+  it("knows its pill by identity, whatever the pill's timestamp", () => {
+    usePresentation("both");
     const earlier = [prompt("2026-10-06T11:00:00Z")];
     const render = mount(earlier)!;
     expect(render(earlier)).not.toBeNull();

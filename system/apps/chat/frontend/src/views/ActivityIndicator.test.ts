@@ -4,7 +4,7 @@ import m from "mithril";
 import type { TranscriptEvent } from "../models/Response";
 import type { QueuedMessage } from "../models/Chats";
 import type { CompactionStatusPresentation } from "../models/ChatSettings";
-import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests, updateChatSettings } from "../models/ChatSettings";
+import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests, setChatSettingsForTests } from "../models/ChatSettings";
 import {
   ActivityIndicator,
   isWorkingActivityState,
@@ -324,16 +324,12 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     expect(labelTextOf(strip)).toBe("Confirming permission changes…");
   });
 
-  /** Save the workspace's presentation setting the way the page does, the backend agreeing. */
-  const usePresentation = async (presentation: CompactionStatusPresentation): Promise<void> => {
-    vi.spyOn(m, "request").mockImplementation((async (options: { body: unknown }) => ({
-      settings: options.body,
-    })) as never);
-    await updateChatSettings({ ...DEFAULT_CHAT_SETTINGS, compaction_status_presentation: presentation });
+  const usePresentation = (presentation: CompactionStatusPresentation): void => {
+    setChatSettingsForTests({ ...DEFAULT_CHAT_SETTINGS, compaction_status_presentation: presentation });
   };
 
-  it.each(["strip", "both"] as const)("shows a compaction on the strip under the %s presentation", async (p) => {
-    await usePresentation(p);
+  it.each(["strip", "both"] as const)("shows a compaction on the strip under the %s presentation", (p) => {
+    usePresentation(p);
     agentState.activity_state = "COMPACTING";
     const strip = render();
     expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("COMPACTING");
@@ -342,8 +338,8 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     expect(labelTextOf(render())).toBe("Compacting, then replying…");
   });
 
-  it("leaves a compaction off the strip under the placeholder presentation, and nothing else", async () => {
-    await usePresentation("placeholder");
+  it("leaves a compaction off the strip under the placeholder presentation, and nothing else", () => {
+    usePresentation("placeholder");
     agentState.activity_state = "COMPACTING";
     // Not even the wake-up caption: the agent is busy, just not shown here.
     resolveReq1();

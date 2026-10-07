@@ -108,6 +108,11 @@ export async function updateChatSettings(next: ChatSettings): Promise<ChatSettin
   return settings ?? DEFAULT_CHAT_SETTINGS;
 }
 
+/** Take these as the loaded settings, as if the backend had answered with them (tests). */
+export function setChatSettingsForTests(next: ChatSettings): void {
+  settings = next;
+}
+
 /** Forget what was loaded, so the next read fetches afresh (tests). */
 export function resetChatSettingsForTests(): void {
   settings = null;
