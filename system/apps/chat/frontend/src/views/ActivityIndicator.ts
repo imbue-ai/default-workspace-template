@@ -60,16 +60,13 @@ function pendingToolCall(events: TranscriptEvent[]): ToolCall | null {
   return null;
 }
 
-/** The activity state of an agent whose context is being compacted. */
 export const COMPACTING_STATE = "COMPACTING";
 
-// Activity states in which the agent is busy: a turn or a compaction is in progress.
 const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING", COMPACTING_STATE]);
 
 /**
  * Whether the given server-derived activity state means the agent is busy with a
- * turn or a compaction. Drives the visibility of the stop button and the
- * composer's queueing placeholder.
+ * turn or a compaction.
  */
 export function isWorkingActivityState(state: string | null | undefined): boolean {
   return state !== null && state !== undefined && WORKING_ACTIVITY_STATES.has(state);
@@ -80,7 +77,6 @@ function labelForToolCall(tc: ToolCall): string {
   return tc.caption_label || "Running tool…";
 }
 
-/** What a compaction in progress is called, on the strip and in the placeholder row alike. */
 export function compactingLabel(hasQueuedMessages: boolean): string {
   return hasQueuedMessages ? "Compacting, then replying…" : "Compacting…";
 }
@@ -257,8 +253,8 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
         cancelRelease();
         cancelWake();
         heldToolCaption = null;
-        // CLEANUP: the compaction-status design review removes the unpicked presentation and the
-        // setting; this branch then either always renders the strip or never does.
+        // CLEANUP: once design review picks a compaction status presentation, drop the
+        // isCompactionStatusShownIn check here (always render the strip, or never).
         return label !== null && isCompactionStatusShownIn("strip") ? renderStrip(label, state) : null;
       }
 

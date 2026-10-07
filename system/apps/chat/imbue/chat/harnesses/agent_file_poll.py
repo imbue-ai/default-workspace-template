@@ -1,13 +1,8 @@
-"""One shared poller over one small file per agent, replacing per-agent watchers.
+"""One shared poller over one small file per agent.
 
-Each agent's file is tiny and rewritten rarely -- but the previous design spent a dedicated
-watchdog observer on each agent (its own poll thread, dispatcher, emitter, and inotify buffer:
-four OS threads per agent, for EVERY agent mngr reports, for as long as the agent exists). On a
-host with dozens of accumulated agents that machinery was the chat app's dominant thread count,
-and it grew without bound as agents were created over the process's life.
-
-This poller is the bounded replacement: ONE thread stats every listed agent's file each
-interval and invokes ``on_file_changed`` only for agents whose file stamp (mtime + size)
+Each agent's file is tiny and rewritten rarely, and a watchdog observer per agent costs four OS
+threads per agent, growing without bound as agents accumulate on a host. Instead, ONE thread
+stats every listed agent's file each interval and invokes ``on_file_changed`` only for agents whose file stamp (mtime + size)
 differs from the remembered one. The invariant is level-triggered and one sentence long: an
 agent's derived state is recomputed whenever its file's observed stamp differs from the
 remembered stamp. Consequences:
@@ -16,13 +11,11 @@ remembered stamp. Consequences:
   function of how many agents have ever been seen.
 - The path set is re-resolved from ground truth on every pass, so an agent whose harness
   was guessed wrong at first sight (the create path tracks before observe reports the
-  harness) is polled at its REAL path on the next pass -- the old per-agent watcher baked
-  the guessed path in forever.
+  harness) is polled at its REAL path on the next pass.
 - A missed wake needs no special handling: there are no wakes, only the next pass.
 
 The callback must be cheap and idempotent for spurious invocations (the manager's
-recomputes are no-op-guarded), exactly like ``PathWatcher.on_change``. A callback that raises
-is logged and skipped, so one agent's failure neither stops the pass nor kills the thread.
+recomputes are no-op-guarded), exactly like ``PathWatcher.on_change``.
 """
 
 from __future__ import annotations
@@ -36,8 +29,7 @@ from typing import Final
 from loguru import logger
 
 # One stat per agent per interval is trivial even under gVisor's elevated syscall cost;
-# 1s keeps a harness-driven write visible within a second, indistinguishable from the
-# inotify latency it replaces.
+# 1s keeps a harness-driven write visible within a second.
 AGENT_FILE_POLL_INTERVAL_SECONDS: Final[float] = 1.0
 
 # What "the file changed" means: a different (mtime_ns, size) pair, or a flip between

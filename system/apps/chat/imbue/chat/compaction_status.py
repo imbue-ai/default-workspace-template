@@ -7,10 +7,6 @@ so the marker can outlive its compaction.
 
 The chat app records each compaction it asks for in ``compaction_request.json`` beside them, so
 the cause survives the chat app's memory of the request.
-
-Every harness's parser marks a finished compaction with the same event: a ``user_message`` whose
-``display`` is ``status`` and whose content is "Context was compacted" (see
-``harnesses/events.py``).
 """
 
 import os
@@ -38,7 +34,6 @@ from imbue.imbue_common.pure import pure
 # The content every harness's parser gives its compacted event.
 CONTEXT_COMPACTED_CONTENT: Final[str] = "Context was compacted"
 
-# The event field the manager stamps with the cause, read by the pill's "why?" popover.
 COMPACTION_CAUSE_FIELD: Final[str] = "compaction_cause"
 
 # The file (in the agent state dir) recording the last compaction the chat app asked for:
@@ -103,9 +98,8 @@ def read_compaction_signal(path: Path, now: float) -> CompactionSignal | None:
     """Read the ``compacting`` marker or ``last_compaction.json`` at ``path``; None when it does not exist.
 
     An unreadable body or a missing time falls back to UNKNOWN and the file's mtime, so a marker
-    always counts for as long as it is fresh. A recorded time later than ``now`` (clock skew)
-    also falls back to the mtime, and an mtime later than ``now`` reads as ``now``, so a marker
-    cannot stay fresh for longer than the timeout after it was written.
+    always counts for as long as it is fresh. Times later than ``now`` (clock skew) are clamped,
+    so a marker cannot stay fresh for longer than the timeout after it was written.
     """
     try:
         mtime = path.stat().st_mtime
@@ -132,11 +126,7 @@ def read_compaction_signal(path: Path, now: float) -> CompactionSignal | None:
 
 
 def write_compaction_request(path: Path, cause: CompactionCause, requested_at: float) -> None:
-    """Record a compaction the chat asked for at ``path``, replacing the previous one atomically.
-
-    Never creates the directory: an agent with no local state dir has nothing local to read it.
-    Raises OSError when the file cannot be written.
-    """
+    """Record a compaction the chat asked for at ``path``, replacing the previous one atomically."""
     content = _RawCompactionRequest(
         cause=cause, requested_at=datetime.fromtimestamp(requested_at, tz=timezone.utc).isoformat()
     ).model_dump_json()
@@ -151,10 +141,7 @@ def write_compaction_request(path: Path, cause: CompactionCause, requested_at: f
 
 
 def read_compaction_request(path: Path, now: float) -> CompactionRequest | None:
-    """Read ``compaction_request.json`` at ``path``; None when it is absent or unreadable.
-
-    A ``requested_at`` later than ``now`` (clock skew) reads as ``now``.
-    """
+    """Read ``compaction_request.json`` at ``path``; None when it is absent or unreadable."""
     try:
         content = path.read_text()
     except OSError:

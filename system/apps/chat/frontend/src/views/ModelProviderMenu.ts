@@ -21,8 +21,8 @@
  * (`components/menu`), not this file's. What this file owns is the rows and the data behind
  * them.
  *
- * Auto-compact is the one row that belongs to the HARNESS rather than the model: shown whenever
- * the chat's harness can be compacted while idle, whatever model it runs.
+ * Auto-compact belongs to the HARNESS rather than the model: shown whenever the chat's harness
+ * can be compacted while idle, whatever model it runs.
  *
  * In the phone layout (`isCompact`) the same menu opens from a settings button at the left of
  * the composer instead of the chip under it, and draws the same rows on a sliding track
@@ -663,9 +663,8 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     return autocompactLabel(state.is_enabled);
   }
 
-  /** The Auto-compact row's submenu: on or off for this chat, what it is for, and a way to make
-   *  the chat's choice what new chats start with. Laid out as the Fast Mode submenu is, and for the
-   *  same reasons: a choice applies at once and the submenu stays up. */
+  /** The Auto-compact row's submenu: on or off for this chat, and a way to make the chat's choice
+   *  what new chats start with. A choice applies at once and the submenu stays up. */
   function autocompactSubmenu(chatId: string): m.Children {
     const settings = getChatSettings();
     if (settings === null) void ensureChatSettings();
@@ -710,8 +709,8 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         "Saves ~50% by compacting right before the cache expires.",
       ),
       m("div", { role: "separator", class: menuDividerClass() }),
-      // The same switch as the Fast Mode submenu's: it reads "new chats start with the choice I am
-      // looking at", so on the choice already holding the setting it goes inert.
+      // It reads "new chats start with the choice I am looking at", so on the choice already
+      // holding the setting it goes inert.
       m("div", { class: `autocompact-default ${css.ROW_STATIC}` }, [
         m("span", { class: css.ROW_LABEL }, defaultLabel),
         m(

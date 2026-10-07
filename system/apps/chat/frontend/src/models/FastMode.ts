@@ -2,8 +2,7 @@
  * A chat's fast mode (the backend's ``ChatFastModeState``, at ``/api/chats/<id>/fast-mode``):
  * off, auto or on, and for auto whether the chat has run its fast turns and been switched to
  * standard speed. The choice belongs to the chat, so it lives on the backend beside the chat's
- * record and this page keeps one copy per chat, loaded on demand and replaced whole by every
- * write.
+ * record.
  */
 
 import { createChatSettingStore } from "./chatSettingStore";

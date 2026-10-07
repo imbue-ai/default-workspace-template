@@ -865,10 +865,6 @@ describe("MessageInput send failure notice", () => {
     expect(restored.indexOf("failed message")).toBeLessThan(restored.indexOf("newer draft"));
   });
 
-  // Escape-dismisses-as-Cancel is not covered here: these tests render vnodes with no DOM, so
-  // there is no document to dispatch a keydown at. The handler delegates to the same function
-  // the Cancel button calls, which is the whole of the fix.
-
   it("retries the same message through the ordinary send", async () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
     const component = MessageInput();

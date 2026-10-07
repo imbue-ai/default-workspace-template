@@ -93,13 +93,8 @@ CompactByNameFn = Callable[[MngrContext, Sequence[AgentName]], Sequence[AgentNam
 def compact_stale_agents_if_enabled(names: Sequence[str], compact_by_name: CompactByNameFn) -> list[str]:
     """Compact whichever of the named agents are stale, when the workspace's mngr config has proactive compaction on.
 
-    Returns the names compacted. One mngr context serves both the mode read and the plugin call
-    (``compact_by_name``, mngr's ``compact_stale_agents_by_name`` outside tests), which skips a
-    name that no longer resolves to a running agent with compaction support rather than raising,
-    since a chat can stop between being listed and this call.
-
-    mngr caches provider instances per context, and this builds a fresh context on every call, so
-    the context's instances are closed before it is dropped.
+    Returns the names compacted. mngr caches provider instances per context, and this builds a
+    fresh context on every call, so the context's instances are closed before it is dropped.
     """
     mngr_ctx, cg = _get_mngr_context()
     try:

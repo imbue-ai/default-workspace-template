@@ -76,7 +76,6 @@ def test_only_claude_adds_the_billing_line_to_the_fast_mode_notice() -> None:
 
 
 def test_only_the_harnesses_mngr_can_compact_support_compaction_and_only_claude_interrupts_one() -> None:
-    """Claude, codex and pi have the autocompact plugin's compaction request; Escape cancels claude's /compact."""
     capabilities = {
         harness: (spec.supports_compaction, spec.can_interrupt_compaction) for harness, spec in HARNESS_SPECS.items()
     }

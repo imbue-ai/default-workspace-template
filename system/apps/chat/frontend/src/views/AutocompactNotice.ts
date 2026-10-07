@@ -1,7 +1,6 @@
 /**
- * The one-time notice under a compaction pill: idle chats now compact on their own, and the
- * Auto-compact row in the model menu turns that off. Shown once per workspace (the settings
- * remember it), under the conversation's latest pill, until dismissed.
+ * The one-time notice that idle chats now compact on their own. Shown once per workspace (the
+ * settings remember it) until dismissed.
  */
 
 import m from "mithril";

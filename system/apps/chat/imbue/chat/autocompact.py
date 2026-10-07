@@ -31,13 +31,7 @@ def _no_harness_known(agent_name: str) -> str | None:
 
 
 class ChatAutoCompactor:
-    """Schedules periodic idle compaction for the chats that have it on.
-
-    Once every interval, asks mngr's autocompact plugin, in process, to compact whichever of the
-    opted-in running chat agents are stale, provided the workspace's mngr config has proactive
-    compaction on. It does nothing at all while no chat is opted in (not even a config read). All
-    collaborators are injectable for unit testing without real agents.
-    """
+    """Schedules periodic idle compaction for the chats that have it on, through mngr's autocompact plugin in process."""
 
     _list_opted_in_chat_agent_names: Callable[[], Sequence[str]]
     _compact: Callable[[Sequence[str]], Sequence[str]]
@@ -55,9 +49,8 @@ class ChatAutoCompactor:
         # Compacts whichever of the named agents are stale when the mngr config allows it; returns
         # the names it compacted.
         compact: Callable[[Sequence[str]], Sequence[str]] = _compact_stale_opted_in_agents,
-        # Told each agent the sweep asked to compact, by name.
         on_compaction_requested: Callable[[str], None] = _ignore_compaction_request,
-        # The harness an agent runs, by name, for the log line; None when not known.
+        # Only for the log line.
         harness_of_agent: Callable[[str], str | None] = _no_harness_known,
         monotonic: Callable[[], float] = time.monotonic,
         interval_seconds: float = _DEFAULT_SWEEP_INTERVAL_SECONDS,
@@ -127,9 +120,7 @@ class ChatAutoCompactor:
     def _run_sweep(self) -> None:
         """Background loop executing sweeps on interval until stopped."""
         while not self._stop_event.wait(self._interval_seconds):
-            # The plugin call can raise beyond the errors the sweep expects (a corrupt agent record
-            # on a host, say), and an exception escaping here would end idle compaction for the
-            # life of the process.
+            # An exception escaping here would end idle compaction for the life of the process.
             try:
                 self.sweep()
             except Exception as e:

@@ -151,8 +151,7 @@ from imbue.mngr_codex.app_server_client import CodexModel
 # Several tests in this module spin up real watchdog FSEvents observers
 # (the activity and model-state watchers). On macOS the FSEvents emitter thread
 # occasionally stalls during shutdown, tripping pytest-timeout. Mark the
-# whole file as flaky so offload retries it automatically -- mirrors
-# ``ws_broadcaster_test.py``.
+# whole file as flaky so offload retries it automatically.
 pytestmark = pytest.mark.flaky
 
 
@@ -1659,7 +1658,6 @@ def test_full_snapshot_omitting_agent_drops_it(
     assert len(agent_manager.get_agents()) == 0
 
 
-# mngr CLI argv contract
 # These confront each builder's argv with the live ``imbue.mngr.main.cli`` tree,
 # so a subcommand/flag rename in a new mngr fails here at merge time rather than
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
@@ -1789,7 +1787,6 @@ def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
     assert templates == ["chat", "fast"]
 
 
-# the chat's originating project (the mngr ``project`` label)
 # A chat is an agent, so the project it was created inside rides the label mngr
 # already propagates to the agent's children rather than a parallel list. The
 # label is where a chat starts out filed, not an owner: membership is
@@ -2360,7 +2357,7 @@ def _seed_sweep_candidates(manager: AgentManager) -> None:
 def test_opted_in_chat_agents_exclude_dead_workers_primary_and_opted_out_chats(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """Only running chats with idle compaction on are swept; a chat with no setting reads the default (on)."""
+    """A chat with no setting reads the default (on)."""
     manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
     try:
         _seed_sweep_candidates(manager)
@@ -2618,9 +2615,6 @@ def test_secondary_manager_never_writes_chat_memory_scores(broadcaster: WebSocke
     finally:
         secondary.stop()
         live.stop()
-
-
-# Activity-state integration
 
 
 def test_ensure_activity_tracking_skips_when_state_dir_missing(agent_manager: AgentManager) -> None:
@@ -3558,9 +3552,6 @@ def test_full_snapshot_rebuilds_agent_set_and_broadcasts(
     assert {chat["chat_id"] for chat in msg["chats"]} == {str(second.id)}
 
 
-# Offline codex model-chip resolution from the persisted raw model-list sidecar
-
-
 def _codex_model_entry(model: str, effort: str, *, priority: bool = False) -> CodexModel:
     """A ``model/list`` entry for the sidecar tests (id == model)."""
     return CodexModel.model_validate(
@@ -3639,11 +3630,7 @@ def test_model_state_poller_recomputes_and_broadcasts_when_the_state_file_change
     agent_manager: AgentManager,
     broadcaster: WebSocketBroadcaster,
 ) -> None:
-    """One poller pass after a ``model_state.json`` write lands the choice on the wire.
-
-    Regression guard for the per-agent-watcher replacement: the poller is now the only
-    thing that turns a harness's state-file write into a recompute + broadcast.
-    """
+    """One poller pass after a ``model_state.json`` write lands the choice on the wire."""
     agent_id = "agent-1"
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
     state_path = get_model_state_path(HarnessType.CODEX, agent_manager._get_agent_state_dir(agent_id))
@@ -3673,13 +3660,7 @@ def test_tracking_many_agents_spawns_no_per_agent_threads(
     agent_manager: AgentManager,
     tmp_path: Path,
 ) -> None:
-    """Folding a snapshot full of agents must not grow the thread count.
-
-    Regression guard for the long-run thread leak: every observed agent used to get its
-    own watchdog observer for model tracking (four OS threads per agent, held for the
-    agent's whole life), so a host accumulating agents grew the chat app to hundreds of
-    threads. Model tracking is now the one shared poller, started in ``start()``.
-    """
+    """Folding a snapshot full of agents must not grow the thread count."""
     agents = [_agent_details(f"threadless-{i}") for i in range(8)]
     for agent in agents:
         (tmp_path / "agents" / str(agent.id)).mkdir(parents=True)
@@ -3695,7 +3676,7 @@ def test_tracking_many_agents_spawns_no_per_agent_threads(
 def test_list_model_state_paths_follows_a_harness_heal(agent_manager: AgentManager) -> None:
     """The poller's path set is re-resolved from ground truth, so an agent first tracked
     under the default-harness guess is polled at its REAL state path once observe reports
-    the true harness -- the per-agent watcher used to bake the guessed path in forever."""
+    the true harness."""
     agent_id = "agent-1"
     _seed_agent(agent_manager, agent_id, harness=HarnessType.CLAUDE)
     state_dir = agent_manager._get_agent_state_dir(agent_id)
@@ -3881,9 +3862,6 @@ def test_stop_activity_tracking_keeps_the_sending_records(agent_manager: AgentMa
     assert session.in_flight_block() == "caught mid-send"
 
 
-# Watcher eviction (the chat-memory lifecycle)
-
-
 def test_remove_agent_evicts_the_watcher(agent_manager: AgentManager) -> None:
     """A destroyed agent's watcher is evicted along with its tracking state."""
     evicted: list[str] = []
@@ -4040,9 +4018,6 @@ def test_the_agent_list_is_known_after_the_first_full_snapshot(agent_manager: Ag
     assert agent_manager.is_agent_list_known()
 
 
-# The auto-open reactor, fed from the observe stream
-
-
 def test_observe_events_feed_the_auto_open_reactor(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -4071,9 +4046,6 @@ def test_observe_events_feed_the_auto_open_reactor(
 
     manager._handle_observe_event(make_agent_removed_event(appeared.id, appeared.name, appeared.host.id))
     assert not reactor.ledger.is_delivered(ChatId(appeared.id))
-
-
-# Chats that have run on several agents (a hand-built record)
 
 
 class _UnremovableChatRecordStore(InMemoryChatRecordStore):
@@ -5200,9 +5172,6 @@ def test_status_mapping_follows_the_chat_row(
     assert chat_status_for_agent(lifecycle, activity, is_permission_pending) is expected
 
 
-# Unseeded chats awaiting their first send (post-launch-paths plan section 3.7)
-
-
 def test_mint_awaiting_chat_lists_a_provisional_chat_with_a_minted_name_and_no_seed(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
@@ -5334,13 +5303,9 @@ def test_a_send_that_fails_while_connecting_still_clears_the_mark(agent_manager:
     assert not is_chat_connecting(agent_manager, agent_id)
 
 
-# Compaction status: the COMPACTING overlay, the pending request, and the compacted event's cause.
-
-
 def _tracked_compaction_agent(
     manager: AgentManager, tmp_path: Path, harness: HarnessType = HarnessType.CLAUDE, state: str = "RUNNING"
 ) -> tuple[str, Path]:
-    """A tracked agent with a local state dir, returned as its id and that dir."""
     agent_id = f"agent-{uuid4().hex}"
     state_dir = tmp_path / "agents" / agent_id
     state_dir.mkdir(parents=True)
@@ -5399,7 +5364,6 @@ def test_a_fresh_compacting_marker_wins_over_thinking_and_tool_running(
     )
     assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
 
-    # The previous label resumes once the compaction ends.
     marker.unlink()
     agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
     assert _activity_of(agent_manager, agent_id) == ActivityState.TOOL_RUNNING
@@ -5659,7 +5623,6 @@ def test_an_interrupt_clears_the_compacting_marker_and_the_pending_request(
     assert not marker.exists()
     assert agent_id not in agent_manager._compaction_pending_by_agent
     assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
-    # A second interrupt, with no marker left, is a quiet no-op.
     agent_manager.clear_compaction_after_interrupt(agent_info)
     assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
     cleared_lines = _log_lines_starting(
@@ -5706,7 +5669,6 @@ def test_a_compact_queued_behind_a_running_turn_shows_the_turn_until_it_ends(
     )
     assert _activity_of(agent_manager, agent_id) == ActivityState.TOOL_RUNNING
 
-    # The turn ends; the compaction queued behind it now shows.
     agent_manager.update_session_events(
         agent_id,
         [
@@ -5858,8 +5820,6 @@ class _SweepFailureError(Exception):
 
 
 class _FailingConnectSession(FileHarnessSession):
-    """A file session whose live-backend connect fails."""
-
     def ensure_live(self) -> None:
         raise _SweepFailureError("connect failed")
 
@@ -5891,7 +5851,6 @@ def test_the_sweep_callback_maps_the_agent_name_to_its_id_and_marks_the_compacti
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
     agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path)
-    # The manager's own sweep reports through this callback.
     assert agent_manager._autocompactor._on_compaction_requested == agent_manager.note_sweep_compaction_requested
 
     agent_manager.note_sweep_compaction_requested(f"agent-{agent_id}")

@@ -534,8 +534,7 @@ export function hasOpenHandoffRequest(events: readonly TranscriptEvent[], handof
 
 /** Whether the tail turn renders as settled (no frontier spinner, closing prose as the reply) for
  *  an agent in this activity state. A compaction counts as settled: an idle compaction runs with no
- *  turn open, and the status strip and placeholder row already show it. A compaction inside a
- *  running turn only hides that turn's frontier until the turn resumes. */
+ *  turn open, and one inside a running turn only hides that turn's frontier until it resumes. */
 export function isTailTurnSettled(activityState: string | null | undefined): boolean {
   return activityState === "IDLE" || activityState === COMPACTING_STATE;
 }

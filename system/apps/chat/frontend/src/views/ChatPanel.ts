@@ -613,9 +613,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // dominant scroll cost on a long conversation. Its output depends only on the
     // held events and the settled flag -- captured by the render version (bumped on
     // any data mutation) plus the settled flag -- so a scroll-only redraw reuses the
-    // cached rows. The grouping (steps, decoration, skill expansions, auth-error
-    // hiding) is produced by the same functions on the same inputs, so the
-    // rendered structure is identical to recomputing.
+    // cached rows.
     const renderKey = `${chatId}|${getRenderVersion(chatId)}|${tailTurnSettled ? 1 : 0}`;
     if (renderKey !== rowsCacheKey) {
       // Both structure and decoration come from the transcript walk; there is no

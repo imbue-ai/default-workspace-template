@@ -47,13 +47,11 @@ class CompactionCause(LowerCaseStrEnum):
     NATIVE = auto()
 
 
-# The command a user types to compact a chat's context; it may carry instructions after a space.
 COMPACT_COMMAND: Final[str] = "/compact"
 
 
 @pure
 def is_working_activity_state(activity_state: ActivityState) -> bool:
-    """Whether the agent is busy in this state: a turn in flight or a compaction."""
     match activity_state:
         case ActivityState.THINKING | ActivityState.TOOL_RUNNING | ActivityState.COMPACTING:
             return True
@@ -65,7 +63,6 @@ def is_working_activity_state(activity_state: ActivityState) -> bool:
 
 @pure
 def is_compact_command(text: str) -> bool:
-    """Whether an outgoing message is the compact command: exactly ``/compact``, or ``/compact <instructions>``."""
     return text == COMPACT_COMMAND or text.startswith(f"{COMPACT_COMMAND} ")
 
 

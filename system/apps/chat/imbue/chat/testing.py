@@ -159,8 +159,7 @@ def observer_holding_the_lock(events_base_dir: Path) -> Iterator[None]:
 
 
 class StandInAnthropicApi:
-    """A loopback stand-in for the Anthropic API, for the ``real_claude`` tests to point Claude Code at with
-    ``ANTHROPIC_BASE_URL``.
+    """A loopback stand-in for the Anthropic API, to point Claude Code at with ``ANTHROPIC_BASE_URL``.
 
     It records every request's path, auth headers and body. With ``reply_for`` set, ``POST /v1/messages`` gets a
     valid answer carrying the text ``reply_for`` picks from the request body: the server-sent events of a streamed
@@ -251,7 +250,6 @@ def _message(model: str, text: str) -> dict[str, Any]:
 
 
 def _streamed_message_events(model: str, text: str) -> bytes:
-    """The server-sent events of one streamed message holding a single text block."""
     started = {
         **_message(model, ""),
         "content": [],
@@ -899,8 +897,6 @@ def close_ws(ws: simple_websocket.Client) -> None:
     except (simple_websocket.ConnectionClosed, OSError):
         pass
 
-
-# the two-process fixture: the shell framing this chat app
 
 # The fixture chat's agent id and name. A real mngr id shape (32 hex), so the send path can type
 # it as an AgentId.

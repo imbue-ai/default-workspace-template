@@ -71,14 +71,11 @@ def _skip_unless_runnable() -> None:
 
 
 def _is_compaction_request(body: dict[str, Any]) -> bool:
-    """Whether a message request is Claude Code's request for a summary of the conversation (``/compact``)."""
     messages = body.get("messages") or []
     return bool(messages) and messages[-1].get("role") == "user" and _COMPACTION_PROMPT in json.dumps(messages[-1])
 
 
 class _CompactionHoldingReplies:
-    """Picks the stand-in's replies, holding the one to the compaction request until ``release`` is set."""
-
     def __init__(self) -> None:
         self.release = threading.Event()
         self.compaction_requested = threading.Event()
@@ -162,7 +159,6 @@ def _prepare_mngr_profile(host_dir: Path, api: StandInAnthropicApi) -> None:
 
 @contextmanager
 def _real_claude_agent(project_dir: Path, log_path: Path) -> Iterator[AgentInfo]:
-    """``mngr create`` a Claude agent running in ``project_dir``; destroyed at the end."""
     try:
         with open(log_path, "ab") as log:
             created = subprocess.run(
@@ -200,8 +196,7 @@ def _real_claude_agent(project_dir: Path, log_path: Path) -> Iterator[AgentInfo]
 
 @contextmanager
 def _chat_app_over(agent: AgentInfo, chats_root: Path) -> Iterator[ServedApp]:
-    """Serve the chat app over the one real agent, sending through mngr, with the ``compacting`` marker watched as
-    ``AgentManager.start`` watches it."""
+    """Watches the ``compacting`` marker as ``AgentManager.start`` would."""
     manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=chats_root)
     seed_agent_state(manager, agent.id, name=agent.name, labels=agent.labels, harness=agent.harness)
     manager._ensure_activity_tracking(agent.id)
@@ -219,10 +214,6 @@ def _chat_app_over(agent: AgentInfo, chats_root: Path) -> Iterator[ServedApp]:
 def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_pill(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``/compact`` from the composer: the strip shows "Compacting…" while Claude Code compacts (mngr's
-    ``PreCompact`` marker is up while the stand-in holds its summary), then the "Context was compacted" pill lands
-    holding the stand-in's summary with the cause "you asked", the strip clears, and mngr's ``PostCompact`` hook has
-    recorded a manual compaction."""
     _skip_unless_runnable()
     project_dir = tmp_path / "project"
     _make_project(project_dir)

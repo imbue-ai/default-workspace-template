@@ -103,7 +103,7 @@ def relabel_account_command(mngr_binary: str, agent_id: str, account_id: str) ->
 
 @pure
 def relabel_autocompact_command(mngr_binary: str, agent_id: str, state: ChatAutocompactState) -> list[str]:
-    """The ``mngr label`` that records a chat's idle compaction setting on its agent. Pure argv assembly."""
+    """The ``mngr label`` that records a chat's idle compaction setting on its agent."""
     return [mngr_binary, "label", agent_id, "--label", state.label]
 
 

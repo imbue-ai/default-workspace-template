@@ -1,17 +1,13 @@
 /**
- * The workspace-wide chat settings (the backend's ``ChatSettings``, at ``/api/settings``): the fast
- * mode a new chat starts in, how many of the user's turns a chat in auto mode runs fast for,
- * whether the user has been told about the first automatic switch to standard speed, whether a
- * new chat is compacted while idle, how a compaction in progress is shown, and whether the user
- * has been told about idle compaction. One copy per page, loaded on demand and replaced whole by
- * every write.
+ * The workspace-wide chat settings (the backend's ``ChatSettings``, at ``/api/settings``). One copy
+ * per page, loaded on demand and replaced whole by every write.
  */
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import type { FastModeMode } from "./FastMode";
 
-// CLEANUP: remove with the presentation the design review does not pick, and the setting with it.
+// CLEANUP: once design review picks a compaction status presentation, remove this type and the setting.
 /** Where a compaction in progress is shown: the activity strip, an inline placeholder row in the
  *  conversation, or both. */
 export type CompactionStatusPresentation = "strip" | "placeholder" | "both";
@@ -78,7 +74,7 @@ export function ensureChatSettings(): Promise<ChatSettings> {
   return loading;
 }
 
-// CLEANUP: remove with the presentation the design review does not pick, and the setting with it.
+// CLEANUP: once design review picks a compaction status presentation, remove this function.
 /** Whether a compaction in progress is shown on `surface` under the workspace's presentation
  *  setting. Before the settings load it answers for the defaults, and asks for them. */
 export function isCompactionStatusShownIn(surface: "strip" | "placeholder"): boolean {

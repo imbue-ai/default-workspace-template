@@ -37,8 +37,6 @@ from imbue.chat.harnesses.claude.tap import poll_verdict
 from imbue.chat.harnesses.claude.tap import read_raw_tail
 from imbue.concurrency_group.errors import ProcessError
 
-# --- raw-record builders -------------------------------------------------------------
-
 
 def _user_line(text: str) -> str:
     return json.dumps({"type": "user", "message": {"role": "user", "content": text}})
@@ -60,9 +58,6 @@ def _tool_result_line_quoting(text: str) -> str:
     return json.dumps(
         {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": text}]}}
     )
-
-
-# --- compute_tail_facts --------------------------------------------------------------
 
 
 def test_tail_facts_empty_tail() -> None:
@@ -105,9 +100,6 @@ def test_tail_facts_mid_tool_variant_is_not_the_tap_sentinel() -> None:
 def test_tail_facts_ignores_non_json_lines() -> None:
     facts = compute_tail_facts(["not json at all", _SENTINEL_LINE])
     assert facts.has_interrupt_sentinel is True
-
-
-# --- poll_verdict / deadline_verdict (the lattice) -----------------------------------
 
 
 def _facts(*, sentinel: bool, answer: bool) -> Any:
@@ -178,9 +170,6 @@ def test_deadline_verdict_flushed_when_sentinel_answered() -> None:
     )
 
 
-# --- read_raw_tail -------------------------------------------------------------------
-
-
 def test_read_raw_tail_returns_only_lines_after_baseline(tmp_path: Path) -> None:
     session = tmp_path / "s.jsonl"
     session.write_text("before-baseline\n")
@@ -203,9 +192,6 @@ def test_read_raw_tail_empty_when_not_grown(tmp_path: Path) -> None:
     session = tmp_path / "s.jsonl"
     session.write_text("base\n")
     assert read_raw_tail(session, session.stat().st_size) == []
-
-
-# --- orchestration: gates + verdict routing ------------------------------------------
 
 
 class _FakeTapWatcher:
@@ -550,9 +536,6 @@ def test_execute_mirror_read_runs_under_the_message_lock(tmp_path: Path) -> None
     # The refresh actually ran inside the lock acquire.
     assert lock_record == ["enter", "exit"]
     assert watcher.events_calls == 1
-
-
-# --- stop-to-composer executor: branch dispatch --------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -1133,9 +1116,6 @@ def test_stop_chord_send_failure_falls_back_to_base(tmp_path: Path) -> None:
     assert recorder.presses == [False]
     assert recorder.base_calls == 1
     assert recorder.mark_idle_calls == 0
-
-
-# --- tap recovery suppression when a stop ran during the tap watch --------------------
 
 
 def test_tap_recovery_suppressed_when_a_stop_ran_since_the_baseline(tmp_path: Path) -> None:

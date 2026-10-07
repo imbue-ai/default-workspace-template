@@ -99,12 +99,9 @@ class DisplayKind(StrEnum):
     # ``resolution`` field is written onto the earlier secret card. ``display_body`` is the
     # notice alone when a harness flushed background-task reports into the same message.
     SECRET_RESOLUTION = "secret_resolution"
-    # A subtle inline status message: "Context was compacted", the one ``user_message`` every
-    # harness emits with this kind when its context has been compacted. The chat app stamps that
-    # event, as it is stored and streamed, with an optional ``compaction_cause``: ``"idle"`` (the
-    # chat's idle sweep asked for it), ``"manual"`` (the user typed /compact), ``"native"`` (the
-    # harness compacted on its own), or null when the cause is unknown. Absent on events read from
-    # disk after the fact (an event older than the compaction status timeout).
+    # A subtle inline status message. Each harness's compacted event ("Context was compacted") is a
+    # ``user_message`` of this kind, stamped with ``compaction_cause`` (a ``CompactionCause`` value,
+    # or null when unknown; absent on an event older than the compaction status timeout).
     STATUS = "status"
     # A one-line notice on the ASSISTANT rail: a tick, a bold lead (``display_label``) and
     # the plain summary (``display_body``). For a message the agent is told about rather

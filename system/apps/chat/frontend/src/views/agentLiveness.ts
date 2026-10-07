@@ -27,7 +27,7 @@ const ACTIVE_STATES: ReadonlySet<string> = new Set(["RUNNING", "RUNNING_UNKNOWN_
 // (RUNNING) or idle (WAITING). Outside this set the process is not running.
 const ALIVE_STATES: ReadonlySet<string> = new Set(["RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE", "WAITING"]);
 
-// Activity states that mean the agent is busy with a turn or a compaction (see ActivityIndicator).
+// Activity states that mean the agent is busy (see ActivityIndicator).
 const WORKING_ACTIVITY_STATES: ReadonlySet<string> = new Set(["THINKING", "TOOL_RUNNING", "COMPACTING"]);
 
 /** True iff ``state`` POSITIVELY says the agent process is dead.

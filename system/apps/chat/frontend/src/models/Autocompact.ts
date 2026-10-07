@@ -2,8 +2,7 @@
  * A chat's auto-compact setting (the backend's ``ChatAutocompactState``, at
  * ``/api/chats/<id>/autocompact``): whether the chat is compacted while idle, just before its
  * prompt cache would expire. The choice belongs to the chat, so it lives on the backend beside the
- * chat's record and this page keeps one copy per chat, loaded on demand and replaced whole by
- * every write.
+ * chat's record.
  */
 
 import { createChatSettingStore } from "./chatSettingStore";

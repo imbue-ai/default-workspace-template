@@ -47,7 +47,6 @@ class CompactionStatusPresentation(LowerCaseStrEnum):
     STRIP = auto()
     # An inline placeholder row at the end of the conversation.
     PLACEHOLDER = auto()
-    # Both at once.
     BOTH = auto()
 
 
@@ -71,9 +70,8 @@ class ChatSettings(FrozenModel):
         default=True,
         description="Whether a new chat starts with idle compaction on",
     )
-    # CLEANUP: this field exists so the compaction-status design review can compare the
-    # presentations; once the review picks one, remove the field, its enum, and the
-    # presentation the review did not pick.
+    # CLEANUP: once the compaction-status design review picks a presentation, remove this field,
+    # its enum, and the presentation not picked.
     compaction_status_presentation: CompactionStatusPresentation = Field(
         default=CompactionStatusPresentation.BOTH,
         description="Where the chat shows that a compaction is in progress",

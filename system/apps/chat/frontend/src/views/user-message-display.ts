@@ -59,7 +59,6 @@ export function compactionCauseText(cause: CompactionCause | null | undefined): 
   }
 }
 
-/** The expansion key the "why?" popover of the compaction pill for `eventId` is open under. */
 export function compactionWhyKey(eventId: string): string {
   return `compaction-why:${eventId}`;
 }
@@ -233,8 +232,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
  * row gets the collapsed-system class; a genuine prompt gets the user-bubble class; a status
  * message gets the status-row class; a notice sits on the agent's rail instead.
  *
- * `isAutocompactNoticeAnchor` puts the one-time idle-compaction notice under a status row (the
- * conversation's latest compaction pill), which shows it until the user dismisses it.
+ * `isAutocompactNoticeAnchor` puts the one-time idle-compaction notice under a status row.
  */
 export function renderUserMessage(event: UserMessageEvent, isAutocompactNoticeAnchor = false): m.Vnode | null {
   const kind = classifyUserMessage(event).kind;

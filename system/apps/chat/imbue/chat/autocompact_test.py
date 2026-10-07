@@ -15,7 +15,6 @@ from imbue.mngr.utils.polling import poll_until
 def _recording_compact(
     compacted_of: Callable[[Sequence[str]], Sequence[str]] = lambda names: [],
 ) -> tuple[list[list[str]], Callable[[Sequence[str]], Sequence[str]]]:
-    """A fake plugin call recording each batch of names it is given, answering it with ``compacted_of(names)``."""
     recorded_batches: list[list[str]] = []
 
     def compact(names: Sequence[str]) -> Sequence[str]:

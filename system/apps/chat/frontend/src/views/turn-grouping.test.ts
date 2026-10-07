@@ -11,8 +11,6 @@ import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { buildSections, hasOpenHandoffRequest, hasUserTurn, isTailTurnSettled } from "./turn-grouping";
 import type { RequestResolution } from "./message-classification";
 
-// Event builders
-
 function userMsg(
   ts: string,
   content: string,
@@ -480,9 +478,7 @@ describe("historical input fallback", () => {
     expect(pending.title).toBe("Read the docs");
   });
 
-  // The fallback used to accept only claude's `Bash` and pi's `bash`, which was the last
-  // piece of harness knowledge in this file -- and it left agy (`run_command`, whose command
-  // lives under `CommandLine`) as the one harness with no fallback at all.
+  // agy's `run_command` keeps its command under `CommandLine`.
   it("recovers decoration from an agy-shaped tool call", () => {
     const agyMsg = (ts: string, command: string, callId: string): AssistantMessageEvent => ({
       ...tkMsg(ts, command, callId),
@@ -1593,7 +1589,7 @@ describe("permission resolutions", () => {
   });
 
   it("attaches each verdict to its own card by request id, even when resolved out of order", () => {
-    // Regression for the verdict-swap bug: request A (Gmail) is created first,
+    // Request A (Gmail) is created first,
     // B (Slack) second, but B's verdict lands FIRST -- deny is fire-and-forget
     // on the frontend while grant can block on a real OAuth browser flow, so
     // denying the newer request while the older one's grant is still working
@@ -1630,9 +1626,8 @@ describe("permission resolutions", () => {
   });
 
   it("hides an id-less notification instead of guessing which card it resolves", () => {
-    // A notice recorded before Imbue Studio embedded ids attributes nothing: the
-    // arrival-order guess is what used to swap verdicts, and an embedded page
-    // recovers the verdict from the response log via the card's hydration
+    // A notice recorded before Imbue Studio embedded ids attributes nothing; an
+    // embedded page recovers the verdict from the response log via the card's hydration
     // query. The notice still acts as the turn boundary it is, with no bubble.
     const events = [
       userMsg("2026-05-01T01:00:00Z", "go"),

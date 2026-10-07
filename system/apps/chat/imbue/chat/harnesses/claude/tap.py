@@ -512,9 +512,7 @@ def execute_claude_shoulder_tap(
     return ClaudeTapResult(status=ClaudeTapStatus.TAPPED)
 
 
-# =============================================================================
 # Stop button (Contract B), empty-queue case: the same chord, resolved as a pure interrupt.
-# =============================================================================
 
 
 class _AbortVerdict(StrEnum):
@@ -608,7 +606,7 @@ def _no_settle_activity() -> None:
 
 
 def _no_compaction_in_flight() -> bool:
-    """Default compaction check: nothing compacting (unit tests of the turn paths)."""
+    """Default compaction check: nothing compacting."""
     return False
 
 

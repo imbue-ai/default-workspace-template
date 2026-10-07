@@ -3,9 +3,8 @@
 Idle compaction is the chat app's sweep (``autocompact.py``) compacting a chat's context just
 before its prompt cache expires. A new chat starts with the workspace's default
 (``chat_settings.py``), copied into the chat's folder at its first launch; the choice then
-belongs to the chat, so it travels with the chat across handoffs and rebinds, exactly like fast
-mode (``chat_fast_mode.py``). A chat created before this setting existed has no file and reads
-the workspace default until the user changes it.
+belongs to the chat, so it travels with the chat across handoffs and rebinds. A chat with no
+file reads the workspace default.
 """
 
 import json

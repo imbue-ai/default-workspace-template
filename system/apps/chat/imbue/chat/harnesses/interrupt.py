@@ -79,8 +79,7 @@ SettleActivity = Callable[[], None]
 # empty-queue chord path uses it; the base restart-drain and the other overrides ignore it.
 PressChord = Callable[[], bool]
 # Whether the agent is compacting its context (a fresh compacting marker, or a compaction the
-# chat asked for and has not seen finish). Bound by the endpoint to the specific agent -- claude's
-# stop cancels such a compaction with no turn in flight; the other implementations ignore it.
+# chat asked for and has not seen finish). Bound by the endpoint to the specific agent.
 IsCompactionInFlight = Callable[[], bool]
 
 
@@ -158,8 +157,8 @@ class InterruptToComposer(ABC):
         ``get_in_flight_block`` reads the session's *Sending* records, so a send aborted
         mid-flight is folded into the returned block (contract A4/B) by the harnesses that
         guarantee ordering (claude, pi); the base restart-drain ignores it.
-        ``is_compaction_in_flight`` says whether the agent is compacting (claude cancels such a
-        compaction with no turn in flight; the others ignore it).
+        ``is_compaction_in_flight`` lets an implementation cancel a compaction running with no turn
+        in flight.
         Raises :class:`AgentRestartError` if a restart-based implementation cannot restart.
         """
 

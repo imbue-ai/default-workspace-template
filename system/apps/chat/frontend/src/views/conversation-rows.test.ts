@@ -14,8 +14,6 @@ import {
 } from "./conversation-rows";
 import { AutocompactNotice } from "./AutocompactNotice";
 
-// --- Event builders (mirroring turn-grouping.test.ts) ---
-
 function userMsg(ts: string, content: string, id = `u-${ts}`): UserMessageEvent {
   return { timestamp: ts, type: "user_message", event_id: id, source: "test", role: "user", content };
 }

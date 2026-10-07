@@ -163,8 +163,6 @@ class ChatAppState(MutableModel):
                 return existing
 
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
-                # A compacted event carries its cause on the wire. The events are the watcher's
-                # stored ones, so stamping them before the fan-out also serves later reads.
                 self.agent_manager.stamp_compaction_events(agent_id, events)
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
                 # via the REST /events endpoint, so nothing is buffered for replay. The
@@ -276,10 +274,8 @@ class ChatAppState(MutableModel):
         Dispatches through the agent's session to the harness's registered interrupt (the
         base restart-drain, or a native override), binding the watcher, the restart the caller
         supplies, the activity settle, and the native cancel chord. Shared by the route and
-        the handoff's draining step. A cancel chord or a restart also ends a compaction in
-        progress, which then reports no completion, so the agent's compaction status is cleared
-        when either actually ran (a stop that found nothing to interrupt leaves it alone). Raises
-        ``AgentRestartError`` when the restart fails.
+        the handoff's draining step. The agent's compaction status is cleared when a cancel chord
+        or a restart actually ran. Raises ``AgentRestartError`` when the restart fails.
         """
         watcher = self.get_or_create_watcher(agent_info)
         interrupts = _SentInterrupts.build(

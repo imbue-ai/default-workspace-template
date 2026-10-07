@@ -73,7 +73,6 @@ const ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND = "account_signed_out";
 // The kind of the server's refusal of a /compact sent before the agent has anything to compact.
 const NOTHING_TO_COMPACT_SEND_FAILURE_KIND = "nothing_to_compact";
 
-/** The ``kind`` the server's refusal of a send carried, or undefined when it carried none. */
 function sendFailureKind(sendError: unknown): unknown {
   return (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
 }
@@ -605,11 +604,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // transcript turn, queued snapshot, or held-send snapshot (see
           // OutgoingMessages) -- nothing to do here.
         } catch (err) {
-          // The send was not accepted (the backend confirms delivery before resolving, so a
-          // rejection means the message was NOT accepted). Drop the optimistic bubble, restore
-          // the text/attachments to the composer, then surface a popup: the declined-command
-          // notice for a /compact with nothing to compact yet, which retrying cannot change, and
-          // the failure notice with its recoveries for anything else.
+          // The backend confirms delivery before resolving, so a rejection means the message was
+          // NOT accepted. A /compact with nothing to compact yet gets the declined-command notice
+          // rather than the failure notice, since retrying cannot change it.
           const detail = describeRequestError(err);
           const isDeclined = sendFailureKind(err) === NOTHING_TO_COMPACT_SEND_FAILURE_KIND;
           if (!isDeclined) {

@@ -3,9 +3,8 @@
 
 The chat app is served over fakes (``running_workspace``) and its page is opened at the chat app's own URL, so the
 chat root's rail and the chat's page are both in reach without the shell. The compaction signals are the files and
-transcript records a real agent produces: mngr's ``compacting`` marker and ``last_compaction.json``, the chat app's
-own ``compaction_request.json``, and Claude Code's compact summary record in the session file. The manager is never
-started in these tests, so the poller that watches the ``compacting`` marker is started here on its own.
+transcript records a real agent produces. The manager is never started in these tests, so the poller that watches the
+``compacting`` marker is started here on its own.
 """
 
 from __future__ import annotations
@@ -77,8 +76,8 @@ _AUTOCOMPACT_NOTICE_TEXT = (
     "under Auto-compact in the model menu."
 )
 
-# A conversation whose last turn is still running with one message queued behind it (see test_e2e.py's
-# ``_QUEUED_SESSION_EVENTS``), so the chat's snapshot carries a queued message.
+# A conversation whose last turn is still running with one message queued behind it, so the chat's snapshot carries
+# a queued message.
 _QUEUED_SESSION_EVENTS: list[dict[str, Any]] = [
     {
         "type": "user",
@@ -122,7 +121,6 @@ def _utc_iso(moment: datetime) -> str:
 def _compaction_workspace(
     tmp_path: Path, session_events: Sequence[Mapping[str, Any]] | None = None
 ) -> Iterator[RunningWorkspace]:
-    """The workspace with the poller over the ``compacting`` marker running, as ``AgentManager.start`` runs it."""
     with running_workspace(tmp_path, find_free_port(), find_free_port(), session_events=session_events) as server:
         poller = server.chat_state.agent_manager._compacting_marker_poller
         poller.start()
@@ -148,7 +146,6 @@ def _settings(server: RunningWorkspace) -> dict[str, Any]:
 
 
 def _update_settings(server: RunningWorkspace, **changes: Any) -> None:
-    """Replace the workspace's chat settings with the current ones plus ``changes``, as the page's own write does."""
     body = json.dumps({**_settings(server), **changes}).encode()
     request = urllib.request.Request(
         f"{server.chat_url}/api/settings", data=body, headers={"Content-Type": "application/json"}, method="PUT"
@@ -158,7 +155,6 @@ def _update_settings(server: RunningWorkspace, **changes: Any) -> None:
 
 
 def _set_fixture_harness(server: RunningWorkspace, harness: HarnessType) -> None:
-    """Run the fixture chat's agent on ``harness``, with the account label the workspace gave it."""
     manager = server.chat_state.agent_manager
     seed_agent_state(
         manager, FIXTURE_AGENT_ID, name=FIXTURE_AGENT_NAME, labels={"account": server.account_ids[0]}, harness=harness
@@ -168,7 +164,6 @@ def _set_fixture_harness(server: RunningWorkspace, harness: HarnessType) -> None
 
 
 def _open_chat(page: Page, server: RunningWorkspace) -> FrameLocator:
-    """Open the chat root on the fixture chat at the chat app's own URL and wait for the chat's composer."""
     page.goto(f"{server.chat_url}{chat_root_path(ChatId(FIXTURE_AGENT_ID))}")
     expect(page.locator(".chat-root")).to_be_visible(timeout=15000)
     chat = page.frame_locator(f'iframe.chat-root-frame[data-chat-id="{FIXTURE_AGENT_ID}"]')
@@ -229,15 +224,10 @@ def _open_autocompact_submenu(chat: FrameLocator) -> Locator:
     return submenu
 
 
-# the Auto-compact toggle
-
-
 @pytest.mark.timeout(60, func_only=False)
 def test_turning_auto_compact_off_writes_the_chats_setting_and_the_switch_makes_off_the_default(
     compaction_server: RunningWorkspace, page: Page
 ) -> None:
-    """A Claude chat's model menu carries the Auto-compact row; choosing Off records the chat's own setting, and the
-    "Use Off for new chats" switch makes Off what a new chat starts with."""
     server = compaction_server
     autocompact_path = server.chat_state.agent_manager._chat_files_root / FIXTURE_AGENT_ID / AUTOCOMPACT_FILENAME
     assert not autocompact_path.exists()
@@ -273,7 +263,6 @@ def test_turning_auto_compact_off_writes_the_chats_setting_and_the_switch_makes_
 def test_a_harness_that_cannot_be_compacted_has_no_auto_compact_row(
     compaction_server: RunningWorkspace, page: Page
 ) -> None:
-    """Antigravity declares no ``supports_compaction``, so its chat's model menu leaves the Auto-compact row out."""
     _set_fixture_harness(compaction_server, HarnessType.ANTIGRAVITY)
     with page.expect_response(lambda response: response.url.endswith("/api/harnesses")) as catalogs:
         chat = _open_chat(page, compaction_server)
@@ -282,9 +271,6 @@ def test_a_harness_that_cannot_be_compacted_has_no_auto_compact_row(
     chat.locator(".model-selector-trigger").click()
     expect(chat.locator('[data-menu-row="providers"]')).to_be_visible()
     expect(chat.locator('[data-menu-row="autocompact"]')).to_have_count(0)
-
-
-# the COMPACTING status
 
 
 @pytest.mark.parametrize(
@@ -299,9 +285,7 @@ def test_a_compacting_marker_shows_the_status_where_the_presentation_puts_it_unt
     is_strip_shown: bool,
     is_placeholder_shown: bool,
 ) -> None:
-    """mngr's ``compacting`` marker puts a Claude chat in COMPACTING: the strip and the placeholder row show
-    "Compacting…" where the presentation setting puts them, the stop button stays (Claude's interrupt cancels a
-    compaction), and the rail's dot is working; removing the marker clears all of it."""
+    """The stop button stays because Claude's interrupt cancels a compaction."""
     server = compaction_server
     _update_settings(server, compaction_status_presentation=presentation)
     chat = _open_chat(page, server)
@@ -331,7 +315,6 @@ def test_a_compacting_marker_shows_the_status_where_the_presentation_puts_it_unt
 
 @pytest.mark.timeout(60, func_only=False)
 def test_a_message_queued_behind_a_compaction_changes_the_label(tmp_path: Path, page: Page) -> None:
-    """With a message queued behind it, the compaction reads "Compacting, then replying…" on the strip and the row."""
     with _compaction_workspace(tmp_path, session_events=_QUEUED_SESSION_EVENTS) as server:
         _write_compacting_marker(server)
         chat = _open_chat(page, server)
@@ -349,8 +332,7 @@ def test_a_message_queued_behind_a_compaction_changes_the_label(tmp_path: Path, 
 def test_the_stop_button_is_hidden_while_a_harness_that_cannot_interrupt_a_compaction_compacts(
     compaction_server: RunningWorkspace, page: Page
 ) -> None:
-    """Codex declares ``can_interrupt_compaction`` false: while its chat compacts (from the chat's own request, since
-    Codex writes no marker) the strip shows the compaction but no stop button is offered."""
+    """Codex writes no ``compacting`` marker, so its compaction comes from the chat's own request."""
     server = compaction_server
     _set_fixture_harness(server, HarnessType.CODEX)
     chat = _open_chat(page, server)
@@ -362,9 +344,6 @@ def test_the_stop_button_is_hidden_while_a_harness_that_cannot_interrupt_a_compa
     expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(_COMPACTING_LABEL, timeout=15000)
     expect(_rail_row(page)).to_have_attribute("data-status", "working")
     expect(_stop_button(chat)).to_have_count(0)
-
-
-# the "Context was compacted" pill
 
 
 def _record_compaction_cause(server: RunningWorkspace, cause: str | None) -> None:
@@ -388,7 +367,6 @@ def _record_compaction_cause(server: RunningWorkspace, cause: str | None) -> Non
 def test_the_compacted_pill_says_why_the_context_was_compacted(
     compaction_server: RunningWorkspace, page: Page, cause: str | None
 ) -> None:
-    """The pill a finished compaction lands carries its cause, and its "why?" popover words it."""
     server = compaction_server
     chat = _open_chat(page, server)
     expect(chat.locator(".message-user").first).to_contain_text("Hello agent!")
@@ -407,8 +385,6 @@ def test_the_compacted_pill_says_why_the_context_was_compacted(
 def test_the_auto_compact_notice_shows_under_the_pill_until_it_is_dismissed(
     compaction_server: RunningWorkspace, page: Page
 ) -> None:
-    """The one-time notice sits under the compaction pill until the user dismisses it, which the workspace's
-    settings remember, so a reload shows the pill without it."""
     server = compaction_server
     assert _settings(server)["is_autocompact_notice_shown"] is False
     chat = _open_chat(page, server)

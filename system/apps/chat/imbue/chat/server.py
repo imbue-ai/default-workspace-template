@@ -752,10 +752,8 @@ def _record_client_message_activity(
 def _get_harnesses_endpoint() -> Response:
     """The static per-harness model catalogs -- the model bar's compile-time half.
 
-    One response covers every harness (each catalog dumped verbatim: options,
-    switch mode, picker mode, powered-by label, shoulder-tap capability, plus the
-    harness's popups, compaction capabilities and user-facing name); the frontend keys in
-    by an agent's harness.
+    One response covers every harness (each catalog dumped verbatim, plus the harness's
+    spec-level declarations); the frontend keys in by an agent's harness.
 
     Every harness is always included, deliberately: what the user has signed in to
     decides what they can LAUNCH, not what the app can render. A codex or pi agent that
@@ -772,7 +770,7 @@ def _get_harnesses_endpoint() -> Response:
         except (OSError, ValueError) as e:
             logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
             continue
-        # The catalog model is the wire shape for the model bar; the popup and compaction declarations
+        # The catalog model is the wire shape for the model bar; the other declarations
         # live on the HarnessSpec and are merged in here so one response carries
         # everything the frontend keys by harness.
         spec = get_harness_spec(harness)
@@ -892,7 +890,7 @@ def _get_powered_by_endpoint(chat_id: str) -> Response:
 
 
 def _get_settings_endpoint() -> Response:
-    """``GET /api/settings``: the workspace-wide chat settings (what a new chat starts with, the fast-mode turn limit, the notice flags)."""
+    """``GET /api/settings``: the workspace-wide chat settings."""
     return json_response(ChatSettingsResponse(settings=get_state().chat_settings.read()).model_dump(mode="json"))
 
 
@@ -958,7 +956,7 @@ def _put_settings_endpoint() -> Response:
     """``PUT /api/settings``: replace the workspace-wide chat settings whole.
 
     The body is the settings object; a field left out takes its default, and an out-of-range
-    value (a turn limit below one, an unknown fast mode or compaction status presentation) answers 400.
+    value answers 400.
     """
     body = parse_json_object_body()
     if isinstance(body, Response):
