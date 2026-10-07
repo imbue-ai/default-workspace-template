@@ -92,7 +92,9 @@ def test_shell_command_reads_claudes_command_key_and_ignores_other_tools() -> No
     [
         # A file is NAMED on a chip, never pathed: the chip is a phrase to read,
         # and the whole path is one click away in its panel.
-        pytest.param("Read", '{"file_path":"/home/user/ws/src/views/midnight.ts"}', ("read", "midnight.ts"), id="read"),
+        pytest.param(
+            "Read", '{"file_path":"/home/user/ws/src/views/midnight.ts"}', ("read", "midnight.ts"), id="read"
+        ),
         pytest.param("Edit", '{"file_path":"a/b/plugin.py"}', ("edited", "plugin.py"), id="edit"),
         pytest.param("Write", '{"file_path":"notes.md"}', ("wrote", "notes.md"), id="write"),
         # A search names what it looked FOR first; the path is only the scope, and

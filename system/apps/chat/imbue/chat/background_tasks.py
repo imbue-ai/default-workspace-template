@@ -1,12 +1,10 @@
-"""The chat's own read of an agent's background-task markers, and the handoff's move of them.
+"""Where an agent's background-task markers live, and the handoff's move of them.
 
 mngr records each pending task that will wake an agent as one JSON file in the agent's
-``background_tasks`` dir and reports the live ones on every observe event. The chat reads the
-same dir itself, the way it reads the ``active`` marker, because the observe stream re-probes
-an agent only when its host shows activity: the flip when a report lands should not wait for
-that. Parsing is mngr's own (``parse_background_task_marker``), so a marker means the same thing
-here as in ``mngr list``; a marker whose pid is dead is stale and skipped, and nothing here
-deletes one, since its writer's next pass does.
+``background_tasks`` dir and reports the live ones on every observe event. The chat also reads
+the dir itself (with mngr's own ``read_live_background_tasks_in_local_dir``), the way it reads
+the ``active`` marker, because the observe stream re-probes an agent only when its host shows
+activity: the flip when a report lands should not wait for that.
 """
 
 import os
@@ -17,8 +15,6 @@ from loguru import logger
 
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.mngr.hosts.common import BACKGROUND_TASKS_DIR_NAME
-from imbue.mngr.hosts.common import parse_background_task_marker
-from imbue.mngr.interfaces.data_types import BackgroundTask
 from imbue.mngr.primitives import BackgroundTaskSource
 
 # A marker file is ``<source>-<task id>.json``, the source spelled lower case on disk.
@@ -29,37 +25,6 @@ RUN_IN_BACKGROUND_MARKER_PREFIX: Final[str] = f"{BackgroundTaskSource.RUN_IN_BAC
 def background_tasks_dir(host_dir: Path, agent_id: str) -> Path:
     """The agent's marker dir under a host dir. Its mtime changes whenever a marker is added or removed."""
     return agent_state_dir(host_dir, agent_id) / BACKGROUND_TASKS_DIR_NAME
-
-
-def is_process_alive(pid: int) -> bool:
-    """Whether a process with this pid exists (one owned by another user counts)."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def read_live_background_tasks(marker_dir: Path) -> tuple[BackgroundTask, ...]:
-    """The tasks recorded in a marker dir whose recording process is alive, oldest first.
-
-    A missing dir, a marker removed between the listing and its read, and a malformed marker
-    all read as no task.
-    """
-    live_tasks: list[BackgroundTask] = []
-    for marker_path in marker_dir.glob(f"*{_MARKER_SUFFIX}"):
-        try:
-            marker_json = marker_path.read_text()
-        except OSError as e:
-            logger.trace("Background-task marker {} went away before it was read: {}", marker_path, e)
-            continue
-        task = parse_background_task_marker(marker_json)
-        if task is not None and is_process_alive(task.pid):
-            live_tasks.append(task)
-    # mngr's order (``select_live_background_tasks``): oldest first, the id breaking ties.
-    return tuple(sorted(live_tasks, key=lambda task: (task.started_at, task.id)))
 
 
 def move_run_in_background_markers(host_dir: Path, from_agent_id: str, to_agent_id: str) -> None:

@@ -118,9 +118,7 @@ def test_poller_uses_one_thread_regardless_of_agent_count(tmp_path: Path) -> Non
         path.parent.mkdir(parents=True)
         path.write_text("{}")
     changed: list[str] = []
-    poller = AgentStatePoller.build(
-        watches=(_file_watch(path_by_agent, changed), _file_watch(path_by_agent, changed))
-    )
+    poller = AgentStatePoller.build(watches=(_file_watch(path_by_agent, changed), _file_watch(path_by_agent, changed)))
 
     threads_before = set(threading.enumerate())
     poller.start()

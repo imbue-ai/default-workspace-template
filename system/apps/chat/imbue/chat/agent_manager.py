@@ -46,9 +46,7 @@ from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
 from imbue.chat.background_tasks import background_tasks_dir
-from imbue.chat.background_tasks import is_process_alive
 from imbue.chat.background_tasks import move_run_in_background_markers
-from imbue.chat.background_tasks import read_live_background_tasks
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
 from imbue.chat.chat_fast_mode import write_fast_mode_state
@@ -126,7 +124,6 @@ from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
-from imbue.chat.models import background_task_snapshots
 from imbue.chat.models import ChatAccountBinding
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatCreationOutcome
@@ -146,6 +143,7 @@ from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import TransitionKind
+from imbue.chat.models import background_task_snapshots
 from imbue.chat.naming import AUTO_NAME_WORD
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.naming import first_free_numbered_name
@@ -174,6 +172,8 @@ from imbue.mngr.api.observe import FullAgentStateEvent
 from imbue.mngr.api.observe import ObserveEventFollower
 from imbue.mngr.api.observe import parse_observe_event_line
 from imbue.mngr.errors import MngrError
+from imbue.mngr.hosts.common import read_live_background_tasks_in_local_dir
+from imbue.mngr.hosts.common import read_local_process_start_times
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.interfaces.data_types import BackgroundTask
 from imbue.mngr.interfaces.data_types import compute_is_busy
@@ -543,24 +543,28 @@ class _BackgroundTaskReading(FrozenModel):
 
 @pure
 def busy_state_from_tasks(
-    lifecycle_state: str, live_tasks: tuple[BackgroundTask, ...]
+    lifecycle_state: str, live_tasks: tuple[BackgroundTask, ...], is_permission_pending: bool
 ) -> tuple[tuple[BackgroundTask, ...], bool]:
     """An agent's pending tasks and busy flag from its lifecycle and a direct read, by mngr's own rule.
 
     As in ``mngr list``, only an agent that can still resume carries tasks (a stopped one's
-    markers will wake nothing), and busy is RUNNING or any carried task.
+    markers will wake nothing), busy is RUNNING or any carried task, and an agent holding on a
+    permission prompt is never busy.
     """
     try:
         lifecycle = AgentLifecycleState(lifecycle_state)
     except ValueError:
         return (), False
     carried_tasks = live_tasks if is_lifecycle_state_able_to_resume(lifecycle) else ()
-    return carried_tasks, compute_is_busy(lifecycle, carried_tasks)
+    return carried_tasks, compute_is_busy(lifecycle, carried_tasks, is_blocked_on_dialog=is_permission_pending)
 
 
 @pure
 def resolve_busy_state(
-    details: AgentDetails, observed_at: datetime | None, reading: _BackgroundTaskReading | None
+    details: AgentDetails,
+    observed_at: datetime | None,
+    reading: _BackgroundTaskReading | None,
+    is_permission_pending: bool,
 ) -> tuple[tuple[BackgroundTask, ...], bool]:
     """An observed agent's pending tasks and busy flag, from whichever source is fresher.
 
@@ -571,8 +575,8 @@ def resolve_busy_state(
     the lifecycle is the stream's.
     """
     if reading is not None and (observed_at is None or reading.read_at >= observed_at):
-        return busy_state_from_tasks(details.state.value, reading.tasks)
-    return details.background_tasks, details.is_busy
+        return busy_state_from_tasks(details.state.value, reading.tasks, is_permission_pending)
+    return details.background_tasks, details.is_busy and not is_permission_pending
 
 
 @pure
@@ -3661,6 +3665,9 @@ class AgentManager:
             details_by_id = dict(self._agent_details_by_id)
             observed_at_by_id = dict(self._agent_details_observed_at_by_id)
             background_reading_by_agent = dict(self._background_reading_by_agent)
+            permission_pending_agent_ids = {
+                agent_id for agent_id, pending_ids in self._pending_permission_ids_by_agent.items() if pending_ids
+            }
 
         before_ids = set(before_details)
         after_ids = set(details_by_id)
@@ -3687,7 +3694,10 @@ class AgentManager:
         new_matches: dict[str, AgentMatch] = {}
         for agent_id, agent in details_by_id.items():
             background_tasks, is_busy = resolve_busy_state(
-                agent, observed_at_by_id.get(agent_id), background_reading_by_agent.get(agent_id)
+                agent,
+                observed_at_by_id.get(agent_id),
+                background_reading_by_agent.get(agent_id),
+                agent_id in permission_pending_agent_ids,
             )
             new_agents[agent_id] = AgentStateItem(
                 id=agent_id,
@@ -4138,23 +4148,26 @@ class AgentManager:
         self._recompute_model_choice(agent_id, broadcast_on_change=True)
 
     def _read_background_task_stamps(self) -> dict[str, Hashable]:
-        """Per tracked agent, its marker dir's stamp and whether each task it carries is still alive.
+        """Per tracked agent, its marker dir's stamp and the start time of each task's recording process.
 
-        The dir's stamp moves when a marker is written or removed; the liveness part moves when
+        The dir's stamp moves when a marker is written or removed; the start-time part moves when
         a task's process dies without removing its marker (a runner the OOM daemon shed), which
         the observe stream would otherwise report only at its next full snapshot. Also drops
         the reading of every agent no longer tracked.
         """
         with self._lock:
-            for agent_id in [agent_id for agent_id in self._background_reading_by_agent if agent_id not in self._agents]:
+            for agent_id in [
+                agent_id for agent_id in self._background_reading_by_agent if agent_id not in self._agents
+            ]:
                 del self._background_reading_by_agent[agent_id]
             pids_by_agent = {
-                agent_id: tuple(task.pid for task in agent.background_tasks) for agent_id, agent in self._agents.items()
+                agent_id: tuple(task.pid for task in agent.background_tasks)
+                for agent_id, agent in self._agents.items()
             }
         return {
             agent_id: (
                 read_file_stamp(background_tasks_dir(self._host_dir, agent_id)),
-                tuple(is_process_alive(pid) for pid in pids),
+                tuple(read_local_process_start_times(pids).get(pid) for pid in pids),
             )
             for agent_id, pids in pids_by_agent.items()
         }
@@ -4166,13 +4179,14 @@ class AgentManager:
         any observe event already folded, so it replaces whatever the agent carried.
         """
         read_at = datetime.now(timezone.utc)
-        tasks = read_live_background_tasks(background_tasks_dir(self._host_dir, agent_id))
+        tasks = read_live_background_tasks_in_local_dir(background_tasks_dir(self._host_dir, agent_id))
         with self._lock:
             agent_state = self._agents.get(agent_id)
             if agent_state is None:
                 return
             self._background_reading_by_agent[agent_id] = _BackgroundTaskReading(tasks=tasks, read_at=read_at)
-            carried_tasks, is_busy = busy_state_from_tasks(agent_state.state, tasks)
+            is_permission_pending = bool(self._pending_permission_ids_by_agent.get(agent_id))
+            carried_tasks, is_busy = busy_state_from_tasks(agent_state.state, tasks, is_permission_pending)
             if agent_state.background_tasks == carried_tasks and agent_state.is_busy == is_busy:
                 return
             self._agents[agent_id] = agent_state.model_copy_update(

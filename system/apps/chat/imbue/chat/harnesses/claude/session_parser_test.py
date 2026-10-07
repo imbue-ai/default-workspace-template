@@ -254,7 +254,6 @@ def test_slash_command_expansion_with_empty_args_drops_trailing_space() -> None:
     assert events[0]["content"] == "/clear"
 
 
-
 def test_queued_slash_command_expansion_normalized() -> None:
     """A slash command queued while the agent is busy is normalized the same way
     on the queued_command path, so it too reconciles against its optimistic
@@ -772,7 +771,6 @@ def test_compaction_command_and_output_dropped() -> None:
     )
     events = parse_lines([cmd_line, plain_cmd_line, out_line])
     assert len(events) == 0
-
 
 
 def test_synthetic_model_assistant_message_not_emitted() -> None:

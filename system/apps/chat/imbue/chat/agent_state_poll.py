@@ -99,7 +99,7 @@ class AgentStatePoller:
         Public so tests (and any caller that wants an immediate reconciliation) can drive
         a pass without the thread.
         """
-        for watch, remembered in zip(self._watches, self._stamp_by_agent_by_watch):
+        for watch, remembered in zip(self._watches, self._stamp_by_agent_by_watch, strict=False):
             stamp_by_agent = watch.read_stamp_by_agent()
 
             # Forget agents that are no longer listed, so one that reappears later is

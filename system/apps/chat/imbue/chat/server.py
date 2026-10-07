@@ -92,7 +92,6 @@ from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentListItem
-from imbue.chat.models import background_task_snapshots
 from imbue.chat.models import AgentListResponse
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
@@ -142,6 +141,7 @@ from imbue.chat.models import StartAgentResponse
 from imbue.chat.models import StopAgentResponse
 from imbue.chat.models import SwitchChatRequest
 from imbue.chat.models import SwitchChatResponse
+from imbue.chat.models import background_task_snapshots
 from imbue.chat.models import parse_subagent_key
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.presence import PresenceReport

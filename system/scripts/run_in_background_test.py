@@ -27,6 +27,7 @@ from imbue.mngr.hosts.common import (
     build_background_task_marker_lines_script,
     get_agent_background_tasks_dir_path,
     get_agent_state_dir_path,
+    read_local_process_start_times,
     select_live_background_tasks,
 )
 from imbue.mngr.primitives import AgentId, BackgroundTaskSource
@@ -366,7 +367,8 @@ def test_the_task_is_cleared_from_the_agent_a_handoff_moved_it_to(
 
 def test_mngr_reads_a_recorded_task_as_the_agents_pending_task(tmp_path: Path) -> None:
     agent_id = AgentId(_CHAT_ID)
-    started_at = datetime.datetime(2026, 10, 6, 12, 0, tzinfo=datetime.timezone.utc)
+    # Recorded after this process (its recorder here) started, as the runner records it.
+    started_at = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
     run_in_background.write_background_task_marker(
         get_agent_state_dir_path(tmp_path, agent_id),
         "20261006T120000Z-0a1b2c",
@@ -387,7 +389,9 @@ def test_mngr_reads_a_recorded_task_as_the_agents_pending_task(tmp_path: Path) -
         check=True,
     ).stdout.splitlines()
 
-    [task] = select_live_background_tasks(marker_lines, frozenset({os.getpid()}))
+    [task] = select_live_background_tasks(
+        marker_lines, read_local_process_start_times([os.getpid()])
+    )
     assert task.source is BackgroundTaskSource.RUN_IN_BACKGROUND
     assert task.id == "20261006T120000Z-0a1b2c"
     assert task.description == "Wait for the worker"

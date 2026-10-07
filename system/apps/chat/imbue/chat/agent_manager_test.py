@@ -38,6 +38,7 @@ from imbue.chat.agent_manager import _build_chat_display_label_command
 from imbue.chat.agent_manager import _build_chat_rename_command
 from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
+from imbue.chat.agent_manager import busy_state_from_tasks
 from imbue.chat.agent_manager import chat_status_for_agent
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
@@ -3461,7 +3462,9 @@ def test_agent_state_poller_recomputes_the_model_and_broadcasts_when_the_state_f
 # Background tasks: the busy state, read from the marker dir and the observe stream.
 
 
-def _write_runner_marker(host_dir: Path, agent_id: str, task_id: str, pid: int) -> Path:
+def _write_runner_marker(
+    host_dir: Path, agent_id: str, task_id: str, pid: int, started_at: datetime | None = None
+) -> Path:
     marker_dir = host_dir / "agents" / agent_id / "background_tasks"
     marker_dir.mkdir(parents=True, exist_ok=True)
     marker = marker_dir / f"run_in_background-{task_id}.json"
@@ -3471,7 +3474,8 @@ def _write_runner_marker(host_dir: Path, agent_id: str, task_id: str, pid: int) 
                 "source": "run_in_background",
                 "id": task_id,
                 "description": "Wait for the background agent",
-                "started_at": "2026-10-06T12:00:00Z",
+                # Written after its recorder started, as a runner writes it.
+                "started_at": (started_at or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "pid": pid,
             }
         )
@@ -3492,6 +3496,20 @@ def _status_and_tasks(agent_manager: AgentManager, chat_id: str) -> tuple[ChatSt
     return snapshot.status, [task.id for task in active.background_tasks], active.is_busy
 
 
+def test_an_agent_holding_on_a_permission_prompt_is_not_busy_even_with_a_task_pending() -> None:
+    """Only the user can answer the prompt, so the pending task's report will not move the agent."""
+    task = BackgroundTask(
+        source=BackgroundTaskSource.RUN_IN_BACKGROUND,
+        id="wait-36287",
+        description="Wait for the background agent",
+        started_at=datetime.now(timezone.utc),
+        pid=os.getpid(),
+    )
+
+    assert busy_state_from_tasks("WAITING", (task,), is_permission_pending=True) == ((task,), False)
+    assert busy_state_from_tasks("WAITING", (task,), is_permission_pending=False) == ((task,), True)
+
+
 def test_a_marker_written_while_waiting_shows_the_chat_as_background_on_the_next_poll(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -3503,7 +3521,8 @@ def test_a_marker_written_while_waiting_shows_the_chat_as_background_on_the_next
     assert _status_and_tasks(agent_manager, agent_id) == (ChatStatus.IDLE, [], False)
     client_queue = broadcaster.register()
 
-    marker = _write_runner_marker(tmp_path, agent_id, "wait-36284", os.getpid())
+    started_at = datetime.now(timezone.utc).replace(microsecond=0)
+    marker = _write_runner_marker(tmp_path, agent_id, "wait-36284", os.getpid(), started_at)
     agent_manager._agent_state_poller.poll_once()
 
     assert _status_and_tasks(agent_manager, agent_id) == (ChatStatus.BACKGROUND, ["wait-36284"], True)
@@ -3511,7 +3530,7 @@ def test_a_marker_written_while_waiting_shows_the_chat_as_background_on_the_next
     assert pushed is not None
     assert pushed["chats"][0]["status"] == "background"
     assert pushed["chats"][0]["active_agent"]["background_tasks"] == [
-        {"id": "wait-36284", "description": "Wait for the background agent", "started_at": "2026-10-06T12:00:00+00:00"}
+        {"id": "wait-36284", "description": "Wait for the background agent", "started_at": started_at.isoformat()}
     ]
     # A pass that finds nothing new pushes nothing.
     agent_manager._agent_state_poller.poll_once()
