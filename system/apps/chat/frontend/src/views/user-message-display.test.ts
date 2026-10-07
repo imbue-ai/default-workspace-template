@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import m from "mithril";
 import type { CompactionCause, UserMessageEvent } from "../models/Response";
 import { AutocompactNotice } from "./AutocompactNotice";
-import { compactionWhyKey, renderUserMessage, StableUserMessage } from "./user-message-display";
+import { renderUserMessage, StableUserMessage } from "./user-message-display";
 import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 
 function collectClasses(node: unknown): string[] {
@@ -53,7 +53,7 @@ describe("user-message-display status messages", () => {
     setBlockExpanded("status:evt-status-summary", false);
   });
 
-  it("renders a simple status pill when there is no summary body", () => {
+  it("renders a toggleable pill whose details hold only the explanation when there is no summary body", () => {
     const event: UserMessageEvent = {
       timestamp: "2026-01-01T00:00:00Z",
       type: "user_message",
@@ -71,8 +71,9 @@ describe("user-message-display status messages", () => {
 
     const inner = renderInner(event);
     const classes = collectClasses(inner);
-    expect(classes).toContain("message-system-status");
-    expect(classes).not.toContain("message-system-status--toggleable");
+    expect(classes).toContain("message-system-status message-system-status--toggleable");
+    expect(classes).toContain("message-system-status-details");
+    expect(classes).not.toContain("message-system-status-body");
     expect(allText(inner)).toContain("Context was compacted");
   });
 
@@ -140,9 +141,7 @@ describe("user-message-display status messages", () => {
     };
 
     const inner = renderInner(event);
-    // The pill is the first thing on the status line, ahead of its "Why?" button.
-    const statusLine = (Array.isArray(inner.children) ? inner.children : [])[0] as m.Vnode;
-    const children = Array.isArray(statusLine.children) ? statusLine.children : [];
+    const children = Array.isArray(inner.children) ? inner.children : [];
     const toggleChild = children[0] as m.Vnode<{
       onclick?: (e: { currentTarget: HTMLElement }) => void;
       onkeydown?: (e: { key: string; preventDefault: () => void; currentTarget: HTMLElement }) => void;
@@ -209,8 +208,9 @@ describe("user-message-display prompt bubbles", () => {
   });
 });
 
-describe("user-message-display compaction pill Why? popover", () => {
+describe("user-message-display compaction pill causes", () => {
   const EVENT_ID = "evt-compacted";
+  const SUMMARY = "Summary of earlier conversation across 12 turns.";
 
   function compactionEvent(cause?: CompactionCause | null): UserMessageEvent {
     return {
@@ -226,53 +226,29 @@ describe("user-message-display compaction pill Why? popover", () => {
     };
   }
 
-  type WhyButtonVnode = m.Vnode<{ onclick: () => void; "aria-expanded": string; "aria-label": string }>;
-
-  type AttrsVnode = { attrs?: Record<string, unknown>; children?: unknown };
-
-  /** The first vnode in the tree, depth first, whose attrs `matches` accepts. */
-  function findVnode(node: unknown, matches: (attrs: Record<string, unknown>) => boolean): AttrsVnode | null {
-    if (node == null || typeof node !== "object") return null;
-    if (Array.isArray(node)) {
-      for (const child of node) {
-        const found = findVnode(child, matches);
-        if (found !== null) return found;
-      }
-      return null;
-    }
-    const v = node as AttrsVnode;
-    if (v.attrs !== undefined && matches(v.attrs)) return v;
-    return findVnode(v.children, matches);
-  }
-
-  /** The "Why?" button's vnode (a Button component, so found by the marker in its `extra`). */
-  function findWhyButton(node: unknown): WhyButtonVnode | null {
-    const found = findVnode(
-      node,
-      (attrs) => typeof attrs.extra === "string" && attrs.extra.includes("compaction-why-button"),
-    );
-    return found === null ? null : (found as unknown as WhyButtonVnode);
-  }
-
-  function findPopover(node: unknown): m.Vnode | null {
-    const found = findVnode(
-      node,
-      (attrs) => typeof attrs.className === "string" && attrs.className.includes("compaction-why-popover"),
-    );
-    return found === null ? null : (found as m.Vnode);
-  }
-
-  /** The open popover mounted into a detached element, since its body is trusted markdown HTML. */
-  function mountPopover(node: unknown): HTMLElement {
-    const popover = findPopover(node);
-    expect(popover).not.toBeNull();
+  /** The pill's details mounted into a detached element, since the explanation is trusted markdown HTML. */
+  function mountDetails(event: UserMessageEvent): HTMLElement {
     const container = document.createElement("div");
-    m.render(container, popover);
-    return container.firstElementChild as HTMLElement;
+    m.render(container, renderInner(event));
+    const details = container.querySelector(".message-system-status-details");
+    expect(details).not.toBeNull();
+    return details as HTMLElement;
   }
 
   beforeEach(() => {
-    setBlockExpanded(compactionWhyKey(EVENT_ID), false);
+    setBlockExpanded(`status:${EVENT_ID}`, false);
+  });
+
+  it.each([
+    ["manual", "Compacted as requested"],
+    ["idle", "Compacted while idle"],
+    ["native", "Compacted to free up context"],
+    [null, "Context was compacted"],
+    [undefined, "Context was compacted"],
+  ] as const)("labels the pill for cause %s", (cause, label) => {
+    const container = document.createElement("div");
+    m.render(container, renderInner(compactionEvent(cause)));
+    expect(container.querySelector(".message-system-status")?.textContent).toBe(`▸${label}`);
   });
 
   it.each([
@@ -281,45 +257,35 @@ describe("user-message-display compaction pill Why? popover", () => {
     ["native", "Your agent triggered compaction. You can ask it about its current setting, or tell it to change it."],
     [null, "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu."],
     [undefined, "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu."],
-  ] as const)("opens on Why? with the sentence for cause %s, and closes again", (cause, text) => {
-    const event = compactionEvent(cause);
-    const component = StableUserMessage();
-    const vnode = m(StableUserMessage, { event }) as unknown as Parameters<typeof component.view>[0];
-    const closed = component.view(vnode);
-    expect(allText(closed)).toContain("Why?");
-    expect(findPopover(closed)).toBeNull();
-    expect(findWhyButton(closed)?.attrs["aria-expanded"]).toBe("false");
-    // Read out of context, a bare "Why?" says nothing; the accessible name carries the question.
-    expect(findWhyButton(closed)?.attrs["aria-label"]).toBe("Why was the context compacted?");
-    expect(findWhyButton(closed)?.children).toEqual(["Why?"]);
-
-    findWhyButton(closed)!.attrs.onclick();
-    // The memoized row repaints for the toggle even though its event did not change.
-    expect(component.onbeforeupdate!.call(component, vnode, vnode as never)).toBe(true);
-    const open = component.view(vnode);
-    expect(mountPopover(open).querySelector("p")?.textContent).toBe(text);
-    expect(findWhyButton(open)?.attrs["aria-expanded"]).toBe("true");
-    expect(component.onbeforeupdate!.call(component, vnode, vnode as never)).toBe(false);
-
-    findWhyButton(open)!.attrs.onclick();
-    expect(findPopover(component.view(vnode))).toBeNull();
+  ] as const)("opens its details on the explanation for cause %s, then the summary", (cause, text) => {
+    const details = mountDetails({ ...compactionEvent(cause), display_body: SUMMARY });
+    const [first, second, ...rest] = Array.from(details.children);
+    expect(first.classList.contains("compaction-explanation")).toBe(true);
+    expect(first.querySelector("p")?.textContent).toBe(text);
+    expect(second.classList.contains("message-system-status-body")).toBe(true);
+    expect(second.textContent).toBe(SUMMARY);
+    expect(rest).toEqual([]);
   });
 
-  it("shows /compact as an inline-code chip, in the popover's helper text style", () => {
-    setBlockExpanded(compactionWhyKey(EVENT_ID), true);
-    const popover = mountPopover(renderInner(compactionEvent("manual")));
-    expect(popover.classList.contains("markdown-content")).toBe(true);
-    const code = popover.querySelector("p > code");
+  it("sets the explanation apart from the summary in the helper text style, with /compact as an inline-code chip", () => {
+    const explanation = mountDetails({ ...compactionEvent("manual"), display_body: SUMMARY }).querySelector(
+      ".compaction-explanation",
+    );
+    expect(explanation?.classList.contains("markdown-content")).toBe(true);
+    expect(explanation?.classList.contains("border-b")).toBe(true);
+    const code = explanation?.querySelector("p > code");
     expect(code?.textContent).toBe("/compact");
     const textStyle = code?.closest("p")?.parentElement;
-    expect(textStyle?.classList.contains("text-secondary")).toBe(true);
+    expect(textStyle?.classList.contains("text-faint")).toBe(true);
     expect(textStyle?.classList.contains("text-(length:--font-size-helper)")).toBe(true);
   });
 
-  it("offers Why? beside a pill that also carries a summary", () => {
-    const inner = renderInner({ ...compactionEvent("manual"), display_body: "Summary text" });
-    expect(findWhyButton(inner)).not.toBeNull();
-    expect(collectClasses(inner)).toContain("message-system-status message-system-status--toggleable");
+  it("has no Why? button", () => {
+    const container = document.createElement("div");
+    m.render(container, renderInner({ ...compactionEvent("idle"), display_body: SUMMARY }));
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.querySelector("[class*='compaction-why']")).toBeNull();
+    expect(container.textContent).not.toContain("Why?");
   });
 
   it("puts the one-time notice under the anchor pill only", () => {

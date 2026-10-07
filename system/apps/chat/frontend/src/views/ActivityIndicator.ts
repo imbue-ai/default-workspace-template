@@ -7,8 +7,8 @@
  *   - IDLE / null      -> hidden
  *   - THINKING         -> "Thinking…"
  *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness
- *   - COMPACTING       -> "Compacting…", or "Compacting, then replying…" once a message is
- *                         queued behind it
+ *   - COMPACTING       -> "Compacting…", named for who started it ("Compacting while idle…"),
+ *                         and "…, then replying…" once a message is queued behind it
  *
  * The TOOL_RUNNING caption is read straight off the tool call: the harness's own
  * parser labelled it, so this view needs no notion of which harness is running.
@@ -27,7 +27,7 @@
 
 import m from "mithril";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
-import type { ToolCall, TranscriptEvent } from "../models/Response";
+import type { CompactionCause, ToolCall, TranscriptEvent } from "../models/Response";
 import { COMPACTING_STATE } from "../models/activityState";
 import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
 import { handoffPhaseText } from "./handoff-phase";
@@ -64,24 +64,40 @@ function labelForToolCall(tc: ToolCall): string {
   return tc.caption_label || "Running tool…";
 }
 
-function compactingLabel(hasQueuedMessages: boolean): string {
-  return hasQueuedMessages ? "Compacting, then replying…" : "Compacting…";
+function compactingLead(cause: CompactionCause | null): string {
+  switch (cause) {
+    case "manual":
+      return "Compacting as requested";
+    case "idle":
+      return "Compacting while idle";
+    case "native":
+      return "Compacting to free up context";
+    default:
+      return "Compacting";
+  }
+}
+
+function compactingLabel(cause: CompactionCause | null, hasQueuedMessages: boolean): string {
+  const lead = compactingLead(cause);
+  return hasQueuedMessages ? `${lead}, then replying…` : `${lead}…`;
 }
 
 /**
  * Pick the user-facing label for a server-derived activity state. For TOOL_RUNNING
  * we consult the transcript for the in-flight tool and use its label; COMPACTING
- * says whether a queued message waits on it; every other state is fixed (or null = hide).
+ * says who started it and whether a queued message waits on it; every other state is fixed
+ * (or null = hide).
  */
 export function labelForActivityState(
   state: string | null | undefined,
   events: TranscriptEvent[],
   hasQueuedMessages = false,
+  compactionCause: CompactionCause | null = null,
 ): string | null {
   if (state === null || state === undefined) return null;
   if (state === "IDLE") return null;
   if (state === "THINKING") return "Thinking…";
-  if (state === COMPACTING_STATE) return compactingLabel(hasQueuedMessages);
+  if (state === COMPACTING_STATE) return compactingLabel(compactionCause, hasQueuedMessages);
   if (state === "TOOL_RUNNING") {
     const pending = pendingToolCall(events);
     if (pending !== null) return labelForToolCall(pending);
@@ -234,7 +250,12 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
         return renderStrip(handoffPhaseText(chat.handoff, chat.active_agent.harness), `HANDOFF_${chat.handoff.phase}`);
       }
       const state = chat?.active_agent.activity_state ?? null;
-      const label = labelForActivityState(state, events, getQueuedMessagesForChat(chatId).length > 0);
+      const label = labelForActivityState(
+        state,
+        events,
+        getQueuedMessagesForChat(chatId).length > 0,
+        chat?.active_agent.compaction_cause ?? null,
+      );
 
       if (state === COMPACTING_STATE) {
         cancelRelease();

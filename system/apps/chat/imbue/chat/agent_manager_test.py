@@ -5492,6 +5492,81 @@ def test_a_compacted_event_ends_the_pending_compaction_and_carries_its_cause(
     assert _log_lines_starting(loguru_records, f"autocompact: compaction finished agent={agent_id} cause=idle")
 
 
+def _snapshot_compaction_cause(manager: AgentManager, agent_id: str) -> CompactionCause | None:
+    snapshot = manager.get_chat_snapshot(agent_id)
+    assert snapshot is not None
+    return snapshot.active_agent.compaction_cause
+
+
+@pytest.mark.parametrize(
+    ("marker_trigger", "pending_cause", "expected_cause"),
+    [
+        pytest.param("auto", None, CompactionCause.NATIVE, id="claude_auto_compaction"),
+        pytest.param(None, CompactionCause.IDLE, CompactionCause.IDLE, id="sweep_request"),
+        pytest.param(None, CompactionCause.MANUAL, CompactionCause.MANUAL, id="composer_compact"),
+    ],
+)
+def test_the_chat_snapshot_names_the_cause_of_a_compaction_while_it_runs(
+    agent_manager: AgentManager,
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    marker_trigger: str | None,
+    pending_cause: CompactionCause | None,
+    expected_cause: CompactionCause,
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is None
+    listener = broadcaster.register()
+
+    if marker_trigger is not None:
+        write_compacting_marker(state_dir, marker_trigger)
+        agent_manager._recompute_activity_state(agent_id, broadcast_on_change=True)
+    if pending_cause is not None:
+        agent_manager.note_compaction_requested(agent_id, pending_cause, time.monotonic())
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is expected_cause
+    assert agent_manager.get_chat_snapshots()[0].active_agent.compaction_cause is expected_cause
+    latest = _last_chats_updated(_drain(listener))
+    assert latest is not None
+    assert latest["chats"][0]["active_agent"]["compaction_cause"] == expected_cause.value
+
+
+def test_the_chat_snapshot_names_no_cause_once_the_compaction_stops_showing(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    marker = write_compacting_marker(state_dir, "auto")
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is CompactionCause.NATIVE
+
+    # The cause is kept for the compacted event still to come, but the chat is no longer compacting.
+    marker.unlink()
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+    assert agent_manager._compaction_cause_by_agent[agent_id] is CompactionCause.NATIVE
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is None
+    assert agent_manager.get_chat_snapshots()[0].active_agent.compaction_cause is None
+
+
+def test_a_cause_that_changes_while_the_chat_compacts_is_broadcast(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+    assert _snapshot_compaction_cause(agent_manager, agent_id) is CompactionCause.MANUAL
+    listener = broadcaster.register()
+
+    write_compacting_marker(state_dir, "auto")
+    agent_manager._recompute_activity_state(agent_id, broadcast_on_change=True)
+
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    latest = _last_chats_updated(_drain(listener))
+    assert latest is not None
+    assert latest["chats"][0]["active_agent"]["compaction_cause"] == CompactionCause.NATIVE.value
+
+
 @pytest.mark.parametrize(
     ("marker_trigger", "pending_cause", "expected_cause"),
     [

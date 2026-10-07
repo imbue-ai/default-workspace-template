@@ -1050,6 +1050,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             account_id=None,
             state="RUNNING",
             activity_state=ActivityState.IDLE,
+            compaction_cause=None,
             model_choice=None,
             queued_messages=(),
             shoulder_tap_available=False,

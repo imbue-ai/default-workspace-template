@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
-import type { TranscriptEvent } from "../models/Response";
+import type { CompactionCause, TranscriptEvent } from "../models/Response";
 import type { QueuedMessage } from "../models/Chats";
 import { ActivityIndicator, labelForActivityState, wakeUpSpinnerDeadline } from "./ActivityIndicator";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
@@ -9,8 +9,14 @@ import { handoffStateFixture } from "../models/chatSnapshotFixture";
 
 // The component reads the agent's server-derived state through the chats model; the
 // mock factory is hoisted, so the state it serves lives in a mutable holder.
-const agentState: { activity_state: string | null; harness: string; queued_messages: QueuedMessage[] } = {
+const agentState: {
+  activity_state: string | null;
+  compaction_cause: CompactionCause | null;
+  harness: string;
+  queued_messages: QueuedMessage[];
+} = {
   activity_state: null,
+  compaction_cause: null,
   harness: "claude",
   queued_messages: [],
 };
@@ -115,6 +121,23 @@ describe("labelForActivityState — fixed-label states", () => {
     expect(labelForActivityState("COMPACTING", [])).toBe("Compacting…");
     expect(labelForActivityState("COMPACTING", [], false)).toBe("Compacting…");
     expect(labelForActivityState("COMPACTING", [], true)).toBe("Compacting, then replying…");
+  });
+});
+
+describe("labelForActivityState — COMPACTING by cause", () => {
+  it.each([
+    ["manual", "Compacting as requested…", "Compacting as requested, then replying…"],
+    ["idle", "Compacting while idle…", "Compacting while idle, then replying…"],
+    ["native", "Compacting to free up context…", "Compacting to free up context, then replying…"],
+    [null, "Compacting…", "Compacting, then replying…"],
+  ] as const)("names cause %s, with and without a queued message", (cause, alone, queued) => {
+    expect(labelForActivityState("COMPACTING", [], false, cause)).toBe(alone);
+    expect(labelForActivityState("COMPACTING", [], true, cause)).toBe(queued);
+  });
+
+  it("ignores a cause outside COMPACTING", () => {
+    expect(labelForActivityState("THINKING", [], true, "idle")).toBe("Thinking…");
+    expect(labelForActivityState("IDLE", [], false, "manual")).toBe(null);
   });
 });
 
@@ -257,6 +280,7 @@ describe("ActivityIndicator — what the strip actually renders", () => {
   beforeEach(() => {
     resetShellPermissionResolutionsForTesting();
     agentState.activity_state = null;
+    agentState.compaction_cause = null;
     agentState.queued_messages = [];
     vi.spyOn(m, "redraw").mockImplementation(() => undefined);
     vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -324,6 +348,14 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     expect(labelTextOf(strip)).toBe("Compacting…");
     agentState.queued_messages = [{ queued_id: "q1", content: "next", timestamp: "2026-04-28T01:00:05Z" }];
     expect(labelTextOf(render())).toBe("Compacting, then replying…");
+  });
+
+  it("names the active agent's compaction cause on the strip", () => {
+    agentState.activity_state = "COMPACTING";
+    agentState.compaction_cause = "idle";
+    expect(labelTextOf(render())).toBe("Compacting while idle…");
+    agentState.queued_messages = [{ queued_id: "q1", content: "next", timestamp: "2026-04-28T01:00:05Z" }];
+    expect(labelTextOf(render())).toBe("Compacting while idle, then replying…");
   });
 
   it("lets a real turn outrank the wake-up caption", () => {

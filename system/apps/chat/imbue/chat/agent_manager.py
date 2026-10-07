@@ -763,6 +763,7 @@ def chat_snapshot_for_active_agent(
     shoulder_tap_available: bool,
     is_connecting: bool,
     last_messaged_at: float | None,
+    compaction_cause: CompactionCause | None,
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
 
@@ -793,6 +794,9 @@ def chat_snapshot_for_active_agent(
             account_id=agent.labels.get("account"),
             state=agent.state,
             activity_state=agent.activity_state,
+            # The manager keeps a cause until the compaction's event arrives, which can be after
+            # the agent has left COMPACTING.
+            compaction_cause=compaction_cause if agent.activity_state == ActivityState.COMPACTING else None,
             model_choice=agent.model_choice,
             queued_messages=agent.queued_messages,
             shoulder_tap_available=shoulder_tap_available,
@@ -1406,6 +1410,9 @@ class AgentManager:
             connecting_by_agent = {
                 agent.id: bool(self._connecting_message_ids_by_agent.get(agent.id)) for agent, _chat in listed
             }
+            compaction_cause_by_agent = {
+                agent.id: self._compaction_cause_by_agent.get(agent.id) for agent, _chat in listed
+            }
         last_messaged = self._message_stamps.read()
         return [
             self._snapshot_as_shown(
@@ -1416,6 +1423,7 @@ class AgentManager:
                     self._shoulder_tap_available(agent),
                     connecting_by_agent[agent.id],
                     last_messaged.get(chat.chat_id),
+                    compaction_cause_by_agent[agent.id],
                 )
             )
             for agent, chat in listed
@@ -1436,6 +1444,7 @@ class AgentManager:
             agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
             is_pending = agent is not None and bool(self._pending_permission_ids_by_agent.get(agent.id))
             is_connecting = agent is not None and bool(self._connecting_message_ids_by_agent.get(agent.id))
+            compaction_cause = None if agent is None else self._compaction_cause_by_agent.get(agent.id)
         if chat is None or agent is None or is_primary_agent(agent):
             return None
         return chat_snapshot_for_active_agent(
@@ -1445,6 +1454,7 @@ class AgentManager:
             self._shoulder_tap_available(agent),
             is_connecting,
             self._message_stamps.read().get(chat.chat_id),
+            compaction_cause,
         )
 
     def get_active_agent_info(self, chat_id: ChatId) -> AgentInfo | None:
@@ -4619,8 +4629,10 @@ class AgentManager:
             compaction_cause = shown_compaction_cause(
                 live_compaction.marker_cause, live_compaction.pending_cause, new_state
             )
+            is_cause_changed = False
             if compaction_cause is not None and not is_lifecycle_dead(agent_state.state):
                 new_state = ActivityState.COMPACTING
+                is_cause_changed = self._compaction_cause_by_agent.get(agent_id) is not compaction_cause
                 self._compaction_cause_by_agent[agent_id] = compaction_cause
             old_state = self._activity_state_by_agent.get(agent_id)
             # The queued-message backstop is LEVEL-triggered, not edge-triggered: an
@@ -4636,7 +4648,12 @@ class AgentManager:
             # stranded on an idle agent forever.
             is_idle = new_state == ActivityState.IDLE
             has_idle_queue = is_idle and bool(self._queued_messages_by_agent.get(agent_id))
-            if old_state == new_state and agent_state.activity_state == new_state.value and not has_idle_queue:
+            if (
+                old_state == new_state
+                and agent_state.activity_state == new_state.value
+                and not has_idle_queue
+                and not is_cause_changed
+            ):
                 return
             self._activity_state_by_agent[agent_id] = new_state
             # Update just this slot so any cached ``model_choice`` stays intact --

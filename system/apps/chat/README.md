@@ -361,7 +361,7 @@ secondary chat names nothing.
 
 Compaction replaces a chat's conversation context with a summary the agent
 carries on from. The chat app compacts idle chats on its own, shows a compaction
-while it runs, and says on each "Context was compacted" pill why it happened.
+while it runs, and says on each compaction pill why it happened.
 
 **Idle compaction.** A provider caches the prompt a chat sends, so a message sent
 while the cache is warm pays a fraction of the price for the context it repeats.
@@ -419,9 +419,13 @@ shows only once the agent is idle, so a `/compact` queued behind a running turn
 leaves the turn's label up until the turn ends. A stopped agent still reads
 idle. It counts as working: the chat list shows the chat as working, and the
 composer stays open, with a message sent meanwhile queued behind the
-compaction. The activity strip above the composer reads "Compacting…", or
-"Compacting, then replying…" once a message is queued. The state comes from two
-signals:
+compaction. The activity strip above the composer names who started it, from
+the snapshot's `active_agent.compaction_cause` (set only while the state is
+`COMPACTING`; the cause rules are under "Why a chat was compacted"): "Compacting
+as requested…" (`manual`), "Compacting while idle…" (`idle`), "Compacting to
+free up context…" (`native`), or "Compacting…" when the cause is unknown. Once a
+message is queued, ", then replying…" takes the place of the ellipsis
+("Compacting while idle, then replying…"). The state comes from two signals:
 
 - mngr's Claude hooks: `PreCompact` writes a `compacting` marker in the agent's
   state dir, and `PostCompact` removes it and writes `last_compaction.json`. The
@@ -458,18 +462,23 @@ only after its `PreCompact` hook had written the marker; a `/compact` Claude
 Code refuses for any other reason leaves the status up until the 10-minute
 timeout or the stop button clears it.
 
-**Why a chat was compacted.** The "Context was compacted" pill has a "Why?"
-button whose popover reads the event's `compaction_cause`:
+**Why a chat was compacted.** The compaction pill is named for the event's
+`compaction_cause`, and expanding it shows a sentence saying why, set apart
+above the summary:
 
-- `idle` (the sweep): "Compacted while idle to keep replies fast and cheap.
-  Change this under Auto-compact in the model menu."
-- `manual` (a `/compact`): "Compacted because you asked (`/compact`).", with
-  `/compact` in the chat's inline-code style
-- `native` (Claude's own compaction, from the hook's recorded trigger): "Your
-  agent triggered compaction. You can ask it about its current setting, or tell
-  it to change it."
-- unknown: "Compacted to keep replies fast and cheap. Idle compaction is under
-  Auto-compact in the model menu."
+- `idle` (the sweep): "Compacted while idle"; "Compacted while idle to keep
+  replies fast and cheap. Change this under Auto-compact in the model menu."
+- `manual` (a `/compact`): "Compacted as requested"; "Compacted because you
+  asked (`/compact`).", with `/compact` in the chat's inline-code style
+- `native` (Claude's own compaction, from the hook's recorded trigger):
+  "Compacted to free up context"; "Your agent triggered compaction. You can ask
+  it about its current setting, or tell it to change it."
+- unknown: "Context was compacted"; "Compacted to keep replies fast and cheap.
+  Idle compaction is under Auto-compact in the model menu."
+
+The sentence is composed by the page from the cause. It is not part of the
+event, so the transcript, the events API, and the agent never see it. A pill
+whose event carries no summary still expands, to the sentence alone.
 
 The cause is what the app saw while the compaction ran, else what it asked for,
 else the request it recorded in the agent's `compaction_request.json` within the

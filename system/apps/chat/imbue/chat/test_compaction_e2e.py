@@ -1,5 +1,5 @@
 """End-to-end tests for the compaction UX in the chat page: the Auto-compact toggle, the COMPACTING status, and the
-"Context was compacted" pill.
+compaction pill.
 
 The chat app is served over fakes (``running_workspace``) and its page is opened at the chat app's own URL, so the
 chat root's rail and the chat's page are both in reach without the shell. The compaction signals are the files and
@@ -10,6 +10,7 @@ transcript records a real agent produces. The manager is never started in these 
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Generator
 from collections.abc import Iterator
@@ -56,12 +57,18 @@ pytestmark = [
     ),
 ]
 
-_COMPACTING_LABEL = "Compacting…"
-_COMPACTING_THEN_REPLYING_LABEL = "Compacting, then replying…"
+_SUMMARY_TEXT = "The conversation so far, summarized."
 
-# The "Why?" popover's text for each cause as the page renders it: the markdown ``compactionCauseText`` in
-# ``user-message-display.ts`` returns, with its inline code read as plain text.
-_CAUSE_TEXT_BY_CAUSE: Mapping[str | None, str] = {
+_PILL_LABEL_BY_CAUSE: Mapping[str | None, str] = {
+    "idle": "Compacted while idle",
+    "manual": "Compacted as requested",
+    "native": "Compacted to free up context",
+    None: "Context was compacted",
+}
+
+# The first line of an expanded pill for each cause as the page renders it: the markdown ``compactionExplanation``
+# in ``user-message-display.ts`` returns, with its inline code read as plain text.
+_EXPLANATION_BY_CAUSE: Mapping[str | None, str] = {
     "idle": "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu.",
     "manual": "Compacted because you asked (/compact).",
     "native": "Your agent triggered compaction. You can ask it about its current setting, or tell it to change it.",
@@ -168,7 +175,7 @@ def _append_compact_summary(server: RunningWorkspace, uuid: str) -> None:
 
 
 def _pill(chat: FrameLocator) -> Locator:
-    return chat.locator(".message-system-status-container", has_text="Context was compacted")
+    return chat.locator(".message-system-status-container")
 
 
 def _open_autocompact_submenu(chat: FrameLocator) -> Locator:
@@ -231,9 +238,12 @@ def test_a_harness_that_cannot_be_compacted_has_no_auto_compact_row(
     expect(chat.locator('[data-menu-row="autocompact"]')).to_have_count(0)
 
 
+@pytest.mark.parametrize(
+    ("trigger", "label"), [("manual", "Compacting as requested…"), ("auto", "Compacting to free up context…")]
+)
 @pytest.mark.timeout(60, func_only=False)
 def test_a_compacting_marker_shows_the_status_on_the_strip_until_it_goes(
-    compaction_server: RunningWorkspace, page: Page
+    compaction_server: RunningWorkspace, page: Page, trigger: str, label: str
 ) -> None:
     """The stop button stays because Claude's interrupt cancels a compaction."""
     server = compaction_server
@@ -241,11 +251,11 @@ def test_a_compacting_marker_shows_the_status_on_the_strip_until_it_goes(
     expect(_rail_row(page)).not_to_have_attribute("data-status", "working")
     expect(_stop_button(chat)).to_have_count(0)
 
-    marker = write_compacting_marker(server.agent_info.agent_state_dir)
+    marker = write_compacting_marker(server.agent_info.agent_state_dir, trigger)
 
     expect(_rail_row(page)).to_have_attribute("data-status", "working", timeout=15000)
     expect(_stop_button(chat)).to_be_visible()
-    expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(_COMPACTING_LABEL)
+    expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(label)
 
     marker.unlink()
 
@@ -262,8 +272,20 @@ def test_a_message_queued_behind_a_compaction_changes_the_label(tmp_path: Path, 
 
         expect(chat.locator(".queued-group")).to_be_visible(timeout=15000)
         expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(
-            _COMPACTING_THEN_REPLYING_LABEL, timeout=15000
+            "Compacting as requested, then replying…", timeout=15000
         )
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_sweep_compaction_reads_compacting_while_idle(compaction_server: RunningWorkspace, page: Page) -> None:
+    server = compaction_server
+    chat = _open_chat(page, server)
+
+    server.chat_state.agent_manager.note_compaction_requested(FIXTURE_AGENT_ID, CompactionCause.IDLE, time.monotonic())
+
+    expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(
+        "Compacting while idle…", timeout=15000
+    )
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -279,7 +301,9 @@ def test_the_stop_button_is_hidden_while_a_harness_that_cannot_interrupt_a_compa
         FIXTURE_AGENT_ID, CompactionCause.MANUAL, time.monotonic()
     )
 
-    expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(_COMPACTING_LABEL, timeout=15000)
+    expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(
+        "Compacting as requested…", timeout=15000
+    )
     expect(_rail_row(page)).to_have_attribute("data-status", "working")
     expect(_stop_button(chat)).to_have_count(0)
 
@@ -298,7 +322,7 @@ def _record_compaction_cause(server: RunningWorkspace, cause: str | None) -> Non
 
 @pytest.mark.parametrize("cause", ["idle", "manual", "native", None])
 @pytest.mark.timeout(60, func_only=False)
-def test_the_compacted_pill_says_why_the_context_was_compacted(
+def test_the_compacted_pill_is_named_for_its_cause_and_its_summary_opens_on_why(
     compaction_server: RunningWorkspace, page: Page, cause: str | None
 ) -> None:
     server = compaction_server
@@ -309,10 +333,20 @@ def test_the_compacted_pill_says_why_the_context_was_compacted(
     _append_compact_summary(server, "uuid-compact-1")
 
     pill = _pill(chat)
-    expect(pill).to_be_visible(timeout=15000)
-    expect(pill.locator(".compaction-why-popover")).to_have_count(0)
-    pill.locator(".compaction-why-button").click()
-    expect(pill.locator(".compaction-why-popover")).to_have_text(_CAUSE_TEXT_BY_CAUSE[cause])
+    expect(pill.locator(".message-system-status")).to_have_text(f"▸{_PILL_LABEL_BY_CAUSE[cause]}", timeout=15000)
+    details = pill.locator(".message-system-status-details")
+    expect(details).to_be_hidden()
+    expect(pill.locator("button")).to_have_count(0)
+
+    pill.locator(".message-system-status--toggleable").click()
+
+    expect(details).to_be_visible()
+    expect(details.locator(":scope > :first-child")).to_have_class(re.compile(r"\bcompaction-explanation\b"))
+    expect(details.locator(":scope > .compaction-explanation")).to_have_text(_EXPLANATION_BY_CAUSE[cause])
+    expect(details.locator(":scope > .message-system-status-body")).to_have_text(_SUMMARY_TEXT)
+    # The explanation is the page's own: what the agent and the events API read is the summary alone.
+    events = get_json(f"{server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/events")["events"]
+    assert _EXPLANATION_BY_CAUSE[cause] not in json.dumps(events)
 
 
 @pytest.mark.timeout(60, func_only=False)

@@ -247,7 +247,9 @@ def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_p
                 textbox.fill("/compact")
                 textbox.press("Enter")
                 strip = chat.locator('.agent-activity-indicator[data-state="COMPACTING"]')
-                expect(strip.locator(".agent-activity-indicator__label")).to_have_text("Compacting…", timeout=30_000)
+                expect(strip.locator(".agent-activity-indicator__label")).to_have_text(
+                    "Compacting as requested…", timeout=30_000
+                )
                 marker = agent.agent_state_dir / COMPACTING_MARKER_FILENAME
                 wait_for(
                     lambda: replies.compaction_requested.is_set() and marker.is_file(),
@@ -257,13 +259,17 @@ def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_p
                 expect(strip).to_be_visible()
                 replies.release.set()
 
-                pill = chat.locator(".message-system-status-container", has_text="Context was compacted")
-                expect(pill).to_be_visible(timeout=_TURN_TIMEOUT_MS)
+                pill = chat.locator(".message-system-status-container")
+                expect(pill.locator(".message-system-status")).to_have_text(
+                    "▸Compacted as requested", timeout=_TURN_TIMEOUT_MS
+                )
                 expect(strip).to_have_count(0, timeout=60_000)
                 pill.locator(".message-system-status--toggleable").click()
-                expect(pill.locator(".message-system-status-body")).to_contain_text(_SUMMARY_TEXT)
-                pill.locator(".compaction-why-button").click()
-                expect(pill.locator(".compaction-why-popover")).to_have_text("Compacted because you asked (/compact).")
+                details = pill.locator(".message-system-status-details")
+                expect(details.locator(":scope > .compaction-explanation")).to_have_text(
+                    "Compacted because you asked (/compact)."
+                )
+                expect(details.locator(":scope > .message-system-status-body")).to_contain_text(_SUMMARY_TEXT)
 
                 last_compaction = agent.agent_state_dir / LAST_COMPACTION_FILENAME
                 wait_for(

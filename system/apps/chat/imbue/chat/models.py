@@ -6,6 +6,7 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
@@ -521,6 +522,9 @@ class ActiveAgentSnapshot(FrozenModel):
     state: str = Field(description="The active agent's mngr lifecycle state")
     activity_state: ActivityState | None = Field(
         description="THINKING / TOOL_RUNNING / COMPACTING / IDLE, or None when untracked; COMPACTING wins over a turn"
+    )
+    compaction_cause: CompactionCause | None = Field(
+        description="Why the agent is compacting while ``activity_state`` is COMPACTING; None otherwise or when unknown"
     )
     model_choice: ModelChoice | None = Field(description="The live model/effort/fast selection, or None")
     queued_messages: tuple[QueuedMessageState, ...] = Field(description="The harness queue, in enqueue order")

@@ -14,11 +14,10 @@ import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { MarkdownContent, renderMarkdown } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
-import { Button } from "@imbue/workspace-ui/src/components/Button";
 import type { CompactionCause, UserMessageEvent } from "../models/Response";
 import { AutocompactNotice } from "./AutocompactNotice";
 import { classifyUserMessage, isHiddenUserMessage } from "./message-classification";
-import { isBlockExpanded, setBlockExpanded, toggleBlockExpanded } from "./expansion-state";
+import { isBlockExpanded, setBlockExpanded } from "./expansion-state";
 import { UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
 
@@ -45,8 +44,22 @@ function renderSystemChip(label: string, body: string, expansionKey: string): m.
   return renderToolBlock({ headerText: label, inputText: body, extra: "max-w-[80%]", expansionKey });
 }
 
-/** What the "Why?" popover beside a compaction pill says, as markdown, for who started the compaction. */
-function compactionCauseText(cause: CompactionCause | null | undefined): string {
+/** A compaction pill's label for who started the compaction, or null to keep the event's own. */
+function compactedLabel(cause: CompactionCause | null | undefined): string | null {
+  switch (cause) {
+    case "manual":
+      return "Compacted as requested";
+    case "idle":
+      return "Compacted while idle";
+    case "native":
+      return "Compacted to free up context";
+    default:
+      return null;
+  }
+}
+
+/** Why the context was compacted and where to change it, as markdown, for who started the compaction. */
+function compactionExplanation(cause: CompactionCause | null | undefined): string {
   switch (cause) {
     case "idle":
       return "Compacted while idle to keep replies fast and cheap. Change this under Auto-compact in the model menu.";
@@ -59,71 +72,32 @@ function compactionCauseText(cause: CompactionCause | null | undefined): string 
   }
 }
 
-export function compactionWhyKey(eventId: string): string {
-  return `compaction-why:${eventId}`;
-}
-
-/** The trailing "Why?" button of a compaction pill and, while it is open, the popover it toggles.
- *  The open state lives in the expansion store, so it survives the row leaving the virtualized
- *  window and coming back. */
-function renderCompactionWhy(event: UserMessageEvent): { button: m.Vnode; popover: m.Vnode | null } {
-  const key = compactionWhyKey(event.event_id);
-  const isOpen = isBlockExpanded(key);
-  const popoverId = `${key}-popover`;
-  return {
-    button: m(
-      Button,
-      {
-        variant: "ghost",
-        sm: true,
-        quiet: true,
-        extra: "compaction-why-button",
-        "aria-label": "Why was the context compacted?",
-        "aria-expanded": isOpen ? "true" : "false",
-        "aria-controls": isOpen ? popoverId : undefined,
-        onclick: () => {
-          toggleBlockExpanded(key);
-        },
-      },
-      "Why?",
+/** The first line of an expanded compaction pill, ahead of its summary. Composed here from the
+ *  event's cause: it is for the user only, so it never enters the transcript the agent reads. */
+function renderCompactionExplanation(cause: CompactionCause | null | undefined, hasSummary: boolean): m.Vnode {
+  return m(
+    "div",
+    { class: `compaction-explanation markdown-content${hasSummary ? " mb-2 border-b border-default pb-2" : ""}` },
+    // The text classes sit on an inner element: .markdown-content is unlayered CSS, so on the
+    // same element it would beat these utilities with its body size and primary colour.
+    m(
+      "div",
+      { class: "text-(length:--font-size-helper) leading-normal text-faint" },
+      m.trust(renderMarkdown(compactionExplanation(cause))),
     ),
-    popover: isOpen
-      ? m(
-          "div",
-          {
-            id: popoverId,
-            class:
-              "compaction-why-popover markdown-content mt-1.5 max-w-[360px] rounded-lg border border-default " +
-              "bg-surface px-3 py-2 text-left shadow-md",
-            role: "note",
-          },
-          // The text classes sit on an inner element: .markdown-content is unlayered CSS, so on the
-          // same element it would beat these utilities with its body size and primary colour.
-          m(
-            "div",
-            { class: "text-(length:--font-size-helper) leading-normal text-secondary" },
-            m.trust(renderMarkdown(compactionCauseText(event.compaction_cause))),
-          ),
-        )
-      : null,
-  };
+  );
 }
 
 /**
- * Render a status message (e.g. "Context was compacted"), followed by its "Why?" button.
- * When body text is present, renders an expandable toggle on the status pill
- * to show/hide the summary contents.
+ * Render a compaction's status pill (e.g. "Context was compacted"), an expandable toggle whose
+ * details say why the context was compacted and then show the summary, when there is one.
  */
-function renderStatusMessage(label: string, body: string, expansionKey: string, event: UserMessageEvent): m.Vnode {
-  const why = renderCompactionWhy(event);
-  const statusLine = (pill: m.Vnode): m.Vnode =>
-    m("div", { class: "message-system-status-line flex items-center gap-1" }, [pill, why.button]);
-  if (!body) {
-    return m("div", { class: "message-system-status-container" }, [
-      statusLine(m("div", { class: "message-system-status" }, label)),
-      why.popover,
-    ]);
-  }
+function renderStatusMessage(
+  label: string,
+  body: string,
+  expansionKey: string,
+  cause: CompactionCause | null | undefined,
+): m.Vnode {
   const expanded = isBlockExpanded(expansionKey);
   const toggleDetails = (pill: HTMLElement): void => {
     const container = pill.closest(".message-system-status-container");
@@ -137,28 +111,28 @@ function renderStatusMessage(label: string, body: string, expansionKey: string, 
       class: `message-system-status-container${expanded ? " message-system-status-container--expanded" : ""}`,
     },
     [
-      statusLine(
-        m(
-          "div",
-          {
-            class: "message-system-status message-system-status--toggleable",
-            role: "button",
-            tabindex: 0,
-            onclick(e: Event) {
-              toggleDetails(e.currentTarget as HTMLElement);
-            },
-            onkeydown(e: KeyboardEvent) {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                toggleDetails(e.currentTarget as HTMLElement);
-              }
-            },
+      m(
+        "div",
+        {
+          class: "message-system-status message-system-status--toggleable",
+          role: "button",
+          tabindex: 0,
+          onclick(e: Event) {
+            toggleDetails(e.currentTarget as HTMLElement);
           },
-          [m("span", { class: "tool-call-chevron" }, "▸"), m("span", label)],
-        ),
+          onkeydown(e: KeyboardEvent) {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggleDetails(e.currentTarget as HTMLElement);
+            }
+          },
+        },
+        [m("span", { class: "tool-call-chevron" }, "▸"), m("span", label)],
       ),
-      why.popover,
-      m("div", { class: "message-system-status-details" }, [m("div", { class: "message-system-status-body" }, body)]),
+      m("div", { class: "message-system-status-details" }, [
+        renderCompactionExplanation(cause, body !== ""),
+        body ? m("div", { class: "message-system-status-body" }, body) : null,
+      ]),
     ],
   );
 }
@@ -184,18 +158,13 @@ export function renderNotice(label: string, body: string): m.Vnode {
 
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
   let renderedEventId: string | null = null;
-  // Whether the compaction pill's "Why?" popover was open at the last render: toggling it is the
-  // one change to an unchanged event that has to repaint.
-  let renderedWhyOpen = false;
   return {
     onbeforeupdate(vnode) {
-      const eventId = vnode.attrs.event.event_id;
-      return eventId !== renderedEventId || isBlockExpanded(compactionWhyKey(eventId)) !== renderedWhyOpen;
+      return vnode.attrs.event.event_id !== renderedEventId;
     },
     view(vnode) {
       const event = vnode.attrs.event;
       renderedEventId = event.event_id;
-      renderedWhyOpen = isBlockExpanded(compactionWhyKey(event.event_id));
       const cls = classifyUserMessage(event);
       // Every branch below draws the classification's body, never the raw content: for a
       // message the backend wrapped, the two differ and the bubble owes the user their words.
@@ -215,9 +184,10 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
         return renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body);
       }
       if (cls.kind === UserMessageKind.StatusMessage) {
-        const label = cls.label ?? (cls.body || "Context was compacted");
-        const body = cls.body && cls.body !== label ? cls.body : "";
-        return renderStatusMessage(label, body, `status:${event.event_id}`, event);
+        const eventLabel = cls.label ?? (cls.body || "Context was compacted");
+        const body = cls.body && cls.body !== eventLabel ? cls.body : "";
+        const label = compactedLabel(event.compaction_cause) ?? eventLabel;
+        return renderStatusMessage(label, body, `status:${event.event_id}`, event.compaction_cause);
       }
 
       const bubbleChildren: m.Children[] = [];

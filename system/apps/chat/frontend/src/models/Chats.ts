@@ -10,7 +10,7 @@ import { getTerminalOriginLabel } from "../document-meta";
 import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice, ModelIdentity } from "./ModelSettings";
-import type { UserMessageEvent } from "./Response";
+import type { CompactionCause, UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
@@ -28,6 +28,9 @@ export interface ActiveAgent {
   state: string;
   // THINKING/TOOL_RUNNING/COMPACTING/IDLE, or null when the chat app has no activity tracking for it.
   activity_state: string | null;
+  // Who started the compaction while ``activity_state`` is COMPACTING; null otherwise, or when the
+  // chat app cannot tell.
+  compaction_cause: CompactionCause | null;
   // The live model/effort/fast selection plus the catalog option it matched. Null when no
   // model resolution is available.
   model_choice: ModelChoice | null;

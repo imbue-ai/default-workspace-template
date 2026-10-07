@@ -25,6 +25,7 @@ export function chatSnapshotFixture(
       account_id: null,
       state: "RUNNING",
       activity_state: null,
+      compaction_cause: null,
       model_choice: null,
       queued_messages: [],
       shoulder_tap_available: false,
