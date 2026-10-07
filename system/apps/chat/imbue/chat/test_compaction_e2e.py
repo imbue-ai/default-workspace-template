@@ -214,19 +214,19 @@ def test_turning_auto_compact_off_writes_the_chats_setting_and_the_default_contr
         error_message="the chat's autocompact.json never recorded Off",
     )
     expect(submenu.locator('[data-autocompact="off"]')).to_have_attribute("aria-checked", "true")
-    default_switch = submenu.locator('[data-autocompact-default="off"]')
-    expect(default_switch).to_have_text("Off")
-    expect(default_switch).to_have_attribute("aria-checked", "false")
+    default_off_segment = submenu.locator('[data-autocompact-default="off"]')
+    expect(default_off_segment).to_have_text("Off")
+    expect(default_off_segment).to_have_attribute("aria-checked", "false")
     expect(submenu.locator('[data-autocompact-default="on"]')).to_have_attribute("aria-checked", "true")
     assert _settings(server)["autocompact_default"] is True
 
-    default_switch.click()
+    default_off_segment.click()
     wait_for(
         lambda: _settings(server)["autocompact_default"] is False,
         timeout=10.0,
         error_message="the workspace's autocompact_default never turned off",
     )
-    expect(default_switch).to_have_attribute("aria-checked", "true")
+    expect(default_off_segment).to_have_attribute("aria-checked", "true")
     assert json.loads(autocompact_path.read_text()) == {"is_enabled": False}
 
 
