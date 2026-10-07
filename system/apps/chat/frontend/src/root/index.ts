@@ -196,8 +196,7 @@ async function startNewChat(): Promise<void> {
   openProviderChooser({ onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId) });
 }
 
-/** With nothing signed in, the chooser opens as the root loads: no chat can start without a provider, so it comes
- *  before anything is typed. */
+/** With nothing signed in, the chooser opens as the root loads, before anything can be typed. */
 async function offerChooserWhenNothingSignedIn(): Promise<void> {
   await whenAccountsReadyToChoose();
   if (getSelectedAccount() === null) openProviderChooser();

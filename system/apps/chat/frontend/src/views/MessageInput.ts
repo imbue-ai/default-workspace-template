@@ -1235,8 +1235,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
-      /** In place of the composer while nothing is signed in that a new chat could start on: a message typed
-       *  now could not be sent until a provider is connected, so the provider comes first. */
+      /** In place of the composer while nothing is signed in that a new chat could start on. */
       function renderNoProviderNotice(): m.Children {
         return m(
           "div",
@@ -1279,8 +1278,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         switchTarget === null &&
         !isSendHeldForSwitch &&
         isAccountSignedOut(chat?.active_agent.account_id);
-      // A chat awaiting its first send launches on that send, which needs an account. Until the list has loaded the
-      // composer shows as usual, since most pages have one.
+      // Until the account list has loaded the composer shows as usual: most pages have an account.
       const awaitingFirstSend = chat === undefined ? getProvisionalChat(chatId) : undefined;
       const isBlockedByNoProvider =
         awaitingFirstSend?.phase === "awaiting_first_send" &&
