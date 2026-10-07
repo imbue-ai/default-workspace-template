@@ -389,11 +389,11 @@ it on every index write and at boot: `[commands.create]` with the default
 account's harness as `type`, its binding (`env__extend` for claude, an
 `extra_provision_command__extend` credential link over `$MNGR_AGENT_STATE_DIR`
 for codex, agy and pi) and the `account=<id>` label a re-auth restarts agents
-by (only the running ones; a stopped agent picks up the new credentials when it
-next starts). The pin and the most recently used account stay in `index.json`; the file is
-derived from them and nobody is expected to edit it, though keys outside the
-managed ones survive every rewrite. With no usable account the managed keys are
-removed, and a create in the workspace is then refused by
+by (only the live ones; a stopped agent picks up the new credentials when it
+next starts). The pin and the most recently used account stay in `index.json`;
+the file is derived from them and nobody is expected to edit it, though keys
+outside the managed ones survive every rewrite. With no usable account the
+managed keys are removed, and a create in the workspace is then refused by
 `system/scripts/require_create_account.py` (mngr's `pre_command_scripts.create`
 entry in `.mngr/settings.toml`) with a message that says to sign in.
 
