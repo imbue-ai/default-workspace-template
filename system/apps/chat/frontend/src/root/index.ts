@@ -196,7 +196,8 @@ async function startNewChat(): Promise<void> {
   openProviderChooser({ onSignedIn: (signedInAccountId) => void createAndSelect(signedInAccountId) });
 }
 
-/** With nothing signed in, the chooser opens as the root loads, before anything can be typed. */
+/** With nothing signed in, the chooser opens as the root loads (or as its intake settles), before anything can be
+ *  typed. */
 async function offerChooserWhenNothingSignedIn(): Promise<void> {
   await whenAccountsReadyToChoose();
   if (getSelectedAccount() === null) openProviderChooser();
@@ -216,6 +217,13 @@ function settleIntake(chatId: string | null): void {
   pendingToken = null;
   reportedLocation = null;
   select(chatId);
+}
+
+/** Settle an intake that launches nothing, so no chooser of its own opens: with nothing signed in the root offers
+ *  one, as on a load with no intake. */
+function settleIntakeWithoutLaunch(chatId: string | null): void {
+  settleIntake(chatId);
+  void offerChooserWhenNothingSignedIn();
 }
 
 /** Put ``text`` in a chat's composer, unsent: the live page's when it is loaded, else where the composer reads
@@ -271,7 +279,8 @@ function isReferenceDraftAvailable(): boolean {
  *  goes into its composer, a first message launches it. */
 function takeApplied(applied: AppliedIntake): void {
   startedHere.add(applied.chatId);
-  settleIntake(applied.chatId);
+  if (applied.firstMessage === null) settleIntakeWithoutLaunch(applied.chatId);
+  else settleIntake(applied.chatId);
   if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
   if (applied.firstMessage !== null) void launchWithFirstMessage(applied.chatId, applied.firstMessage);
 }
@@ -284,7 +293,7 @@ async function applyIntake(token: string, pickedChatId: string | null): Promise<
     takeApplied(await applyPendingIntake(token, pickedChatId));
   } catch (error) {
     if (!(error instanceof PendingIntakeGoneError)) alert(`Could not take the message: ${(error as Error).message}`);
-    settleIntake(selectedChatId);
+    settleIntakeWithoutLaunch(selectedChatId);
   }
 }
 
@@ -298,7 +307,7 @@ async function takeIntake(token: string): Promise<void> {
     intake = await fetchPendingIntake(token);
   } catch (error) {
     if (!(error instanceof PendingIntakeGoneError)) alert(`Could not read the message: ${(error as Error).message}`);
-    settleIntake(selectedChatId);
+    settleIntakeWithoutLaunch(selectedChatId);
     return;
   }
   if (intake.needsPick) {
@@ -320,7 +329,7 @@ function dismissPick(): void {
   const pick = pendingPick;
   pendingPick = null;
   if (pick !== null) void discardPendingIntake(pick.token);
-  settleIntake(selectedChatId);
+  settleIntakeWithoutLaunch(selectedChatId);
 }
 
 function onChatsUpdated(): void {
@@ -525,7 +534,7 @@ function bootstrap(): void {
   installCursorHidingWhileTyping(document);
   reportLocation();
   const token = pendingToken;
-  // An intake that launches a chat offers the chooser itself, with its message riding the sign-in.
+  // An intake offers the chooser once it settles: one that launches a chat with its message riding the sign-in.
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));
   else void offerChooserWhenNothingSignedIn();
 }
