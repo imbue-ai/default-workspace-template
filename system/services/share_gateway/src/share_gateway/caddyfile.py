@@ -57,7 +57,7 @@ def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
         parsed = urlsplit(url)
         if not parsed.hostname or not parsed.port:
             continue
-        # Anything but a literal ``false`` (or no key at all) reads as internal.
+        # A missing key or a literal ``false`` is grantable; any other value reads as internal.
         is_grantable = entry.get("internal", False) is False
         apps.append(
             RegisteredApp(
