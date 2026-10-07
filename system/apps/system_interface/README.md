@@ -204,14 +204,15 @@ reported (under gVisor and on lima, a change made outside the sandbox raises no
 inotify event in it).
 
 Every registry read is also announced to the minds desktop (`app_announcements.py`):
-one `service_registered` event per app whose URL, label, icon, display name, or shareability
-(whether the minds Share tab may offer it on its own: never for an internal app)
-differs from the last announced, and one `service_deregistered` per app that
-left, appended to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the
-`imbue_common` event envelope; the first read after the shell starts announces
-every app. The stream is what `mngr forward` and the desktop resolve app
-origins from, and they replay it whole each time they attach, so a stream over
-5 MiB at that first read is renamed aside before it and gzipped to
+one `service_registered` event per app whose URL, label, icon, display name, or
+`system` or `internal` declaration (which tell the minds Share tab to list the
+app under its System group, or not at all) differs from the last announced, and
+one `service_deregistered` per app that left, appended to
+`$MNGR_AGENT_STATE_DIR/events/services/events.jsonl` in the `imbue_common`
+event envelope; the first read after the shell starts announces every app. The
+stream is what `mngr forward` and the desktop resolve app origins from, and
+they replay it whole each time they attach, so a stream over 5 MiB at that
+first read is renamed aside before it and gzipped to
 `events.jsonl.<timestamp>.gz` (a name mngr does not replay) on a thread of its
 own; the newest three archives are kept. Streams that large were left by the
 retired `app-watcher` service, which re-announced every app on each registry
@@ -220,8 +221,8 @@ rewrite. A preview shell announces nothing, since its registry is a copy.
 The shell also owns each stoppable app's process (`shell/app_lifecycle.py`,
 the stop-when-no-windows spec): an app whose manifest declares
 `stop_when_no_windows` is stopped once no window on any desktop has shown it
-for a minute (only once someone has visited the workspace, and never, if it is
-shareable, while a per-app share grant names it, since such a visitor reaches
+for a minute (only once someone has visited the workspace, and never, unless it
+is internal, while a per-app share grant names it, since such a visitor reaches
 the app without the shell: `shell/share_grants.py` reads
 `data/.secrets/share_grants.toml`), and while any stoppable app is stopped the
 shell holds its port (`shell/port_parking.py`), so the first request for the

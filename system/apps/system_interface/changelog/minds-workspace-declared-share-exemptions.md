@@ -1,3 +1,3 @@
-The shell's `service_registered` events now carry `shareable`: `true` only when the app's row is shareable and not internal. The minds Share tab reads it to decide which apps to offer, so it no longer has to hardcode app names. A change to an app's shareability is re-announced like a change to its URL or label.
+The shell's `service_registered` events now carry two more fields, `system` and `internal`, copied from the app's registry row. The minds Share tab reads them instead of a hardcoded list of names: it never lists an internal app, lists a system app under its System group, and offers the rest up front. A change to either is re-announced like a change to the app's URL or label.
 
-The no-window rule no longer lets a per-app share grant keep an internal or unshareable app running (such as Getting Started): the share gateway admits nobody through such a grant, so it stands in for no window.
+The no-window rule no longer lets a per-app share grant keep an internal app running: the share gateway admits nobody through a grant on one, so it stands in for no window. A grant on any other app, system apps included, still keeps it running.

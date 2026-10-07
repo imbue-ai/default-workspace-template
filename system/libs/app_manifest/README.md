@@ -4,11 +4,11 @@ The models behind a workspace app's two descriptions:
 
 - **The manifest**, `system/apps/<package>/app.toml`: an app's static
   declarations (name, display name, icon, its memory-shedding priority, whether
-  it is critical, whether it stops once no window shows it, whether it can be
-  shared on its own (offered by the minds Share tab and admitted to by a per-app
-  share grant), its supervisord program, the launch paths the desktop opens
-  windows at, the shortcut a new desktop is seeded with, the messages from the
-  Imbue Studio chrome it takes, and what it owns outside its own directory). The
+  it is critical, whether it stops once no window shows it, whether it is part
+  of the workspace itself (which the minds Share tab lists under its System
+  group), its supervisord program, the launch paths the desktop opens windows
+  at, the shortcut a new desktop is seeded with, the messages from the Imbue
+  Studio chrome it takes, and what it owns outside its own directory). The
   schema is `contracts.md`
   section 2 of the desktop interface (`docs/system/blueprint/desktop-interface/`),
   which carries

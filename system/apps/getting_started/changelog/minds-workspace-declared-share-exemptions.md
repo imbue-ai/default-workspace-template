@@ -1,1 +1,1 @@
-The manifest declares `shareable = false`. Studio's Share tab no longer offers Getting Started as a share target of its own, and the share gateway no longer admits a per-app grant on it. It is shared only as part of the whole machine.
+The manifest declares `system = true`: Getting Started is part of the workspace itself rather than an app built on it, so the minds Share tab lists it under its collapsed System group instead of offering it up front. It can still be shared on its own from there.

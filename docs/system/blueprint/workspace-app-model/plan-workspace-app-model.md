@@ -152,10 +152,10 @@ An app with `instances = false` declares no actions; the shell synthesizes its o
 
 ### 4.2 Registry rows
 
-A registry row carries `name`, `url`, `label`, `icon`, `internal`, and `program` from the registration, and `display_name`, `instances`, `instances_url`, `actions`, `default_shortcut`, `critical`, `shareable`, and `priority`, all copied from the manifest at registration.
+A registry row carries `name`, `url`, `label`, `icon`, `internal`, and `program` from the registration, and `display_name`, `instances`, `instances_url`, `actions`, `default_shortcut`, `critical`, `system`, and `priority`, all copied from the manifest at registration.
 The `label` suffix has one job, an unguessable origin, and is never used as an identifier.
 Liveness (`is_running`) is derived from supervisord and is never stored.
-The shell's services event writer, which writes the `service_registered` and `service_deregistered` events minds reads, announces `name`, `url`, `label`, and `icon`, and `shareable` as `true` only when the row is shareable and not `internal`; it ignores the other manifest fields.
+The shell's services event writer, which writes the `service_registered` and `service_deregistered` events minds reads, announces `name`, `url`, `label`, `icon`, `display_name`, `system`, and `internal`; it ignores the other manifest fields.
 
 ## 5. The app contract
 
@@ -354,7 +354,8 @@ Worker agents that chats spawn are listed as instances too; they are chats with 
 ### 8.1 Sharing
 
 The share gateway re-renders from the registry, so the chat origin is claimed like every app's.
-A workspace-level grant admits the chat origin directly; the chat declares `shareable = false`, so a per-app `[services.chat]` grant admits nobody.
+A workspace-level grant admits the chat origin directly, and a per-app grant (the grants file keys apps as `[services.<name>]`, so `[services.chat]`) can narrow a visitor to it.
+The chat declares `system = true`, so the minds Share tab lists it under its System group rather than up front; the gateway treats the grant like any other.
 Read-only sharing of one chat is deferred (section 11).
 
 ### 8.2 Memory shedding
