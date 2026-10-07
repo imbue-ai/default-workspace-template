@@ -44,6 +44,7 @@ from imbue.chat.testing import FIXTURE_SESSION_ID
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
+from imbue.chat.testing import get_json
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.mngr.utils.polling import wait_for
@@ -141,13 +142,8 @@ def e2e_server(tmp_path: Path) -> Generator[RunningWorkspace, None, None]:
         yield server
 
 
-def _get_json(url: str) -> Any:
-    with urllib.request.urlopen(url, timeout=5) as response:
-        return json.loads(response.read())
-
-
 def _desktops(server: RunningWorkspace) -> list[dict[str, Any]]:
-    return list(_get_json(f"{server.shell_url}/api/desktops")["desktops"])
+    return list(get_json(f"{server.shell_url}/api/desktops")["desktops"])
 
 
 def _chat_windows(server: RunningWorkspace, desktop_id: str = _HOME_DESKTOP_ID) -> list[dict[str, Any]]:
@@ -195,7 +191,7 @@ def _wait_for_client_on_desktop(server: RunningWorkspace, client_id: str, deskto
     wait_for(
         lambda: any(
             client["id"] == client_id and client["active_desktop"] == desktop_id
-            for client in _get_json(f"{server.shell_url}/api/clients")["clients"]
+            for client in get_json(f"{server.shell_url}/api/clients")["clients"]
         ),
         timeout=15.0,
         poll_interval=0.1,

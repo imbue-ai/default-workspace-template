@@ -38,6 +38,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_AGENT_NAME
 from imbue.chat.testing import RunningWorkspace
+from imbue.chat.testing import get_json
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
@@ -136,13 +137,8 @@ def compaction_server(tmp_path: Path) -> Generator[RunningWorkspace, None, None]
         yield server
 
 
-def _get_json(url: str) -> Any:
-    with urllib.request.urlopen(url, timeout=5) as response:
-        return json.loads(response.read())
-
-
 def _settings(server: RunningWorkspace) -> dict[str, Any]:
-    return dict(_get_json(f"{server.chat_url}/api/settings")["settings"])
+    return dict(get_json(f"{server.chat_url}/api/settings")["settings"])
 
 
 def _update_settings(server: RunningWorkspace, **changes: Any) -> None:

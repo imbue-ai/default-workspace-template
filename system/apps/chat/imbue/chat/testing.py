@@ -1036,6 +1036,12 @@ def seed_failed_chat(
     return proto
 
 
+def get_json(url: str) -> Any:
+    """GET ``url`` and decode its JSON body, for assertions against a served app's API."""
+    with urllib.request.urlopen(url, timeout=5) as response:
+        return json.loads(response.read())
+
+
 def _is_serving_api(base_url: str) -> bool:
     try:
         urllib.request.urlopen(f"{base_url}/api/health", timeout=0.5)
