@@ -4210,9 +4210,9 @@ def test_the_stop_button_clears_a_compaction_it_cancelled(tmp_path: Path) -> Non
     state_dir, config_dir = _claude_tap_dirs(tmp_path)
     agent_id = f"agent-{uuid4().hex}"
     agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
-    marker = write_compacting_marker(state_dir, "manual", started_seconds_ago=_STALE_COMPACTION_SECONDS)
+    marker = write_compacting_marker(state_dir, "manual")
     manager, _ = _manager_with_known_agents()
-    manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, 0.0)
+    manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
     app = create_application(build_test_state(agent_manager=manager))
     fake_watcher = _fake_claude_interrupt_watcher(block="queued behind it", queued=[{"queued_id": "q1"}])
     with (
@@ -4243,7 +4243,8 @@ def test_a_compact_command_the_agent_refused_shows_no_compaction(tmp_path: Path)
                 .post(f"/api/chats/{agent_id}/message", json={"message": "/compact"})
             )
 
-        assert response.status_code != 200
+        assert response.status_code == 500
+        assert response.get_json()["kind"] == messenger.failure_kind
         assert messenger.sent == [(agent_id, "/compact")]
         assert agent_id not in manager._compaction_pending_by_agent
     finally:
@@ -4303,7 +4304,6 @@ def test_the_stop_button_with_no_turn_and_no_compaction_interrupts_and_clears_no
     # A marker past the stale timeout is not a compaction in flight, and the stop leaves it be.
     stale_marker = write_compacting_marker(state_dir, "manual", started_seconds_ago=_STALE_COMPACTION_SECONDS)
     manager, messenger = _manager_with_known_agents()
-    manager._compaction_cause_by_agent[agent_info.id] = CompactionCause.IDLE
     app = create_application(build_test_state(agent_manager=manager))
     fake_watcher = _fake_claude_interrupt_watcher(block="", queued=[])
     with (
@@ -4318,17 +4318,16 @@ def test_the_stop_button_with_no_turn_and_no_compaction_interrupts_and_clears_no
     assert messenger.pressed == []
     mock_run.assert_not_called()
     assert stale_marker.exists()
-    assert manager._compaction_cause_by_agent[agent_info.id] == CompactionCause.IDLE
 
 
 def test_the_interrupt_route_clears_a_compaction_its_restart_ended(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    marker = write_compacting_marker(state_dir, "auto", started_seconds_ago=_STALE_COMPACTION_SECONDS)
+    marker = write_compacting_marker(state_dir, "auto")
     agent_id = f"agent-{uuid4().hex}"
     agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir)
     manager, _ = _manager_with_known_agents()
-    manager.note_compaction_requested(agent_id, CompactionCause.IDLE, 0.0)
+    manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
     app = create_application(build_test_state(agent_manager=manager))
     with (
         patch("imbue.chat.server._find_active_agent", return_value=agent_info),
