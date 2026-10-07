@@ -3955,7 +3955,8 @@ def test_a_recorded_chats_segments_follow_the_record_and_skip_an_agent_mngr_no_l
 def test_a_sign_in_restarts_only_the_live_agents_on_the_account(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    # A stopped agent picks up the new credentials when it next starts, so only live ones restart.
+    # A stopped agent picks up the new credentials when it next starts, so only live ones restart;
+    # an unobserved one is not known to be stopped, so it counts as live.
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
     account = f"acct-{uuid4().hex}"
@@ -3964,14 +3965,16 @@ def test_a_sign_in_restarts_only_the_live_agents_on_the_account(
         "Waiting-Chat": "WAITING",
         "Stopped-Chat": "STOPPED",
         "Done-Chat": "DONE",
+        "Unobserved-Chat": "UNKNOWN",
     }
     for name, state in agent_state_by_name.items():
         seed_agent_state(manager, f"agent-{uuid4().hex}", name=name, state=state, labels={"account": account})
     seed_agent_state(manager, f"agent-{uuid4().hex}", name="Other-Account-Chat", labels={"account": "acct-other"})
     try:
-        assert manager.restart_agents_on_account(account) == 2
+        assert manager.restart_agents_on_account(account) == 3
         assert sorted(argv_log.read_text().splitlines()) == [
             "start Running-Chat --restart --no-resume",
+            "start Unobserved-Chat --restart --no-resume",
             "start Waiting-Chat --restart --no-resume",
         ]
     finally:
