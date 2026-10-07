@@ -40,16 +40,6 @@ class FastModeMode(LowerCaseStrEnum):
     ON = auto()
 
 
-class CompactionStatusPresentation(LowerCaseStrEnum):
-    """Where the chat shows that a compaction is in progress."""
-
-    # The activity strip above the composer.
-    STRIP = auto()
-    # An inline placeholder row at the end of the conversation.
-    PLACEHOLDER = auto()
-    BOTH = auto()
-
-
 class ChatSettings(FrozenModel):
     """What the settings file holds. Every field has a default, so an older file reads whole."""
 
@@ -69,12 +59,6 @@ class ChatSettings(FrozenModel):
     autocompact_default: bool = Field(
         default=True,
         description="Whether a new chat starts with idle compaction on",
-    )
-    # CLEANUP: once the compaction-status design review picks a presentation, remove this field,
-    # its enum, and the presentation not picked.
-    compaction_status_presentation: CompactionStatusPresentation = Field(
-        default=CompactionStatusPresentation.BOTH,
-        description="Where the chat shows that a compaction is in progress",
     )
     is_autocompact_notice_shown: bool = Field(
         default=False,

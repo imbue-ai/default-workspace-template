@@ -11,7 +11,6 @@ const STORED = {
   fast_mode_turn_limit: 5,
   is_fast_mode_notice_shown: false,
   autocompact_default: true,
-  compaction_status_presentation: "both" as const,
   is_autocompact_notice_shown: false,
 };
 
@@ -103,32 +102,5 @@ describe("updateChatSettings", () => {
     expect(chatSettings.getChatSettings()).toEqual(STORED);
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
-  });
-});
-
-describe("isCompactionStatusShownIn", () => {
-  it("answers for the default presentation, both, before the settings load, and asks for them", async () => {
-    vi.resetModules();
-    mockRequest.mockReset();
-    mockRequest.mockReturnValueOnce(new Promise(() => undefined));
-    const chatSettings = await import("./ChatSettings");
-
-    expect(chatSettings.isCompactionStatusShownIn("strip")).toBe(true);
-    expect(chatSettings.isCompactionStatusShownIn("placeholder")).toBe(true);
-    expect(mockRequest).toHaveBeenCalledWith(expect.objectContaining({ method: "GET", url: "/api/settings" }));
-  });
-
-  it.each([
-    ["strip", true, false],
-    ["placeholder", false, true],
-    ["both", true, true],
-  ] as const)("under %s shows the strip: %s, the placeholder: %s", async (presentation, isStrip, isPlaceholder) => {
-    const chatSettings = await loadWithSettings();
-    const next = { ...STORED, compaction_status_presentation: presentation };
-    mockRequest.mockResolvedValueOnce({ settings: next });
-    await chatSettings.updateChatSettings(next);
-
-    expect(chatSettings.isCompactionStatusShownIn("strip")).toBe(isStrip);
-    expect(chatSettings.isCompactionStatusShownIn("placeholder")).toBe(isPlaceholder);
   });
 });

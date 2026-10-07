@@ -7,11 +7,6 @@ import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import type { FastModeMode } from "./FastMode";
 
-// CLEANUP: once design review picks a compaction status presentation, remove this type and the setting.
-/** Where a compaction in progress is shown: the activity strip, an inline placeholder row in the
- *  conversation, or both. */
-export type CompactionStatusPresentation = "strip" | "placeholder" | "both";
-
 export interface ChatSettings {
   // The fast mode a new chat starts in.
   fast_mode_default: FastModeMode;
@@ -20,7 +15,6 @@ export interface ChatSettings {
   is_fast_mode_notice_shown: boolean;
   // Whether a new chat starts with auto-compact on.
   autocompact_default: boolean;
-  compaction_status_presentation: CompactionStatusPresentation;
   is_autocompact_notice_shown: boolean;
 }
 
@@ -30,7 +24,6 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   fast_mode_turn_limit: 2,
   is_fast_mode_notice_shown: false,
   autocompact_default: true,
-  compaction_status_presentation: "both",
   is_autocompact_notice_shown: false,
 };
 
@@ -72,16 +65,6 @@ export function ensureChatSettings(): Promise<ChatSettings> {
       loading = null;
     });
   return loading;
-}
-
-// CLEANUP: once design review picks a compaction status presentation, remove this function.
-/** Whether a compaction in progress is shown on `surface` under the workspace's presentation
- *  setting. Before the settings load it answers for the defaults, and asks for them. */
-export function isCompactionStatusShownIn(surface: "strip" | "placeholder"): boolean {
-  const current = getChatSettings();
-  if (current === null) void ensureChatSettings();
-  const presentation = (current ?? DEFAULT_CHAT_SETTINGS).compaction_status_presentation;
-  return presentation === "both" || presentation === surface;
 }
 
 /**

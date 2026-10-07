@@ -2700,7 +2700,6 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
             "fast_mode_turn_limit": 2,
             "is_fast_mode_notice_shown": False,
             "autocompact_default": True,
-            "compaction_status_presentation": "both",
             "is_autocompact_notice_shown": False,
         }
     }
@@ -2710,7 +2709,6 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
         "fast_mode_turn_limit": 2,
         "is_fast_mode_notice_shown": True,
         "autocompact_default": False,
-        "compaction_status_presentation": "placeholder",
         "is_autocompact_notice_shown": True,
     }
     response = client.put("/api/settings", json=replacement)
@@ -2722,9 +2720,7 @@ def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: F
 def test_the_chat_settings_refuse_a_turn_limit_below_one_and_an_unknown_mode(client: FlaskClient) -> None:
     assert client.put("/api/settings", json={"fast_mode_turn_limit": 0}).status_code == 400
     assert client.put("/api/settings", json={"fast_mode_default": "sometimes"}).status_code == 400
-    assert client.put("/api/settings", json={"compaction_status_presentation": "toast"}).status_code == 400
     assert client.get("/api/settings").get_json()["settings"]["fast_mode_turn_limit"] == 2
-    assert client.get("/api/settings").get_json()["settings"]["compaction_status_presentation"] == "both"
 
 
 def test_a_chats_idle_compaction_defaults_to_the_workspaces_and_is_replaced_whole(

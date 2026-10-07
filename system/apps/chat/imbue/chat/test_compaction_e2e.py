@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import time
-import urllib.request
 from collections.abc import Generator
 from collections.abc import Iterator
 from collections.abc import Mapping
@@ -134,15 +133,6 @@ def _settings(server: RunningWorkspace) -> dict[str, Any]:
     return dict(get_json(f"{server.chat_url}/api/settings")["settings"])
 
 
-def _update_settings(server: RunningWorkspace, **changes: Any) -> None:
-    body = json.dumps({**_settings(server), **changes}).encode()
-    request = urllib.request.Request(
-        f"{server.chat_url}/api/settings", data=body, headers={"Content-Type": "application/json"}, method="PUT"
-    )
-    with urllib.request.urlopen(request, timeout=5) as response:
-        assert response.status == 200
-
-
 def _set_fixture_harness(server: RunningWorkspace, harness: HarnessType) -> None:
     manager = server.chat_state.agent_manager
     seed_agent_state(
@@ -166,10 +156,6 @@ def _rail_row(page: Page) -> Locator:
 
 def _strip(chat: FrameLocator) -> Locator:
     return chat.locator('.agent-activity-indicator[data-state="COMPACTING"]')
-
-
-def _placeholder(chat: FrameLocator) -> Locator:
-    return chat.locator(".compaction-placeholder")
 
 
 def _stop_button(chat: FrameLocator) -> Locator:
@@ -245,21 +231,12 @@ def test_a_harness_that_cannot_be_compacted_has_no_auto_compact_row(
     expect(chat.locator('[data-menu-row="autocompact"]')).to_have_count(0)
 
 
-@pytest.mark.parametrize(
-    ("presentation", "is_strip_shown", "is_placeholder_shown"),
-    [("both", True, True), ("strip", True, False), ("placeholder", False, True)],
-)
 @pytest.mark.timeout(60, func_only=False)
-def test_a_compacting_marker_shows_the_status_where_the_presentation_puts_it_until_it_goes(
-    compaction_server: RunningWorkspace,
-    page: Page,
-    presentation: str,
-    is_strip_shown: bool,
-    is_placeholder_shown: bool,
+def test_a_compacting_marker_shows_the_status_on_the_strip_until_it_goes(
+    compaction_server: RunningWorkspace, page: Page
 ) -> None:
     """The stop button stays because Claude's interrupt cancels a compaction."""
     server = compaction_server
-    _update_settings(server, compaction_status_presentation=presentation)
     chat = _open_chat(page, server)
     expect(_rail_row(page)).not_to_have_attribute("data-status", "working")
     expect(_stop_button(chat)).to_have_count(0)
@@ -268,19 +245,11 @@ def test_a_compacting_marker_shows_the_status_where_the_presentation_puts_it_unt
 
     expect(_rail_row(page)).to_have_attribute("data-status", "working", timeout=15000)
     expect(_stop_button(chat)).to_be_visible()
-    if is_strip_shown:
-        expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(_COMPACTING_LABEL)
-    else:
-        expect(_strip(chat)).to_have_count(0)
-    if is_placeholder_shown:
-        expect(_placeholder(chat).locator(".compaction-placeholder__label")).to_have_text(_COMPACTING_LABEL)
-    else:
-        expect(_placeholder(chat)).to_have_count(0)
+    expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(_COMPACTING_LABEL)
 
     marker.unlink()
 
     expect(_strip(chat)).to_have_count(0, timeout=15000)
-    expect(_placeholder(chat)).to_have_count(0)
     expect(_stop_button(chat)).to_have_count(0)
     expect(_rail_row(page)).not_to_have_attribute("data-status", "working")
 
@@ -294,9 +263,6 @@ def test_a_message_queued_behind_a_compaction_changes_the_label(tmp_path: Path, 
         expect(chat.locator(".queued-group")).to_be_visible(timeout=15000)
         expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text(
             _COMPACTING_THEN_REPLYING_LABEL, timeout=15000
-        )
-        expect(_placeholder(chat).locator(".compaction-placeholder__label")).to_have_text(
-            _COMPACTING_THEN_REPLYING_LABEL
         )
 
 

@@ -75,7 +75,6 @@ import { renderOutgoingMessages } from "./OutgoingMessageView";
 import { renderHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
-import { renderCompactionPlaceholder } from "./compaction-placeholder";
 import { SwitchDialog } from "./SwitchDialog";
 import { hasOpenHandoffRequest, isTailTurnSettled } from "./turn-grouping";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
@@ -646,8 +645,6 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         ...[renderHandoffTailNode(chatId, hasOpenHandoffRequest(events, chat?.handoff ?? null))].filter(
           (node) => node !== null,
         ),
-        // A compaction in progress holds the slot its pill lands in.
-        ...[renderCompactionPlaceholder(chatId, events)].filter((node) => node !== null),
         ...renderQueuedMessages(chatId),
         // The messages the chat app holds while the chat switches harness, then this page's
         // own not-yet-delivered sends.

@@ -8,8 +8,7 @@
  *   - THINKING         -> "Thinking…"
  *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness
  *   - COMPACTING       -> "Compacting…", or "Compacting, then replying…" once a message is
- *                         queued behind it; shown only under the presentation settings that put
- *                         the compaction status on the strip
+ *                         queued behind it
  *
  * The TOOL_RUNNING caption is read straight off the tool call: the harness's own
  * parser labelled it, so this view needs no notion of which harness is running.
@@ -31,7 +30,6 @@ import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot
 import type { ToolCall, TranscriptEvent } from "../models/Response";
 import { COMPACTING_STATE } from "../models/activityState";
 import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
-import { isCompactionStatusShownIn } from "../models/ChatSettings";
 import { handoffPhaseText } from "./handoff-phase";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
@@ -66,7 +64,7 @@ function labelForToolCall(tc: ToolCall): string {
   return tc.caption_label || "Running tool…";
 }
 
-export function compactingLabel(hasQueuedMessages: boolean): string {
+function compactingLabel(hasQueuedMessages: boolean): string {
   return hasQueuedMessages ? "Compacting, then replying…" : "Compacting…";
 }
 
@@ -242,9 +240,7 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
         cancelRelease();
         cancelWake();
         heldToolCaption = null;
-        // CLEANUP: once design review picks a compaction status presentation, drop the
-        // isCompactionStatusShownIn check here (always render the strip, or never).
-        return label !== null && isCompactionStatusShownIn("strip") ? renderStrip(label, state) : null;
+        return label !== null ? renderStrip(label, state) : null;
       }
 
       const now = Date.now();

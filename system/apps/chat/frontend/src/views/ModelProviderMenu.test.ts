@@ -48,7 +48,6 @@ const { DEFAULT_CHAT_SETTINGS, chatSettingsState, settingsWrites } = vi.hoisted(
     fast_mode_turn_limit: 2,
     is_fast_mode_notice_shown: false,
     autocompact_default: true,
-    compaction_status_presentation: "both",
     is_autocompact_notice_shown: false,
   };
   return {

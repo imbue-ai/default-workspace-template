@@ -419,10 +419,9 @@ shows only once the agent is idle, so a `/compact` queued behind a running turn
 leaves the turn's label up until the turn ends. A stopped agent still reads
 idle. It counts as working: the chat list shows the chat as working, and the
 composer stays open, with a message sent meanwhile queued behind the
-compaction. The page shows "Compacting…", or "Compacting, then replying…" once
-a message is queued, on the activity strip above the composer and as a row at
-the end of the conversation where the pill will land
-(`compaction_status_presentation`, below). The state comes from two signals:
+compaction. The activity strip above the composer reads "Compacting…", or
+"Compacting, then replying…" once a message is queued. The state comes from two
+signals:
 
 - mngr's Claude hooks: `PreCompact` writes a `compacting` marker in the agent's
   state dir, and `PostCompact` removes it and writes `last_compaction.json`. The
@@ -518,21 +517,6 @@ mngr config set --scope local plugins.autocompact.epsilon_offset_minutes 60
 
 Each request, toggle change, and status change writes an `autocompact: ...` line
 to the chat service log (`/var/log/supervisor/chat-stderr.log`).
-
-**Status presentation (temporary).** `compaction_status_presentation` in
-`/api/settings` picks where the status shows: `strip` (the activity strip),
-`placeholder` (the row in the conversation), or `both` (the default). It exists
-for the design review comparing the two and goes away, with the presentation not
-picked, once the review decides. `PUT /api/settings` replaces the settings
-whole, and a field left out takes its default, so change it by sending back what
-`GET` returns with the one field edited, then reload open chat pages, which read
-the settings once:
-
-```bash
-curl -s http://127.0.0.1:8010/api/settings \
-  | jq '.settings | .compaction_status_presentation = "strip"' \
-  | curl -s -X PUT -H 'Content-Type: application/json' --data @- http://127.0.0.1:8010/api/settings
-```
 
 ## Provider accounts
 

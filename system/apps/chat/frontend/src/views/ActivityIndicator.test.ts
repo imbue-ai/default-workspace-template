@@ -3,8 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 import type { TranscriptEvent } from "../models/Response";
 import type { QueuedMessage } from "../models/Chats";
-import type { CompactionStatusPresentation } from "../models/ChatSettings";
-import { DEFAULT_CHAT_SETTINGS, resetChatSettingsForTests, setChatSettingsForTests } from "../models/ChatSettings";
 import { ActivityIndicator, labelForActivityState, wakeUpSpinnerDeadline } from "./ActivityIndicator";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
@@ -266,7 +264,6 @@ describe("ActivityIndicator — what the strip actually renders", () => {
 
   afterEach(() => {
     resetShellPermissionResolutionsForTesting();
-    resetChatSettingsForTests();
     vi.restoreAllMocks();
   });
 
@@ -319,28 +316,14 @@ describe("ActivityIndicator — what the strip actually renders", () => {
     expect(labelTextOf(strip)).toBe("Confirming permission changes…");
   });
 
-  const usePresentation = (presentation: CompactionStatusPresentation): void => {
-    setChatSettingsForTests({ ...DEFAULT_CHAT_SETTINGS, compaction_status_presentation: presentation });
-  };
-
-  it.each(["strip", "both"] as const)("shows a compaction on the strip under the %s presentation", (p) => {
-    usePresentation(p);
+  it("shows a compaction on the strip, ahead of the wake-up caption", () => {
     agentState.activity_state = "COMPACTING";
+    resolveReq1();
     const strip = render();
     expect((strip?.attrs as Record<string, unknown>)["data-state"]).toBe("COMPACTING");
     expect(labelTextOf(strip)).toBe("Compacting…");
     agentState.queued_messages = [{ queued_id: "q1", content: "next", timestamp: "2026-04-28T01:00:05Z" }];
     expect(labelTextOf(render())).toBe("Compacting, then replying…");
-  });
-
-  it("leaves a compaction off the strip under the placeholder presentation, and nothing else", () => {
-    usePresentation("placeholder");
-    agentState.activity_state = "COMPACTING";
-    // Not even the wake-up caption: the agent is busy, just not shown here.
-    resolveReq1();
-    expect(render()).toBeNull();
-    agentState.activity_state = "THINKING";
-    expect(labelTextOf(render())).toBe("Thinking…");
   });
 
   it("lets a real turn outrank the wake-up caption", () => {
