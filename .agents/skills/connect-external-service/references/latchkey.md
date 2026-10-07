@@ -92,8 +92,8 @@ respond; mention that you will continue once they do if you need to wait.
 
 Do not forget to use the `-H "X-Latchkey-Device: *"` option to send the request
 to all of the user’s available devices. If none are available (usually
-indicated by an HTTP 503 error), the request will be stored on the outer host
-and delivered when the user starts Imbue Studio again.
+indicated by an HTTP 503 error) or there are connection failures, the request
+will be stored on the outer host and delivered when the user starts Imbue Studio again.
 
 ### File exactly one permission request per tool call
 
