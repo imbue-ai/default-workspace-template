@@ -95,6 +95,7 @@ The program lines that end in `&& <entry>` without `exec` (`system_interface`, a
 | `files` | false | true |
 | `browser` | false | false |
 | `getting-started` | false | true |
+| `memories` | false | true |
 
 `system/test_app_manifests.py` pins the table.
 The browser's manifest keeps its `window_closed_path`, so Chromium still stops on the close hint, and declares `false`: the coordinator serves browsers that agents drive with no window (decision 3), so Part D must not stop it.
