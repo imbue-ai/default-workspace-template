@@ -300,7 +300,12 @@ def _nearness_key(cell: GridCell, target: GridCell) -> tuple[float, int, int]:
 @pure
 def _nearest_of(candidates: Sequence[GridCell], target: GridCell) -> GridCell | None:
     """The candidate at the least Euclidean distance from the target, ties by lower column then lower row."""
-    return min(candidates, key=lambda cell: _nearness_key(cell, target), default=None)
+    return min(
+        candidates,
+        # ty folds the default's None into the key's parameter (astral-sh/ty#4016).
+        key=lambda cell: _nearness_key(cell, target),  # ty: ignore[invalid-argument-type]
+        default=None,
+    )
 
 
 @pure
