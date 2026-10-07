@@ -274,9 +274,9 @@ def test_live_statusline_model_ids_match_their_catalog_option() -> None:
     # /model sonnet, /model haiku). None of them is a bare catalog key any more: opus and
     # sonnet keep their [1m] launch suffix and haiku reports a dated id, so all three reach
     # their option through match_option's prefix pass rather than an exact key hit.
-    # claude-opus-5-5[1m] is the 2.1.280 capture and claude-sonnet-5-5[1m] the 2.1.285 one --
-    # each pin repointed that alias to a point release -- and each sits next to its
-    # predecessor because that pair is the shadowing trap this catalog is ordered against:
+    # claude-opus-5-5[1m] (2.1.280) and claude-sonnet-5-5[1m] (2.1.285) are live captures,
+    # and each sits next to its predecessor because that pair is the shadowing trap this
+    # catalog is ordered against:
     # claude-opus-5 prefixes claude-opus-5-5, so a catalog that put the older key first would
     # label every Opus 5.5 read "Opus 5" (likewise Sonnet). The two Fable 5.1 ids are NOT
     # captured live -- they are what the fable[1m] switch must report given the [1m] suffix
