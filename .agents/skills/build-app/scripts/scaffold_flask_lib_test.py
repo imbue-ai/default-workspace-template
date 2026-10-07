@@ -28,7 +28,14 @@ import pytest
 import scaffold_flask_lib
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import MAX_DISPLAY_NAME_LENGTH
-from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH
+from app_manifest.registry import (
+    SHELL_APP_CONTRACT_PATH,
+    SHELL_CONTEXT_MENU_PATH,
+    SHELL_THEME_SCRIPT_PATH,
+    SHELL_THEME_STYLESHEET_PATH,
+)
+from workspace_themes.contract import BUILTIN_THEMES_DIRECTORY
+from workspace_themes.testing import write_standard_theme, write_test_theme
 
 _SCRIPT = Path(__file__).resolve().parent / "scaffold_flask_lib.py"
 
@@ -422,13 +429,19 @@ def test_the_shell_module_paths_match_the_library() -> None:
     assert scaffold_flask_lib.SHELL_STATIC_MODULE_NAMES == (
         SHELL_APP_CONTRACT_PATH.name,
         SHELL_CONTEXT_MENU_PATH.name,
+        SHELL_THEME_SCRIPT_PATH.name,
+        SHELL_THEME_STYLESHEET_PATH.name,
+    )
+    assert (
+        Path(scaffold_flask_lib.SHELL_STATIC_MODULES_DIR)
+        == SHELL_THEME_SCRIPT_PATH.parent
     )
 
 
 def test_the_runner_serves_the_shell_modules_and_nothing_else(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The scaffolded app answers the two shell-built modules from its own origin, and 404s any other name."""
+    """The scaffolded app answers the shell-built files from its own origin, and 404s any other name."""
     source = scaffold_flask_lib._lib_runner(
         "inbox-status", "inbox_status", "inbox status dashboard", 8081
     )
@@ -452,9 +465,24 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
     assert client.get("/_static/context_menu.js").status_code == 404
     assert client.get("/_static/runner.py").status_code == 404
     assert client.get("/_static/..%2Frunner.py").status_code == 404
+    (modules_dir / "workspace_theme.css").write_text(":root { --c-bg: #fafaf8; }\n")
+    stylesheet = client.get("/_static/workspace_theme.css")
+    assert stylesheet.status_code == 200 and stylesheet.mimetype == "text/css"
     page = client.get("/")
     assert page.status_code == 200
     assert b'from "/_static/context_menu.js"' in page.data
+    # The page wears the workspace's theme: the kit's stylesheet, then its script, in the head.
+    head = page.data.split(b"</head>")[0]
+    assert head.index(b"/_static/workspace_theme.css") < head.index(
+        b'<script src="/_static/workspace_theme.js">'
+    )
+    # The app serves the workspace's themes from its own origin.
+    write_standard_theme(tmp_path)
+    write_test_theme(tmp_path / BUILTIN_THEMES_DIRECTORY, "paper", "")
+    bundle = client.get("/_static/themes/paper/theme.css")
+    assert bundle.status_code == 200 and bundle.mimetype == "text/css"
+    assert b'@import url("../paper/parts.css' in bundle.data
+    assert client.get("/_static/themes/nowhere/theme.css").status_code == 404
 
 
 def test_the_runner_does_not_use_reloader() -> None:

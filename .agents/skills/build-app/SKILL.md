@@ -365,7 +365,8 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
 - The mock renders **static / hard-coded content** that demonstrates the proposed
   layout and interactions -- no real fetching, no persistence, no backend logic.
   Read the reference `references/frontend-choices.md` for recommended design
-  choices.
+  choices, and `references/theming.md`: build the page from the page kit's
+  parts and tokens, so it wears whichever theme the user's workspace wears.
 - If you were handed a confirmed `sample.json` (the `fetch-process-show` hybrid),
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
@@ -574,6 +575,9 @@ app name, the URL segment, and what the app does. The generic worker
 loads `harden-creation.md` + `op-crystallize.md` + `type-app.md` and
 reports `done` once its testing contract and the review gates pass; there is no
 worker gate because the user already confirmed the live site.
+
+Alongside it, make the app's icons for the workspace's themes in the background
+(`references/theming.md`, "Icons under a theme").
 
 The confirmed mock plus the confirmed working site remain the single source of
 truth: if finalization changes the look-and-feel, re-confirm with the user before

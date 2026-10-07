@@ -5,10 +5,11 @@ Use these default choices unless the user has requested something different, or 
 ## Overall design
 Clean, modern, functional design. No unnecessary gimmicks.
 
-## Default font choices
-Feel free to use different fonts if it helps the task at hand. However, the following are reasonable defaults you can just use:
-* For all text: `font-family: ui-sans-serif, system-ui, sans-serif;`
-* For code: `font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;`
+## Fonts and colors
+Use the workspace's design tokens, never a literal, so the page wears the user's theme (`theming.md`):
+* For text: `font-family: var(--font-sans);`, and `var(--font-display)` for headings.
+* For code: `font-family: var(--font-mono);`
+* For colors: the `var(--c-...)` tokens (`--c-bg`, `--c-surface`, `--c-text-primary`, `--c-border`, `--c-accent`, ...).
 
 ## Cards
 Don't over-use visible cards in your design.
