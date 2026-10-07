@@ -474,11 +474,12 @@ compaction reading `idle` after the app restarts, since the sweep's `/compact`
 leaves `last_compaction.json` saying manual. The cause is attached in memory as
 the event is stored and streamed, so a page reload keeps it, but a pill older
 than 10 minutes when the app first reads it has no cause and shows the unknown
-text. Under the latest pill
-of whichever chat is open, a notice says "Idle chats now compact automatically
-to keep replies fast and cheap. Turn this off per chat, or for new chats, under
-Auto-compact in the model menu." It shows until dismissed once, which records
-`is_autocompact_notice_shown` in the workspace settings.
+text.
+
+Under the latest pill of whichever chat is open, a notice says "Idle chats now
+compact automatically to keep replies fast and cheap. Turn this off per chat, or
+for new chats, under Auto-compact in the model menu." It shows until dismissed
+once, which records `is_autocompact_notice_shown` in the workspace settings.
 
 **Operating it.** The template turns idle compaction on with one line in
 `.mngr/settings.toml`, leaving every other plugin key at its default:
