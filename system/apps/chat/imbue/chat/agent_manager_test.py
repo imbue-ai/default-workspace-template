@@ -5693,6 +5693,38 @@ def test_a_compaction_request_is_recorded_beside_the_marker(agent_manager: Agent
     assert request.requested_at < before
 
 
+def test_a_compaction_request_for_an_agent_without_a_local_state_dir_is_pending_but_not_recorded(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """An agent on another host has no state dir here, and nothing local would read the record."""
+    agent_id = f"agent-{uuid4().hex}"
+    _seed_agent(agent_manager, agent_id)
+    agent_manager._ensure_activity_tracking(agent_id)
+    state_dir = tmp_path / "agents" / agent_id
+
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
+
+    assert agent_manager._compaction_pending_by_agent[agent_id][1] == CompactionCause.MANUAL
+    assert not state_dir.exists()
+
+
+def test_a_compaction_request_that_cannot_be_recorded_is_still_pending_and_warned_about(
+    agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path)
+    # A directory where the record should be: replacing it with the file fails with an OSError.
+    (state_dir / COMPACTION_REQUEST_FILENAME).mkdir()
+
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+
+    assert agent_manager._compaction_pending_by_agent[agent_id][1] == CompactionCause.IDLE
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+    assert any(
+        record.startswith("WARNING Failed to record the compaction request of agent") for record in loguru_records
+    )
+    assert [path for path in state_dir.iterdir() if path.name != COMPACTION_REQUEST_FILENAME] == []
+
+
 def test_a_sweep_compaction_stamped_after_the_managers_memory_is_gone_still_reads_idle(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
