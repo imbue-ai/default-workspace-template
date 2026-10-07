@@ -28,7 +28,9 @@ export type LinkTarget =
   | { readonly kind: "file"; readonly path: string }
   | { readonly kind: "unroutable" };
 
-/** The message types a routed link sends (desktop-interface contracts.md section 7, ``shell:message``). */
+/** The message types a link becomes (desktop-interface contracts.md section 5.6): ``open:file``, which a routed file
+ *  link sends as a ``shell:message``, and ``open:url``, which the shell sends for a local URL no app is registered
+ *  at. */
 export const OPEN_FILE_MESSAGE = "open:file";
 export const OPEN_URL_MESSAGE = "open:url";
 
