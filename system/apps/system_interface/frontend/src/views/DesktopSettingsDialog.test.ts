@@ -3,7 +3,7 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { desktopRecord, themeCatalog, themeRecord } from "../testing/records";
+import { appRecord, desktopRecord, themeCatalog, themeRecord } from "../testing/records";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
 import type { DesktopSettingsDialogAttrs } from "./DesktopSettingsDialog";
 
@@ -19,6 +19,7 @@ function render(overrides: Partial<DesktopSettingsDialogAttrs> = {}): DesktopSet
     onCancel: vi.fn(),
     onPreviewTheme: vi.fn(),
     onClearPreview: vi.fn(),
+    previewApp: null,
     themes: themeCatalog(
       themeRecord("mac-classic", { name: "Classic Mac" }),
       themeRecord("windows-2000", { name: "Windows 2000" }),
@@ -237,5 +238,26 @@ describe("a wallpaper the workspace no longer offers", () => {
       { kind: "bundled", name: "arcs" },
       { theme: null, isWorkspaceDefault: false },
     );
+  });
+});
+
+describe("the Theme row's pictures", () => {
+  it("draws the app's own icon for a theme that draws none of its own, and the theme's icon otherwise", () => {
+    const files = appRecord("files", {
+      icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" fill="#123456"/></svg>',
+    });
+    render({
+      previewApp: files,
+      themes: themeCatalog(
+        themeRecord("standard", { name: "Standard", icons: null }),
+        themeRecord("mac-classic", { name: "Classic Mac" }),
+      ),
+    });
+
+    const pictures = Array.from(card().querySelectorAll("[data-theme-picture]")).map((p) =>
+      p.getAttribute("data-theme-picture"),
+    );
+    expect(pictures).toContain("standard");
+    expect(card().querySelector('[data-theme-picture="standard"] rect')?.getAttribute("fill")).toBe("#123456");
   });
 });

@@ -179,7 +179,7 @@ function taskbar(state: GalleryState): m.Children {
         {
           ...partAttrs("launcher-field"),
           class:
-            "launcher-field flex h-9 w-56 items-center rounded-full border border-strong bg-surface px-3 type-body text-faint",
+            "launcher-field flex h-9 w-(--desk-launcher-field-width) max-w-[40vw] shrink-0 items-center overflow-hidden rounded-full border border-strong bg-surface px-3 type-body whitespace-nowrap text-faint",
         },
         "Open an app or send a message",
       ),
@@ -266,9 +266,18 @@ function tilesAndRows(): m.Children {
 }
 
 function terminalPalette(): m.Children {
+  // A theme that sets no terminal colors leaves the terminal its own, so there is nothing to swatch.
+  const isPaletteSet = getComputedStyle(document.documentElement).getPropertyValue(TERMINAL_TOKENS[0]).trim() !== "";
+  if (!isPaletteSet) {
+    return m(
+      "p",
+      { "data-gallery-terminal": "own", class: "type-helper text-faint" },
+      "The terminal keeps its own colors.",
+    );
+  }
   return m(
     "div",
-    { class: "flex flex-wrap gap-1" },
+    { "data-gallery-terminal": "theme", class: "flex flex-wrap gap-1" },
     TERMINAL_TOKENS.map((token) =>
       m("span", {
         title: token,

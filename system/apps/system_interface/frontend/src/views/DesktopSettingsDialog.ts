@@ -9,8 +9,10 @@ import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
-import type { Desktop, Wallpaper, WallpaperListing } from "../model/records";
+import type { AppRecord, Desktop, Wallpaper, WallpaperListing } from "../model/records";
 import { resolveDesktopTheme, type ThemeCatalog, type ThemeRecord } from "../model/themes";
+import { appIconMarkupForApp } from "./components/appIcon";
+import { glyph as genericGlyph } from "./glyphs";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
 import { FIELD_PART, TILE_PART } from "@imbue/workspace-ui/src/themes/parts";
 
@@ -38,6 +40,8 @@ export interface DesktopSettingsDialogAttrs {
   readonly onCancel: () => void;
   /** The workspace's themes, for the Theme row. */
   readonly themes: ThemeCatalog;
+  /** The app whose icon pictures each theme in the Theme row, as that theme draws it (null when absent). */
+  readonly previewApp: Pick<AppRecord, "name" | "icon"> | null;
   /** Show a picked theme (a theme id, or null for the workspace's default) before it is saved. */
   readonly onPreviewTheme: (choice: string | null) => void;
   /** The dialog closed: put back whatever the desktop has saved by then. */
@@ -51,7 +55,7 @@ export interface ThemeChoice {
   readonly isWorkspaceDefault: boolean;
 }
 
-const THEME_PREVIEW_APP = "files";
+export const THEME_PREVIEW_APP = "files";
 
 function normalizedGlyphIndex(glyph: number): number {
   const count = SQUIGGLE_GLYPHS.length;
@@ -200,9 +204,17 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
 
   /** A theme's picture in its tile: the icon it draws for the File Viewer, or the desktop's own squiggle for a
    *  theme without pixel icons (the standard look) and for an unavailable one, whose files are not served. */
-  function themePicture(record: ThemeRecord): m.Children {
+  function themePicture(record: ThemeRecord, previewApp: Pick<AppRecord, "name" | "icon"> | null): m.Children {
     const icons = record.available ? record.icons : null;
     const url = icons === null ? null : (icons.apps[THEME_PREVIEW_APP] ?? icons.fallback_url);
+    // A theme that draws no icons of its own (the standard one) shows the app's own icon.
+    if (record.available && url === null && previewApp !== null) {
+      return m(
+        "span",
+        { "data-theme-picture": "standard", class: "flex h-8 w-8 items-center justify-center" },
+        m.trust(appIconMarkupForApp(previewApp, 32, genericGlyph("app", 32))),
+      );
+    }
     if (url === null || icons === null) {
       return m(
         "span",
@@ -247,7 +259,7 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
           attrs.onPreviewTheme(theme);
         },
       },
-      [themePicture(record), m("span", { class: "type-helper text-center text-primary" }, label)],
+      [themePicture(record, attrs.previewApp), m("span", { class: "type-helper text-center text-primary" }, label)],
     );
   }
 

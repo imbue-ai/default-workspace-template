@@ -22,7 +22,7 @@ kbd {
    boxes at the right (the slots are this theme's [chrome]). */
 [data-part="title-bar"] {
   gap: 0;
-  padding: 0 7px;
+  padding: 0 9px;
   border-bottom: 1px solid #000000;
   background: #ffffff;
 }
@@ -85,13 +85,14 @@ kbd {
 [data-part="window-control"]:is([data-control="minimize"], [data-control="maximize"], [data-control="restore"]):active {
   background: #000000;
 }
-/* The window's own actions (reload, the window menu) keep their glyphs, on white patches by the close box. */
+/* The window's own actions (reload, the window menu) keep their glyphs, and join the close box on one white
+   patch, so the stripes part once around the group rather than showing in stubs between its boxes. */
 [data-part="window-control"]:is([data-control="refresh"], [data-control="menu"]) {
   height: 14px;
   width: 16px;
-  margin-left: 8px;
+  margin-left: 4px;
   border: none;
-  box-shadow: 0 0 0 1px #ffffff;
+  box-shadow: 0 0 0 2px #ffffff;
   color: #000000;
 }
 [data-part="window-control"]:is([data-control="refresh"], [data-control="menu"]) > * {
@@ -135,6 +136,29 @@ kbd {
 [data-part="button"][data-shape="icon"]:not(:disabled):active {
   background: #000000;
   color: #ffffff;
+}
+
+/* Check boxes: a white 12-pixel box with a one-pixel black edge, crossed by an X when checked, as System 7
+   drew them; radios keep the browser's, in black. */
+input[type="checkbox"] {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  flex: none;
+  border: 1px solid #000000;
+  border-radius: 0;
+  background: #ffffff;
+}
+input[type="checkbox"]:checked {
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' shape-rendering='crispEdges'%3E%3Cpath d='M0 0h1v1H0zM1 1h1v1H1zM2 2h1v1H2zM3 3h1v1H3zM4 4h2v2H4zM6 6h1v1H6zM7 7h1v1H7zM8 8h1v1H8zM9 9h1v1H9zM9 0h1v1H9zM8 1h1v1H8zM7 2h1v1H7zM6 3h1v1H6zM3 6h1v1H3zM2 7h1v1H2zM1 8h1v1H1zM0 9h1v1H0z'/%3E%3C/svg%3E")
+    center / 10px 10px no-repeat #ffffff;
+}
+input[type="checkbox"]:disabled {
+  border-color: #808080;
+}
+input[type="radio"] {
+  accent-color: #000000;
 }
 
 /* Fields: system.css's black box, in Geneva rather than the display face. */

@@ -123,6 +123,7 @@ kbd {
 /* Icon-only buttons are toolbar buttons: flat, raised under the pointer, sunk while pressed. */
 [data-part="button"][data-shape="icon"] {
   border: none;
+  outline: none;
   background: transparent;
   color: #000000;
 }
@@ -134,6 +135,27 @@ kbd {
   background: transparent;
 }
 
+/* Check boxes: a sunk white 13-pixel box with the system's black tick; radios keep the browser's, in black. */
+input[type="checkbox"] {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  flex: none;
+  background: #ffffff;
+  box-shadow: var(--theme-sunken);
+}
+input[type="checkbox"]:checked {
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='7' height='7' shape-rendering='crispEdges'%3E%3Cpath d='M6 0h1v3H6zM5 1h1v3H5zM0 2h1v3H0zM1 3h1v3H1zM2 4h1v3H2zM3 3h1v3H3zM4 2h1v3H4z'/%3E%3C/svg%3E")
+    center / 7px 7px no-repeat #ffffff;
+}
+input[type="checkbox"]:disabled {
+  background-color: #d4d0c8;
+}
+input[type="radio"] {
+  accent-color: #000000;
+}
+
 /* Fields: white and sunk. */
 [data-part="field"],
 select {
@@ -142,8 +164,15 @@ select {
   background-color: #ffffff;
   box-shadow: var(--theme-sunken);
   font-family: var(--font-sans);
-  padding-left: 4px;
-  padding-right: 4px;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+
+/* A drop-down list: the sunk field with a raised arrow button at its right end. */
+select {
+  appearance: none;
+  padding-right: 22px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='17' shape-rendering='crispEdges'%3E%3Cpath fill='%23d4d0c8' d='M0 0h16v17H0z'/%3E%3Cpath fill='%23ffffff' d='M1 1h14v1H1zM1 1h1v15H1z'/%3E%3Cpath fill='%23404040' d='M0 16h16v1H0zM15 0h1v17h-1z'/%3E%3Cpath fill='%23808080' d='M1 15h14v1H1zM14 1h1v15h-1z'/%3E%3Cpath d='M5 7h7v1H5zM6 8h5v1H6zM7 9h3v1H7zM8 10h1v1H8z'/%3E%3C/svg%3E") right 2px center / 16px 17px no-repeat, #ffffff;
 }
 
 /* Menus: win95.css's raised gray card; the row under the pointer turns navy. */
@@ -209,9 +238,13 @@ select {
   box-shadow: var(--theme-pressed);
   font-weight: 700;
 }
+/* The launcher field: white and sunk, like every other field (the Run box's). */
 [data-part="launcher-field"] {
+  border: none;
   border-radius: 0;
   margin-top: 0;
+  background: #ffffff;
+  box-shadow: var(--theme-sunken);
 }
 
 /* Desktop icon labels: white on the desktop's own blue. */

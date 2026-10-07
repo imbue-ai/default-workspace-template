@@ -53,7 +53,7 @@ import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
-import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
+import { DesktopSettingsDialog, THEME_PREVIEW_APP, isSameWallpaper } from "./DesktopSettingsDialog";
 import { LauncherMenu } from "./LauncherMenu";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyDropStyle, applyLiftStyle } from "./ShortcutIcon";
@@ -846,6 +846,7 @@ export function App(): m.Component<AppAttrs> {
         settingsDialog = null;
       },
       themes: current.getThemeCatalog(),
+      previewApp: appByName(current.getState(), THEME_PREVIEW_APP) ?? null,
       onPreviewTheme: (choice) => current.previewDesktopTheme(desktop.id, choice),
       onClearPreview: () => current.clearThemePreview(),
     });
